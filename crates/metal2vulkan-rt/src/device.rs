@@ -202,6 +202,11 @@ pub(crate) struct Core {
     pub(crate) caches: Caches,
     /// The compiled kernels by content, which every compute pipeline state of a content shares.
     pub(crate) kernels: KernelMap,
+    /// The translator's decodes and specialized entries of the functions the device's pipeline
+    /// states lowered, which every creation reads, so a module is decoded and a stage
+    /// specialized once for the device rather than once a state. Bounded by the translator: the
+    /// least recently used go ([`StageEntries`](metal2vulkan::pipeline::StageEntries)).
+    pub(crate) entries: metal2vulkan::pipeline::StageEntries,
     /// Quiesced or torn down: calls that need a thread are refused.
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
@@ -474,6 +479,7 @@ impl Device {
             translator,
             caches,
             kernels: KernelMap::new(),
+            entries: metal2vulkan::pipeline::StageEntries::new(),
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
         });
@@ -967,6 +973,17 @@ pub(crate) struct ComputeLimits {
 }
 
 impl Core {
+    /// The gauges of the device's stage entries ([`Gauges::stage_entries`] and
+    /// [`Gauges::stage_entry_bytes`]), read after a creation moved them.
+    ///
+    /// [`Gauges::stage_entries`]: crate::Gauges::stage_entries
+    /// [`Gauges::stage_entry_bytes`]: crate::Gauges::stage_entry_bytes
+    pub(crate) fn note_entries(&self) {
+        let (entries, decodes, bytes) = self.entries.held();
+        self.counters.set(Gauge::StageEntries, entries + decodes);
+        self.counters.set(Gauge::StageEntryBytes, bytes);
+    }
+
     /// The memory type of a class's blocks.
     /// What the device makes of an image of `info`'s format, type, tiling, usage and flags;
     /// `None` where it makes none.
@@ -1101,6 +1118,9 @@ impl Drop for Shared {
 impl Drop for Core {
     fn drop(&mut self) {
         self.wait_idle();
+        // The stage entries go with the core.
+        self.counters.set(Gauge::StageEntries, 0);
+        self.counters.set(Gauge::StageEntryBytes, 0);
         // The runtime's threads have ended: the core is dropped only once none holds it, and with
         // it every command buffer and upload, each of which held what it used. The teardown ran
         // the consumer's unmap hook, so freeing runs none.

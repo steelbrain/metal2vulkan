@@ -162,11 +162,13 @@ impl crate::Device {
             Some(compiled) => compiled,
             None => {
                 let budget = Budget::standard();
-                let entries = StageEntries::new();
+                let entries = &core.entries;
                 let keys = (core.translator)
-                    .render_variant_key(descriptor, &VariantKey::new(), &budget, &entries)
+                    .render_variant_key(descriptor, &VariantKey::new(), &budget, entries)
                     .map_err(Error::Translation)?;
-                let compiled = RenderCompiled::of(core, descriptor, &keys, &budget, &entries)?;
+                let compiled = RenderCompiled::of(core, descriptor, &keys, &budget, entries);
+                core.note_entries();
+                let compiled = compiled?;
                 (core.kernels).keep_render(key, Arc::new(compiled), &core.counters)
             }
         };

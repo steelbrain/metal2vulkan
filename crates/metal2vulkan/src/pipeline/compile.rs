@@ -965,12 +965,12 @@ pub struct StageEntries {
 /// The most entries one [`StageEntries`] keeps, whatever their sizes. One creation asks for at
 /// most three (its stages), so this is room for the stages of many states' worth of functions,
 /// while the search stays a scan of a handful.
-const KEPT_ENTRIES: usize = 32;
+pub(crate) const KEPT_ENTRIES: usize = 32;
 
 /// The most bytes of specialized entries one [`StageEntries`] keeps: 64 MiB, each entry counted
 /// as the ledger bytes specializing it held. One translation attempt may use 500 MiB, so
 /// an object shared between creations holds a fraction of one attempt's room.
-const KEPT_ENTRY_BYTES: u64 = 64 << 20;
+pub(crate) const KEPT_ENTRY_BYTES: u64 = 64 << 20;
 
 /// The most module decodes one [`StageEntries`] keeps, whatever their sizes: a render creation's
 /// three stages and one more, which is the window a sweep of states, or a library's entries
@@ -1063,6 +1063,20 @@ impl StageEntries {
     pub fn counts(&self) -> (u64, u64) {
         let kept = self.kept.lock();
         kept.as_ref().map_or((0, 0), |k| (k.made, k.found))
+    }
+
+    /// What it holds now: its specialized entries, its module decodes, and the bytes both hold
+    /// (each counted as the ledger bytes making it held, as its bounds count them). Each falls as
+    /// the least recently used go.
+    pub fn held(&self) -> (u64, u64, u64) {
+        let kept = self.kept.lock();
+        kept.as_ref().map_or((0, 0, 0), |k| {
+            (
+                k.entries.len() as u64,
+                k.decodes.len() as u64,
+                k.bytes + k.decode_bytes,
+            )
+        })
     }
 
     /// How many module decodes it has read of bitcode, and how many asks copied a decode an

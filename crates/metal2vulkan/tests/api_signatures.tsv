@@ -2296,6 +2296,8 @@ field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
+field	metal2vulkan-rt::Gauges.stage_entries	pub stage_entries: u64
+field	metal2vulkan-rt::Gauges.stage_entry_bytes	pub stage_entry_bytes: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::HeapRange.block	pub block: BlockId
 field	metal2vulkan-rt::HeapRange.len	pub len: u64
@@ -11245,6 +11247,7 @@ method	metal2vulkan::pipeline::SpecKey::read_as_data	pub fn read_as_data(self) -
 method	metal2vulkan::pipeline::SpecTest::differ	pub fn differ(key: SpecKey, mask: u32, bits: u32) -> SpecTest
 method	metal2vulkan::pipeline::SpecTest::equal	pub fn equal(key: SpecKey, mask: u32, bits: u32) -> SpecTest
 method	metal2vulkan::pipeline::StageEntries::counts	pub fn counts(&self) -> (u64, u64)
+method	metal2vulkan::pipeline::StageEntries::held	pub fn held(&self) -> (u64, u64, u64)
 method	metal2vulkan::pipeline::StageEntries::new	pub fn new() -> StageEntries
 method	metal2vulkan::pipeline::StageInputAttributeDescriptor::new	pub fn new(format: metal::AttributeFormat, offset: u32, buffer_index: u32) -> Self
 method	metal2vulkan::pipeline::StageInputDescriptor::canonical	pub fn canonical(&self) -> StageInputDescriptor

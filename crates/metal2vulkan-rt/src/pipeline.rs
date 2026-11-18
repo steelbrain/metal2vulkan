@@ -499,9 +499,9 @@ impl Compiled {
         };
         let (whole, partial, observes, image_only, source) = match &descriptor.kernel {
             StageSource::Function(function) => {
-                let entries = StageEntries::new();
+                let entries = &core.entries;
                 let plain = translator
-                    .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, &entries)
+                    .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, entries)
                     .map_err(Error::Translation)?;
                 let mut emulated = plain.clone();
                 emulated.emulated_simdgroups = true;
@@ -509,7 +509,7 @@ impl Compiled {
                 let mut inputs = plain.clone();
                 inputs.partial_threadgroups = true;
                 let lower =
-                    |inputs: &LoweringInputs| lower(&core, function, inputs, &budget, &entries);
+                    |inputs: &LoweringInputs| lower(&core, function, inputs, &budget, entries);
                 // The translator's refusal of the variant (emulated simdgroups, a vote word its
                 // workgroup memory cannot hold), kept like a lowering: the kernel keeps its plain
                 // module.
@@ -683,7 +683,9 @@ pub(crate) fn lower(
         return Ok(kept);
     }
     core.counters.count(Metric::Translations);
-    let lowered = translator.compile_function_from_entries(function, inputs, budget, entries)?;
+    let lowered = translator.compile_function_from_entries(function, inputs, budget, entries);
+    core.note_entries();
+    let lowered = lowered?;
     core.caches
         .keep_translation(key.digest(), &lowered.to_bytes(), &core.counters);
     Ok(lowered)
@@ -1165,8 +1167,7 @@ impl Emulated {
             core.counters.count(Metric::TranslationsLoaded);
             return Lowered::Refused;
         }
-        let entries = StageEntries::new();
-        let compiled = match lower(core, &self.function, &self.inputs, &budget, &entries) {
+        let compiled = match lower(core, &self.function, &self.inputs, &budget, &core.entries) {
             Ok(compiled) => compiled,
             Err(TranslationError::Unsupported(_)) => {
                 core.caches.keep_refusal(&key, &core.counters);

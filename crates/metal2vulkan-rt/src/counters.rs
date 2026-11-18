@@ -90,6 +90,10 @@ pub(crate) enum Gauge {
     CaptureBytes,
     /// [`Gauges::staging_bytes`].
     StagingBytes,
+    /// [`Gauges::stage_entries`].
+    StageEntries,
+    /// [`Gauges::stage_entry_bytes`].
+    StageEntryBytes,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -161,6 +165,8 @@ struct Atomics {
     private_idle_bytes: AtomicU64,
     capture_bytes: AtomicU64,
     staging_bytes: AtomicU64,
+    stage_entries: AtomicU64,
+    stage_entry_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -338,6 +344,11 @@ impl Counters {
         self.gauge(gauge).fetch_sub(amount, Relaxed);
     }
 
+    /// `gauge` at `value`: what an object the device holds counts itself, read after it moved.
+    pub(crate) fn set(&self, gauge: Gauge, value: u64) {
+        self.gauge(gauge).store(value, Relaxed);
+    }
+
     fn gauge(&self, gauge: Gauge) -> &AtomicU64 {
         let a = &self.atomics;
         match gauge {
@@ -359,6 +370,8 @@ impl Counters {
             Gauge::PrivateIdleBytes => &a.private_idle_bytes,
             Gauge::CaptureBytes => &a.capture_bytes,
             Gauge::StagingBytes => &a.staging_bytes,
+            Gauge::StageEntries => &a.stage_entries,
+            Gauge::StageEntryBytes => &a.stage_entry_bytes,
         }
     }
 
@@ -430,6 +443,8 @@ impl Counters {
             private_idle_bytes: a.private_idle_bytes.load(Relaxed),
             capture_bytes: a.capture_bytes.load(Relaxed),
             staging_bytes: a.staging_bytes.load(Relaxed),
+            stage_entries: a.stage_entries.load(Relaxed),
+            stage_entry_bytes: a.stage_entry_bytes.load(Relaxed),
         }
     }
 }
@@ -639,4 +654,10 @@ pub struct Gauges {
     /// the staging region, once a copy made it, and the staging buffers of their own that copies
     /// larger than the region hold until the upload that copies through them is gone.
     pub staging_bytes: u64,
+    /// The translator's specialized entries and module decodes the device keeps for its pipeline
+    /// creations: at most 32 entries and 4 decodes, the least recently used going past them.
+    pub stage_entries: u64,
+    /// The bytes those entries and decodes hold, each counted as the ledger bytes making it held:
+    /// at most 64 MiB of entries and 32 MiB of decodes.
+    pub stage_entry_bytes: u64,
 }

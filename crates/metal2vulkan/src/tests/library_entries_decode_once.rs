@@ -36,6 +36,9 @@
 //!   `HASH` is verified against its bitcode when the container is parsed
 //!   ([`a_librarys_stated_air_hash_is_the_hash_of_the_bitcode_a_compile_reads`],
 //!   [`a_metallib_whose_stated_hash_is_not_its_bitcodes_is_refused`]).
+//! - **Bounded.** Filled past its bounds, it keeps the most recently used entries and no more,
+//!   and what it holds stays within its byte bounds
+//!   ([`an_object_filled_past_its_bounds_keeps_only_the_most_recent`]).
 //! - **What holding it costs.** The headline part reports what one decode charges the ledger and
 //!   holds four of the largest committed module's to the object's byte bound, so a bound that
 //!   could not hold a library's one decode would fail here.
@@ -414,4 +417,59 @@ fn a_metallib_whose_stated_hash_is_not_its_bitcodes_is_refused() {
         refused.is_err(),
         "a metallib whose HASH is not its bitcode's must be refused, not parsed"
     );
+}
+
+/// Filled past its bounds, the object keeps the most recently used and no more: one entry of
+/// [`MANY`] asked at forty call-stack depths, each depth its own specialized entry, leaves at most
+/// `KEPT_ENTRIES` entries and one decode within the byte bounds ([`StageEntries::held`]); of the
+/// depths, the latest is found again, while the first, gone past the bound, is made again.
+#[test]
+fn an_object_filled_past_its_bounds_keeps_only_the_most_recent() {
+    use crate::pipeline::compile::{KEPT_DECODE_BYTES, KEPT_ENTRIES, KEPT_ENTRY_BYTES};
+    let Some(bitcode) = fixture(MANY) else { return };
+    let device = device();
+    let library = Library::from_air(&bitcode).expect("library");
+    let fd = stages(&library).into_iter().next().expect("an entry");
+    let entries = StageEntries::new();
+    let ask = |depth: u32| {
+        let mut inputs = LowerInputs::new();
+        inputs.max_call_stack_depth = Some(depth);
+        let mut meter = Meter::new(&Budget::standard());
+        let compiled = compile_stage_from(
+            &fd,
+            device.profile(),
+            InputsFrom::Given(&inputs),
+            &entries,
+            &mut meter,
+        );
+        compiled.expect("the entry compiles at every depth");
+    };
+    for depth in 1..=40 {
+        ask(depth);
+    }
+    let (held, decodes, bytes) = entries.held();
+    let kept = u64::try_from(KEPT_ENTRIES).expect("the bound");
+    assert!(
+        (1..=kept).contains(&held),
+        "40 entries asked must leave between 1 and {kept} held, not {held}"
+    );
+    assert_eq!(decodes, 1, "one module, one decode held");
+    assert!(
+        bytes <= KEPT_ENTRY_BYTES + KEPT_DECODE_BYTES,
+        "the held bytes, {bytes}, must stay within the bounds"
+    );
+    assert_eq!(
+        entries.counts(),
+        (40, 0),
+        "forty depths, forty entries made"
+    );
+    ask(40);
+    assert_eq!(entries.counts(), (40, 1), "the latest depth is found again");
+    ask(1);
+    assert_eq!(
+        entries.counts(),
+        (41, 1),
+        "the first depth, gone past the bound, is made again"
+    );
+    assert!(entries.held().0 <= kept, "asking again keeps the bound");
 }

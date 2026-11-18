@@ -831,6 +831,12 @@ that touch blocks first.
   kernel goes once its last state and the map have let it go. Each state numbers its own
   samplers. `Gauges::kernels` counts the compiled kernels alive and `Gauges::kernel_entries` the
   map's entries.
+- A content the map does not hold is lowered from the device's stage entries (the translator's
+  `StageEntries`), which every compute and render creation of the device reads: a module is
+  decoded once for the device and a stage specialized once for its function, constants, links
+  and call-stack depth, not once a content. They hold at most 32 specialized entries in 64 MiB
+  and 4 module decodes in 32 MiB, and forget the least recently used past them;
+  `Gauges::stage_entries` counts what they hold and `Gauges::stage_entry_bytes` its bytes.
 - A state numbers samplers as Metal's pipeline creation does (`NumberedSampler`, in Metal's
   order): each constexpr sampler its kernel uses, then one where it reads a texture and one where
   it writes one. `sampler_ids` takes that list once the kernel is lowered and answers an index

@@ -1674,6 +1674,8 @@ impl Backend for NewRuntime {
             ("private_idle_bytes", gauges.private_idle_bytes),
             ("capture_bytes", gauges.capture_bytes),
             ("staging_bytes", gauges.staging_bytes),
+            ("stage_entries", gauges.stage_entries),
+            ("stage_entry_bytes", gauges.stage_entry_bytes),
             ("shared_block_bytes", held(rt::MemoryClass::Shared)),
             ("private_block_bytes", held(rt::MemoryClass::Private)),
         ])
