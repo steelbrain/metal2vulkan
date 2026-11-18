@@ -1117,10 +1117,10 @@ impl Compiled {
     pub(crate) fn later_kernel(
         self: &Arc<Self>,
         which: Which,
-        refused: Error,
+        refused: impl FnOnce() -> Error,
     ) -> Result<&Kernel, Error> {
         let Some(later) = self.later(which) else {
-            return Err(refused);
+            return Err(refused());
         };
         let lowered = match later.lowered.get() {
             Some(lowered) => lowered,
@@ -1136,7 +1136,7 @@ impl Compiled {
         };
         match lowered {
             Lowered::Made(kernel, _) => Ok(&**kernel),
-            Lowered::Refused => Err(refused),
+            Lowered::Refused => Err(refused()),
             &Lowered::Failed(result) => Err(Error::Vulkan {
                 call: "vkCreateShaderModule",
                 result,

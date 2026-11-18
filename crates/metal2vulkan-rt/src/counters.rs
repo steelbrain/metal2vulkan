@@ -77,6 +77,62 @@ pub(crate) enum Metric {
     CaptureOverflows,
 }
 
+/// The number of [`Metric`]s.
+const METRICS: usize = Metric::CaptureOverflows as usize + 1;
+
+/// Every [`Metric`], in its order: each at its own index.
+const METRIC_ORDER: [Metric; METRICS] = [
+    Metric::Submissions,
+    Metric::Passes,
+    Metric::Barriers,
+    Metric::PipelinesCreated,
+    Metric::BlocksMade,
+    Metric::BlocksReused,
+    Metric::DispatchesWithoutEffects,
+    Metric::Translations,
+    Metric::TranslationsLoaded,
+    Metric::CreationsBeforeSeed,
+    Metric::CacheWritesDropped,
+    Metric::RingWrites,
+    Metric::Pushes,
+    Metric::PushesHeld,
+    Metric::UploadWaits,
+    Metric::Synchronizations,
+    Metric::GroupsBesideAnotherQueue,
+    Metric::LoneSubmissionsAcrossQueues,
+    Metric::ForcedFlushesAcrossQueues,
+    Metric::OverCopies,
+    Metric::AllocationsFreed,
+    Metric::SubmissionsDuringFrees,
+    Metric::CaptureWaits,
+    Metric::CaptureStreams,
+    Metric::CaptureOverflows,
+];
+
+// Each metric of the order is at its own index.
+const _: () = {
+    let mut at = 0;
+    while at < METRICS {
+        assert!(METRIC_ORDER[at] as usize == at);
+        at += 1;
+    }
+};
+
+/// What a command buffer's recording counts as its encoders record, added to the device's
+/// counters once an encoder ends ([`Counters::add`]): no command an encoder records writes a
+/// counter the device's threads share.
+#[derive(Default)]
+pub(crate) struct Tally {
+    counts: [u64; METRICS],
+}
+
+impl Tally {
+    /// Counts one more of `metric`.
+    pub(crate) fn count(&mut self, metric: Metric) {
+        self.counts[metric as usize] += 1;
+    }
+}
+
 /// A gauge the runtime moves.
 #[derive(Clone, Copy)]
 pub(crate) enum Gauge {
@@ -134,7 +190,9 @@ pub(crate) enum Gauge {
 ///
 /// A cheap handle that stays readable after the device is torn down, so a test can read the
 /// gauges at zero once it is gone. Reads are relaxed: each value is exact once the work that
-/// moves it has stopped, and close while it runs.
+/// moves it has stopped, and close while it runs. What an encoder's commands count (its passes,
+/// barriers, pushes, ring writes, dispatches without effects and synchronizes) arrives when the
+/// encoder ends, all at once.
 #[derive(Clone)]
 pub struct Counters {
     atomics: Arc<Atomics>,
@@ -246,8 +304,23 @@ impl Counters {
 
     /// Counts one more of `metric`.
     pub(crate) fn count(&self, metric: Metric) {
+        self.metric(metric).fetch_add(1, Relaxed);
+    }
+
+    /// Adds what `tally` counted, and leaves it at zero.
+    pub(crate) fn add(&self, tally: &mut Tally) {
+        for (metric, count) in METRIC_ORDER.iter().zip(&mut tally.counts) {
+            if *count > 0 {
+                self.metric(*metric).fetch_add(*count, Relaxed);
+                *count = 0;
+            }
+        }
+    }
+
+    /// The atomic of `metric`.
+    fn metric(&self, metric: Metric) -> &AtomicU64 {
         let a = &self.atomics;
-        let atomic = match metric {
+        match metric {
             Metric::Submissions => &a.submissions,
             Metric::Passes => &a.passes,
             Metric::Barriers => &a.barriers,
@@ -273,8 +346,7 @@ impl Counters {
             Metric::CaptureWaits => &a.capture_waits,
             Metric::CaptureStreams => &a.capture_streams,
             Metric::CaptureOverflows => &a.capture_overflows,
-        };
-        atomic.fetch_add(1, Relaxed);
+        }
     }
 
     /// One more first-use wait: an encoding call that made the `VkPipeline` it needed, for

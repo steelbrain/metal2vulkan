@@ -1074,7 +1074,7 @@ mod on_device {
             });
             assert!(
                 matches!(
-                    compiled.later_kernel(Which::Emulated, refused),
+                    compiled.later_kernel(Which::Emulated, || refused),
                     Err(Error::Quiesced)
                 ),
                 "{name}: the need refused"

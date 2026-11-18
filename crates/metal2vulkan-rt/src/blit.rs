@@ -26,6 +26,7 @@
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
+use crate::device::Core;
 use crate::encoder::Resource;
 use crate::error::{Error, Gap, Refusal};
 use crate::fence::Fence;
@@ -77,6 +78,8 @@ pub struct BufferLayout {
 /// [`end_encoding`](Self::end_encoding) does.
 pub struct BlitCommandEncoder {
     command_buffer: CommandBuffer,
+    /// The device: each call borrows it, taking no reference of its own.
+    core: Arc<Core>,
     /// What the command buffer records, held while the encoder is open.
     building: Option<Building>,
 }
@@ -87,10 +90,11 @@ impl CommandBuffer {
     /// Err: [`Refusal::Committed`]; [`Refusal::EncoderOpen`] while another encoder of the command
     /// buffer is open.
     pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder, Error> {
-        let building = self.open_encoder()?;
-        building.device.core().counters.count(Metric::Passes);
+        let mut building = self.open_encoder()?;
+        building.count(Metric::Passes);
         Ok(BlitCommandEncoder {
             command_buffer: self.clone(),
+            core: Arc::clone(building.device.core()),
             building: Some(building),
         })
     }
@@ -98,9 +102,14 @@ impl CommandBuffer {
 
 impl BlitCommandEncoder {
     fn building(&mut self) -> &mut Building {
-        self.building
-            .as_mut()
-            .expect("an encoder holds its command buffer's recording until it ends")
+        self.parts().1
+    }
+
+    /// The device and the recording, borrowed apart.
+    fn parts(&mut self) -> (&Arc<Core>, &mut Building) {
+        let building = (self.building.as_mut())
+            .expect("an encoder holds its command buffer's recording until it ends");
+        (&self.core, building)
     }
 
     /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:`
@@ -126,9 +135,8 @@ impl BlitCommandEncoder {
         destination: &Texture,
         to: TexturePlace,
     ) -> Result<(), Error> {
-        let building = self.building();
-        let core = Arc::clone(building.device.core());
-        if !source.is_of(&core) || !destination.is_of(&core) {
+        let (core, building) = self.parts();
+        if !source.is_of(core) || !destination.is_of(core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
         let same = source.id() == destination.id();
@@ -196,8 +204,8 @@ impl BlitCommandEncoder {
                 &vk::DependencyInfo::default().image_memory_barriers(&back),
             );
         }
-        core.counters.count(Metric::Barriers);
-        core.counters.count(Metric::Barriers);
+        building.count(Metric::Barriers);
+        building.count(Metric::Barriers);
         Ok(())
     }
 
@@ -264,9 +272,8 @@ impl BlitCommandEncoder {
         destination_offset: u64,
         size: u64,
     ) -> Result<(), Error> {
-        let building = self.building();
-        let core = Arc::clone(building.device.core());
-        if !source.is_of(&core) || !destination.is_of(&core) {
+        let (core, building) = self.parts();
+        if !source.is_of(core) || !destination.is_of(core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
         // A Managed buffer's GPU side is its device copy, where it has one.
@@ -318,8 +325,8 @@ impl BlitCommandEncoder {
                 &vk::DependencyInfo::default().memory_barriers(&written),
             );
         }
-        core.counters.count(Metric::Barriers);
-        core.counters.count(Metric::Barriers);
+        building.count(Metric::Barriers);
+        building.count(Metric::Barriers);
         Ok(())
     }
 
@@ -333,8 +340,7 @@ impl BlitCommandEncoder {
         layout: BufferLayout,
         into_image: bool,
     ) -> Result<(), Error> {
-        let core = Arc::clone(self.building().device.core());
-        if !texture.is_of(&core) || !buffer.is_of(&core) {
+        if !texture.is_of(&self.core) || !buffer.is_of(&self.core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
         // A Managed buffer's GPU side is its device copy, where it has one.
@@ -360,8 +366,7 @@ impl BlitCommandEncoder {
         copies: &[BufferCopy],
         into_image: bool,
     ) -> Result<(), Error> {
-        let building = self.building();
-        let core = Arc::clone(building.device.core());
+        let (core, building) = self.parts();
         let vk_buffer = buffer.device_range().0;
         building.keep_texture(texture);
         building.keep(buffer);
@@ -405,12 +410,25 @@ impl BlitCommandEncoder {
             ),
         };
         let earlier = [memory_barrier(Reach::Commands)];
-        let away: Vec<_> = (copies.iter())
-            .map(|copy| texture.away(&copy.placed, layout, access))
-            .collect();
-        let back: Vec<_> = (copies.iter())
-            .map(|copy| texture.back(&copy.placed, layout))
-            .collect();
+        // One copy, a copy call's, takes its barriers on the stack; a synchronize's of each level
+        // and slice, in lists.
+        let (away_one, back_one, away_each, back_each);
+        let (away, back): (&[_], &[_]) = match copies {
+            [copy] => {
+                away_one = [texture.away(&copy.placed, layout, access)];
+                back_one = [texture.back(&copy.placed, layout)];
+                (&away_one, &back_one)
+            }
+            _ => {
+                away_each = (copies.iter())
+                    .map(|copy| texture.away(&copy.placed, layout, access))
+                    .collect::<Vec<_>>();
+                back_each = (copies.iter())
+                    .map(|copy| texture.back(&copy.placed, layout))
+                    .collect::<Vec<_>>();
+                (&away_each, &back_each)
+            }
+        };
         let written = [written()];
         let written = match into_image {
             true => &written[..0],
@@ -454,8 +472,8 @@ impl BlitCommandEncoder {
                     .image_memory_barriers(&back),
             );
         }
-        core.counters.count(Metric::Barriers);
-        core.counters.count(Metric::Barriers);
+        building.count(Metric::Barriers);
+        building.count(Metric::Barriers);
         Ok(())
     }
 
@@ -473,9 +491,8 @@ impl BlitCommandEncoder {
         range: Range<u64>,
         value: u8,
     ) -> Result<(), Error> {
-        let building = self.building();
-        let core = Arc::clone(building.device.core());
-        if !buffer.is_of(&core) {
+        let (core, building) = self.parts();
+        if !buffer.is_of(core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
         let (vk_buffer, base) = buffer.device_range();
@@ -514,8 +531,8 @@ impl BlitCommandEncoder {
                 &vk::DependencyInfo::default().memory_barriers(&written),
             );
         }
-        core.counters.count(Metric::Barriers);
-        core.counters.count(Metric::Barriers);
+        building.count(Metric::Barriers);
+        building.count(Metric::Barriers);
         Ok(())
     }
 
@@ -546,15 +563,14 @@ impl BlitCommandEncoder {
     /// Err: [`Refusal::OtherDevice`] for another device's resource; [`Error::Vulkan`] where the
     /// command buffer cannot record.
     pub fn synchronize_resource(&mut self, resource: Resource<'_>) -> Result<(), Error> {
-        let core = Arc::clone(self.building().device.core());
         match resource {
-            Resource::Buffer(buffer) if buffer.is_of(&core) => self.read_back(buffer)?,
-            Resource::Texture(texture) if texture.is_of(&core) => {
+            Resource::Buffer(buffer) if buffer.is_of(&self.core) => self.read_back(buffer)?,
+            Resource::Texture(texture) if texture.is_of(&self.core) => {
                 self.read_back_texture(texture)?
             }
             _ => return Err(Error::Refused(Refusal::OtherDevice)),
         }
-        core.counters.count(Metric::Synchronizations);
+        self.building().count(Metric::Synchronizations);
         Ok(())
     }
 
@@ -600,8 +616,7 @@ impl BlitCommandEncoder {
     /// A Managed buffer's synchronize: its device copy into the consumer's bytes, where it has
     /// one.
     fn read_back(&mut self, buffer: &Buffer) -> Result<(), Error> {
-        let building = self.building();
-        let core = Arc::clone(building.device.core());
+        let (core, building) = self.parts();
         if let (block, Some(copy)) = buffer.held() {
             let (from, to) = (copy.buffer(), block.memory.buffer);
             let region = vk::BufferCopy {
@@ -632,8 +647,8 @@ impl BlitCommandEncoder {
                     &vk::DependencyInfo::default().memory_barriers(&written),
                 );
             }
-            core.counters.count(Metric::Barriers);
-            core.counters.count(Metric::Barriers);
+            building.count(Metric::Barriers);
+            building.count(Metric::Barriers);
         }
         Ok(())
     }
@@ -645,8 +660,7 @@ impl BlitCommandEncoder {
     /// Err: [`Refusal::OtherDevice`] for another device's fence; [`Gap::FenceOtherQueue`] for a
     /// fence another queue used first.
     pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        let core = Arc::clone(self.building().device.core());
-        fence.used_on(&core, self.command_buffer.queue())
+        fence.used_on(&self.core, self.command_buffer.queue())
     }
 
     /// `waitForFence:`: this encoder sees what the encoders up to `fence`'s last update wrote. It
@@ -654,8 +668,7 @@ impl BlitCommandEncoder {
     ///
     /// Err: as [`update_fence`](Self::update_fence).
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        let core = Arc::clone(self.building().device.core());
-        fence.used_on(&core, self.command_buffer.queue())
+        fence.used_on(&self.core, self.command_buffer.queue())
     }
 
     /// `endEncoding`. Each copy ordered itself, so the encoder owes no barrier.

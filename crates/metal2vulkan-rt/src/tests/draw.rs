@@ -11,6 +11,8 @@
 //!     to its pixels. The pass is one submission, its two barriers and the segment's end, makes no
 //!     pipeline and copies no byte of the runtime's own; a memory barrier after draws that wrote
 //!     no memory records nothing.
+//!   - 2,000 draws in one encoder move none of the device's counters while it is open; its end
+//!     adds the pass, the push and the 1,999 pushes held.
 //!   - a draw of lines makes its content's line `VkPipeline` once, a first-use wait, and draws
 //!     its row.
 //!   - a stencil state that replaces the stencil marks what a draw covers, and one that tests it
@@ -351,6 +353,70 @@ mod on_device {
             });
             assert_eq!(read(&color, 4), want, "{name}: the texels");
             println!("{name}: three draws in one pass, 1 barrier, no pipeline made");
+        });
+    }
+
+    /// What an encoder's commands count reaches the device's counters once, at the encoder's
+    /// end: 2,000 draws move none of them while the encoder is open, and its end adds the pass,
+    /// the push and the 1,999 pushes held.
+    #[test]
+    fn every_device_counts_an_encoders_draws_at_its_end() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("draw_counts", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            run(name, &first);
+            let counters = device.counters();
+            settled(&device);
+            let counted =
+                |m: &crate::Metrics| (m.passes, m.barriers, m.pushes, m.pushes_held, m.ring_writes);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            for _ in 0..2_000 {
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            }
+            let open = counters.metrics();
+            assert_eq!(
+                counted(&open),
+                counted(&before),
+                "{name}: passes, barriers, pushes, pushes held and ring writes while it is open"
+            );
+            encoder.end_encoding();
+            let ended = counters.metrics();
+            assert_eq!(
+                (
+                    ended.passes - before.passes,
+                    ended.pushes - before.pushes,
+                    ended.pushes_held - before.pushes_held,
+                ),
+                (1, 1, 1_999),
+                "{name}: passes, pushes and pushes held at its end"
+            );
+            run(name, &command_buffer);
+            let want = texels(|_, y| match y {
+                0..4 => GREEN,
+                _ => BLACK,
+            });
+            assert_eq!(read(&color, 4), want, "{name}: the texels");
+            println!("{name}: 2,000 draws counted once, at the encoder's end");
         });
     }
 

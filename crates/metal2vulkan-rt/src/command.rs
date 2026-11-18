@@ -3,7 +3,7 @@
 
 use crate::buffer::{Buffer, DeviceCopy};
 use crate::capture::CopyIn;
-use crate::counters::Metric;
+use crate::counters::{Metric, Tally};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::event::{Event, EventInner};
@@ -149,6 +149,12 @@ pub(crate) struct Building {
     pushed: Pushed,
     /// The current segment wrote memory the host may read: its end barrier reaches the host.
     host_written: bool,
+    /// The vertex buffers bound in the current segment's command buffer: binding, buffer and
+    /// offset. Vulkan keeps a binding across renderings and pipeline binds of one command buffer.
+    vertex: Vec<(u32, vk::Buffer, u64)>,
+    /// What the encoders counted since the last one ended, added to the device's counters as each
+    /// ends ([`CommandBuffer::close_encoder`]).
+    tally: Tally,
 }
 
 /// The push constant bytes a command buffer holds, from offset 0, as its pushes left them.
@@ -313,6 +319,8 @@ impl CommandBuffer {
                         drawn: None,
                         pushed: Pushed::default(),
                         host_written: false,
+                        vertex: Vec::new(),
+                        tally: Tally::default(),
                     }),
                     ended: None,
                     times: Times::default(),
@@ -346,8 +354,10 @@ impl CommandBuffer {
             .expect("an open command buffer is recording"))
     }
 
-    /// Gives back what an encoder recorded into.
-    pub(crate) fn close_encoder(&self, building: Building) {
+    /// Gives back what an encoder recorded into, adding what it counted to the device's counters:
+    /// once an encoder, so that no command it recorded wrote a counter the device's threads share.
+    pub(crate) fn close_encoder(&self, mut building: Building) {
+        (building.device.core().counters).add(&mut building.tally);
         let mut state = self.state();
         state.building = Some(building);
         state.encoding = false;
@@ -476,6 +486,7 @@ impl CommandBuffer {
             work.carry(copy_ins);
             return Err(error);
         }
+        (building.device.core().counters).add(&mut building.tally);
         let Building {
             device,
             mut gpu,
@@ -687,6 +698,7 @@ impl Building {
         self.bound = None;
         self.drawn = None;
         self.pushed = Pushed::default();
+        self.vertex.clear();
         Ok(command)
     }
 
@@ -793,9 +805,8 @@ impl Building {
             true => Reach::Commands,
             false => reach,
         };
-        let core = self.device.core();
-        record::barrier(&core.device, command, reach);
-        core.counters.count(Metric::Barriers);
+        record::barrier(&self.device.core().device, command, reach);
+        self.tally.count(Metric::Barriers);
         self.owed = false;
         self.owed_pass = false;
         if reach.reaches_indirect() {
@@ -891,16 +902,36 @@ impl Building {
         (needed, first)
     }
 
+    /// Whether vertex buffer `binding` needs binding to `buffer` at `offset` in the current
+    /// command buffer: it holds another binding there, or none. It is bound so from now.
+    pub(crate) fn vertex_needed(&mut self, binding: u32, buffer: vk::Buffer, offset: u64) -> bool {
+        match self.vertex.iter_mut().find(|(held, ..)| *held == binding) {
+            Some((_, held, at)) if (*held, *at) == (buffer, offset) => false,
+            Some((_, held, at)) => {
+                (*held, *at) = (buffer, offset);
+                true
+            }
+            None => {
+                self.vertex.push((binding, buffer, offset));
+                true
+            }
+        }
+    }
+
     /// Whether `push`, the push bytes of a dispatch or a draw from offset 0, needs recording in
     /// the current command buffer: its push bytes do not already begin with it. They do from now.
     pub(crate) fn push_needed(&mut self, push: &[u8]) -> bool {
         let needed = self.pushed.needed(push);
-        let metric = match needed {
+        self.tally.count(match needed {
             true => Metric::Pushes,
             false => Metric::PushesHeld,
-        };
-        self.device.core().counters.count(metric);
+        });
         needed
+    }
+
+    /// Counts one more of `metric`, added to the device's counters once the encoder ends.
+    pub(crate) fn count(&mut self, metric: Metric) {
+        self.tally.count(metric);
     }
 
     /// Copies `bytes` into the parameter ring, returning their address.
@@ -910,9 +941,8 @@ impl Building {
 
     /// Copies `bytes` into the parameter ring, returning where they lie.
     pub(crate) fn write_ring_placed(&mut self, bytes: &[u8]) -> Result<Placed, Error> {
-        let core = Arc::clone(self.device.core());
-        core.counters.count(Metric::RingWrites);
-        self.gpu.ring.write(&core, bytes)
+        self.tally.count(Metric::RingWrites);
+        self.gpu.ring.write(self.device.core(), bytes)
     }
 
     /// Keeps `buffer`'s block, and its device copy where it has one, until the command buffer

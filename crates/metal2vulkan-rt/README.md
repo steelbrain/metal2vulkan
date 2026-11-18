@@ -79,7 +79,7 @@ cumulative counts (submissions, passes, barriers, bytes copied, pipelines create
 first-use waits, kernels lowered, kernels read from the cache directory, upload waits, pushes,
 and the draws and dispatches whose push bytes the command buffer already held);
 `gauges()` are live counts per kind of resource, every one zero after teardown. They are relaxed
-atomics, always on.
+atomics, always on. What an encoder's commands count arrives when the encoder ends.
 
 ## Memory blocks and buffers
 
@@ -1548,6 +1548,18 @@ limit or a memory type. The crate holds:
 - no check that runs beside the program's work.
 
 The test `tests::one_path` reads the crate's sources and fails on the first three.
+
+## Encoder calls
+
+An encoder call executes no locked instruction on its success path: no atomic read-modify-write,
+no mutex and no reference count change. Each encoder holds the device once; a command borrows it,
+the pipeline state and the bound resources, and counts into the encoder's own tally, which the
+device's counters take once, at the encoder's end. What a draw or a dispatch learns from its
+bindings (the vertex buffers it binds, the alignments it checks, whether it reads an attachment,
+reaches a Managed buffer's device copy or writes what the host reads) it works out again only
+after the pipeline state or a binding changes. On RADV a recorded command lies in write-combining
+memory, and a locked instruction between two of them flushes it: a draw took about 490 ns more on
+a Radeon RX 7900 XTX with one.
 
 ## Floor
 

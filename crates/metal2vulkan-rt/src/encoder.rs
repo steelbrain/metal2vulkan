@@ -169,6 +169,8 @@ enum Launch<'a> {
 /// [`end_encoding`](Self::end_encoding) does.
 pub struct ComputeCommandEncoder {
     command_buffer: CommandBuffer,
+    /// The device: each call borrows it, taking no reference of its own.
+    core: Arc<Core>,
     /// What the command buffer records, held while the encoder is open.
     building: Option<Building>,
     serial: bool,
@@ -191,6 +193,37 @@ pub struct ComputeCommandEncoder {
     parameters: Parameters,
     /// Whether a dispatch of the encoder wrote anything.
     wrote: bool,
+    /// What a dispatch of the pipeline state reaches of the bound resources.
+    facts: DispatchFacts,
+}
+
+/// What a dispatch of the encoder's pipeline state reaches of its bound resources and
+/// declarations, worked out at the first dispatch after either changes and kept until the next
+/// change: whether its buffers are aligned as its kernel takes them, whether it reaches a Managed
+/// buffer's device copy or writes a texture over one, and whether it writes memory the host may
+/// read. A dispatch after no change runs none of the scans.
+///
+/// A change is the encoder's own call: a pipeline state set, or a buffer, an offset, bytes or a
+/// texture bound, or a resource declared. Nothing outside the encoder changes what a fact holds:
+/// each is of the objects bound (a buffer's device copy and storage, a texture's storage) and of
+/// the kernel, which do not change. What can change outside it between two dispatches, a Managed
+/// buffer's textures over its device copy and the textures over a buffer in images of their own
+/// that live, each dispatch looks at again where a fact says it may matter.
+#[derive(Default)]
+struct DispatchFacts {
+    /// The bound buffers are aligned as the state's kernels take them.
+    aligned: bool,
+    /// The module whose kernel the facts below are of, while they hold.
+    module: Option<Module>,
+    /// A buffer the kernel reaches has a device copy, or a texture it writes is over one.
+    managed: bool,
+    /// A write the host may read once the command buffer completes: to a Shared buffer or a
+    /// texture over one, bound or declared, or through an address outside the dispatch's
+    /// resources.
+    host: bool,
+    /// The nil buffer's address where a buffer argument the kernels reach is bound to nothing
+    /// (`Ring::nil`), else 0, found with the alignments.
+    nil: u64,
 }
 
 /// Which of its state's modules a dispatch runs.
@@ -350,7 +383,7 @@ impl CommandBuffer {
     ) -> Result<ComputeCommandEncoder, Error> {
         let mut building = self.open_encoder()?;
         let core = Arc::clone(building.device.core());
-        core.counters.count(Metric::Passes);
+        building.count(Metric::Passes);
         if dispatch_type == DispatchType::Concurrent {
             // Its dispatches take no barrier among themselves, so whatever earlier encoders read
             // or wrote is ordered before its first dispatch.
@@ -358,6 +391,7 @@ impl CommandBuffer {
         }
         Ok(ComputeCommandEncoder {
             command_buffer: self.clone(),
+            core,
             building: Some(building),
             serial: dispatch_type == DispatchType::Serial,
             pipeline: None,
@@ -370,15 +404,20 @@ impl CommandBuffer {
             last: None,
             parameters: Parameters::default(),
             wrote: false,
+            facts: DispatchFacts::default(),
         })
     }
 }
 
 impl ComputeCommandEncoder {
     fn building(&mut self) -> &mut Building {
-        self.building
-            .as_mut()
-            .expect("an encoder holds its command buffer's recording until it ends")
+        recording(&mut self.building)
+    }
+
+    /// The pipeline state, a binding or a declaration changed: the next dispatch finds its facts
+    /// again.
+    fn changed(&mut self) {
+        self.facts = DispatchFacts::default();
     }
 
     /// `setComputePipelineState:`. The command buffer keeps the state until it retires.
@@ -397,6 +436,7 @@ impl ComputeCommandEncoder {
         self.building().keep_pipeline(state);
         self.pipeline = Some(state.clone());
         self.last = None;
+        self.changed();
         Ok(())
     }
 
@@ -427,6 +467,7 @@ impl ComputeCommandEncoder {
             None => Slot::Empty,
         };
         self.slots[slot] = bound;
+        self.changed();
         Ok(())
     }
 
@@ -449,6 +490,7 @@ impl ComputeCommandEncoder {
             building.keep_texture(texture);
         }
         self.textures[index as usize] = texture.cloned();
+        self.changed();
         Ok(())
     }
 
@@ -486,6 +528,7 @@ impl ComputeCommandEncoder {
         match &mut self.slots[slot] {
             Slot::Buffer { offset: bound, .. } => {
                 *bound = offset;
+                self.changed();
                 Ok(())
             }
             _ => Err(Error::Refused(Refusal::NoBufferAtIndex { index })),
@@ -508,6 +551,11 @@ impl ComputeCommandEncoder {
             }));
         }
         let address = self.building().write_ring(bytes)?;
+        // Bytes are aligned, of no Managed or Shared buffer: a dispatch's facts change only where
+        // the slot held a buffer.
+        if !matches!(self.slots[slot], Slot::Bytes(_)) {
+            self.changed();
+        }
         self.slots[slot] = Slot::Bytes(address);
         Ok(())
     }
@@ -562,6 +610,7 @@ impl ComputeCommandEncoder {
             return Ok(());
         };
         self.declared_shared_write |= access.writes() && shared;
+        self.changed();
         match self
             .declared
             .iter_mut()
@@ -603,8 +652,7 @@ impl ComputeCommandEncoder {
     /// Err: [`Refusal::OtherDevice`] for another device's fence; [`Gap::FenceOtherQueue`] for a
     /// fence another queue used first.
     pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        let core = Arc::clone(self.building().device.core());
-        fence.used_on(&core, self.command_buffer.queue())
+        fence.used_on(&self.core, self.command_buffer.queue())
     }
 
     /// `waitForFence:`: this encoder sees what the encoders up to `fence`'s last update wrote. It
@@ -612,8 +660,7 @@ impl ComputeCommandEncoder {
     ///
     /// Err: as [`update_fence`](Self::update_fence).
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        let core = Arc::clone(self.building().device.core());
-        fence.used_on(&core, self.command_buffer.queue())
+        fence.used_on(&self.core, self.command_buffer.queue())
     }
 
     /// `dispatchThreadgroups:threadsPerThreadgroup:`.
@@ -751,10 +798,9 @@ impl ComputeCommandEncoder {
     }
 
     fn dispatch(&mut self, grid: Grid<'_>, size: [u32; 3]) -> Result<(), Error> {
-        let pipeline = self
-            .pipeline
-            .clone()
-            .ok_or(Error::Refused(Refusal::NoPipeline))?;
+        let Some(pipeline) = &self.pipeline else {
+            return Err(Error::Refused(Refusal::NoPipeline));
+        };
         let state = &pipeline.inner;
         let inner = &state.compiled;
         let max = inner.whole.interface.max_total_threads;
@@ -763,19 +809,22 @@ impl ComputeCommandEncoder {
             return Err(Error::Refused(Refusal::ThreadgroupSize { size, max }));
         }
         // Every module of a state is the same function, with the same arguments and alignments,
-        // so the whole module answers this check and the next.
-        let core = Arc::clone(self.building().device.core());
-        let nil = self.check_alignments(&core, &inner.whole.interface)?;
+        // so the whole module answers this check and the next, once after each change.
+        if !self.facts.aligned {
+            self.facts.nil = check_alignments(&self.core, &self.slots, &inner.whole.interface)?;
+            self.facts.aligned = true;
+        }
+        let core = &*self.core;
         let limits = &core.limits;
         // A kernel that writes no memory has no effect a program can observe: once checked as
         // Metal checks it, the dispatch records nothing, binds nothing and reads no indirect
         // buffer.
         if !inner.whole.interface.has_effects {
-            core.counters.count(Metric::DispatchesWithoutEffects);
+            recording(&mut self.building).count(Metric::DispatchesWithoutEffects);
             return Ok(());
         }
         if let Grid::Indirect(buffer, _) = &grid {
-            self.building().keep(buffer);
+            recording(&mut self.building).keep(buffer);
         }
         // What runs: the module, which of the state's it is, its workgroup size, the threadgroup
         // size its regions carry, and for a direct dispatch Metal's grid, the workgroups, and
@@ -805,10 +854,9 @@ impl ComputeCommandEncoder {
             direct,
         } = choose(&inner.form, direct, size);
         let kernel = match module {
-            Module::Partial => inner.later_kernel(
-                Which::Partial,
-                partial_threadgroups(direct.map_or([0; 3], |(threads, ..)| threads)),
-            )?,
+            Module::Partial => inner.later_kernel(Which::Partial, || {
+                partial_threadgroups(direct.map_or([0; 3], |(threads, ..)| threads))
+            })?,
             _ => &inner.whole,
         };
         // A threadgroup that is not whole groups of a module that runs only whole ones runs the
@@ -826,16 +874,15 @@ impl ComputeCommandEncoder {
                     direct.map_or([0; 3], |(threads, ..)| threads),
                 ))
             }
-            Some(&width) => {
-                let refused = Error::Unsupported(Gap::PartialSimdgroups {
-                    threads_per_threadgroup: size,
-                    width,
-                });
-                (
-                    inner.later_kernel(Which::Emulated, refused)?,
-                    Module::Emulated,
-                )
-            }
+            Some(&width) => (
+                inner.later_kernel(Which::Emulated, || {
+                    Error::Unsupported(Gap::PartialSimdgroups {
+                        threads_per_threadgroup: size,
+                        width,
+                    })
+                })?,
+                Module::Emulated,
+            ),
         };
         // No thread runs: nothing is recorded, so a zero grid stays the kernel's mark of an
         // indirect dispatch.
@@ -865,7 +912,7 @@ impl ComputeCommandEncoder {
                         max: limits.max_shared_memory,
                     }));
                 }
-                kernel.pipeline(&core, &variant)?
+                kernel.pipeline(core, &variant)?
             }
         };
         self.last = Some(Last {
@@ -873,26 +920,12 @@ impl ComputeCommandEncoder {
             local,
             pipeline: vk_pipeline,
         });
-        let serial = self.serial;
-        // A write the host may read once the command buffer completes: to a Shared buffer or a
-        // texture over one, bound or declared, or through an address outside the dispatch's
-        // resources.
-        let host = kernel.interface.writes_unbound
-            || self.declared_shared_write
-            || (kernel.interface.buffers.iter()).any(|&(slot, access)| {
-                access.writes()
-                    && matches!(
-                        self.slots.get(slot as usize),
-                        Some(Slot::Buffer { buffer, .. }) if buffer.is_shared()
-                    )
-            })
-            || (kernel.interface.textures.iter()).any(|&(slot, access)| {
-                access.writes()
-                    && matches!(
-                        self.textures.get(slot as usize),
-                        Some(Some(texture)) if texture.host_reads()
-                    )
-            });
+        let interface = &kernel.interface;
+        if self.facts.module != Some(module) {
+            self.facts.managed = self.reaches_managed(interface);
+            self.facts.host = self.writes_host(interface);
+            self.facts.module = Some(module);
+        }
         let wrote = {
             let accesses = Accesses {
                 slots: &self.slots,
@@ -903,49 +936,48 @@ impl ComputeCommandEncoder {
                     Grid::Direct { .. } => None,
                 },
             };
-            let building = self
-                .building
-                .as_mut()
-                .expect("an encoder holds its command buffer's recording until it ends");
+            let building = recording(&mut self.building);
             // Textures over a buffer in an image of their own take their copies first
             // (`crate::over`).
-            let interface = &kernel.interface;
             let overs =
                 (building.copies_over()).then(|| accesses.each(interface).collect::<Vec<_>>());
             if let Some(overs) = &overs {
                 let unbound = interface.reads_unbound || interface.writes_unbound;
                 building.overs_before(overs, unbound)?;
             }
-            // A binding of a Managed buffer with textures over its device copy takes their copies
-            // back first, and one whose compiled interface writes it owes them their copies in; a
-            // texture slot written owes its copy back (`crate::over::ManagedOvers`).
-            let mut backs = Vec::new();
-            for &(slot, access) in &interface.buffers {
-                if let Some(Slot::Buffer { buffer, .. }) = self.slots.get(slot as usize) {
-                    if buffer.managed_overs().is_some() {
-                        backs.extend(over::backs(buffer, None, true));
-                        if access.writes() {
-                            building.wrote_managed(buffer);
+            if self.facts.managed {
+                // A binding of a Managed buffer with textures over its device copy takes their
+                // copies back first, and one whose compiled interface writes it owes them their
+                // copies in; a texture slot written owes its copy back
+                // (`crate::over::ManagedOvers`).
+                let mut backs = Vec::new();
+                for &(slot, access) in &interface.buffers {
+                    if let Some(Slot::Buffer { buffer, .. }) = self.slots.get(slot as usize) {
+                        if buffer.managed_overs().is_some() {
+                            backs.extend(over::backs(buffer, None, true));
+                            if access.writes() {
+                                building.wrote_managed(buffer);
+                            }
                         }
                     }
                 }
-            }
-            building.managed_backs(backs)?;
-            for &(slot, access) in &interface.textures {
-                if let (true, Some(Some(texture))) =
-                    (access.writes(), self.textures.get(slot as usize))
-                {
-                    building.wrote_texture_managed(texture);
+                building.managed_backs(backs)?;
+                for &(slot, access) in &interface.textures {
+                    if let (true, Some(Some(texture))) =
+                        (access.writes(), self.textures.get(slot as usize))
+                    {
+                        building.wrote_texture_managed(texture);
+                    }
                 }
             }
-            let wrote = building.dispatch_hazards(serial, interface, &accesses)?;
+            let wrote = building.dispatch_hazards(self.serial, interface, &accesses)?;
             match &overs {
                 Some(overs) => building.overs_after(overs, interface.writes_unbound),
                 None => building.overs_untracked(),
             }
             // Marked after the hazards' barrier, which may have split the recording at a signal:
             // the mark is the dispatch's own segment's.
-            if host {
+            if self.facts.host {
                 building.wrote_host();
             }
             wrote
@@ -956,8 +988,9 @@ impl ComputeCommandEncoder {
                 true => nonuniform_region_bytes(base, threads, nominal),
                 false => region_bytes(base, threads, nominal),
             }
-            .ok_or(Error::Refused(Refusal::ThreadgroupSize { size, max }))
+            .ok_or_else(|| Error::Refused(Refusal::ThreadgroupSize { size, max }))
         };
+        let ids = &state.numbered.ids;
         match (direct, grid) {
             (Some((threads, groups, ragged)), _) => {
                 // A count past the device's limit on an axis is split: each piece starts at its
@@ -970,12 +1003,16 @@ impl ComputeCommandEncoder {
                             let count = std::array::from_fn(|axis| {
                                 limit[axis].min(groups[axis] - base[axis])
                             });
-                            self.fill_parameters(
-                                kernel,
-                                (&state.numbered.ids, nil),
-                                &region(base, threads, ragged)?,
-                            );
-                            self.record(vk_pipeline, Launch::Direct(count))?;
+                            let region = region(base, threads, ragged)?;
+                            let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
+                            self.parameters
+                                .fill(kernel, (bound, self.facts.nil), ids, &region);
+                            recording(&mut self.building).record_dispatch(
+                                core,
+                                vk_pipeline,
+                                &mut self.parameters,
+                                &Launch::Direct(count),
+                            )?;
                         }
                     }
                 }
@@ -983,40 +1020,58 @@ impl ComputeCommandEncoder {
             }
             (None, Grid::Indirect(buffer, offset)) => {
                 let region = region([0; 3], [0; 3], false)?;
-                self.fill_parameters(kernel, (&state.numbered.ids, nil), &region);
-                self.record(vk_pipeline, Launch::Indirect(buffer, offset))
+                let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
+                self.parameters
+                    .fill(kernel, (bound, self.facts.nil), ids, &region);
+                recording(&mut self.building).record_dispatch(
+                    core,
+                    vk_pipeline,
+                    &mut self.parameters,
+                    &Launch::Indirect(buffer, offset),
+                )
             }
             (None, Grid::Direct { .. }) => Ok(()),
         }
     }
 
-    /// Records one launch of the parameters filled last.
-    fn record(&mut self, pipeline: vk::Pipeline, launch: Launch<'_>) -> Result<(), Error> {
-        let building = self
-            .building
-            .as_mut()
-            .expect("an encoder holds its command buffer's recording until it ends");
-        building.record_dispatch(pipeline, &mut self.parameters, &launch)
+    /// Whether a dispatch of a kernel of `interface` reaches a bound buffer that has a device
+    /// copy, or writes a bound texture over one: the only dispatches that may owe a Managed
+    /// buffer's textures over its device copy their copies.
+    fn reaches_managed(&self, interface: &Interface) -> bool {
+        (interface.buffers.iter()).any(|&(slot, _)| {
+            matches!(
+                self.slots.get(slot as usize),
+                Some(Slot::Buffer { buffer, .. }) if buffer.held().1.is_some()
+            )
+        }) || (interface.textures.iter()).any(|&(slot, access)| {
+            access.writes()
+                && matches!(
+                    self.textures.get(slot as usize),
+                    Some(Some(texture)) if texture.managed_over().is_some()
+                )
+        })
     }
 
-    /// [`check_alignment`] of each buffer `interface` reaches, and the nil buffer's address
-    /// where one it reaches is bound to nothing (`Ring::nil`), else 0. A `set_bytes` copy is at a
-    /// multiple of 16 in the ring, which every mask divides, and so is the nil buffer.
-    fn check_alignments(&self, core: &Core, interface: &Interface) -> Result<u64, Error> {
-        let mut nil = 0;
-        for field in &interface.fields {
-            let FieldValue::BufferAddress { slot, mask } = field.value else {
-                continue;
-            };
-            match self.slots.get(slot as usize) {
-                Some(Slot::Buffer { buffer, offset }) => {
-                    check_alignment(slot, mask, buffer, *offset)?
-                }
-                Some(Slot::Bytes(_)) => {}
-                Some(Slot::Empty) | None => nil = core.ring.nil(core)?,
-            }
-        }
-        Ok(nil)
+    /// Whether a dispatch of a kernel of `interface` writes what the host may read once the
+    /// command buffer completes: a Shared buffer or a texture over one, bound or declared, or
+    /// memory through an address outside the dispatch's resources.
+    fn writes_host(&self, interface: &Interface) -> bool {
+        interface.writes_unbound
+            || self.declared_shared_write
+            || (interface.buffers.iter()).any(|&(slot, access)| {
+                access.writes()
+                    && matches!(
+                        self.slots.get(slot as usize),
+                        Some(Slot::Buffer { buffer, .. }) if buffer.is_shared()
+                    )
+            })
+            || (interface.textures.iter()).any(|&(slot, access)| {
+                access.writes()
+                    && matches!(
+                        self.textures.get(slot as usize),
+                        Some(Some(texture)) if texture.host_reads()
+                    )
+            })
     }
 
     /// The length set for threadgroup memory index `index`, 0 where none was.
@@ -1026,37 +1081,71 @@ impl ComputeCommandEncoder {
             .find(|(set, _)| *set == index)
             .map_or(0, |(_, length)| *length)
     }
+}
 
-    /// Fills the push window and the ring block of one launch of `kernel` whose region is
-    /// `region`, the `DispatchRegion` push field's bytes, and whose state gave its numbered
-    /// samplers `sampler_ids`. The block's address is written by [`Building::record_dispatch`]
-    /// once the block is in the ring. A buffer argument bound to nothing takes `nil`, the nil
-    /// buffer's address.
+/// The recording an open encoder holds.
+fn recording(building: &mut Option<Building>) -> &mut Building {
+    building
+        .as_mut()
+        .expect("an encoder holds its command buffer's recording until it ends")
+}
+
+/// [`check_alignment`] of each buffer bound in `slots` that `interface` reaches, and the nil
+/// buffer's address where one it reaches is bound to nothing (`Ring::nil`), else 0. A `set_bytes`
+/// copy is at a multiple of 16 in the ring, which every mask divides, and so is the nil buffer.
+fn check_alignments(core: &Core, slots: &[Slot], interface: &Interface) -> Result<u64, Error> {
+    let mut nil = 0;
+    for field in &interface.fields {
+        let FieldValue::BufferAddress { slot, mask } = field.value else {
+            continue;
+        };
+        match slots.get(slot as usize) {
+            Some(Slot::Buffer { buffer, offset }) => check_alignment(slot, mask, buffer, *offset)?,
+            Some(Slot::Bytes(_)) => {}
+            Some(Slot::Empty) | None => nil = core.ring.nil(core)?,
+        }
+    }
+    Ok(nil)
+}
+
+/// A compute encoder's argument tables: buffer slots, textures and samplers.
+type Bound<'a> = (
+    &'a [Slot],
+    &'a [Option<Texture>],
+    &'a [Option<SamplerState>],
+);
+
+impl Parameters {
+    /// Fills the push window and the ring block of one launch of `kernel` with `bound`, the
+    /// encoder's argument tables, whose region is `region`, the `DispatchRegion` push field's
+    /// bytes, and whose state gave its numbered samplers `sampler_ids`. The block's address is
+    /// written by [`Building::record_dispatch`] once the block is in the ring. A buffer argument
+    /// bound to nothing takes `nil`, the nil buffer's address.
     ///
     /// Every buffer address is a multiple of the alignment the module takes it to have, which the
-    /// dispatch checked first (`check_alignments`, which gave `nil`).
-    fn fill_parameters(
+    /// dispatch checked first ([`check_alignments`], which gave `nil`).
+    fn fill(
         &mut self,
         kernel: &Kernel,
-        (sampler_ids, nil): (&[u32], u64),
+        (bound, nil): (Bound<'_>, u64),
+        sampler_ids: &[u32],
         region: &[u8; 32],
     ) {
+        let (slots, textures, samplers) = bound;
         let interface: &Interface = &kernel.interface;
-        let parameters = &mut self.parameters;
-        parameters.push.clear();
-        parameters
-            .push
+        self.push.clear();
+        self.push
             .resize(interface.push_len.next_multiple_of(4) as usize, 0);
-        parameters.block.clear();
-        parameters.block.resize(interface.block_len as usize, 0);
+        self.block.clear();
+        self.block.resize(interface.block_len as usize, 0);
         for field in &interface.fields {
             let (bytes, at) = match field.place {
-                Place::Push(offset) => (&mut parameters.push, offset as usize),
-                Place::Block(offset) => (&mut parameters.block, offset as usize),
+                Place::Push(offset) => (&mut self.push, offset as usize),
+                Place::Block(offset) => (&mut self.block, offset as usize),
             };
             match field.value {
                 FieldValue::BufferAddress { slot, .. } => {
-                    let address = match self.slots.get(slot as usize) {
+                    let address = match slots.get(slot as usize) {
                         Some(Slot::Buffer { buffer, offset }) => {
                             buffer.gpu_address().wrapping_add(*offset)
                         }
@@ -1066,21 +1155,21 @@ impl ComputeCommandEncoder {
                     bytes[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }
                 FieldValue::TextureId(slot) => {
-                    let id = match self.textures.get(slot as usize) {
+                    let id = match textures.get(slot as usize) {
                         Some(Some(texture)) => texture.gpu_resource_id().to_bits(),
                         _ => 0,
                     };
                     bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
                 }
                 FieldValue::SamplerId(slot) => {
-                    let id = match self.samplers.get(slot as usize) {
+                    let id = match samplers.get(slot as usize) {
                         Some(Some(sampler)) => sampler.gpu_resource_id().to_bits(),
                         _ => 0,
                     };
                     bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
                 }
                 FieldValue::IntegerChannels(slot) => {
-                    let word = match self.textures.get(slot as usize) {
+                    let word = match textures.get(slot as usize) {
                         Some(Some(texture)) => {
                             integer_channels_word(texture.descriptor().pixel_format)
                         }
@@ -1095,7 +1184,7 @@ impl ComputeCommandEncoder {
                 FieldValue::DispatchRegion => bytes[at..at + 32].copy_from_slice(region),
             }
         }
-        parameters.block_address = (interface.block_len > 0).then_some(interface.block_address);
+        self.block_address = (interface.block_len > 0).then_some(interface.block_address);
     }
 }
 
@@ -1203,14 +1292,14 @@ impl Building {
     }
 
     /// Binds `pipeline` where it is not bound, writes the parameters' ring block and its address,
-    /// pushes the window, and records the dispatch.
+    /// pushes the window, and records the dispatch, on `core`, the recording's device.
     fn record_dispatch(
         &mut self,
+        core: &Core,
         pipeline: vk::Pipeline,
         parameters: &mut Parameters,
         launch: &Launch<'_>,
     ) -> Result<(), Error> {
-        let core = Arc::clone(self.device.core());
         let device = &core.device;
         if let Some(at) = parameters.block_address {
             let address = self.write_ring(&parameters.block)?;

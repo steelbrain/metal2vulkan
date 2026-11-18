@@ -3,7 +3,8 @@
 //! through the ring, indirect dispatch, indirect arguments read only at a multiple of 4 of their
 //! block, barriers only at hazards in a serial encoder and only on
 //! request in a concurrent one, end barriers that reach the host only after Shared writes and
-//! signals, a dispatch of a kernel without effects that records nothing, and Metal's refusals.
+//! signals, a dispatch of a kernel without effects that records nothing, 2,000 dispatches whose
+//! counts reach the device's counters only at their encoder's end, and Metal's refusals.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
@@ -318,6 +319,60 @@ pub(crate) mod on_device {
             );
             let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
             assert_eq!(words(&x), expected, "{name}: concurrent");
+        });
+    }
+
+    /// What an encoder's commands count reaches the device's counters once, at the encoder's
+    /// end: 2,000 dispatches that each read the one before's writes move none of them while the
+    /// encoder is open, and its end adds the pass, the 1,999 barriers between them, the push and
+    /// the 1,999 pushes held.
+    #[test]
+    fn every_device_counts_an_encoders_dispatches_at_its_end() {
+        each_device("compute_counts", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let state = step(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let count = 2_000;
+            let x = arena.buffer();
+            write_words(&x, |index| index);
+            let counters = device.counters();
+            let counted =
+                |m: &crate::Metrics| (m.passes, m.barriers, m.pushes, m.pushes_held, m.ring_writes);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            encoder.set_buffer(Some(&x), 0, 0).expect("a buffer");
+            for _ in 0..count {
+                encoder
+                    .dispatch_threadgroups([4, 1, 1], [16, 1, 1])
+                    .expect("a dispatch");
+            }
+            let open = counters.metrics();
+            assert_eq!(
+                counted(&open),
+                counted(&before),
+                "{name}: passes, barriers, pushes, pushes held and ring writes while it is open"
+            );
+            encoder.end_encoding();
+            let ended = counters.metrics();
+            assert_eq!(
+                (
+                    ended.passes - before.passes,
+                    ended.barriers - before.barriers,
+                    ended.pushes - before.pushes,
+                    ended.pushes_held - before.pushes_held,
+                ),
+                (1, count - 1, 1, count - 1),
+                "{name}: passes, barriers, pushes and pushes held at its end"
+            );
+            run(name, &command_buffer);
+            let chained = |start: u32| (0..count).fold(start, |x, _| x.wrapping_mul(2) + 1);
+            let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
+            assert_eq!(words(&x), expected, "{name}");
+            println!("{name}: 2,000 dispatches counted once, at the encoder's end");
         });
     }
 

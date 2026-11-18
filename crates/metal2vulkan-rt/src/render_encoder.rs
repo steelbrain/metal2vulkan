@@ -66,6 +66,7 @@ use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Tests};
+use crate::device::Core;
 use crate::encoder::{check_alignment, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS};
 use crate::error::{DrawKind, Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
@@ -74,7 +75,7 @@ use crate::over;
 use crate::pass::{layout_barrier, Pass, RenderPassDescriptor};
 use crate::pipeline::{FieldValue, PUSH_STAGES};
 use crate::record::{memory_barrier, Reach};
-use crate::render::{RenderPipelineState, FRAGMENT, VERTEX};
+use crate::render::{Draws, RenderPipelineState, FRAGMENT, VERTEX};
 use crate::ring::{Placed, CHUNK};
 use crate::sampler::SamplerState;
 use crate::shadow::{self, Area, Held};
@@ -182,6 +183,105 @@ struct Shadowed {
     cleared: Option<vk::ClearColorValue>,
 }
 
+/// What a draw of the encoder's pipeline state reaches of its bound resources, worked out at the
+/// first draw after either changes and kept until the next change: the vertex buffers it binds,
+/// and whether it reads an attachment of its pass through a texture, reaches a Managed buffer's
+/// device copy or a texture over one, or writes memory the host may read. A draw after no change
+/// runs none of the scans; one after a change checks its vertex buffers' offsets and its buffers'
+/// alignments again.
+///
+/// A change is the encoder's own call: a pipeline state set, or a buffer, an offset, bytes or a
+/// texture bound. Nothing outside the encoder changes what a fact holds: each is of the objects
+/// bound (a buffer's device copy, storage and length, a texture's image, storage and pixel
+/// format) and of the pass, which do not change. What can change outside it between two draws, a
+/// Managed buffer's textures over its device copy and the textures over a buffer in images of
+/// their own that live, each draw looks at again where a fact says it may matter.
+#[derive(Default)]
+struct Facts {
+    /// The facts are the bound pipeline state's and resources'.
+    held: bool,
+    /// The fixed-function vertex buffers the vertex descriptor reads: binding, buffer, offset.
+    vertex: Vec<(u32, vk::Buffer, u64)>,
+    /// A texture the draw reads is of an image the pass renders.
+    attachments: bool,
+    /// A buffer the draw reaches has a device copy, or a texture it writes is over one.
+    managed: bool,
+    /// A write the host may read once the command buffer completes: to a Shared buffer or a
+    /// texture over one, or through an address outside the draw's resources.
+    host: bool,
+    /// The nil buffer's address where a buffer argument the draw reaches is bound to nothing
+    /// (`Ring::nil`), else 0.
+    nil: u64,
+}
+
+impl Facts {
+    /// The facts of a draw of `draws` with `tables` bound in `pass`, but the alignments, which the
+    /// draw checks after its attachment reads.
+    ///
+    /// Err: [`Refusal::VertexBufferOffset`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the
+    /// vertex descriptor reads that is not bound.
+    fn find(&mut self, draws: &Draws, tables: &[Tables; 2], pass: &Pass) -> Result<(), Error> {
+        self.vertex.clear();
+        for &(binding, index) in &draws.bindings {
+            let (buffer, offset) = match tables[VERTEX].buffers.get(index as usize) {
+                Some(Bound::Buffer { buffer, offset }) => {
+                    if *offset >= buffer.length() {
+                        return Err(Error::Refused(Refusal::VertexBufferOffset {
+                            index,
+                            offset: *offset,
+                            length: buffer.length(),
+                        }));
+                    }
+                    let (reached, at) = buffer.device_range();
+                    (reached, at + offset)
+                }
+                Some(Bound::Bytes(placed)) => (placed.buffer, placed.offset),
+                Some(Bound::Empty) | None => {
+                    return Err(Error::Refused(Refusal::NoBufferAtIndex { index }))
+                }
+            };
+            self.vertex.push((binding, buffer, offset));
+        }
+        self.attachments = (draws.textures.iter()).any(|&(table, slot, _)| {
+            tables[table].texture(slot).is_some_and(|texture| {
+                let hazard = texture.hazard_id();
+                pass.targets().any(|t| t.texture.hazard_id() == hazard)
+            })
+        });
+        let copied = |buffer: &Buffer| buffer.held().1.is_some();
+        self.managed = (draws.buffers.iter())
+            .any(|&(table, slot, _)| tables[table].buffer(slot).is_some_and(copied))
+            || (draws.bindings.iter())
+                .any(|&(_, index)| tables[VERTEX].buffer(index).is_some_and(copied))
+            || (draws.textures.iter()).any(|&(table, slot, access)| {
+                access.writes()
+                    && (tables[table].texture(slot)).is_some_and(|t| t.managed_over().is_some())
+            });
+        self.host = draws.writes_unbound
+            || (draws.buffers.iter()).any(|&(table, slot, access)| {
+                access.writes() && tables[table].buffer(slot).is_some_and(Buffer::is_shared)
+            })
+            || (draws.textures.iter()).any(|&(table, slot, access)| {
+                access.writes() && tables[table].texture(slot).is_some_and(Texture::host_reads)
+            });
+        Ok(())
+    }
+}
+
+/// What a draw reads of its pass's attachments through textures
+/// ([`RenderCommandEncoder::attachment_reads`]).
+struct AttachmentReads {
+    /// Through the feedback loop: a texture reaches an attachment's level and layer.
+    reads: bool,
+    /// The images the draw moves to the feedback layout first.
+    moves: Vec<Move>,
+    /// Without the feedback loop: each texture that reads a shadow, and what the draw reads
+    /// through it.
+    shadow_reads: Vec<(Texture, Vec<Area>)>,
+    /// Their slots: function and slot.
+    shadow_slots: Vec<(usize, u32)>,
+}
+
 /// What a buffer slot holds.
 #[derive(Clone, Default)]
 enum Bound {
@@ -224,7 +324,7 @@ impl Tables {
         self.textures.get(slot as usize)?.as_ref()
     }
 
-    /// The address of buffer slot `slot`: the buffer's plus its offset, or the bytes' copy; 0
+    /// The address of buffer slot `slot`: the buffer's plus its offset, or the bytes' copy; `nil`
     /// where none is bound.
     fn address(&self, slot: u32, nil: u64) -> u64 {
         match self.buffers.get(slot as usize) {
@@ -272,6 +372,8 @@ enum Call<'a> {
 /// [`end_encoding`](Self::end_encoding) does.
 pub struct RenderCommandEncoder {
     command_buffer: CommandBuffer,
+    /// The device: each call borrows it, taking no reference of its own.
+    core: Arc<Core>,
     /// What the command buffer records, held while the encoder is open.
     building: Option<Building>,
     /// The checked pass, for its second barrier and to begin its rendering again.
@@ -314,10 +416,13 @@ pub struct RenderCommandEncoder {
     shadowed: Vec<Shadowed>,
     /// The texture slots of the draw being recorded that read a shadow: function and slot.
     shadow_slots: Vec<(usize, u32)>,
-    /// The fixed-function vertex buffers of the draw being recorded: binding, buffer and offset.
-    vertex_buffers: Vec<(u32, vk::Buffer, u64)>,
-    /// The push bytes of the draw being recorded.
+    /// What a draw of the pipeline state reaches of the bound resources.
+    facts: Facts,
+    /// The push bytes of the last draw.
     push: Vec<u8>,
+    /// The push bytes are those of the bound pipeline state and resources, and of the images the
+    /// pass moved and the shadows the last draw read: the next draw pushes them as they are.
+    push_filled: bool,
 }
 
 impl CommandBuffer {
@@ -340,11 +445,13 @@ impl CommandBuffer {
         descriptor: &RenderPassDescriptor,
     ) -> Result<RenderCommandEncoder, Error> {
         let mut building = self.open_encoder()?;
-        match begin(&mut building, descriptor) {
+        let core = Arc::clone(building.device.core());
+        match begin(&mut building, &core, descriptor) {
             Ok((pass, command)) => {
                 let [width, height] = pass.area;
                 Ok(RenderCommandEncoder {
                     command_buffer: self.clone(),
+                    core,
                     building: Some(building),
                     command,
                     tables: [Tables::new(), Tables::new()],
@@ -374,8 +481,9 @@ impl CommandBuffer {
                     loop_aspects: vk::ImageAspectFlags::NONE,
                     shadowed: Vec::new(),
                     shadow_slots: Vec::new(),
-                    vertex_buffers: Vec::new(),
+                    facts: Facts::default(),
                     push: Vec::new(),
+                    push_filled: false,
                     pass,
                 })
             }
@@ -391,10 +499,10 @@ impl CommandBuffer {
 /// `vkCmdBeginRendering`.
 fn begin(
     building: &mut Building,
+    core: &Arc<Core>,
     descriptor: &RenderPassDescriptor,
 ) -> Result<(Pass, vk::CommandBuffer), Error> {
-    let core = Arc::clone(building.device.core());
-    let pass = Pass::check(&core, descriptor)?;
+    let pass = Pass::check(core, descriptor)?;
     let overs: Vec<(u32, Access)> = (pass.targets())
         .map(|t| (t.texture.hazard_id(), Access::ReadWrite))
         .collect();
@@ -411,7 +519,7 @@ fn begin(
         building.wrote_host();
     }
     building.overs_after(&overs, false);
-    core.counters.count(Metric::Passes);
+    building.count(Metric::Passes);
     let earlier = [memory_barrier(Reach::Commands)];
     let away: Vec<vk::ImageMemoryBarrier2> = (pass.targets())
         .filter(|t| t.moves())
@@ -433,7 +541,7 @@ fn begin(
                     .image_memory_barriers(&away),
             );
         }
-        core.counters.count(Metric::Barriers);
+        building.count(Metric::Barriers);
     }
     // SAFETY: the command buffer records outside any render pass and keeps each attachment's
     // texture until it retires; each attachment is in the layout the pass names.
@@ -446,6 +554,13 @@ impl RenderCommandEncoder {
         self.building
             .as_mut()
             .expect("an encoder holds its command buffer's recording until it ends")
+    }
+
+    /// The pipeline state or a binding changed: the next draw finds its facts and fills its push
+    /// bytes again.
+    fn changed(&mut self) {
+        self.facts.held = false;
+        self.push_filled = false;
     }
 
     /// `setRenderPipelineState:`. The command buffer keeps the state until it retires.
@@ -461,6 +576,7 @@ impl RenderCommandEncoder {
         self.building().keep_render_pipeline(state);
         self.renders_into = state.inner.compiled.renders_into(&self.pass);
         self.pipeline = Some(state.clone());
+        self.changed();
         Ok(())
     }
 
@@ -516,6 +632,7 @@ impl RenderCommandEncoder {
             None => Bound::Empty,
         };
         self.tables[table].buffers[slot] = bound;
+        self.changed();
         Ok(())
     }
 
@@ -538,6 +655,7 @@ impl RenderCommandEncoder {
         match &mut self.tables[table].buffers[slot(index)?] {
             Bound::Buffer { offset: bound, .. } => {
                 *bound = offset;
+                self.changed();
                 Ok(())
             }
             _ => Err(Error::Refused(Refusal::NoBufferAtIndex { index })),
@@ -574,6 +692,7 @@ impl RenderCommandEncoder {
         }
         let placed = self.building().write_ring_placed(bytes)?;
         self.tables[table].buffers[slot] = Bound::Bytes(placed);
+        self.changed();
         Ok(())
     }
 
@@ -621,6 +740,7 @@ impl RenderCommandEncoder {
             building.keep_texture(texture);
         }
         self.tables[table].textures[index as usize] = texture.cloned();
+        self.changed();
         Ok(())
     }
 
@@ -668,6 +788,7 @@ impl RenderCommandEncoder {
             building.keep_sampler(sampler);
         }
         self.tables[table].samplers[index as usize] = sampler.cloned();
+        self.push_filled = false;
         Ok(())
     }
 
@@ -691,8 +812,7 @@ impl RenderCommandEncoder {
         if fields.iter().any(|f| !f.is_finite()) {
             return Err(Error::Refused(Refusal::ViewportNotFinite));
         }
-        let core = Arc::clone(self.building().device.core());
-        let limits = &core.limits;
+        let limits = &self.core.limits;
         let [low, high] = limits.viewport_bounds.map(f64::from);
         let vk = vk_viewport(&v);
         let [x, y, width, height] = [vk.x, vk.y, vk.width, vk.height].map(f64::from);
@@ -808,7 +928,7 @@ impl RenderCommandEncoder {
     /// encoder's draws so far are ordered before its later ones.
     fn ordered(&mut self) -> Result<(), Error> {
         (self.drew, self.owed) = (false, false);
-        self.interrupt(|building| {
+        self.interrupt(|building, _| {
             let command = building.ordered_command()?;
             building.barrier(command, Reach::Commands);
             Ok(())
@@ -836,10 +956,10 @@ impl RenderCommandEncoder {
             }
         }
         self.moved.extend(moves.into_iter().map(|m| m.moved));
+        self.push_filled = false;
         (self.drew, self.owed) = (false, false);
-        self.interrupt(|building| {
+        self.interrupt(|building, core| {
             let command = building.ordered_command()?;
-            let core = Arc::clone(building.device.core());
             let memory = [memory_barrier(Reach::Commands)];
             // SAFETY: the command buffer records outside any rendering; each range is in the
             // layout it moves from: the attachment's in the layout the pass rendered it in, the
@@ -852,7 +972,7 @@ impl RenderCommandEncoder {
                         .image_memory_barriers(&images),
                 )
             };
-            core.counters.count(Metric::Barriers);
+            building.count(Metric::Barriers);
             Ok(())
         })
     }
@@ -973,9 +1093,8 @@ impl RenderCommandEncoder {
                 .sum::<u64>();
             copies.push((s.image, s.shadow, regions));
         }
-        self.interrupt(|building| {
+        self.interrupt(|building, core| {
             let command = building.ordered_command()?;
-            let core = Arc::clone(building.device.core());
             let memory = [memory_barrier(Reach::Commands)];
             let device = &core.device;
             // SAFETY: the command buffer records outside any rendering and keeps each image until
@@ -1003,8 +1122,8 @@ impl RenderCommandEncoder {
                     &vk::DependencyInfo::default().image_memory_barriers(&back),
                 );
             }
-            core.counters.count(Metric::Barriers);
-            core.counters.count(Metric::Barriers);
+            building.count(Metric::Barriers);
+            building.count(Metric::Barriers);
             core.counters.attachment_read_copied(count, bytes);
             Ok(())
         })
@@ -1017,8 +1136,7 @@ impl RenderCommandEncoder {
     /// Err: [`Refusal::OtherDevice`] for another device's fence; [`Gap::FenceOtherQueue`] for a
     /// fence another queue used first.
     pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        let core = Arc::clone(self.building().device.core());
-        fence.used_on(&core, self.command_buffer.queue())
+        fence.used_on(&self.core, self.command_buffer.queue())
     }
 
     /// `waitForFence:beforeStages:`: this encoder sees what the encoders up to `fence`'s last
@@ -1027,8 +1145,7 @@ impl RenderCommandEncoder {
     ///
     /// Err: as [`update_fence`](Self::update_fence).
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        let core = Arc::clone(self.building().device.core());
-        fence.used_on(&core, self.command_buffer.queue())
+        fence.used_on(&self.core, self.command_buffer.queue())
     }
 
     /// `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` (the shorter forms are
@@ -1096,7 +1213,9 @@ impl RenderCommandEncoder {
         instance_count: u32,
         base_instance: u32,
     ) -> Result<(), Error> {
-        let state = (self.pipeline.clone()).ok_or(Error::Refused(Refusal::NoPipeline))?;
+        let Some(state) = &self.pipeline else {
+            return Err(Error::Refused(Refusal::NoPipeline));
+        };
         let compiled = &state.inner.compiled;
         let draws = &compiled.draws;
         let gap = |kind| Err(Error::Unsupported(Gap::Draw { kind }));
@@ -1114,7 +1233,6 @@ impl RenderCommandEncoder {
         if self.tests.stencil && self.pass.stencil.is_none() {
             return Err(Error::Refused(Refusal::StencilAttachment));
         }
-        let core = Arc::clone(self.building().device.core());
         // The index buffer: its `VkBuffer`, the offset there, and the index type.
         let index = match call {
             Call::Direct { .. } => None,
@@ -1128,7 +1246,7 @@ impl RenderCommandEncoder {
                     },
                 ..
             } => {
-                if !buffer.is_of(&core) {
+                if !buffer.is_of(&self.core) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 let size = match index_type {
@@ -1156,100 +1274,29 @@ impl RenderCommandEncoder {
                 Some((buffer, reached, place, vk::IndexType::from_raw(ty.as_raw())))
             }
         };
-        // The vertex buffers the vertex descriptor reads.
-        self.vertex_buffers.clear();
-        for &(binding, index) in &draws.bindings {
-            let (buffer, offset) = match self.tables[VERTEX].buffers.get(index as usize) {
-                Some(Bound::Buffer { buffer, offset }) => {
-                    if *offset >= buffer.length() {
-                        return Err(Error::Refused(Refusal::VertexBufferOffset {
-                            index,
-                            offset: *offset,
-                            length: buffer.length(),
-                        }));
-                    }
-                    let (reached, at) = buffer.device_range();
-                    (reached, at + offset)
-                }
-                Some(Bound::Bytes(placed)) => (placed.buffer, placed.offset),
-                Some(Bound::Empty) | None => {
-                    return Err(Error::Refused(Refusal::NoBufferAtIndex { index }))
-                }
-            };
-            self.vertex_buffers.push((binding, buffer, offset));
+        if !self.facts.held {
+            self.facts.find(draws, &self.tables, &self.pass)?;
         }
-        // A texture whose image the pass renders. One that reaches the attachment's level and
-        // layer reads the attachment: from the fragment function, never written, of an image a
-        // draw may read so that one attachment of the pass renders. Through the feedback loop,
-        // one that reaches neither reads its image at home, or, once the pass moved the image, in
-        // the feedback layout, never written, and the pass's first draw that reads an attachment
-        // moves its image. Without the loop, one that reaches the attachment reads the image's
-        // shadow, into which the draw copies what it reads first, and one that reaches neither
-        // reads its image at home.
-        let drawn = self.drawn();
-        let tables = &self.tables;
-        let mut reads = false;
-        let mut moves: Vec<Move> = Vec::new();
-        let mut shadow_reads: Vec<(Texture, Vec<Area>)> = Vec::new();
-        let mut shadow_slots = Vec::new();
-        for &(table, slot, access) in &draws.textures {
-            let Some(texture) = tables[table].texture(slot) else {
-                continue;
-            };
-            let hazard = texture.hazard_id();
-            let mut rendered = (self.pass.targets()).filter(|t| t.texture.hazard_id() == hazard);
-            let Some(target) = rendered.next() else {
-                continue;
-            };
-            let a = &target.attachment;
-            let reaches = texture.reaches(a.level, a.layer);
-            let moved = (self.moved.iter()).any(|m| m.hazard == hazard)
-                || (moves.iter()).any(|m| m.moved.hazard == hazard);
-            if !reaches && !moved {
-                continue;
-            }
-            let readable = core.attachment_reads
-                && texture.attachment_reads()
-                && !access.writes()
-                && (table == FRAGMENT || !reaches)
-                && rendered.next().is_none();
-            if !readable {
-                return gap(DrawKind::AttachmentRead);
-            }
-            if core.feedback.is_none() {
-                // What the slot reads: at the fragment's own pixel, or all its texture reaches.
-                let own = (table == FRAGMENT && draws.own_pixel.binary_search(&slot).is_ok())
-                    .then_some(drawn);
-                shadow_reads.push((texture.clone(), texture.read_areas(own)));
-                shadow_slots.push((table, slot));
-                continue;
-            }
-            reads |= reaches;
-            if !moved {
-                moves.push(Move {
-                    moved: Moved {
-                        hazard,
-                        image: a.image,
-                        whole: texture.whole(),
-                        home: a.home,
-                    },
-                    rendered: target.range(),
-                    from: target.layout,
-                });
-            }
-        }
-        // A buffer argument bound to nothing reads the nil buffer (`Ring::nil`).
-        let mut nil = 0;
-        for &(_, table, value) in &draws.fields {
-            if let FieldValue::BufferAddress { slot, mask } = value {
-                match tables[table].buffers.get(slot as usize) {
-                    Some(Bound::Buffer { buffer, offset }) => {
-                        check_alignment(slot, mask, buffer, *offset)?
+        let reads = match self.facts.attachments {
+            true => Some(self.attachment_reads(draws)?),
+            false => None,
+        };
+        if !self.facts.held {
+            // A buffer argument bound to nothing reads the nil buffer (`Ring::nil`).
+            let mut nil = 0;
+            for &(_, table, value) in &draws.fields {
+                if let FieldValue::BufferAddress { slot, mask } = value {
+                    match self.tables[table].buffers.get(slot as usize) {
+                        Some(Bound::Buffer { buffer, offset }) => {
+                            check_alignment(slot, mask, buffer, *offset)?
+                        }
+                        Some(Bound::Bytes(_)) => {}
+                        Some(Bound::Empty) | None => nil = self.core.ring.nil(&self.core)?,
                     }
-                    Some(Bound::Bytes(_)) => {}
-                    Some(Bound::Empty) | None => nil = core.ring.nil(&core)?,
                 }
             }
+            self.facts.nil = nil;
+            self.facts.held = true;
         }
         let count = match call {
             Call::Direct { vertex_count, .. } => vertex_count,
@@ -1262,116 +1309,60 @@ impl RenderCommandEncoder {
             return gap(DrawKind::DividedBaseInstance);
         }
         let pipeline = compiled.pipeline(topology)?;
-        // The attachments the draw reads: their images moved, which orders everything before, or
-        // the barrier owed paid; without the feedback loop, what their shadows do not hold copied.
-        if !moves.is_empty() {
-            self.feedback_moves(moves)?;
-        } else if reads && self.owed {
-            self.ordered()?;
-        }
-        if !shadow_reads.is_empty() {
-            self.shadow_copies(&shadow_reads)?;
-        }
-        self.shadow_slots = shadow_slots;
-        if core.feedback.is_some() {
-            let aspects = match reads {
-                true => vk::ImageAspectFlags::COLOR,
-                false => vk::ImageAspectFlags::NONE,
-            };
-            if aspects != self.loop_aspects {
-                self.loop_aspects = aspects;
-                self.dirty |= LOOP;
-            }
-        }
-        let tables = &self.tables;
-        // The copies the draw needs first: its textures over a buffer in an image of their own
-        // (`crate::over`), and the textures over a Managed buffer's device copy it reaches
-        // (`crate::over::ManagedOvers`), each recorded between the rendering's end and its new
-        // beginning.
-        let building = (self.building.as_mut())
+        let writes_memory = draws.writes_memory;
+        let building = (self.building.as_ref())
             .expect("an encoder holds its command buffer's recording until it ends");
-        let vertex_reads = (draws.bindings.iter())
-            .filter_map(|&(_, index)| tables[VERTEX].buffer(index))
-            .chain(index.map(|(buffer, ..)| buffer));
-        let accesses: Vec<(u32, Access)> = match building.copies_over() {
-            false => Vec::new(),
-            true => (draws.buffers.iter())
-                .filter_map(|&(table, slot, access)| {
-                    Some((tables[table].buffer(slot)?.id(), access))
-                })
-                .chain(
-                    (draws.textures.iter()).filter_map(|&(table, slot, access)| {
-                        Some((tables[table].texture(slot)?.hazard_id(), access))
-                    }),
-                )
-                .chain(
-                    vertex_reads
-                        .clone()
-                        .map(|buffer| (buffer.id(), Access::Read)),
-                )
-                .collect(),
-        };
-        let unbound = draws.reads_unbound || draws.writes_unbound;
-        let copies = building.overs_owed(&accesses, unbound);
-        let mut backs = Vec::new();
-        for &(table, slot, access) in &draws.buffers {
-            if let Some(buffer) = tables[table].buffer(slot) {
-                if buffer.managed_overs().is_some() {
-                    backs.extend(over::backs(buffer, None, true));
-                    if access.writes() {
-                        building.wrote_managed(buffer);
-                    }
+        // What a draw reaches that each draw looks at again: an attachment of its pass through a
+        // texture, a Managed buffer's device copy or a texture over one, or textures over a buffer
+        // in an image of their own while any lives (`crate::over`).
+        let index_buffer = index.map(|(buffer, ..)| buffer);
+        let each = reads.is_some()
+            || self.facts.managed
+            || index_buffer.is_some_and(|buffer| buffer.managed_overs().is_some())
+            || building.copies_over();
+        match each {
+            true => self.draw_reaches(reads, index_buffer)?,
+            false => {
+                if !self.shadow_slots.is_empty() {
+                    self.shadow_slots.clear();
+                    self.push_filled = false;
                 }
+                self.loop_reads(false);
+                (self.building.as_mut())
+                    .expect("an encoder holds its command buffer's recording until it ends")
+                    .overs_untracked();
             }
-        }
-        for buffer in vertex_reads {
-            if buffer.managed_overs().is_some() {
-                backs.extend(over::backs(buffer, None, true));
-            }
-        }
-        for &(table, slot, access) in &draws.textures {
-            if let (true, Some(texture)) = (access.writes(), tables[table].texture(slot)) {
-                building.wrote_texture_managed(texture);
-            }
-        }
-        // A write the host may read once the command buffer completes: to a Shared buffer or a
-        // texture over one, or through an address outside the draw's resources.
-        let host = draws.writes_unbound
-            || (draws.buffers.iter()).any(|&(table, slot, access)| {
-                access.writes() && tables[table].buffer(slot).is_some_and(Buffer::is_shared)
-            })
-            || (draws.textures.iter()).any(|&(table, slot, access)| {
-                access.writes() && tables[table].texture(slot).is_some_and(Texture::host_reads)
-            });
-        if !copies.is_empty() || !backs.is_empty() {
-            self.interrupt(|building| {
-                building.record_overs(copies)?;
-                building.managed_backs(backs)
-            })?;
         }
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
-        building.overs_after(&accesses, draws.writes_unbound);
-        if host {
+        if self.facts.host {
             building.wrote_host();
         }
-        self.wrote |= draws.writes_memory;
+        self.wrote |= writes_memory;
         (self.drew, self.pass_drew) = (true, true);
         let (bind, first) = building.bind_graphics(pipeline);
-        self.fill_push(&state, nil);
-        let building = (self.building.as_mut())
-            .expect("an encoder holds its command buffer's recording until it ends");
+        if !self.push_filled {
+            if let Some(state) = &self.pipeline {
+                fill_push(
+                    &mut self.push,
+                    (&self.tables, self.facts.nil),
+                    &self.moved,
+                    &self.shadow_slots,
+                    state,
+                );
+            }
+            self.push_filled = true;
+        }
         let push = !self.push.is_empty() && building.push_needed(&self.push);
-        let device = &core.device;
+        let core = &*self.core;
         let command = self.command;
         // SAFETY: the command buffer is inside the pass's rendering, which the pipeline renders
         // into (its formats are the attachments'), and keeps the pipeline state, every bound
         // resource and set 1 until it retires; the layout and set 1 are the device's, set 1 of
-        // that layout and update-after-bind; the push bytes lie in the layout's one push range,
-        // of `PUSH_STAGES`; every vertex binding the pipeline reads is bound inside its buffer.
+        // that layout and update-after-bind.
         unsafe {
             if first {
-                device.cmd_bind_descriptor_sets(
+                core.device.cmd_bind_descriptor_sets(
                     command,
                     vk::PipelineBindPoint::GRAPHICS,
                     core.layout,
@@ -1381,11 +1372,23 @@ impl RenderCommandEncoder {
                 );
             }
             if bind {
-                device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                core.device
+                    .cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, pipeline);
             }
-            self.record_state(device, core.feedback.as_ref(), topology, restart);
-            for &(binding, buffer, offset) in &self.vertex_buffers {
-                device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
+            self.record_state(topology, restart);
+        }
+        let core = &*self.core;
+        let device = &core.device;
+        let building = (self.building.as_mut())
+            .expect("an encoder holds its command buffer's recording until it ends");
+        // SAFETY: as above; the push bytes lie in the layout's one push range, of `PUSH_STAGES`;
+        // every vertex binding the pipeline reads is bound inside its buffer, the ones the
+        // command buffer holds already as they are.
+        unsafe {
+            for &(binding, buffer, offset) in &self.facts.vertex {
+                if building.vertex_needed(binding, buffer, offset) {
+                    device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
+                }
             }
             if push {
                 device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, &self.push);
@@ -1428,55 +1431,191 @@ impl RenderCommandEncoder {
         Ok(())
     }
 
-    /// Fills the push bytes of a draw of `state` from the tables, a buffer argument bound to
-    /// nothing taking `nil`, the nil buffer's address.
-    fn fill_push(&mut self, state: &RenderPipelineState, nil: u64) {
+    /// What a draw of `draws` reads of its pass's attachments through textures. A texture whose
+    /// image the pass renders and that reaches the attachment's level and layer reads the
+    /// attachment: from the fragment function, never written, of an image a draw may read so that
+    /// one attachment of the pass renders. Through the feedback loop, one that reaches neither
+    /// reads its image at home, or, once the pass moved the image, in the feedback layout, never
+    /// written, and the pass's first draw that reads an attachment moves its image. Without the
+    /// loop, one that reaches the attachment reads the image's shadow, into which the draw copies
+    /// what it reads first, and one that reaches neither reads its image at home.
+    ///
+    /// Err: [`Gap::Draw`] of [`DrawKind::AttachmentRead`] for a read the device cannot make.
+    fn attachment_reads(&self, draws: &Draws) -> Result<AttachmentReads, Error> {
+        let core = &*self.core;
+        let drawn = self.drawn();
+        let tables = &self.tables;
+        let mut found = AttachmentReads {
+            reads: false,
+            moves: Vec::new(),
+            shadow_reads: Vec::new(),
+            shadow_slots: Vec::new(),
+        };
+        for &(table, slot, access) in &draws.textures {
+            let Some(texture) = tables[table].texture(slot) else {
+                continue;
+            };
+            let hazard = texture.hazard_id();
+            let mut rendered = (self.pass.targets()).filter(|t| t.texture.hazard_id() == hazard);
+            let Some(target) = rendered.next() else {
+                continue;
+            };
+            let a = &target.attachment;
+            let reaches = texture.reaches(a.level, a.layer);
+            let moved = (self.moved.iter()).any(|m| m.hazard == hazard)
+                || (found.moves.iter()).any(|m| m.moved.hazard == hazard);
+            if !reaches && !moved {
+                continue;
+            }
+            let readable = core.attachment_reads
+                && texture.attachment_reads()
+                && !access.writes()
+                && (table == FRAGMENT || !reaches)
+                && rendered.next().is_none();
+            if !readable {
+                return Err(Error::Unsupported(Gap::Draw {
+                    kind: DrawKind::AttachmentRead,
+                }));
+            }
+            if core.feedback.is_none() {
+                // What the slot reads: at the fragment's own pixel, or all its texture reaches.
+                let own = (table == FRAGMENT && draws.own_pixel.binary_search(&slot).is_ok())
+                    .then_some(drawn);
+                found
+                    .shadow_reads
+                    .push((texture.clone(), texture.read_areas(own)));
+                found.shadow_slots.push((table, slot));
+                continue;
+            }
+            found.reads |= reaches;
+            if !moved {
+                found.moves.push(Move {
+                    moved: Moved {
+                        hazard,
+                        image: a.image,
+                        whole: texture.whole(),
+                        home: a.home,
+                    },
+                    rendered: target.range(),
+                    from: target.layout,
+                });
+            }
+        }
+        Ok(found)
+    }
+
+    /// The part of a draw that each draw that reaches an attachment of its pass through a texture,
+    /// a Managed buffer's device copy or a texture over one, or records while a texture over a
+    /// buffer in an image of its own lives, works out again: the attachments it reads (`reads`,
+    /// [`attachment_reads`](Self::attachment_reads)), their images moved, which orders everything
+    /// before, or the barrier owed paid, and without the feedback loop what their shadows do not
+    /// hold copied; then the copies it needs first, its textures over a buffer in an image of
+    /// their own (`crate::over`) and the textures over a Managed buffer's device copy it reaches
+    /// (`crate::over::ManagedOvers`), each recorded between the rendering's end and its new
+    /// beginning. `index` is its index buffer.
+    fn draw_reaches(
+        &mut self,
+        reads: Option<AttachmentReads>,
+        index: Option<&Buffer>,
+    ) -> Result<(), Error> {
+        let reads_attachment = match reads {
+            Some(found) => {
+                if !found.moves.is_empty() {
+                    self.feedback_moves(found.moves)?;
+                } else if found.reads && self.owed {
+                    self.ordered()?;
+                }
+                if !found.shadow_reads.is_empty() {
+                    self.shadow_copies(&found.shadow_reads)?;
+                }
+                self.shadow_slots = found.shadow_slots;
+                self.push_filled = false;
+                found.reads
+            }
+            None => {
+                if !self.shadow_slots.is_empty() {
+                    self.shadow_slots.clear();
+                    self.push_filled = false;
+                }
+                false
+            }
+        };
+        self.loop_reads(reads_attachment);
+        let Some(state) = &self.pipeline else {
+            return Err(Error::Refused(Refusal::NoPipeline));
+        };
         let draws = &state.inner.compiled.draws;
-        let ids = &state.inner.numbered.ids;
-        let push = &mut self.push;
-        push.clear();
-        push.resize(draws.push_len.next_multiple_of(4) as usize, 0);
-        for &(offset, table, value) in &draws.fields {
-            let tables = &self.tables[table];
-            let at = offset as usize;
-            match value {
-                // At a multiple of the argument's alignment, which the draw checked first.
-                FieldValue::BufferAddress { slot, .. } => {
-                    let address = tables.address(slot, nil);
-                    push[at..at + 8].copy_from_slice(&address.to_le_bytes());
+        let tables = &self.tables;
+        let building = (self.building.as_mut())
+            .expect("an encoder holds its command buffer's recording until it ends");
+        let vertex_reads = (draws.bindings.iter())
+            .filter_map(|&(_, index)| tables[VERTEX].buffer(index))
+            .chain(index);
+        let accesses: Vec<(u32, Access)> = match building.copies_over() {
+            false => Vec::new(),
+            true => (draws.buffers.iter())
+                .filter_map(|&(table, slot, access)| {
+                    Some((tables[table].buffer(slot)?.id(), access))
+                })
+                .chain(
+                    (draws.textures.iter()).filter_map(|&(table, slot, access)| {
+                        Some((tables[table].texture(slot)?.hazard_id(), access))
+                    }),
+                )
+                .chain(
+                    vertex_reads
+                        .clone()
+                        .map(|buffer| (buffer.id(), Access::Read)),
+                )
+                .collect(),
+        };
+        let unbound = draws.reads_unbound || draws.writes_unbound;
+        let writes_unbound = draws.writes_unbound;
+        let copies = building.overs_owed(&accesses, unbound);
+        let mut backs = Vec::new();
+        for &(table, slot, access) in &draws.buffers {
+            if let Some(buffer) = tables[table].buffer(slot) {
+                if buffer.managed_overs().is_some() {
+                    backs.extend(over::backs(buffer, None, true));
+                    if access.writes() {
+                        building.wrote_managed(buffer);
+                    }
                 }
-                // A texture whose image the pass moved to the feedback layout reads through its
-                // second element in that layout, and one that reads a shadow through its second
-                // element, the shadow's.
-                FieldValue::TextureId(slot) => {
-                    let id = (tables.texture(slot)).map_or(0, |t| {
-                        let second = (self.moved.iter()).any(|m| m.hazard == t.hazard_id())
-                            || self.shadow_slots.contains(&(table, slot));
-                        match second {
-                            true => t.second_resource_id().to_bits(),
-                            false => t.gpu_resource_id().to_bits(),
-                        }
-                    });
-                    push[at..at + 8].copy_from_slice(&id.to_le_bytes());
-                }
-                FieldValue::SamplerId(slot) => {
-                    let id = match tables.samplers.get(slot as usize) {
-                        Some(Some(sampler)) => sampler.gpu_resource_id().to_bits(),
-                        _ => 0,
-                    };
-                    push[at..at + 8].copy_from_slice(&id.to_le_bytes());
-                }
-                FieldValue::IntegerChannels(slot) => {
-                    let word = (tables.texture(slot))
-                        .map_or(0, |t| integer_channels_word(t.descriptor().pixel_format));
-                    push[at..at + 4].copy_from_slice(&word.to_le_bytes());
-                }
-                FieldValue::ConstexprSampler(place) => {
-                    let index = ids.get(place).copied().unwrap_or(0);
-                    push[at..at + 4].copy_from_slice(&index.to_le_bytes());
-                }
-                // A render content has no dispatch region (`render::draws`).
-                FieldValue::DispatchRegion => {}
+            }
+        }
+        for buffer in vertex_reads {
+            if buffer.managed_overs().is_some() {
+                backs.extend(over::backs(buffer, None, true));
+            }
+        }
+        for &(table, slot, access) in &draws.textures {
+            if let (true, Some(texture)) = (access.writes(), tables[table].texture(slot)) {
+                building.wrote_texture_managed(texture);
+            }
+        }
+        if !copies.is_empty() || !backs.is_empty() {
+            self.interrupt(|building, _| {
+                building.record_overs(copies)?;
+                building.managed_backs(backs)
+            })?;
+        }
+        (self.building.as_mut())
+            .expect("an encoder holds its command buffer's recording until it ends")
+            .overs_after(&accesses, writes_unbound);
+        Ok(())
+    }
+
+    /// Sets the feedback loop's aspects for a draw that reads an attachment (`reads`) or none,
+    /// where the device reads attachments through it: dirty where they change.
+    fn loop_reads(&mut self, reads: bool) {
+        if self.core.feedback.is_some() {
+            let aspects = match reads {
+                true => vk::ImageAspectFlags::COLOR,
+                false => vk::ImageAspectFlags::NONE,
+            };
+            if aspects != self.loop_aspects {
+                self.loop_aspects = aspects;
+                self.dirty |= LOOP;
             }
         }
     }
@@ -1487,13 +1626,9 @@ impl RenderCommandEncoder {
     /// # Safety
     ///
     /// The encoder's command buffer is inside its pass's rendering.
-    unsafe fn record_state(
-        &mut self,
-        device: &ash::Device,
-        feedback: Option<&ash::ext::attachment_feedback_loop_dynamic_state::Device>,
-        topology: vk::PrimitiveTopology,
-        restart: bool,
-    ) {
+    unsafe fn record_state(&mut self, topology: vk::PrimitiveTopology, restart: bool) {
+        let device = &self.core.device;
+        let feedback = self.core.feedback.as_ref();
         let command = self.command;
         let dirty = self.dirty;
         self.dirty = 0;
@@ -1598,15 +1733,15 @@ impl RenderCommandEncoder {
     /// unwritten again.
     fn interrupt(
         &mut self,
-        record: impl FnOnce(&mut Building) -> Result<(), Error>,
+        record: impl FnOnce(&mut Building, &Core) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
-        let core = Arc::clone(building.device.core());
+        let core = &*self.core;
         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
         // into while the encoder holds it.
         unsafe { core.device.cmd_end_rendering(self.command) };
-        let recorded = record(building);
+        let recorded = record(building, core);
         // SAFETY: the command buffer records outside any rendering and keeps each attachment's
         // texture until it retires; each attachment stays in the layout the pass renders it in,
         // and what `record` recorded orders itself after the rendering and before the next by
@@ -1626,7 +1761,7 @@ impl RenderCommandEncoder {
         let Some(mut building) = self.building.take() else {
             return;
         };
-        let core = Arc::clone(building.device.core());
+        let core = &*self.core;
         let later = [memory_barrier(Reach::Commands)];
         let looped = vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
         let moved = &self.moved;
@@ -1658,7 +1793,7 @@ impl RenderCommandEncoder {
                         .image_memory_barriers(&back),
                 );
             }
-            core.counters.count(Metric::Barriers);
+            building.count(Metric::Barriers);
         }
         self.command_buffer.close_encoder(building);
     }
@@ -1667,6 +1802,63 @@ impl RenderCommandEncoder {
 impl Drop for RenderCommandEncoder {
     fn drop(&mut self) {
         self.end();
+    }
+}
+
+/// Fills `push`, the push bytes of a draw of `state`, from the `tables`, a buffer argument bound to
+/// nothing taking `nil`, the nil buffer's address: a texture whose image the pass `moved` to the
+/// feedback layout reads through its second element in that layout, and one in `shadow_slots`,
+/// which reads a shadow, through its second element, the shadow's.
+fn fill_push(
+    push: &mut Vec<u8>,
+    (tables, nil): (&[Tables; 2], u64),
+    moved: &[Moved],
+    shadow_slots: &[(usize, u32)],
+    state: &RenderPipelineState,
+) {
+    let draws = &state.inner.compiled.draws;
+    let ids = &state.inner.numbered.ids;
+    push.clear();
+    push.resize(draws.push_len.next_multiple_of(4) as usize, 0);
+    for &(offset, table, value) in &draws.fields {
+        let tables = &tables[table];
+        let at = offset as usize;
+        match value {
+            // At a multiple of the argument's alignment, which the draw checked first.
+            FieldValue::BufferAddress { slot, .. } => {
+                let address = tables.address(slot, nil);
+                push[at..at + 8].copy_from_slice(&address.to_le_bytes());
+            }
+            FieldValue::TextureId(slot) => {
+                let id = (tables.texture(slot)).map_or(0, |t| {
+                    let second = (moved.iter()).any(|m| m.hazard == t.hazard_id())
+                        || shadow_slots.contains(&(table, slot));
+                    match second {
+                        true => t.second_resource_id().to_bits(),
+                        false => t.gpu_resource_id().to_bits(),
+                    }
+                });
+                push[at..at + 8].copy_from_slice(&id.to_le_bytes());
+            }
+            FieldValue::SamplerId(slot) => {
+                let id = match tables.samplers.get(slot as usize) {
+                    Some(Some(sampler)) => sampler.gpu_resource_id().to_bits(),
+                    _ => 0,
+                };
+                push[at..at + 8].copy_from_slice(&id.to_le_bytes());
+            }
+            FieldValue::IntegerChannels(slot) => {
+                let word = (tables.texture(slot))
+                    .map_or(0, |t| integer_channels_word(t.descriptor().pixel_format));
+                push[at..at + 4].copy_from_slice(&word.to_le_bytes());
+            }
+            FieldValue::ConstexprSampler(place) => {
+                let index = ids.get(place).copied().unwrap_or(0);
+                push[at..at + 4].copy_from_slice(&index.to_le_bytes());
+            }
+            // A render content has no dispatch region (`render::draws`).
+            FieldValue::DispatchRegion => {}
+        }
     }
 }
 
