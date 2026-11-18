@@ -2,6 +2,7 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
+use super::new_runtime::places::Waiting;
 use super::new_runtime::unwritten::Unwritten;
 use super::new_runtime::{next_index, top_index};
 use super::player::{
@@ -1646,4 +1647,26 @@ fn placement_heaps_take_the_runtimes_sizes_and_alignments() {
     assert!(report
         .lines()
         .contains(&"relaid 1 moved 1 grown 16384".to_owned()));
+}
+
+/// A released buffer's place waits for each command buffer that named it and is not yet
+/// committed: it is let go only when the last of them is committed or released uncommitted, never
+/// on a count of commits that those users are not part of.
+#[test]
+fn a_place_waits_for_its_uncommitted_users() {
+    let mut waiting = Waiting::default();
+    // No user waits: the place goes to the commit count at once.
+    assert_eq!(waiting.wait("free", Vec::new()), Some("free"));
+    // Two command buffers named it, neither committed.
+    assert_eq!(waiting.wait("held", vec![7, 9]), None);
+    assert_eq!(waiting.wait("other", vec![9]), None);
+    assert!(
+        waiting.ended(8).is_empty(),
+        "a command buffer that named neither"
+    );
+    assert!(waiting.ended(7).is_empty(), "the place still waits for 9");
+    let mut done = waiting.ended(9);
+    done.sort();
+    assert_eq!(done, vec!["held", "other"]);
+    assert!(waiting.ended(9).is_empty(), "each place is let go once");
 }

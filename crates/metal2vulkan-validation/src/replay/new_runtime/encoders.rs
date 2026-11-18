@@ -147,7 +147,10 @@ impl NewRuntime {
                 self.unwritten.committed(call.receiver);
                 self.in_flight.push_back((self.commits, command_buffer));
                 for place in self.staging.remove(&call.receiver).unwrap_or_default() {
-                    self.places.give(place, self.commits);
+                    self.places.give(place, self.commits, Vec::new());
+                }
+                if self.users.remove(&call.receiver).is_some() {
+                    self.places.ended(call.receiver, self.commits);
                 }
                 Ok(None)
             }
@@ -411,7 +414,7 @@ impl NewRuntime {
         self.staged_bytes += len;
         match self.owners.get(&id).copied() {
             Some(command_buffer) => self.staging.entry(command_buffer).or_default().push(place),
-            None => self.places.give(place, self.commits),
+            None => self.places.give(place, self.commits, Vec::new()),
         }
         Ok(())
     }

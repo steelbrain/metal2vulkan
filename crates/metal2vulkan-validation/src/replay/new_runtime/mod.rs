@@ -8,8 +8,8 @@
 //! result. A selector, an argument or a descriptor key this module does not name is refused.
 
 mod encoders;
-mod places;
 mod render;
+pub(super) mod places;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
@@ -182,6 +182,9 @@ pub struct NewRuntime {
     /// The staging places of each command buffer not yet committed, which hold the bytes of its
     /// guest-RAM copies: given back at its commit, free once it completes.
     staging: HashMap<u64, Vec<Place>>,
+    /// The buffers in a place of the play's own that an encoder of each command buffer not yet
+    /// committed named: a release of one waits for those command buffers (`Places::give`).
+    users: HashMap<u64, HashSet<u64>>,
     /// The bytes those copies staged.
     staged_bytes: u64,
     /// The compute pipeline states whose `gpuResourceID` the player asked, which the runtime does
@@ -412,6 +415,7 @@ impl NewRuntime {
             identity: false,
             unwritten: unwritten::Unwritten::default(),
             staging: HashMap::new(),
+            users: HashMap::new(),
             staged_bytes: 0,
             unanswered_pipeline_ids: 0,
             block_bytes: [0; 2],
@@ -1373,17 +1377,27 @@ impl Backend for NewRuntime {
             self.unwritten.released(call.receiver);
             self.outside.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
-                Some(Object::Buffer(_, Some(place))) => self.places.give(place, self.commits),
+                Some(Object::Buffer(_, Some(place))) => {
+                    let users = (self.users.iter())
+                        .filter(|(_, named)| named.contains(&call.receiver))
+                        .map(|(&command_buffer, _)| command_buffer)
+                        .collect();
+                    self.places.give(place, self.commits, users);
+                }
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a
                 // heap's resources keep the heap.
                 Some(Object::Block(range, class, block)) => {
                     self.device.release_block(block).map_err(failed(call))?;
                     self.block_bytes[class_index(class)] -= range.len;
                 }
-                // A command buffer released uncommitted runs nothing of its staging.
+                // A command buffer released uncommitted runs nothing: neither its staging nor its
+                // uses of buffers released before it.
                 Some(Object::CommandBuffer(_)) => {
                     for place in self.staging.remove(&call.receiver).unwrap_or_default() {
-                        self.places.give(place, self.commits);
+                        self.places.give(place, self.commits, Vec::new());
+                    }
+                    if self.users.remove(&call.receiver).is_some() {
+                        self.places.ended(call.receiver, self.commits);
                     }
                 }
                 _ => {}
@@ -1394,6 +1408,12 @@ impl Backend for NewRuntime {
             // Skipped encoders too: what the program's GPU passes reach is the stream's.
             let compute = matches!(self.objects.get(&call.receiver), Some(Object::Compute(_)));
             self.unwritten.encoded(call, command_buffer, compute);
+            let mut named = Vec::new();
+            objects_named(&call.args, &mut named);
+            named.retain(|id| matches!(self.objects.get(id), Some(Object::Buffer(_, Some(_)))));
+            if !named.is_empty() {
+                self.users.entry(command_buffer).or_default().extend(named);
+            }
         }
         if call.receiver != 0 && self.skipped(call.receiver) {
             // A call on a skipped object; what it makes is skipped too.
