@@ -602,6 +602,18 @@ fn print(runtime: &str, name: &str, report: &Report) {
         time.map_or("-".to_owned(), |us| format!("{us:.1}")),
         us(&report.wall_us, 50),
     );
+    // A run's GPU time at the 50th percentile, beside the matrix time and on its scale; none for
+    // a workload whose runs wrote no GPU time.
+    let gpu_p50 = percentile(&report.gpu_us, 50).filter(|&us| us > 0.0);
+    let at_base = report.scaled_to.map_or(1.0, |scaled| {
+        f64::from(scaled.base) / f64::from(scaled.size)
+    });
+    if let Some(us) = gpu_p50 {
+        println!(
+            "M2V-MATRIX time harness-gpu-{runtime}/{name} {:.3}",
+            us * at_base
+        );
+    }
     match report.scaled_to {
         None => matrix(runtime, name, time, &report.gauges),
         Some(scaled) => {
@@ -614,7 +626,6 @@ fn print(runtime: &str, name: &str, report: &Report) {
                 scaled.size, scaled.base
             );
             println!("M2V-MATRIX size harness-{runtime}/{name} {}", scaled.size);
-            let at_base = f64::from(scaled.base) / f64::from(scaled.size);
             matrix(runtime, name, time.map(|us| us * at_base), &report.gauges);
         }
     }

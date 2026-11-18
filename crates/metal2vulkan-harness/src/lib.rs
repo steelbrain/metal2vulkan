@@ -79,6 +79,7 @@
 //!
 //! ```text
 //! M2V-MATRIX time harness-<runtime>/<workload> <steady us>
+//! M2V-MATRIX time harness-gpu-<runtime>/<workload> <GPU us at the 50th percentile>
 //! M2V-MATRIX gauge harness-<runtime>/<workload>/<gauge>@100 <value>
 //! M2V-MATRIX gauge harness-<runtime>/<workload>/<gauge>@200 <value>
 //! ```
@@ -88,8 +89,9 @@
 //! consecutive windows of 10, with at least 5 timed runs) of each run's last command buffer's
 //! commit-to-complete time where the workload times its command buffers'
 //! ([`plan::Plan::commit_to_complete`]), the lateness of the others a column that decides nothing, else
-//! of the host wall time each run adds. The GPU time (the table's `steady` column) is a
-//! diagnostic and decides no row. A creation workload's time is the steady time of its creation
+//! of the host wall time each run adds. The GPU time (the table's `steady` column, and the
+//! `harness-gpu-` record: a run's GPU time at the 50th percentile, on the matrix time's scale,
+//! for a plan workload whose runs wrote one) is a diagnostic and decides no row. A creation workload's time is the steady time of its creation
 //! calls. A workload the device sizes ([`plan::Scaled`]) prints the size it ran at on a line of
 //! its own and as its `M2V-MATRIX size harness-<runtime>/<workload> <size>` record, and its matrix
 //! time is that time scaled to its base size, so its row keeps one scale whatever size it ran at.
