@@ -78,7 +78,9 @@ FROZEN_CRATES = ("metal2vulkan-harness", "metal2vulkan-runtime")
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
 #: (RAM GiB, minutes) of each job kind before a run of it was measured; the minutes stay its floor.
-DEFAULTS = {"build": (16, 30), "gpu": (4, 15), "time": (4, 20), "lavapipe": (32, 60), "lint": (16, 60), "winbuild": (16, 60),
+#: The Windows build's, from its measured runs on the mini: a peak of 6.7 GiB, 29 s to 4 min a run
+#: (m3-max-48387, -48266, -48124), and 6m45s the longest build of the 50 runs kept (29 crates).
+DEFAULTS = {"build": (16, 30), "gpu": (4, 15), "time": (4, 20), "lavapipe": (32, 60), "lint": (16, 60), "winbuild": (10, 15),
             "winrun": (4, 15), "wintime": (4, 20)}
 #: The awk filter between nextest and the job's log: every line up to the summary, then only the
 #: captured output of tests that did not pass, and the records of those that did.

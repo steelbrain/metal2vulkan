@@ -39,7 +39,7 @@ class SizeTests(unittest.TestCase):
     def test_a_build_is_sized_from_whole_builds_alone(self):
         # Incremental builds peaked near 2 GiB: their peaks size nothing, so the default stands.
         incremental = [recorded(3, 2.1), recorded(3, 2.0), recorded(3, 2.2)]
-        self.assertEqual(run_of({"winbuild@host": incremental}).size("winbuild", "host"), (16, 60))
+        self.assertEqual(run_of({"winbuild@host": incremental}).size("winbuild", "host"), (10, 15))
         # A whole build that peaked at 9.5 GiB: 1.3 times it, rounded up.
         whole = incremental + [recorded(16, 9.5, full=True)]
         self.assertEqual(run_of({"winbuild@host": whole}).size("winbuild", "host")[0], 13)
@@ -76,8 +76,8 @@ class RetryTests(unittest.TestCase):
                 mock.patch.object(matrix, "log"):
             run.rdir = Path(rdir)
             code, _, _ = run.job("winbuild", "host", "true", "winbuild-leg", space="winbuild")
-        # Sized from its whole build's 2 GiB peak, then doubled up to the default, 16 GiB.
-        self.assertEqual(asked, [4, 8, 16])
+        # Sized from its whole build's 2 GiB peak, then doubled up to the default, 10 GiB.
+        self.assertEqual(asked, [4, 8, 10])
         self.assertEqual(code, 137)
 
 
