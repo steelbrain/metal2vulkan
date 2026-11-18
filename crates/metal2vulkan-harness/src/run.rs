@@ -308,7 +308,7 @@ impl Handled {
 
     /// Each run's time from its first `commit` to its last completed handler
     /// ([`Report::from_idle_us`]).
-    pub(crate) fn from_idle_us(&self) -> Vec<f64> {
+    pub(crate) fn idle_latency_us(&self) -> Vec<f64> {
         let (Some(first), Some(last)) = (self.committed.first(), self.handled.last()) else {
             return Vec::new();
         };
@@ -1206,7 +1206,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
                 wait_run::<D>(&self.commit_run(plan, &made, Some(&idle))?)?;
             }
             report.from_idle_us =
-                (idle.wait(runs.timed as usize, plan.command_buffers())?).from_idle_us();
+                (idle.wait(runs.timed as usize, plan.command_buffers())?).idle_latency_us();
         }
         let (before, submissions) = (self.device.counts(), self.device.submissions());
         wait_run::<D>(&self.commit_run(plan, &made, None)?)?;

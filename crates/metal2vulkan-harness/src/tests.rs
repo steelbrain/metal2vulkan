@@ -320,7 +320,7 @@ fn frames_take_their_throughput_handler_to_handler_and_their_latency_from_the_fi
         "every pair but the two around a gauge wait"
     );
     assert!(throughput.iter().all(|&us| us == 1000.0), "{throughput:?}");
-    assert!(handled.from_idle_us().iter().all(|&us| us == 700.0));
+    assert!(handled.idle_latency_us().iter().all(|&us| us == 700.0));
     assert_eq!(handled.commit_us()[1], vec![700.0; runs]);
 }
 
