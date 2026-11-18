@@ -8026,7 +8026,7 @@ fn a_failure_only_ours_records_is_a_refusal() {
     let found = compare(&metal, &ours, &[], Offered::notices(&[]));
     assert!(found.divergences.is_empty(), "{:?}", found.divergences);
     assert_eq!(found.refusals.len(), 1, "{:?}", found.refusals);
-    assert_eq!(found.refusals[0].path, "row/pass");
+    assert_eq!(found.refusals[0].path, "case/row/pass");
     let answered = row(Some(Node::leaf("pass", Observed::value(Value::Bool(true)))));
     let found = compare(&metal, &answered, &[], Offered::notices(&[]));
     assert!(found.refusals.is_empty(), "{:?}", found.refusals);
