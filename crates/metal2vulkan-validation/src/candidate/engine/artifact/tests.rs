@@ -177,6 +177,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/pipeline/artifact.rs", values),
         ("metal2vulkan/src/pipeline/compile.rs", compile),
         ("metal2vulkan/src/pipeline/compile/key.rs", "the compile's cache key, which the artifact digest excludes"),
+        ("metal2vulkan/src/pipeline/compile/partition.rs", "compile-time translation, reached only from the compile-time part of lower/dispatch.rs (plan_kernel's grid edge: whether a kernel observes its threadgroup partition, decided from its AIR); what it produces is in the pipeline the artifact digests"),
         ("metal2vulkan/src/pipeline/descriptor.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests (the pipeline descriptors)"),
         ("metal2vulkan/src/pipeline/facts.rs", values),
         ("metal2vulkan/src/pipeline/graphics.rs", "the compiled pipeline's value types; the artifact digests their values (the graphics state)"),
