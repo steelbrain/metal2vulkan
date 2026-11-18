@@ -325,14 +325,25 @@ HARNESS_GPU = "harness-gpu-"
 WALL_ROWS = ("frame", "burst")
 #: WALL_ROWS as the re-time selection's awk pattern.
 WALL_RE = "^(" + "|".join(WALL_ROWS) + ")"
-#: Rows whose GPU time varies on one card itself, by GPU leg, with what was seen: harness_budget
-#: judges them on their GPU time against their GPU floor like any other, never fails a leg for
-#: them, and names them as the card's variance, so no one chases them as the new runtime's.
+#: Rows whose GPU time varies on one card itself, run to run or with its driver's register
+#: assignment of an unchanged loop, by GPU leg, with what was seen: harness_budget judges them on
+#: their GPU time against their GPU floor like any other, never fails a leg for them, and names
+#: them as the card's variance, so no one chases them as the new runtime's.
 CARD_VARIANCE = {
     "1002:744c": {
         "sampling": "its GPU p50 on the old runtime ran 16.3-20.3 us over 8 runs (m3-max-45546)",
         "constant_managed": "its GPU p50 on the old runtime is 66.8-69.2 or 74.4 us run to run "
                             "(m3-max-45546)",
+    },
+    # Informational on the Iris Xe until the harness kernels are authored not to depend on it:
+    # with the loop's instructions unchanged, ANV's register assignment moves these rows' GPU time
+    # in equal steps, one per two-source instruction whose two vector sources start at GRF numbers
+    # equal modulo 16 (m3-max-47683: 0 to 40 dead multiply-adds ahead of the loop). No lane claims
+    # a gain or a loss on these rows here without the loop's dump.
+    "8086:a7a0": {
+        "zero_products": "its GPU p50 ran 4377-5308 us over the same loop code, in steps of 232 us "
+                         "(m3-max-47683)",
+        "vote_loop": "its GPU p50 ran 824-930 us over the same loop code (m3-max-47683)",
     },
 }
 
