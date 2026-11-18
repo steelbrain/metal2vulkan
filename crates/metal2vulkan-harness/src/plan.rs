@@ -196,6 +196,13 @@ pub enum Binding {
         /// Its filter.
         filter: Filter,
     },
+    /// `setThreadgroupMemoryLength:atIndex:`.
+    ThreadgroupMemory {
+        /// The threadgroup memory index.
+        index: u32,
+        /// Its length in bytes: a multiple of 16, as Metal requires.
+        length: u32,
+    },
 }
 
 /// A dispatch call.
@@ -403,7 +410,16 @@ impl Plan {
                 let (kind, at, count) = match binding {
                     Binding::Buffer { buffer, .. } => ("buffer", *buffer, self.buffers.len()),
                     Binding::Texture { texture, .. } => ("texture", *texture, self.textures.len()),
-                    Binding::Bytes { .. } | Binding::Sampler { .. } => continue,
+                    Binding::ThreadgroupMemory { length, .. } if length % 16 != 0 => {
+                        return Err(format!(
+                            "{name}: dispatch {i} sets a threadgroup memory length of {length}, \
+                             not a multiple of 16"
+                        )
+                        .into());
+                    }
+                    Binding::Bytes { .. }
+                    | Binding::Sampler { .. }
+                    | Binding::ThreadgroupMemory { .. } => continue,
                 };
                 if at >= count {
                     return Err(format!(

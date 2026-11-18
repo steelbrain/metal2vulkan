@@ -234,6 +234,10 @@ impl crate::ComputeCommandEncoder<runtime::Device> for runtime::ComputeCommandEn
         )?)
     }
 
+    fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<()> {
+        Ok(runtime::ComputeCommandEncoder::set_threadgroup_memory_length(self, length, index)?)
+    }
+
     fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<()> {
         Ok(runtime::ComputeCommandEncoder::dispatch_threadgroups(
             self,

@@ -10,6 +10,8 @@
 //! buffer LENGTH shared|private FILL      the next buffer, numbered from 0
 //! set-buffer INDEX BUFFER [OFFSET]       setBuffer:offset:atIndex: before the next dispatch
 //! set-bytes INDEX LENGTH FILL            setBytes:length:atIndex: before the next dispatch
+//! threadgroup-length INDEX LENGTH        setThreadgroupMemoryLength:atIndex: before the next
+//!                                        dispatch; LENGTH a multiple of 16, as Metal requires
 //! constant INDEX TYPE HEX                a function constant of the next dispatch's kernel: its
 //!                                        index, raw MTLDataType and value's bytes
 //! dispatch FUNCTION threadgroups GX GY GZ TX TY TZ [repeat N]
@@ -199,6 +201,20 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
             index: number(index)?,
             bytes: filled(number(length)?, fill)?,
         }),
+        ["threadgroup-length", index, length] => Line::Binding(Binding::ThreadgroupMemory {
+            index: number(index)?,
+            length: match number(length)? {
+                length if length % 16 == 0 => length,
+                length => {
+                    return Err(format!(
+                        "threadgroup length {length} is not a multiple of 16"
+                    ))
+                }
+            },
+        }),
+        ["threadgroup-length", ..] => {
+            return Err("threadgroup-length takes INDEX LENGTH".to_owned())
+        }
         ["constant", index, data_type, hex] => Line::Constant(Constant {
             index: number(index)?,
             data_type: number(data_type)?,

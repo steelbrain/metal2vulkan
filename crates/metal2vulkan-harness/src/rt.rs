@@ -525,6 +525,10 @@ impl crate::ComputeCommandEncoder<Device> for rt::ComputeCommandEncoder {
         rt::ComputeCommandEncoder::set_sampler_state(self, Some(sampler), index).map_err(error)
     }
 
+    fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<()> {
+        rt::ComputeCommandEncoder::set_threadgroup_memory_length(self, length, index).map_err(error)
+    }
+
     fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<()> {
         rt::ComputeCommandEncoder::dispatch_threadgroups(self, size(groups)?, size(threads)?)
             .map_err(error)

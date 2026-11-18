@@ -316,6 +316,9 @@ pub trait ComputeCommandEncoder<D: ComputeDevice> {
     /// `setSamplerState:atIndex:`.
     fn set_sampler_state(&mut self, sampler: &D::SamplerState, index: u32) -> Result<()>;
 
+    /// `setThreadgroupMemoryLength:atIndex:`.
+    fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<()>;
+
     /// `dispatchThreadgroups:threadsPerThreadgroup:`.
     fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<()>;
 

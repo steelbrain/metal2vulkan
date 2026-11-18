@@ -280,3 +280,25 @@ kernel void vote_loop(device const uint *steps [[buffer(0)]],
     }
     destination[index] = uint2(state, lane);
 }
+
+// Each threadgroup's sum of its threads' words, through threadgroup memory whose length the host
+// sets (setThreadgroupMemoryLength:atIndex:), a word a thread; threadgroups of a power of two.
+kernel void group_sums(device const uint *source [[buffer(0)]],
+                       device uint *sums [[buffer(1)]],
+                       threadgroup uint *scratch [[threadgroup(0)]],
+                       uint at [[thread_position_in_threadgroup]],
+                       uint size [[threads_per_threadgroup]],
+                       uint group [[threadgroup_position_in_grid]],
+                       uint index [[thread_position_in_grid]]) {
+    scratch[at] = source[index];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint half_size = size / 2; half_size > 0; half_size /= 2) {
+        if (at < half_size) {
+            scratch[at] += scratch[at + half_size];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (at == 0) {
+        sums[group] = scratch[0];
+    }
+}

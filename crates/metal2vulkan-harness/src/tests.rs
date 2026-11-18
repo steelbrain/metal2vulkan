@@ -235,6 +235,7 @@ check 1 float 0.5
 workload second other.metallib
 buffer 16 private zero
 set-buffer 0 0
+threadgroup-length 0 1024
 dispatch m threadgroups 1 1 1 16 1 1
 check 0 exact
 ";
@@ -311,6 +312,13 @@ fn a_description_makes_its_plans() {
         "a zero buffer is left as made"
     );
     assert_eq!(second.outputs[0].comparison, Comparison::Exact);
+    assert!(matches!(
+        second.dispatches[0].bindings[1],
+        Binding::ThreadgroupMemory {
+            index: 0,
+            length: 1024
+        }
+    ));
 }
 
 /// The error of the description `text`.
@@ -373,6 +381,14 @@ fn a_faulty_description_is_refused_naming_its_line() {
     assert_eq!(
         refusal("check 0 close"),
         "line 3: check 0 close is no directive"
+    );
+    assert_eq!(
+        refusal("threadgroup-length 0 1000"),
+        "line 3: threadgroup length 1000 is not a multiple of 16"
+    );
+    assert_eq!(
+        refusal("threadgroup-length 0"),
+        "line 3: threadgroup-length takes INDEX LENGTH"
     );
     assert_eq!(refusal("set-buffer 0 0"), "workload w has no dispatch");
     assert_eq!(

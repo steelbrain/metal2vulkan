@@ -539,6 +539,9 @@ impl<D: ComputeDevice> Harness<D> {
                             made.ok_or("a sampler state the plan names is unmade")?;
                         encoder.set_sampler_state(sampler, *index)?
                     }
+                    Binding::ThreadgroupMemory { index, length } => {
+                        encoder.set_threadgroup_memory_length(*length, *index)?
+                    }
                 }
             }
             match dispatch.grid {

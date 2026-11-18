@@ -15,7 +15,8 @@ use metal2vulkan_harness::run::{run_each, Harness, Runs, Session};
 use metal2vulkan_harness::{authored, description, old, rt};
 
 /// The description: each fill, both storage modes, a binding at an offset, bindings that stay
-/// set for the dispatches after, both dispatch calls, `repeat`, and both comparisons.
+/// set for the dispatches after, both dispatch calls, `repeat`, both comparisons, and a
+/// threadgroup memory length.
 const DESCRIPTION: &str = "\
 # Synthetic workloads over the authored kernels.
 workload scale kernels.metallib
@@ -51,22 +52,37 @@ set-buffer 1 1
 set-bytes 2 8 hex 0010000000100000   # uint2(4096, 4096)
 dispatch reduce_sum threadgroups 1 1 1 256 1 1
 check 1 exact
+
+workload groups kernels.metallib
+buffer 16384 private words 13
+buffer 64 shared zero
+set-buffer 0 0
+set-buffer 1 1
+threadgroup-length 0 1024   # a word for each of 256 threads
+dispatch group_sums threadgroups 16 1 1 256 1 1
+check 1 exact
 ";
 
 #[test]
 fn described_workloads_match_between_the_old_runtime_and_the_new() {
     let air = authored::library_air().unwrap();
     let ll = std::fs::read_to_string(fixtures_dir().join("harness/workloads.ll")).unwrap();
-    let functions: Vec<MtlbFunction> = ["scale_offset", "lcg_step", "binomial3x3", "reduce_sum"]
-        .map(|name| MtlbFunction {
-            name,
-            type_code: 2,
-            bitcode: wrap(&llvm_assemble_text(&single_entry(&ll, name)).unwrap()),
-            constants: Vec::new(),
-            public: Vec::new(),
-            tags: Vec::new(),
-        })
-        .into();
+    let functions: Vec<MtlbFunction> = [
+        "scale_offset",
+        "lcg_step",
+        "binomial3x3",
+        "reduce_sum",
+        "group_sums",
+    ]
+    .map(|name| MtlbFunction {
+        name,
+        type_code: 2,
+        bitcode: wrap(&llvm_assemble_text(&single_entry(&ll, name)).unwrap()),
+        constants: Vec::new(),
+        public: Vec::new(),
+        tags: Vec::new(),
+    })
+    .into();
     let scratch = Owned::made("harness-described").unwrap();
     std::fs::write(
         scratch.path().join("kernels.metallib"),
@@ -114,8 +130,18 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
                 .collect();
             assert_eq!(got, want);
         }
+        if plan.name == "groups" {
+            // Each threadgroup of 256 threads sums its words through the length the host set.
+            let want: Vec<u32> = (seeded_words(13, 4096).chunks(256))
+                .map(|words| words.iter().fold(0u32, |sum, &word| sum.wrapping_add(word)))
+                .collect();
+            let got: Vec<u32> = (first.outputs[0].as_chunks::<4>().0.iter())
+                .map(|word| u32::from_le_bytes(*word))
+                .collect();
+            assert_eq!(got, want);
+        }
     }
-    assert_eq!(described.len(), 4);
+    assert_eq!(described.len(), 5);
 }
 
 /// The fixture's LLVM text `ll` with `kernel` its only entry point: every other kernel's
