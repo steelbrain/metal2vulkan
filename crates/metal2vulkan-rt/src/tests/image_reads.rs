@@ -14,7 +14,8 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::{
         ComputePipelineDescriptor, Device, DispatchType, FunctionDescriptor, IndexClass, Library,
-        PixelFormat, Region, StageSource, Texture, TextureDescriptor, TextureType, TextureUsage,
+        NumberedSampler, PixelFormat, Region, StageSource, Texture, TextureDescriptor, TextureType,
+        TextureUsage,
     };
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
@@ -100,8 +101,12 @@ mod on_device {
             let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
                 FunctionDescriptor::new(function),
             ));
-            let state = (device.new_compute_pipeline_state(&descriptor, |_| Ok(Vec::new())))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // A texture read numbers one sampler, its own; sampler 0 serves it.
+            let state = (device.new_compute_pipeline_state(&descriptor, |samplers| {
+                assert_eq!(samplers, [NumberedSampler::Read], "{name}");
+                Ok(vec![0])
+            }))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
             let grant = (device.grant_indices(IndexClass::Texture, 1, 3))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             // Level 0's texel (x, y) is (10 + 40x, 20 + 40y, 30, 200), level 1's (5 + 50x,
