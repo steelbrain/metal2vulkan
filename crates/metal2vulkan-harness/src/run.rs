@@ -186,6 +186,9 @@ pub struct Report {
     pub warmup: Warmup,
 }
 
+/// Microseconds of each timed run, one list per command buffer's place in its run.
+type ByPlace = Vec<Vec<f64>>;
+
 /// The commit-to-complete times and lateness that the completed handlers of a plan's timed
 /// command buffers report ([`Plan::commit_to_complete`]).
 #[derive(Default)]
@@ -212,7 +215,7 @@ impl Completions {
     /// The commit-to-complete times and the lateness of `runs` runs of `places` command buffers
     /// each, by place, once their handlers have run: a completed handler may run after the wait
     /// for its command buffer returns. An error where fewer have run within [`HANDLERS_RUN`].
-    fn wait(&self, runs: usize, places: usize) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>)> {
+    fn wait(&self, runs: usize, places: usize) -> Result<(ByPlace, ByPlace)> {
         let count = runs * places;
         let times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
         let (times, _) = (self.reported)
