@@ -1193,8 +1193,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
     10:10:10:2 formats as `A2B10G10R10`, `FloatRG11B10` as `B10G11R11_UFLOAT_PACK32`. The
     validation crate's device profiles of RADV, ANV, NVIDIA and lavapipe report the bit for
     every one of them but `FloatRGB9E5`, which only lavapipe's reports;
-  - steps: per vertex, and per instance at rate 1, map to the vertex and instance input rates;
-    the constant step is a vertex-rate binding of stride 0, on every device and with no divisor:
+  - steps: per vertex, and per instance at rate 1, map to the vertex and instance input rates,
+    and per instance at a rate above 1 to the instance input rate with the rate as its divisor
+    where the device has the step rates (Floor, Step rates): Vulkan fetches element
+    `firstInstance + (instanceIndex - firstInstance) / divisor`, counting from the draw's base
+    instance as Metal does (the conformance case `vertex-step-rate-instances`); the constant step is a vertex-rate binding of stride 0, on every device and with no divisor:
     Vulkan reads a vertex-rate attribute at `vertexIndex * stride` past the bound offset, so every
     vertex and instance reads the layout's first element, and no rule but the portability
     subset's bounds a binding's stride from below;
@@ -1204,10 +1207,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
     (`VertexInputLayout`).
 - What has no fixed-function equivalent on the floor is refused at creation by the translator,
   `Error::Translation` naming what it needs, and never pulled into the shader:
-  - a per-instance step rate above 1 (`VertexStepRate`, needing
-    `vertexAttributeInstanceRateDivisor`): Vulkan divides the instance index only with that
-    feature, a rate within `maxVertexAttribDivisor` and `supportsNonZeroFirstInstance`, and the
-    floor does not enable the feature;
+  - a per-instance step rate above 1 on a device without the step rates, or past its
+    `maxVertexAttribDivisor` (`VertexStepRate`, naming `vertexAttributeInstanceRateDivisor` or
+    the limit; on a device that lacks only `supportsNonZeroFirstInstance`, not implemented):
+    Vulkan divides the instance index only with that feature, a rate within that limit and,
+    for a draw at a base instance other than 0, that property;
   - a format the device's query does not report for `VERTEX_BUFFER` (`Format`, with the format),
     and `FloatRGB9E5` on every device (`Format`, not implemented: of those profiles only
     lavapipe's reports the format, and its fetch answers 0 for the fourth component, where Metal
@@ -1423,6 +1427,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_portability_subset` | device, where listed | Vulkan requires it enabled where a device lists it; the device is asked for the portability features below |
 | `VK_EXT_attachment_feedback_loop_layout` | device, with the attachment reads | a draw's read of an attachment of its own pass through a texture, in the feedback layout (below) |
 | `VK_EXT_attachment_feedback_loop_dynamic_state` | device, with the attachment reads | the feedback loop's enable as dynamic state of every render pipeline |
+| `VK_KHR_vertex_attribute_divisor` | device, where listed | a vertex layout stepped per instance at a rate above 1, through the step-rate feature below |
 
 ### Features
 
@@ -1476,6 +1481,19 @@ extension offers each of them by Vulkan's definition and is not asked.
 | `imageViewFormatSwizzle` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | a texture view's component mapping: its format's and Metal's swizzle |
 | `mutableComparisonSamplers` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | the comparison sampler array, which takes each sampler state's sampler as it is made |
 | `multisampleArrayImage` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | `MTLTextureType2DMultisampleArray` |
+
+### Step rates
+
+Metal's per-instance step at a rate above 1 has one form, a vertex binding's divisor. Where the
+device lists `VK_KHR_vertex_attribute_divisor` and reports the feature below, device creation
+enables both, and the translator builds the step where the rate is within
+`maxVertexAttribDivisor` and the device reports `supportsNonZeroFirstInstance`, as a Metal draw
+may carry a base instance. Elsewhere it refuses the step at creation (`VertexStepRate`); no
+other feature or answer changes.
+
+| Step-rate feature | Structure | Used for |
+|---|---|---|
+| `vertexAttributeInstanceRateDivisor` | `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR` | a vertex binding's divisor other than 1 |
 
 ### Limits
 

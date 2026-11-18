@@ -38,13 +38,14 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
     [vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN];
 
 /// The device extensions device creation enables where the device lists them: the SIMD groups'
-/// reconvergence modes, each for the optional features of its own, and the portability subset,
-/// which Vulkan requires enabled where a device lists it, with the portability features the floor
-/// asks of such a device.
+/// reconvergence modes, each for the optional features of its own, the portability subset, which
+/// Vulkan requires enabled where a device lists it, with the portability features the floor asks
+/// of such a device, and the vertex attribute divisor, for the step-rate feature of its own.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
     ash::khr::portability_subset::NAME,
+    ash::khr::vertex_attribute_divisor::NAME,
 ];
 
 /// The device extensions of a draw that reads, through a texture, an attachment its own pass
@@ -69,6 +70,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::ExtRobustness2)
     } else if name == ash::khr::portability_subset::NAME {
         Some(VkExtension::KhrPortabilitySubset)
+    } else if name == ash::khr::vertex_attribute_divisor::NAME {
+        Some(VkExtension::KhrVertexAttributeDivisor)
     } else {
         None
     }
@@ -193,6 +196,9 @@ pub struct Features {
     /// `VK_EXT_attachment_feedback_loop_dynamic_state`: likewise.
     pub feedback_loop_dynamic:
         vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>,
+    /// `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR`, of `VK_KHR_vertex_attribute_divisor`:
+    /// read and enabled only where the device lists it, and then only the step-rate feature.
+    pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -234,6 +240,9 @@ macro_rules! feature {
     };
     (@structure feedback_loop_dynamic) => {
         "VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT"
+    };
+    (@structure divisor) => {
+        "VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR"
     };
     (@translator) => {
         None
@@ -349,12 +358,22 @@ pub(crate) const ATTACHMENT_READS: &[Feature] = &[
     feature!(feedback_loop_dynamic.attachment_feedback_loop_dynamic_state),
 ];
 
+/// The features device creation enables where the device reports them, for Metal's per-instance
+/// step at a rate above 1, which the translator builds in one form, a binding's divisor, and
+/// refuses on a device without them (`Feature::VertexStepRate`). No answer chooses a second form.
+pub(crate) const STEP_RATES: &[Feature] = &[feature!(
+    divisor.vertex_attribute_instance_rate_divisor => VertexAttributeInstanceRateDivisor
+)];
+
 /// What the translator's shaders may use of what device creation enables: each enabled feature of
 /// `capabilities` the translator names, and each enabled extension it names.
 pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
     let mut features = capabilities.features;
     let mut enables = EnableSet::new();
-    for feature in REQUIRED.iter().chain(OPTIONAL).chain(PORTABILITY) {
+    for feature in (REQUIRED.iter().chain(OPTIONAL))
+        .chain(PORTABILITY)
+        .chain(STEP_RATES)
+    {
         if let Some(name) = feature.translator {
             if *(feature.field)(&mut features) == vk::TRUE {
                 enables.features.insert(name);
@@ -524,7 +543,7 @@ pub struct Capabilities {
     /// through a texture, an attachment its own pass renders, as Metal reads a render target.
     pub attachment_reads: bool,
     /// The features device creation enables: every one the floor requires, and each of the
-    /// optional ones the device reports.
+    /// optional and step-rate ones the device reports.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
@@ -631,6 +650,7 @@ unsafe fn query(
         let feedback_loop_listed = listed(ash::ext::attachment_feedback_loop_layout::NAME);
         let feedback_loop_dynamic_listed =
             listed(ash::ext::attachment_feedback_loop_dynamic_state::NAME);
+        let divisor_listed = listed(ash::khr::vertex_attribute_divisor::NAME);
 
         let Features {
             core,
@@ -643,6 +663,7 @@ unsafe fn query(
             portability,
             feedback_loop,
             feedback_loop_dynamic,
+            divisor,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -666,6 +687,9 @@ unsafe fn query(
         if feedback_loop_dynamic_listed {
             features = features.push_next(&mut *feedback_loop_dynamic);
         }
+        if divisor_listed {
+            features = features.push_next(&mut *divisor);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -677,6 +701,7 @@ unsafe fn query(
         portability.p_next = std::ptr::null_mut();
         feedback_loop.p_next = std::ptr::null_mut();
         feedback_loop_dynamic.p_next = std::ptr::null_mut();
+        divisor.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -761,7 +786,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     let Some((queue_family, _)) = family.filter(|_| missing.is_empty()) else {
         return Err(BelowFloor { missing });
     };
-    for feature in OPTIONAL {
+    for feature in OPTIONAL.iter().chain(STEP_RATES) {
         *(feature.field)(&mut features) = *(feature.field)(&mut reported);
     }
     let listed =

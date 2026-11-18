@@ -35,8 +35,9 @@ impl DeviceExtension {
     /// `VkPhysicalDeviceVulkan11Features`, `12`, `13`,
     /// `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR`,
     /// `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR`,
-    /// `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT` or
-    /// `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT`.
+    /// `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT`,
+    /// `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT` or
+    /// `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR`.
     pub fn with_features<T>(name: &CStr, wanted: T, needs: fn(&T) -> bool) -> DeviceExtension
     where
         T: vk::ExtendsPhysicalDeviceFeatures2

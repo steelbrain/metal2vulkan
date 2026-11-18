@@ -162,6 +162,9 @@ struct Module {
 /// vertex layout, attachments, blending and sample count, as the translator states them.
 struct Fixed {
     bindings: Vec<vk::VertexInputBindingDescription>,
+    /// Each instance-rate binding's divisor other than 1, a per-instance step rate the translator
+    /// states only where device creation enabled the step-rate feature.
+    divisors: Vec<vk::VertexInputBindingDivisorDescriptionKHR>,
     attributes: Vec<vk::VertexInputAttributeDescription>,
     discard: bool,
     samples: vk::SampleCountFlags,
@@ -490,6 +493,13 @@ impl Fixed {
                 input_rate: vk::VertexInputRate::from_raw(binding.input_rate.as_raw()),
             })
             .collect();
+        let divisors = (pipeline.vertex_input.bindings.iter())
+            .filter(|binding| binding.divisor != 1)
+            .map(|binding| vk::VertexInputBindingDivisorDescriptionKHR {
+                binding: binding.binding,
+                divisor: binding.divisor,
+            })
+            .collect();
         let attributes = (pipeline.vertex_input.attributes.iter())
             .map(|attribute| vk::VertexInputAttributeDescription {
                 location: attribute.location,
@@ -529,6 +539,7 @@ impl Fixed {
             .collect();
         Fixed {
             bindings,
+            divisors,
             attributes,
             discard: g.rasterizer_discard,
             samples: vk::SampleCountFlags::from_raw(g.rasterization_samples.as_raw()),
@@ -713,9 +724,15 @@ impl RenderCompiled {
                     .specialization_info(specialization)
             })
             .collect();
-        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
+        let mut divided = vk::PipelineVertexInputDivisorStateCreateInfoKHR::default()
+            .vertex_binding_divisors(&fixed.divisors);
+        let mut vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&fixed.bindings)
             .vertex_attribute_descriptions(&fixed.attributes);
+        // The divisor structure has at least one divisor where it is chained.
+        if !fixed.divisors.is_empty() {
+            vertex_input = vertex_input.push_next(&mut divided);
+        }
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default().topology(topology);
         let viewport = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)

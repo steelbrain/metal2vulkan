@@ -636,9 +636,7 @@ mod on_device {
 
     /// An unnormalized signed-integer attribute is fetched in fixed function into a variable
     /// declared `int`: `ima_vertex`'s mark, a `short` of -2, reaches `ima_fragment`'s unsigned
-    /// output as its sign-extended bits. A layout stepped per instance at rate 2 is the
-    /// translator's refusal (`VertexStepRate`), which names the divisor feature device creation
-    /// does not enable.
+    /// output as its sign-extended bits.
     #[test]
     fn every_device_fetches_a_signed_attribute_in_fixed_function() {
         let Some(library) = library(&engine_dir().join("icb_merged_attributes.ll")) else {
@@ -695,35 +693,13 @@ mod on_device {
                 let word = |at: usize| u32::from_le_bytes([0, 1, 2, 3].map(|i| texel[at + i]));
                 assert_eq!((word(0), word(12)), (0xFFFF_FFFE, 1), "{name}: {texel:?}");
             }
-            let mut stepped = d.clone();
-            let layouts = &mut stepped.vertex_descriptor.as_mut().expect("layouts").layouts;
-            let layout = layouts.get_mut(&1).expect("layout 1");
-            layout.step_function = VertexStepFunction::PerInstance;
-            layout.step_rate = 2;
-            match device.new_render_pipeline_state(&stepped, crate::tests::no_constexpr_samplers) {
-                Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) => {
-                    assert_eq!(u.feature, Feature::VertexStepRate, "{name}: {u:?}")
-                }
-                Err(other) => panic!("{name}: {other}"),
-                Ok(_) => panic!("{name}: a step rate of 2 made a state"),
-            }
-            println!("{name}: a short of -2 read as int, a step rate of 2 refused");
+            println!("{name}: a short of -2 read as int");
         });
     }
 
-    /// Metal's constant step reads the layout's first element for every vertex and instance: a
-    /// vertex-rate binding of stride 0, with no divisor, on every device. `ima_vertex`'s `uint`
-    /// mark comes from a layout at the constant step over four distinct marks; two instances of a
-    /// triangle are drawn from vertex 1 at base instance 1, each instance moved down 4 rows, the
-    /// second covering the lower half of the target over the first. Every texel holds the first
-    /// mark with the provoking vertex's ID, 1, and its instance: 1 in the upper half, 2 in the
-    /// lower. A vertex-rate binding at the layout's stride would read the second mark there, and
-    /// any instance step the second and third.
-    #[test]
-    fn every_device_fetches_a_constant_step_attribute_for_every_vertex_and_instance() {
-        let Some(library) = library(&engine_dir().join("icb_merged_attributes.ll")) else {
-            return;
-        };
+    /// `ima_vertex` into `ima_fragment`'s `RGBA32Uint` output, with positions at layout 0 and a
+    /// `uint` mark at layout 1 stepped by `step` at `rate`.
+    fn marked(library: &Library, step: VertexStepFunction, rate: u32) -> RenderPipelineDescriptor {
         let function = |name| {
             StageSource::Function(FunctionDescriptor::new(
                 library.function(name).expect("the function"),
@@ -742,9 +718,20 @@ mod on_device {
                 .insert(index, VertexBufferLayoutDescriptor::new(Some(stride)));
         }
         let marks = vertex.layouts.get_mut(&1).expect("the marks' layout");
-        marks.step_function = VertexStepFunction::Constant;
-        marks.step_rate = 0;
+        marks.step_function = step;
+        marks.step_rate = rate;
         d.vertex_descriptor = Some(vertex);
+        d
+    }
+
+    /// Instances 1 and 2 of `state`'s triangle ([`marked`]), drawn from vertex 1 at base
+    /// instance 1 over the marks `0xA0` to `0xA3`: each texel's four words, and the instance whose
+    /// triangle covers it last, 1 in the target's upper half and 2 in its lower.
+    fn two_instances(
+        name: &str,
+        device: &Device,
+        state: &RenderPipelineState,
+    ) -> Vec<([u32; 4], u32)> {
         // `ima_vertex` maps pixel positions to clip space by the frame's width and height and
         // moves instance `iid` down `iid` rows of the frame's row stride, 4. Vertices 1 to 3 are a
         // triangle twice the target's side, starting 4 rows above it: instance 1 covers the whole
@@ -766,41 +753,92 @@ mod on_device {
             .iter()
             .flat_map(|m| m.to_le_bytes())
             .collect();
-        each_device("draw_constant_step", |name, _, device| {
-            let state = state(name, &device, &d);
-            let mut buffers = Buffers::new(&device);
-            let xy = buffers.of(&device, &positions);
-            let mark = buffers.of(&device, &marks);
-            let color = target(
-                &device,
-                PixelFormat::RGBA32Uint,
-                TextureUsage::RENDER_TARGET,
-            );
-            let queue = device.new_command_queue(4).expect("a queue");
-            let command_buffer = queue.command_buffer().expect("a command buffer");
-            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-            draw(encoder.set_render_pipeline_state(&state));
-            draw(encoder.set_vertex_buffer(Some(&xy), 0, 0));
-            draw(encoder.set_vertex_buffer(Some(&mark), 0, 1));
-            draw(encoder.set_vertex_bytes(&frame, 2));
-            draw(encoder.draw_primitives(PrimitiveType::Triangle, 1, 3, 2, 1));
-            encoder.end_encoding();
-            run(name, &command_buffer);
-            for (at, texel) in read(&color, 16).chunks(16).enumerate() {
+        let mut buffers = Buffers::new(device);
+        let xy = buffers.of(device, &positions);
+        let mark = buffers.of(device, &marks);
+        let color = target(device, PixelFormat::RGBA32Uint, TextureUsage::RENDER_TARGET);
+        let queue = device.new_command_queue(4).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+        draw(encoder.set_render_pipeline_state(state));
+        draw(encoder.set_vertex_buffer(Some(&xy), 0, 0));
+        draw(encoder.set_vertex_buffer(Some(&mark), 0, 1));
+        draw(encoder.set_vertex_bytes(&frame, 2));
+        draw(encoder.draw_primitives(PrimitiveType::Triangle, 1, 3, 2, 1));
+        encoder.end_encoding();
+        run(name, &command_buffer);
+        (read(&color, 16).chunks(16).enumerate())
+            .map(|(at, texel)| {
                 let word = |i: usize| u32::from_le_bytes([0, 1, 2, 3].map(|b| texel[4 * i + b]));
                 let instance = match at / SIDE as usize {
                     0..4 => 1,
                     _ => 2,
                 };
-                assert_eq!(
-                    [word(0), word(1), word(2), word(3)],
-                    [0xA0, 1, instance, 1],
-                    "{name}: texel {at}"
-                );
+                ([word(0), word(1), word(2), word(3)], instance)
+            })
+            .collect()
+    }
+
+    /// Metal's constant step reads the layout's first element for every vertex and instance: a
+    /// vertex-rate binding of stride 0, with no divisor, on every device. `ima_vertex`'s `uint`
+    /// mark comes from a layout at the constant step over four distinct marks; two instances of a
+    /// triangle are drawn from vertex 1 at base instance 1, each instance moved down 4 rows, the
+    /// second covering the lower half of the target over the first. Every texel holds the first
+    /// mark with the provoking vertex's ID, 1, and its instance: 1 in the upper half, 2 in the
+    /// lower. A vertex-rate binding at the layout's stride would read the second mark there, and
+    /// any instance step the second and third.
+    #[test]
+    fn every_device_fetches_a_constant_step_attribute_for_every_vertex_and_instance() {
+        let Some(library) = library(&engine_dir().join("icb_merged_attributes.ll")) else {
+            return;
+        };
+        let d = marked(&library, VertexStepFunction::Constant, 0);
+        each_device("draw_constant_step", |name, _, device| {
+            let state = state(name, &device, &d);
+            for (at, (words, instance)) in two_instances(name, &device, &state).iter().enumerate() {
+                assert_eq!(*words, [0xA0, 1, *instance, 1], "{name}: texel {at}");
             }
             println!("{name}: the first mark at every vertex of instances 1 and 2");
+        });
+    }
+
+    /// Metal's per-instance step at rate 2 fetches one element for every two instances, counted
+    /// from the draw's base instance (the conformance case `vertex-step-rate-instances`): a
+    /// binding's divisor where the device has the step rates (Floor, Step rates) and reports
+    /// `supportsNonZeroFirstInstance`. Instances 1 and 2 drawn from base instance 1 both read the
+    /// second mark: without the divisor the lower half would read the third, and a division of the
+    /// instance index from 0 would give the upper half the first. Elsewhere the state is the
+    /// translator's refusal (`VertexStepRate`).
+    #[test]
+    fn every_device_with_the_step_rates_fetches_per_instance_at_rate_2_from_the_base_instance() {
+        let Some(library) = library(&engine_dir().join("icb_merged_attributes.ll")) else {
+            return;
+        };
+        let d = marked(&library, VertexStepFunction::PerInstance, 2);
+        each_device("draw_step_rate", |name, _, device| {
+            let core = device.core();
+            let profile = core.translator.profile();
+            let divides = profile.fragment().vertex_attribute_divisor
+                && profile.limits().supports_non_zero_first_instance
+                && profile.limits().max_vertex_attrib_divisor >= 2;
+            match device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers) {
+                Ok(state) => {
+                    assert!(divides, "{name}: a step rate of 2 made a state");
+                    for (at, (words, instance)) in
+                        two_instances(name, &device, &state).iter().enumerate()
+                    {
+                        assert_eq!(*words, [0xA1, 1, *instance, 1], "{name}: texel {at}");
+                    }
+                    println!("{name}: the second mark at instances 1 and 2, at rate 2 from base instance 1");
+                }
+                Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) if !divides => {
+                    assert_eq!(u.feature, Feature::VertexStepRate, "{name}: {u:?}");
+                    println!("{name}: no step rates; a step rate of 2 refused");
+                }
+                Err(other) => panic!("{name}: {other}"),
+            }
         });
     }
 

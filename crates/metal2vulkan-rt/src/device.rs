@@ -340,6 +340,7 @@ impl Device {
             mut portability,
             mut feedback_loop,
             mut feedback_loop_dynamic,
+            mut divisor,
         } = enabled_features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -362,6 +363,9 @@ impl Device {
             features = features
                 .push_next(&mut feedback_loop)
                 .push_next(&mut feedback_loop_dynamic);
+        }
+        if enabled(ash::khr::vertex_attribute_divisor::NAME) {
+            features = features.push_next(&mut divisor);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }

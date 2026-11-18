@@ -6,7 +6,8 @@ use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
     Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS,
     MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY,
-    PRIVATE_MEMORY, REQUIRED, RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
+    PRIVATE_MEMORY, REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS,
+    VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -227,7 +228,7 @@ fn a_device_at_the_floor_is_above_it() {
             required.member
         );
     }
-    for optional in OPTIONAL {
+    for optional in OPTIONAL.iter().chain(STEP_RATES) {
         assert!(!holds(enabled, optional), "{} is enabled", optional.member);
     }
     assert_eq!(enabled.core.geometry_shader, vk::FALSE);
@@ -886,6 +887,44 @@ fn the_translator_sees_the_portability_subset_device_creation_enables() {
         .contains(&VkFeature::ImageViewFormatSwizzle));
 }
 
+/// A device that lists the vertex attribute divisor and reports the step-rate feature is given it,
+/// and the translator sees both; the zero divisor beside it is not enabled, and a device that
+/// lists the extension without the feature is given the extension alone.
+#[test]
+fn the_step_rate_feature_is_enabled_where_reported() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::{VkExtension, VkFeature};
+    let divisor = ash::khr::vertex_attribute_divisor::NAME;
+    let mut device = at_the_floor();
+    device.extensions.push(divisor.to_owned());
+    let unreported = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert!(unreported.extensions.contains(&divisor));
+    assert!(STEP_RATES
+        .iter()
+        .all(|feature| !holds(&unreported.features, feature)));
+    assert!(!shader_enables(&unreported)
+        .features
+        .contains(&VkFeature::VertexAttributeInstanceRateDivisor));
+
+    let reported = &mut device.features.divisor;
+    reported.vertex_attribute_instance_rate_divisor = vk::TRUE;
+    reported.vertex_attribute_instance_rate_zero_divisor = vk::TRUE;
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    let enabled = &capabilities.features.divisor;
+    assert_eq!(enabled.vertex_attribute_instance_rate_divisor, vk::TRUE);
+    assert_eq!(
+        enabled.vertex_attribute_instance_rate_zero_divisor,
+        vk::FALSE
+    );
+    let enables = shader_enables(&capabilities);
+    assert!(enables
+        .features
+        .contains(&VkFeature::VertexAttributeInstanceRateDivisor));
+    assert!(enables
+        .extensions
+        .contains(&VkExtension::KhrVertexAttributeDivisor));
+}
+
 /// A set layout the created device does not support is named by its set.
 #[test]
 fn a_set_layout_the_device_does_not_support_is_named() {
@@ -1049,6 +1088,7 @@ fn the_readme_states_the_floor() {
             ["Attachment-read feature", "Structure", "Used for"],
             ATTACHMENT_READS,
         ),
+        (["Step-rate feature", "Structure", "Used for"], STEP_RATES),
     ] {
         let stated: BTreeSet<(String, String)> = table(&section, &header)
             .into_iter()
@@ -1141,6 +1181,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut portability,
             mut feedback_loop,
             mut feedback_loop_dynamic,
+            mut divisor,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -1162,6 +1203,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             features = features
                 .push_next(&mut feedback_loop)
                 .push_next(&mut feedback_loop_dynamic);
+        }
+        if enabled(ash::khr::vertex_attribute_divisor::NAME) {
+            features = features.push_next(&mut divisor);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions
