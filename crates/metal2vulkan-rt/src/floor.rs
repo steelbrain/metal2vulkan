@@ -274,6 +274,14 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // requires both of every graphics device.
     feature!(core.independent_blend => IndependentBlend),
     feature!(core.fragment_stores_and_atomics => FragmentStoresAndAtomics),
+    // What Vulkan 1.1 to 1.3 require of every device and the translator's shaders use where they
+    // are enabled: multiview, subgroup operations on 8-, 16- and 64-bit values, a fragment's
+    // demotion to a helper and its termination, and workgroup memory zeroed at its declaration.
+    feature!(vulkan11.multiview => Multiview),
+    feature!(vulkan12.shader_subgroup_extended_types => ShaderSubgroupExtendedTypes),
+    feature!(vulkan13.shader_demote_to_helper_invocation => ShaderDemoteToHelperInvocation),
+    feature!(vulkan13.shader_terminate_invocation => ShaderTerminateInvocation),
+    feature!(vulkan13.shader_zero_initialize_workgroup_memory => ShaderZeroInitializeWorkgroupMemory),
     // Submission, barriers and render passes.
     feature!(vulkan12.timeline_semaphore),
     // GPU times: a command buffer's two timestamp queries reset on the host as it retires, so no

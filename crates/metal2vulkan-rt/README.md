@@ -1224,6 +1224,11 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `robustImageAccess` | `VkPhysicalDeviceVulkan13Features` | an image write or atomic out of range dropped and a read out of range zero, with no guard in the shader |
 | `independentBlend` | `VkPhysicalDeviceFeatures` | each color attachment of a render pipeline blended by its own state, as Metal's are |
 | `fragmentStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a fragment function's writes and atomics on device memory |
+| `multiview` | `VkPhysicalDeviceVulkan11Features` | Vulkan 1.1 requires it; the translator's multiview forms |
+| `shaderSubgroupExtendedTypes` | `VkPhysicalDeviceVulkan12Features` | SIMD-group operations on 8-, 16- and 64-bit values; Vulkan 1.2 requires it |
+| `shaderDemoteToHelperInvocation` | `VkPhysicalDeviceVulkan13Features` | a discarded fragment demoted to a helper, so its quad's derivatives stay defined; Vulkan 1.3 requires it |
+| `shaderTerminateInvocation` | `VkPhysicalDeviceVulkan13Features` | a fragment's termination; Vulkan 1.3 requires it |
+| `shaderZeroInitializeWorkgroupMemory` | `VkPhysicalDeviceVulkan13Features` | threadgroup memory zeroed at its declaration where the translator zeroes it; Vulkan 1.3 requires it |
 | `timelineSemaphore` | `VkPhysicalDeviceVulkan12Features` | submission and completion |
 | `hostQueryReset` | `VkPhysicalDeviceVulkan12Features` | a command buffer's timestamp queries reset on the host as it retires |
 | `synchronization2` | `VkPhysicalDeviceVulkan13Features` | barriers, layout changes and submission |

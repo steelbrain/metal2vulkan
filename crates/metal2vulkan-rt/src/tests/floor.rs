@@ -68,6 +68,11 @@ fn at_the_floor() -> Queried {
     features.vulkan13.robust_image_access = vk::TRUE;
     features.core.independent_blend = vk::TRUE;
     features.core.fragment_stores_and_atomics = vk::TRUE;
+    features.vulkan11.multiview = vk::TRUE;
+    features.vulkan12.shader_subgroup_extended_types = vk::TRUE;
+    features.vulkan13.shader_demote_to_helper_invocation = vk::TRUE;
+    features.vulkan13.shader_terminate_invocation = vk::TRUE;
+    features.vulkan13.shader_zero_initialize_workgroup_memory = vk::TRUE;
     features.vulkan12.timeline_semaphore = vk::TRUE;
     features.vulkan12.host_query_reset = vk::TRUE;
     features.vulkan13.synchronization2 = vk::TRUE;
@@ -162,6 +167,19 @@ fn the_translator_sees_only_what_device_creation_enables() {
     assert!(enables
         .features
         .contains(&VkFeature::FragmentStoresAndAtomics));
+    assert!(enables.features.contains(&VkFeature::Multiview));
+    assert!(enables
+        .features
+        .contains(&VkFeature::ShaderSubgroupExtendedTypes));
+    assert!(enables
+        .features
+        .contains(&VkFeature::ShaderDemoteToHelperInvocation));
+    assert!(enables
+        .features
+        .contains(&VkFeature::ShaderTerminateInvocation));
+    assert!(enables
+        .features
+        .contains(&VkFeature::ShaderZeroInitializeWorkgroupMemory));
     assert!(enables.features.contains(&VkFeature::NullDescriptor));
     for reported in [
         VkFeature::GeometryShader,
@@ -218,6 +236,17 @@ fn a_device_at_the_floor_is_above_it() {
     assert_eq!(enabled.vulkan13.robust_image_access, vk::TRUE);
     assert_eq!(enabled.core.independent_blend, vk::TRUE);
     assert_eq!(enabled.core.fragment_stores_and_atomics, vk::TRUE);
+    assert_eq!(enabled.vulkan11.multiview, vk::TRUE);
+    assert_eq!(enabled.vulkan12.shader_subgroup_extended_types, vk::TRUE);
+    assert_eq!(
+        enabled.vulkan13.shader_demote_to_helper_invocation,
+        vk::TRUE
+    );
+    assert_eq!(enabled.vulkan13.shader_terminate_invocation, vk::TRUE);
+    assert_eq!(
+        enabled.vulkan13.shader_zero_initialize_workgroup_memory,
+        vk::TRUE
+    );
 }
 
 #[test]
@@ -228,7 +257,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 31] = [
+    let cases: [(Clear, Missing); 36] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -342,6 +371,26 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.fragment_stores_and_atomics = vk::FALSE,
             feature(CORE, "fragmentStoresAndAtomics"),
+        ),
+        (
+            |f| f.vulkan11.multiview = vk::FALSE,
+            feature(V11, "multiview"),
+        ),
+        (
+            |f| f.vulkan12.shader_subgroup_extended_types = vk::FALSE,
+            feature(V12, "shaderSubgroupExtendedTypes"),
+        ),
+        (
+            |f| f.vulkan13.shader_demote_to_helper_invocation = vk::FALSE,
+            feature(V13, "shaderDemoteToHelperInvocation"),
+        ),
+        (
+            |f| f.vulkan13.shader_terminate_invocation = vk::FALSE,
+            feature(V13, "shaderTerminateInvocation"),
+        ),
+        (
+            |f| f.vulkan13.shader_zero_initialize_workgroup_memory = vk::FALSE,
+            feature(V13, "shaderZeroInitializeWorkgroupMemory"),
         ),
         (
             |f| f.vulkan13.synchronization2 = vk::FALSE,
