@@ -494,6 +494,54 @@ impl Arrays {
         elements: &[(usize, Option<vk::Sampler>)],
     ) -> Result<Owner, Error> {
         let mut grants = lock(&self.grants);
+        // SAFETY: the caller's contract, and the lock is held.
+        unsafe { self.place_samplers_locked(&mut grants, device, counters, index, elements) }
+    }
+
+    /// One more pipeline state numbers the constexpr sampler of `owner` at `index`. Where the
+    /// constexpr sampler still owns the index, writes `added`, the elements of the arrays the
+    /// state adds, as [`Arrays::place_samplers`] does, and answers `owner`. Where another object
+    /// took the index since, the state's numbering is a placement like any other: it places the
+    /// constexpr sampler there again with `all`, every element it holds, and answers the new
+    /// owner word.
+    ///
+    /// Err: [`Refusal::IndicesNotGranted`].
+    ///
+    /// # Safety
+    ///
+    /// No pending work uses an element of `added`, each sampler is live and of the device
+    /// whenever work uses it, and no work in flight reads a displaced object through the index.
+    pub(crate) unsafe fn hold_samplers(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        (index, owner): (u32, Owner),
+        added: &[(usize, Option<vk::Sampler>)],
+        all: &[(usize, Option<vk::Sampler>)],
+    ) -> Result<Owner, Error> {
+        let mut grants = lock(&self.grants);
+        if grants.owns(IndexClass::Sampler, index, owner) {
+            // SAFETY: the caller's contract; the object owns the index, and the lock is held.
+            unsafe { self.write_samplers(device, index, added) };
+            return Ok(owner);
+        }
+        // SAFETY: the caller's contract, and the lock is held.
+        unsafe { self.place_samplers_locked(&mut grants, device, counters, index, all) }
+    }
+
+    /// [`Arrays::place_samplers`] under the grants' lock, `grants`.
+    ///
+    /// # Safety
+    ///
+    /// As [`Arrays::place_samplers`]; `grants` is the guard of `self.grants`.
+    unsafe fn place_samplers_locked(
+        &self,
+        grants: &mut Grants,
+        device: &ash::Device,
+        counters: &Counters,
+        index: u32,
+        elements: &[(usize, Option<vk::Sampler>)],
+    ) -> Result<Owner, Error> {
         let Placed { owner, displaced } = grants.place(IndexClass::Sampler, index)?;
         if !displaced {
             counters.rise(Gauge::DescriptorSlots);
@@ -510,28 +558,6 @@ impl Arrays {
         // SAFETY: the caller's contract; the object owns the index, and the lock is held.
         unsafe { self.write_samplers(device, index, &all) };
         Ok(owner)
-    }
-
-    /// Writes `elements` at `index` as [`Arrays::place_samplers`] does, where the object of
-    /// `owner` still owns the index: a later holder of a constexpr sampler adds the arrays it
-    /// uses. Elsewhere it writes nothing.
-    ///
-    /// # Safety
-    ///
-    /// No pending work uses an element it writes, and each sampler is live and of the device
-    /// whenever work uses it.
-    pub(crate) unsafe fn add_samplers(
-        &self,
-        device: &ash::Device,
-        index: u32,
-        owner: Owner,
-        elements: &[(usize, Option<vk::Sampler>)],
-    ) {
-        let grants = lock(&self.grants);
-        if grants.owns(IndexClass::Sampler, index, owner) {
-            // SAFETY: the caller's contract; the object owns the index, and the lock is held.
-            unsafe { self.write_samplers(device, index, elements) };
-        }
     }
 
     /// The sampler state or constexpr sampler of `owner` goes from `index`: where it still owns

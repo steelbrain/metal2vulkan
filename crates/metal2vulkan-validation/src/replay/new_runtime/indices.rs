@@ -66,17 +66,25 @@ impl Indices {
         }
     }
 
-    /// The lowest index of `class` from `from` that no object holds, the program did not reserve
-    /// and `skip` does not name.
-    pub(in crate::replay) fn lowest(
-        &self,
-        class: rt::IndexClass,
-        from: u32,
-        skip: impl Fn(u32) -> bool,
-    ) -> Option<u32> {
+    /// The lowest index of `class` from `from` that no object holds and the program did not
+    /// reserve.
+    pub(in crate::replay) fn lowest(&self, class: rt::IndexClass, from: u32) -> Option<u32> {
         let (held, reserved) = (&self.held[slot(class)], &self.reserved[slot(class)]);
         let range = class.range();
         (from.max(range.start)..range.end)
+            .find(|index| !held.contains_key(index) && !reserved.contains(index))
+    }
+
+    /// The highest index of `class` that no object holds, the program did not reserve and `skip`
+    /// does not name: away from the lowest indices, which the program's own objects take.
+    pub(in crate::replay) fn highest(
+        &self,
+        class: rt::IndexClass,
+        skip: impl Fn(u32) -> bool,
+    ) -> Option<u32> {
+        let (held, reserved) = (&self.held[slot(class)], &self.reserved[slot(class)]);
+        (class.range())
+            .rev()
             .find(|index| !held.contains_key(index) && !reserved.contains(index) && !skip(*index))
     }
 
@@ -102,7 +110,7 @@ impl Indices {
                 }
             }
         }
-        let index = self.lowest(class, 0, |_| false)?;
+        let index = self.lowest(class, 0)?;
         let made = make(index);
         if made.is_ok() {
             self.hold(Some(object), class, index);
@@ -110,20 +118,15 @@ impl Indices {
         Some(made)
     }
 
-    /// `make` at the highest index of `class` that no object holds and the program did not
-    /// reserve: one away from the lowest indices, which the program's own objects take; what
-    /// `object` then holds. None where every index of the class is held.
+    /// `make` at the [`highest`](Self::highest) free index of `class`; what `object` then holds.
+    /// None where every index of the class is held.
     pub(in crate::replay) fn top<T>(
         &mut self,
         object: u64,
         class: rt::IndexClass,
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Option<Result<T, rt::Error>> {
-        let range = class.range();
-        let (held, reserved) = (&self.held[slot(class)], &self.reserved[slot(class)]);
-        let index = (range.clone())
-            .rev()
-            .find(|index| !held.contains_key(index) && !reserved.contains(index))?;
+        let index = self.highest(class, |_| false)?;
         let made = make(index);
         if made.is_ok() {
             self.hold(Some(object), class, index);

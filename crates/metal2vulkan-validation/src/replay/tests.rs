@@ -1151,6 +1151,28 @@ fn a_texture_marked_outside_takes_no_index_of_the_sequence() {
     assert_eq!((marked, marked_again), (end - 1, end - 2));
 }
 
+/// The new runtime's backend gives a constexpr sampler, which the stream names no index for, the
+/// highest free sampler index, past those the same call took, and leaves the sequence the
+/// program's sampler states take where it was: a sampler state at its index would take it.
+#[test]
+fn a_constexpr_sampler_takes_no_index_of_the_sequence() {
+    let class = rt::IndexClass::Sampler;
+    let (start, end) = (class.range().start, class.range().end);
+    let make = |index: u32| Ok::<u32, rt::Error>(index);
+    let mut indices = Indices::default();
+    let first = indices.place(1, class, None, make);
+    assert_eq!(first.expect("a free index").expect("made"), start);
+    let constexpr = indices.highest(class, |_| false);
+    assert_eq!(constexpr, Some(end - 1));
+    indices.hold(None, class, end - 1);
+    assert_eq!(
+        indices.highest(class, |index| index == end - 2),
+        Some(end - 3)
+    );
+    let second = indices.place(2, class, None, make);
+    assert_eq!(second.expect("a free index").expect("made"), start + 1);
+}
+
 /// An object takes the index its record names; else, and for an object with none, the lowest
 /// index of its class that no live object holds and the program did not reserve. A named index an
 /// object holds is taken from it, and the earlier object's release leaves it; a released object's
@@ -1178,7 +1200,7 @@ fn objects_take_the_named_index_else_the_lowest_free_one() {
     // A named index an object holds: taken, and the earlier object's release leaves it.
     assert_eq!(take(&mut indices, 5, Some(start + 7)), start + 7);
     indices.give(1);
-    assert_eq!(indices.lowest(class, start + 7, |_| false), Some(start + 8));
+    assert_eq!(indices.lowest(class, start + 7), Some(start + 8));
     assert_eq!(
         take(&mut indices, 6, Some(start + 2)),
         start + 2,
@@ -1191,7 +1213,7 @@ fn objects_take_the_named_index_else_the_lowest_free_one() {
         "free again after the release"
     );
     indices.give(5);
-    assert_eq!(indices.lowest(class, start + 7, |_| false), Some(start + 7));
+    assert_eq!(indices.lowest(class, start + 7), Some(start + 7));
     assert!(
         indices.line().starts_with("indices named 3:"),
         "{}",

@@ -468,9 +468,13 @@ impl crate::Device {
     /// (`CombinedSampler::constexpr_sampler`, shared by create info as a sampler state's are) at
     /// its index of the sampler arrays before the call returns, and every dispatch pushes the
     /// index; states that number one constexpr sampler at one index share its elements, and the
-    /// last of them to go gives them back. The read and write samplers take nothing at their
-    /// indices. What `sampler_ids` answers as an error, the call answers; once it has answered,
-    /// a failing call holds none of the indices.
+    /// last of them to go gives them back. A constexpr sampler's index has one owner, as a
+    /// texture's has ([`Device::new_texture`]): a sampler state made there takes it, and a later
+    /// state numbering the constexpr sampler there takes it back. The consumer keeps the index
+    /// from the program's sampler states while a state numbering it there lives; the runtime does
+    /// not check it. The read and write samplers take nothing at their indices. What
+    /// `sampler_ids` answers as an error, the call answers; once it has answered, a failing call
+    /// holds none of the indices.
     ///
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that reads what the

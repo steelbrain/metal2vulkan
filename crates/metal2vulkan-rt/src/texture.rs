@@ -445,10 +445,12 @@ impl Device {
     /// after it. Until the next submission nothing else holds the texture: released first, it is
     /// freed at once.
     ///
-    /// An index another live texture holds is taken, as Metal's later texture at a resource ID
-    /// takes the ID: the new texture owns the index and its elements from then, and the earlier
-    /// one's going touches neither. No work in flight may read the earlier texture through the
-    /// index (the program's duty, as it is Metal's; nothing checks it).
+    /// An index another texture holds, a live one or one the program released that a command
+    /// buffer not yet retired still holds, is taken at once, as Metal's later texture at a
+    /// resource ID takes the ID: the new texture owns the index and its elements from then, and
+    /// the earlier one's going, at its release or once its command buffers retire, touches
+    /// neither. No work in flight may read a displaced or released texture through the index
+    /// (the program's duty, as it is Metal's; nothing checks it).
     ///
     /// A swizzle composes with the view's own component mapping. Shader-write usage writes the
     /// storage element where the device stores the format through a storage image without a

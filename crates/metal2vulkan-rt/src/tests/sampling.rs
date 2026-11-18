@@ -8,19 +8,22 @@
 //! it, in one dispatch. An index belongs to the texture placed there last: sampling and writing
 //! through it reach that texture, a displaced texture's going touches nothing, a placement of a
 //! texture with no storage view empties the storage element an earlier one wrote, and once the
-//! last placed goes, the index samples zero.
+//! last placed goes, the index samples zero. The rule holds at a constexpr sampler's index, and
+//! over a texture and a sampler state the program released while a command buffer that used
+//! them is still pending.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::device::lock;
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device, finished, shared_event, PATIENCE};
     use crate::{
-        CommandQueue, ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType, Error,
-        FunctionDescriptor, IndexClass, Library, Limit, NumberedSampler, PixelFormat, Refusal,
-        Region, SamplerDescriptor, SamplerMinMagFilter, SamplerState, StageSource, Texture,
-        TextureDescriptor, TextureType, TextureUsage,
+        CommandBuffer, CommandBufferStatus, CommandQueue, ComputePipelineDescriptor,
+        ComputePipelineState, Device, DispatchType, Error, FunctionDescriptor, IndexClass, Library,
+        Limit, NumberedSampler, PixelFormat, Refusal, Region, SamplerDescriptor,
+        SamplerMinMagFilter, SamplerState, StageSource, Texture, TextureDescriptor, TextureType,
+        TextureUsage,
     };
     use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
 
@@ -125,6 +128,11 @@ mod on_device {
 
     /// Writes every texel of `source`, `SIDE` a side, [`texel`].
     fn fill(name: &str, source: &Texture) {
+        fill_with(name, source, texel);
+    }
+
+    /// Writes every texel `(x, y)` of `source`, `SIDE` a side, `texel(x, y)`.
+    fn fill_with(name: &str, source: &Texture, texel: fn(u32, u32) -> [f32; 4]) {
         let bytes: Vec<u8> = (0..SIDE)
             .flat_map(|y| (0..SIDE).flat_map(move |x| texel(x, y)))
             .flat_map(|v| half(v).to_le_bytes())
@@ -173,10 +181,24 @@ mod on_device {
     fn sample_down(
         name: &str,
         queue: &CommandQueue,
+        pass: (&ComputePipelineState, &SamplerState),
+        textures: [&Texture; 2],
+    ) {
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        encode_down(name, &command_buffer, pass, textures);
+        command_buffer.commit().expect("a commit");
+        finished(name, &command_buffer);
+        assert!(command_buffer.error().is_none(), "{name}");
+    }
+
+    /// Encodes one dispatch of `sample_down` (`down`) into `command_buffer`, sampling `source`,
+    /// `SIDE` a side, through `sampler` into `target`'s first half of each side.
+    fn encode_down(
+        name: &str,
+        command_buffer: &CommandBuffer,
         (down, sampler): (&ComputePipelineState, &SamplerState),
         [source, target]: [&Texture; 2],
     ) {
-        let command_buffer = queue.command_buffer().expect("a command buffer");
         let mut encoder = command_buffer
             .compute_command_encoder(DispatchType::Serial)
             .expect("an encoder");
@@ -190,9 +212,72 @@ mod on_device {
             .dispatch_threads([SIDE / 2, SIDE / 2, 1], [4, 4, 1])
             .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"));
         encoder.end_encoding();
+    }
+
+    /// Whether a state's numbered samplers are `sample_up`'s: its constexpr sampler, then its
+    /// texture write's.
+    fn up_samplers(s: &[NumberedSampler]) -> bool {
+        matches!(s, [NumberedSampler::Constexpr(_), NumberedSampler::Write])
+    }
+
+    /// A state of the harness's `sample_up`, its constexpr sampler at `CONSTEXPR`.
+    fn up_state(name: &str, device: &Device, library: &Library) -> ComputePipelineState {
+        state(
+            device,
+            library,
+            "sample_up",
+            up_samplers,
+            vec![CONSTEXPR, 0],
+        )
+        .unwrap_or_else(|error| panic!("{name}: sample_up: {error}"))
+    }
+
+    /// One dispatch of `sample_up` (`up`) in a command buffer of its own, sampling `middle`, half
+    /// `SIDE` a side, through its constexpr sampler into `output`, `SIDE` a side, committed and
+    /// waited for: `output`'s texels.
+    fn sample_up(
+        name: &str,
+        queue: &CommandQueue,
+        up: &ComputePipelineState,
+        [middle, output]: [&Texture; 2],
+    ) -> Vec<f32> {
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder = command_buffer
+            .compute_command_encoder(DispatchType::Serial)
+            .expect("an encoder");
+        encoder.set_compute_pipeline_state(up).expect("up");
+        encoder.set_texture(Some(middle), 0).expect("middle");
+        encoder.set_texture(Some(output), 1).expect("output");
+        encoder
+            .dispatch_threads([SIDE, SIDE, 1], [4, 4, 1])
+            .unwrap_or_else(|error| panic!("{name}: sample_up: {error}"));
+        encoder.end_encoding();
         command_buffer.commit().expect("a commit");
         finished(name, &command_buffer);
         assert!(command_buffer.error().is_none(), "{name}");
+        texels(output, SIDE)
+    }
+
+    /// What `sample_up` writes of `mean`, half `SIDE` a side, through a linear filter: each texel
+    /// a quarter of a middle texel from a middle texel's center, clamped to the edge.
+    fn upsampled(mean: &[f32]) -> Vec<f32> {
+        let half_side = SIDE / 2;
+        let taps = |x: u32| {
+            let k = x / 2;
+            match x % 2 {
+                0 => (k.saturating_sub(1), k, 0.75f32),
+                _ => (k, (k + 1).min(half_side - 1), 0.25f32),
+            }
+        };
+        let mid = |x: u32, y: u32, c: u32| mean[(4 * (y * half_side + x) + c) as usize];
+        (0..SIDE)
+            .flat_map(|y| (0..SIDE).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
+            .map(|(x, y, c)| {
+                let ((x0, x1, wx), (y0, y1, wy)) = (taps(x), taps(y));
+                let row = |y| mid(x0, y, c) * (1.0 - wx) + mid(x1, y, c) * wx;
+                row(y0) * (1.0 - wy) + row(y1) * wy
+            })
+            .collect()
     }
 
     /// Whether `got` is the linear filter's `want`, within what a device's filter weights round.
@@ -309,24 +394,7 @@ mod on_device {
             let mean = means();
             let got = texels(&middle, half_side);
             assert!(near(&got, &mean), "{name}: sample_down {got:?} {mean:?}");
-            // Up: each texel a quarter of a middle texel from a middle texel's center, clamped to
-            // the edge.
-            let taps = |x: u32| {
-                let k = x / 2;
-                match x % 2 {
-                    0 => (k.saturating_sub(1), k, 0.75f32),
-                    _ => (k, (k + 1).min(half_side - 1), 0.25f32),
-                }
-            };
-            let mid = |x: u32, y: u32, c: u32| mean[(4 * (y * half_side + x) + c) as usize];
-            let upsampled: Vec<f32> = (0..SIDE)
-                .flat_map(|y| (0..SIDE).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
-                .map(|(x, y, c)| {
-                    let ((x0, x1, wx), (y0, y1, wy)) = (taps(x), taps(y));
-                    let row = |y| mid(x0, y, c) * (1.0 - wx) + mid(x1, y, c) * wx;
-                    row(y0) * (1.0 - wy) + row(y1) * wy
-                })
-                .collect();
+            let upsampled = upsampled(&mean);
             let got = texels(&output, SIDE);
             assert!(
                 near(&got, &upsampled),
@@ -471,6 +539,165 @@ mod on_device {
             drop(d);
             assert_eq!(counters.gauges().descriptor_slots, slots + 2, "{name}");
             drop((queue, down, sampler, source, target));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    /// The owner rule at a constexpr sampler's index: a sampler state of nearest filter made at
+    /// the index `sample_up`'s constexpr sampler (linear) holds takes it, and `sample_up` samples
+    /// through the state's element; a later state that numbers the constexpr sampler there takes
+    /// the index back, for every state that numbers it, and the sampler state's going touches
+    /// nothing. The descriptor-slot gauge counts the index once throughout, and not after the
+    /// last state that numbers the constexpr sampler.
+    #[test]
+    fn every_device_gives_a_constexpr_sampler_s_index_to_the_object_placed_there_last() {
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("sampling", |name, _, device| {
+            let counters = device.counters();
+            let grants = [IndexClass::Texture, IndexClass::Sampler].map(|class| {
+                (device.grant_indices(class, 1, 4))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let read = TextureUsage::SHADER_READ;
+            let write = read | TextureUsage::SHADER_WRITE;
+            let source = texture(&device, SIDE, read, 1);
+            let middle = texture(&device, SIDE / 2, write, 2);
+            let output = texture(&device, SIDE, write, 3);
+            fill(name, &source);
+            let sampler = linear(name, &device, 1);
+            let down = down_state(name, &device, &library);
+            let queue = device.new_command_queue(4).expect("a queue");
+            sample_down(name, &queue, (&down, &sampler), [&source, &middle]);
+            let mean = means();
+            let linear_up = upsampled(&mean);
+            // Nearest: each texel the middle texel it lies in.
+            let half_side = SIDE / 2;
+            let nearest_up: Vec<f32> = (0..SIDE)
+                .flat_map(|y| (0..SIDE).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
+                .map(|(x, y, c)| mean[(4 * ((y / 2) * half_side + x / 2) + c) as usize])
+                .collect();
+            let up_pass =
+                |up: &ComputePipelineState| sample_up(name, &queue, up, [&middle, &output]);
+
+            let slots = counters.gauges().descriptor_slots;
+            let up = up_state(name, &device, &library);
+            assert_eq!(counters.gauges().descriptor_slots, slots + 1, "{name}");
+            let got = up_pass(&up);
+            assert!(
+                near(&got, &linear_up),
+                "{name}: the constexpr sampler {got:?}"
+            );
+
+            let nearest = (device.new_sampler_state(&SamplerDescriptor::new(), CONSTEXPR))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(counters.gauges().descriptor_slots, slots + 1, "{name}");
+            let got = up_pass(&up);
+            assert!(
+                near(&got, &nearest_up),
+                "{name}: the sampler state made over it {got:?}"
+            );
+
+            let again = up_state(name, &device, &library);
+            assert_eq!(counters.gauges().descriptor_slots, slots + 1, "{name}");
+            let got = up_pass(&up);
+            assert!(near(&got, &linear_up), "{name}: taken back {got:?}");
+            drop(nearest);
+            let got = up_pass(&again);
+            assert!(
+                near(&got, &linear_up),
+                "{name}: once the sampler state went {got:?}"
+            );
+            drop((up, again));
+            assert_eq!(counters.gauges().descriptor_slots, slots, "{name}");
+            drop((queue, down, sampler, source, middle, output));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    /// The owner rule over objects the program released while work that used them is pending: a
+    /// command buffer samples texture A through sampler state SA, signals once that is done, and
+    /// waits on the host. A and SA are released, and texture B and sampler state SB are made at
+    /// their indices at once, with the command buffer still pending; sampling through the indices
+    /// on another queue reads B through SB. Once the command buffer has retired, and A and SA with
+    /// it, sampling through the indices still reads B through SB. Nothing reads A or SA through
+    /// the indices once B and SB take them: A's dispatch had completed (its signal), so the
+    /// writes are valid under `UPDATE_UNUSED_WHILE_PENDING`. The descriptor-slot gauge counts each
+    /// index once throughout.
+    #[test]
+    fn every_device_gives_a_released_object_s_index_to_the_next_at_once() {
+        const AT: u32 = 3;
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("sampling", |name, _, device| {
+            let counters = device.counters();
+            let grants =
+                [(IndexClass::Texture, 8), (IndexClass::Sampler, 1)].map(|(class, count)| {
+                    (device.grant_indices(class, 1, count))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"))
+                });
+            let read = TextureUsage::SHADER_READ;
+            let write = read | TextureUsage::SHADER_WRITE;
+            fn flat(_: u32, _: u32) -> [f32; 4] {
+                [0.5, 0.25, 0.75, 1.0]
+            }
+            let a = texture(&device, SIDE, read, AT);
+            fill_with(name, &a, flat);
+            let [first, second] = [5, 6].map(|index| texture(&device, SIDE / 2, write, index));
+            let sa = linear(name, &device, 1);
+            let down = down_state(name, &device, &library);
+            let [queue, other] = [(); 2].map(|()| device.new_command_queue(4).expect("a queue"));
+            let (signaled, release) = (shared_event(&device), shared_event(&device));
+            let slots = counters.gauges().descriptor_slots;
+
+            let pending = queue.command_buffer().expect("a command buffer");
+            encode_down(name, &pending, (&down, &sa), [&a, &first]);
+            (pending.encode_signal_event(signaled.as_event(), 1)).expect("a signal");
+            (pending.encode_wait_for_event(release.as_event(), 1)).expect("a wait");
+            pending.commit().expect("a commit");
+            assert!(signaled.wait_until_signaled_value(1, PATIENCE), "{name}");
+            drop((a, sa));
+            let b = texture(&device, SIDE, read, AT);
+            fill(name, &b);
+            let sb = linear(name, &device, 1);
+            assert_eq!(counters.gauges().descriptor_slots, slots, "{name}");
+            sample_down(name, &other, (&down, &sb), [&b, &second]);
+            let status = pending.status();
+            assert!(
+                !matches!(
+                    status,
+                    CommandBufferStatus::Completed | CommandBufferStatus::Error
+                ),
+                "{name}: A's command buffer is pending: {status:?}"
+            );
+            let got = texels(&second, SIDE / 2);
+            assert!(
+                near(&got, &means()),
+                "{name}: while A's work is pending {got:?}"
+            );
+
+            release.set_signaled_value(1);
+            finished(name, &pending);
+            assert!(pending.error().is_none(), "{name}");
+            let want: Vec<f32> = (0..SIDE * SIDE / 4).flat_map(|_| flat(0, 0)).collect();
+            let got = texels(&first, SIDE / 2);
+            assert!(near(&got, &want), "{name}: A sampled {got:?}");
+            assert_eq!(counters.gauges().descriptor_slots, slots, "{name}");
+            sample_down(name, &queue, (&down, &sb), [&b, &first]);
+            let got = texels(&first, SIDE / 2);
+            assert!(
+                near(&got, &means()),
+                "{name}: once A's work retired {got:?}"
+            );
+            drop((b, sb));
+            assert_eq!(counters.gauges().descriptor_slots, slots - 2, "{name}");
+            drop((pending, queue, other, down, first, second));
             for grant in grants {
                 (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             }

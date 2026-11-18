@@ -285,14 +285,16 @@ made, with no lock, and never rewritten for layouts.
   `Device::release_indices` returns a grant; one not granted is `Refusal::IndicesNotGranted`, and
   one where an object still holds an index `Refusal::IndicesInUse`.
 - An index has one owner: the object placed there last, in each class. Making an object at an
-  index another live object holds takes the index, as Metal's later texture at a resource ID
+  index another object holds, a live one or one the program released that a command buffer not
+  yet retired still holds, takes the index at once, as Metal's later texture at a resource ID
   takes the ID: the new object writes its elements (a texture with no storage view writes its
   storage element null where it took the index from another, so nothing stale answers there),
-  and the earlier object's going touches neither the index nor its elements. No work in flight
-  may read the earlier object through the index: the program's duty, as it is Metal's, which the
-  runtime does not check. Making one at an index not granted is `Refusal::IndicesNotGranted`.
-  The index is free again once its owner's last handle is gone, and with it the last command
-  buffer that used it; its elements read their default again from then.
+  and the earlier object's going, at its release or once its command buffers retire, touches
+  neither the index nor its elements. No work in flight may read a displaced or released object
+  through the index: the program's duty, as it is Metal's, which the runtime does not check.
+  Making one at an index not granted is `Refusal::IndicesNotGranted`. Where nothing took it, the
+  index is free again once its owner's last handle is gone, and with it the last command buffer
+  that used it; its elements read their default again from then.
 
 ## Textures
 
@@ -889,9 +891,13 @@ that touch blocks first.
   coordinate is scaled in the shader) at its index of the three sampler arrays, shared by create
   info with the sampler states'. States that number one constexpr sampler at one index share its
   elements; a constexpr sampler of other state words, or a sampler state, made at that index takes
-  it, as any object made at a held index does (above). The last of them to go writes the arrays'
-  defaults back and frees the index, where the constexpr sampler still owns it. The read and write samplers take nothing at their
-  indices. Once `sampler_ids` has answered, a call that fails holds none of the indices.
+  it, as any object made at a held index does (above), and a later state that numbers the
+  constexpr sampler there takes it back, with every element the constexpr sampler holds. The last
+  of its states to go writes the arrays' defaults back and frees the index, where the constexpr
+  sampler still owns it. The consumer keeps a constexpr sampler's index from the program's sampler
+  states while a state numbering it there lives; rt does not check it. The read and write samplers
+  take nothing at their indices. Once `sampler_ids` has answered, a call that fails holds none of
+  the indices.
 - Every kernel is lowered once at creation. The translator answers, lowering nothing
   (`Device::kernel_observes_partition`), whether it observes its threadgroup partition (it holds
   threadgroup memory, a barrier, fence or atomic of threadgroup or SIMD-group scope, a SIMD-group

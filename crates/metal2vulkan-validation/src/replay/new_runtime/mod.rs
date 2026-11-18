@@ -922,7 +922,9 @@ impl NewRuntime {
     }
 
     /// The pipeline state `make` makes on the device with `ids`, which gives each numbered
-    /// constexpr sampler an index of its own, the lowest free one, the same words one index.
+    /// constexpr sampler an index of its own, the highest free one, the same words one index: the
+    /// stream names no index for it, and the program's sampler states take the lowest, which a
+    /// constexpr sampler there would lose to them.
     fn numbered<T>(
         &mut self,
         make: impl FnOnce(
@@ -944,10 +946,10 @@ impl NewRuntime {
                         .or_else(|| taken.iter().find(|(w, _)| w == words).map(|&(_, i)| i));
                     let index = match known {
                         Some(index) => index,
-                        // The lowest free sampler index this call has not taken yet.
+                        // The highest free sampler index this call has not taken yet.
                         None => {
                             let fresh = |index| taken.iter().any(|&(_, i)| i == index);
-                            let index = indices.lowest(rt::IndexClass::Sampler, 0, fresh);
+                            let index = indices.highest(rt::IndexClass::Sampler, fresh);
                             // None free: the next would be past the class's range.
                             let index = index.ok_or(rt::Error::Refused(
                                 rt::Refusal::IndicesNotGranted {

@@ -183,7 +183,9 @@ and the (name id, value) answer pairs.
   only where the stream names it. A named index a live object of the play holds is taken from
   it, as Metal's later texture at an ID takes the ID: the earlier object's release leaves the
   index. Where the runtime refuses a named index (it lies outside the object's class), the object
-  takes the lowest free one, and the report counts it.
+  takes the lowest free one, and the report counts it. A constexpr sampler, which the stream names
+  no index for, takes the highest free sampler index on the new runtime, outside the sequence the
+  program's sampler states take, so none of theirs takes its index.
 - **Textures outside the program's IDs.** A texture the recorder makes for itself, not the
   program's (the host's cursor), comes from a texture descriptor record whose map holds
   `outside: true` and a device's `newTextureWithDescriptor:` of that descriptor. Live, it took no

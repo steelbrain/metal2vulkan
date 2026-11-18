@@ -30,12 +30,13 @@ shader reaches has no index. A texture view takes its own index of the texture c
 buffer has no index: it is a typed refusal under these domains.
 
 An index has one owner, the object placed there last, as Metal's later texture at a resource ID
-takes the ID. A texture or a sampler placed at an index another live object holds writes its
-elements and owns the index; where the earlier texture had a storage element and the later has
-none, the later one writes that element null, so nothing stale answers there. The earlier
-object's release touches neither the index nor its elements; the owner's release empties them.
-The rule rests on the duty Metal puts on a program: no work in flight reads the displaced object
-through that ID. The runtime does not check it.
+takes the ID. A texture or a sampler placed at an index another object holds, a live one or one
+the program released that work in flight still holds, writes its elements and owns the index at
+once; where the earlier texture had a storage element and the later has none, the later one
+writes that element null, so nothing stale answers there. The earlier object's release, and its
+teardown once its work retires, touch neither the index nor its elements; the owner's empties
+them. The rule rests on the duty Metal puts on a program: no work in flight reads a displaced or
+released object through that ID. The runtime does not check it.
 
 ## The arrays
 
@@ -44,9 +45,14 @@ array of 65,536 elements, binding 1 the storage-image array of 65,536, and bindi
 sampler arrays of 4,000 elements each, every one partially bound, updated after binding and while
 unused elements are pending, and seen by every stage. Element `i` of each image array is the
 texture whose ID holds index `i`, so the consumer writes an element once, as it makes the texture,
-for every pipeline. Element 0 is a null descriptor (`nullDescriptor`): a nil
-texture sizes 0, reads and samples zero, and drops a store, as Metal answers for a nil texture, with
-no code in the shader. Each texture class a shader declares (its shape, numeric type and depth
+for every pipeline. Element 0 is a null descriptor (`nullDescriptor`, which the floor requires): a
+nil texture sizes 0, reads and samples zero, and drops a store, as Metal answers for a nil texture,
+with no code in the shader. So is every image element no texture owns: the runtime writes every
+element at device creation, a null descriptor in each image array and a default sampler (nearest,
+clamped to the edge; the comparison array's compares with `NEVER`) in each sampler array, as
+Vulkan has no null sampler, and writes an element back to that once its owner goes. An index
+nobody owns, nil, freed or stale, reads as nil and cannot reach a destroyed view or sampler. Each
+texture class a shader declares (its shape, numeric type and depth
 comparison, sampled, or storage without a format) is a variable of its descriptor type's binding.
 
 A shader takes a texture slot's ID from the slot's push field (`PushField::SlotGuestBase`), and an

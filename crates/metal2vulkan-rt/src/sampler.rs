@@ -140,21 +140,24 @@ fn every(samplers: [Option<vk::Sampler>; 3]) -> [(usize, Option<vk::Sampler>); 3
 }
 
 /// A constexpr sampler at an index of the sampler arrays, by its index and state words: the
-/// create info of each array's element it holds there (plain, comparison, integer texture), how
-/// many pipeline states number it there, and its owner word at the index.
+/// create info and sampler of each array's element it holds there (plain, comparison, integer
+/// texture), how many pipeline states number it there, and its owner word at the index.
 pub(crate) struct Constexpr {
-    uses: [Option<SamplerDesc>; 3],
+    uses: [Option<(SamplerDesc, vk::Sampler)>; 3],
     holders: u32,
     owner: Owner,
 }
 
 /// One more pipeline state numbers the constexpr sampler of state words `words` at `index`, with
 /// the create info of each array's element it uses there (`None` for an array it does not use).
-/// The first holder places it at the index and writes its elements, taking the index from a
-/// sampler state or a constexpr sampler of other words there, as any placement does
-/// ([`Arrays::place_samplers`](crate::arrays::Arrays::place_samplers)); a later one of the same
-/// words writes the elements of the arrays it adds and leaves the others, which pending work may
-/// read, where the constexpr sampler still owns the index.
+/// Each numbering is a placement, as any is
+/// ([`Arrays::place_samplers`](crate::arrays::Arrays::place_samplers)): the first holder places it
+/// at the index and writes its elements, taking the index from a sampler state or a constexpr
+/// sampler of other words there. A later one of the same words writes the elements of the arrays
+/// it adds and leaves the others, which pending work may read, where the constexpr sampler still
+/// owns the index; where another object took the index since, it places the constexpr sampler
+/// there again with every element it holds
+/// ([`Arrays::hold_samplers`](crate::arrays::Arrays::hold_samplers)).
 ///
 /// Err: [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted);
 /// [`Limit::DeviceSamplers`]; [`Error::Vulkan`].
@@ -191,33 +194,49 @@ pub(crate) fn hold_constexpr(
         .iter()
         .map(|&(array, _, sampler)| (array, Some(sampler)))
         .collect();
-    let owner = match present {
-        // SAFETY: no work reads an element it had not written (no state numbering it there uses
-        // that array), and each sampler is held while its element holds it.
-        Some((_, owner)) => {
-            unsafe { (core.arrays).add_samplers(&core.device, index, owner, &elements) };
-            owner
-        }
-        // SAFETY: each sampler is held while its element holds it.
-        None => match unsafe {
-            (core.arrays).place_samplers(&core.device, &core.counters, index, &elements)
-        } {
-            Ok(owner) => owner,
-            Err(error) => {
-                let taken: Vec<Option<SamplerDesc>> =
-                    added.iter().map(|&(_, desc, _)| Some(desc)).collect();
-                give_back(core, &taken);
-                return Err(error);
+    let placed = match present {
+        Some((present, owner)) => {
+            let held = present
+                .iter()
+                .enumerate()
+                .filter_map(|(array, used)| used.map(|(_, sampler)| (array, Some(sampler))));
+            let all: Vec<(usize, Option<vk::Sampler>)> = held.chain(elements.clone()).collect();
+            // SAFETY: no work reads an element of `elements` (no state numbering it there uses
+            // that array), each sampler is held while its element holds it, and no work in
+            // flight reads the object it takes the index from (the consumer's duty).
+            unsafe {
+                (core.arrays).hold_samplers(
+                    &core.device,
+                    &core.counters,
+                    (index, owner),
+                    &elements,
+                    &all,
+                )
             }
+        }
+        // SAFETY: each sampler is held while its element holds it, and no work in flight reads
+        // the object it takes the index from (the consumer's duty).
+        None => unsafe {
+            (core.arrays).place_samplers(&core.device, &core.counters, index, &elements)
         },
+    };
+    let owner = match placed {
+        Ok(owner) => owner,
+        Err(error) => {
+            let taken: Vec<Option<SamplerDesc>> =
+                added.iter().map(|&(_, desc, _)| Some(desc)).collect();
+            give_back(core, &taken);
+            return Err(error);
+        }
     };
     let entry = held.entry((index, words)).or_insert(Constexpr {
         uses: [None; 3],
         holders: 0,
         owner,
     });
-    for (array, desc, _) in added {
-        entry.uses[array] = Some(desc);
+    entry.owner = owner;
+    for (array, desc, sampler) in added {
+        entry.uses[array] = Some((desc, sampler));
     }
     entry.holders += 1;
     Ok(())
@@ -242,7 +261,7 @@ pub(crate) fn release_constexpr(core: &Core, index: u32, words: [u64; 2]) {
     // numbering it held the state until it retired.
     unsafe { (core.arrays).vacate_samplers(&core.device, &core.counters, index, entry.owner) };
     drop(held);
-    give_back(core, &entry.uses);
+    give_back(core, &entry.uses.map(|used| used.map(|(desc, _)| desc)));
 }
 
 /// Gives up one hold of each sampler of `uses`, the reaper freeing each one no element holds.
@@ -266,7 +285,8 @@ impl Device {
     /// device's samplers, which share one `VkSampler` per create info, and written into the three
     /// sampler arrays at `index` before the call returns. The comparison array takes the state's
     /// sampler where its compare function is not `Never`, and keeps its default otherwise. An
-    /// index another live state or constexpr sampler holds is taken, as a texture's is
+    /// index another state or a constexpr sampler holds, live or released and held by a command
+    /// buffer not yet retired, is taken at once, as a texture's is
     /// ([`Device::new_texture`](crate::Device::new_texture)): the earlier one's going leaves it.
     ///
     /// Err: [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted);
