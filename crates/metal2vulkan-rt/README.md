@@ -758,10 +758,18 @@ that touch blocks first.
   (15 ms at the 90th). The last command buffer's own report is not late: on the 2080 it came
   97.2-97.5 ms after its commit, where the old runtime's came 94.9-96.4 ms after. The harness prints each command buffer's lateness, from
   its `gpu_end_time` to its completed handler (`late_us`).
-- GPU start and end times are the device's timestamps. On Mesa's Apple-GPU driver a command
-  buffer with no render pass reports `gpu_start_time` equal to its `gpu_end_time`: the driver
-  writes both timestamps with Metal's relaxed timestamp granularity, which gives two writes in one
-  compute pass one value. Vulkan allows it: a later timestamp is never lower. The two timestamps
+- GPU start and end times are the device's timestamps. On Mesa's Apple-GPU driver a timestamp
+  reads the end of the Metal encoder that holds it: the driver writes it with Metal's relaxed
+  timestamp granularity into the compute encoder open there, which holds the compute and blit
+  work up to the next render pass. So a command buffer's `gpu_start_time` is the end of its
+  compute and blit work before its first render pass: one with no render pass reports
+  `gpu_start_time` equal to its `gpu_end_time`, a length of zero, and one that dispatches before
+  its first render pass reports a start after those dispatches. Its `gpu_end_time` is its
+  work's end. Measured on an M3 Max with Mesa 26.3.1, in Vulkan alone, around a 16 ms dispatch:
+  two timestamps read one value with a pipeline barrier or a buffer fill between them too, 43-56
+  µs apart with an empty render pass after the dispatch, and the end one came 51-213 µs before
+  the host's calibration after its fence wait. Vulkan allows it: a timestamp may be latched at
+  any logically later stage. The two timestamps
   also cost each committed command buffer about 93 µs there: on an M3 Max with Mesa 26.3.1, a
   burst of command buffers of two dispatches each took 122-124 µs a command buffer with them and
   29.5-29.8 µs without. The driver writes a timestamp outside a render pass with a one-thread
