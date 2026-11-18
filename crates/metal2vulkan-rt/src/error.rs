@@ -619,8 +619,15 @@ pub enum Refusal {
     },
     /// An indirect dispatch's arguments, or an indexed draw's indices, at a byte of the block
     /// the buffer lies in (its device copy's, for a Managed buffer with one) that is not a
-    /// multiple of 4, or of the index size: a buffer the consumer placed at such a byte, read at
-    /// an offset Metal takes.
+    /// multiple of 4, or of the index size.
+    ///
+    /// Metal's offset rules keep both at such a multiple of the buffer's start, so only a buffer
+    /// that starts off it meets this: a no-copy buffer
+    /// (`newBufferWithBytesNoCopy:length:options:deallocator:`) over a pointer that is not a
+    /// multiple of 4 (indirect arguments) or of the index size (indexed draws), which documented
+    /// Metal does not allow, its pointer being page-aligned. The consumer places every other
+    /// buffer at an aligned byte. Such a buffer is still made, and every other use of it runs:
+    /// only the dispatch or draw that reads its arguments or indices is refused.
     ///
     /// Basis: ours (`vkCmdDispatchIndirect` reads its arguments at a multiple of 4 in the
     /// `VkBuffer`, and `vkCmdBindIndexBuffer` takes indices at a multiple of their size in the

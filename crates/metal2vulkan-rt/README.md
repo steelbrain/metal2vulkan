@@ -217,10 +217,9 @@ is the slack past a buffer's length: the runtime writes no byte of a block outsi
 the buffers placed in it (a zero fill, a Managed buffer's copy-in and its device copy's zeroing
 each cover exactly the buffer's bytes), so what lies between and after them is as the consumer
 left it. Vulkan reads an indirect dispatch's arguments only at a multiple of 4 of the block, and an
-indexed draw's indices only at a multiple of their size; a Metal buffer starts at an aligned
-address, where Metal's offset rules keep both so. A dispatch or draw whose arguments or indices a
-consumer's placement puts at a byte that misses that multiple is refused
-(`Refusal::ArgumentPlace`).
+indexed draw's indices only at a multiple of their size; a dispatch or draw whose arguments or
+indices start at a byte that misses that multiple is refused (`Refusal::ArgumentPlace`, in the
+known gaps below).
 
 ### The consumer's mappings
 
@@ -235,6 +234,13 @@ after a quiesce.
 
 ### Known gaps of memory blocks
 
+- A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
+  block that is not a multiple of 4, or of the index size, is refused (`Refusal::ArgumentPlace`).
+  Metal's offset rules keep both at that multiple of the buffer's start, so only a buffer that
+  starts off it meets this: a no-copy buffer over a pointer that is not a multiple of 4 (indirect
+  arguments) or of the index size (indexed draws), which documented Metal does not allow, its
+  pointer being page-aligned. The consumer places every other buffer at an aligned byte. Such a
+  buffer is still made and its other uses run; only the dispatch or draw is refused.
 - On the NVIDIA cards we measured in Thunderbolt enclosures, freeing host-visible memory takes
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one block at a time and only
