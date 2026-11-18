@@ -1,4 +1,4 @@
-//! Blit copies between textures, and between buffers and textures; buffer fills.
+//! Blit copies between textures, and between buffers and textures; buffer fills; synchronizes.
 //!
 //! - The rules: a texture copies into one of its own pixel format and sample count; two formats
 //!   or two sample counts are `Refusal::TextureCopyMismatch`, as Metal's validation refuses them;
@@ -29,6 +29,12 @@
 //!   `Refusal::FillRange`, one of no whole words `Gap::FillAlignment`. Under a device cfg its
 //!   bytes are plain Metal's (probe `blit_fill_rules.m`, job m3-max-43571), at one submission and
 //!   three barriers alone.
+//! - Under a device cfg: a synchronize brings the host's bytes of a Managed buffer up to date with
+//!   a fill before it, to plain Metal's bytes (probe `blit_synchronize_rules.m`, job
+//!   m3-max-43632): by one copy between two barriers where the buffer has a device copy, which
+//!   the fill alone does not reach; by nothing where it has none. Each is counted and is no
+//!   submission of its own; one of a texture records nothing. A blit's segment ends reaching the
+//!   host exactly where it wrote Shared memory or synchronized a device copy.
 
 use crate::blit::{
     buffer_copy, fill_range, texture_copy, BufferCopy, BufferLayout, ImageCopy, Lies, Side,
@@ -734,9 +740,9 @@ fn a_fill_takes_whole_words_of_a_range_inside_the_buffer() {
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        Buffer, BufferLayout, CommandBuffer, Device, DispatchType, Error, Gap, IndexClass,
-        MemoryClass, PixelFormat, Refusal, Region, StorageMode, Texture, TextureDescriptor,
-        TexturePlace, TextureType, TextureUsage,
+        BlitCommandEncoder, Buffer, BufferLayout, CommandBuffer, Device, DispatchType, Error, Gap,
+        IndexClass, MemoryClass, PixelFormat, Refusal, Region, Resource, StorageMode, Texture,
+        TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
 
     /// A byte pattern of `len` bytes, different at every offset of one call and between calls.
@@ -1461,6 +1467,186 @@ mod on_device {
                 metal(want, 0x5d28_bc84_b408_472d),
                 "{name}: the fill"
             );
+        });
+    }
+
+    /// `command_buffer` committed and complete with no error.
+    fn run(name: &str, command_buffer: &CommandBuffer) {
+        command_buffer.commit().expect("a commit");
+        finished(name, command_buffer);
+        assert_eq!(command_buffer.error(), None, "{name}");
+    }
+
+    /// A synchronize brings the host's bytes of a Managed buffer up to date with a fill before it
+    /// in the command buffer, to plain Metal's bytes. Where the buffer has a device copy the fill
+    /// alone leaves the host's bytes as they were, and the synchronize is one copy between two
+    /// barriers; where it has none the host reads the fill's bytes at once and the synchronize
+    /// records nothing. Either way it is counted, is no submission of its own, and the segment's
+    /// end reaches the host. A synchronize of a texture records nothing.
+    #[test]
+    fn every_device_synchronizes_a_managed_buffer() {
+        each_device("blit_synchronize", |name, _, device| {
+            let copied = !device.core().shared_is_device_local();
+            let block = (device.take_block(MemoryClass::Shared, 4096))
+                .expect("a Shared block")
+                .id;
+            let before = pattern(64, 21);
+            let start = (device.new_buffer(block, 256, 64, false)).expect("a buffer");
+            write(&start, &before);
+            drop(start);
+            let managed = (device.new_managed_buffer(block, 256, 64, 64))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+
+            // The fill alone: the host reads it only where the buffer has no device copy.
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .fill_buffer(&managed, 4..8, 0xab)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let mut want = before.clone();
+            if !copied {
+                want[4..8].fill(0xab);
+            }
+            assert_eq!(
+                read(&managed),
+                want,
+                "{name}: the fill alone (device copy: {copied})"
+            );
+
+            // The fill and a synchronize.
+            let metrics = counters.metrics();
+            let reaches = counters.host_reaches();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .fill_buffer(&managed, 4..12, 0xab)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder
+                .synchronize_resource(Resource::Buffer(&managed))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - metrics.submissions,
+                    after.barriers - metrics.barriers,
+                    after.bytes_copied - metrics.bytes_copied,
+                    after.synchronizations - metrics.synchronizations,
+                    counters.host_reaches() - reaches,
+                ),
+                (1, if copied { 5 } else { 3 }, 0, 1, 1),
+                "{name}: submissions, barriers, bytes copied, synchronizations, host reaches \
+                 (device copy: {copied})"
+            );
+            let mut want = before;
+            want[4..12].fill(0xab);
+            assert_eq!(
+                read(&managed),
+                metal(want, 0x5d28_bc84_b408_472d),
+                "{name}: the synchronized fill (device copy: {copied})"
+            );
+
+            // A texture's synchronize records nothing.
+            device
+                .grant_indices(IndexClass::Texture, 4096, 1)
+                .expect("a grant");
+            let usage = TextureUsage::SHADER_READ;
+            let texture = texture(
+                &device,
+                TextureType::Type2D,
+                PixelFormat::R8Unorm,
+                [4, 4, 1],
+                usage,
+                4096,
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let metrics = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .synchronize_resource(Resource::Texture(&texture))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.barriers - metrics.barriers,
+                    after.synchronizations - metrics.synchronizations,
+                ),
+                (0, 1),
+                "{name}: a texture's barriers and synchronizations"
+            );
+        });
+    }
+
+    /// A blit's segment ends reaching the host where it wrote a Shared buffer, by a fill or a
+    /// copy from a texture, and not where it wrote only Private memory or a texture: the
+    /// invariant a synchronize with nothing to copy rests on, as the compute encoder's test holds
+    /// it for dispatches.
+    #[test]
+    fn every_device_reaches_the_host_only_after_a_blit_writes_shared_memory() {
+        each_device("blit_host_reach", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 1)
+                .expect("a grant");
+            let shared = (device.take_block(MemoryClass::Shared, 4096))
+                .expect("a Shared block")
+                .id;
+            let private = (device.take_block(MemoryClass::Private, 4096))
+                .expect("a Private block")
+                .id;
+            let shared = (device.new_buffer(shared, 0, 256, true)).expect("a Shared buffer");
+            let private = (device.new_buffer(private, 0, 256, true)).expect("a Private buffer");
+            let texture = texture(
+                &device,
+                TextureType::Type2D,
+                PixelFormat::R8Unorm,
+                [16, 16, 1],
+                TextureUsage::SHADER_READ,
+                4096,
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+            let layout = BufferLayout {
+                offset: 0,
+                bytes_per_row: 16,
+                bytes_per_image: 0,
+            };
+            let at = TexturePlace::default();
+            type Blit<'a> = &'a dyn Fn(&mut BlitCommandEncoder) -> Result<(), Error>;
+            let fill_private: Blit =
+                &|encoder: &mut BlitCommandEncoder| encoder.fill_buffer(&private, 0..256, 1);
+            let into_texture: Blit = &|encoder: &mut BlitCommandEncoder| {
+                encoder.copy_from_buffer(&private, layout, [16, 16, 1], &texture, at)
+            };
+            let fill_shared: Blit =
+                &|encoder: &mut BlitCommandEncoder| encoder.fill_buffer(&shared, 0..256, 2);
+            let out_of_texture: Blit = &|encoder: &mut BlitCommandEncoder| {
+                encoder.copy_from_texture_to_buffer(&texture, at, [16, 16, 1], &shared, layout)
+            };
+            for (what, blit, reaches) in [
+                ("a fill of a Private buffer", fill_private, 0),
+                ("a copy into a texture", into_texture, 0),
+                ("a fill of a Shared buffer", fill_shared, 1),
+                ("a copy into a Shared buffer", out_of_texture, 1),
+            ] {
+                let before = counters.host_reaches();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                blit(&mut encoder).unwrap_or_else(|error| panic!("{name}: {what}: {error}"));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                assert_eq!(counters.host_reaches() - before, reaches, "{name}: {what}");
+            }
+            // The copy out of the texture brought the Private buffer's fill to the host.
+            assert_eq!(read(&shared), vec![1; 256], "{name}: the bytes");
         });
     }
 }

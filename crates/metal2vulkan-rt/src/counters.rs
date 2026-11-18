@@ -25,6 +25,8 @@ pub(crate) enum Metric {
     RingWrites,
     /// [`Metrics::upload_waits`].
     UploadWaits,
+    /// [`Metrics::synchronizations`].
+    Synchronizations,
 }
 
 /// A gauge the runtime moves.
@@ -81,6 +83,7 @@ struct Atomics {
     translations_loaded: AtomicU64,
     ring_writes: AtomicU64,
     upload_waits: AtomicU64,
+    synchronizations: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -122,6 +125,7 @@ impl Counters {
             Metric::TranslationsLoaded => &a.translations_loaded,
             Metric::RingWrites => &a.ring_writes,
             Metric::UploadWaits => &a.upload_waits,
+            Metric::Synchronizations => &a.synchronizations,
         };
         atomic.fetch_add(1, Relaxed);
     }
@@ -227,6 +231,7 @@ impl Counters {
             translations_loaded: a.translations_loaded.load(Relaxed),
             ring_writes: a.ring_writes.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
+            synchronizations: a.synchronizations.load(Relaxed),
         }
     }
 
@@ -262,12 +267,12 @@ pub struct Metrics {
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each
     /// segment with commands and of each upload, one before a dispatch at a hazard, one owed by
     /// an encoder that wrote or a memory barrier call, recorded before the next command, and two
-    /// around each blit copy, the first of which pays what is owed. A block's zero fill, made
+    /// around each blit copy, fill and synchronize copy, the first of which pays what is owed. A block's zero fill, made
     /// apart from any command buffer, is not counted.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
-    /// counted copy at commit where a device offers no linear image. A blit's own copy is the
-    /// program's and is not counted.
+    /// counted copy at commit where a device offers no linear image. A blit's own copy, and a
+    /// synchronize's, is the program's and is not counted.
     pub bytes_copied: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
@@ -295,6 +300,9 @@ pub struct Metrics {
     /// Calls that waited for an upload to complete before they recorded: the upload at its
     /// bound of calls or bytes, or the staging region with no room for a copy.
     pub upload_waits: u64,
+    /// `synchronizeResource:` calls: each one copy into the host's bytes of a Managed buffer with
+    /// a device copy, and nothing for any other resource; none a submission of its own.
+    pub synchronizations: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the

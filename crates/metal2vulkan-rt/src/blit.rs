@@ -15,10 +15,15 @@
 //!
 //! A fill is one `vkCmdFillBuffer` between two barriers: the first after every earlier command,
 //! as a copy's, the second making its writes visible to every later command.
+//!
+//! A synchronize of a Managed buffer with a device copy is one `vkCmdCopyBuffer` of the copy into
+//! the consumer's bytes between the same two barriers, marking the segment so its end reaches the
+//! host; of any other resource it records nothing.
 
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
+use crate::encoder::Resource;
 use crate::error::{Error, Gap, Refusal};
 use crate::record::{memory_barrier, Reach};
 use crate::texture::{place, CopyUnit, Placed, Region, Texture, TextureDescriptor};
@@ -256,7 +261,6 @@ impl BlitCommandEncoder {
             building.wrote_host();
         }
         use vk::AccessFlags2 as Access;
-        use vk::PipelineStageFlags2 as Stage;
         let (layout, access) = match into_image {
             true => (
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -267,11 +271,7 @@ impl BlitCommandEncoder {
         let earlier = [memory_barrier(Reach::Commands)];
         let away = [texture.away(&copy.placed, layout, access)];
         let back = [texture.back(&copy.placed, layout)];
-        let written = [vk::MemoryBarrier2::default()
-            .src_stage_mask(Stage::COPY)
-            .src_access_mask(Access::TRANSFER_WRITE)
-            .dst_stage_mask(Stage::ALL_COMMANDS)
-            .dst_access_mask(Access::MEMORY_READ | Access::MEMORY_WRITE)];
+        let written = [written()];
         let written = match into_image {
             true => &written[..0],
             false => &written[..],
@@ -347,11 +347,7 @@ impl BlitCommandEncoder {
             building.wrote_host();
         }
         let earlier = [memory_barrier(Reach::Commands)];
-        let written = [vk::MemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
-            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)];
+        let written = [written()];
         let device = &core.device;
         // SAFETY: the command buffer records outside any render pass and keeps the buffer until it
         // retires; the range lies in the buffer's device range, in whole words
@@ -378,6 +374,70 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
+    /// `synchronizeResource:`: the host's bytes of a Managed `resource` brought up to date with
+    /// the GPU's writes to it before the call, which the host reads once the command buffer
+    /// completes or it sees an event signaled after the call. Counted in
+    /// [`Metrics::synchronizations`](crate::Metrics::synchronizations); it makes no submission of
+    /// its own.
+    ///
+    /// A Managed buffer with a device copy
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer) on a device whose
+    /// Shared memory is not device-local) is one `vkCmdCopyBuffer` of the copy into the
+    /// consumer's bytes, between a fill's two barriers, the segment marked so its end barrier
+    /// reaches the host; the command buffer keeps the buffer until it retires. A buffer with no
+    /// device copy is one the host reads where shaders write it, and a texture has no bytes the
+    /// host reads apart from its image: the call records nothing for either.
+    ///
+    /// Metal's validation stops the call on a resource that is not Managed (probe
+    /// `blit_synchronize_rules.m` in the conformance crate, an Apple M3 Max, macOS 27.0.1, job
+    /// m3-max-43632); the runtime keeps no storage mode for a buffer without a device copy or for a
+    /// texture, and records nothing there.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's resource; [`Error::Vulkan`] where the
+    /// command buffer cannot record.
+    pub fn synchronize_resource(&mut self, resource: Resource<'_>) -> Result<(), Error> {
+        let building = self.building();
+        let core = Arc::clone(building.device.core());
+        let buffer = match resource {
+            Resource::Buffer(buffer) if buffer.is_of(&core) => Some(buffer),
+            Resource::Texture(texture) if texture.is_of(&core) => None,
+            _ => return Err(Error::Refused(Refusal::OtherDevice)),
+        };
+        if let Some((buffer, (block, Some(copy)))) = buffer.map(|buffer| (buffer, buffer.held())) {
+            let (from, to) = (copy.buffer(), block.memory.buffer);
+            let region = vk::BufferCopy {
+                src_offset: copy.offset(),
+                dst_offset: buffer.offset(),
+                size: buffer.length(),
+            };
+            building.keep(buffer);
+            let command = building.ordered_command()?;
+            // Marked after `ordered_command`, as a copy into a Shared buffer is.
+            building.wrote_host();
+            let earlier = [memory_barrier(Reach::Commands)];
+            let written = [written()];
+            let device = &core.device;
+            // SAFETY: the command buffer records outside any render pass and keeps the buffer, its
+            // block and its device copy until it retires; the copy's place and the buffer's range
+            // of its block are each `length` bytes, and do not overlap.
+            unsafe {
+                device.cmd_pipeline_barrier2(
+                    command,
+                    &vk::DependencyInfo::default().memory_barriers(&earlier),
+                );
+                device.cmd_copy_buffer(command, from, to, &[region]);
+                device.cmd_pipeline_barrier2(
+                    command,
+                    &vk::DependencyInfo::default().memory_barriers(&written),
+                );
+            }
+            core.counters.count(Metric::Barriers);
+            core.counters.count(Metric::Barriers);
+        }
+        core.counters.count(Metric::Synchronizations);
+        Ok(())
+    }
+
     /// `endEncoding`. Each copy ordered itself, so the encoder owes no barrier.
     pub fn end_encoding(mut self) {
         self.end();
@@ -394,6 +454,15 @@ impl Drop for BlitCommandEncoder {
     fn drop(&mut self) {
         self.end();
     }
+}
+
+/// The barrier after a blit's write into a buffer: the write visible to every later command.
+fn written() -> vk::MemoryBarrier2<'static> {
+    vk::MemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
 }
 
 /// One texture of a copy: its descriptor, its image's format and the unit its copies move.
