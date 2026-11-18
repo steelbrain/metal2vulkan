@@ -23,7 +23,7 @@
 mod on_device {
     use crate::staging::REGION_LEN;
     use crate::submit::{HOMES_PRUNE, UPLOAD_BYTES, UPLOAD_ENTRIES};
-    use crate::tests::command::on_device::Busy;
+    use crate::tests::command::on_device::{Busy, PATIENCE};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Device, DeviceOptions, Error, Gauges, IndexClass, MemoryClass, PixelFormat, Region,
@@ -307,7 +307,8 @@ mod on_device {
     /// waits behind busy work the host holds ([`Busy`]); a `replace_region` on another thread then
     /// finds no room behind it. The write sleeps once (`staging_sleeps` rises by one and no more,
     /// so the loop turned once to sleep and once on waking) and returns only after the read ends.
-    /// In the second round a quiesce ends the sleep instead: the write is refused.
+    /// In the second round a quiesce on a third thread ends the sleep instead: the write is
+    /// refused, and the quiesce goes idle once the busy work opens.
     #[test]
     fn every_device_sleeps_a_staging_call_behind_a_read_until_it_ends() {
         let instance = crate::tests::validation::instance(&[]);
@@ -361,13 +362,22 @@ mod on_device {
                     "{name}: the write slept once, with no spin"
                 );
                 if quiesce {
-                    let _ = device.quiesce(Duration::from_millis(100));
+                    // The quiesce closes the device at once, and then waits for the GPU, which
+                    // the busy work holds until the write has answered.
+                    let quiescing = {
+                        let device = device.clone();
+                        thread::spawn(move || device.quiesce(PATIENCE))
+                    };
                     let written = writer.join().expect("the writer");
                     assert!(
                         matches!(written, Err(Error::Quiesced)),
                         "{name}: the quiesce ended the sleep with {written:?}"
                     );
                     busy.open();
+                    assert!(
+                        quiescing.join().expect("the quiesce"),
+                        "{name}: the device went idle once the busy work opened"
+                    );
                     let _ = reader.join().expect("the reader");
                     drop(busy);
                     drop(device);
