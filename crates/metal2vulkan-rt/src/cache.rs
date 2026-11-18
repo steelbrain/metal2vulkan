@@ -565,7 +565,7 @@ pub(crate) fn prune_blobs(dir: &Path, own: &str) {
             Some((time, entry.path()))
         })
         .collect();
-    others.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    others.sort_unstable_by_key(|(time, _)| std::cmp::Reverse(*time));
     for (_, path) in others.into_iter().skip(BLOBS_KEPT - 1) {
         let _ = fs::remove_file(path);
     }
