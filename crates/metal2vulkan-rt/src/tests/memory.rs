@@ -611,7 +611,7 @@ mod on_device {
                 .take_block(MemoryClass::Shared, asked)
                 .expect("a long block");
             assert!(
-                long.len >= asked && long.len % (64 << 10) == 0,
+                long.len >= asked && long.len.is_multiple_of(64 << 10),
                 "{name}: a long block of {} bytes",
                 long.len
             );

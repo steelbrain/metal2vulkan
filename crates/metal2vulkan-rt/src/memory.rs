@@ -466,12 +466,6 @@ impl Pool {
         self.lock().free(class) >= MAKE_BELOW
     }
 
-    /// For the device tests: the class's allocations.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn allocations(&self, class: MemoryClass) -> usize {
-        self.lock().allocations[class.index()].len()
-    }
-
     /// For the device tests: the class's blocks given back, zeroed and kept.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn kept(&self, class: MemoryClass) -> usize {
@@ -899,7 +893,7 @@ pub(crate) fn run(core: Arc<Core>) {
             .into_iter()
             .find(|c| state.unkeep[c.index()])
         {
-            let kept: Vec<Memory> = state.kept[class.index()].drain(..).collect();
+            let kept: Vec<Memory> = state.kept[class.index()].split_off(0);
             drop(state);
             for memory in &kept {
                 retire(&core, memory);
@@ -1252,8 +1246,8 @@ pub(crate) fn free_all(core: &mut Core, blocks: Vec<Memory>) {
         let state = (core.pool.state.get_mut()).unwrap_or_else(PoisonError::into_inner);
         for class in MemoryClass::ALL {
             let index = class.index();
-            retired.extend(state.kept[index].drain(..));
-            allocations.extend(state.allocations[index].drain(..));
+            retired.append(&mut state.kept[index]);
+            allocations.append(&mut state.allocations[index]);
             idle[index] = state.idle_bytes[index];
             state.idle_bytes[index] = 0;
         }
