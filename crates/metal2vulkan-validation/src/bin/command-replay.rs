@@ -4,7 +4,8 @@
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--runtime old|rt]` plays the stream whose first segment is `FILE` through the
 //! old runtime (the default) or the new one (`rt`) and writes `DIR/report.txt`: `device NAME`,
-//! the player's report lines, `cut SEGMENT OFFSET` where the last segment ends in a record cut
+//! the player's report lines, the backend's own lines, `cut SEGMENT OFFSET` where the last
+//! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
 //! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`. The exit
 //! status is 0 for `ok`, 1 for a play that stopped and 2 for a harness failure (a bad command line, no device, an unreadable stream).
@@ -287,6 +288,9 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
 fn run<B: Backend>(backend: &mut B, reader: &mut StreamReader, report: &mut ReportFile) -> i32 {
     let (played, ended) = Player::new(backend).play(reader);
     for line in played.lines() {
+        report.line(&line);
+    }
+    for line in backend.lines() {
         report.line(&line);
     }
     if let Some((segment, offset)) = reader.truncated() {

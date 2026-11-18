@@ -18,7 +18,8 @@ use super::value::Value;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions};
 use metal2vulkan_rt as rt;
 use places::{class_index, Place, Places};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 /// What the play skipped because the runtime does not build it yet.
 #[derive(Default)]
@@ -67,12 +68,23 @@ enum Held {
     Skipped,
 }
 
-/// A function: its descriptor, and the name `newFunctionWithDescriptor:error:` specialized it
-/// under, which a pipeline that links it takes.
+/// A function: its descriptor, the name `newFunctionWithDescriptor:error:` specialized it
+/// under, which a pipeline that links it takes, and its kernel.
 #[derive(Clone)]
 struct Function {
     descriptor: rt::FunctionDescriptor,
     specialized_name: Option<String>,
+    kernel: Kernel,
+}
+
+/// A kernel apart from its specializations: the library object it came from and its name.
+type Kernel = (u64, Arc<str>);
+
+/// A compute pipeline state's making: its wall time, and whether its kernel was new to the play
+/// (no state of another specialization of it made before).
+struct Creation {
+    nanos: u64,
+    new_kernel: bool,
 }
 
 /// The new runtime on one device.
@@ -95,6 +107,9 @@ pub struct NewRuntime {
     unanswered_pipeline_ids: u64,
     /// The bytes of the stream's live blocks and heaps, by class (`class_index`).
     block_bytes: [u64; 2],
+    /// Each compute pipeline state made, in order, and the kernels made so far.
+    creations: Vec<Creation>,
+    kernels: HashSet<Kernel>,
 }
 
 /// A made object with no address.
@@ -283,6 +298,8 @@ impl NewRuntime {
             skips: Skips::default(),
             unanswered_pipeline_ids: 0,
             block_bytes: [0; 2],
+            creations: Vec::new(),
+            kernels: HashSet::new(),
         })
     }
 
@@ -469,6 +486,7 @@ impl NewRuntime {
     fn library_call(&self, call: &Call, library: &rt::Library) -> Result<Function, PlayError> {
         let name = arg(call, 0)?.as_str();
         let name = name.ok_or_else(|| refuse(call, "argument 0 is no name"))?;
+        let kernel = (call.receiver, Arc::from(name));
         let function = library.function(name).map_err(translated(call))?;
         let mut descriptor = rt::FunctionDescriptor::new(function);
         let mut specialized_name = None;
@@ -498,6 +516,7 @@ impl NewRuntime {
         Ok(Function {
             descriptor,
             specialized_name,
+            kernel,
         })
     }
 
@@ -585,8 +604,28 @@ impl NewRuntime {
         made.map_err(failed(call))
     }
 
-    /// `newComputePipelineStateWithDescriptor:options:reflection:error:`'s descriptor.
-    fn compute_pipeline(&self, call: &Call) -> Result<rt::ComputePipelineDescriptor, PlayError> {
+    /// A compute pipeline state of `descriptor`, of `kernel`'s, timed and counted (`creations`).
+    fn timed_state(
+        &mut self,
+        call: &Call,
+        descriptor: &rt::ComputePipelineDescriptor,
+        kernel: Kernel,
+    ) -> Result<rt::ComputePipelineState, PlayError> {
+        let began = std::time::Instant::now();
+        let state = self.compute_pipeline_state(call, descriptor)?;
+        self.creations.push(Creation {
+            nanos: u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            new_kernel: self.kernels.insert(kernel),
+        });
+        Ok(state)
+    }
+
+    /// `newComputePipelineStateWithDescriptor:options:reflection:error:`'s descriptor, and its
+    /// kernel.
+    fn compute_pipeline(
+        &self,
+        call: &Call,
+    ) -> Result<(rt::ComputePipelineDescriptor, Kernel), PlayError> {
         let f = Fields::arg(
             call,
             0,
@@ -613,7 +652,8 @@ impl NewRuntime {
                 &["functions", "binaryFunctions", "groups", "privateFunctions"],
             )?,
         )?;
-        let kernel = self.function_of(call, id)?.descriptor.with_linked(linked);
+        let function = self.function_of(call, id)?;
+        let kernel = function.descriptor.with_linked(linked);
         if f.get("stageInput").is_some() {
             return Err(refuse(call, "a stage input"));
         }
@@ -638,7 +678,7 @@ impl NewRuntime {
         if let Some(support) = f.bool("supportIndirectCommandBuffers")? {
             d.support_indirect_command_buffers = support;
         }
-        Ok(d)
+        Ok((d, function.kernel))
     }
 
     /// A call of the platform (receiver 0) or the device, and what it made.
@@ -731,12 +771,12 @@ impl NewRuntime {
                 let d = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(
                     function.descriptor,
                 ));
-                let state = self.compute_pipeline_state(call, &d)?;
+                let state = self.timed_state(call, &d, function.kernel)?;
                 unaddressed(Object::ComputePipeline(state))
             }
             "newComputePipelineStateWithDescriptor:options:reflection:error:" => {
-                let d = self.compute_pipeline(call)?;
-                let state = self.compute_pipeline_state(call, &d)?;
+                let (d, kernel) = self.compute_pipeline(call)?;
+                let state = self.timed_state(call, &d, kernel)?;
                 unaddressed(Object::ComputePipeline(state))
             }
             // Render pipeline and depth-stencil states, render pass descriptors and libraries from
@@ -1189,6 +1229,16 @@ impl Backend for NewRuntime {
             ("shared_block_bytes", held(rt::MemoryClass::Shared)),
             ("private_block_bytes", held(rt::MemoryClass::Private)),
         ])
+    }
+
+    /// A `pipeline I wall_nanos=N kernel=new|again` line for each compute pipeline state made, in
+    /// order: its making's wall time, and whether its kernel was new to the play.
+    fn lines(&self) -> Vec<String> {
+        let lines = self.creations.iter().enumerate().map(|(at, made)| {
+            let kernel = if made.new_kernel { "new" } else { "again" };
+            format!("pipeline {at} wall_nanos={} kernel={kernel}", made.nanos)
+        });
+        lines.collect()
     }
 
     /// The runtime makes no blits between buffers yet.

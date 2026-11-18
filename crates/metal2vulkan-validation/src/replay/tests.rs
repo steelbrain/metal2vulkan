@@ -389,6 +389,10 @@ impl Backend for Kept {
         counters
     }
 
+    fn lines(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     fn live(&mut self) -> Counters {
         Counters::from([("calls", self.calls.len() as u64)])
     }

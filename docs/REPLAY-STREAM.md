@@ -454,7 +454,10 @@ encoders around them (`N` the encoders split, `COUNTS` the executed counts of th
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
 offsets it moved in them and the bytes it added to their sizes), `total COUNTS` (its `calls` the
 calls played: where
-the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
+the play stopped, the stopping call is the next), the new runtime's backend's
+`pipeline I wall_nanos=N kernel=new|again` for each compute pipeline state it made, in order (the
+making's wall time, and whether no state of another specialization of the kernel, a library's
+function by name, was made before), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute
 pipeline states whose `gpuResourceID` the player asked, which the new runtime does not give),

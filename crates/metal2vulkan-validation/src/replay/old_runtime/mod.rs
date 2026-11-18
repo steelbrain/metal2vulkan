@@ -909,6 +909,11 @@ impl Backend for OldRuntime {
         ])
     }
 
+    /// None: the old runtime's backend adds no lines.
+    fn lines(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// The runtime's live memory blocks: pooled ones with a placement, empty ones kept (pooled or
     /// dedicated), and dedicated ones with their placement.
     fn live(&mut self) -> Counters {

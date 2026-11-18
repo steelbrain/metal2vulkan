@@ -84,6 +84,8 @@ pub trait Backend {
     ) -> Result<(u64, u64), PlayError>;
     /// The runtime's counters now.
     fn counters(&mut self) -> Counters;
+    /// Lines of the backend's own for the report, after the player's.
+    fn lines(&self) -> Vec<String>;
     /// The runtime's gauges now: what it holds live, which a frame's end reports as it stands
     /// (`Report::ends`), never as growth.
     fn live(&mut self) -> Counters;
