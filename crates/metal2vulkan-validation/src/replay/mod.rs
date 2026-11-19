@@ -18,7 +18,7 @@ mod value;
 pub use covers::SlotStage;
 pub use dumps::{compare_dumps, Comparison, Difference};
 pub use heaps::HeapSplit;
-pub use new_runtime::{Ended, ManagedCopies, NewRuntime};
+pub use new_runtime::{judged_records, Ended, ManagedCopies, NewRuntime};
 pub use old_runtime::OldRuntime;
 pub use player::WAIT_COMPLETED;
 pub use player::{

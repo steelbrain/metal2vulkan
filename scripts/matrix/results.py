@@ -25,6 +25,12 @@ GAUGE_POINTS = ("100", "200", "drop")
 POOL_GAUGES = ("blocks",)
 #: `instructions` may grow by this fraction over the base before it fails.
 INSTRUCTIONS_BAND = 0.01
+#: Record keys, by prefix, whose `metric` fails where it differs from the base's either way, and
+#: where the base has it and the leg does not: the replay player's judged totals of a play on the
+#: new runtime (`replay-rt/STREAM/RANGE/NAME`, the validation crate's `judged_records`), each shown
+#: equal between two plays of one stream at one commit on one card, which a play that did not
+#: finish its range does not print.
+EQUAL_METRICS = ("replay-",)
 #: A GPU's slowdown over the base fails past this multiple of the median slowdown...
 TIME_OUTLIER = 1.25
 #: ...of at least this many GPUs.
@@ -285,8 +291,11 @@ def leg_problems(leg, records, base):
     if base is not None:
         for key, value in sorted(records["metric"].items()):
             was = base["metric"].get(key)
-            if was is not None and value > was:
+            if was is not None and (value != was if key.startswith(EQUAL_METRICS) else value > was):
                 problems.append(f"metric {key}: {was} -> {value}")
+        for key, was in sorted(base["metric"].items()):
+            if key.startswith(EQUAL_METRICS) and key not in records["metric"]:
+                problems.append(f"metric {key}: {was} -> none: the play did not finish its range")
         for key, value in sorted(records["instructions"].items()):
             was = base["instructions"].get(key)
             if (was is not None and not key.startswith(PARKED_RECORDS + ("harness-",))

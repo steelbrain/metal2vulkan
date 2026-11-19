@@ -1021,7 +1021,9 @@ pub struct Metrics {
     /// [`Device::new_texture_for_views`](crate::Device::new_texture_for_views) and
     /// [`Device::new_managed_texture`](crate::Device::new_managed_texture)): each image's one
     /// clear of every subresource, or its copies from the zero source where its format takes no
-    /// clear.
+    /// clear. The split between this form and the zero-initialized one
+    /// ([`zeroed_textures`](Self::zeroed_textures)) follows where the pool places a texture, and
+    /// may differ between two runs of one program.
     pub texture_clears: u64,
     /// The bytes of memory of those images.
     pub texture_clear_bytes: u64,
@@ -1029,13 +1031,16 @@ pub struct Metrics {
     /// allocations ([`Capabilities::zero_initialize_memory`](crate::floor::Capabilities::zero_initialize_memory)),
     /// those whose memory read the driver's zeros, which no resource used (a place in a texture
     /// block past every place it held before, or memory of its own), each made in the
-    /// zero-initialized layout and moved home from it.
+    /// zero-initialized layout and moved home from it. The split between this form and the clear
+    /// ([`texture_clears`](Self::texture_clears)) follows where the pool places a texture, and may
+    /// differ between two runs of one program.
     pub zeroed_textures: u64,
     /// The bytes of memory of those images.
     pub zeroed_texture_bytes: u64,
     /// The barriers that move new textures' images home after their zeroing: one for each upload
     /// that zeroed any ([`texture_clears`](Self::texture_clears)), however many it zeroed, also
-    /// counted in [`barriers`](Self::barriers).
+    /// counted in [`barriers`](Self::barriers). It follows the clears, so it may differ between
+    /// two runs of one program as they do.
     pub texture_clear_barriers: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,

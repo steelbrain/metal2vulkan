@@ -14,11 +14,14 @@ mod encoders;
 mod guest_ram;
 mod imports;
 pub(super) mod indices;
+mod judged;
 pub(super) mod places;
 mod render;
 pub(super) mod second;
 mod surfaces;
 pub(super) mod unwritten;
+
+pub use judged::judged_records;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
 use super::covers::SlotStage;

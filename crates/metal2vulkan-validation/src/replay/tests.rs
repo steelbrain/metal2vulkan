@@ -9,7 +9,7 @@ use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
 use super::new_runtime::second::merge;
 use super::new_runtime::unwritten::Unwritten;
-use super::new_runtime::Ended;
+use super::new_runtime::{judged_records, Ended};
 use super::player::{
     Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
     TextureWrites, WAIT_COMPLETED,
@@ -458,7 +458,7 @@ fn a_range_that_meets_a_live_one_in_part_ends_it() {
 /// (one it is told to split with no buffer outside them) and a heap's buffer at the heap's address
 /// plus its offset. It holds the bytes of the buffers made by length, which
 /// writes and buffer copies change and a read gives; it runs no dispatch. It counts submissions,
-/// and buffer copies once there was one.
+/// buffer copies once there was one, and for each submission the counts `per_commit` names.
 #[derive(Default)]
 struct Kept {
     calls: Vec<String>,
@@ -502,6 +502,8 @@ struct Kept {
     splits: Vec<(u64, HeapSplit)>,
     /// The texture slots each compute pipeline state's kernel writes; one not here answers none.
     kernel_writes: HashMap<u64, Vec<u64>>,
+    /// The counts each submission adds to its counters.
+    per_commit: Counters,
 }
 
 impl Backend for Kept {
@@ -619,6 +621,9 @@ impl Backend for Kept {
         if self.copies > 0 {
             counters.insert("copies", self.copies);
         }
+        for (&name, &count) in &self.per_commit {
+            counters.insert(name, count * self.commits);
+        }
         counters
     }
 
@@ -668,10 +673,24 @@ fn played(
     backend: &mut Kept,
     build: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
 ) -> (Report, Result<(), PlayError>) {
+    played_through(backend, None, build)
+}
+
+/// `build`'s stream, played on `backend` through frame `last` where one is given.
+fn played_through(
+    backend: &mut Kept,
+    last: Option<usize>,
+    build: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
+) -> (Report, Result<(), PlayError>) {
     let dir = ScratchDir::new("replay-player").unwrap();
     let path = written(&dir, "s.m2vr", build);
     let mut reader = StreamReader::open(&[path], None).unwrap();
-    Player::new(backend).play(&mut reader)
+    let player = Player::new(backend);
+    let player = match last {
+        Some(last) => player.until_frame(last),
+        None => player,
+    };
+    player.play(&mut reader)
 }
 
 const BLOCK: u64 = 1 << 46;
@@ -912,6 +931,124 @@ fn a_heap_splits_by_what_the_stream_places_whatever_its_type() {
     assert_eq!(kept.splits, splits);
     assert_eq!((report.pinned, report.textures_outside), (Some(2), 2));
     assert_eq!(report.relaid, Relaid::default());
+}
+
+/// Two frames, each one command buffer committed; `inside` adds its calls to the first frame,
+/// after the command buffer's making and before its commit.
+fn two_frames(
+    w: &mut StreamWriter<File>,
+    inside: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+    w.call("newCommandQueue", 1, 2, &[], &[])?;
+    w.call("commandBuffer", 2, 3, &[], &[])?;
+    inside(w)?;
+    w.call("commit", 3, 0, &[], &[])?;
+    w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+    w.call("commandBuffer", 2, 4, &[], &[])?;
+    w.call("commit", 4, 0, &[], &[])?;
+    w.call("m2v.present", 1, 0, &[Value::Nil], &[])
+}
+
+/// The counts each submission adds on the backend the judged metrics' tests play on.
+fn judged_counts() -> Counters {
+    Counters::from([
+        ("passes", 3),
+        ("barriers", 5),
+        ("texture_clear_barriers", 1),
+        ("texture_clears", 2),
+        ("zeroed_textures", 4),
+        ("texture_clear_bytes", 100),
+        ("zeroed_texture_bytes", 60),
+        ("bytes_copied", 7),
+        ("blocks_made", 9),
+    ])
+}
+
+/// The matrix's judged metrics of a play on the new runtime are the play's executed totals, one
+/// record each under the stream's first segment's stem (whitespace made `_`) and its range: the
+/// barriers less the one after each upload's clears, the clears and the zero-initialized textures
+/// as one count and their bytes as one, a counter the backend does not report as 0, and no other
+/// counter (here `blocks_made`). A play through a last frame names it.
+#[test]
+fn the_judged_metrics_total_the_play_less_the_zeroing_barrier() {
+    let first = std::path::Path::new("streams/a b.0000.m2vr");
+    let mut kept = Kept {
+        per_commit: judged_counts(),
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| two_frames(w, |_| Ok(())));
+    ended.as_ref().unwrap();
+    let records = judged_records(first, &report, &ended, None);
+    let whole = [
+        "M2V-MATRIX metric replay-rt/a_b/whole/submissions 2",
+        "M2V-MATRIX metric replay-rt/a_b/whole/passes 6",
+        "M2V-MATRIX metric replay-rt/a_b/whole/barriers 8",
+        "M2V-MATRIX metric replay-rt/a_b/whole/bytes_copied 14",
+        "M2V-MATRIX metric replay-rt/a_b/whole/pipelines_created 0",
+        "M2V-MATRIX metric replay-rt/a_b/whole/new_textures_zeroed 12",
+        "M2V-MATRIX metric replay-rt/a_b/whole/new_texture_zeroed_bytes 320",
+    ];
+    assert_eq!(records, whole);
+    let mut kept = Kept {
+        per_commit: judged_counts(),
+        ..Kept::default()
+    };
+    let (report, ended) = played_through(&mut kept, Some(0), |w| two_frames(w, |_| Ok(())));
+    assert_eq!(report.frames.len(), 1);
+    let records = judged_records(first, &report, &ended, Some(0));
+    assert_eq!(
+        records[0],
+        "M2V-MATRIX metric replay-rt/a_b/through-0/submissions 1"
+    );
+    assert_eq!(
+        records[2],
+        "M2V-MATRIX metric replay-rt/a_b/through-0/barriers 4"
+    );
+}
+
+/// A play that did not finish its range gives no judged metric, so the matrix fails it for the
+/// base's records it lacks: one that ended before its last frame's present, one that stopped, and
+/// one whose backend skipped anything (no gate result). Each played its frames' counts.
+#[test]
+fn a_short_play_gives_no_judged_metric() {
+    let first = std::path::Path::new("s.0000.m2vr");
+    let none: [String; 0] = [];
+    let mut kept = Kept {
+        per_commit: judged_counts(),
+        ..Kept::default()
+    };
+    let (report, ended) = played_through(&mut kept, Some(2), |w| two_frames(w, |_| Ok(())));
+    ended.as_ref().unwrap();
+    assert_eq!(report.frames.len(), 2);
+    assert_eq!(judged_records(first, &report, &ended, Some(2)), none);
+    let mut kept = Kept {
+        per_commit: judged_counts(),
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        two_frames(w, |w| w.call("notPlayed", 1, 0, &[], &[]))
+    });
+    assert!(ended.is_err());
+    assert_eq!(judged_records(first, &report, &ended, None), none);
+    let mut kept = Kept {
+        per_commit: judged_counts(),
+        skips_draws: true,
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        two_frames(w, |w| {
+            w.call("MTLRenderPassDescriptor.new", 0, 5, &[], &[])?;
+            let pass = [Value::Object(5)];
+            w.call("renderCommandEncoderWithDescriptor:", 3, 6, &pass, &[])?;
+            let draw = [Value::Uint(3), Value::Uint(0), Value::Uint(3)];
+            w.call("drawPrimitives:vertexStart:vertexCount:", 6, 0, &draw, &[])?;
+            w.call("endEncoding", 6, 0, &[], &[])
+        })
+    });
+    ended.as_ref().unwrap();
+    assert_eq!((report.frames.len(), kept.skipped), (2, 1));
+    assert_eq!(judged_records(first, &report, &ended, None), none);
 }
 
 /// The gauges the new runtime's backend reads once its device dropped go out as the matrix's

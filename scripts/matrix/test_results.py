@@ -137,6 +137,21 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(self.problems(recs(metric={"a/barriers": 5, "a/passes": 2}), base),
                          ["metric a/barriers: 4 -> 5"])
 
+    def test_a_replay_metric_fails_on_any_change_and_where_the_leg_lacks_it(self):
+        # The replay player's judged totals (judged_records): equal to the base's, and printed
+        # only by a play that finished its range, so a short play fails for the records it lacks.
+        key = "replay-rt/s/through-356/barriers"
+        base = recs(metric={key: 4, "a/passes": 2})
+        self.assertEqual(self.problems(recs(metric={key: 4, "a/passes": 1}), base), [])
+        self.assertEqual(self.problems(recs(metric={key: 3, "a/passes": 2}), base),
+                         [f"metric {key}: 4 -> 3"])
+        self.assertEqual(self.problems(recs(metric={key: 5, "a/passes": 2}), base),
+                         [f"metric {key}: 4 -> 5"])
+        self.assertEqual(self.problems(recs(metric={"a/passes": 2}), base),
+                         [f"metric {key}: 4 -> none: the play did not finish its range"])
+        self.assertEqual(self.problems(recs(metric={key: 4}), base), [])
+        self.assertEqual(self.problems(recs(metric={key: 9}), None), [])
+
     def test_the_harness_s_instructions_are_not_compared_to_the_base(self):
         # The instructions gate judges them (harness_budget); a driver's threads swing the whole count.
         base = recs(instructions={"harness-old/frame/per_run": 100000, "harness-new/frame/per_run": 50000,

@@ -27,12 +27,15 @@
 //! the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
-//! no gate result), `gaps ...` where it met a typed gap, then `ok`, `ids: ...` or `error WHAT`,
-//! the skipped line and this one ending `; not a verdict past frame F, call C` where the backend
-//! skipped anything (`F` and `C` the first skip's frame and stream position); a play that ends
-//! where an object's ID differs, the compute pipeline states' typed gap aside, ends `ids: played
-//! to the end; ...`. The exit status is 0 for `ok`, 1 for a play that stopped, 2 for a harness
-//! failure (a bad command line, no device, an unreadable stream or sidecar) and 3 for `ids`.
+//! no gate result), `gaps ...` where it met a typed gap, on the new runtime where the play
+//! finished its range and skipped nothing the matrix's judged metrics (`M2V-MATRIX metric
+//! replay-rt/STEM/RANGE/NAME N`, `docs/REPLAY-STREAM.md`, section 10), then `ok`, `ids: ...` or
+//! `error WHAT`, the skipped line and this one ending `; not a verdict past frame F, call C` where
+//! the backend skipped anything (`F` and `C` the first skip's frame and stream position); a play
+//! that ends where an object's ID differs, the compute pipeline states' typed gap aside, ends
+//! `ids: played to the end; ...`. The exit status is 0 for `ok`, 1 for a play that stopped, 2 for
+//! a harness failure (a bad command line, no device, an unreadable stream or sidecar) and 3 for
+//! `ids`.
 //!
 //! With `--dump-command-buffers FIRST..LAST --dump-dir DIR`, the play also writes into `DIR`, once
 //! each command buffer whose stream id lies in `FIRST..=LAST` completed, every buffer its encoders
@@ -60,14 +63,14 @@ use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout, WAIT_TIMEOUT_FLAG};
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
-    compare_dumps, display_library, recording_range, segments, Backend, ManagedCopies, NewRuntime,
-    OldRuntime, PlayError, Player, RangeSource, RecordingRange, StreamError, StreamReader, Value,
-    FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
+    compare_dumps, display_library, judged_records, recording_range, segments, Backend,
+    ManagedCopies, NewRuntime, OldRuntime, PlayError, Player, RangeSource, RecordingRange,
+    StreamError, StreamReader, Value, FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::ops::RangeInclusive;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
@@ -449,7 +452,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                 &mut backend,
                 &mut reader,
                 &mut report,
-                (snapshots, until, dump),
+                (snapshots, until, dump, None),
             )
         }
         Some("rt") => {
@@ -470,11 +473,12 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                     return 2;
                 }
             };
+            let first = PathBuf::from(&options["stream"]);
             let code = run(
                 &mut backend,
                 &mut reader,
                 &mut report,
-                (snapshots, until, dump),
+                (snapshots, until, dump, Some(&first)),
             );
             // The device ends here, not in `exit()`, where the driver's own exit teardown would
             // run beside the runtime's threads. Its gauges read after it dropped go out as the
@@ -552,12 +556,14 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
 type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
 
 /// Play `reader` through `backend` into `report`, taking snapshots or not, to the last frame where
-/// one is given, dumping the command buffers where asked: the exit status.
+/// one is given, dumping the command buffers where asked, and on the new runtime, where `judged`
+/// names the stream's first segment, writing the matrix's judged metrics of a play that finished
+/// its range (`judged_records`): the exit status.
 fn run<B: Backend>(
     backend: &mut B,
     reader: &mut StreamReader,
     report: &mut ReportFile,
-    (snapshots, until, dump): (bool, Option<usize>, Dumped),
+    (snapshots, until, dump, judged): (bool, Option<usize>, Dumped, Option<&Path>),
 ) -> i32 {
     let player = Player::new(backend).with_frame_lines(&mut *report);
     let player = match snapshots {
@@ -624,6 +630,11 @@ fn run<B: Backend>(
     let gaps = counted("gap_");
     if !gaps.is_empty() {
         report.line(&format!("gaps {}", gaps.join(" ")));
+    }
+    if let Some(first) = judged {
+        for line in judged_records(first, &played, &ended, until) {
+            report.line(&line);
+        }
     }
     match ended {
         // Played to the end, the IDs a shader reads differing from the program's: no fault, hang

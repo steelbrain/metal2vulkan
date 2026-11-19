@@ -956,7 +956,19 @@ in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute and
 render pipeline states whose `gpuResourceID` the player asked, which the new runtime does not
 give; bookkeeping: no draw or dispatch is skipped for it, and only an indirect command buffer,
-which the runtime does not build, would read such an ID),
+which the runtime does not build, would read such an ID), on the new runtime where the play
+finished its range (it ended without an error, through frame `F`'s present where it plays to
+`F`) and the backend skipped nothing, the matrix's judged metrics, one line each, `M2V-MATRIX
+metric replay-rt/STEM/RANGE/NAME N` (`STEM` the first segment's stem, whitespace made `_`;
+`RANGE` `through-F` or `whole`; `N` the play's executed total of `submissions`, `passes`,
+`barriers` less `texture_clear_barriers`, `bytes_copied` and `pipelines_created`, and of
+`new_textures_zeroed`, the new textures zeroed by a clear (`texture_clears`) and those made
+zero-initialized (`zeroed_textures`) as one count, the split between the two following where the
+runtime's pool places a texture, which may differ between two plays, and
+`new_texture_zeroed_bytes`, their bytes as one), each one two plays of one stream at one commit
+on one card gave alike, which the matrix's rule (`scripts/matrix/results.py`) holds equal to the
+base's, failing a play whose base has a record it lacks; a play that did not finish its range
+prints none,
 then `ok`, `ids: played to the end; N objects' gpuResourceID differ from the recording's` where
 the play ended but objects whose ID the program saw have other IDs in the runtime, or
 `error WHAT`. Where the backend skipped anything, the `skipped` line and the last
