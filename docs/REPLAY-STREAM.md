@@ -68,7 +68,7 @@ Each value starts with a one-byte tag.
 | 5 | f32 | 4 bytes | read as a number; the recorder writes `float` as f64 |
 | 6 | f64 | 8 bytes | `float`, `double`, `CGFloat` |
 | 7 | object | varint id | Metal objects; object 0, which no object is, a property set to nil (section 9) |
-| 8 | address | varint | a GPU address: relocated (section 5) |
+| 8 | address | varint | a GPU address: moved with its object (section 5) |
 | 9 | string | varint length, UTF-8 | `NSString`, names |
 | 10 | bytes | varint length, data | data, inline |
 | 11 | blob | 32-byte SHA-256 | data, by content |
@@ -188,19 +188,25 @@ and the (name id, value) answer pairs.
   span meets a live pin's, its first page starts no 32-KiB granule, or it leaves the space), or an
   object the runtime made at another address than it recorded, stops the play, naming the object
   and its recorded address (`PlayError::Unpinned`); no other placement is tried. Each range's
-  address in the play is then its recorded one, so relocation (below) moves no word: every word,
-  data or address, and every address argument plays as recorded, and the map's counts stay the
-  stream's. The report says how many objects it pinned (section 10).
-- **Relocation.** On the new runtime the player makes each object where the runtime has room. In
-  the bytes it puts into an object that answered a `gpuAddress` (`m2v.write`, a copied buffer's `contents` and the
-  copies from the guest's RAM), in the data of every `set*Bytes:length:atIndex:` and in every address value, each 8-byte word at an
-  offset that is a multiple of 8 from the target's start, whose value lies in a live range, becomes
-  the player's address of that range's object plus the word's offset into the range. The innermost
-  range wins: a buffer in a block moves with its own new address. Words outside every live range
-  stay as they are. Bytes put into an object with no address, the data of `replaceRegion:...`,
-  library bytes and function constants are never rewritten. The player counts the words that lie
-  in a live range, on either runtime; on the new runtime a data word that is no address but lies
-  in a live range is rewritten too, and the count shows it.
+  address in the play is then its recorded one, so no address argument moves (below). The report
+  says how many objects it pinned (section 10).
+- **Address arguments move.** On the new runtime the player makes each object where the runtime
+  has room. Every address value (tag 8) whose value lies in a live range becomes the player's
+  address of that range's object plus its offset into the range; the innermost range wins, so an
+  address in a buffer in a block moves with the buffer. One outside every live range stays. The
+  report counts the address values (`address_arguments`) and those that moved
+  (`relocated_words`): none on the old runtime, whose ranges lie at their recorded addresses.
+- **Written words play as recorded.** A word's value is no reason to move it: the bytes the
+  player puts into an object (`m2v.write`, a copied buffer's `contents`, the copies from the
+  guest's RAM, a Private range's bytes before a dispatch) and the data of every
+  `set*Bytes:length:atIndex:` play as the stream holds them, on either runtime. A word there that
+  is an address, which a stream recorded before the escape note cannot tell from data, keeps its
+  recorded value. The player counts, as a census that writes nothing, the words that look like
+  addresses: in the bytes put into an object that answered a `gpuAddress` and in `set*Bytes`
+  data, each 8-byte word at an offset that is a multiple of 8 from the target's start whose value
+  lies in a live range (`address_looking_words`), and apart from them the 8-byte values at 4 past
+  a multiple of 8 that do (`misaligned_address_words`). Both are the stream's, the same on every
+  play on either runtime.
 - **Resource IDs.** A descriptor's resource index places its object at that ID, as Metal places it
   whether or not the index is forced: a texture descriptor's and a render pipeline's
   `resourceIndex` (`[index, forced]`), a sampler's (an index), and a view's `resourceIndex:`
@@ -486,8 +492,8 @@ counted from 0), completes the work committed so far, reports as at the stream's
 - **Streams recorded before the completion fix.** Where the stream's header lacks bit 1 (section
   6), the report's first line is, by itself, `recorded before the recorder's completion fix: the
   stream may differ from what the program did`, so no table taken from the report loses it.
-- It relocates (section 5) and plays the host's plumbing as the plain calls it stands for
-  (section 4).
+- It moves address arguments (section 5) and plays the host's plumbing as the plain calls it
+  stands for (section 4).
 - **Managed buffers** (the new runtime) play in the form the recording device kept them: its
   `m2v.deviceIdentity` record's `hasUnifiedMemory`, or where the stream has none, `--managed`
   (`one-copy` for unified memory, `two-copy` for a GPU copy). With neither, a Managed buffer stops
@@ -540,13 +546,13 @@ counted from 0), completes the work committed so far, reports as at the stream's
   held behind an event wait. Each wait is bounded under the validation crate's hang protocol.
 - It reads the `m2v.privateBytes` records (section 8) ahead, before it plays the stream, and plays
   each dispatch they name with its ranges' bytes before put in and its bytes after compared: it
-  puts the bytes before (relocated as a write's are) in a Shared buffer of its own; ends the
-  dispatch's compute encoder; copies them into the ranges in a blit encoder; makes the compute
-  encoder again by the call that made it, with every `set…` and `use…` call the program made on
-  it; dispatches; then ends it, copies the ranges out in a blit encoder and makes it again the
+  puts the bytes before (as recorded, counted as a write's are) in a Shared buffer of its own;
+  ends the dispatch's compute encoder; copies them into the ranges in a blit encoder; makes the
+  compute encoder again by the call that made it, with every `set…` and `use…` call the program
+  made on it; dispatches; then ends it, copies the ranges out in a blit encoder and makes it again the
   same way. A fence of its own orders each of these encoders after the one before it. Once the
   command buffer completed, it reads the bytes after back and counts the 4-byte words of each
-  range that differ from the recording's, relocated the same way. A difference is reported, and
+  range that differ from the recording's bytes after. A difference is reported, and
   the play goes on. Its own objects take ids from 2^63 + 1. On a backend that takes no snapshots
   (the new runtime's, which has no blits between buffers yet), each such dispatch plays
   as it is and is counted on the report's `unsnapshotted` line.
@@ -569,9 +575,11 @@ counted from 0), completes the work committed so far, reports as at the stream's
     calls played (`calls`), the command buffers committed (`commits`, a host's split included),
     the encoders made (`encoders`: the objects a command buffer or an encoder makes), the draws
     and dispatches their calls issued (`draws` and `dispatches`: an encoder's calls whose
-    selectors begin `draw` and `dispatch`), the words it relocated (`relocated_words`), the
-    8-byte values at offsets 4 past a multiple of 8 that lie in a live range, left as they are
-    (`misaligned_address_words`), and the bytes it wrote or copied in, `m2v.write`, the copied
+    selectors begin `draw` and `dispatch`), the written words that look like addresses
+    (`address_looking_words`) and the 8-byte values at offsets 4 past a multiple of 8 that lie in
+    a live range (`misaligned_address_words`), both played as recorded (section 5), the address
+    arguments (`address_arguments`) and those it moved (`relocated_words`), and the bytes it
+    wrote or copied in, `m2v.write`, the copied
     buffers' `contents`, the copies from the guest's RAM and the `m2v.privateBytes` bytes before
     (`written_bytes`). A group's calls are those played before it completed:
     the call that waited for it counts in the next.
@@ -695,11 +703,10 @@ stream may differ from what the program did` first where the stream's header lac
 --past-range yes plays past it` or `range whole (SOURCE)`, where `SOURCE` is `the stream's
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
 `device NAME runtime old|rt snapshots yes|no`, then
-`relocation relocated_words=N misaligned_address_words=N address_arguments=N unrelocated_writes=N
-differing_ids=N` (the play's words in a live range, which the new runtime relocates, and those
-left at 4 past a multiple of 8,
-the address arguments beside which a data word that only looks like an address stands out, the
-writes and uploads into objects with no recorded range, which nothing relocates, and the objects
+`addresses address_looking_words=N misaligned_address_words=N address_arguments=N
+relocated_words=N differing_ids=N: written words play as recorded; the stream predates the escape
+note` (the census of the written words that look like addresses, at a multiple of 8 and 4 past
+one, which play as the stream holds them; the address arguments and those moved; and the objects
 whose ID differs from the recording's, those of the compute pipeline states' typed gap and of
 the skipped objects aside: any such object makes the play an error, as a word that names it
 names something else in the play),

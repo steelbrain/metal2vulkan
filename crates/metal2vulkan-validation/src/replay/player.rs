@@ -1,5 +1,5 @@
 //! The player (`docs/REPLAY-STREAM.md`, section 10): it reads a stream's calls in order and drives a
-//! runtime through a [`Backend`], relocating what it uploads, waiting for the command buffers
+//! runtime through a [`Backend`], moving the address arguments, waiting for the command buffers
 //! that can complete (never for one an event wait holds), and reporting per group of command
 //! buffers waited for, per frame and in total what the stream fixed and what the runtime
 //! executed, with the checksums the stream asks for and the Private buffer ranges it holds around
@@ -20,32 +20,35 @@ pub type Counters = BTreeMap<&'static str, u64>;
 
 /// The counts the stream fixes, the same on every play of it on any runtime: the calls played,
 /// the command buffers committed, the encoders made, the draws and dispatches their calls issued,
-/// the words the player relocated, the 8-byte values at offsets 4 past a multiple of 8 that lie in
-/// a live range (left as they are), and the bytes it wrote.
+/// the address-looking words of the bytes it wrote and the 8-byte values at offsets 4 past a
+/// multiple of 8 that lie in a live range (both counted, neither moved), and the bytes it wrote.
 const CALLS: &str = "calls";
 const COMMITS: &str = "commits";
 const ENCODERS: &str = "encoders";
 const DRAWS: &str = "draws";
 const DISPATCHES: &str = "dispatches";
-const RELOCATED_WORDS: &str = "relocated_words";
+/// The 8-byte words at a multiple of 8 from their target's start, in the bytes the player put
+/// into an object with a recorded range and in `set*Bytes` data, whose value lies in a live
+/// recorded range: counted, written as recorded (`docs/REPLAY-STREAM.md`, section 5).
+const ADDRESS_LOOKING_WORDS: &str = "address_looking_words";
 const MISALIGNED_WORDS: &str = "misaligned_address_words";
 const WRITTEN_BYTES: &str = "written_bytes";
-/// The address arguments of the calls played, beside which `relocated_words` shows a data word
-/// that only looks like an address.
+/// The address arguments of the calls played.
 const ADDRESS_ARGUMENTS: &str = "address_arguments";
-/// Writes and uploads into an object with no recorded range, whose words are not relocated.
-const UNRELOCATED_WRITES: &str = "unrelocated_writes";
+/// The address arguments the address map moved: those in a live range whose object the runtime
+/// made at another address than the recorded one (none where the backend makes each at its own).
+const RELOCATED_WORDS: &str = "relocated_words";
 const FIXED: [&str; 10] = [
     CALLS,
     COMMITS,
     ENCODERS,
     DRAWS,
     DISPATCHES,
-    RELOCATED_WORDS,
+    ADDRESS_LOOKING_WORDS,
     MISALIGNED_WORDS,
     WRITTEN_BYTES,
     ADDRESS_ARGUMENTS,
-    UNRELOCATED_WRITES,
+    RELOCATED_WORDS,
 ];
 
 /// The host's record of a Private buffer range's bytes around one dispatch
@@ -63,12 +66,12 @@ pub struct Made {
 }
 
 /// One runtime behind the player. Objects are named by their stream ids; the player resolves blobs
-/// and relocates before a call reaches the backend, and handles `m2v.write`, `m2v.check`,
-/// `m2v.present`, `m2v.commitPart`, `m2v.privateBytes`, `gpuResourceID`, `release` of a device,
-/// and the program's waits itself. A copy from the guest's RAM reaches it with its data relocated
-/// (the player's `upload` says where the data lands), a record of the host's own plumbing as the
-/// plain Metal call it stands for (`plain`), and a copied buffer's descriptor without its
-/// `contents`, which reach it as a write once the buffer is made (`copied`).
+/// and relocates address arguments before a call reaches the backend, and handles `m2v.write`,
+/// `m2v.check`, `m2v.present`, `m2v.commitPart`, `m2v.privateBytes`, `gpuResourceID`, `release` of
+/// a device, and the program's waits itself. A copy from the guest's RAM reaches it with its data
+/// as recorded (the player's `upload` says where the data lands), a record of the host's own
+/// plumbing as the plain Metal call it stands for (`plain`), and a copied buffer's descriptor
+/// without its `contents`, which reach it as a write once the buffer is made (`copied`).
 pub trait Backend {
     /// Run `call`: make its result, or run its receiver's method, or drop the object `release`
     /// names.
@@ -158,10 +161,10 @@ pub trait Backend {
 
     /// Whether the backend makes every object with a recorded range at its recorded address (the
     /// `gpuAddress` it answered) and every other object outside the addresses a recording holds.
-    /// The address map then moves no word: each range's new address is its recorded one, so every
-    /// word and address argument plays as recorded, and the map's counts are the stream's as on
-    /// any backend. A made object at another address stops the play ([`PlayError::Unpinned`]).
-    /// Otherwise the map relocates (`docs/REPLAY-STREAM.md`, section 5).
+    /// The address map then moves no address argument: each range's new address is its recorded
+    /// one. A made object at another address stops the play ([`PlayError::Unpinned`]). Otherwise
+    /// the map moves address arguments to the runtime's addresses (`docs/REPLAY-STREAM.md`,
+    /// section 5). Written bytes play as recorded on either.
     fn places_at_recorded(&self) -> bool {
         false
     }
@@ -303,7 +306,8 @@ pub struct Report {
     pub parted: u64,
     /// On a backend that makes objects at their recorded addresses
     /// (`Backend::places_at_recorded`), the objects with a recorded range it made there, every
-    /// one of them (another stops the play); `None` on a backend the address map relocates for.
+    /// one of them (another stops the play); `None` on a backend the address map moves address
+    /// arguments for.
     pub pinned: Option<u64>,
     /// The placement heaps the player laid out again for the runtime's sizes and alignments
     /// (`relay`).
@@ -1596,8 +1600,8 @@ impl<'b, B: Backend> Player<'b, B> {
         *self.fixed.entry(ADDRESS_ARGUMENTS).or_default() +=
             args.iter().map(addresses).sum::<u64>();
         if sets_bytes(&call.selector) {
-            if let Some(Value::Bytes(data)) = args.first_mut() {
-                self.relocate(data, 0);
+            if let Some(Value::Bytes(data)) = args.first() {
+                self.census(data, 0);
             }
         }
         let resolved = self.placed(Call { args, ..call });
@@ -1656,28 +1660,25 @@ impl<'b, B: Backend> Player<'b, B> {
         }
     }
 
-    /// `call` with the data of the upload it is, if any, relocated where its target answered a
-    /// `gpuAddress`, and the data counted.
-    fn uploaded(&mut self, mut call: Call) -> Result<Call, PlayError> {
+    /// `call`, and the data of the upload it is, if any, counted: its address-looking words where
+    /// its target answered a `gpuAddress`, and its bytes.
+    fn uploaded(&mut self, call: Call) -> Result<Call, PlayError> {
         let Some(upload) = upload(&call)? else {
             return Ok(call);
         };
-        let relocated = self.addresses.holds(upload.target);
-        if !relocated {
-            *self.fixed.entry(UNRELOCATED_WRITES).or_default() += 1;
-        }
-        let Some(Value::List(entries)) = call.args.get_mut(PIECES) else {
+        let censused = self.addresses.holds(upload.target);
+        let Some(Value::List(entries)) = call.args.get(PIECES) else {
             unreachable!("an upload's pieces");
         };
         for (at, entry) in upload.pieces {
-            let Value::List(pair) = &mut entries[entry] else {
+            let Value::List(pair) = &entries[entry] else {
                 unreachable!("an upload's piece");
             };
-            let Value::Bytes(data) = &mut pair[1] else {
+            let Value::Bytes(data) = &pair[1] else {
                 unreachable!("a piece's bytes");
             };
-            if relocated {
-                self.relocate(data, at);
+            if censused {
+                self.census(data, at);
             }
             *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         }
@@ -1731,7 +1732,8 @@ impl<'b, B: Backend> Player<'b, B> {
         self.made_count += 1;
     }
 
-    /// `value` with its blobs read and its addresses relocated.
+    /// `value` with its blobs read and its address arguments where the address map puts them,
+    /// `relocated` counting those it moved.
     fn resolve(
         &self,
         stream: &mut StreamReader,
@@ -1741,11 +1743,11 @@ impl<'b, B: Backend> Player<'b, B> {
         Ok(match value {
             Value::Blob(hash) => Value::Bytes(stream.blob(hash)?),
             Value::Address(at) => match self.addresses.relocated(*at) {
-                Some(moved) => {
+                Some(moved) if moved != *at => {
                     *relocated += 1;
                     Value::Address(moved)
                 }
-                None => Value::Address(*at),
+                _ => Value::Address(*at),
             },
             Value::List(items) => Value::List(
                 items
@@ -1786,21 +1788,21 @@ impl<'b, B: Backend> Player<'b, B> {
         Ok(())
     }
 
-    /// Put `data` at `offset` of `target`, relocated where the target answered a `gpuAddress`, and
-    /// count it.
-    fn put(&mut self, target: u64, offset: u64, mut data: Vec<u8>) -> Result<(), PlayError> {
-        match self.addresses.holds(target) {
-            true => self.relocate(&mut data, offset),
-            false => *self.fixed.entry(UNRELOCATED_WRITES).or_default() += 1,
+    /// Put `data` at `offset` of `target` as recorded, and count it: its address-looking words
+    /// where the target answered a `gpuAddress`, and its bytes.
+    fn put(&mut self, target: u64, offset: u64, data: Vec<u8>) -> Result<(), PlayError> {
+        if self.addresses.holds(target) {
+            self.census(&data, offset);
         }
         *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         self.write_bytes(target, offset, &data)
     }
 
-    /// Relocate `data`, which starts `offset` bytes into its target, and count what it found.
-    fn relocate(&mut self, data: &mut [u8], offset: u64) {
-        let (moved, misaligned) = self.addresses.relocate(data, offset);
-        *self.fixed.entry(RELOCATED_WORDS).or_default() += moved;
+    /// Count the address-looking words of `data`, which starts `offset` bytes into its target
+    /// (`AddressMap::census`), and move none.
+    fn census(&mut self, data: &[u8], offset: u64) {
+        let (aligned, misaligned) = self.addresses.census(data, offset);
+        *self.fixed.entry(ADDRESS_LOOKING_WORDS).or_default() += aligned;
         *self.fixed.entry(MISALIGNED_WORDS).or_default() += misaligned;
     }
 
@@ -1920,10 +1922,10 @@ impl<'b, B: Backend> Player<'b, B> {
         self.own(device, "newBufferWithLength:options:", staging, &length)?;
         self.own(device, "newFence", fence, &[])?;
         for &(around, at) in &placed {
-            let mut before = self.blob(stream, &around.before)?;
+            let before = self.blob(stream, &around.before)?;
             sized(&around, &before)?;
             if self.addresses.holds(around.buffer) {
-                self.relocate(&mut before, around.location);
+                self.census(&before, around.location);
             }
             *self.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
             self.write_bytes(staging, at, &before)?;
@@ -1994,7 +1996,7 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     /// Compare each range of the snapshots whose command buffers completed with the recording's
-    /// bytes after its dispatch, word by word, relocated as its bytes before were.
+    /// bytes after its dispatch, word by word, both as recorded.
     fn compare(
         &mut self,
         stream: &mut StreamReader,
@@ -2009,11 +2011,8 @@ impl<'b, B: Backend> Player<'b, B> {
                 Ok(bytes)
             })?;
             for (around, at) in snapshot.ranges {
-                let mut after = stream.blob(&around.after)?;
+                let after = stream.blob(&around.after)?;
                 sized(&around, &after)?;
-                if self.addresses.holds(around.buffer) {
-                    self.addresses.relocate(&mut after, around.location);
-                }
                 let start = (snapshot.half + at) as usize;
                 let played = bytes.get(start..start + after.len());
                 let played = played.ok_or_else(|| PlayError::Runtime {

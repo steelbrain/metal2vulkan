@@ -694,7 +694,8 @@ re-record on that venue.
   compared, and fails the comparison unless named in `--expected-skips`.
 - `command-replay play` plays a replay stream ([REPLAY-STREAM.md](REPLAY-STREAM.md)) on a Vulkan
   device through the old runtime and writes its report: the runtime's counters for each group of
-  command buffers it waited for, each frame and the whole play, the address words it relocated,
+  command buffers it waited for, each frame and the whole play, the census of written words that
+  look like addresses (they play as recorded) and the address arguments it moved,
   and a SHA-256 of each checked buffer or texture against the recorded one. `command-replay dump`
   prints a stream's calls.
 - `format-scout` drives every Metal pixel format through the runtime's public API, one use at a

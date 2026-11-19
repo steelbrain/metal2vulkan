@@ -216,9 +216,9 @@ fn pointer_chain(w: &mut StreamWriter<File>) -> std::io::Result<()> {
 }
 
 /// The kernel reads the node through the pointer as written, the block and its buffers and the
-/// output at their recorded addresses: its output is the case's Metal output, the address map
-/// found the one word in a live range and moved it nowhere, the write's 32 bytes counted; the
-/// same stream on a second device reports the same counts of the stream's and the same checks.
+/// output at their recorded addresses: its output is the case's Metal output, the census counted
+/// the one word in a live range, nothing moved, the write's 32 bytes counted; the same stream on a
+/// second device reports the same counts of the stream's and the same checks.
 #[test]
 fn a_pointer_written_at_a_recorded_address_reaches_its_node() {
     let dir = ScratchDir::new("replay-pointer-chain").unwrap();
@@ -232,7 +232,8 @@ fn a_pointer_written_at_a_recorded_address_reaches_its_node() {
     let report = &reports[0];
     assert_eq!(report.checks.len(), 1);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
-    assert_eq!(report.total.stream["relocated_words"], 1);
+    assert_eq!(report.total.stream["address_looking_words"], 1);
+    assert_eq!(report.total.stream["relocated_words"], 0);
     assert_eq!(report.total.stream["misaligned_address_words"], 0);
     assert_eq!(report.total.stream["written_bytes"], 32);
     assert_eq!(
@@ -301,7 +302,8 @@ fn a_data_word_in_a_live_range_plays_as_written() {
             report.checks[0].recorded,
             "the words as written"
         );
-        assert_eq!(report.total.stream["relocated_words"], 2);
+        assert_eq!(report.total.stream["address_looking_words"], 2);
+        assert_eq!(report.total.stream["relocated_words"], 0);
         assert_eq!(report.pinned, Some(2));
         let line = "pinned 2 of 2: every object with a recorded range at its recorded address; \
                     the address map moves no word";

@@ -371,8 +371,8 @@ fn a_blob_left_out_is_read_from_the_blob_directory() {
     assert_eq!(reader.blob(&hash).unwrap(), data);
 }
 
-/// Ranges nest: a word in a buffer inside a block moves with the buffer, one in the block alone
-/// with the block, one past every range stays. A removed block leaves its buffers.
+/// Ranges nest: an address in a buffer inside a block goes with the buffer, one in the block alone
+/// with the block, one past every range nowhere. A removed block leaves its buffers.
 #[test]
 fn the_address_map_relocates_by_the_innermost_live_range() {
     let block = 1u64 << 46;
@@ -394,28 +394,21 @@ fn the_address_map_relocates_by_the_innermost_live_range() {
     assert_eq!(map.relocated(block + 0x10), None);
     assert_eq!(map.relocated(block + 0x108), Some(0x90_0008));
 
-    // Words at multiples of 8 from the target's start move; a value 4 past one is counted and
-    // stays; bytes before the first such word are no word.
+    // The census counts words at multiples of 8 from the target's start apart from values 4 past
+    // one; bytes before the first such word are no word.
     let mut bytes = vec![0u8; 4];
     bytes.extend_from_slice(&(block + 0x100).to_le_bytes());
     bytes.extend_from_slice(&[0u8; 4]);
     bytes.extend_from_slice(&(block + 0x110).to_le_bytes());
     // `bytes` starts 4 bytes into its target: the first address is at the target's offset 8, the
     // second at its offset 20.
-    let (moved, misaligned) = map.relocate(&mut bytes, 4);
-    assert_eq!((moved, misaligned), (1, 1));
-    assert_eq!(&bytes[4..12], &0x90_0000u64.to_le_bytes());
-    assert_eq!(
-        &bytes[16..24],
-        &(block + 0x110).to_le_bytes(),
-        "4 past 8 stays"
-    );
+    assert_eq!(map.census(&bytes, 4), (1, 1));
 }
 
-/// Words below the first live range and at or past the last one's end stay, and those inside move:
-/// the span check before each lookup keeps every word a lookup would keep.
+/// Words below the first live range and at or past the last one's end are not counted, and those
+/// inside a range are: the span check before each lookup drops only words a lookup would drop.
 #[test]
-fn words_outside_the_live_ranges_span_stay() {
+fn words_outside_the_live_ranges_span_are_not_counted() {
     let block = 1u64 << 46;
     let mut map = AddressMap::default();
     map.insert(1, block, 0x100, 0x10_0000).unwrap();
@@ -427,25 +420,12 @@ fn words_outside_the_live_ranges_span_stay() {
         block + 0x1008,
         block + 0x1100,
     ];
-    let mut bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-    assert_eq!(map.relocate(&mut bytes, 0), (2, 0));
-    let after: Vec<u64> = (bytes.as_chunks::<8>().0.iter())
-        .map(|&w| u64::from_le_bytes(w))
-        .collect();
-    assert_eq!(
-        after,
-        [
-            block - 8,
-            0x10_0000,
-            block + 0x800,
-            0x20_0008,
-            block + 0x1100
-        ]
-    );
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    assert_eq!(map.census(&bytes, 0), (2, 0));
 }
 
 /// A range that meets a live one in part ends that one, whose inner ranges stay: the program put
-/// the newer object in that memory while the older lived on, so a word there relocates by the newer
+/// the newer object in that memory while the older lived on, so an address there goes by the newer
 /// one.
 #[test]
 fn a_range_that_meets_a_live_one_in_part_ends_it() {
@@ -693,11 +673,12 @@ fn a_range_met_in_part_is_counted() {
     assert!(report.lines().contains(&"parted 1".to_string()));
 }
 
-/// A write into a block and a constant upload carry recorded addresses: the player rewrites them
-/// to the backend's, counts them, and leaves an address 4 past a multiple of 8 counted apart; a
-/// write into a buffer of no address is not touched.
+/// A write into a block and a constant upload carry words that look like recorded addresses: the
+/// player writes them as recorded on a backend that moved the block, and counts them, an address 4
+/// past a multiple of 8 apart; a write into a buffer of no address is written as recorded and not
+/// counted. No address argument moved.
 #[test]
-fn uploads_are_relocated_and_counted() {
+fn written_words_play_as_recorded_and_are_counted() {
     let mut kept = Kept::default();
     let pointer = (BLOCK + 0x100 + 8).to_le_bytes();
     let mut misaligned = vec![0u8; 4];
@@ -756,33 +737,57 @@ fn uploads_are_relocated_and_counted() {
         w.call("setBytes:length:atIndex:", 9, 0, &bytes, &[])
     });
     ended.unwrap();
-    let moved = (0x1000_0000u64 + 0x100 + 8).to_le_bytes();
-    assert_eq!(kept.writes[0], (2, 0, moved.to_vec()));
-    assert_eq!(kept.writes[1], (2, 16, misaligned), "4 past 8 stays");
-    assert_eq!(
-        kept.writes[2],
-        (4, 0, pointer.to_vec()),
-        "no address: untouched"
-    );
+    assert_eq!(kept.writes[0], (2, 0, pointer.to_vec()), "as recorded");
+    assert_eq!(kept.writes[1], (2, 16, misaligned), "4 past 8 as recorded");
+    assert_eq!(kept.writes[2], (4, 0, pointer.to_vec()), "no address");
     let constants = kept.args.last().and_then(|args| args.first());
-    assert_eq!(constants, Some(&Value::Bytes(moved.to_vec())));
-    assert_eq!(report.total.stream["relocated_words"], 2);
+    assert_eq!(constants, Some(&Value::Bytes(pointer.to_vec())));
+    assert_eq!(report.total.stream["address_looking_words"], 2);
     assert_eq!(report.total.stream["misaligned_address_words"], 1);
     assert_eq!(report.total.stream["written_bytes"], 8 + 16 + 8);
-    assert_eq!(
-        report.total.stream["unrelocated_writes"], 1,
-        "the write of no address"
-    );
+    assert_eq!(report.total.stream["relocated_words"], 0);
 }
 
-/// A copy from the guest's RAM lands each piece at its byte: into a block, an address is
-/// relocated at a multiple of 8 and counted apart 4 past one; into a buffer of no address, nothing
-/// moves. A copy of another form (one the platform refused, recorded before the recorder left
-/// those out) stops the play.
+/// A typed address argument in a live range goes where the backend made its innermost object (a
+/// buffer in a block), counted as moved; one in no live range stays, and is not.
 #[test]
-fn guest_ram_copies_are_relocated_where_their_buffer_has_an_address() {
+fn a_typed_address_argument_moves_with_its_object() {
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let block = [Value::Uint(0x1_0000), Value::Uint(0)];
+        let at = addressed(BLOCK, 0x1_0000);
+        w.call("m2v.newBlockWithLength:storageMode:", 1, 2, &block, &at)?;
+        let inner = [
+            Value::Object(2),
+            Value::Uint(0x100),
+            Value::Uint(0x100),
+            Value::Uint(0),
+        ];
+        let at = addressed(BLOCK + 0x100, 0x100);
+        let placed = "m2v.newBufferInBlock:offset:length:options:";
+        w.call(placed, 2, 3, &inner, &at)?;
+        let set = [Value::Address(BLOCK + 0x108), Value::Uint(0)];
+        w.call("setAddress:atIndex:", 9, 0, &set, &[])?;
+        let set = [Value::Address(1 << 40), Value::Uint(1)];
+        w.call("setAddress:atIndex:", 9, 0, &set, &[])
+    });
+    ended.unwrap();
+    let address = |call: usize| kept.args[call][0].clone();
+    assert_eq!(address(3), Value::Address(0x1000_0000 + 0x108));
+    assert_eq!(address(4), Value::Address(1 << 40), "in no range");
+    assert_eq!(report.total.stream["address_arguments"], 2);
+    assert_eq!(report.total.stream["relocated_words"], 1);
+    assert_eq!(report.total.stream["address_looking_words"], 0);
+}
+
+/// A copy from the guest's RAM lands each piece at its byte, as recorded: into a block, a word that
+/// looks like an address is counted at a multiple of 8 and apart 4 past one; into a buffer of no
+/// address, it is not counted. A copy of another form (one the platform refused, recorded before
+/// the recorder left those out) stops the play.
+#[test]
+fn guest_ram_copies_play_as_recorded_and_are_counted() {
     let pointer = (BLOCK + 0x10).to_le_bytes();
-    let moved = (0x1000_0000u64 + 0x10).to_le_bytes();
     let piece = |at: u64, data: Value| Value::List(vec![Value::Uint(at), data]);
     let mut kept = Kept::default();
     let (report, ended) = played(&mut kept, |w| {
@@ -831,22 +836,15 @@ fn guest_ram_copies_are_relocated_where_their_buffer_has_an_address() {
         Value::List(pieces) => pieces[entry].as_list().unwrap()[1].clone(),
         other => panic!("{other}"),
     };
-    let copied = [moved.to_vec(), vec![0; 8]].concat();
+    let copied = [pointer.to_vec(), vec![0; 8]].concat();
     assert_eq!(data(3, 0), Value::Bytes(copied));
-    assert_eq!(data(4, 0), Value::Bytes(moved.to_vec()));
-    assert_eq!(data(4, 1), Value::Bytes(pointer.to_vec()), "4 past 8 stays");
-    assert_eq!(
-        data(5, 0),
-        Value::Bytes(pointer.to_vec()),
-        "no address: untouched"
-    );
-    assert_eq!(report.total.stream["relocated_words"], 2);
+    assert_eq!(data(4, 0), Value::Bytes(pointer.to_vec()));
+    assert_eq!(data(4, 1), Value::Bytes(pointer.to_vec()), "4 past 8");
+    assert_eq!(data(5, 0), Value::Bytes(pointer.to_vec()), "no address");
+    assert_eq!(report.total.stream["address_looking_words"], 2);
     assert_eq!(report.total.stream["misaligned_address_words"], 1);
     assert_eq!(report.total.stream["written_bytes"], 16 + 16 + 8);
-    assert_eq!(
-        report.total.stream["unrelocated_writes"], 1,
-        "the copy of no address"
-    );
+    assert_eq!(report.total.stream["relocated_words"], 0);
 
     let (_, ended) = played(&mut Kept::default(), |w| {
         let runs = Value::List(vec![Value::List(vec![
@@ -1016,10 +1014,10 @@ fn frames_releases_and_splits() {
         ("draws", 0),
         ("encoders", 0),
         ("misaligned_address_words", 0),
-        ("relocated_words", 0),
+        ("address_looking_words", 0),
         ("written_bytes", 0),
         ("address_arguments", 0),
-        ("unrelocated_writes", 0),
+        ("relocated_words", 0),
     ]);
     let executed = Counters::from([("submissions", 2)]);
     assert_eq!(report.frames, [Counts { stream, executed }]);
@@ -1117,10 +1115,10 @@ fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
             ("draws", 2),
             ("encoders", 2),
             ("misaligned_address_words", 0),
-            ("relocated_words", 0),
+            ("address_looking_words", 0),
             ("written_bytes", 0),
             ("address_arguments", 0),
-            ("unrelocated_writes", 0),
+            ("relocated_words", 0),
         ])
     };
     let executed = Counters::from([("submissions", 1)]);
@@ -1137,8 +1135,8 @@ fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
     assert_eq!(report.total, total);
     assert_eq!(
         report.lines()[0],
-        "completed #3 stream address_arguments=0 calls=10 commits=1 dispatches=1 draws=2 \
-         encoders=2 misaligned_address_words=0 relocated_words=0 unrelocated_writes=0 \
+        "completed #3 stream address_arguments=0 address_looking_words=0 calls=10 commits=1 \
+         dispatches=1 draws=2 encoders=2 misaligned_address_words=0 relocated_words=0 \
          written_bytes=0 executed submissions=1"
     );
 }
@@ -1175,9 +1173,9 @@ fn a_part_commits_only_where_the_host_cut_it() {
 
 /// A buffer made as a copy of host memory starts with its descriptor's `contents`, a blob or
 /// inline bytes: the backend makes it with the contents nil, and the player writes them from its
-/// first byte, relocated where it answered a `gpuAddress` (here a pointer into itself) and
-/// counted; a buffer of no address is written as it is, and a no-copy buffer's nil contents
-/// write nothing.
+/// first byte as recorded, counting a word that looks like an address where it answered a
+/// `gpuAddress` (here a pointer into itself); a buffer of no address is written as it is, and a
+/// no-copy buffer's nil contents write nothing.
 #[test]
 fn a_copied_buffer_starts_with_its_contents() {
     let mut kept = Kept::default();
@@ -1213,12 +1211,11 @@ fn a_copied_buffer_starts_with_its_contents() {
             .find(|(k, _)| &**k == "contents");
         assert_eq!(contents.map(|(_, v)| v), Some(&Value::Nil));
     }
-    let mut moved = long.clone();
-    moved[8..16].copy_from_slice(&(0x1000_0000u64 + 0x40).to_le_bytes());
     let untouched = (3, 0, pointer.to_vec());
-    assert_eq!(kept.writes, [(2, 0, moved), untouched]);
+    assert_eq!(kept.writes, [(2, 0, long), untouched]);
     assert_eq!(report.total.stream["written_bytes"], 128 + 8);
-    assert_eq!(report.total.stream["relocated_words"], 1);
+    assert_eq!(report.total.stream["address_looking_words"], 1);
+    assert_eq!(report.total.stream["relocated_words"], 0);
 }
 
 /// A `gpuResourceID` record compares the ID the program saw with the runtime's, once per object:

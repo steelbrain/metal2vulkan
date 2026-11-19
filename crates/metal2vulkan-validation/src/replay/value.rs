@@ -20,7 +20,7 @@ pub enum Value {
     /// An object, by its stream id; 0, which no object is, an object property set to nil (one
     /// left unset is [`Value::Nil`]).
     Object(u64),
-    /// A GPU address, which the player relocates.
+    /// A GPU address, which the player moves to its object's address in the play.
     Address(u64),
     Str(String),
     Bytes(Vec<u8>),

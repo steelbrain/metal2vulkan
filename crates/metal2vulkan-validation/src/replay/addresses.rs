@@ -1,6 +1,7 @@
-//! The address map and relocation (`docs/REPLAY-STREAM.md`, section 5): the recorded ranges of the
-//! live objects, each with the address the player's runtime gave its object, nested where one lies
-//! in another (a buffer in a block), and the rewrite of 8-byte words that fall in them.
+//! The address map (`docs/REPLAY-STREAM.md`, section 5): the recorded ranges of the live objects,
+//! each with the address the player's runtime gave its object, nested where one lies in another (a
+//! buffer in a block); where a typed address goes; and the census of the 8-byte words of written
+//! bytes that fall in a range, which moves none of them.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -119,11 +120,11 @@ impl AddressMap {
         found
     }
 
-    /// Rewrite each 8-byte word of `bytes` that starts at a multiple of 8 from the target's start
-    /// (`bytes` starts `offset` bytes into the target) and lies in a live range. Answers the words
-    /// rewritten, and the 8-byte values at 4 past a multiple of 8 that lie in a live range, which
-    /// stay as they are.
-    pub fn relocate(&self, bytes: &mut [u8], offset: u64) -> (u64, u64) {
+    /// Count the 8-byte words of `bytes` that start at a multiple of 8 from the target's start
+    /// (`bytes` starts `offset` bytes into the target) and lie in a live range, and the 8-byte
+    /// values at 4 past a multiple of 8 that do. Nothing is rewritten: a word's value is no reason
+    /// to move it.
+    pub fn census(&self, bytes: &[u8], offset: u64) -> (u64, u64) {
         // The live ranges' span: a level's ranges are disjoint, so the top level's first starts it
         // and its last ends it. A word outside it lies in no range and takes no lookup.
         let (Some((&low, _)), Some((_, last))) =
@@ -140,22 +141,16 @@ impl AddressMap {
             let at = bytes.get(at..at + 8)?;
             Some(u64::from_le_bytes(at.try_into().expect("8 bytes")))
         };
-        let misaligned_first = ((12 - offset % 8) % 8) as usize;
-        let misaligned = (misaligned_first..bytes.len())
-            .step_by(8)
-            .filter(|&at| word(at, bytes).and_then(relocated).is_some())
-            .count() as u64;
-        let first = ((8 - offset % 8) % 8) as usize;
-        let mut rewritten = 0;
-        let mut at = first;
-        while let Some(value) = word(at, bytes) {
-            if let Some(moved) = relocated(value) {
-                bytes[at..at + 8].copy_from_slice(&moved.to_le_bytes());
-                rewritten += 1;
-            }
-            at += 8;
-        }
-        (rewritten, misaligned)
+        let counted = |first: u64| {
+            (first as usize..bytes.len())
+                .step_by(8)
+                .filter(|&at| word(at, bytes).and_then(relocated).is_some())
+                .count() as u64
+        };
+        (
+            counted((8 - offset % 8) % 8),
+            counted((12 - offset % 8) % 8),
+        )
     }
 }
 

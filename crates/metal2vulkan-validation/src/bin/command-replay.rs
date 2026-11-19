@@ -17,9 +17,9 @@
 //! where it came from, and whether the play ends there), then
 //! `device NAME runtime old|rt snapshots yes|no`, each frame's `frame`
 //! and `end` lines as the frame ends (flushed, so a play that never ends leaves the frames it
-//! finished), `relocation ...` (the
-//! words relocated, the address arguments, the writes into objects with no recorded range, and
-//! the objects whose ID differs from the recording's), the player's other report lines, the
+//! finished), `addresses ...` (the written words that look like addresses, which play as
+//! recorded, the address arguments and those moved, and the objects whose ID differs from the
+//! recording's), the player's other report lines, the
 //! backend's own lines, `until-frame F` where the play stopped there (at `--until-frame` or at the
 //! recording range), `cut SEGMENT OFFSET` where
 //! the last
@@ -478,12 +478,13 @@ fn run<B: Backend>(
     let stream = &played.total.stream;
     let fixed = |key: &str| stream.get(key).copied().unwrap_or(0);
     report.line(&format!(
-        "relocation relocated_words={} misaligned_address_words={} address_arguments={} \
-         unrelocated_writes={} differing_ids={differing_ids}",
-        fixed("relocated_words"),
+        "addresses address_looking_words={} misaligned_address_words={} address_arguments={} \
+         relocated_words={} differing_ids={differing_ids}: written words play as recorded; the \
+         stream predates the escape note",
+        fixed("address_looking_words"),
         fixed("misaligned_address_words"),
         fixed("address_arguments"),
-        fixed("unrelocated_writes"),
+        fixed("relocated_words"),
     ));
     for line in played.lines_but_frames() {
         report.line(&line);

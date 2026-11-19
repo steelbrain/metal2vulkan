@@ -47,16 +47,19 @@
 //!   bytesPerImage:`) of a 2D descriptor plays as the public texture over the buffer, and one of a
 //!   2D array, whose slices Metal lays out itself, is refused.
 //! - Buffers keep the slack of their recorded granule: two recorded at addresses of 32 KiB and
-//!   64 KiB granules lie apart by at least the lower one's granule, as the recording's addresses
-//!   that a third buffer holds come back from the player relocated.
+//!   64 KiB granules take places that span their lengths rounded up to those granules, the slack
+//!   the places hold the sum of both.
+//! - A word that looks like an address (its value lies in a live recorded range, as two 32-bit
+//!   indices can) plays as written, and the census of such words is the same on both runtimes.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
 
-use super::ScratchCache;
+use super::host_memory::on_device_with;
+use super::{at_plan, ScratchCache};
 use crate::gpu::{self, DeviceType};
 use crate::replay::{
-    Backend, NewRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value,
+    Backend, NewRuntime, OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value,
     WAIT_COMPLETED,
 };
 use crate::ScratchDir;
@@ -1055,31 +1058,105 @@ fn buffers_keep_the_slack_of_their_recorded_granule() {
                 &at(address, 4),
             )?;
         }
-        // #4 holds their recorded addresses, which the player puts there as the runtime's.
-        w.call(
-            made,
-            1,
-            4,
-            &[Value::Uint(16), Value::Uint(0)],
-            &at(0x60000, 16),
-        )?;
-        let words = [0x48000u64, 0x50000].iter().flat_map(|a| a.to_le_bytes());
-        let write = [Value::Uint(0), Value::Bytes(words.collect())];
-        w.call("m2v.write", 4, 0, &write, &[])
+        Ok(())
     });
-    let (_, lines, words) = play_then("granule", &path, |backend| backend.read(4).unwrap());
-    let word = |at: usize| u64::from_le_bytes(words[at..at + 8].try_into().unwrap());
-    let (first, second) = (word(0), word(8));
-    let apart = match first < second {
-        true => second - first >= 32 << 10,
-        false => first - second >= 64 << 10,
-    };
-    assert!(apart, "#2 at {first:#x}, #3 at {second:#x}: {lines:?}");
+    let (_, lines) = play("granule", &path);
     let places = lines
         .iter()
         .find(|line| line.starts_with("places by recorded granule: "));
     let places = places.unwrap_or_else(|| panic!("a places line: {lines:?}"));
-    assert!(places.contains("32768 B 1, 65536 B 2"), "{places}");
+    // Each place spans 4 bytes rounded up to its granule: 32,764 and 65,532 bytes of slack.
+    let slack = "32768 B 1, 65536 B 1; most slack held 98296 bytes";
+    assert!(places.contains(slack), "{places}");
+}
+
+/// A Shared block at a recorded address, a buffer in it, and a write into the buffer of a word
+/// whose value lies in the buffer's recorded range (two 32-bit indices, as an index array holds,
+/// can make one) and one 4 past a multiple of 8 that lies in the block's; then a check of the
+/// buffer's bytes as written.
+fn census_stream(dir: &ScratchDir) -> PathBuf {
+    let block = 1u64 << 46;
+    let mut bytes = (block + 0x108).to_le_bytes().to_vec();
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&(block + 0x10).to_le_bytes());
+    bytes.extend_from_slice(&[0; 4]);
+    written(dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let at = |address: u64, length: u64| {
+            [
+                ("gpuAddress", Value::Address(address)),
+                ("gpuLength", Value::Uint(length)),
+            ]
+        };
+        let made = [Value::Uint(0x1_0000), Value::Uint(0)];
+        let selector = "m2v.newBlockWithLength:storageMode:";
+        w.call(selector, 1, 2, &made, &at(block, 0x1_0000))?;
+        let inner = [
+            Value::Object(2),
+            Value::Uint(0x100),
+            Value::Uint(0x100),
+            Value::Uint(0),
+        ];
+        let selector = "m2v.newBufferInBlock:offset:length:options:";
+        w.call(selector, 2, 3, &inner, &at(block + 0x100, 0x100))?;
+        let write = [Value::Uint(0), Value::Bytes(bytes.clone())];
+        w.call("m2v.write", 3, 0, &write, &[])?;
+        let mut whole = bytes.clone();
+        whole.resize(0x100, 0);
+        let sum = Value::List(vec![Value::Bytes(Sha256::digest(&whole).to_vec())]);
+        w.call("m2v.check", 0, 0, &[Value::Object(3)], &[("sha256", sum)])
+    })
+}
+
+/// The census's counts of a play: the address-looking words, those 4 past a multiple of 8, and
+/// the address arguments moved.
+fn census(report: &Report) -> [u64; 3] {
+    let stream = &report.total.stream;
+    [
+        "address_looking_words",
+        "misaligned_address_words",
+        "relocated_words",
+    ]
+    .map(|key| stream[key])
+}
+
+/// On the new runtime, which makes the block elsewhere, the word that looks like an address
+/// plays as written: the buffer reads back the recorded bytes, the word is counted, and nothing
+/// moved.
+#[test]
+fn a_data_word_in_a_live_range_plays_as_written_on_the_new_runtime() {
+    let dir = ScratchDir::new("rt-replay-data-word").unwrap();
+    let (report, _) = play("data-word", &census_stream(&dir));
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    assert_eq!(census(&report), [1, 1, 0]);
+}
+
+/// The same stream on the old runtime, which makes the block at its recorded address, and on the
+/// new runtime, which does not: the census counts the same words on both, and both play them as
+/// written.
+#[test]
+fn the_address_census_is_the_same_on_both_runtimes() {
+    let dir = ScratchDir::new("rt-replay-census").unwrap();
+    let path = census_stream(&dir);
+    let (rt, _) = play("census", &path);
+    let mut old = None;
+    on_device_with(at_plan, |device| {
+        let mut backend = OldRuntime::new(device.clone(), gpu::TEST_DEVICE);
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let (report, ended) = Player::new(&mut backend).play(&mut reader);
+        for line in report.lines() {
+            eprintln!("REPLAY census-old {line}");
+        }
+        ended.unwrap();
+        old = Some(report);
+    });
+    let old = old.expect("an old runtime's device");
+    for report in [&rt, &old] {
+        assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    }
+    assert_eq!(census(&rt), census(&old));
+    assert_eq!(census(&old), [1, 1, 0]);
+    assert_eq!(old.pinned, Some(2), "the block and its buffer");
 }
 
 /// A copy back to the guest's RAM plays as the runtime's buffer copies into a sink of the play's
