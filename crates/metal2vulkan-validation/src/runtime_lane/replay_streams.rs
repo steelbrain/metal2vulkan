@@ -1284,6 +1284,7 @@ fn f32_bytes(values: &[f32]) -> Value {
 ///   element, the whole target, where its first lies outside;
 /// - base vertex -3 (`drawIndexedPrimitives:...:baseVertex:baseInstance:`) of indices 3, 4 and 5:
 ///   vertices 0, 1 and 2, the whole target, where 3, 4 and 5 make no triangle.
+///
 /// The setters whose effect no such draw shows play before the first draw, which still covers
 /// the target: the depth bias and clip mode, the blend colour, a vertex texture of nil, and the
 /// vertex and fragment sampler forms (one, one with LOD clamps, a range, a range with clamps).
@@ -1307,6 +1308,8 @@ fn render_encoder_setters_play_with_their_effects() {
     let (constant, device, sampler, instances, indices) = (7u64, 8u64, 9u64, 10u64, 11u64);
     let s = || Value::Object(sampler);
     type Calls = Vec<(&'static str, Vec<Value>)>;
+    // A case: its pipeline, the calls before its draw, the draw, and the target's texels.
+    type Case = (u64, Calls, (&'static str, Vec<Value>), Vec<u8>);
     let effectless: Calls = vec![
         ("setDepthBias:slopeScale:clamp:", vec![Value::F64(0.0); 3]),
         ("setDepthClipMode:", vec![Value::Uint(0)]),
@@ -1364,8 +1367,7 @@ fn render_encoder_setters_play_with_their_effects() {
     let indexed = "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:\
                    instanceCount:baseVertex:baseInstance:";
     let set_bytes = "setVertexBytes:length:atIndex:";
-    // (pipeline, the calls before the draw, the draw, the target's texels)
-    let cases: Vec<(u64, Calls, (&str, Vec<Value>), Vec<u8>)> = vec![
+    let cases: Vec<Case> = vec![
         (
             constant,
             [vec![(set_bytes, bytes(whole))], effectless].concat(),
