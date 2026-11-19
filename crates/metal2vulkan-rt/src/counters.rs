@@ -1011,10 +1011,13 @@ pub struct Metrics {
     /// device had three or more in flight across its queues: the ones one queue of the same
     /// command buffers would have held in a group.
     pub lone_submissions_across_queues: u64,
-    /// Groups sent with no reason of their own queue's: neither full, nor ended by an event's
-    /// signal or a semaphore wait, nor below three submissions in flight, nor asked for by a host
-    /// wait or the end. No path of the submit thread sends one, so this stays 0; it is counted to
-    /// show it.
+    /// Groups sent with none of these reasons: full, ended by an event's signal or a semaphore
+    /// wait, below three submissions in flight, asked for by a host wait, by another queue's
+    /// command buffer that waits on a fence the group updates, or by the end. Its test omits three
+    /// reasons of the group's own queue's, which it counts, with one queue too: a command buffer
+    /// that cannot join the group (its queue's expected run not known, or the group at its bound
+    /// of summed expected runs or of joins while none of the queue's retires), and a segment that
+    /// leans on a copy for a buffer an earlier segment of the group wrote.
     pub forced_flushes_across_queues: u64,
     /// Copies a draw that reads an attachment of its own pass through a texture makes into the
     /// image's shadow first, on a device without the attachment feedback loop, which Metal does
