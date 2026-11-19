@@ -253,8 +253,10 @@ struct Counts {
     straddled: u64,
     /// Encoders that may have written two shapes of one plane.
     unordered: u64,
-    /// Uses taken as writes by the texture's usage alone, with no interface at hand.
+    /// Uses taken as writes by the texture's usage alone, with no interface at hand, and draws'
+    /// and dispatches' slots whose interface declares a write.
     usage_writes: u64,
+    declared_writes: u64,
     /// Recorded CPU writes into a buffer after a shape's making.
     cpu_writes: u64,
     /// `m2v.externalWriteDone` records, the shapes they refilled and the bytes of those.
@@ -424,7 +426,7 @@ impl Surfaces {
     }
 
     /// The executed counters.
-    pub(super) fn counted(&self) -> [(&'static str, u64); 20] {
+    pub(super) fn counted(&self) -> [(&'static str, u64); 21] {
         let c = &self.counts;
         [
             ("surface_external_writes", c.external_writes),
@@ -442,6 +444,7 @@ impl Surfaces {
             ("surface_straddled", c.straddled),
             ("surface_unordered_writes", c.unordered),
             ("surface_usage_writes", c.usage_writes),
+            ("surface_declared_writes", c.declared_writes),
             ("surface_cpu_writes", c.cpu_writes),
             ("surface_copies_in", c.copies_in),
             ("surface_copies_out", c.copies_out),
@@ -456,8 +459,8 @@ impl Surfaces {
         format!(
             "surfaces {} textures and views of {} shapes, each filled at its making ({} made again \
              as views, {} dropped); {} overlap copies ({} bytes), {} straddled texels, {} \
-             unordered writes, {} usage writes (writes through an argument buffer with no use \
-             named unseen, not counted); {} dirty shapes written back ({} bytes); {} CPU writes, \
+             unordered writes, {} usage writes and {} declared slot writes (writes through an \
+             argument buffer with no use named unseen, not counted); {} dirty shapes written back ({} bytes); {} CPU writes, \
              {} external writes refilling {} shapes ({} bytes, {} ns of GPU time, the longest \
              command buffer {} ns), {} copies from the guest's RAM into a shape and {} back, {} \
              bytes in all; {} across planes skipped",
@@ -470,6 +473,7 @@ impl Surfaces {
             c.straddled,
             c.unordered,
             c.usage_writes,
+            c.declared_writes,
             c.written_back,
             c.written_back_bytes,
             c.cpu_writes,
@@ -863,7 +867,11 @@ impl NewRuntime {
             .and_then(|state| self.texture_writes(state, stage));
         for (index, id) in bound {
             let written = match &writes {
-                Some(writes) => writes.contains(&index),
+                Some(writes) => {
+                    let declared = writes.contains(&index);
+                    self.surfaces.counts.declared_writes += u64::from(declared);
+                    declared
+                }
                 None => {
                     let writable = self.surfaces.writable.contains(&id);
                     self.surfaces.counts.usage_writes += u64::from(writable);
