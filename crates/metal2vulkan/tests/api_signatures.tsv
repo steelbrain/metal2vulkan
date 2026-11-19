@@ -12446,6 +12446,7 @@ trait-impl	metal2vulkan-rt::Buffer impl crate::kept::Handle	impl crate::kept::Ha
 trait-impl	metal2vulkan-rt::ClearColor impl Default	impl Default for ClearColor
 trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for ComputeCommandEncoder
 trait-impl	metal2vulkan-rt::ComputePipelineState impl crate::kept::Handle	impl crate::kept::Handle for ComputePipelineState
+trait-impl	metal2vulkan-rt::ComputePipelineState impl crate::kept::Uncount	impl crate::kept::Uncount for ComputePipelineState
 trait-impl	metal2vulkan-rt::DepthStencilDescriptor impl Default	impl Default for DepthStencilDescriptor
 trait-impl	metal2vulkan-rt::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-rt::Error impl std::error::Error	impl std::error::Error for Error
@@ -12457,6 +12458,7 @@ trait-impl	metal2vulkan-rt::RenderCommandEncoder impl Drop	impl Drop for RenderC
 trait-impl	metal2vulkan-rt::RenderPassDepthAttachmentDescriptor impl Default	impl Default for RenderPassDepthAttachmentDescriptor
 trait-impl	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor impl Default	impl Default for RenderPassStencilAttachmentDescriptor
 trait-impl	metal2vulkan-rt::RenderPipelineState impl crate::kept::Handle	impl crate::kept::Handle for RenderPipelineState
+trait-impl	metal2vulkan-rt::RenderPipelineState impl crate::kept::Uncount	impl crate::kept::Uncount for RenderPipelineState
 trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsage
 trait-impl	metal2vulkan-rt::SamplerDescriptor impl Default	impl Default for SamplerDescriptor
 trait-impl	metal2vulkan-rt::SamplerState impl crate::kept::Handle	impl crate::kept::Handle for SamplerState
