@@ -3,8 +3,10 @@
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
-//! [--until-frame F] [--past-range yes|no]` plays the stream whose first segment is `FILE` through
-//! the old runtime (the default) or the new one (`rt`), with `--snapshots no` taking no
+//! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]` plays the stream whose
+//! first segment is `FILE` through the old runtime (the default) or the new one (`rt`), with
+//! `--gpu-wait-timeout` bounding each device wait (10 s unless it says otherwise; a CPU device's
+//! work can take longer than a GPU's), with `--snapshots no` taking no
 //! `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), `--managed`
 //! telling the new runtime how the recording device kept Managed buffers where the stream has no
 //! `m2v.deviceIdentity` record (one copy: unified memory; two copies: a GPU copy; with neither, a
@@ -55,6 +57,7 @@
 
 use metal2vulkan_runtime::{DeviceOptions, ShaderCacheOptions};
 use metal2vulkan_validation::candidate::runtime_case::open_device;
+use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout, WAIT_TIMEOUT_FLAG};
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
     compare_dumps, display_library, recording_range, segments, Backend, ManagedCopies, NewRuntime,
@@ -69,6 +72,7 @@ use std::path::PathBuf;
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
+                     [--gpu-wait-timeout SECONDS] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
                      command-replay dump \
@@ -356,6 +360,13 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    let flag = WAIT_TIMEOUT_FLAG.trim_start_matches("--");
+    if let Some(seconds) = options.get(flag) {
+        if let Err(why) = parse_wait_timeout(seconds).and_then(set_wait_timeout) {
+            report.line(&format!("error {flag}: {why}"));
+            return 2;
+        }
+    }
     let snapshots = match options.get("snapshots").map(String::as_str) {
         None | Some("yes") => true,
         Some("no") => false,

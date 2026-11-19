@@ -502,10 +502,12 @@ and the (name id, value) answer pairs.
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
-[--until-frame F] [--past-range yes|no]` plays a stream (its first segment) on one device through
-the old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. It writes each
-frame's `frame` and `end` lines as the frame ends, flushed, so a play that never ends leaves every
-frame it finished. Every line it writes to `report.txt`, the frame lines among them, it writes to
+[--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]` plays a stream (its first
+segment) on one device through the old runtime (the default) or the new one (`rt`), and writes
+`DIR/report.txt`. Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
+by default; docs/VALIDATION.md, the hang tripwire), which a play on a CPU device raises. It
+writes each frame's `frame` and `end` lines as the frame ends, flushed, so a play that never ends
+leaves every frame it finished. Every line it writes to `report.txt`, the frame lines among them, it writes to
 its standard error too, so a caller that loses the directory keeps the report.
 With `--snapshots no` it takes no `m2v.privateBytes` snapshot on either runtime: each such dispatch
 plays as it is, counted on the `unsnapshotted` line, so two runtimes' plays do the same work and
