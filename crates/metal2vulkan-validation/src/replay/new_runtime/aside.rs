@@ -47,6 +47,11 @@ impl Asides {
         self.two_copies.insert(object);
     }
 
+    /// Whether buffer `object` lives with two copies.
+    pub(super) fn has_two(&self, object: u64) -> bool {
+        self.two_copies.contains(&object)
+    }
+
     /// Whether a read-back of buffer `object` goes into an aside: the stream is marked and the
     /// buffer has two copies.
     pub(super) fn takes(&self, object: u64) -> bool {

@@ -11,6 +11,7 @@
 
 mod aside;
 mod encoders;
+mod imports;
 pub(super) mod indices;
 pub(super) mod places;
 mod render;
@@ -344,6 +345,12 @@ pub struct NewRuntime {
     /// Each compute pipeline state made, in order, and the kernels made so far.
     creations: Vec<Creation>,
     kernels: HashSet<Kernel>,
+    /// The device's `minImportedHostPointerAlignment`, where it imports host memory: the
+    /// alignment of the host pages a no-copy buffer's memory is imported from (`imports`).
+    host_alignment: Option<u64>,
+    /// The no-copy buffers whose memory was imported, and the bytes imported.
+    imported: u64,
+    imported_bytes: u64,
 }
 
 /// The objects `values` name, lists included.
@@ -625,6 +632,7 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
         ("command_buffers", gauges.command_buffers),
         ("descriptor_slots", gauges.descriptor_slots),
         ("blocks", gauges.blocks),
+        ("imports", gauges.imports),
         ("events", gauges.events),
         ("device_samplers", gauges.device_samplers),
         ("spilled_bytes", gauges.spilled_bytes),
@@ -672,6 +680,9 @@ impl NewRuntime {
         }
         Ok(NewRuntime {
             places: Places::new(device.clone()),
+            host_alignment: imports::host_alignment(&device),
+            imported: 0,
+            imported_bytes: 0,
             device,
             objects: HashMap::new(),
             indices: indices::Indices::default(),
@@ -1037,13 +1048,38 @@ impl NewRuntime {
         let completed = self.completed();
         // Each copy's place keeps the slack the buffer had in the recording.
         let recorded = granule(call.answer("gpuAddress").and_then(Value::as_address));
-        let place = (self.places.take(class, length, recorded, completed)).map_err(failed(call))?;
-        let (start, block) = (place.range.start, place.block);
+        // A no-copy buffer's memory is host pages imported as a block of their own, as the
+        // product imports the program's (`imports`); any other buffer's, a place of its own.
+        let (block, start, import, place) = match no_copy {
+            true => {
+                let alignment = (self.host_alignment).ok_or_else(|| {
+                    refuse(
+                        call,
+                        "a no-copy buffer on a device that imports no host memory",
+                    )
+                })?;
+                let (import, len) =
+                    imports::imported(&self.device, length, alignment).map_err(translated(call))?;
+                self.imported += 1;
+                self.imported_bytes += len;
+                (import.id, 0, Some(import), None)
+            }
+            false => {
+                let place =
+                    (self.places.take(class, length, recorded, completed)).map_err(failed(call))?;
+                (place.block, place.range.start, None, Some(place))
+            }
+        };
+        // A place may hold a released buffer's bytes; an import's pages start zero, and the
+        // runtime never zeroes a no-copy buffer's, as Metal does not.
+        let zero = place.is_some().then_some(0);
         let buffer = match mode {
             // A two-copy stream's Managed buffer on a one-copy device: the GPU's copy here, the
-            // CPU's in a place of its own (`second`), both holding the bytes it starts with.
+            // CPU's in a place of its own (`second`), both holding the bytes it starts with. A
+            // no-copy one's GPU copy is the import, which shaders and textures reach as the
+            // product's one copy.
             rt::StorageMode::Managed if self.device.has_unified_memory() => {
-                let gpu = self.device.new_buffer(block, start, length, Some(0));
+                let gpu = self.device.new_buffer(block, start, length, zero);
                 let gpu = gpu.map_err(failed(call))?;
                 write_into(&gpu, 0, bytes)?;
                 let cpu_place =
@@ -1059,7 +1095,7 @@ impl NewRuntime {
             }
             rt::StorageMode::Managed => {
                 // The consumer's bytes first: the place may hold a released buffer's.
-                let shared = self.device.new_buffer(block, start, length, Some(0));
+                let shared = self.device.new_buffer(block, start, length, zero);
                 let shared = shared.map_err(failed(call))?;
                 write_into(&shared, 0, bytes)?;
                 let copied = bytes.len() as u64;
@@ -1078,13 +1114,18 @@ impl NewRuntime {
                 managed
             }
             _ => {
-                let buffer = self.device.new_buffer(block, start, length, Some(0));
+                let buffer = self.device.new_buffer(block, start, length, zero);
                 let buffer = buffer.map_err(failed(call))?;
                 write_into(&buffer, 0, bytes)?;
                 buffer
             }
         };
-        addressed(buffer, Some(place))
+        if let Some(import) = import {
+            // The buffer keeps the block, and the runtime the import, while it lives or work
+            // uses it; then the import's release frees the pages.
+            self.device.release_block(import).map_err(failed(call))?;
+        }
+        addressed(buffer, place)
     }
 
     /// A texture of `descriptor`, at an index where shaders reach it: the next of its class's
@@ -1902,12 +1943,17 @@ impl Backend for NewRuntime {
             self.indices.give(call.receiver);
             self.resource_indices.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
-                Some(Object::Buffer(_, Some(place))) => {
-                    let users = self.users_of(call.receiver);
-                    if let Some(copy) = self.device_copies.remove(&call.receiver) {
-                        self.places.give(copy, self.commits, users.clone());
+                // Its place and its device copy's, where it has them: a no-copy buffer's memory
+                // is an import, and one in a block or heap the stream's.
+                Some(Object::Buffer(_, place)) => {
+                    let copy = self.device_copies.remove(&call.receiver);
+                    let held: Vec<Place> = copy.into_iter().chain(place).collect();
+                    if !held.is_empty() {
+                        let users = self.users_of(call.receiver);
+                        for place in held {
+                            self.places.give(place, self.commits, users.clone());
+                        }
                     }
-                    self.places.give(place, self.commits, users);
                 }
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a
                 // heap's resources keep the heap.
@@ -1937,7 +1983,11 @@ impl Backend for NewRuntime {
             let mut named = Vec::new();
             objects_named(&call.args, &mut named);
             self.indices.named(command_buffer, &named);
-            named.retain(|id| matches!(self.objects.get(id), Some(Object::Buffer(_, Some(_)))));
+            // The buffers with a place, or a device copy's or an aside's (two copies).
+            named.retain(|id| match self.objects.get(id) {
+                Some(Object::Buffer(_, place)) => place.is_some() || self.asides.has_two(*id),
+                _ => false,
+            });
             if !named.is_empty() {
                 self.users.entry(command_buffer).or_default().extend(named);
             }
@@ -2230,6 +2280,7 @@ impl Backend for NewRuntime {
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),
             ("over_copies", metrics.over_copies),
+            ("over_copy_bytes", metrics.over_copy_bytes),
             ("attachment_read_copies", metrics.attachment_read_copies),
             (
                 "attachment_read_copy_bytes",
@@ -2325,6 +2376,7 @@ impl Backend for NewRuntime {
         };
         Counters::from([
             ("blocks", gauges.blocks),
+            ("imports", gauges.imports),
             ("buffers", gauges.buffers),
             ("textures", gauges.textures),
             ("pipelines", gauges.pipelines),
@@ -2406,6 +2458,12 @@ impl Backend for NewRuntime {
         if self.managed == Some(ManagedCopies::Two) && self.device.has_unified_memory() {
             lines.push(self.seconds.line());
         }
+        lines.push(format!(
+            "no-copy imports {}: no-copy buffers made over host pages of the player's own, each \
+             imported as a block of its own ({} bytes in all); a texture over one is the \
+             runtime's counted copy (over_copies, over_copy_bytes)",
+            self.imported, self.imported_bytes
+        ));
         lines.push(self.asides.line());
         lines.push(self.places.line());
         lines.push(self.unwritten.line());

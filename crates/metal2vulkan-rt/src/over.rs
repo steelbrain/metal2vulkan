@@ -25,9 +25,9 @@
 //!   end barrier then reaches the host for a Shared buffer. A segment's end is a submission's
 //!   edge, so the next submission's leading copy reads what the image held.
 //!
-//! Each copy is counted (`Metrics::over_copies`, and its bytes in `Metrics::bytes_copied`). The
-//! tracking is by buffer: a write of any of a buffer's bytes makes every such texture over it
-//! stale.
+//! Each copy is counted (`Metrics::over_copies`, and its bytes in `Metrics::over_copy_bytes`
+//! and `Metrics::bytes_copied`). The tracking is by buffer: a write of any of a buffer's bytes
+//! makes every such texture over it stale.
 
 use crate::buffer::Buffer;
 use crate::counters::{Counters, Metric};
@@ -338,8 +338,7 @@ pub(crate) unsafe fn record_side(
                     &[copy.region],
                 ),
             }
-            counters.count(Metric::OverCopies);
-            counters.copied(copy.bytes);
+            counters.over_copied(copy.bytes);
         }
         device.cmd_pipeline_barrier2(
             command,

@@ -547,6 +547,19 @@ counted from 0), completes the work committed so far, reports as at the stream's
   On a device with unified memory the runtime keeps one copy anyway. The report's `managed` line says which form
   played and from what, counts the Managed buffers and the no-copy ones whose contents came from
   first use, not from create, and says where a two-copy recording played as one copy.
+- **No-copy buffers** (the new runtime): a buffer of
+  `newBufferWithBytesNoCopy:length:options:deallocator:`, or of `newBufferWithDescriptor:` with
+  `noCopy`, is made over zeroed host pages of the player's own, standing for the program's: its
+  length rounded up to the device's `minImportedHostPointerAlignment`, imported as a block of its
+  own (`Device::import_host_memory`), as the product imports the program's pages, and freed once
+  the runtime frees the import. Where the buffer plays with two copies, the import holds the copy
+  the CPU writes where the runtime keeps a GPU copy, and the copy shaders and textures reach where
+  the player keeps the second copy itself. A texture over such a buffer is the runtime's counted
+  copy, which each frame's `over_copies` and `over_copy_bytes` count. On a device that imports no
+  host memory a no-copy buffer stops the play with a refusal that says so. The report's `no-copy
+  imports` line counts the imports and their bytes. The stream records no no-copy buffer's host
+  address (section 5), so whether two of the program's shared pages is not known to the player;
+  its own never do.
 - **Announced bytes** (both runtimes' backends). On a stream whose header has bit 0 set (section
   6), a `synchronizeResource:` of a buffer played with two copies leaves the CPU's copy as the
   stream's writes made it, so the next `didModifyRange:` puts the stream's bytes into the GPU's

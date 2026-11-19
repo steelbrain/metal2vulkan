@@ -63,8 +63,6 @@ pub(crate) enum Metric {
     LoneSubmissionsAcrossQueues,
     /// [`Metrics::forced_flushes_across_queues`].
     ForcedFlushesAcrossQueues,
-    /// [`Metrics::over_copies`].
-    OverCopies,
     /// [`Metrics::allocations_freed`].
     AllocationsFreed,
     /// [`Metrics::submissions_during_frees`].
@@ -109,7 +107,6 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::GroupsBesideAnotherQueue,
     Metric::LoneSubmissionsAcrossQueues,
     Metric::ForcedFlushesAcrossQueues,
-    Metric::OverCopies,
     Metric::AllocationsFreed,
     Metric::SubmissionsDuringFrees,
     Metric::CaptureWaits,
@@ -270,6 +267,7 @@ struct Atomics {
     lone_submissions_across_queues: AtomicU64,
     forced_flushes_across_queues: AtomicU64,
     over_copies: AtomicU64,
+    over_copy_bytes: AtomicU64,
     attachment_read_copies: AtomicU64,
     attachment_read_copy_bytes: AtomicU64,
     allocations_freed: AtomicU64,
@@ -385,7 +383,6 @@ impl Counters {
             Metric::GroupsBesideAnotherQueue => &a.groups_beside_another_queue,
             Metric::LoneSubmissionsAcrossQueues => &a.lone_submissions_across_queues,
             Metric::ForcedFlushesAcrossQueues => &a.forced_flushes_across_queues,
-            Metric::OverCopies => &a.over_copies,
             Metric::AllocationsFreed => &a.allocations_freed,
             Metric::SubmissionsDuringFrees => &a.submissions_during_frees,
             Metric::CaptureWaits => &a.capture_waits,
@@ -490,6 +487,16 @@ impl Counters {
     /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
     pub(crate) fn copied(&self, bytes: u64) {
         self.atomics.bytes_copied.fetch_add(bytes, Relaxed);
+    }
+
+    /// One more copy between a texture over a buffer and its image of its own, of `bytes`
+    /// ([`Metrics::over_copies`], [`Metrics::over_copy_bytes`]), which count in
+    /// [`Metrics::bytes_copied`] too.
+    pub(crate) fn over_copied(&self, bytes: u64) {
+        let a = &self.atomics;
+        a.over_copies.fetch_add(1, Relaxed);
+        a.over_copy_bytes.fetch_add(bytes, Relaxed);
+        a.bytes_copied.fetch_add(bytes, Relaxed);
     }
 
     /// `copies` more copies of attachments' images into their shadows, of `bytes`
@@ -716,6 +723,7 @@ impl Counters {
             lone_submissions_across_queues: a.lone_submissions_across_queues.load(Relaxed),
             forced_flushes_across_queues: a.forced_flushes_across_queues.load(Relaxed),
             over_copies: a.over_copies.load(Relaxed),
+            over_copy_bytes: a.over_copy_bytes.load(Relaxed),
             attachment_read_copies: a.attachment_read_copies.load(Relaxed),
             attachment_read_copy_bytes: a.attachment_read_copy_bytes.load(Relaxed),
             allocations_freed: a.allocations_freed.load(Relaxed),
@@ -821,7 +829,7 @@ pub struct Metrics {
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
     /// between a texture over a buffer and its image of its own
-    /// ([`over_copies`](Self::over_copies)), and the copies of attachments' images into their
+    /// ([`over_copy_bytes`](Self::over_copy_bytes)), and the copies of attachments' images into their
     /// shadows ([`attachment_read_copy_bytes`](Self::attachment_read_copy_bytes)). A blit's own
     /// copy, and a synchronize's, is the program's and is not counted.
     pub bytes_copied: u64,
@@ -970,6 +978,8 @@ pub struct Metrics {
     /// buffer's bytes into the image, in the upload that leads a submission or after a command
     /// wrote the buffer, and the image back into the buffer after a command wrote the texture.
     pub over_copies: u64,
+    /// The bytes of those copies, which count in [`bytes_copied`](Self::bytes_copied) too.
+    pub over_copy_bytes: u64,
     /// Idle allocations the block-maker thread freed: one at a time, each once it had been idle,
     /// holding no live block, for 250 ms, whatever the device's queues were doing.
     pub allocations_freed: u64,

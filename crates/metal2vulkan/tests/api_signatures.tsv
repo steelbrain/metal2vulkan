@@ -2387,6 +2387,7 @@ field	metal2vulkan-rt::Metrics.lone_submissions_across_queues	pub lone_submissio
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
 field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64
 field	metal2vulkan-rt::Metrics.over_copies	pub over_copies: u64
+field	metal2vulkan-rt::Metrics.over_copy_bytes	pub over_copy_bytes: u64
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.private_long_reuses	pub private_long_reuses: u64

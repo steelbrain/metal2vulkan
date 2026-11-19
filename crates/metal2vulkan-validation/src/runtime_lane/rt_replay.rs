@@ -46,6 +46,10 @@
 //! - A buffer's linear texture (the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:
 //!   bytesPerImage:`) of a 2D descriptor plays as the public texture over the buffer, and one of a
 //!   2D array, whose slices Metal lays out itself, is refused.
+//! - Both no-copy creators (`newBufferWithBytesNoCopy:length:options:deallocator:`, and
+//!   `newBufferWithDescriptor:` with `noCopy`) make their buffers over host pages the player
+//!   imports: a texture over one is the runtime's counted copy (one copy of its 64 bytes), a blit
+//!   of the texture reads the stream's bytes, and the imports end with the device.
 //! - Buffers keep the slack of their recorded granule: two recorded at addresses of 32 KiB and
 //!   64 KiB granules take places that span their lengths rounded up to those granules, the slack
 //!   the places hold the sum of both.
@@ -995,6 +999,110 @@ fn a_linear_texture_over_a_buffer_plays_where_2d_and_is_refused_as_an_array() {
         }
         other => panic!("a linear 2D array's refusal: {other:?}"),
     }
+}
+
+/// Both no-copy creators make their buffers over imported host pages: a texture over one is the
+/// runtime's counted copy, which a blit of the texture reads the stream's bytes through, and the
+/// imports end with the device.
+#[test]
+fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
+    let dir = ScratchDir::new("rt-replay-no-copy").unwrap();
+    // An RGBA8Unorm 4 by 4 texture's rows, 16 bytes each, 256 bytes apart in the buffer.
+    let texels: Vec<u8> = (0..64).collect();
+    let mut pages = vec![0u8; 1024];
+    for (row, bytes) in texels.chunks(16).enumerate() {
+        pages[row * 256..][..16].copy_from_slice(bytes);
+    }
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // #3 Shared, no-copy, its bytes as the stream gives them: in writes.
+        let no_copy = [Value::Nil, Value::Uint(1024), Value::Uint(0), Value::Nil];
+        let selector = "newBufferWithBytesNoCopy:length:options:deallocator:";
+        w.call(selector, 1, 3, &no_copy, &[])?;
+        w.call(
+            "m2v.write",
+            3,
+            0,
+            &[Value::Uint(0), Value::Bytes(pages)],
+            &[],
+        )?;
+        // #4 the descriptor's no-copy buffer, which nothing reads.
+        let fields = [
+            ("length", Value::Uint(4096)),
+            ("options", Value::List(Vec::new())),
+            ("contents", Value::Nil),
+            ("noCopy", Value::Bool(true)),
+        ];
+        let descriptor = Value::Map(Vec::from(fields.map(|(key, value)| (key.into(), value))));
+        w.call("newBufferWithDescriptor:", 1, 4, &[descriptor], &[])?;
+        let keys = [
+            ("pixelFormat", 70),
+            ("width", 4),
+            ("height", 4),
+            ("usage", 1),
+        ];
+        w.call("m2v.textureDescriptor", 0, 5, &[uints(&keys)], &[])?;
+        let over = [Value::Object(5), Value::Uint(0), Value::Uint(256)];
+        w.call(
+            "newTextureWithDescriptor:offset:bytesPerRow:",
+            3,
+            6,
+            &over,
+            &[],
+        )?;
+        let made = [Value::Uint(64), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 7, &made, &[])?;
+        // The texture, packed into #7.
+        w.call("commandBuffer", 2, 8, &[], &[])?;
+        w.call("blitCommandEncoder", 8, 9, &[], &[])?;
+        let copy = [
+            Value::Object(6),
+            Value::Uint(0),
+            Value::Uint(0),
+            uints(&[("x", 0), ("y", 0), ("z", 0)]),
+            uints(&[("width", 4), ("height", 4), ("depth", 1)]),
+            Value::Object(7),
+            Value::Uint(0),
+            Value::Uint(16),
+            Value::Uint(64),
+        ];
+        let selector = "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:\
+                        toBuffer:destinationOffset:destinationBytesPerRow:\
+                        destinationBytesPerImage:";
+        w.call(selector, 9, 0, &copy, &[])?;
+        w.call("endEncoding", 9, 0, &[], &[])?;
+        w.call("commit", 8, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 8, 0, &[], &[])?;
+        let sum = Value::List(vec![Value::Bytes(Sha256::digest(&texels).to_vec())]);
+        w.call("m2v.check", 0, 0, &[Value::Object(7)], &[("sha256", sum)])?;
+        w.call("release", 6, 0, &[], &[])?;
+        w.call("release", 3, 0, &[], &[])
+    });
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let (report, ended) = Player::new(&mut backend).play(&mut reader);
+    let lines = backend.lines();
+    for line in report.lines().iter().chain(&lines) {
+        eprintln!("REPLAY no-copy {line}");
+    }
+    ended.unwrap();
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let imports = lines
+        .iter()
+        .find(|line| line.starts_with("no-copy imports "));
+    assert!(
+        imports.is_some_and(|line| line.starts_with("no-copy imports 2:")),
+        "{lines:?}"
+    );
+    // The texture's bytes into its image of its own, once.
+    let executed = &report.total.executed;
+    assert_eq!(executed["over_copies"], 1, "{executed:?}");
+    assert_eq!(executed["over_copy_bytes"], 64, "{executed:?}");
+    let ended = backend.end();
+    ended.result().unwrap();
+    assert!(ended.gauges.contains(&("imports", 0)), "{:?}", ended.gauges);
 }
 
 #[test]

@@ -172,9 +172,26 @@ mod on_device {
             let scratch = plain(name, &device, &texels(0));
             let queue = device.new_command_queue(4).expect("a queue");
             for round in 0..3 {
-                let before = copies(&device);
+                let before = device.counters().metrics();
                 run(name, &queue, |cb| blit(cb, &texture, &scratch));
-                assert_eq!(copies(&device) - before, 1, "{name}: round {round}");
+                let after = device.counters().metrics();
+                assert_eq!(
+                    after.over_copies - before.over_copies,
+                    1,
+                    "{name}: round {round}"
+                );
+                // The copy's bytes, the texture's texels, count in both byte metrics.
+                let bytes = TEXELS as u64;
+                assert_eq!(
+                    after.over_copy_bytes - before.over_copy_bytes,
+                    bytes,
+                    "{name}: round {round}: its bytes"
+                );
+                assert_eq!(
+                    after.bytes_copied - before.bytes_copied,
+                    bytes,
+                    "{name}: round {round}: its bytes copied"
+                );
                 assert!(
                     image(name, &scratch) == rows(&now, 0, pitch),
                     "{name}: round {round}: the image takes the host's bytes"
