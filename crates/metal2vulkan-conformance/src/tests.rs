@@ -2960,7 +2960,9 @@ fn a_notice_scoped_to_the_new_runtime_leaves_the_old_runtimes_site_its_one_row()
 /// **A site only Metal reached after a refusal beside it is folded under that refusal.** A row
 /// whose rate map we refused never reaches its labels or its later sites, so those are the
 /// refusal's and no divergence of their own; a site before the refusal, and a site of another row
-/// that refused nothing, still read as only Metal's.
+/// that refused nothing, still read as only Metal's. So for a refusal only ours holds, where
+/// Metal's row recorded the map's facts and no map site: Metal's sites after the last one the
+/// rows share before the refusal are the refusal's, and one before that shared site is not.
 #[test]
 fn a_site_only_metal_reached_after_a_refusal_is_that_refusal_s() {
     let uint = |word: u64| Observed::value(Value::Uint(word));
@@ -2984,6 +2986,21 @@ fn a_site_only_metal_reached_after_a_refusal_is_that_refusal_s() {
             vec![Node::leaf("first", uint(4)), Node::leaf("map", uint(5))],
         ),
         Node::branch("refused-nothing", vec![Node::leaf("x", uint(6))]),
+        Node::branch(
+            "refused-only-ours",
+            vec![
+                Node::leaf("facts", uint(7)),
+                Node::leaf("coordinates", uint(8)),
+            ],
+        ),
+        Node::branch(
+            "refused-after-shared",
+            vec![
+                Node::leaf("early", uint(9)),
+                Node::leaf("shared", uint(10)),
+                Node::leaf("facts", uint(11)),
+            ],
+        ),
     ]);
     let ours = Transcript::new(vec![
         Node::branch(
@@ -2995,6 +3012,11 @@ fn a_site_only_metal_reached_after_a_refusal_is_that_refusal_s() {
         ),
         Node::branch("missing-before", vec![Node::leaf("map", refused())]),
         Node::branch("refused-nothing", Vec::new()),
+        Node::branch("refused-only-ours", vec![Node::leaf("map", refused())]),
+        Node::branch(
+            "refused-after-shared",
+            vec![Node::leaf("shared", uint(10)), Node::leaf("map", refused())],
+        ),
     ]);
     let found = compare(&metal, &ours, &[], Offered::notices(&[]));
     let divergences: Vec<&str> = found
@@ -3004,13 +3026,22 @@ fn a_site_only_metal_reached_after_a_refusal_is_that_refusal_s() {
         .collect();
     assert_eq!(
         divergences,
-        ["case/missing-before/first", "case/refused-nothing/x"],
+        [
+            "case/missing-before/first",
+            "case/refused-nothing/x",
+            "case/refused-after-shared/early"
+        ],
         "{found:?}"
     );
     let refusals: Vec<&str> = found.refusals.iter().map(|at| at.path.as_str()).collect();
     assert_eq!(
         refusals,
-        ["case/refused-then-more/map", "case/missing-before/map"],
+        [
+            "case/refused-then-more/map",
+            "case/missing-before/map",
+            "case/refused-only-ours/map",
+            "case/refused-after-shared/map"
+        ],
         "{found:?}"
     );
 }

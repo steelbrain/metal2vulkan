@@ -447,6 +447,10 @@ impl Walk<'_> {
     /// forward over the refused site's later siblings and down into them, and never up: a site
     /// before the refusal, or one beside the site that holds it (another row of the case), still
     /// reads as only Metal's.
+    ///
+    /// A refusal only ours holds is a call of ours that refused where Metal's answered and went on
+    /// (a row's map, whose Metal row holds the map's facts instead). It stands where Metal's sites
+    /// after the last site the two rows share before it stand, so the fold starts there.
     fn node(&mut self, parent: &str, metal: &Node, ours: &Node, after_refusal: bool) -> bool {
         let path = if parent.is_empty() {
             metal.name.clone()
@@ -476,8 +480,17 @@ impl Walk<'_> {
                 ));
             }
         }
+        let folded_from = (ours.children.iter())
+            .position(|child| child.observed.value.is_error() && metal.child(&child.name).is_none())
+            .map(|refused| {
+                let before = &ours.children[..refused];
+                (metal.children.iter())
+                    .rposition(|child| before.iter().any(|shared| shared.name == child.name))
+                    .map_or(0, |last| last + 1)
+            });
         let mut after_refusal = after_refusal;
-        for child in &metal.children {
+        for (at, child) in metal.children.iter().enumerate() {
+            after_refusal |= folded_from.is_some_and(|from| at >= from);
             match ours.child(&child.name) {
                 Some(theirs) => after_refusal |= self.node(&path, child, theirs, after_refusal),
                 None if self.stopped || after_refusal => {}
