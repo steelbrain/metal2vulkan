@@ -11,7 +11,8 @@ use crate::replay::value::Value;
 use metal2vulkan::metal::{BarrierScope, DispatchType, IndexType, RenderStages, ResourceUsage};
 use metal2vulkan_runtime::{
     BlitCommandEncoder, BlitOption, Buffer, ComputeCommandEncoder, DrawPrimitiveType,
-    RenderCommandEncoder, ResourceOptions, ResourceRef, ScissorRect, Texture, Viewport,
+    RenderCommandEncoder, ResourceOptions, ResourceRef, ScissorRect, StoreAction, Texture,
+    Viewport,
 };
 use std::ops::Range;
 
@@ -496,6 +497,29 @@ impl OldRuntime {
                 let samplers: Vec<_> = samplers.iter().map(Option::as_ref).collect();
                 self.render(id)
                     .set_fragment_sampler_states(&samplers, None, at)
+            }
+            "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:" => {
+                let samplers = self.samplers(call, 0)?;
+                let clamps = |at: usize| -> Result<Vec<f32>, PlayError> {
+                    let clamps = list(call, at)?.iter().map(|value| match value.as_f64() {
+                        Some(clamp) => Ok(clamp as f32),
+                        None => Err(refuse(call, format!("{value} is no clamp"))),
+                    });
+                    let clamps = clamps.collect::<Result<Vec<_>, _>>()?;
+                    match clamps.len() == samplers.len() {
+                        true => Ok(clamps),
+                        false => Err(refuse(call, "clamps of another count than the samplers")),
+                    }
+                };
+                let (mins, maxes) = (clamps(1)?, clamps(2)?);
+                let at = first(call, 3, samplers.len())?;
+                let samplers: Vec<_> = samplers.iter().map(Option::as_ref).collect();
+                (self.render(id)).set_fragment_sampler_states(&samplers, Some((&mins, &maxes)), at)
+            }
+            "setColorStoreAction:atIndex:" => {
+                let action = StoreAction::from_raw(uint(call, 0)?).map_err(failed(call))?;
+                let at = index(call, 1)?;
+                self.render(id).set_color_store_action(action, at)
             }
             "setViewport:" => {
                 let known = ["originX", "originY", "width", "height", "znear", "zfar"];

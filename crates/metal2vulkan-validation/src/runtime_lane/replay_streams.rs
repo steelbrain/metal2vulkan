@@ -18,6 +18,8 @@
 //! - A view made through a swizzle, by the public call and by Apple's private one at a resource
 //!   index, is sampled through it.
 //! - A blit's generated mipmaps fill a texture's levels below its first.
+//! - A store action an encoder sets over its pass's unknown one stores the pass's clear, with
+//!   fragment samplers bound with LOD clamps.
 //!
 //! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
 //! their own beside the stream's.
@@ -987,5 +989,68 @@ fn a_blit_s_generated_mipmaps_fill_the_levels_below_the_first() {
         for check in &report.checks {
             assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
         }
+    });
+}
+
+/// A pass whose colour attachment's store action is unknown until its encoder sets it: the
+/// encoder binds two fragment samplers with LOD clamps, sets the store action to store, and the
+/// cleared green is what the texture holds after.
+#[test]
+fn an_encoder_s_store_action_and_clamped_samplers_play() {
+    let dir = ScratchDir::new("replay-store-action").unwrap();
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 3, &[render_target(vec![])], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 4, &[Value::Object(3)], &[])?;
+        for sampler in [5, 6] {
+            let plain = [Value::Map(Vec::new())];
+            w.call("newSamplerStateWithDescriptor:", 1, sampler, &plain, &[])?;
+        }
+        w.call("MTLRenderPassDescriptor.new", 0, 7, &[], &[])?;
+        let clear = Value::Map(
+            [("red", 0.0), ("green", 1.0), ("blue", 0.0), ("alpha", 1.0)]
+                .map(|(key, value)| (key.into(), Value::F64(value)))
+                .to_vec(),
+        );
+        // Load action clear (2), store action unknown (4).
+        let Value::Map(mut color) = uints(&[("level", 0), ("loadAction", 2), ("storeAction", 4)])
+        else {
+            unreachable!("a map");
+        };
+        color.push(("texture".into(), Value::Object(4)));
+        color.push(("resolveTexture".into(), Value::Nil));
+        color.push(("clearColor".into(), clear));
+        let args = [Value::Uint(0), Value::Map(color)];
+        w.call("m2v.setColorAttachment", 7, 0, &args, &[])?;
+        w.call("commandBuffer", 2, 8, &[], &[])?;
+        let pass = [Value::Object(7)];
+        w.call("renderCommandEncoderWithDescriptor:", 8, 9, &pass, &[])?;
+        let clamped = [
+            Value::List(vec![Value::Object(5), Value::Object(6)]),
+            Value::List(vec![Value::F64(1.0), Value::F64(0.0)]),
+            Value::List(vec![Value::F64(2.0), Value::F64(0.5)]),
+            uints(&[("location", 1), ("length", 2)]),
+        ];
+        let selector = "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:";
+        w.call(selector, 9, 0, &clamped, &[])?;
+        // Store (1) at colour attachment 0.
+        let store = [Value::Uint(1), Value::Uint(0)];
+        w.call("setColorStoreAction:atIndex:", 9, 0, &store, &[])?;
+        w.call("endEncoding", 9, 0, &[], &[])?;
+        w.call("commit", 8, 0, &[], &[])?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(4)],
+            &[("sha256", sha(&green))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("store-action", device, &path);
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     });
 }
