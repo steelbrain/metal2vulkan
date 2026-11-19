@@ -949,6 +949,8 @@ pub(crate) mod on_device {
                 ),
                 "{name}"
             );
+            // A scheduled handler runs after its command buffer's status reads `Scheduled`.
+            within(name, || log.lines().len() == 2);
             assert_eq!(
                 log.lines(),
                 [
@@ -986,6 +988,7 @@ pub(crate) mod on_device {
                 ),
                 "{name}: their GPU waits, on the semaphore, still hold them"
             );
+            within(name, || log.lines().len() == 6);
             assert_eq!(
                 log.lines()[4..],
                 ["set scheduled Scheduled", "set next scheduled Scheduled"],
