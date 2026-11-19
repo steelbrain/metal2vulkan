@@ -225,11 +225,21 @@ pub enum ConsumerObject {
     /// archives in its own bundle, and the device's archive holds only each added function's
     /// lookup key, so nothing of an archive reaches the runtime.
     BinaryArchive,
+    /// `MTLResource`'s `label`, `device`, `cpuCacheMode`, `hazardTrackingMode`,
+    /// `resourceOptions`, `heap`, `heapOffset` and `isAliasable`: the runtime's buffers and
+    /// textures keep none of them, and its consumer answers each from what it holds. `label`
+    /// echoes the label the program set; `cpuCacheMode`, `hazardTrackingMode` and
+    /// `resourceOptions` echo the options or descriptor the program made the resource with, each
+    /// default resolved by the consumer; `device` and `heap` are the consumer's own objects, the
+    /// device it made the resource on and the heap it placed it in; `heapOffset` is where the
+    /// consumer's own placement put the resource, and `isAliasable` is what the consumer's own
+    /// record of `makeAliasable` holds. A resource's `storageMode` is the runtime's, and not this.
+    ResourceGetters,
 }
 
 impl ConsumerObject {
     /// Every object, in the order the count line names them.
-    pub const ALL: [ConsumerObject; 9] = [
+    pub const ALL: [ConsumerObject; 10] = [
         ConsumerObject::RenderPassDescriptor,
         ConsumerObject::Heap,
         ConsumerObject::DispatchType,
@@ -239,6 +249,7 @@ impl ConsumerObject {
         ConsumerObject::Label,
         ConsumerObject::Device,
         ConsumerObject::BinaryArchive,
+        ConsumerObject::ResourceGetters,
     ];
 
     /// The name a row states in its parentheses.
@@ -261,6 +272,10 @@ impl ConsumerObject {
             ConsumerObject::Label => "label",
             ConsumerObject::Device => "device",
             ConsumerObject::BinaryArchive => "MTLBinaryArchive, binaryArchives",
+            ConsumerObject::ResourceGetters => {
+                "label, device, cpuCacheMode, hazardTrackingMode, resourceOptions, heap, \
+                 heapOffset, isAliasable"
+            }
         }
     }
 

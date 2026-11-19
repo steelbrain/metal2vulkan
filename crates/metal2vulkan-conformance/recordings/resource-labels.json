@@ -144,6 +144,14 @@
                       ]
                     },
                     {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    },
+                    {
                       "name": "labelled/0-0",
                       "observed": {
                         "value": "absent"
@@ -508,6 +516,14 @@
                       ]
                     },
                     {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    },
+                    {
                       "name": "labelled/0-0",
                       "observed": {
                         "value": "absent"
@@ -870,6 +886,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     },
                     {
                       "name": "labelled/0-0",
@@ -1492,6 +1516,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     },
                     {
                       "name": "labelled/0-0",

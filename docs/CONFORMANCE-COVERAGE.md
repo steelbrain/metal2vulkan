@@ -542,7 +542,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `NewRuntimeAccepted`, `WithoutCompression`, `NewRuntimeNotice` |
 | modules forbidding a re-record | 8 |
-| `Side` methods (the suite's whole device vocabulary) | 131 |
+| `Side` methods (the suite's whole device vocabulary) | 132 |
 | `Side` methods the Metal leg reaches an SDK item through | 126 |
 | SDK items a case's Metal leg reaches, median | 55 |
 | the same, least and most | 0 and 216 |

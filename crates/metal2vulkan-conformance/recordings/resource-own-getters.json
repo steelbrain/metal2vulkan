@@ -142,6 +142,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -236,6 +244,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -330,6 +346,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -424,6 +448,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -518,6 +550,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -612,6 +652,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -706,6 +754,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -800,6 +856,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -894,6 +958,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -988,6 +1060,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
                     }
                   ]
                 },
@@ -1082,6 +1162,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
                     }
                   ]
                 },
@@ -1176,6 +1264,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
                     }
                   ]
                 },
@@ -1270,6 +1366,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
                     }
                   ]
                 },
@@ -1364,6 +1468,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
                     }
                   ]
                 },
@@ -1458,6 +1570,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
                     }
                   ]
                 },
@@ -1552,6 +1672,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
                     }
                   ]
                 },
@@ -1646,6 +1774,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -1740,6 +1876,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -1834,6 +1978,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -1928,6 +2080,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },
@@ -2022,6 +2182,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     }
                   ]
                 },

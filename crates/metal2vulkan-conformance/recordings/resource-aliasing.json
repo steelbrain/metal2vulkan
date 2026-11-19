@@ -144,6 +144,14 @@
                       ]
                     },
                     {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    },
+                    {
                       "name": "heap-before",
                       "observed": {
                         "value": "absent"
@@ -505,6 +513,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     },
                     {
                       "name": "heap-before",
@@ -870,6 +886,14 @@
                       ]
                     },
                     {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    },
+                    {
                       "name": "heap-before",
                       "observed": {
                         "value": "absent"
@@ -1231,6 +1255,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
                     },
                     {
                       "name": "heap-before",
@@ -1596,6 +1628,14 @@
                       ]
                     },
                     {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    },
+                    {
                       "name": "make-aliasable",
                       "observed": {
                         "value": {
@@ -1785,6 +1825,14 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "name": "storage-mode",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
                     },
                     {
                       "name": "make-aliasable",

@@ -11,7 +11,7 @@ device against the floor below.
 
 ## What the consumer implements
 
-Nine of Metal's objects and getters have no counterpart here by design. The consumer implements
+Ten of Metal's objects and getters have no counterpart here by design. The consumer implements
 them over this crate's items:
 
 - `MTLRenderPassDescriptor`'s read-back of its own fields. `RenderPassDescriptor` is a value the
@@ -39,6 +39,15 @@ them over this crate's items:
   the consumer knows which device it made each on.
 - `MTLBinaryArchive` and a pipeline descriptor's `binaryArchives`. The consumer keeps its archives
   in its own bundle; nothing of an archive reaches this crate.
+- `MTLResource`'s `label`, `device`, `cpuCacheMode`, `hazardTrackingMode`, `resourceOptions`,
+  `heap`, `heapOffset` and `isAliasable`. No buffer or texture here keeps any of them, and the
+  consumer answers each from what it holds: `label` echoes the label the program set;
+  `cpuCacheMode`, `hazardTrackingMode` and `resourceOptions` echo the options or descriptor the
+  program made the resource with, each default resolved by the consumer; `device` and `heap` are
+  the consumer's own objects, the device it made the resource on and the heap it placed it in;
+  `heapOffset` is where the consumer's own placement put the resource, and `isAliasable` is what
+  the consumer's own record of `makeAliasable` holds. A resource's `storageMode` is this crate's:
+  a texture's descriptor states it, and a buffer's is its block's class.
 
 ## Instance and device
 
