@@ -247,7 +247,7 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
                     .unwrap_or_else(|error| panic!("{name}: {format:?}: {error}"));
                 cases.push((format!("{format:?}"), texture));
             }
-            let parent = (device.new_texture(&descriptor(PixelFormat::RGBA8Unorm), None))
+            let parent = (device.new_texture(&descriptor(PixelFormat::RGBA8Unorm), Some(next())))
                 .unwrap_or_else(|error| panic!("{name}: RGBA8Unorm: {error}"));
             let view = (parent.new_texture_view(
                 PixelFormat::RGBA8UnormSRGB,
