@@ -6,7 +6,8 @@
 //! a dispatch compared.
 
 use super::addresses::AddressMap;
-use super::covers::{Covers, SlotStage};
+use super::covers::{self, Covers, SlotStage};
+use super::dumps;
 use super::heaps::{
     heap_size, placement_heap, placement_offset, places_buffer, places_texture, recorded_range,
     relay, HeapSplit, Layout, Overlaps, Placements,
@@ -15,9 +16,11 @@ use super::stream::{Call, StreamError, StreamReader};
 use super::texwrites::TexWrites;
 use super::value::{Hash, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::Write;
+use std::ops::RangeInclusive;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// A runtime's counters, cumulative, by name.
@@ -231,6 +234,8 @@ pub enum PlayError {
         made: Option<u64>,
         why: String,
     },
+    /// A command buffer's dump could not be written ([`Player::dumping`]).
+    Dump(String),
 }
 
 impl fmt::Display for PlayError {
@@ -240,6 +245,7 @@ impl fmt::Display for PlayError {
             PlayError::Refused { selector, why } => write!(f, "refused {selector}: {why}"),
             PlayError::Runtime { selector, error } => write!(f, "{selector}: {error}"),
             PlayError::Invalid(why) => write!(f, "invalid stream: {why}"),
+            PlayError::Dump(why) => write!(f, "dump: {why}"),
             PlayError::NotedWord {
                 target,
                 offset,
@@ -989,6 +995,22 @@ pub struct Player<'b, B: Backend> {
     /// The runtime's size of each texture the stream places in a placement heap, read ahead, by
     /// the texture and the position of the call that places it.
     placed_sizes: HashMap<(u64, u64), u64>,
+    /// The command buffers whose buffers the play writes out as each completes (`dumping`).
+    dump: Option<Dump>,
+}
+
+/// A play's dump of command buffers ([`Player::dumping`]): which, where, and what each named.
+struct Dump {
+    command_buffers: RangeInclusive<u64>,
+    dir: PathBuf,
+    /// The live buffers.
+    buffers: HashSet<u64>,
+    /// Each encoder a listed command buffer made: that command buffer.
+    encoders: HashMap<u64, u64>,
+    /// The buffers each listed command buffer's encoders named, until it completes.
+    named: HashMap<u64, BTreeSet<u64>>,
+    /// The listed command buffers that completed and are not yet written out.
+    completed: Vec<u64>,
 }
 
 /// `now` past `base`, key by key.
@@ -1200,6 +1222,7 @@ impl<'b, B: Backend> Player<'b, B> {
             covers: Covers::default(),
             receivers: HashSet::new(),
             placed_sizes: HashMap::new(),
+            dump: None,
         }
     }
 
@@ -1226,6 +1249,23 @@ impl<'b, B: Backend> Player<'b, B> {
         self
     }
 
+    /// The player that, once each command buffer whose stream id lies in `command_buffers`
+    /// completed, writes every buffer its encoders named into `dir`, with the ranges of it the
+    /// cover rule held covered then (`dumps.rs`): the per-command-buffer compare of two plays
+    /// ([`compare_dumps`](super::compare_dumps)) reads them. A listed command buffer's buffers are
+    /// read after the wait that saw it complete, before the next call plays.
+    pub fn dumping(mut self, command_buffers: RangeInclusive<u64>, dir: PathBuf) -> Self {
+        self.dump = Some(Dump {
+            command_buffers,
+            dir,
+            buffers: HashSet::new(),
+            encoders: HashMap::new(),
+            named: HashMap::new(),
+            completed: Vec::new(),
+        });
+        self
+    }
+
     /// Play every call of `stream`; the report holds what ran, whether or not it all did.
     pub fn play(mut self, stream: &mut StreamReader) -> (Report, Result<(), PlayError>) {
         let start = self.baseline.clone();
@@ -1236,6 +1276,7 @@ impl<'b, B: Backend> Player<'b, B> {
         let result = self.read_ahead(stream);
         let result = result.and_then(|()| self.all(stream, &mut left_out));
         let ended = result.and_then(|()| self.finish());
+        let ended = ended.and_then(|()| self.dump_completed(&mut left_out));
         let ended = ended.and_then(|()| self.compare(stream, &mut left_out));
         let now = self.backend.counters();
         let mut executed = grown(&now, &start);
@@ -1285,6 +1326,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 *self.fixed.entry(key).or_default() += 1;
             }
             self.compare(stream, left_out)?;
+            self.dump_completed(left_out)?;
             if (self.last_frame).is_some_and(|last| self.report.frames.len() > last) {
                 break;
             }
@@ -1642,10 +1684,72 @@ impl<'b, B: Backend> Player<'b, B> {
             "release" => {
                 self.texwrites.released(call.receiver);
                 self.covers.released(call.receiver);
+                if let Some(dump) = &mut self.dump {
+                    dump.buffers.remove(&call.receiver);
+                }
                 self.release(call.receiver)
             }
             _ => self.make(stream, call),
         }
+    }
+
+    /// What a dump (`dumping`) keeps of `call`, played: a buffer it made, an encoder a listed
+    /// command buffer made, and the buffers such an encoder's call names.
+    fn dump_saw(&mut self, call: &Call) {
+        let Some(dump) = &mut self.dump else {
+            return;
+        };
+        let selector = &*call.selector;
+        let buffer = selector.starts_with("newBuffer") || selector == "m2v.newBufferInBlock";
+        if call.result != 0 && buffer {
+            dump.buffers.insert(call.result);
+        }
+        let listed = match self.kinds.get(&call.receiver) {
+            Some(Kind::CommandBuffer) => dump.command_buffers.contains(&call.receiver),
+            _ => false,
+        };
+        let command_buffer = match listed {
+            true => Some(call.receiver),
+            false => dump.encoders.get(&call.receiver).copied(),
+        };
+        let Some(command_buffer) = command_buffer else {
+            return;
+        };
+        if call.result != 0 {
+            dump.encoders.insert(call.result, command_buffer);
+        }
+        let mut objects = Vec::new();
+        covers::named(&call.args, &mut objects);
+        let named = dump.named.entry(command_buffer).or_default();
+        named.extend(objects.into_iter().filter(|o| dump.buffers.contains(o)));
+    }
+
+    /// Write out the listed command buffers that completed (`dumping`): each buffer they named,
+    /// read now, and its covered ranges now.
+    fn dump_completed(&mut self, left_out: &mut Counters) -> Result<(), PlayError> {
+        let Some(dump) = &mut self.dump else {
+            return Ok(());
+        };
+        let dir = dump.dir.clone();
+        let completed: Vec<u64> = dump.completed.drain(..).collect();
+        let mut buffers = Vec::new();
+        for command_buffer in completed {
+            dump.encoders.retain(|_, of| *of != command_buffer);
+            let named = dump.named.remove(&command_buffer).unwrap_or_default();
+            buffers.extend(named.into_iter().map(|object| (command_buffer, object)));
+        }
+        for (command_buffer, object) in buffers {
+            let covered = self.covers.ranges(object);
+            let bytes = self.uncounted(left_out, |player| player.read_back(object));
+            let bytes = bytes.as_deref().map_err(|error| error.to_string());
+            dumps::write(&dir, command_buffer, object, bytes, &covered).map_err(|error| {
+                PlayError::Dump(format!(
+                    "{}: cb #{command_buffer} #{object}: {error}",
+                    dir.display()
+                ))
+            })?;
+        }
+        Ok(())
     }
 
     /// The count `call` adds once played, where it is an encoder's draw or dispatch.
@@ -1782,6 +1886,7 @@ impl<'b, B: Backend> Player<'b, B> {
             self.receivers.insert(resolved.receiver);
         }
         self.track(&resolved);
+        self.dump_saw(&resolved);
         let size = self.placed_sizes.remove(&(resolved.result, self.position));
         let backend = &*self.backend;
         let writes = |pipeline, stage| backend.texture_writes(pipeline, stage);
@@ -2427,6 +2532,11 @@ impl<'b, B: Backend> Player<'b, B> {
             }
         }
         self.committed.retain(|id| !ready.contains(id));
+        if let Some(dump) = &mut self.dump {
+            let named = &dump.named;
+            dump.completed
+                .extend(ready.iter().filter(|id| named.contains_key(id)));
+        }
         let now = self.counters();
         let executed = grown(&now, &self.baseline);
         let executed = match split {

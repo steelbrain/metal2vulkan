@@ -4,6 +4,7 @@
 mod addresses;
 mod args;
 mod covers;
+mod dumps;
 mod heaps;
 mod new_runtime;
 mod old_runtime;
@@ -15,6 +16,7 @@ mod translator;
 mod value;
 
 pub use covers::SlotStage;
+pub use dumps::{compare_dumps, Comparison, Difference};
 pub use heaps::HeapSplit;
 pub use new_runtime::{Ended, ManagedCopies, NewRuntime};
 pub use old_runtime::OldRuntime;

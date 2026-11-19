@@ -32,6 +32,17 @@
 //! to the end; ...`. The exit status is 0 for `ok`, 1 for a play that stopped, 2 for a harness
 //! failure (a bad command line, no device, an unreadable stream or sidecar) and 3 for `ids`.
 //!
+//! With `--dump-command-buffers FIRST..LAST --dump-dir DIR`, the play also writes into `DIR`, once
+//! each command buffer whose stream id lies in `FIRST..=LAST` completed, every buffer its encoders
+//! named, with the ranges of it the cover rule held covered then (`docs/REPLAY-STREAM.md`, section
+//! 10).
+//!
+//! `command-replay compare-dumps --a DIR --b DIR` compares two plays' dumps word by word, leaving
+//! out the words either play held covered, and prints a line per buffer that differs outside every
+//! cover, per dump only one play has and per dump a play could not read, then a summary ending
+//! `agree` or `DIFFER`. The exit status is 0 where they agree, 1 where they differ, 2 for a bad
+//! command line or an unreadable dump.
+//!
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
 //! then `cut SEGMENT OFFSET` where the last segment ends in a record cut short.
 //!
@@ -46,17 +57,20 @@ use metal2vulkan_runtime::{DeviceOptions, ShaderCacheOptions};
 use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
-    display_library, recording_range, segments, Backend, ManagedCopies, NewRuntime, OldRuntime,
-    PlayError, Player, RangeSource, RecordingRange, StreamError, StreamReader, Value,
+    compare_dumps, display_library, recording_range, segments, Backend, ManagedCopies, NewRuntime,
+    OldRuntime, PlayError, Player, RangeSource, RecordingRange, StreamError, StreamReader, Value,
     FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
-                     [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no]\n       \
+                     [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
+                     [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
+                     command-replay compare-dumps --a DIR --b DIR\n       \
                      command-replay dump \
                      --stream FILE\n       command-replay shapes --stream FILE";
 
@@ -68,6 +82,7 @@ fn main() {
             with_options(&args[1..], &required, play)
         }
         Some("dump") => with_options(&args[1..], &["stream"], dump),
+        Some("compare-dumps") => with_options(&args[1..], &["a", "b"], compare),
         Some("shapes") => with_options(&args[1..], &["stream"], shapes),
         _ => {
             eprintln!("{USAGE}");
@@ -108,6 +123,27 @@ fn options(args: &[String], required: &[&str]) -> Result<BTreeMap<String, String
         }
     }
     Ok(out)
+}
+
+/// `compare-dumps`: two plays' dumps compared, a line each, then the summary; 0 where they agree,
+/// 1 where they differ, 2 where a dump cannot be read.
+fn compare(options: &BTreeMap<String, String>) -> i32 {
+    let (a, b) = (PathBuf::from(&options["a"]), PathBuf::from(&options["b"]));
+    match compare_dumps(&a, &b) {
+        Ok(comparison) => {
+            for line in comparison.lines() {
+                println!("{line}");
+            }
+            match comparison.agrees() {
+                true => 0,
+                false => 1,
+            }
+        }
+        Err(error) => {
+            eprintln!("command-replay: compare-dumps: {error}");
+            2
+        }
+    }
 }
 
 fn reader(options: &BTreeMap<String, String>) -> Result<StreamReader, StreamError> {
@@ -351,6 +387,29 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         }
     };
     let until = range.last_frame(past, until);
+    let dump = match (options.get("dump-command-buffers"), options.get("dump-dir")) {
+        (None, None) => None,
+        (Some(listed), Some(dir)) => {
+            let parsed = listed.split_once("..").and_then(|(first, last)| {
+                Some(first.parse::<u64>().ok()?..=last.parse::<u64>().ok()?)
+            });
+            let Some(command_buffers) = parsed else {
+                report.line(&format!(
+                    "error dump-command-buffers: {listed} is no FIRST..LAST"
+                ));
+                return 2;
+            };
+            if let Err(error) = std::fs::create_dir_all(dir) {
+                report.line(&format!("error dump-dir: {dir}: {error}"));
+                return 2;
+            }
+            Some((command_buffers, PathBuf::from(dir)))
+        }
+        _ => {
+            report.line("error dump: --dump-command-buffers and --dump-dir go together");
+            return 2;
+        }
+    };
     // The first line says which mode ran: a timing table never comes from a snapshotting play
     // unnoticed.
     let mode = match snapshots {
@@ -375,7 +434,12 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             if let Some(metallib) = display {
                 backend = backend.with_display_library(metallib);
             }
-            run(&mut backend, &mut reader, &mut report, snapshots, until)
+            run(
+                &mut backend,
+                &mut reader,
+                &mut report,
+                (snapshots, until, dump),
+            )
         }
         Some("rt") => {
             let mut backend = match open_rt(device_type, cache) {
@@ -395,7 +459,12 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                     return 2;
                 }
             };
-            let code = run(&mut backend, &mut reader, &mut report, snapshots, until);
+            let code = run(
+                &mut backend,
+                &mut reader,
+                &mut report,
+                (snapshots, until, dump),
+            );
             // The device ends here, not in `exit()`, where the driver's own exit teardown would
             // run beside the runtime's threads. Its gauges read after it dropped go out as the
             // matrix's lines, which the matrix's zero-at-drop rule reads.
@@ -468,13 +537,16 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
     ))
 }
 
-/// Play `reader` through `backend` into `report`: the exit status.
+/// The command buffers a play dumps and where (`--dump-command-buffers`, `--dump-dir`).
+type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
+
+/// Play `reader` through `backend` into `report`, taking snapshots or not, to the last frame where
+/// one is given, dumping the command buffers where asked: the exit status.
 fn run<B: Backend>(
     backend: &mut B,
     reader: &mut StreamReader,
     report: &mut ReportFile,
-    snapshots: bool,
-    until: Option<usize>,
+    (snapshots, until, dump): (bool, Option<usize>, Dumped),
 ) -> i32 {
     let player = Player::new(backend).with_frame_lines(&mut *report);
     let player = match snapshots {
@@ -483,6 +555,10 @@ fn run<B: Backend>(
     };
     let player = match until {
         Some(last) => player.until_frame(last),
+        None => player,
+    };
+    let player = match dump {
+        Some((command_buffers, dir)) => player.dumping(command_buffers, dir),
         None => player,
     };
     let (played, ended) = player.play(reader);

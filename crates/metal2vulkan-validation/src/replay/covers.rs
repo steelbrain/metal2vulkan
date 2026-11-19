@@ -111,6 +111,13 @@ impl Covers {
             .is_some_and(|ranges| !ranges.is_empty())
     }
 
+    /// The covered ranges of `object` (a view: its texture), from its start, as the rule holds them
+    /// now: what a dump's compare leaves out (`dumps.rs`).
+    pub(super) fn ranges(&self, object: u64) -> Vec<(u64, u64)> {
+        let object = self.base_of(object);
+        self.covered.get(&object).cloned().unwrap_or_default()
+    }
+
     /// Whether any of the `length` bytes at `offset` of `object` is covered.
     pub(super) fn meets(&self, object: u64, offset: u64, length: u64) -> bool {
         let end = offset.saturating_add(length);

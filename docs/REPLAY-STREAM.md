@@ -953,3 +953,20 @@ also writes `error teardown: WHAT`. The old runtime's counts end with its device
 print no such line. The exit status is 0 for `ok`, 1 for a run that stopped or an `ok` followed
 by `error teardown`, 2 for a harness failure (a bad command line or an unreadable stream) and 3
 for `ids`, a run that played to the end.
+
+With `--dump-command-buffers FIRST..LAST --dump-dir DIR`, the player also writes, once each
+command buffer whose stream id lies in `FIRST..=LAST` completed (a split command buffer's parts by
+their own ids), every buffer its encoders named, read after the wait that saw the command buffer
+complete and before the next call plays: `cbC-objO.bin` its bytes, `cbC-objO.cover` the ranges of
+it covered then (as above, `start..end` byte offsets joined by commas, or `-`), and
+`cbC-objO.unread` in place of the bytes where the backend could not read it. `command-replay
+compare-dumps --a DIR --b DIR` compares two plays' dumps word by word (4 bytes), leaving out a word
+wholly inside a range either play held covered (the old runtime answers no slot access, so its
+plays cover less), and prints `differs cb #C obj #O: N words outside every cover, the first word
+W; M covered; lengths A and B` for each buffer that differs outside every cover, `only in a|b:
+cbC-objO` for a dump one play lacks, `unread in a|b: cbC-objO: WHY`, then `compared N buffers: D
+differ, U words outside every cover, M covered; O dumps in one play only, R unread: agree|DIFFER`.
+Its exit status is 0 for `agree`, 1 for `DIFFER` and 2 for a bad command line or an unreadable
+dump. This compare says whether two plays of a range of command buffers agree; a whole-object
+checksum does not, as a buffer partly under a cover would differ under it and a difference outside
+the cover would show only as the same mismatch.

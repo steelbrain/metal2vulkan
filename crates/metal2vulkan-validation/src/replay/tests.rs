@@ -3,6 +3,7 @@
 
 use super::addresses::AddressMap;
 use super::covers::SlotStage;
+use super::dumps::{compare_dumps, Difference};
 use super::heaps::HeapSplit;
 use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
@@ -553,7 +554,11 @@ impl Backend for Kept {
         if let Some(address) = made.address {
             self.bases.insert(call.result, address);
         }
-        if &*call.selector == "newBufferWithLength:options:" {
+        let buffer = [
+            "newBufferWithLength:options:",
+            "newBufferWithLength:options:offset:",
+        ];
+        if buffer.contains(&&*call.selector) {
             let length = call.args[0].as_uint().unwrap() as usize;
             self.memory.insert(call.result, vec![0; length]);
         }
@@ -2691,4 +2696,146 @@ fn a_surface_s_receiver_buffer_is_not_compared() {
     assert!(lines
         .iter()
         .any(|l| l.starts_with("check #2 ") && l.ends_with(" receiver")));
+}
+
+/// A play of `build` on `backend` that dumps command buffers 20 to 29 into `dir`.
+fn dumped(
+    backend: &mut Kept,
+    dir: &std::path::Path,
+    build: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
+) -> (Report, Result<(), PlayError>) {
+    let streams = ScratchDir::new("replay-dumped").unwrap();
+    let path = written(&streams, "s.m2vr", build);
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let player = Player::new(backend).dumping(20..=29, dir.to_path_buf());
+    player.play(&mut reader)
+}
+
+/// The dump tests' play of `bytes` into buffer #3 (0x2000 bytes at offset 0 of a placement heap,
+/// with a 0x1000-byte texture #5 at offset 0 too), into `dir`: command buffer #20 binds the
+/// buffer, then dispatches a state that writes the texture's slot, which covers the buffer's first
+/// 0x1000 bytes. Where `rebound`, the encoder binds the buffer again after the dispatch: a binding
+/// counts as a write, so the buffer's last write follows the cover, and the cover is void.
+fn play_covered(dir: &std::path::Path, bytes: Vec<u8>, rebound: bool) {
+    let mut kept = Kept::default();
+    kept.heap_answers.insert(4, (0x1000, 0x1000));
+    kept.kernel_writes.insert(9, vec![0]);
+    let (_, ended) = dumped(&mut kept, dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newHeapWithDescriptor:", 1, 2, &heap_of(0x1_0000, 1), &[])?;
+        let buffer = [Value::Uint(0x2000), Value::Uint(0), Value::Uint(0)];
+        w.call("newBufferWithLength:options:offset:", 2, 3, &buffer, &[])?;
+        w.call("m2v.textureDescriptor", 0, 4, &[map(&[])], &[])?;
+        let texture = [Value::Object(4), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 2, 5, &texture, &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        w.call("newComputePipelineStateWithFunction:error:", 1, 9, &[], &[])?;
+        let written = [Value::Uint(0), Value::Bytes(bytes)];
+        w.call("m2v.write", 3, 0, &written, &[])?;
+        w.call("commandBuffer", 6, 20, &[], &[])?;
+        w.call("computeCommandEncoder", 20, 21, &[], &[])?;
+        let state = [Value::Object(9)];
+        w.call("setComputePipelineState:", 21, 0, &state, &[])?;
+        let bound = [Value::Object(3), Value::Uint(0), Value::Uint(0)];
+        w.call("setBuffer:offset:atIndex:", 21, 0, &bound, &[])?;
+        let slot = [Value::Object(5), Value::Uint(0)];
+        w.call("setTexture:atIndex:", 21, 0, &slot, &[])?;
+        let size = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+        let groups = [size.clone(), size];
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, 21, 0, &groups, &[])?;
+        if rebound {
+            w.call("setBuffer:offset:atIndex:", 21, 0, &bound, &[])?;
+        }
+        w.call("endEncoding", 21, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])
+    });
+    ended.unwrap();
+}
+
+/// Two plays' buffer #3, alike but for the words at bytes 0x10 and 0x1800.
+fn two_dumps(rebound: bool) -> (ScratchDir, ScratchDir) {
+    let (a, b) = (
+        ScratchDir::new("dumps-a").unwrap(),
+        ScratchDir::new("dumps-b").unwrap(),
+    );
+    let mut other = vec![0u8; 0x2000];
+    other[0x10] = 1;
+    other[0x1800] = 1;
+    play_covered(a.path(), vec![0; 0x2000], rebound);
+    play_covered(b.path(), other, rebound);
+    (a, b)
+}
+
+/// The per-command-buffer compare of two plays (`compare_dumps`) leaves out a differing word
+/// under a cover and reports one outside every cover: a texture's write covered the first 0x1000
+/// bytes of buffer #3 after the command buffer bound it, so of the two words that differ, the one
+/// at 0x10 is covered and the one at 0x1800 (word 0x600) is reported, and the plays differ.
+#[test]
+fn the_dump_compare_reports_a_differing_word_outside_every_cover() {
+    let (a, b) = two_dumps(false);
+    let cover = std::fs::read_to_string(a.path().join("cb20-obj3.cover")).unwrap();
+    assert_eq!(cover, "0..4096");
+    let comparison = compare_dumps(a.path(), b.path()).unwrap();
+    assert_eq!(comparison.compared, 1);
+    let difference = Difference {
+        command_buffer: 20,
+        object: 3,
+        differing: 2,
+        covered: 1,
+        first_uncovered: Some(0x600),
+        lengths: (0x2000, 0x2000),
+    };
+    assert_eq!(comparison.differences, [difference]);
+    assert_eq!(comparison.uncovered(), 1);
+    assert!(!comparison.agrees());
+    let lines = comparison.lines();
+    assert_eq!(
+        lines,
+        [
+            "differs cb #20 obj #3: 1 words outside every cover, the first word 1536; 1 covered; \
+             lengths 8192 and 8192",
+            "compared 1 buffers: 1 differ, 1 words outside every cover, 1 covered; 0 dumps in one \
+             play only, 0 unread: DIFFER",
+        ]
+    );
+}
+
+/// A cover the buffer was written after is void, and the compare reports what differs under it:
+/// the command buffer binds buffer #3 again after the texture's write covered it, a binding counts
+/// as a write, so the dump holds no cover and both differing words are reported.
+#[test]
+fn the_dump_compare_reports_a_word_whose_cover_the_buffer_s_last_write_voided() {
+    let (a, b) = two_dumps(true);
+    let cover = std::fs::read_to_string(a.path().join("cb20-obj3.cover")).unwrap();
+    assert_eq!(cover, "-");
+    let comparison = compare_dumps(a.path(), b.path()).unwrap();
+    let difference = Difference {
+        command_buffer: 20,
+        object: 3,
+        differing: 2,
+        covered: 0,
+        first_uncovered: Some(4),
+        lengths: (0x2000, 0x2000),
+    };
+    assert_eq!(comparison.differences, [difference]);
+    assert_eq!(comparison.uncovered(), 2);
+    assert!(!comparison.agrees());
+}
+
+/// Two plays alike agree; a dump one play has alone is reported.
+#[test]
+fn the_dump_compare_agrees_on_alike_plays_and_reports_a_dump_one_play_lacks() {
+    let (a, b) = (
+        ScratchDir::new("dumps-a").unwrap(),
+        ScratchDir::new("dumps-b").unwrap(),
+    );
+    play_covered(a.path(), vec![5; 0x2000], false);
+    play_covered(b.path(), vec![5; 0x2000], false);
+    let comparison = compare_dumps(a.path(), b.path()).unwrap();
+    assert_eq!((comparison.compared, comparison.agrees()), (1, true));
+    std::fs::write(a.path().join("cb21-obj3.bin"), [0u8; 4]).unwrap();
+    let comparison = compare_dumps(a.path(), b.path()).unwrap();
+    assert_eq!(comparison.only_one, [("cb21-obj3".to_owned(), 'a')]);
+    assert!(!comparison.agrees());
 }
