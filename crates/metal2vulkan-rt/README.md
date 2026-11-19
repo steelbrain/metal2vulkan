@@ -209,9 +209,8 @@ in its memory.
   driver is called; `Gauges::blocks` counts those live. The limit is about 4.29 billion on RADV,
   NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD Graphics 630, and
   4,096, Vulkan's minimum, on Mesa's Mac driver.
-- A block's bytes are undefined, new or taken again: the runtime zeroes nothing ahead of need,
-  and nothing the driver or the memory type does counts but the zeroed allocations below, which
-  a take answers as `BlockInfo::zeroed`. A buffer reads zero where
+- A block's bytes are undefined, new or taken again, except where a take answers
+  `BlockInfo::zeroed` (below): the runtime zeroes nothing ahead of need. A buffer reads zero where
   `Device::new_buffer` zeroes its range (below), as Metal zeroes a buffer from
   `newBufferWithLength:options:`, and Metal owes zeros for that call's buffers alone: not for a
   heap's memory or a texture's, whose bytes are undefined, as Metal is silent on them. The
