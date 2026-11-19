@@ -794,7 +794,13 @@ fn fragment_textures_bound_through_a_range_are_read_at_the_slot_its_location_nam
             ),
         ]);
         for (id, bytes) in [(15, [255, 0, 0, 0]), (16, [0, 0, 255, 0])] {
-            w.call("newTextureWithDescriptor:", 1, id, &[texel.clone()], &[])?;
+            w.call(
+                "newTextureWithDescriptor:",
+                1,
+                id,
+                std::slice::from_ref(&texel),
+                &[],
+            )?;
             let args = [
                 region.clone(),
                 Value::Uint(0),
