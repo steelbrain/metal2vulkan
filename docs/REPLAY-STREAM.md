@@ -576,7 +576,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
   bytes, and the bytes-form ones and their bytes imported, apart; its `textures over buffers` line
   counts the textures over buffers it made (not substituted), in place and in an image of their
   own, by whether the runtime's `textures_copied_over` gauge rose across the making (a copied
-  texture freed on another thread in that moment hides one).
+  texture freed on another thread in that moment hides one), and its `textures over buffers in an
+  image of their own, by pixel format and usage` line those in an image of their own by the
+  descriptor's pixel format and usage, most first.
 - **Announced bytes** (both runtimes' backends). On a stream whose header has bit 0 set (section
   6), a `synchronizeResource:` of a buffer played with two copies leaves the CPU's copy as the
   stream's writes made it, so the next `didModifyRange:` puts the stream's bytes into the GPU's

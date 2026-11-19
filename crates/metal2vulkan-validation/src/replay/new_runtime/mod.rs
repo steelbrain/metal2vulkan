@@ -359,6 +359,8 @@ pub struct NewRuntime {
     /// The textures over buffers made (not substituted): in place, and held in an image of their
     /// own (`rt::Gauges::textures_copied_over` rose across the making).
     textures_over: [u64; 2],
+    /// Of those in an image of their own, how many of each pixel format and usage.
+    copied_over_kinds: BTreeMap<String, u64>,
 }
 
 /// The objects `values` name, lists included.
@@ -693,6 +695,7 @@ impl NewRuntime {
             host_alignment: imports::host_alignment(&device),
             no_copies: imports::NoCopies::default(),
             textures_over: [0; 2],
+            copied_over_kinds: BTreeMap::new(),
             device,
             objects: HashMap::new(),
             indices: indices::Indices::default(),
@@ -1900,7 +1903,12 @@ impl NewRuntime {
                 let (gaps, copied) = (self.substitutes.gaps, self.copied_over());
                 let made = self.texture_or_substitute(call, descriptor.usage, &descriptor, make)?;
                 if self.substitutes.gaps == gaps {
-                    self.textures_over[usize::from(self.copied_over() > copied)] += 1;
+                    let in_image = self.copied_over() > copied;
+                    self.textures_over[usize::from(in_image)] += 1;
+                    if in_image {
+                        let kind = format!("{:?} {:?}", descriptor.pixel_format, descriptor.usage);
+                        *self.copied_over_kinds.entry(kind).or_default() += 1;
+                    }
                 }
                 Ok(made)
             }
@@ -2559,6 +2567,17 @@ impl Backend for NewRuntime {
              copied at use (the runtime's gauge rose across the making)",
             in_place + copied
         ));
+        if !self.copied_over_kinds.is_empty() {
+            let mut kinds: Vec<(&String, &u64)> = self.copied_over_kinds.iter().collect();
+            kinds.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+            let kinds: Vec<String> = (kinds.iter())
+                .map(|(kind, n)| format!("{kind} {n}"))
+                .collect();
+            lines.push(format!(
+                "textures over buffers in an image of their own, by pixel format and usage: {}",
+                kinds.join(", ")
+            ));
+        }
         lines.push(self.asides.line());
         lines.push(self.places.line());
         lines.push(self.unwritten.line());
