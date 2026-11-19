@@ -23,6 +23,10 @@
 //! ([`Ring::nil`]): 64 KiB of zeros, at a multiple of 16 like every chunk, so it meets any buffer
 //! argument's alignment. A buffer argument nothing is bound to reads it, as Metal's nil buffer
 //! reads zeros. A read past its 64 KiB, and a write through it, are not covered.
+//!
+//! Another, taken the same way, is the zero range ([`Ring::zero`]): zeros that no command and no
+//! buffer argument reaches, which a checked load of a buffer argument outside its buffer reads
+//! (the translator's `PushField::ZeroAddress`), so it reads zero.
 
 use crate::counters::{Gauge, Metric, Site};
 use crate::device::{lock, Core};
@@ -60,6 +64,8 @@ struct State {
     free: Vec<Chunk>,
     /// The nil buffer's address, once asked ([`Ring::nil`]).
     nil: Option<u64>,
+    /// The zero range's address, once asked ([`Ring::zero`]).
+    zero: Option<u64>,
     /// Who makes the next block.
     next: Next,
 }
@@ -107,6 +113,7 @@ impl Ring {
                 blocks: Vec::new(),
                 free: Vec::new(),
                 nil: None,
+                zero: None,
                 next: Next::Maker,
             }),
             changed: Condvar::new(),
@@ -186,7 +193,19 @@ impl Ring {
     /// The nil buffer's address (the module docs): a chunk of zeros, taken and zeroed at the
     /// first ask and never given back, so no command buffer writes it.
     pub(crate) fn nil(&self, core: &Core) -> Result<u64, Error> {
-        if let Some(address) = lock(&self.state).nil {
+        self.kept(core, |state| &mut state.nil)
+    }
+
+    /// The zero range's address (the module docs): a chunk of zeros taken as the nil buffer's
+    /// is, which nothing is bound to, so nothing writes it. A multiple of 16.
+    pub(crate) fn zero(&self, core: &Core) -> Result<u64, Error> {
+        self.kept(core, |state| &mut state.zero)
+    }
+
+    /// The address of the chunk of zeros `which` holds, taken and zeroed at its first ask and
+    /// never given back.
+    fn kept(&self, core: &Core, which: fn(&mut State) -> &mut Option<u64>) -> Result<u64, Error> {
+        if let Some(address) = *which(&mut lock(&self.state)) {
             return Ok(address);
         }
         let chunk = self.take(core)?;
@@ -194,7 +213,7 @@ impl Ring {
         // the host alone writes it, once.
         unsafe { std::ptr::write_bytes(chunk.host.at(0).as_ptr(), 0, CHUNK as usize) };
         let mut state = lock(&self.state);
-        match state.nil {
+        match *which(&mut state) {
             // Another thread's ask made it first: the chunk goes back.
             Some(address) => {
                 state.free.push(chunk);
@@ -204,7 +223,7 @@ impl Ring {
                 Ok(address)
             }
             None => {
-                state.nil = Some(chunk.address);
+                *which(&mut state) = Some(chunk.address);
                 Ok(chunk.address)
             }
         }
@@ -246,6 +265,7 @@ impl Ring {
         }
         state.free.clear();
         state.nil = None;
+        state.zero = None;
         freed
     }
 }

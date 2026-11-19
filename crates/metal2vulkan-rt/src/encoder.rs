@@ -99,8 +99,8 @@ enum Slot {
         buffer: Lent<Buffer>,
         offset: u64,
     },
-    /// The address of a `set_bytes` copy in the parameter ring.
-    Bytes(u64),
+    /// The address of a `set_bytes` copy in the parameter ring, and its length.
+    Bytes(u64, u32),
 }
 
 /// [`Refusal::BufferOffsetAlignment`] where `buffer`, bound at `offset` to buffer argument
@@ -235,8 +235,9 @@ struct DispatchFacts {
     /// resources.
     host: bool,
     /// The nil buffer's address where a buffer argument the kernels reach is bound to nothing
-    /// (`Ring::nil`), else 0, found with the alignments.
-    nil: u64,
+    /// (`Ring::nil`), else 0, and the zero range's where the kernels check a load (`Ring::zero`),
+    /// else 0, found with the alignments.
+    nil: (u64, u64),
 }
 
 /// Which of its state's modules a dispatch runs.
@@ -634,10 +635,11 @@ impl ComputeCommandEncoder {
         let address = self.building().write_ring(bytes)?;
         // Bytes are aligned, of no Managed or Shared buffer: a dispatch's facts change only where
         // the slot held a buffer.
-        if !matches!(self.slots[slot], Slot::Bytes(_)) {
+        if !matches!(self.slots[slot], Slot::Bytes(..)) {
             self.changed();
         }
-        self.slots[slot] = Slot::Bytes(address);
+        // At most one chunk, 64 KiB.
+        self.slots[slot] = Slot::Bytes(address, bytes.len() as u32);
         Ok(())
     }
 
@@ -1220,22 +1222,39 @@ fn recording(building: &mut Option<Building>) -> &mut Building {
         .expect("an encoder holds its command buffer's recording until it ends")
 }
 
-/// [`check_alignment`] of each buffer bound in `slots` that `interface` reaches, and the nil
-/// buffer's address where one it reaches is bound to nothing (`Ring::nil`), else 0. A `set_bytes`
-/// copy is at a multiple of 16 in the ring, which every mask divides, and so is the nil buffer.
-fn check_alignments(core: &Core, slots: &[Slot], interface: &Interface) -> Result<u64, Error> {
-    let mut nil = 0;
+/// [`check_alignment`] of each buffer bound in `slots` that `interface` reaches, the nil buffer's
+/// address where one it reaches is bound to nothing (`Ring::nil`), else 0, and the zero range's
+/// where it checks a load (`Ring::zero`), else 0. A `set_bytes` copy is at a multiple of 16 in the
+/// ring, which every mask divides, and so is the nil buffer.
+fn check_alignments(
+    core: &Core,
+    slots: &[Slot],
+    interface: &Interface,
+) -> Result<(u64, u64), Error> {
+    let (mut nil, mut zero) = (0, 0);
     for field in &interface.fields {
-        let FieldValue::BufferAddress { slot, mask } = field.value else {
-            continue;
+        let (slot, mask) = match field.value {
+            FieldValue::BufferAddress { slot, mask } => (slot, mask),
+            FieldValue::ZeroAddress => {
+                zero = core.ring.zero(core)?;
+                continue;
+            }
+            _ => continue,
         };
         match slots.get(slot as usize) {
             Some(Slot::Buffer { buffer, offset }) => check_alignment(slot, mask, buffer, *offset)?,
-            Some(Slot::Bytes(_)) => {}
+            Some(Slot::Bytes(..)) => {}
             Some(Slot::Empty) | None => nil = core.ring.nil(core)?,
         }
     }
-    Ok(nil)
+    Ok((nil, zero))
+}
+
+/// The bytes of a buffer of `length` bytes from `offset` to its end, 0 past it: a slot's
+/// [`FieldValue::BufferRemaining`]. No buffer is longer than `MAX_BUFFER_LENGTH`, 2 GiB, so it
+/// fits a `u32`.
+pub(crate) fn remaining(length: u64, offset: u64) -> u32 {
+    u32::try_from(length.saturating_sub(offset)).unwrap_or(u32::MAX)
 }
 
 /// A compute encoder's argument tables: buffer slots, textures and samplers.
@@ -1252,14 +1271,15 @@ impl Parameters {
     /// kernel that reads it has one: the dispatch checked first), and whose state gave its
     /// numbered samplers `sampler_ids`. Only a kernel that reads the stage-in region copies it.
     /// The block's address is written by [`Building::record_dispatch`] once the block is in the
-    /// ring. A buffer argument bound to nothing takes `nil`, the nil buffer's address.
+    /// ring. A buffer argument bound to nothing takes `nil`, the nil buffer's address, and its
+    /// length is 0; the zero range's address is `zero`.
     ///
     /// Every buffer address is a multiple of the alignment the module takes it to have, which the
     /// dispatch checked first ([`check_alignments`], which gave `nil`).
     fn fill(
         &mut self,
         kernel: &Kernel,
-        (bound, nil): (Bound<'_>, u64),
+        (bound, (nil, zero)): (Bound<'_>, (u64, u64)),
         sampler_ids: &[u32],
         (region, stage_in): (&[u8; 32], Option<&[u8; 32]>),
     ) {
@@ -1281,12 +1301,23 @@ impl Parameters {
                         Some(Slot::Buffer { buffer, offset }) => {
                             buffer.gpu_address().wrapping_add(*offset)
                         }
-                        Some(Slot::Bytes(address)) => *address,
+                        Some(Slot::Bytes(address, _)) => *address,
                         Some(Slot::Empty) | None => nil,
                     };
                     let word = address_word(address);
                     bytes[at..at + 8].copy_from_slice(&word.to_le_bytes());
                 }
+                FieldValue::BufferRemaining(slot) => {
+                    let length = match slots.get(slot as usize) {
+                        Some(Slot::Buffer { buffer, offset }) => {
+                            remaining(buffer.length(), *offset)
+                        }
+                        Some(Slot::Bytes(_, length)) => *length,
+                        Some(Slot::Empty) | None => 0,
+                    };
+                    bytes[at..at + 4].copy_from_slice(&length.to_le_bytes());
+                }
+                FieldValue::ZeroAddress => bytes[at..at + 8].copy_from_slice(&zero.to_le_bytes()),
                 FieldValue::TextureId(slot) => {
                     let id = match textures.get(slot as usize) {
                         Some(Some(texture)) => texture.gpu_resource_id().to_bits(),

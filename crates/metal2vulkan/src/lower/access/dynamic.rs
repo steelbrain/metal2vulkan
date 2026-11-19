@@ -574,6 +574,7 @@ fn static_access(
 ) -> Result<Access, Error> {
     let (mut targets, null) = static_roots(cx, ptr, m)?;
     let check = contain::encoding(cx.profile);
+    let fixed = super::fixed_offset(cx, ptr);
     for t in &mut targets {
         *t = Target { check, ..*t };
         let plan = cx
@@ -584,7 +585,9 @@ fn static_access(
         if write && super::view_kind(cx.profile, plan) != super::ViewKind::Storage {
             return Err(cx.invariant("a pointer store through a uniform view"));
         }
-        cx.push.insert(PushField::SlotBindOffset(plan.slot));
+        let slot = plan.slot;
+        cx.push.insert(PushField::SlotBindOffset(slot));
+        super::note_variable(cx, slot, fixed, !write);
     }
     Ok(Access {
         ptr: operand(cx, ptr)?,

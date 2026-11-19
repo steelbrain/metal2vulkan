@@ -17009,6 +17009,7 @@ variant	metal2vulkan::pipeline::PushField::ShaderTestsState	ShaderTestsState
 variant	metal2vulkan::pipeline::PushField::ShadowStencilState	ShadowStencilState
 variant	metal2vulkan::pipeline::PushField::SlotBindOffset	SlotBindOffset(SlotRef)
 variant	metal2vulkan::pipeline::PushField::SlotGuestBase	SlotGuestBase(SlotRef)
+variant	metal2vulkan::pipeline::PushField::SlotRemaining	SlotRemaining(SlotRef)
 variant	metal2vulkan::pipeline::PushField::SnapshotPhase	SnapshotPhase
 variant	metal2vulkan::pipeline::PushField::Specialized	Specialized(SpecKey)
 variant	metal2vulkan::pipeline::PushField::StageInRegion	StageInRegion
@@ -17029,6 +17030,7 @@ variant	metal2vulkan::pipeline::PushField::ViewportCompensation	ViewportCompensa
 variant	metal2vulkan::pipeline::PushField::ViewportCount	ViewportCount
 variant	metal2vulkan::pipeline::PushField::ViewportMirrors	ViewportMirrors
 variant	metal2vulkan::pipeline::PushField::YCbCrInPlace	YCbCrInPlace(SlotRef)
+variant	metal2vulkan::pipeline::PushField::ZeroAddress	ZeroAddress
 variant	metal2vulkan::pipeline::PushLoc::ArgumentTable	ArgumentTable { offset: u32 }
 variant	metal2vulkan::pipeline::PushLoc::Push	Push { offset: u32 }
 variant	metal2vulkan::pipeline::Reconvergence::Guaranteed	Guaranteed

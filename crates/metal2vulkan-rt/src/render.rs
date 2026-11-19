@@ -462,6 +462,15 @@ fn draws(
                         _ => return Err(draw_input()),
                     }
                 }
+                PushField::SlotRemaining(SlotRef {
+                    stage,
+                    class: SlotClass::Buffer,
+                    index,
+                }) => {
+                    fields.push((offset, table(stage)?, FieldValue::BufferRemaining(index)));
+                    continue;
+                }
+                PushField::ZeroAddress => FieldValue::ZeroAddress,
                 PushField::TessellationFactorAddress => FieldValue::TessellationFactors,
                 // The encoder's reference, which a fragment function under the private alpha test
                 // compares its color 0's alpha with.

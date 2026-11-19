@@ -607,6 +607,9 @@ pub(super) fn select(
     // A view's read adds the bind residual; `access::finish_slots` drops the field for a source
     // buffer it reaches by device address, as for any slot.
     cx.push.insert(PushField::SlotBindOffset(s));
+    // The fetch reads at the vertex's or instance's offset, which is not a translation-time
+    // constant.
+    crate::lower::access::note_variable(cx, s, false, true);
     cx.facts
         .insert(RuntimeFact::VertexFetch { attr: attribute });
     // The access family chooses the source buffer's slot, its facts, and its descriptor.

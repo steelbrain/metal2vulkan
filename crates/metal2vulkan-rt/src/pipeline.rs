@@ -561,6 +561,14 @@ pub(crate) enum FieldValue {
     /// (`RuntimeFact::AddressAlignment`), 0 where it takes none: a dispatch whose bound buffer's
     /// address it does not divide is refused (`Refusal::BufferOffsetAlignment`).
     BufferAddress { slot: u32, mask: u64 },
+    /// A `u32`: the bytes from the bind offset of the buffer bound at the slot to the buffer's
+    /// end, a `set_bytes` copy's length, or 0 where nothing is bound, which the module checks each
+    /// access of the slot at an offset that is not a constant against (the translator's
+    /// `PushField::SlotRemaining`).
+    BufferRemaining(u32),
+    /// A `u64`: the address of the ring's zero range (`Ring::zero`), where a checked load outside
+    /// its buffer reads (the translator's `PushField::ZeroAddress`).
+    ZeroAddress,
     /// A `u64`: the `gpuResourceID` of the texture bound at the slot, 0 where none is.
     TextureId(u32),
     /// A `u64`: the `gpuResourceID` of the sampler state bound at the slot, 0 where none is.
@@ -1095,6 +1103,15 @@ fn interface(
                 }
                 (PushField::DispatchRegion, _) => FieldValue::DispatchRegion,
                 (PushField::StageInRegion, _) => FieldValue::StageInRegion,
+                (
+                    PushField::SlotRemaining(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Buffer,
+                        index,
+                    }),
+                    _,
+                ) => FieldValue::BufferRemaining(index),
+                (PushField::ZeroAddress, _) => FieldValue::ZeroAddress,
                 _ => return Err(gap()),
             };
             fields.push(Field { place, value });

@@ -698,8 +698,13 @@ pub struct AccessPlan {
     /// the profile): a sub-word store there is one narrow store instead of two word atomics.
     pub psb_units: Units,
     /// The function compiles under the identity domains: a device-address slot's address is its
-    /// own field ([`address_field`]), uncontained.
+    /// own field ([`address_field`]).
     pub identity: bool,
+    /// Under the identity domains with containment on ([`identity_contained`]), the buffer slots
+    /// an access may reach at a byte offset that is not a translation-time constant
+    /// ([`note_variable`]): each reads its `PushField::SlotRemaining`, and each of those accesses
+    /// whose emitted offset is not a constant is checked against it (`emit::prepare`).
+    pub variable: BTreeSet<SlotRef>,
     /// A storage view's slot declares its `RangeAtBindOffset` specialization, as a uniform view's
     /// does: the profile takes `DriverWorkaround::PushReadsLengthenThreadPayload`, so a read of
     /// the slot at its bind offset alone, which reads no push word, is worth the key
@@ -1325,6 +1330,37 @@ pub(crate) fn identity(p: &DeviceProfile) -> bool {
     p.fields().pointer_domain == crate::device::PointerDomain::Identity
 }
 
+/// Whether a function selected in `cx` contains its slots' device-address accesses under the
+/// identity domains: containment is on (`Containment::UnsafeOff` turns it off) and the function
+/// is no device-replay variant, whose slots' addresses are its replayed command's.
+pub(crate) fn identity_contained(cx: &SelectCx<'_>) -> bool {
+    identity(cx.profile)
+        && cx.profile.fields().containment != Containment::UnsafeOff
+        && !cx.inputs.replay_bindings
+}
+
+/// An access of buffer slot `slot`, a read where `read`, whose byte offset is a translation-time
+/// constant only where `fixed`. Under the identity domains with containment on
+/// ([`identity_contained`]), a slot an access may reach at another offset is checked
+/// ([`AccessPlan::variable`]): it reads its `PushField::SlotRemaining`, and a read of it reads
+/// `PushField::ZeroAddress` outside. An access at a constant offset stays unchecked.
+pub(crate) fn note_variable(cx: &mut SelectCx<'_>, slot: SlotRef, fixed: bool, read: bool) {
+    if fixed || !identity_contained(cx) {
+        return;
+    }
+    cx.families.access.variable.insert(slot);
+    cx.push.insert(PushField::SlotRemaining(slot));
+    if read {
+        cx.push.insert(PushField::ZeroAddress);
+    }
+}
+
+/// Whether static-root pointer `ptr`'s byte offset from its roots is a translation-time
+/// constant: the memory plan proves it one value.
+pub(crate) fn fixed_offset(cx: &SelectCx<'_>, ptr: Value) -> bool {
+    cx.memory.offset(ptr).and_then(|o| o.exact()).is_some()
+}
+
 /// [`finish_slots`]'s placement, in its charged working tables.
 fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotChoice>>, Error> {
     let p = cx.profile;
@@ -1732,7 +1768,8 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     cx.families.access.pulled = sourced;
     cx.families.access.unwritten = unwritten_slots(cx, &lowering, &sources);
     cx.families.access.slots = lowering;
-    // Metal contains no device-address access, so under the identity domains none is contained.
+    // The root table's containment; under the identity domains a slot's accesses are checked
+    // against its pushed length instead (`variable`).
     cx.families.access.psb_contained =
         p.fields().containment != Containment::UnsafeOff && !identity(p);
     cx.families.access.psb_units = psb::narrow_units(p);
@@ -2330,11 +2367,12 @@ fn blob_roots(
 
 /// Give each of `targets` the profile's containment check and read its slot's `SlotBindOffset`;
 /// a written target is a storage view. Every static-root access places its targets here
-/// ([`access_with_leaf`], `copy::endpoint`).
+/// ([`access_with_leaf`], `copy::endpoint`), each at a byte offset that is a translation-time
+/// constant only where `fixed` ([`note_variable`]).
 fn place_targets(
     cx: &mut SelectCx<'_>,
     targets: &mut [Target],
-    write: bool,
+    (write, fixed): (bool, bool),
     reach: u32,
 ) -> Result<(), Error> {
     let check = contain::encoding(cx.profile);
@@ -2348,7 +2386,9 @@ fn place_targets(
         if write && view_kind(cx.profile, plan) != ViewKind::Storage {
             return Err(cx.invariant("a write through a uniform view"));
         }
-        cx.push.insert(PushField::SlotBindOffset(plan.slot));
+        let slot = plan.slot;
+        cx.push.insert(PushField::SlotBindOffset(slot));
+        note_variable(cx, slot, fixed, !write);
         note_reach(cx, t.slot, reach);
     }
     Ok(())
@@ -2424,10 +2464,11 @@ fn access_with_leaf(
     null: bool,
     blob_check: Option<Check>,
 ) -> Result<Access, Error> {
+    let fixed = fixed_offset(cx, ptr);
     place_targets(
         cx,
         &mut targets,
-        value.is_some(),
+        (value.is_some(), fixed),
         leaf_reach(cx.profile, &leaf),
     )?;
     note_units(cx, &targets, &leaf, value.is_some())?;

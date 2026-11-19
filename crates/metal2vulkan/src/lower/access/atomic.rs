@@ -698,6 +698,7 @@ pub fn select(
     } else {
         let (mut targets, null) = static_roots(cx, r.ptr, m)?;
         let check = contain::atomic_encoding(cx.profile);
+        let fixed = super::fixed_offset(cx, r.ptr);
         for t in &mut targets {
             t.check = check;
             let plan = cx
@@ -708,7 +709,9 @@ pub fn select(
             if view_kind(cx.profile, plan) != ViewKind::Storage {
                 return Err(cx.invariant("an atomic through a uniform view"));
             }
-            cx.push.insert(PushField::SlotBindOffset(plan.slot));
+            let slot = plan.slot;
+            cx.push.insert(PushField::SlotBindOffset(slot));
+            super::note_variable(cx, slot, fixed, false);
             // An atomic reaches its word.
             super::note_reach(cx, t.slot, 4);
             if typed {
@@ -1351,7 +1354,7 @@ pub fn emit(
             let m = fb.composite_extract(fat, &[1])?;
             let mut prepared = Vec::with_capacity(targets.len());
             for t in targets {
-                let prep = prepare(cx, fb, t, m, bytes)?;
+                let prep = prepare(cx, fb, t, m, (bytes, false))?;
                 if typed.is_some() && !matches!(prep.mem, Mem::Psb(_)) {
                     return Err(cx.fail("a typed atomic through a descriptor view"));
                 }

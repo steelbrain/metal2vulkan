@@ -417,8 +417,11 @@ pub fn endpoint(
     // A source may also point into the constant blob (its `BLOB_ROOT` candidate); the blob is
     // constant, so a destination may not. The targets are placed as a load's or a store's are.
     let (mut targets, null, blob) = super::blob_roots(cx, v, write, m)?;
-    // A copy's chunks take their own leaves when it is emitted, words among them.
-    super::place_targets(cx, &mut targets, write, 4)?;
+    // A copy's chunks take their own leaves when it is emitted, words among them. A chunk's
+    // offset is the endpoint's plus a constant where the copy is unrolled; a looping copy's
+    // chunks are noted apart (`select`).
+    let fixed = super::fixed_offset(cx, v);
+    super::place_targets(cx, &mut targets, (write, fixed), 4)?;
     Ok(Endpoint::Buffer(Access {
         ptr: operand(cx, v)?,
         value: None,
@@ -596,6 +599,19 @@ pub fn select(
         }
     }
     let buffered = matches!(length, Length::Const { count, .. } if count <= unroll_units(unit));
+    // A copy that loops reaches its buffers at offsets that are not translation-time constants.
+    if !buffered {
+        for (e, write) in [(Some(&dst), true), (from.as_ref(), false)] {
+            if let Some(Endpoint::Buffer(a)) = e {
+                for t in &a.targets {
+                    if let Some(plan) = cx.memory.slots.get(t.slot) {
+                        let slot = plan.slot;
+                        super::note_variable(cx, slot, false, !write);
+                    }
+                }
+            }
+        }
+    }
     let src = if fill {
         let v = arg(cx, 1)?;
         match const_index(cx, v) {

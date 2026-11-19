@@ -923,6 +923,8 @@ codec_enum! {
         ArgumentTableAddress,
         ConstexprSampler(f0),
         TessellationFactorAddress,
+        SlotRemaining(f0),
+        ZeroAddress,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }

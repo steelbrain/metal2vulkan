@@ -1782,6 +1782,11 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 PushField::SlotGuestBase(slot) if planned(slot).is_some() => {
                     return Err(BindError::MissingGuestAddress { slot })
                 }
+                // The bytes from the bound buffer's bind offset to its end, which instantiation
+                // reads from the state.
+                PushField::SlotRemaining(slot) if planned(slot).is_some() => {}
+                // The identity domains' zero range is the new runtime's own memory.
+                PushField::ZeroAddress => return Err(not_implemented(Feature::IdentityDomains)),
                 PushField::SlotBindOffset(SlotRef {
                     class: SlotClass::Texture,
                     ..
@@ -5122,8 +5127,11 @@ fn changed_fields<'a>(
                     }
                     (slot, LooseWord::Stride(layout))
                 }
-                // A changed texture's in-place planes or rows.
-                PushField::YCbCrInPlace(slot) | PushField::TexelRows(slot)
+                // A changed texture's in-place planes or rows, and a changed buffer's length past
+                // its bind offset.
+                PushField::YCbCrInPlace(slot)
+                | PushField::TexelRows(slot)
+                | PushField::SlotRemaining(slot)
                     if slots.contains(&slot) =>
                 {
                     return Some(None)

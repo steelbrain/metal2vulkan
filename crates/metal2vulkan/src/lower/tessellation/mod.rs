@@ -613,6 +613,8 @@ fn pulled_read(
         Stage::Vertex,
         buffer,
     )));
+    // The fetch reads at a control point's offset, which is not a translation-time constant.
+    crate::lower::access::note_variable(cx, fetch::slot(Stage::Vertex, buffer), false, true);
     cx.facts
         .insert(RuntimeFact::VertexFetch { attr: attribute });
     // The source buffers are the vertex function's pulled-attribute buffers: the access family

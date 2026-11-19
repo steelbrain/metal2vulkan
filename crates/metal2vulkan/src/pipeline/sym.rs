@@ -1096,11 +1096,23 @@ pub enum PushField {
     /// Residual bind offset of a descriptor-form slot: the bind offset minus the descriptor base,
     /// modulo 2^32.
     SlotBindOffset(SlotRef),
+    /// Under the identity domains, the device address (`u64`) of 16 bytes of zeros, at a multiple
+    /// of 16, that nothing writes: a load of a buffer slot checked against its `SlotRemaining`
+    /// reads each of its units there where the check fails, so it reads zero (`docs/API.md`,
+    /// section 5). Placed before the slot addresses, so the window holds it.
+    ZeroAddress,
     /// Guest base address of a static-root slot. Under the identity domains, a `u64`: a buffer
     /// slot's device address (its `gpuAddress` plus the bind offset) less 2^31, modulo 2^64
     /// (`docs/API.md`, section 5), and a texture or sampler slot's `gpuResourceID`
     /// (`docs/RESOURCE-ID.md`), 0 for nil.
     SlotGuestBase(SlotRef),
+    /// Under the identity domains, the bytes (`u32`) from a buffer slot's bind offset to its
+    /// buffer's end: the buffer's length less the bind offset, a `set*Bytes` copy's length, and 0
+    /// for nil. A load, store or atomic of the slot whose byte offset is not a translation-time
+    /// constant is checked against it, `(len >= n) && (offset <= len - n)` in `u32`: outside, a
+    /// load reads zero at `ZeroAddress` and a store or atomic runs nothing (`docs/API.md`,
+    /// section 5).
+    SlotRemaining(SlotRef),
     /// Stride of a pulled vertex buffer layout.
     VertexBufferStride(u32),
     /// The compute encoder's stage-in region (`setStageInRegion:`): its origin `xyz` and its size

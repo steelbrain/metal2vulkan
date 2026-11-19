@@ -449,6 +449,11 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             PushField::SlotGuestBase(slot) if planned(slot).is_some() => {
                 return Err(BindError::MissingGuestAddress { slot })
             }
+            // The bytes from the bound buffer's bind offset to its end, which instantiation reads
+            // from the state.
+            PushField::SlotRemaining(slot) if planned(slot).is_some() => {}
+            // The identity domains' zero range is the new runtime's own memory.
+            PushField::ZeroAddress => return Err(not_implemented(Feature::IdentityDomains)),
             PushField::SlotBindOffset(SlotRef {
                 class: SlotClass::Texture,
                 ..

@@ -31,7 +31,8 @@
 //! contained by the profile's encoding, and a device address through the slot's root entry (`psb`,
 //! window start 0), always contained unless containment is off. Under the identity domains every
 //! source buffer is its device address, which the fetch reads from the slot's own pushed address
-//! (`SlotGuestBase`) plus its displacement, uncontained, as Metal contains no fetch. Reads are plain: a vertex function
+//! (`SlotGuestBase`) plus its displacement, checked against the slot's pushed length
+//! (`SlotRemaining`): outside its buffer a fetch reads zero at the zero range (`ZeroAddress`). Reads are plain: a vertex function
 //! has no barrier a coherence could order them with.
 
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
@@ -253,20 +254,28 @@ pub fn psb_read(
     })
 }
 
-/// A read of a source buffer under the identity domains, at the `u32` Metal displacement `m` from
-/// its bind offset in a slot whose window starts at `start`: from `address` (a `u64`), the slot's
-/// own device address, the word below the read and the byte offset in it (`psb::prepare_at`). No
-/// table is read, and the read is not contained, as Metal contains no fetch: a fetch outside its
-/// buffer reads what the device gives.
+/// An `n`-byte read of a source buffer under the identity domains, at the `u32` Metal
+/// displacement `m` from its bind offset in a slot whose window starts at `start`: from `address`
+/// (a `u64`), the slot's own device address, the word below the read and the byte offset in it
+/// (`psb::prepare_at`). No table is read. Where `check` holds the slot's `SlotRemaining` and
+/// `ZeroAddress` and `m` is not a constant, the read is checked as a load of the slot is
+/// (`emit::prepare`): outside its buffer it reads zero at the zero range.
 fn address_read(
     fb: &mut FunctionBuilder<'_>,
     address: SValue,
-    m: SValue,
-    start: i64,
+    (m, start): (SValue, i64),
+    (n, check): (u32, Option<(SValue, SValue)>),
 ) -> BResult<SourceRead> {
     let a = psb::prepare_at(fb, address, m, start)?;
+    let mem = match check {
+        Some((remaining, zero)) if leaf::known(fb, m)?.is_none() => {
+            let inb = contain::in_bounds(fb, m, remaining, u64::from(n))?;
+            a.mem.outside(inb, zero)
+        }
+        _ => a.mem,
+    };
     Ok(SourceRead {
-        mem: SourceMem(Mem::Psb(a.mem)),
+        mem: SourceMem(Mem::Psb(mem)),
         off: a.off,
         inb: a.inb,
     })
@@ -289,7 +298,11 @@ pub fn prepare(
             start,
             contained,
         } => psb_read(fb, table, buffer, m, start, n, contained),
-        Source::Address { address, start } => address_read(fb, address, m, start),
+        Source::Address {
+            address,
+            start,
+            check,
+        } => address_read(fb, address, (m, start), (n, check)),
     }
 }
 
@@ -331,10 +344,14 @@ pub fn prepare_within(
             let m = fb.select(fits, m, zero)?;
             (psb_read(fb, table, buffer, m, start, n, contained)?, fits)
         }
-        Source::Address { address, start } => {
+        Source::Address {
+            address,
+            start,
+            check,
+        } => {
             let zero = k32(fb, 0)?;
             let m = fb.select(fits, m, zero)?;
-            (address_read(fb, address, m, start)?, fits)
+            (address_read(fb, address, (m, start), (n, check))?, fits)
         }
     };
     let inb = match read.inb {
@@ -359,8 +376,13 @@ enum Source {
         contained: bool,
     },
     /// Under the identity domains, its own device address (`SlotGuestBase`, a `u64`), in a slot
-    /// whose window starts at `start`.
-    Address { address: SValue, start: i64 },
+    /// whose window starts at `start`, with its `SlotRemaining` and the `ZeroAddress` where the
+    /// access plan checks it (`AccessPlan::variable`).
+    Address {
+        address: SValue,
+        start: i64,
+        check: Option<(SValue, SValue)>,
+    },
 }
 
 /// The form source buffer `buffer` is read in.
@@ -375,6 +397,7 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
     // The form is `AccessPlan::source_lowering`'s, which the census reads too.
     let lowering = access.source_lowering(slot);
     let identity = access.identity;
+    let checked = access.variable.contains(&slot);
     let view = match reach {
         Some(Reach::Shared { slot }) => cx.decl.families.access.views.get(slot).copied().flatten(),
         Some(Reach::Own(_)) => cx
@@ -410,7 +433,18 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
         }
         (Some(SlotLowering::Psb { start }), _) if identity => {
             let address = super::pointer::slot_address(cx, fb, slot)?;
-            Ok(Source::Address { address, start })
+            let check = match checked {
+                true => Some((
+                    cx.push_field(fb, PushField::SlotRemaining(slot))?,
+                    cx.push_field(fb, PushField::ZeroAddress)?,
+                )),
+                false => None,
+            };
+            Ok(Source::Address {
+                address,
+                start,
+                check,
+            })
         }
         (Some(SlotLowering::Psb { start }), _) => {
             let table = cx.push_field(fb, PushField::RootTableAddress)?;

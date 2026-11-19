@@ -146,6 +146,11 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::TexelRows(_) => FieldShape::UVec4Array(1),
         // The residual is below `min{Storage,Uniform}BufferOffsetAlignment`.
         PushField::SlotBindOffset(_) | PushField::VertexBufferStride(_) => FieldShape::U32,
+        // The bytes from a slot's bind offset to its buffer's end, at most 2 GiB under the
+        // identity domains.
+        PushField::SlotRemaining(_) => FieldShape::U32,
+        // The identity domains' zero range.
+        PushField::ZeroAddress => FieldShape::U64,
         // A texture's mipmap level count, an acceleration structure's instance count, the render
         // encoder's viewport count, the render pass's array length, a kernel stage-in buffer's
         // bound stride, a storage texture's integer channels' widths.

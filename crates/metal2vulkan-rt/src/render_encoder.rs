@@ -241,8 +241,9 @@ struct Facts {
     /// texture over one, or through an address outside the draw's resources.
     host: bool,
     /// The nil buffer's address where a buffer argument the draw reaches is bound to nothing
-    /// (`Ring::nil`), else 0.
-    nil: u64,
+    /// (`Ring::nil`), else 0, and the zero range's where the draw checks a load (`Ring::zero`),
+    /// else 0.
+    nil: (u64, u64),
 }
 
 impl Facts {
@@ -267,7 +268,7 @@ impl Facts {
                     let (reached, at) = buffer.device_range();
                     (reached, at + offset)
                 }
-                Some(Bound::Bytes(placed)) => (placed.buffer, placed.offset),
+                Some(Bound::Bytes(placed, _)) => (placed.buffer, placed.offset),
                 Some(Bound::Empty) | None => {
                     return Err(Error::Refused(Refusal::NoBufferAtIndex { index }))
                 }
@@ -341,8 +342,8 @@ enum Bound {
         buffer: Lent<Buffer>,
         offset: u64,
     },
-    /// A `set_*_bytes` copy in the parameter ring.
-    Bytes(Placed),
+    /// A `set_*_bytes` copy in the parameter ring, and its length.
+    Bytes(Placed, u32),
 }
 
 /// One function's argument tables: their objects borrowed from what the command buffer keeps
@@ -380,8 +381,20 @@ impl Tables {
     fn address(&self, slot: u32, nil: u64) -> u64 {
         match self.buffers.get(slot as usize) {
             Some(Bound::Buffer { buffer, offset }) => buffer.gpu_address().wrapping_add(*offset),
-            Some(Bound::Bytes(placed)) => placed.address,
+            Some(Bound::Bytes(placed, _)) => placed.address,
             Some(Bound::Empty) | None => nil,
+        }
+    }
+
+    /// The bytes of buffer slot `slot` from its bind offset to its buffer's end: the bytes'
+    /// length for a copy, 0 where none is bound.
+    fn remaining(&self, slot: u32) -> u32 {
+        match self.buffers.get(slot as usize) {
+            Some(Bound::Buffer { buffer, offset }) => {
+                crate::encoder::remaining(buffer.length(), *offset)
+            }
+            Some(Bound::Bytes(_, length)) => *length,
+            Some(Bound::Empty) | None => 0,
         }
     }
 }
@@ -789,7 +802,8 @@ impl RenderCommandEncoder {
             }));
         }
         let placed = self.building().write_ring_placed(bytes)?;
-        self.tables[table].buffers[slot] = Bound::Bytes(placed);
+        // At most one chunk, 64 KiB.
+        self.tables[table].buffers[slot] = Bound::Bytes(placed, bytes.len() as u32);
         self.changed();
         Ok(())
     }
@@ -1707,20 +1721,25 @@ impl RenderCommandEncoder {
             false => None,
         };
         if !self.facts.held {
-            // A buffer argument bound to nothing reads the nil buffer (`Ring::nil`).
-            let mut nil = 0;
+            // A buffer argument bound to nothing reads the nil buffer (`Ring::nil`), and a checked
+            // load outside its buffer the zero range (`Ring::zero`).
+            let (mut nil, mut zero) = (0, 0);
             for &(_, table, value) in &draws.fields {
-                if let FieldValue::BufferAddress { slot, mask } = value {
-                    match self.tables[table].buffers.get(slot as usize) {
-                        Some(Bound::Buffer { buffer, offset }) => {
-                            check_alignment(slot, mask, buffer, *offset)?
+                match value {
+                    FieldValue::BufferAddress { slot, mask } => {
+                        match self.tables[table].buffers.get(slot as usize) {
+                            Some(Bound::Buffer { buffer, offset }) => {
+                                check_alignment(slot, mask, buffer, *offset)?
+                            }
+                            Some(Bound::Bytes(..)) => {}
+                            Some(Bound::Empty) | None => nil = self.core.ring.nil(&self.core)?,
                         }
-                        Some(Bound::Bytes(_)) => {}
-                        Some(Bound::Empty) | None => nil = self.core.ring.nil(&self.core)?,
                     }
+                    FieldValue::ZeroAddress => zero = self.core.ring.zero(&self.core)?,
+                    _ => {}
                 }
             }
-            self.facts.nil = nil;
+            self.facts.nil = (nil, zero);
             self.facts.held = true;
         }
         let count = match call {
@@ -2316,12 +2335,13 @@ fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, b
 }
 
 /// Fills `push`, the push bytes of a draw of `state`, from the `tables`, a buffer argument bound to
-/// nothing taking `nil`, the nil buffer's address: a texture whose image the pass `moved` to the
+/// nothing taking `nil`, the nil buffer's address, and length 0, a checked load's zero range at
+/// `zero`: a texture whose image the pass `moved` to the
 /// feedback layout reads through its second element in that layout, and one in `shadow_slots`,
 /// which reads a shadow, through its second element, the shadow's.
 fn fill_push(
     push: &mut Vec<u8>,
-    (tables, nil, factors, alpha_test): (&[Tables; 2], u64, u64, u32),
+    (tables, (nil, zero), factors, alpha_test): (&[Tables; 2], (u64, u64), u64, u32),
     moved: &[Moved],
     shadow_slots: &[(usize, u32)],
     state: &RenderPipelineState,
@@ -2339,6 +2359,10 @@ fn fill_push(
                 let word = address_word(tables.address(slot, nil));
                 push[at..at + 8].copy_from_slice(&word.to_le_bytes());
             }
+            FieldValue::BufferRemaining(slot) => {
+                push[at..at + 4].copy_from_slice(&tables.remaining(slot).to_le_bytes());
+            }
+            FieldValue::ZeroAddress => push[at..at + 8].copy_from_slice(&zero.to_le_bytes()),
             FieldValue::TextureId(slot) => {
                 let id = (tables.texture(slot)).map_or(0, |t| {
                     let second = (moved.iter()).any(|m| m.hazard == t.hazard_id())

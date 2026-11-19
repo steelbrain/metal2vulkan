@@ -190,6 +190,9 @@ fn select(
             Stage::Kernel,
             index.buffer,
         )));
+        // The index read's offset is the thread's, not a translation-time constant.
+        let slot = fetch::slot(Stage::Kernel, index.buffer);
+        crate::lower::access::note_variable(cx, slot, false, true);
         cx.families.stage_io.buffers.insert(index.buffer);
     }
     if matches!(step, Step::Grid { .. } | Step::Indexed { .. }) {
@@ -205,6 +208,13 @@ fn select(
         Stage::Kernel,
         f.buffer_index,
     )));
+    // The fetch reads at the thread's element, whose offset is not a translation-time constant.
+    crate::lower::access::note_variable(
+        cx,
+        fetch::slot(Stage::Kernel, f.buffer_index),
+        false,
+        true,
+    );
     // A fixed stride is the descriptor's, whatever the bind's; a dynamic layout's is the one the
     // encoder binds the buffer with, which the binder pushes. A constant step's is `Some(0)`
     // (`StageInFetch::of`): it reads none.

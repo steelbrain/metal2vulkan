@@ -19,7 +19,9 @@
 //! **Containment** is mandatory for PSB (robust buffer access does not apply to device addresses):
 //! the normative check in `u64` against `size`, the access at `select(inb, address, sink)`, and a
 //! load's value `select(inb, v, 0)`. A contained store lands in the sink, which no shader reads
-//! observably. Only `Containment::UnsafeOff` omits it.
+//! observably. Only `Containment::UnsafeOff` omits it. Under the identity domains no table is
+//! read: an access whose offset is not a translation-time constant is checked against the slot's
+//! pushed length (`emit::prepare`), a load outside reading the zero range ([`PsbMem::outside`]).
 //!
 //! The leaf itself (`memory::leaf`) sees a word memory based at the 4-aligned address below the
 //! access, and the access's byte offset within that word (0 to 3).
@@ -195,8 +197,8 @@ enum Reach {
 /// Prepare an access of a static slot whose window starts at `start` at the `u32` displacement
 /// `m` from its bind offset, under the identity domains: `address` (a `u64`) is the slot's own
 /// device address, the buffer's plus the bind offset, so no table is read. It need not be
-/// 4-aligned: the word below the access and the byte offset in it come from the sum. Uncontained,
-/// as Metal contains no device-address access.
+/// 4-aligned: the word below the access and the byte offset in it come from the sum. The check,
+/// where the access takes one, is `emit::prepare`'s.
 pub fn prepare_at(
     fb: &mut FunctionBuilder<'_>,
     address: Value,
@@ -230,7 +232,7 @@ pub fn prepare_at(
 /// address, as a descriptor view's is `m` from its base ([`Reach::Direct`]). Every byte of a
 /// buffer lies within 2^31 bytes of each bind address in it, the runtime making no buffer longer
 /// than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the offset is exact whatever the slot's
-/// window. Nothing is rounded. Uncontained, as Metal contains no device-address access.
+/// window. Nothing is rounded. The check, where the access takes one, is `emit::prepare`'s.
 pub fn prepare_direct(base: Value, m: Value) -> PsbAccess {
     PsbAccess {
         mem: PsbMem {
@@ -264,6 +266,9 @@ pub struct PsbMem {
     units: Units,
     read_only: bool,
     reach: Reach,
+    /// Where a load's units read when a check fails ([`PsbMem::outside`]): the check and the
+    /// zero range's address.
+    outside: Option<(Value, Value)>,
 }
 
 impl PsbMem {
@@ -276,6 +281,19 @@ impl PsbMem {
             units: Units::NONE,
             read_only: false,
             reach: Reach::Rounded,
+            outside: None,
+        }
+    }
+
+    /// The same words, each unit a load reads at `zero` (a `u64`, the identity domains' zero
+    /// range: 16 bytes of zeros at a multiple of 16 that nothing writes) where `inb` fails: one
+    /// select of the unit's address, so a load outside reads zero, touches nothing of the slot,
+    /// and takes no select of its value. Stores and atomics are not redirected: they run only
+    /// where `inb` holds.
+    pub fn outside(self, inb: Value, zero: Value) -> PsbMem {
+        PsbMem {
+            outside: Some((inb, zero)),
+            ..self
         }
     }
 
@@ -393,7 +411,8 @@ impl PsbMem {
         self.place_of(fb, 4, word, u32_, load)
     }
 
-    /// The place of a `pointee` at `addr`: `NonWritable` for a load of read-only memory.
+    /// The place of a `pointee` at `addr`: `NonWritable` for a load of read-only memory, and a
+    /// load's at the zero range where its check fails ([`PsbMem::outside`]).
     fn place(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -401,6 +420,10 @@ impl PsbMem {
         pointee: TypeId,
         load: bool,
     ) -> BResult<Value> {
+        let addr = match (load, self.outside) {
+            (true, Some((inb, zero))) => fb.select(inb, addr, zero)?,
+            _ => addr,
+        };
         match load && self.read_only {
             true => fb.device_place_read_only(addr, pointee),
             false => fb.device_place(addr, pointee),

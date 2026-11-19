@@ -256,17 +256,30 @@ pub(super) struct Prepared {
     pub(super) off: SValue,
     pub(super) inb: Option<SValue>,
     /// A store needs `if_(inb)`: a view's out-of-bounds offset is not redirected (a PSB access
-    /// already points at the sink).
+    /// already points at the sink), nor is a store's under the identity domains.
     pub(super) guard_store: bool,
+    /// A load out of bounds already reads zeros: its units' places select the zero range
+    /// (`PsbMem::outside`), so its value takes no select.
+    pub(super) reads_zero: bool,
 }
 
-/// Prepare `t` for an access of `n` bytes at Metal offset `m`.
+/// Prepare `t` for an access of `n` bytes at Metal offset `m`, a load or a copy's read where
+/// `read`.
+///
+/// Under the identity domains a slot an access may reach at an offset that is not a
+/// translation-time constant (`AccessPlan::variable`) is checked where `m` is not a constant:
+/// the normative check (`contain::in_bounds`) of `m` against the slot's `SlotRemaining`, in
+/// `u32`, so an offset before the bind offset, which wraps to at least 2^31, is outside. A load
+/// outside reads each unit at `ZeroAddress`, 16 bytes of zeros, with one select of the unit's
+/// address and none of its value; a store or atomic outside is in the closed `if_(inb)` and runs
+/// nothing. Nil and a slot shorter than one access push a length the check fails for every
+/// offset that reaches past it, so neither reads nor writes there.
 pub(super) fn prepare(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     t: &Target,
     m: SValue,
-    n: u32,
+    (n, read): (u32, bool),
 ) -> BResult<Prepared> {
     let Some(choice) = cx.plan.slots.get(t.slot).copied().flatten() else {
         return Err(cx.fail("an access names an unplanned slot"));
@@ -297,17 +310,35 @@ pub(super) fn prepare(
         };
         let units = cx.plan.families.access.psb_units;
         let read_only = cx.plan.families.access.unwritten.contains(&t.slot);
+        let mut mem = a
+            .mem
+            .with(ops)
+            .with_units(units)
+            .with_vectors(aligned)
+            .read_only(read_only);
+        let checked = cx.plan.families.access.variable.contains(&choice.slot)
+            && leaf::known(fb, m)?.is_none();
+        if checked {
+            let remaining = cx.push_field(fb, PushField::SlotRemaining(choice.slot))?;
+            let inb = contain::in_bounds(fb, m, remaining, u64::from(n))?;
+            if read {
+                let zero = cx.push_field(fb, PushField::ZeroAddress)?;
+                mem = mem.outside(inb, zero);
+            }
+            return Ok(Prepared {
+                mem: Mem::Psb(mem),
+                off: a.off,
+                inb: Some(inb),
+                guard_store: true,
+                reads_zero: read,
+            });
+        }
         return Ok(Prepared {
-            mem: Mem::Psb(
-                a.mem
-                    .with(ops)
-                    .with_units(units)
-                    .with_vectors(aligned)
-                    .read_only(read_only),
-            ),
+            mem: Mem::Psb(mem),
             off: a.off,
             inb: a.inb,
             guard_store: false,
+            reads_zero: false,
         });
     }
     let Some(view) = cx.decl.families.access.views.get(t.slot).copied().flatten() else {
@@ -368,6 +399,7 @@ pub(super) fn prepare(
         off,
         inb,
         guard_store,
+        reads_zero: false,
     })
 }
 
@@ -377,6 +409,7 @@ fn load_one(fb: &mut FunctionBuilder<'_>, leaf: &Leaf, p: Prepared) -> BResult<S
     let v = leaf::load(fb, &mut mem, leaf, p.off)?;
     match p.inb {
         None => Ok(v),
+        Some(_) if p.reads_zero => Ok(v),
         Some(inb) => {
             let z = leaf::zero(fb, leaf)?;
             fb.select(inb, v, z)
@@ -466,7 +499,7 @@ pub(super) fn access_at(
     };
     let mut prepared = Vec::with_capacity(a.targets.len());
     for t in &a.targets {
-        let mut p = prepare(cx, fb, t, m, a.leaf.bytes)?;
+        let mut p = prepare(cx, fb, t, m, (a.leaf.bytes, stored.is_none()))?;
         p.mem = p.mem.with(ops);
         prepared.push((t.root, t.slot, p));
     }
