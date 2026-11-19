@@ -32,7 +32,7 @@
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
-use crate::counters::Gauge;
+use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::hazard::HeapId;
@@ -2737,7 +2737,7 @@ impl TextureInner {
 
     /// Records `copy` between `region` of `buffer` and the image, `to_image` for a replace: the
     /// subresource leaves home for the transfer layout and comes back, and a read's bytes are
-    /// made visible to the host.
+    /// made visible to the host. Its two barriers are counted in `counters`.
     ///
     /// # Safety
     ///
@@ -2746,6 +2746,7 @@ impl TextureInner {
     unsafe fn record(
         &self,
         device: &ash::Device,
+        counters: &Counters,
         command: vk::CommandBuffer,
         copy: &Transfer,
         (buffer, region): (vk::Buffer, vk::BufferImageCopy),
@@ -2797,6 +2798,8 @@ impl TextureInner {
             }
             device.cmd_pipeline_barrier2(command, &back);
         }
+        counters.count(Metric::Barriers);
+        counters.count(Metric::Barriers);
     }
 }
 
@@ -3279,7 +3282,14 @@ impl Texture {
             // SAFETY: recording under the work lock, the upload holding the image and the stage.
             |device, command| unsafe {
                 let region = copy.buffer_image_copy(stage.offset(), 0, 0);
-                inner.record(device, command, &copy, (stage.buffer(), region), true)
+                inner.record(
+                    device,
+                    &core.counters,
+                    command,
+                    &copy,
+                    (stage.buffer(), region),
+                    true,
+                )
             },
         )
     }
@@ -3346,7 +3356,14 @@ impl Texture {
             // buffer's block, the bytes the copy reads: named bytes lie in Shared memory with no
             // device copy (`check_places`).
             |device, command| unsafe {
-                inner.record(device, command, &copy, (buffer, region), true)
+                inner.record(
+                    device,
+                    &core.counters,
+                    command,
+                    &copy,
+                    (buffer, region),
+                    true,
+                )
             },
         )
     }
@@ -3434,7 +3451,14 @@ impl Texture {
             // SAFETY: as in `replace_region`.
             |device, command| unsafe {
                 let region = copy.buffer_image_copy(stage.offset(), 0, 0);
-                inner.record(device, command, copy, (stage.buffer(), region), false)
+                inner.record(
+                    device,
+                    &core.counters,
+                    command,
+                    copy,
+                    (stage.buffer(), region),
+                    false,
+                )
             },
         )?;
         let value = core.work.flush();

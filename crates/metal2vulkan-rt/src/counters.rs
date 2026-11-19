@@ -882,7 +882,10 @@ pub struct Metrics {
     /// ([`attachment_read_copies`](Self::attachment_read_copies)), or the clear of the shadow
     /// that stands for a copy of what its pass cleared, one for each acquire of an exported
     /// block ([`external_acquires`](Self::external_acquires)), and one for each release of one
-    /// ([`external_releases`](Self::external_releases)). Any other draw takes none.
+    /// ([`external_releases`](Self::external_releases)). Any other draw takes none. An upload
+    /// adds one where it moves new textures' images to their home layouts, and two around each
+    /// copy between a texture's image and the staging region or a named buffer
+    /// (`replaceRegion` and `getBytes`).
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
     /// between a texture over a buffer and its image of its own

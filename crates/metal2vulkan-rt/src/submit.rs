@@ -40,7 +40,7 @@ use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, Chunk, CopyIn, Modified, Named, CAPTURE_LEN};
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Pending, Segment};
 use crate::complete;
-use crate::counters::{Gauge, Metric};
+use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
@@ -299,8 +299,13 @@ impl Upload {
     }
 
     /// Records `moves`, images' moves from undefined to their home layouts
-    /// ([`Image::homing`]), in one barrier; the upload holds each image.
-    fn home(&self, device: &ash::Device, moves: &[vk::ImageMemoryBarrier2<'_>]) {
+    /// ([`Image::homing`]), in one barrier, counted in `counters`; the upload holds each image.
+    fn home(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        moves: &[vk::ImageMemoryBarrier2<'_>],
+    ) {
         if moves.is_empty() {
             return;
         }
@@ -308,6 +313,7 @@ impl Upload {
         // SAFETY: the upload's command buffer is recording, under the work lock; each image is
         // the device's and held by the upload.
         unsafe { device.cmd_pipeline_barrier2(self.command, &dependency) };
+        counters.count(Metric::Barriers);
     }
 }
 
@@ -903,7 +909,7 @@ impl Work {
                 _ => None,
             })
             .collect();
-        upload.home(device, &moves);
+        upload.home(device, &core.counters, &moves);
         record(device, upload.command);
         upload.entries += 1;
         upload.staging += staging;
@@ -1302,6 +1308,7 @@ impl WorkState {
     fn take_upload(
         &mut self,
         device: &ash::Device,
+        counters: &Counters,
         released: &AtomicU64,
         value: u64,
     ) -> Option<Upload> {
@@ -1327,7 +1334,7 @@ impl WorkState {
             }
         }
         if !moves.is_empty() {
-            upload.home(device, &moves);
+            upload.home(device, counters, &moves);
             upload.entries += 1;
         }
         Some(upload)
@@ -1684,6 +1691,7 @@ impl WorkState {
         &mut self,
         index: usize,
         device: &ash::Device,
+        counters: &Counters,
         released: &AtomicU64,
     ) -> Option<(u64, Option<Upload>, Batch)> {
         let fifo = &mut self.fifos[index];
@@ -1716,7 +1724,11 @@ impl WorkState {
             }
         }
         self.flush = false;
-        Some((value, self.take_upload(device, released, value), batch))
+        Some((
+            value,
+            self.take_upload(device, counters, released, value),
+            batch,
+        ))
     }
 
     /// The first FIFO whose group goes at the end of a pass: unless its queue has [`IN_FLIGHT`]
@@ -1975,7 +1987,9 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
             Step::Staged => continue,
             Step::Goes(index) => index,
         };
-        let Some((value, upload, batch)) = state.close(index, &core.device, &work.released) else {
+        let Some((value, upload, batch)) =
+            state.close(index, &core.device, &core.counters, &work.released)
+        else {
             continue;
         };
         drop(state);
@@ -1988,7 +2002,8 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
     }
     if state.flush && !sent {
         let value = state.progress + 1;
-        if let Some(upload) = state.take_upload(&core.device, &work.released, value) {
+        if let Some(upload) = state.take_upload(&core.device, &core.counters, &work.released, value)
+        {
             state.flush = false;
             state.progress = value;
             drop(state);

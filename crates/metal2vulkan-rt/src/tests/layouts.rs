@@ -3,7 +3,7 @@
 //! module's own for each core command rt records that names an image layout (its barriers, its
 //! copies between images and buffers, its blits, its colour clears, dynamic rendering's
 //! attachments and its descriptor writes), each noting the layouts it names, then calling the
-//! driver's. The core commands that name a layout and that rt does not record get no entry, so
+//! driver's. Its barrier commands are counted too. The core commands that name a layout and that rt does not record get no entry, so
 //! that a call of one panics (ash's stub for a command it did not load) and the test learns of it.
 //!
 //! Under a device cfg, on every device of the cfg's kind: one command buffer runs every blit
@@ -58,6 +58,8 @@ struct Driver {
 #[derive(Default)]
 struct Record {
     named: Vec<Named>,
+    /// Each recorded device's `vkCmdPipelineBarrier2` calls.
+    barriers: HashMap<vk::Device, u64>,
     /// Each recorded device's driver commands.
     drivers: HashMap<vk::Device, Driver>,
     /// Each command buffer's device.
@@ -81,6 +83,11 @@ pub(crate) fn named(device: vk::Device, image: vk::Image) -> Vec<Named> {
 }
 
 /// Forgets the layouts recorded so far: a handle of a destroyed image may name another since.
+/// The `vkCmdPipelineBarrier2` calls recorded for `device` so far.
+pub(crate) fn barriers(device: vk::Device) -> u64 {
+    record().barriers.get(&device).copied().unwrap_or(0)
+}
+
 pub(crate) fn forget() {
     record().named.clear();
 }
@@ -306,6 +313,7 @@ unsafe extern "system" fn cmd_pipeline_barrier2(
     info: *const vk::DependencyInfo<'_>,
 ) {
     let (device, driver) = driver_of(command_buffer);
+    *record().barriers.entry(device).or_default() += 1;
     // SAFETY: the caller's dependency info and its image barriers.
     let barriers = unsafe {
         let info = &*info;
@@ -474,7 +482,7 @@ unsafe extern "system" fn cmd_begin_rendering(
 }
 
 mod on_device {
-    use super::{forget, named, RECORDING};
+    use super::{barriers, forget, named, RECORDING};
     use crate::tests::command::on_device::{each_device, finished};
     use crate::texture::TextureObject;
     use crate::{
@@ -647,6 +655,58 @@ mod on_device {
             );
             drop((texture, plain, other, buffer, command_buffer, queue));
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// Every `vkCmdPipelineBarrier2` rt records is counted in [`crate::Metrics::barriers`]: a
+    /// texture's move home in an upload, a replace and a read of a texture's image through the
+    /// staging region (each a barrier away from home and one back), and a command buffer's blit
+    /// between two textures, counted against the barrier commands the device's table saw.
+    #[test]
+    fn every_barrier_rt_records_is_counted() {
+        let _recording = Recording::start();
+        each_device("barrier count", |name, _, device| {
+            let handle = device.core().device.handle();
+            let counted = || device.counters().metrics().barriers;
+            let before = (counted(), barriers(handle));
+            let d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
+            let new = || (device.new_texture(&d, None)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let (a, b) = (new(), new());
+            let size = [WIDTH, HEIGHT, 1];
+            let whole = Region {
+                origin: [0; 3],
+                size,
+            };
+            let written = vec![0x5Au8; (ROW * u64::from(HEIGHT)) as usize];
+            (a.replace_region(whole, 0, 0, crate::HostBytes::from(&written[..]), ROW, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+            let at = TexturePlace::default();
+            (blit.copy_from_texture(&a, at, size, &b, at))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            blit.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let mut read = vec![0u8; written.len()];
+            (b.get_bytes(&mut read, ROW, 0, whole, 0, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(read, written, "{name}: the bytes through the copy");
+            let after = (counted(), barriers(handle));
+            let recorded = after.1 - before.1;
+            // At least: a move home, two for the replace, two for the blit, two for the read.
+            assert!(
+                recorded >= 7,
+                "{name}: {recorded} barrier commands recorded"
+            );
+            assert_eq!(
+                after.0 - before.0,
+                recorded,
+                "{name}: barriers counted, against the barrier commands recorded"
+            );
         });
     }
 }
