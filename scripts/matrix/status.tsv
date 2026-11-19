@@ -16,7 +16,6 @@
 card      | row                              | status | who                                | since      | owned | note
 1002:15bf | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | 0.988 | -
 1002:699f | wide_bindings                    | open   | identity                           | 5f2494bfc5 | 1.123 | waits for the card's native table
-8086:3e9b | sampling_deep_64x64x16           | open   | identity                           | 5f2494bfc5 | 1.017 | waits for the card's native table
 8086:a7a0 | row_cells                        | open   | identity                           | 795c834ded | 1.144 | waits for the card's native table
 8086:a7a0 | constant_managed                 | open   | identity                           | 5f2494bfc5 | 1.061 | waits for the card's native table
 8086:a7a0 | constant_private                 | open   | identity                           | 5f2494bfc5 | 1.065 | waits for the card's native table
