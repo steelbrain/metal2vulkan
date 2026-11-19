@@ -194,6 +194,22 @@ fn shapes(options: &BTreeMap<String, String>) -> i32 {
 const BEFORE_COMPLETION_FIX: &str =
     "recorded before the recorder's completion fix: the stream may differ from what the program did";
 
+/// The report's `display library` line of a stream with the sidecar `metallib`: its length, its
+/// SHA-256, and its git blob id (the SHA-1 of `blob LENGTH\0` and the bytes), which names the
+/// file in the host's tree.
+fn display_line(metallib: &[u8]) -> String {
+    use sha1::Digest as _;
+    let sha256 = metal2vulkan_validation::replay::hex(&sha2::Sha256::digest(metallib));
+    let mut blob = sha1::Sha1::new();
+    blob.update(format!("blob {}\0", metallib.len()).as_bytes());
+    blob.update(metallib);
+    let blob = metal2vulkan_validation::replay::hex(&blob.finalize());
+    format!(
+        "display library the stream's sidecar, {} bytes, sha256 {sha256}, git blob {blob}",
+        metallib.len()
+    )
+}
+
 /// The report's `range` line: the recording range the play used, where it came from, and whether
 /// the play ends there or `--past-range yes` takes it past.
 fn range_line(range: RecordingRange, source: RangeSource, past: bool) -> String {
@@ -269,10 +285,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
     let display = display_library(&PathBuf::from(&options["stream"]));
     let display = match std::fs::read(&display) {
         Ok(metallib) => {
-            report.line(&format!(
-                "display library the stream's sidecar, {} bytes",
-                metallib.len()
-            ));
+            report.line(&display_line(&metallib));
             Some(metallib)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

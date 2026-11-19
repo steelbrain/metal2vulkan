@@ -67,7 +67,7 @@ fn a_report_names_the_recording_range_the_play_used() {
 }
 
 /// The line after the range says whether the stream has the host's display library beside it,
-/// `NAME.display.metallib`, and its length.
+/// `NAME.display.metallib`, and its length, SHA-256 and git blob id.
 #[test]
 fn a_report_names_the_display_library_beside_the_stream() {
     let dir = ScratchDir::new("replay-display-report").unwrap();
@@ -86,8 +86,10 @@ fn a_report_names_the_display_library_beside_the_stream() {
         "display library none: the host's library from source is skipped"
     );
     std::fs::write(dir.path().join("s.display.metallib"), b"MTLB!").unwrap();
+    // `git hash-object` of the five bytes names the same blob.
     assert_eq!(
         line("beside"),
-        "display library the stream's sidecar, 5 bytes"
+        "display library the stream's sidecar, 5 bytes, sha256 \
+         6cfdce7eee577852d35aebca1eb2891e635bec8546b3038e31348ff5f9a5ce0c, git blob 8d7ffd7ee222d331e5a1c416934ff13a9ab9b1be"
     );
 }

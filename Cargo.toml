@@ -37,6 +37,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # SHA-256 on the CPU's own instructions where it has them (ARMv8's SHA2 extension, x86's SHA-NI),
 # detected at run time; nothing here uses the default `alloc` and `oid` features.
+sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }
 
 # Dev and test builds keep line tables (file and line in backtraces) and no other debug info, and
