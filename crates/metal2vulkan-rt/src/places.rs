@@ -17,7 +17,7 @@
 //! block. Writes through it in other blocks touch no page of a texture block's: blocks start and
 //! end on the pool's granule, at least the device's `bufferImageGranularity`.
 
-use crate::counters::Site;
+use crate::counters::{Gauge, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::memory::{BlockId, Memory, MemoryClass};
@@ -83,6 +83,7 @@ impl Places {
                         offset,
                         len,
                     };
+                    core.counters.rise_by(Gauge::TextureBlockBytes, len);
                     return Ok((place, block.memory));
                 }
             }
@@ -107,6 +108,7 @@ impl Places {
     /// Frees `place`. Where its block empties and is longer than the block length, or another
     /// block of the set of that length is empty, the block goes back to the pool.
     pub(crate) fn release(&self, core: &Core, place: Place) {
+        core.counters.fall_by(Gauge::TextureBlockBytes, place.len);
         let mut blocks = lock(&self.blocks);
         let Some(index) = (blocks.iter()).position(|block| block.memory.id == place.block) else {
             return;

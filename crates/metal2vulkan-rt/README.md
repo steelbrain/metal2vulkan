@@ -208,7 +208,13 @@ in its memory.
   `texture_allocations` (a texture's allocation of its own), `texture_block_allocations`,
   `ring_block_allocations`, `staging_region_allocations`, `staging_buffer_allocations` (a copy
   larger than the staging region), `zero_source_allocations` and `take_allocations` (a take that
-  no free range fits).
+  no free range fits). A take's parts are timed apart, each as a `Timed` (calls, bytes, total
+  and longest time, and the calls over 1, 5 and 20 ms): `Metrics::takes` (each take whole, a
+  texture block's among them), `take_lock_waits` (its wait for the pool's lock), `take_makes`
+  (an allocation it made for itself on the caller's thread: the buffer, `vkAllocateMemory`, the
+  bind, the address and a Shared one's map), `take_maps` (the consumer's `BlockMappings::map` of
+  it) and `maker_makes` (the allocations made ahead of need, off every take); `zero_writes` times
+  `Device::new_buffer`'s host writes of zeros (`memset` through the block's mapping).
 - The runtime's fixed-size internals are made by the block-maker thread, never on a caller's
   thread and never inside `Device::new`: its first work once `Device::new` starts it is the zero
   source (64 KiB), the parameter ring's first block (2 MiB) and the staging region (16 MiB). The
@@ -288,7 +294,13 @@ in its memory.
   allocation the rule will free; `Gauges::shared_reserve_bytes` and `Gauges::private_reserve_bytes`
   count the reserve's bytes, and `Gauges::shared_allocation_bytes` and
   `Gauges::private_allocation_bytes` the bytes of each class's live allocations, idle ones
-  included. Once the last handle is gone the block's
+  included. `Gauges::shared_placed_bytes` and `private_placed_bytes` count the bytes of the blocks
+  taken and not given back, so a class's allocation bytes less its placed and idle bytes are the
+  free ranges between blocks; `shared_buffer_bytes` and `private_buffer_bytes` count live buffers'
+  lengths by their block's class, `texture_block_bytes` the placed textures' image sizes and
+  `texture_own_bytes` textures' allocations of their own, and `import_bytes` and
+  `surface_import_bytes` the imports' and the surface plane imports' bytes. Once the last handle
+  is gone the block's
   number names nothing
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's
   teardown frees every allocation, blocks still claimed included, each after the consumer's

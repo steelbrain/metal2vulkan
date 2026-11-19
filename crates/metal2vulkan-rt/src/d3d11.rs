@@ -326,19 +326,19 @@ impl Device {
                 return Err(error);
             }
         };
-        core.counters.rise(Gauge::SurfaceImports);
+        core.counters.surface_imported(needs.size);
         // SAFETY: the memory is the image's dedicated import, of a type its requirements list.
         if let Err(result) = unsafe { device.bind_image_memory(image, memory, 0) } {
             destroy();
             // SAFETY: the image bound to nothing is destroyed.
             unsafe { device.free_memory(memory, None) };
             core.counters.fall(Gauge::Blocks);
-            core.counters.fall(Gauge::SurfaceImports);
+            core.counters.surface_import_freed(needs.size);
             return Err(Error::vulkan("vkBindImageMemory")(result));
         }
         Ok(SurfaceImage {
             image,
-            backing: Backing::Import(memory),
+            backing: Backing::Import(memory, needs.size),
             bytes: needs.size,
             usage,
             format,

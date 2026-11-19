@@ -148,17 +148,18 @@ impl Reaper {
 /// The image bound to it is destroyed.
 unsafe fn free_backing(core: &Core, backing: Backing) {
     match backing {
-        Backing::Own(memory, spilled) => {
+        Backing::Own(memory, bytes, spilled) => {
             // SAFETY: the caller's contract.
             unsafe { core.device.free_memory(memory, None) };
             core.counters.fall(Gauge::Blocks);
+            core.counters.fall_by(Gauge::TextureOwnBytes, bytes);
             core.counters.fall_by(Gauge::SpilledBytes, spilled);
         }
-        Backing::Import(memory) => {
+        Backing::Import(memory, bytes) => {
             // SAFETY: the caller's contract.
             unsafe { core.device.free_memory(memory, None) };
             core.counters.fall(Gauge::Blocks);
-            core.counters.fall(Gauge::SurfaceImports);
+            core.counters.surface_import_freed(bytes);
         }
         Backing::Placed(place) => core.places.release(core, place),
         Backing::InBlock | Backing::Drawable => {}

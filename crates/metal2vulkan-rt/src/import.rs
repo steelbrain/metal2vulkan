@@ -672,9 +672,9 @@ impl Device {
             return Err(error);
         }
         let undo = |made: &[(vk::DeviceMemory, u64)]| {
-            for &(memory, _) in made {
+            for &(memory, bytes) in made {
                 // SAFETY: nothing is bound to the import yet, and nothing uses it.
-                unsafe { memory::free_chunk(core, memory) };
+                unsafe { memory::free_chunk(core, memory, bytes) };
             }
             sparse.unreserve(needs.size);
             destroy();

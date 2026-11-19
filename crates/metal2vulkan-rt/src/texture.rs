@@ -735,9 +735,9 @@ impl Drop for Image {
 pub(crate) enum Backing {
     /// A place in a texture block.
     Placed(Place),
-    /// An allocation of its own, and its bytes where it spilled out of device-local memory (else
-    /// 0).
-    Own(vk::DeviceMemory, u64),
+    /// An allocation of its own, its bytes, and its bytes where it spilled out of device-local
+    /// memory (else 0), counted in the textures' own bytes gauge.
+    Own(vk::DeviceMemory, u64, u64),
     /// A place in a block the image holds: a heap's range ([`Device::new_heap_texture`]), or a
     /// buffer's bytes ([`Buffer::new_texture`]).
     InBlock,
@@ -746,8 +746,9 @@ pub(crate) enum Backing {
     Drawable,
     /// A surface plane's own dedicated import: of the surface's dma-buf
     /// ([`Device::new_exported_surface`]), or of a Direct3D 11 texture's handle
-    /// (`Device::import_d3d11_surface`, on Windows), counted in the surface imports gauge.
-    Import(vk::DeviceMemory),
+    /// (`Device::import_d3d11_surface`, on Windows), of its bytes, counted in the surface imports
+    /// gauges.
+    Import(vk::DeviceMemory, u64),
 }
 
 /// The unit of a copy between an image and bytes or another image: the aspect, an element's
@@ -2592,7 +2593,9 @@ impl Made {
                 false => 0,
             };
             core.counters.rise_by(Gauge::SpilledBytes, spilled);
-            (Backing::Own(memory, spilled), memory, 0)
+            core.counters
+                .rise_by(Gauge::TextureOwnBytes, requirements.size);
+            (Backing::Own(memory, requirements.size, spilled), memory, 0)
         };
         self.backing = Some(backing);
         // SAFETY: the place or allocation holds the image's size at its alignment, in memory of a
@@ -2655,15 +2658,16 @@ impl Made {
                 device.destroy_image(image, None);
             }
             match self.backing {
-                Some(Backing::Own(memory, spilled)) => {
+                Some(Backing::Own(memory, bytes, spilled)) => {
                     device.free_memory(memory, None);
                     core.counters.fall(Gauge::Blocks);
+                    core.counters.fall_by(Gauge::TextureOwnBytes, bytes);
                     core.counters.fall_by(Gauge::SpilledBytes, spilled);
                 }
                 Some(Backing::Placed(place)) => core.places.release(core, place),
                 // A surface's plane images are made by `crate::surface` and `crate::d3d11`,
                 // never here.
-                Some(Backing::Import(_)) => {}
+                Some(Backing::Import(..)) => {}
                 Some(Backing::InBlock | Backing::Drawable) | None => {}
             }
         }
@@ -4423,11 +4427,11 @@ pub(crate) struct SurfaceImage {
 pub(crate) unsafe fn discard_surface_image(core: &Core, made: SurfaceImage) {
     // SAFETY: the caller's contract.
     unsafe { core.device.destroy_image(made.image, None) };
-    if let Backing::Import(memory) = made.backing {
+    if let Backing::Import(memory, bytes) = made.backing {
         // SAFETY: the image bound to it is destroyed.
         unsafe { core.device.free_memory(memory, None) };
         core.counters.fall(Gauge::Blocks);
-        core.counters.fall(Gauge::SurfaceImports);
+        core.counters.surface_import_freed(bytes);
     }
 }
 

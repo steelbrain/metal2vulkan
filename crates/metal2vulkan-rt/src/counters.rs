@@ -22,6 +22,30 @@ fn bucket(bounds: &[u64], nanos: u64) -> usize {
         .unwrap_or(bounds.len())
 }
 
+/// The bounds of each [`Timed`]'s buckets, in nanoseconds: 1, 5 and 20 ms.
+const OVER_NANOS: [u64; 3] = [1_000_000, 5_000_000, 20_000_000];
+
+/// A part of the consumer's takes and buffer makes the runtime times, counted on its own in
+/// [`Metrics`].
+#[derive(Clone, Copy)]
+pub(crate) enum Part {
+    /// [`Metrics::takes`].
+    Take,
+    /// [`Metrics::take_lock_waits`].
+    TakeLock,
+    /// [`Metrics::take_makes`].
+    TakeMake,
+    /// [`Metrics::take_maps`].
+    TakeMap,
+    /// [`Metrics::maker_makes`].
+    MakerMake,
+    /// [`Metrics::zero_writes`].
+    ZeroWrite,
+}
+
+/// The number of [`Part`]s.
+const PARTS: usize = Part::ZeroWrite as usize + 1;
+
 /// A metric the runtime adds to.
 #[derive(Clone, Copy)]
 pub(crate) enum Metric {
@@ -221,6 +245,22 @@ pub(crate) enum Gauge {
     SurfaceImports,
     /// [`Gauges::surface_buffers`].
     SurfaceBuffers,
+    /// [`Gauges::texture_block_bytes`].
+    TextureBlockBytes,
+    /// [`Gauges::texture_own_bytes`].
+    TextureOwnBytes,
+    /// [`Gauges::shared_buffer_bytes`].
+    SharedBufferBytes,
+    /// [`Gauges::private_buffer_bytes`].
+    PrivateBufferBytes,
+    /// [`Gauges::shared_placed_bytes`].
+    SharedPlacedBytes,
+    /// [`Gauges::private_placed_bytes`].
+    PrivatePlacedBytes,
+    /// [`Gauges::import_bytes`].
+    ImportBytes,
+    /// [`Gauges::surface_import_bytes`].
+    SurfaceImportBytes,
 }
 
 /// A site that allocates on the consumer's threads, inside its calls, counted on its own in
@@ -338,6 +378,9 @@ struct Atomics {
     surface_wait_submissions: AtomicU64,
     sparse_binds: AtomicU64,
     resolves: AtomicU64,
+    /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
+    /// and those over each of [`OVER_NANOS`].
+    parts: [[AtomicU64; 7]; PARTS],
     handles_out: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
@@ -384,6 +427,14 @@ struct Atomics {
     exports: AtomicU64,
     surface_imports: AtomicU64,
     surface_buffers: AtomicU64,
+    texture_block_bytes: AtomicU64,
+    texture_own_bytes: AtomicU64,
+    shared_buffer_bytes: AtomicU64,
+    private_buffer_bytes: AtomicU64,
+    shared_placed_bytes: AtomicU64,
+    private_placed_bytes: AtomicU64,
+    import_bytes: AtomicU64,
+    surface_import_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -570,6 +621,46 @@ impl Counters {
             a.consumer_allocations.fetch_add(1, Relaxed);
             a.consumer_allocation_nanos.fetch_add(nanos, Relaxed);
             a.consumer_allocation_max_nanos.fetch_max(nanos, Relaxed);
+        }
+    }
+
+    /// One more import of `bytes` ([`Gauges::imports`] and [`Gauges::import_bytes`]).
+    pub(crate) fn imported(&self, bytes: u64) {
+        self.rise(Gauge::Imports);
+        self.rise_by(Gauge::ImportBytes, bytes);
+    }
+
+    /// One import of `bytes` freed.
+    pub(crate) fn import_freed(&self, bytes: u64) {
+        self.fall(Gauge::Imports);
+        self.fall_by(Gauge::ImportBytes, bytes);
+    }
+
+    /// One more surface plane import of `bytes` ([`Gauges::surface_imports`] and
+    /// [`Gauges::surface_import_bytes`]).
+    pub(crate) fn surface_imported(&self, bytes: u64) {
+        self.rise(Gauge::SurfaceImports);
+        self.rise_by(Gauge::SurfaceImportBytes, bytes);
+    }
+
+    /// One surface plane import of `bytes` freed.
+    pub(crate) fn surface_import_freed(&self, bytes: u64) {
+        self.fall(Gauge::SurfaceImports);
+        self.fall_by(Gauge::SurfaceImportBytes, bytes);
+    }
+
+    /// One call of `part`, of `bytes` bytes, that took `nanos` nanoseconds ([`Metrics::takes`]
+    /// and the other parts').
+    pub(crate) fn timed(&self, part: Part, bytes: u64, nanos: u64) {
+        let [count, all, total, longest, over @ ..] = &self.atomics.parts[part as usize];
+        count.fetch_add(1, Relaxed);
+        all.fetch_add(bytes, Relaxed);
+        total.fetch_add(nanos, Relaxed);
+        longest.fetch_max(nanos, Relaxed);
+        for (bound, over) in OVER_NANOS.iter().zip(over) {
+            if nanos > *bound {
+                over.fetch_add(1, Relaxed);
+            }
         }
     }
 
@@ -796,6 +887,14 @@ impl Counters {
             Gauge::Exports => &a.exports,
             Gauge::SurfaceImports => &a.surface_imports,
             Gauge::SurfaceBuffers => &a.surface_buffers,
+            Gauge::TextureBlockBytes => &a.texture_block_bytes,
+            Gauge::TextureOwnBytes => &a.texture_own_bytes,
+            Gauge::SharedBufferBytes => &a.shared_buffer_bytes,
+            Gauge::PrivateBufferBytes => &a.private_buffer_bytes,
+            Gauge::SharedPlacedBytes => &a.shared_placed_bytes,
+            Gauge::PrivatePlacedBytes => &a.private_placed_bytes,
+            Gauge::ImportBytes => &a.import_bytes,
+            Gauge::SurfaceImportBytes => &a.surface_import_bytes,
         }
     }
 
@@ -808,6 +907,18 @@ impl Counters {
                 count: count.load(Relaxed),
                 bytes: bytes.load(Relaxed),
                 longest_nanos: longest.load(Relaxed),
+            }
+        };
+        let part = |part: Part| {
+            let [count, bytes, total, longest, over_1, over_5, over_20] = &a.parts[part as usize];
+            Timed {
+                count: count.load(Relaxed),
+                bytes: bytes.load(Relaxed),
+                total_nanos: total.load(Relaxed),
+                longest_nanos: longest.load(Relaxed),
+                over_1_ms: over_1.load(Relaxed),
+                over_5_ms: over_5.load(Relaxed),
+                over_20_ms: over_20.load(Relaxed),
             }
         };
         Metrics {
@@ -891,6 +1002,12 @@ impl Counters {
             surface_wait_submissions: a.surface_wait_submissions.load(Relaxed),
             sparse_binds: a.sparse_binds.load(Relaxed),
             resolves: a.resolves.load(Relaxed),
+            takes: part(Part::Take),
+            take_lock_waits: part(Part::TakeLock),
+            take_makes: part(Part::TakeMake),
+            take_maps: part(Part::TakeMap),
+            maker_makes: part(Part::MakerMake),
+            zero_writes: part(Part::ZeroWrite),
         }
     }
 
@@ -954,6 +1071,14 @@ impl Counters {
             exports: a.exports.load(Relaxed),
             surface_imports: a.surface_imports.load(Relaxed),
             surface_buffers: a.surface_buffers.load(Relaxed),
+            texture_block_bytes: a.texture_block_bytes.load(Relaxed),
+            texture_own_bytes: a.texture_own_bytes.load(Relaxed),
+            shared_buffer_bytes: a.shared_buffer_bytes.load(Relaxed),
+            private_buffer_bytes: a.private_buffer_bytes.load(Relaxed),
+            shared_placed_bytes: a.shared_placed_bytes.load(Relaxed),
+            private_placed_bytes: a.private_placed_bytes.load(Relaxed),
+            import_bytes: a.import_bytes.load(Relaxed),
+            surface_import_bytes: a.surface_import_bytes.load(Relaxed),
         }
     }
 }
@@ -1307,6 +1432,54 @@ pub struct Metrics {
     /// `MTLStoreActionStoreAndMultisampleResolve`): one per attachment a pass resolves, counted
     /// as its encoder ends.
     pub resolves: u64,
+    /// Takes from the pool on the consumer's threads, each whole: a block of
+    /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
+    /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes
+    /// the blocks'.
+    pub takes: Timed,
+    /// The takes' waits for the pool's lock, which the block-maker thread and the other takes
+    /// hold too; no bytes.
+    pub take_lock_waits: Timed,
+    /// Allocations a take made for itself on the consumer's thread, where no free range fit it:
+    /// `vkCreateBuffer`, `vkAllocateMemory`, `vkBindBufferMemory`, the buffer's address and, for a
+    /// Shared one, `vkMapMemory`, together; their bytes the allocations'. The `vkAllocateMemory`
+    /// calls alone are [`take_allocations`](Self::take_allocations).
+    pub take_makes: Timed,
+    /// The consumer's [`BlockMappings::map`](crate::BlockMappings::map) of those allocations, on
+    /// the take's thread; their bytes the allocations'.
+    pub take_maps: Timed,
+    /// Allocations of the pool made ahead of need, off every take: the block-maker thread's, and
+    /// each class's first in the device's making; timed as [`take_makes`](Self::take_makes)
+    /// times a take's, their bytes the allocations'.
+    pub maker_makes: Timed,
+    /// The host's writes of zeros into a mapped block by
+    /// [`Device::new_buffer`](crate::Device::new_buffer)'s `zero_from`, on the consumer's thread:
+    /// `ptr::write_bytes` (the C library's `memset`) through the block's mapping; their bytes the
+    /// zeros. A block the host does not map is zeroed by a GPU fill instead, which is not timed
+    /// here ([`block_zero_fills`](Self::block_zero_fills)).
+    pub zero_writes: Timed,
+}
+
+/// No Metal counterpart: the calls of one part of the consumer's takes and buffer makes
+/// ([`Metrics::takes`] and the others'), each timed alone with [`host_time`](crate::host_time).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Timed {
+    /// The calls.
+    pub count: u64,
+    /// The bytes they took, made, mapped or wrote, as the part says.
+    pub bytes: u64,
+    /// Their nanoseconds, in total.
+    pub total_nanos: u64,
+    /// The longest, in nanoseconds; a maximum since the device was made, so the difference of two
+    /// reads does not apply to it.
+    pub longest_nanos: u64,
+    /// Those longer than 1 ms.
+    pub over_1_ms: u64,
+    /// Those longer than 5 ms.
+    pub over_5_ms: u64,
+    /// Those longer than 20 ms.
+    pub over_20_ms: u64,
 }
 
 /// No Metal counterpart: the `vkAllocateMemory` calls one site of the runtime made on the
@@ -1514,4 +1687,30 @@ pub struct Gauges {
     /// import of the dma-buf, which is also one of [`surface_imports`](Self::surface_imports) and
     /// of [`blocks`](Self::blocks). A copy form's buffer is its block's, and not counted here.
     pub surface_buffers: u64,
+    /// Bytes of textures' places in texture blocks: each placed texture's image size. Those
+    /// blocks are Private blocks, counted in [`private_placed_bytes`](Self::private_placed_bytes)
+    /// whole.
+    pub texture_block_bytes: u64,
+    /// Bytes of textures' allocations of their own (shadows and counted copies' images among
+    /// them), not in the pool.
+    pub texture_own_bytes: u64,
+    /// Bytes of live buffers in Shared blocks, each its length, Managed buffers' bytes among them:
+    /// a buffer the consumer placed over another's bytes counts again.
+    pub shared_buffer_bytes: u64,
+    /// As [`shared_buffer_bytes`](Self::shared_buffer_bytes), of Private blocks, Managed buffers'
+    /// device copies not among them.
+    pub private_buffer_bytes: u64,
+    /// Bytes of Shared blocks taken from the pool and not given back: against
+    /// [`shared_allocation_bytes`](Self::shared_allocation_bytes), the rest of the pool's Shared
+    /// allocations is [`shared_idle_bytes`](Self::shared_idle_bytes) and the free ranges between
+    /// blocks.
+    pub shared_placed_bytes: u64,
+    /// As [`shared_placed_bytes`](Self::shared_placed_bytes), of Private blocks, texture blocks
+    /// among them.
+    pub private_placed_bytes: u64,
+    /// Bytes of the imports [`imports`](Self::imports) counts, as each was allocated.
+    pub import_bytes: u64,
+    /// Bytes of the surface plane imports [`surface_imports`](Self::surface_imports) counts, as
+    /// each was allocated.
+    pub surface_import_bytes: u64,
 }

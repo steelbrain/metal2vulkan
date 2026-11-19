@@ -6,7 +6,7 @@
 //! zeroes nothing ahead of need. A buffer reads zero where
 //! [`Device::new_buffer`](crate::Device::new_buffer) zeroes its range.
 
-use crate::counters::{Counters, Gauge, Metric, Site};
+use crate::counters::{Counters, Gauge, Metric, Part, Site};
 use crate::device::{lock, Core};
 use crate::error::{Error, Limit};
 use crate::floor;
@@ -105,6 +105,22 @@ impl MemoryClass {
         match self {
             MemoryClass::Private => Gauge::PrivateIdleBytes,
             MemoryClass::Shared => Gauge::SharedIdleBytes,
+        }
+    }
+
+    /// The gauge of the class's blocks taken and not given back.
+    fn placed_gauge(self) -> Gauge {
+        match self {
+            MemoryClass::Private => Gauge::PrivatePlacedBytes,
+            MemoryClass::Shared => Gauge::SharedPlacedBytes,
+        }
+    }
+
+    /// The gauge of the class's live buffers' bytes.
+    pub(crate) fn buffer_gauge(self) -> Gauge {
+        match self {
+            MemoryClass::Private => Gauge::PrivateBufferBytes,
+            MemoryClass::Shared => Gauge::SharedBufferBytes,
         }
     }
 
@@ -817,9 +833,18 @@ impl Pool {
         max: u64,
         site: Site,
     ) -> Result<Memory, Error> {
+        let started = crate::host_time();
         let (len, align) = self.shape(len, max)?;
         let index = class.index();
         let mut state = self.lock();
+        let locked = crate::host_time();
+        self.counters
+            .timed(Part::TakeLock, 0, locked.saturating_sub(started));
+        let took = |memory: Memory| {
+            self.counters.rise_by(class.placed_gauge(), memory.len);
+            (self.counters).timed(Part::Take, memory.len, crate::host_time() - started);
+            memory
+        };
         // A take is a pool event: the block-maker thread tries a failed allocation again.
         state.failed[index] = false;
         let id = number(&mut state)?;
@@ -838,14 +863,14 @@ impl Pool {
             // The block-maker thread runs the idle rule on this take, and makes an allocation
             // where it took the class's last wholly free unit.
             self.changed.notify_all();
-            return Ok(carve.block(id, class, len));
+            return Ok(took(carve.block(id, class, len)));
         }
         drop(state);
         let memory = self.own(core, class, len, align, id, site)?;
         let mut state = self.lock();
         self.settle(&mut state, class);
         self.changed.notify_all();
-        Ok(memory)
+        Ok(took(memory))
     }
 
     /// Makes block `id` of `len` bytes at a multiple of `align` at the start of an allocation of
@@ -860,8 +885,16 @@ impl Pool {
         id: BlockId,
         site: Site,
     ) -> Result<Memory, Error> {
+        let started = crate::host_time();
         let mut allocation = make_allocation(core, class, len.max(ALLOCATION_LEN), Some(site))?;
-        if !self.map(&allocation, class, true) {
+        let made = crate::host_time();
+        let bytes = allocation.len;
+        (self.counters).timed(Part::TakeMake, bytes, made.saturating_sub(started));
+        let mapped = self.map(&allocation, class, true);
+        if self.mappings.is_some() {
+            (self.counters).timed(Part::TakeMap, bytes, crate::host_time() - made);
+        }
+        if !mapped {
             free_allocation(core, allocation);
             return Err(Error::Limit(Limit::AllocationNotMapped { class, len }));
         }
@@ -973,6 +1006,7 @@ impl Pool {
     /// allocation at once.
     pub(crate) fn give_back(&self, memory: Memory) {
         let class = memory.class;
+        self.counters.fall_by(class.placed_gauge(), memory.len);
         let mut state = self.lock();
         state.failed[class.index()] = false;
         if let Some(allocation) = state.find(class, memory.memory) {
@@ -1215,7 +1249,13 @@ pub(crate) fn buffer_alignment(device: &ash::Device) -> u64 {
 /// Makes an allocation ahead of need of `class`, and has the consumer map it: the allocation, or
 /// `None` where it was not made or not mapped.
 fn ahead(core: &Core, class: MemoryClass) -> Option<Allocation> {
+    let started = crate::host_time();
     let allocation = make_allocation(core, class, ALLOCATION_LEN, None).ok()?;
+    (core.counters).timed(
+        Part::MakerMake,
+        allocation.len,
+        crate::host_time() - started,
+    );
     if !core.pool.map(&allocation, class, false) {
         free_allocation(core, allocation);
         return None;
@@ -1649,13 +1689,13 @@ pub(crate) unsafe fn import(
     let address = unsafe { device.get_buffer_device_address(&address) };
     let class = match own {
         Own::Import => {
-            core.counters.rise(Gauge::Imports);
+            core.counters.imported(len);
             MemoryClass::Shared
         }
         _ => {
             core.counters.rise(Gauge::SurfaceBuffers);
             #[cfg(unix)]
-            core.counters.rise(Gauge::SurfaceImports);
+            core.counters.surface_imported(len);
             MemoryClass::Private
         }
     };
@@ -1728,7 +1768,7 @@ pub(crate) unsafe fn import_chunk(
             None,
         )
     }?;
-    core.counters.rise(Gauge::Imports);
+    core.counters.imported(info.allocation_size);
     Ok(memory)
 }
 
@@ -1737,13 +1777,13 @@ pub(crate) unsafe fn import_chunk(
 ///
 /// # Safety
 ///
-/// Nothing is bound to `memory`, and nothing uses it.
+/// Nothing is bound to `memory`, an import of `bytes`, and nothing uses it.
 #[cfg(unix)]
-pub(crate) unsafe fn free_chunk(core: &Core, memory: vk::DeviceMemory) {
+pub(crate) unsafe fn free_chunk(core: &Core, memory: vk::DeviceMemory, bytes: u64) {
     // SAFETY: the caller's.
     unsafe { core.device.free_memory(memory, None) };
     core.counters.fall(Gauge::Blocks);
-    core.counters.fall(Gauge::Imports);
+    core.counters.import_freed(bytes);
 }
 
 /// What [`sparse_block`] makes a block of: the sparse buffer of `len` bytes, its chunks' imports
@@ -2124,9 +2164,9 @@ fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
         Some(Own::Surface { .. }) => {
             core.counters.fall(Gauge::SurfaceBuffers);
             #[cfg(unix)]
-            core.counters.fall(Gauge::SurfaceImports);
+            core.counters.surface_import_freed(memory.len);
         }
-        _ => core.counters.fall(Gauge::Imports),
+        _ => core.counters.import_freed(memory.len),
     }
     if let Some(release) = release {
         release();

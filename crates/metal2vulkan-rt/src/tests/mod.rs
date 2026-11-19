@@ -65,6 +65,7 @@ mod storage_element;
 mod submit_infos;
 mod surface;
 mod swizzle;
+mod take_split;
 mod texture;
 mod texture_accesses;
 mod translate;

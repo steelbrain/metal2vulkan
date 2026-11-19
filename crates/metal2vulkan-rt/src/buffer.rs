@@ -2,7 +2,7 @@
 //! device copy, where the device has one, is a range of a Private block the consumer placed it in.
 
 use crate::capture::Named;
-use crate::counters::Gauge;
+use crate::counters::{Gauge, Part};
 use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
 use crate::hazard::HeapId;
@@ -119,6 +119,8 @@ impl Drop for BufferInner {
         let core = &self.core;
         core.ids.give_back(self.id);
         core.counters.fall(Gauge::Buffers);
+        let gauge = self.block.memory.class.buffer_gauge();
+        core.counters.fall_by(gauge, self.length);
     }
 }
 
@@ -232,12 +234,17 @@ impl Device {
         });
         if let Some(from) = zero_from.filter(|&from| from < length) {
             match contents {
-                // SAFETY: `from..length` lies in the new buffer, whose range is in the block.
-                Some(contents) => unsafe {
-                    (contents.get().as_ptr())
-                        .add(from as usize)
-                        .write_bytes(0, (length - from) as usize)
-                },
+                Some(contents) => {
+                    let started = crate::host_time();
+                    // SAFETY: `from..length` lies in the new buffer, whose range is in the block.
+                    unsafe {
+                        (contents.get().as_ptr())
+                            .add(from as usize)
+                            .write_bytes(0, (length - from) as usize)
+                    };
+                    let nanos = crate::host_time() - started;
+                    (self.core().counters).timed(Part::ZeroWrite, length - from, nanos);
+                }
                 None => (self.core().work).zero(self.core(), &block, offset + from, end)?,
             }
             self.core().counters.zeroed(length - from);
@@ -431,6 +438,8 @@ impl Device {
         heap: Option<Arc<HeapId>>,
     ) -> Buffer {
         self.core().counters.rise(Gauge::Buffers);
+        let gauge = block.memory.class.buffer_gauge();
+        self.core().counters.rise_by(gauge, length);
         Buffer {
             inner: Arc::new(BufferInner {
                 core: Arc::clone(self.core()),

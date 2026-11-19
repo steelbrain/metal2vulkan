@@ -1145,11 +1145,11 @@ impl Device {
                     error: Error|
          -> Result<Result<InPlace, SurfaceCopy>, Error> {
             destroy(device, made);
-            for memory in imported {
+            for (memory, &size) in imported.into_iter().zip(&sizes) {
                 // SAFETY: the image bound to it is destroyed.
                 unsafe { device.free_memory(memory, None) };
                 core.counters.fall(Gauge::Blocks);
-                core.counters.fall(Gauge::SurfaceImports);
+                core.counters.surface_import_freed(size);
             }
             free_block();
             Err(error)
@@ -1207,7 +1207,7 @@ impl Device {
             };
             // A successful import owns the fd.
             let _ = fd.into_raw_fd();
-            core.counters.rise(Gauge::SurfaceImports);
+            core.counters.surface_imported(size);
             imported.push(memory);
             step!("import");
             // SAFETY: the memory is the image's dedicated import, of its size and a type it lists.
@@ -1230,7 +1230,7 @@ impl Device {
         for (m, (memory, size)) in made.into_iter().zip(imported.into_iter().zip(sizes)) {
             images.push(SurfaceImage {
                 image: m.image,
-                backing: Backing::Import(memory),
+                backing: Backing::Import(memory, size),
                 bytes: size,
                 usage: m.usage,
                 format: m.format,
