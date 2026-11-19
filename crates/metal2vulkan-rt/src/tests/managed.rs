@@ -20,8 +20,8 @@
 //! Managed textures, on every device: the image takes the named bytes of a region at its upload
 //! and nothing outside it, `get_bytes` reads the named bytes, `replace_region` writes them and
 //! uploads them, and places that do not lie as a copy reads them are refused. The upload keeps the
-//! bytes it reads, the device copy's where there is one, until it retires, though the texture and
-//! its buffer go right after the call.
+//! named buffer's block it reads until it retires, though the texture, the buffer and the block's
+//! handle go right after the call.
 
 use crate::capture::merge;
 
@@ -1090,36 +1090,17 @@ pub(crate) mod on_device {
     }
 
     /// The upload of a Managed texture's region keeps the bytes it reads until it retires: with
-    /// the texture, its named Managed buffer and their blocks' handles gone right after the call,
-    /// and the upload not yet submitted, the block of those bytes (the device copy's, where the
-    /// device keeps one) stays out of the pool until the upload has run.
+    /// the texture, its named buffer and the block's handle gone right after the call, and the
+    /// upload not yet submitted, the named buffer's block stays out of the pool until the upload
+    /// has run. Named bytes lie in Shared memory with no device copy, on every device.
     #[test]
     fn every_device_keeps_the_bytes_a_managed_texture_s_upload_reads_until_it_retires() {
         each_device("managed texture upload hold", |name, _, device| {
             let cpu = (device.take_block(MemoryClass::Shared, NAMED))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            // The block the upload reads: the device copy's where the device keeps one.
-            let (named, read) = match device.has_unified_memory() {
-                true => (
-                    device.new_managed_buffer((cpu.id, 0), None, NAMED, 0),
-                    cpu.id,
-                ),
-                false => {
-                    let copy = (device.take_block(MemoryClass::Private, NAMED))
-                        .unwrap_or_else(|error| panic!("{name}: {error}"));
-                    let named =
-                        device.new_managed_buffer((cpu.id, 0), Some((copy.id, 0)), NAMED, 0);
-                    (named, copy.id)
-                }
-            };
-            let named = named.unwrap_or_else(|error| panic!("{name}: {error}"));
-            // The device copy's zero fill, whose upload holds it, runs and retires first: an
-            // upload leads its submission.
-            let queue = device.new_command_queue(1).expect("a queue");
-            let first = queue.command_buffer().expect("a command buffer");
-            (first.record_for_test(&[&named], |_, _| {})).expect("a recording");
-            first.commit().expect("a commit");
-            finished(name, &first);
+            let read = cpu.id;
+            let named = (device.new_buffer(cpu.id, 0, NAMED, Some(0)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             let places = [BytesPlace {
                 offset: 0,
                 bytes_per_row: PITCH,
@@ -1141,7 +1122,6 @@ pub(crate) mod on_device {
             let value = core.work.flush();
             (core.done.wait(core, value)).unwrap_or_else(|error| panic!("{name}: {error}"));
             within("the read bytes' return", || core.pool.holds(read));
-            drop((first, queue));
         });
     }
 }
