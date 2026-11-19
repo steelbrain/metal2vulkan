@@ -175,8 +175,7 @@ impl Ring {
 }
 
 /// A ring of host-visible bytes: its buffer, the allocation of its own that the buffer spans, its
-/// mapping, and its ring. The device's staging region is one, of [`REGION_LEN`] bytes; the
-/// capture ring of Managed buffers' changed ranges is another (`crate::capture`).
+/// mapping, and its ring: the device's staging region, of [`REGION_LEN`] bytes.
 pub(crate) struct Region {
     pub(crate) buffer: vk::Buffer,
     memory: vk::DeviceMemory,

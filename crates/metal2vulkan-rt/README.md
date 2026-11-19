@@ -203,12 +203,12 @@ in its memory.
   pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared allocation made beside it.
   `Metrics::consumer_allocation_nanos` and `consumer_allocation_max_nanos` count the time of
   allocations made on the consumer's threads, and `maker_allocation_nanos` those of the
-  block-maker thread. Eight of the consumer's sites are
+  block-maker thread. Seven of the consumer's sites are
   counted apart, each as a `SiteAllocations` (calls, bytes and the longest call):
   `texture_allocations` (a texture's allocation of its own), `texture_block_allocations`,
   `ring_block_allocations`, `staging_region_allocations`, `staging_buffer_allocations` (a copy
-  larger than the staging region), `capture_ring_allocations`, `zero_source_allocations` and
-  `take_allocations` (a take that no free range fits).
+  larger than the staging region), `zero_source_allocations` and `take_allocations` (a take that
+  no free range fits).
 - The runtime's fixed-size internals are made by the block-maker thread, never on a caller's
   thread and never inside `Device::new`: its first work once `Device::new` starts it is the zero
   source (64 KiB), the parameter ring's first block (2 MiB) and the staging region (16 MiB). The
@@ -341,8 +341,11 @@ in its memory.
   a block, whether Metal's `newBufferWithLength:`, a heap's or a no-copy buffer stands behind it.
 - `Device::new_managed_buffer(bytes, copy, length, copied)` makes a Managed buffer whose bytes are
   `length` bytes at `bytes`, a block the consumer holds and an offset in it: the consumer's bytes,
-  which `contents` answers, in a block the host maps (`Refusal::ManagedBlockNotShared` for a
-  Private one). Vulkan's device type picks its form, as `Device::has_unified_memory` answers it.
+  which `contents` answers where the runtime maps the block (one taken from the pool), and `None`
+  where it does not (an imported block, whose pages the consumer reaches through its own mapping).
+  The block is a Shared one (`Refusal::ManagedBlockPrivate` for a Private one, whose pages the
+  consumer cannot write). Vulkan's device type picks its form, as `Device::has_unified_memory`
+  answers it.
   On an integrated or CPU device the buffer is its bytes, as a Shared buffer is, its `gpu_address`
   theirs, `did_modify_range` does nothing, and `copy` is `None` (`Refusal::ManagedCopyOnUnified`
   otherwise). Elsewhere shaders reach a device copy at `gpu_address`, always: `length` bytes at
@@ -352,31 +355,17 @@ in its memory.
   it. The copy's rest past its first `copied` bytes is zeroed in the upload, and those bytes are
   named as `did_modify_range` names a range.
   `Buffer::did_modify_range(start, length)` names a range changed (`Refusal::ModifiedRange` past
-  the buffer), merged with the buffer's others where they overlap or touch, and submits nothing.
-  The next commit of a command buffer with commands, on any queue, takes the bytes of every range
-  named since: on the committing thread, before `commit` returns, it copies each once into a
-  64 MiB staging ring of the Shared type (made at the device's first `did_modify_range`, on its
-  thread, so no commit waits for the allocation; never zeroed, as each span is written before it
-  is copied), and the copies from the ring into the device copies go
-  ahead of that command buffer's commands, after every earlier command on the device, which the
-  barrier ending each earlier command buffer orders; the copies record one barrier, after them. So
-  the bytes are taken at the commit; Metal takes them shortly after, before the command buffer is
-  scheduled. A write or a `did_modify_range` made while a command buffer runs does not reach it.
-  Commits take turns while they copy, so command buffers keep the order of their captures. A
-  commit that finds the ring full waits for its oldest copy's submission to complete. Where that
-  copy is not yet submitted, the held groups go at once; once every command buffer committed
-  before is submitted, the commit's own ring-full goes in a copy submission of its own, which the
-  commit waits for before it reuses the ring, so the ring is all the staging a commit holds,
-  whatever it names, and the wait runs at the GPU's copy speed. Where a command buffer committed
-  before waits on the host instead (an event wait the host has not met, or a command buffer
-  enqueued ahead of it and not committed), nothing can go before the host acts: the rest of the
-  commit's bytes go into Shared staging blocks of its own from the pool (at most 256 MiB each),
-  which its command buffer gives back as it retires, the pool's idle rule then deciding when their
-  memory is freed. Every byte is still the commit's. `Metrics::managed_bytes_captured`,
-  `capture_waits`, `capture_streams`, `capture_overflows` and `capture_overflow_bytes` count them,
-  `capture_copy_nanos` and `capture_wait_nanos` time the commits' host copies and waits, and
-  `Gauges::capture_bytes` counts the ring and the staging blocks alive. A command buffer
-  keeps each device copy it uses, and so the copy's block, until it retires.
+  the buffer), merged with the buffer's others where they overlap or touch, and submits and
+  allocates nothing. The next commit of a command buffer with commands, on any queue, takes every
+  range named since, once each: GPU copies from the consumer's block into the device copy,
+  recorded at the commit into a command buffer of their own that goes ahead of that command
+  buffer's commands in its submission, after every earlier command on the device, which the
+  barrier ending each earlier command buffer orders; the copies record one barrier, after them.
+  The copy runs when that submission reaches the GPU, so a command buffer reads the bytes the
+  consumer wrote before its commit, as Metal's `didModifyRange:` asks, and a write made after the
+  commit may reach it, where Metal leaves the range undefined for the GPU.
+  `Metrics::managed_bytes_captured` counts the bytes the copies take. A command buffer keeps each
+  device copy it uses, and the consumer's blocks its copies read, until it retires.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
 the buffer there before has completed. A command buffer keeps each buffer it uses, and so its
@@ -797,14 +786,6 @@ planes lie in memories of their own, and `Surface::handle()` is `None`.
   647 µs held it for 579 µs; the other submits took a median of 2 to 3 µs. A submit waits at most
   the rest of one allocation, and the pool makes one per 16 MiB the consumer takes, about what the
   take would spend allocating on its own thread.
-- A commit that fills the capture ring waits for each ring-full's copy into the device copies,
-  which crosses the card's link to the host. On an RTX 3090 in a Thunderbolt 3 enclosure whose
-  link runs at 20 Gb/s (rt at ac1896537f), a ring-full of 63.3 MiB took 33.4 ms on the GPU (1.99
-  GB/s) of the 33.6 ms the commit waited; the runtime's own part (its submission, the queue ahead
-  of the copy and the commit's wake) was about 0.2 ms. In one consumer's replay stream on that
-  card, 258 ring-fulls took 7.3 s of a 98 s play. Over the internal link of an RTX 5080 Laptop GPU
-  the same kind of copy, 64 MiB from Shared memory into a device copy, took 3.9 to 4.5 ms on the GPU
-  (15 to 17 GB/s, rt at 5ad1438f7b), about an eighth of the time.
 - NVIDIA's Linux driver allocates host-visible memory at about 0.14 ms per MiB on an RTX 3090 and
   0.2 ms per MiB on an RTX 2080, in every form we tried (plain, with a device address, dedicated,
   cached or not), against about 0.03 ms per MiB for device-local memory on the 3090. A take longer

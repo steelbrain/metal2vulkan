@@ -1583,8 +1583,8 @@ pub(crate) mod on_device {
     }
 
     /// A commit's wait for the submission lock is counted: one made while another thread holds
-    /// the lock counts at least the time from its turn (taken after its count began) to the
-    /// lock's release, here 20 ms or more. No clock of the test's bounds it from above.
+    /// the lock counts at least the time from the start of its count to the lock's release, here
+    /// 20 ms or more. No clock of the test's bounds it from above.
     #[test]
     fn every_device_counts_a_commits_wait_for_the_submission_lock() {
         each_device("command_lock_wait", |name, _, device| {
@@ -1598,7 +1598,9 @@ pub(crate) mod on_device {
                 let command_buffer = command_buffer.clone();
                 thread::spawn(move || command_buffer.commit().expect("a commit"))
             };
-            within("the commit's turn", || device.core().work.turn_taken());
+            within("the commit's count", || {
+                (device.core().work.counting).load(std::sync::atomic::Ordering::SeqCst)
+            });
             let waiting = host_time();
             thread::sleep(Duration::from_millis(20));
             let released = host_time();
@@ -1608,7 +1610,7 @@ pub(crate) mod on_device {
             let metrics = device.counters().metrics();
             assert!(
                 metrics.commit_lock_wait_max_nanos >= released - waiting,
-                "{name}: {} counted, the lock held {} past the commit's turn",
+                "{name}: {} counted, the lock held {} past the start of the commit's count",
                 metrics.commit_lock_wait_max_nanos,
                 released - waiting
             );

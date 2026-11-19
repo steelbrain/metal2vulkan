@@ -2321,7 +2321,6 @@ field	metal2vulkan-rt::FunctionDescriptor.specialized	pub specialized: bool
 field	metal2vulkan-rt::Gauges.attachment_views	pub attachment_views: u64
 field	metal2vulkan-rt::Gauges.blocks	pub blocks: u64
 field	metal2vulkan-rt::Gauges.buffers	pub buffers: u64
-field	metal2vulkan-rt::Gauges.capture_bytes	pub capture_bytes: u64
 field	metal2vulkan-rt::Gauges.command_buffers	pub command_buffers: u64
 field	metal2vulkan-rt::Gauges.descriptor_slots	pub descriptor_slots: u64
 field	metal2vulkan-rt::Gauges.device_samplers	pub device_samplers: u64
@@ -2382,13 +2381,6 @@ field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
 field	metal2vulkan-rt::Metrics.bytes_zeroed	pub bytes_zeroed: u64
 field	metal2vulkan-rt::Metrics.cache_bytes_written	pub cache_bytes_written: u64
 field	metal2vulkan-rt::Metrics.cache_writes_dropped	pub cache_writes_dropped: u64
-field	metal2vulkan-rt::Metrics.capture_copy_nanos	pub capture_copy_nanos: u64
-field	metal2vulkan-rt::Metrics.capture_overflow_bytes	pub capture_overflow_bytes: u64
-field	metal2vulkan-rt::Metrics.capture_overflows	pub capture_overflows: u64
-field	metal2vulkan-rt::Metrics.capture_ring_allocations	pub capture_ring_allocations: SiteAllocations
-field	metal2vulkan-rt::Metrics.capture_streams	pub capture_streams: u64
-field	metal2vulkan-rt::Metrics.capture_wait_nanos	pub capture_wait_nanos: u64
-field	metal2vulkan-rt::Metrics.capture_waits	pub capture_waits: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_max_nanos	pub commit_lock_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_nanos	pub commit_lock_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.consumer_allocation_max_nanos	pub consumer_allocation_max_nanos: u64
@@ -14040,7 +14032,7 @@ variant	metal2vulkan-rt::Refusal::IndicesGranted	IndicesGranted { class: IndexCl
 variant	metal2vulkan-rt::Refusal::IndicesInUse	IndicesInUse { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesNotGranted	IndicesNotGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndirectOffset	IndirectOffset { offset: u64, length: u64 }
-variant	metal2vulkan-rt::Refusal::ManagedBlockNotShared	ManagedBlockNotShared { block: BlockId }
+variant	metal2vulkan-rt::Refusal::ManagedBlockPrivate	ManagedBlockPrivate { block: BlockId }
 variant	metal2vulkan-rt::Refusal::ManagedCopyMissing	ManagedCopyMissing
 variant	metal2vulkan-rt::Refusal::ManagedCopyNotPrivate	ManagedCopyNotPrivate { block: BlockId }
 variant	metal2vulkan-rt::Refusal::ManagedCopyOnUnified	ManagedCopyOnUnified

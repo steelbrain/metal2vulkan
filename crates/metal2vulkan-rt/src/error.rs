@@ -115,12 +115,15 @@ pub enum Refusal {
         /// The heap's bytes.
         heap_len: u64,
     },
-    /// A Managed buffer whose bytes are in a block the host does not map, a Private block
-    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    /// A Managed buffer whose bytes are in a Private block
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)): a Managed buffer's
+    /// bytes are the consumer's, which it writes, and a Private block has no pages the consumer
+    /// can write.
     ///
-    /// Basis: ours (a Managed buffer's bytes are the consumer's, which the host reaches through
-    /// the block's mapping; a Private block has none).
-    ManagedBlockNotShared {
+    /// Basis: metal-documented (a Managed buffer has a CPU-side copy: `MTLBuffer.h` gives its
+    /// `contents` as "the data pointer of this buffer's shared copy", and `didModifyRange:` names
+    /// the ranges "the CPU has modified").
+    ManagedBlockPrivate {
         /// The block named.
         block: BlockId,
     },
@@ -1654,7 +1657,7 @@ impl fmt::Display for Refusal {
                 f,
                 "a heap buffer of {length} bytes at offset {offset} leaves its heap of {heap_len} bytes"
             ),
-            Refusal::ManagedBlockNotShared { block } => write!(
+            Refusal::ManagedBlockPrivate { block } => write!(
                 f,
                 "a Managed buffer's bytes are in block {}, which is Private",
                 block.get()

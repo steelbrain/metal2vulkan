@@ -290,7 +290,7 @@ pub(crate) struct Core {
     /// thread placed, in the order it placed them ([`Ticks::span`](crate::times::Ticks::span)).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) tick_spans: Mutex<Vec<u64>>,
-    /// For the device tests: where set, the making of a staging or capture ring meets the test at
+    /// For the device tests: where set, the making of the staging region meets the test at
     /// the barrier twice before it allocates, once parked and once released.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) park_region: Mutex<Option<Arc<std::sync::Barrier>>>,
@@ -1528,12 +1528,6 @@ impl Drop for Core {
         // The store's removal thread, the one thread no stop ends, is waited for here, so every
         // gauge, `Gauges::threads` among them, reads zero once the core is gone.
         self.caches.join_removal();
-        if let Some(region) = self.work.take_capture_region() {
-            self.counters
-                .fall_by(Gauge::CaptureBytes, crate::capture::CAPTURE_LEN);
-            // SAFETY: every command buffer whose copy-in read it retired, and no commit runs.
-            unsafe { region.free(self) };
-        }
         if let Some(region) = self.work.take_region() {
             self.counters
                 .fall_by(Gauge::StagingBytes, crate::staging::REGION_LEN);

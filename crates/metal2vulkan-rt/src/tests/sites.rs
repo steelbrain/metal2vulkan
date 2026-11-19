@@ -7,7 +7,6 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::capture::CAPTURE_LEN;
     use crate::fill::ZEROS;
     use crate::memory::MakerTest;
     use crate::ring::{Writes, CHUNK};
@@ -19,14 +18,13 @@ mod on_device {
     use std::sync::atomic::Ordering::Relaxed;
 
     /// Each site's counter in `metrics`, by name.
-    fn sites(metrics: &Metrics) -> [(&'static str, SiteAllocations); 8] {
+    fn sites(metrics: &Metrics) -> [(&'static str, SiteAllocations); 7] {
         [
             ("texture", metrics.texture_allocations),
             ("texture block", metrics.texture_block_allocations),
             ("ring block", metrics.ring_block_allocations),
             ("staging region", metrics.staging_region_allocations),
             ("staging buffer", metrics.staging_buffer_allocations),
-            ("capture ring", metrics.capture_ring_allocations),
             ("zero source", metrics.zero_source_allocations),
             ("take", metrics.take_allocations),
         ]
@@ -265,8 +263,8 @@ mod on_device {
             );
         });
 
-        // A device that keeps a device copy of a Managed buffer makes the capture ring at the
-        // first range named; one that keeps none names nothing.
+        // A Managed buffer's first named range allocates nothing, with a device copy or without:
+        // the commit copies it from the consumer's block.
         let two = !device.has_unified_memory();
         let copy = two.then(|| {
             (device.take_block(MemoryClass::Private, 4096 + 4096))
@@ -277,15 +275,11 @@ mod on_device {
         let at = copy.as_ref().map(|copy| (copy.id, 4096));
         let managed = (device.new_managed_buffer((bytes_block.id, 0), at, 4096, 0))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let expected: &[(&str, u64)] = match two {
-            true => &[("capture ring", CAPTURE_LEN)],
-            false => &[],
-        };
         step(
             name,
             device,
             "a Managed buffer's first named range",
-            expected,
+            &[],
             || {
                 (managed.did_modify_range(0, 4096))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));

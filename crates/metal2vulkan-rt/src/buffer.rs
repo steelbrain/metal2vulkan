@@ -248,10 +248,12 @@ impl Device {
 
     /// `newBufferWithLength:options:`, `newBufferWithBytes:length:options:` and
     /// `newBufferWithBytesNoCopy:length:options:deallocator:` with
-    /// `MTLResourceStorageModeManaged`: `length` bytes at `bytes` (a block the consumer holds and
-    /// the offset in it) are the consumer's bytes, which [`Buffer::contents`] answers. The block is
-    /// one the host maps: a Shared block. Which form the buffer takes is the device's memory-type
-    /// query's answer:
+    /// `MTLResourceStorageModeManaged`: `length` bytes at `bytes` (a Shared block the consumer
+    /// holds and the offset in it) are the consumer's bytes, which [`Buffer::contents`] answers
+    /// where the runtime maps the block (a block it took from the pool), and `None` where it does
+    /// not (an imported block, whose pages the consumer reaches through its own mapping, as for
+    /// [`Device::new_buffer`]). Which form the buffer takes is the device's memory-type query's
+    /// answer:
     ///
     /// - where Vulkan's device type is integrated or CPU ([`Device::has_unified_memory`]), the
     ///   buffer is its bytes, as a Shared buffer is, its [`Buffer::gpu_address`] the bytes' block's
@@ -262,8 +264,8 @@ impl Device {
     ///   the offset. The rest past its first `copied` bytes is zeroed, ahead of every command
     ///   buffer committed after this call, and those first bytes (all of them where `copied` is
     ///   the length or more) are named as [`Buffer::did_modify_range`] names a range: the next
-    ///   commit takes them from the consumer's bytes. The consumer's own bytes are as it wrote
-    ///   them.
+    ///   commit copies them from the consumer's bytes on the GPU. The consumer's own bytes are as
+    ///   it wrote them. The consumer's block lives until every copy from it has run.
     ///
     /// Metal keeps such a copy on a Mac with a discrete GPU, and places it itself. Here the
     /// consumer places both, as it places every buffer ([`Device::new_buffer`]): any byte offset,
@@ -277,8 +279,8 @@ impl Device {
     /// buffer lives.
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler, on every device; as
-    /// [`Device::new_buffer`], for either range; [`Refusal::ManagedBlockNotShared`] for
-    /// bytes in a block the host does not map; [`Refusal::ManagedCopyMissing`] for no `copy` where
+    /// [`Device::new_buffer`], for either range; [`Refusal::ManagedBlockPrivate`] for bytes in a
+    /// Private block; [`Refusal::ManagedCopyMissing`] for no `copy` where
     /// the device keeps one, [`Refusal::ManagedCopyOnUnified`] for a `copy` where it keeps none
     /// and [`Refusal::ManagedCopyNotPrivate`] for a `copy` in a Shared block; for a device copy,
     /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be made,
@@ -304,11 +306,11 @@ impl Device {
         }
         let (block, offset) = bytes;
         let block = self.placed(block, offset, length)?;
-        let Some(mapping) = block.memory.mapping else {
-            return Err(Error::Refused(Refusal::ManagedBlockNotShared {
+        if block.memory.class == MemoryClass::Private {
+            return Err(Error::Refused(Refusal::ManagedBlockPrivate {
                 block: block.memory.id,
             }));
-        };
+        }
         let core = self.core();
         let copy = match (core.unified_memory(), copy) {
             (true, None) => None,
@@ -324,8 +326,10 @@ impl Device {
                 Some((copy_block, copy_offset))
             }
         };
-        // SAFETY: `offset` is inside the block.
-        let contents = Some(Mapping::new(unsafe { mapping.at(offset) }));
+        let contents = block.memory.mapping.map(|mapping| {
+            // SAFETY: `offset` is inside the block.
+            Mapping::new(unsafe { mapping.at(offset) })
+        });
         let Some((copy_block, copy_offset)) = copy else {
             return Ok(self.buffer(block, offset, length, contents, None, None));
         };
@@ -476,24 +480,17 @@ impl Buffer {
 
     /// `didModifyRange:`: the consumer changed `length` bytes from `start` of the buffer's bytes.
     /// Of a Managed buffer with a device copy, the range is named, and the next commit of a command
-    /// buffer with commands, on any queue, copies the consumer's bytes of every range named since
-    /// into staging memory before it returns, once each, merged where they overlap or touch. The
-    /// copies into the device copy, and into the images of its textures over the range in images
-    /// of their own, go ahead of that command buffer's commands. So the command buffers committed
-    /// after this call read the bytes as they were at that commit; Metal takes them shortly after
-    /// the commit, before the command buffer is scheduled. A write or a didModifyRange made while
-    /// a command buffer runs does not reach it. A commit naming more than the staging ring holds
-    /// sends its ring-fulls ahead and waits for them, or, behind a command buffer held on the
-    /// host, takes staging of its own for the rest (the crate's README, Memory blocks and
-    /// buffers). Of any other buffer it does nothing, as the GPU reads the consumer's bytes. The
-    /// device's first range named makes the staging ring, on the calling thread, so no commit
-    /// waits for it.
+    /// buffer with commands, on any queue, takes every range named since, once each, merged where
+    /// they overlap or touch: GPU copies from the consumer's block into the device copy, and into
+    /// the images of its textures over the range in images of their own, go ahead of that command
+    /// buffer's commands in its submission. So a command buffer committed after this call reads
+    /// the bytes the consumer wrote before its commit, as Metal owes. The copy reads the
+    /// consumer's bytes as it runs, so a write made after the commit may reach it, where Metal
+    /// leaves the range undefined for the GPU. Of any other buffer it does nothing, as the GPU
+    /// reads the consumer's bytes. It allocates nothing.
     ///
     /// Err: [`Refusal::ModifiedRange`] for a range that leaves the buffer; for a copy,
-    /// [`Error::Quiesced`], and at the device's first range named,
-    /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) where the staging ring's
-    /// memory would take the device past its count and [`Error::Vulkan`] where the ring cannot be
-    /// made.
+    /// [`Error::Quiesced`].
     pub fn did_modify_range(&self, start: u64, length: u64) -> Result<(), Error> {
         BufferObject::did_modify_range(self, start, length)
     }
@@ -556,22 +553,16 @@ pub(crate) trait BufferObject {
                 length,
                 buffer_length: inner.length,
             }))?;
-        let Some(copy) = &inner.copy else {
-            return Ok(());
-        };
-        // A Managed buffer's block is mapped (Refusal::ManagedBlockNotShared otherwise).
-        let Some(contents) = inner.contents.filter(|_| length > 0) else {
+        let Some(copy) = inner.copy.as_ref().filter(|_| length > 0) else {
             return Ok(());
         };
         let named = Named {
             copy,
             cpu: &inner.block,
-            contents,
             offset: inner.offset,
             overs: &inner.overs,
         };
-        let core = &inner.core;
-        core.work.modify(core, named, start, end)
+        inner.core.work.modify(named, start, end)
     }
 
     /// [`Buffer::length`].

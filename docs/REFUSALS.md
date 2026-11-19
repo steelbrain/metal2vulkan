@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 20 | 17 | 0 | 0 | 36 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 20 | 18 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 1 | 27 | 0 | 0 | 0 |
 
@@ -620,7 +620,7 @@ Columns:
 | `BufferTooLong` | A buffer longer than `MAX_BUFFER_LENGTH` (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `ours`: this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind address in it | 2: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`, `crates/metal2vulkan-rt/src/buffer.rs (placed_buffer)` | `-` |
 | `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-rt/src/buffer.rs (placed)` | `-` |
 | `HeapBufferPlace` | A heap buffer whose range leaves its heap (`Device::new_heap_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_heap_buffer)` | `-` |
-| `ManagedBlockNotShared` | A Managed buffer whose bytes are in a block the host does not map, a Private block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: a Managed buffer's bytes are the consumer's, which the host reaches through the block's mapping; a Private block has none | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `ManagedBlockPrivate` | A Managed buffer whose bytes are in a Private block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `metal-documented`: a Managed buffer has a CPU-side copy: `MTLBuffer.h` gives its `contents` as "the data pointer of this buffer's shared copy", and `didModifyRange:` names the ranges "the CPU has modified" | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ManagedCopyMissing` | A Managed buffer given no place for its device copy on a device that keeps one, where `Device::has_unified_memory` is false... | every device (a public call's own check of its arguments) | `ours`: Metal keeps a Managed buffer's second copy on a Mac with a discrete GPU; the consumer places it, as it places every buffer | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ManagedCopyOnUnified` | A Managed buffer given a place for a device copy on a device that keeps none, where `Device::has_unified_memory` is true... | every device (a public call's own check of its arguments) | `ours`: on unified memory a Managed buffer is its bytes, as Metal keeps one copy of a Managed buffer on Apple silicon | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ManagedCopyNotPrivate` | A Managed buffer whose device copy is placed in a block that is not Private (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: shaders reach the device copy in Private memory, device-local where it has room, as a discrete GPU's Metal keeps the copy in its own memory | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
@@ -1239,7 +1239,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::BufferTooLong`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (placed_buffer)`
 - `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (placed)`
 - `rt:Refusal::HeapBufferPlace`: `crates/metal2vulkan-rt/src/buffer.rs (new_heap_buffer)`
-- `rt:Refusal::ManagedBlockNotShared`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::ManagedBlockPrivate`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ManagedCopyMissing`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ManagedCopyOnUnified`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ManagedCopyNotPrivate`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`

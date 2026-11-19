@@ -578,7 +578,8 @@ impl CommandBuffer {
         // the reaper, never in this call.
         let core = self.building(|building| Ok(Arc::clone(building.device.core())))?;
         let began = crate::host_time();
-        let turn = core.work.turn();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        (core.work.counting).store(true, std::sync::atomic::Ordering::SeqCst);
         let work = core.work.lock();
         core.counters
             .commit_lock_wait(crate::host_time().saturating_sub(began));
@@ -648,7 +649,6 @@ impl CommandBuffer {
             drop(work);
             core.work.wake();
         }
-        drop(turn);
         drop(core);
         drop(last);
         Ok(())

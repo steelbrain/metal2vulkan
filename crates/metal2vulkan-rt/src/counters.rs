@@ -61,12 +61,6 @@ pub(crate) enum Metric {
     AllocationsFreed,
     /// [`Metrics::submissions_during_frees`].
     SubmissionsDuringFrees,
-    /// [`Metrics::capture_waits`].
-    CaptureWaits,
-    /// [`Metrics::capture_streams`].
-    CaptureStreams,
-    /// [`Metrics::capture_overflows`].
-    CaptureOverflows,
     /// [`Metrics::untimed_command_buffers`].
     UntimedCommandBuffers,
     /// [`Metrics::sampler_element_writes`].
@@ -112,9 +106,6 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::Synchronizations,
     Metric::AllocationsFreed,
     Metric::SubmissionsDuringFrees,
-    Metric::CaptureWaits,
-    Metric::CaptureStreams,
-    Metric::CaptureOverflows,
     Metric::UntimedCommandBuffers,
     Metric::SamplerElementWrites,
     Metric::StampsNotAvailable,
@@ -200,8 +191,6 @@ pub(crate) enum Gauge {
     SharedIdleBytes,
     /// [`Gauges::private_idle_bytes`].
     PrivateIdleBytes,
-    /// [`Gauges::capture_bytes`].
-    CaptureBytes,
     /// [`Gauges::staging_bytes`].
     StagingBytes,
     /// [`Gauges::stage_entries`].
@@ -242,8 +231,6 @@ pub(crate) enum Site {
     StagingRegion,
     /// [`Metrics::staging_buffer_allocations`].
     StagingBuffer,
-    /// [`Metrics::capture_ring_allocations`].
-    CaptureRing,
     /// [`Metrics::zero_source_allocations`].
     ZeroSource,
     /// [`Metrics::take_allocations`].
@@ -333,9 +320,6 @@ struct Atomics {
     idle_frees_by_age: [AtomicU64; FREE_AGES_MS.len() + 1],
     idle_reuses_by_age: [AtomicU64; REUSE_AGES_MS.len() + 1],
     managed_bytes_captured: AtomicU64,
-    capture_waits: AtomicU64,
-    capture_streams: AtomicU64,
-    capture_overflows: AtomicU64,
     untimed_command_buffers: AtomicU64,
     sampler_element_writes: AtomicU64,
     stamps_not_available: AtomicU64,
@@ -349,9 +333,6 @@ struct Atomics {
     surface_wait_max_nanos: AtomicU64,
     surface_wait_submissions: AtomicU64,
     sparse_binds: AtomicU64,
-    capture_overflow_bytes: AtomicU64,
-    capture_copy_nanos: AtomicU64,
-    capture_wait_nanos: AtomicU64,
     handles_out: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
@@ -386,7 +367,6 @@ struct Atomics {
     shared_long_reused_bytes: AtomicU64,
     /// As [`shared_long_reused_bytes`](Self::shared_long_reused_bytes), of Private allocations.
     private_long_reused_bytes: AtomicU64,
-    capture_bytes: AtomicU64,
     staging_bytes: AtomicU64,
     stage_entries: AtomicU64,
     stage_entry_bytes: AtomicU64,
@@ -458,9 +438,6 @@ impl Counters {
             Metric::Synchronizations => &a.synchronizations,
             Metric::AllocationsFreed => &a.allocations_freed,
             Metric::SubmissionsDuringFrees => &a.submissions_during_frees,
-            Metric::CaptureWaits => &a.capture_waits,
-            Metric::CaptureStreams => &a.capture_streams,
-            Metric::CaptureOverflows => &a.capture_overflows,
             Metric::UntimedCommandBuffers => &a.untimed_command_buffers,
             Metric::SamplerElementWrites => &a.sampler_element_writes,
             Metric::StampsNotAvailable => &a.stamps_not_available,
@@ -706,29 +683,12 @@ impl Counters {
         a.zeroed_texture_bytes.fetch_add(bytes, Relaxed);
     }
 
-    /// `bytes` more of Managed buffers' bytes a commit copied ([`Metrics::managed_bytes_captured`]).
+    /// `bytes` more of Managed buffers' bytes a commit's copy-in copies
+    /// ([`Metrics::managed_bytes_captured`]).
     pub(crate) fn captured(&self, bytes: u64) {
         self.atomics
             .managed_bytes_captured
             .fetch_add(bytes, Relaxed);
-    }
-
-    /// `bytes` more of them copied into staging blocks of an overflow's own
-    /// ([`Metrics::capture_overflow_bytes`]).
-    pub(crate) fn overflowed(&self, bytes: u64) {
-        self.atomics
-            .capture_overflow_bytes
-            .fetch_add(bytes, Relaxed);
-    }
-
-    /// `nanos` more a capture spent copying bytes on the host ([`Metrics::capture_copy_nanos`]).
-    pub(crate) fn capture_copied(&self, nanos: u64) {
-        self.atomics.capture_copy_nanos.fetch_add(nanos, Relaxed);
-    }
-
-    /// `nanos` more a capture spent waiting ([`Metrics::capture_wait_nanos`]).
-    pub(crate) fn capture_waited(&self, nanos: u64) {
-        self.atomics.capture_wait_nanos.fetch_add(nanos, Relaxed);
     }
 
     /// `bytes` more written to the cache directory ([`Metrics::cache_bytes_written`]).
@@ -831,7 +791,6 @@ impl Counters {
             Gauge::PrivateAllocationBytes => &a.private_allocation_bytes,
             Gauge::SharedIdleBytes => &a.shared_idle_bytes,
             Gauge::PrivateIdleBytes => &a.private_idle_bytes,
-            Gauge::CaptureBytes => &a.capture_bytes,
             Gauge::StagingBytes => &a.staging_bytes,
             Gauge::StageEntries => &a.stage_entries,
             Gauge::StageEntryBytes => &a.stage_entry_bytes,
@@ -890,7 +849,6 @@ impl Counters {
             ring_block_allocations: site(Site::RingBlock),
             staging_region_allocations: site(Site::StagingRegion),
             staging_buffer_allocations: site(Site::StagingBuffer),
-            capture_ring_allocations: site(Site::CaptureRing),
             zero_source_allocations: site(Site::ZeroSource),
             take_allocations: site(Site::Take),
             maker_waits: a.maker_waits.load(Relaxed),
@@ -928,9 +886,6 @@ impl Counters {
             idle_frees_by_age: std::array::from_fn(|at| a.idle_frees_by_age[at].load(Relaxed)),
             idle_reuses_by_age: std::array::from_fn(|at| a.idle_reuses_by_age[at].load(Relaxed)),
             managed_bytes_captured: a.managed_bytes_captured.load(Relaxed),
-            capture_waits: a.capture_waits.load(Relaxed),
-            capture_streams: a.capture_streams.load(Relaxed),
-            capture_overflows: a.capture_overflows.load(Relaxed),
             untimed_command_buffers: a.untimed_command_buffers.load(Relaxed),
             sampler_element_writes: a.sampler_element_writes.load(Relaxed),
             stamps_not_available: a.stamps_not_available.load(Relaxed),
@@ -944,9 +899,6 @@ impl Counters {
             surface_wait_max_nanos: a.surface_wait_max_nanos.load(Relaxed),
             surface_wait_submissions: a.surface_wait_submissions.load(Relaxed),
             sparse_binds: a.sparse_binds.load(Relaxed),
-            capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
-            capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
-            capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
         }
     }
 
@@ -998,7 +950,6 @@ impl Counters {
             private_reserve_bytes: a.private_reserve_bytes.load(Relaxed),
             shared_long_reused_bytes: a.shared_long_reused_bytes.load(Relaxed),
             private_long_reused_bytes: a.private_long_reused_bytes.load(Relaxed),
-            capture_bytes: a.capture_bytes.load(Relaxed),
             staging_bytes: a.staging_bytes.load(Relaxed),
             stage_entries: a.stage_entries.load(Relaxed),
             stage_entry_bytes: a.stage_entry_bytes.load(Relaxed),
@@ -1117,8 +1068,8 @@ pub struct Metrics {
     /// frame allocated.
     pub block_bytes_made: u64,
     /// `vkAllocateMemory` calls made on the consumer's threads, inside its calls: takes that no
-    /// free range fits, textures' allocations of their own, copies' staging buffers of their own
-    /// and the capture ring; and the runtime's fixed-size internals (the zero source, the
+    /// free range fits, textures' allocations of their own and copies' staging buffers of their
+    /// own; and the runtime's fixed-size internals (the zero source, the
     /// parameter ring's blocks and the staging region) only where the block-maker thread's make
     /// of one failed. A driver may hold the device's other calls for an allocation's whole length.
     pub consumer_allocations: u64,
@@ -1153,18 +1104,12 @@ pub struct Metrics {
     /// Those of staging buffers of their own, one for each `replace_region` or `get_bytes` copy
     /// larger than the 16 MiB staging region.
     pub staging_buffer_allocations: SiteAllocations,
-    /// Those of the capture ring, the staging memory commits copy Managed buffers' modified bytes
-    /// into ([`managed_bytes_captured`](Self::managed_bytes_captured)), made at the device's first
-    /// [`Buffer::did_modify_range`](crate::Buffer::did_modify_range) of a Managed buffer with a
-    /// device copy.
-    pub capture_ring_allocations: SiteAllocations,
     /// Those of the zero source, the buffer of zeros that Private fills and new block-compressed
     /// textures copy from, which the block-maker thread makes as its first work: made by the
     /// first such fill or texture only where that make failed.
     pub zero_source_allocations: SiteAllocations,
     /// Those of takes from the pool that no free range fit: the consumer's
-    /// ([`Device::take_block`](crate::Device::take_block)), and a capture's staging blocks of its
-    /// own ([`capture_overflows`](Self::capture_overflows)). Texture blocks' are
+    /// ([`Device::take_block`](crate::Device::take_block)). Texture blocks' are
     /// [`texture_block_allocations`](Self::texture_block_allocations).
     pub take_allocations: SiteAllocations,
     /// Calls that waited for the block-maker thread's make of one of the runtime's fixed-size
@@ -1301,29 +1246,11 @@ pub struct Metrics {
     /// 50 to 100 ms, 100 to 250 ms, 250 to 500 ms, 500 ms to 1 s, 1 to 2 s, and 2 s or more. Only
     /// a class's reserve, which the idle rule does not free, is taken again past 250 ms.
     pub idle_reuses_by_age: [u64; 7],
-    /// Bytes commits copied on the host from Managed buffers' bytes into staging memory: each range
-    /// `didModifyRange:` named since the last capture, once, on a device whose Managed buffers have
-    /// device copies ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
+    /// Bytes the commits' copy-ins copy on the GPU from Managed buffers' bytes into their device
+    /// copies: each range `didModifyRange:` named since the last capture, once, on a device whose
+    /// Managed buffers have device copies
+    /// ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
     pub managed_bytes_captured: u64,
-    /// Waits of commits for a submission to complete for room in the capture ring: an earlier
-    /// command buffer's copy, or the commit's own ring-full sent ahead.
-    pub capture_waits: u64,
-    /// Ring-fulls of a commit's own bytes sent as copy submissions of their own, which the commit
-    /// waited for before it used the ring again.
-    pub capture_streams: u64,
-    /// Commits whose capture took staging blocks of its own, as a command buffer committed before
-    /// was held on the host.
-    pub capture_overflows: u64,
-    /// The bytes those commits copied into such blocks.
-    pub capture_overflow_bytes: u64,
-    /// Host time commits spent copying Managed buffers' bytes into the capture ring and into
-    /// staging blocks of their own, in nanoseconds.
-    pub capture_copy_nanos: u64,
-    /// Host time commits spent waiting in their captures, in nanoseconds: for a submission to
-    /// complete for room in the ring (an earlier command buffer's copy, or the commit's own
-    /// ring-full sent ahead, from its flush to its completion), and for command buffers committed
-    /// before to be submitted.
-    pub capture_wait_nanos: u64,
     /// Command buffers that ran untimed, their GPU start and end times 0
     /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time)): at their first
     /// record, every pair of the device's timestamp pools was taken and the device made no new
@@ -1540,9 +1467,6 @@ pub struct Gauges {
     pub shared_long_reused_bytes: u64,
     /// As [`shared_long_reused_bytes`](Self::shared_long_reused_bytes), of Private allocations.
     pub private_long_reused_bytes: u64,
-    /// Bytes of staging for Managed buffers' captures: the capture ring, once a commit made it, and
-    /// the staging blocks of overflows that command buffers not yet retired hold.
-    pub capture_bytes: u64,
     /// Bytes of staging for copies between textures and the CPU (`replace_region`, `get_bytes`):
     /// the staging region, once made, and the staging buffers of their own that copies
     /// larger than the region hold until the upload that copies through them is gone.
