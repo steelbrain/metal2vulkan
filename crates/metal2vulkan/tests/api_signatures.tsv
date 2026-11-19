@@ -2265,6 +2265,7 @@ field	metal2vulkan-rt::BlockInfo.gpu_address	pub gpu_address: u64
 field	metal2vulkan-rt::BlockInfo.id	pub id: BlockId
 field	metal2vulkan-rt::BlockInfo.len	pub len: u64
 field	metal2vulkan-rt::BlockInfo.offset	pub offset: u64
+field	metal2vulkan-rt::BlockInfo.zeroed	pub zeroed: bool
 field	metal2vulkan-rt::BufferLayout.bytes_per_image	pub bytes_per_image: u64
 field	metal2vulkan-rt::BufferLayout.bytes_per_row	pub bytes_per_row: u64
 field	metal2vulkan-rt::BufferLayout.offset	pub offset: u64
@@ -2424,6 +2425,8 @@ field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-rt::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
 field	metal2vulkan-rt::Metrics.upload_waits	pub upload_waits: u64
 field	metal2vulkan-rt::Metrics.waits_behind_counter	pub waits_behind_counter: u64
+field	metal2vulkan-rt::Metrics.zeroed_take_bytes	pub zeroed_take_bytes: u64
+field	metal2vulkan-rt::Metrics.zeroed_takes	pub zeroed_takes: u64
 field	metal2vulkan-rt::PixelFormatInfo.cast_class	pub cast_class: u64
 field	metal2vulkan-rt::PixelFormatInfo.flags	pub flags: u64
 field	metal2vulkan-rt::PixelFormatInfo.name	pub name: &'static str

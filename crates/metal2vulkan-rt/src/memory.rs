@@ -6,10 +6,10 @@
 //! [`Device::new_buffer`](crate::Device::new_buffer) zeroes its range.
 //!
 //! Where the device enabled `zeroInitializeDeviceMemory`, every allocation of the pool is made
-//! with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until written. A take
-//! answers the bytes of its block that lie past every range its allocation held before as its
-//! zeroed tail ([`Block::placed`]); a zeroing of a buffer's range skips the bytes its block's
-//! tail still covers, and every placement shortens the tail to after its range.
+//! with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until written, and a take
+//! answers whether its block's bytes all lie past every range a block of its allocation held
+//! before ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)): then they read zero as handed out.
+//! The runtime trusts nothing of it after the take, and zeroes every range it is asked to.
 
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
@@ -19,7 +19,7 @@ use crate::places::Ranges;
 use ash::vk;
 use std::collections::{HashSet, VecDeque};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -186,6 +186,23 @@ pub struct BlockInfo {
     /// block is where the device's Shared type is, and an imported one where the type imported
     /// into is.
     pub device_local: bool,
+    /// Whether every byte of it reads zero as the take hands it out: the device enabled
+    /// `zeroInitializeDeviceMemory`
+    /// ([`floor::Capabilities::zero_initialize_memory`](crate::floor::Capabilities::zero_initialize_memory)),
+    /// so the driver made its allocation zeroed, and no block of that allocation ever held a byte
+    /// at or past this block's first byte (the runtime writes the pool's bytes only through
+    /// blocks). False on a device without the feature, for a block below the furthest range a
+    /// block of its allocation held (one given back and taken again among them), and for an
+    /// imported or exported block. Counted in
+    /// [`Metrics::zeroed_takes`](crate::Metrics::zeroed_takes).
+    ///
+    /// Metal's counterpart is the zeros of a new buffer of `newBufferWithLength:options:`. It is a
+    /// fact at the take: what the consumer or its guest writes through the mapping afterwards is
+    /// the consumer's to know, and a consumer skips its own zeroing only for bytes it has not
+    /// exposed for writing since the take. The runtime zeroes every range it is asked to
+    /// ([`Device::new_buffer`](crate::Device::new_buffer)'s `zero_from`,
+    /// [`Device::zero_block_range`](crate::Device::zero_block_range)) on every device.
+    pub zeroed: bool,
 }
 
 // SAFETY: plain data. `contents` is an address; reading or writing through it is the consumer's
@@ -276,10 +293,8 @@ pub(crate) struct Memory {
     /// An import's block ([`import`]) or an export's ([`export`]): an allocation of its own,
     /// which no pool holds and which is freed once the block is given back.
     pub(crate) own: Option<Own>,
-    /// The first byte of its zeroed tail as the take found it: the bytes from here to its end
-    /// lie past every range its allocation held before, in an allocation made zeroed
-    /// ([`Allocation::zeroed`]), so they read zero. Its length where none do.
-    zeroed_from: u64,
+    /// Its bytes read zero as the take found them ([`BlockInfo::zeroed`]).
+    zeroed: bool,
 }
 
 /// What a block that is an allocation of its own is.
@@ -325,6 +340,7 @@ impl Memory {
             gpu_address: self.address,
             contents: self.mapping.map(Mapping::get),
             device_local: self.device_local,
+            zeroed: self.zeroed,
         }
     }
 }
@@ -374,16 +390,11 @@ pub(crate) struct Block {
     /// An import's release, which runs once its memory is freed: behind a lock, as the block is
     /// shared between threads and the release is only `Send`.
     release: Mutex<Option<Release>>,
-    /// The first byte of its zeroed tail: from the take's ([`Memory::zeroed_from`]), raised past
-    /// each range placed in the block. Its bytes from here to its end read zero, as the driver
-    /// made them, and nothing placed in the block reaches them.
-    zeroed_from: AtomicU64,
 }
 
 impl Block {
     pub(crate) fn new(memory: Memory, core: Arc<Core>) -> Block {
         Block {
-            zeroed_from: AtomicU64::new(memory.zeroed_from),
             memory,
             core,
             release: Mutex::new(None),
@@ -393,33 +404,11 @@ impl Block {
     /// An import's block ([`import`]), whose `release` runs once its memory is freed.
     pub(crate) fn imported(memory: Memory, core: Arc<Core>, release: Option<Release>) -> Block {
         Block {
-            zeroed_from: AtomicU64::new(memory.zeroed_from),
             memory,
             core,
             release: Mutex::new(release),
         }
     }
-
-    /// A placement of a buffer or a texture in the block that ends at byte `end`: from now on
-    /// what is placed may write any byte before it. Returns the first byte of the zeroed tail as
-    /// it was before: the bytes of the placement at or past it read zero already, and nothing
-    /// needs to zero them.
-    pub(crate) fn placed(&self, end: u64) -> u64 {
-        self.zeroed_from.fetch_max(end, Relaxed)
-    }
-
-    /// The first byte of the zeroed tail, for a zeroing that places nothing
-    /// ([`Device::zero_block_range`](crate::Device::zero_block_range)).
-    pub(crate) fn zeroed_from(&self) -> u64 {
-        self.zeroed_from.load(Relaxed)
-    }
-}
-
-/// The part of `start..end` of a block that a zeroing writes, where the block's zeroed tail
-/// starts at `zeroed_from`: the bytes before the tail, `None` where every byte lies in it.
-pub(crate) fn to_zero(start: u64, end: u64, zeroed_from: u64) -> Option<(u64, u64)> {
-    let end = end.min(zeroed_from);
-    (start < end).then_some((start, end))
 }
 
 impl Drop for Block {
@@ -582,8 +571,8 @@ struct Carve {
     mapping: Option<Mapping>,
     device_local: bool,
     spilled: bool,
-    /// The first byte of the range's zeroed tail ([`Memory::zeroed_from`]).
-    zeroed_from: u64,
+    /// The range reads zero as taken ([`BlockInfo::zeroed`]).
+    zeroed: bool,
 }
 
 impl Carve {
@@ -602,7 +591,7 @@ impl Carve {
             device_local: self.device_local,
             spilled: self.spilled,
             own: None,
-            zeroed_from: self.zeroed_from,
+            zeroed: self.zeroed,
         }
     }
 }
@@ -1034,14 +1023,11 @@ impl State {
 }
 
 impl Allocation {
-    /// What a block of `len` bytes at `base`, a range taken from the free bytes, is. Its bytes past
-    /// every range a block held before are its zeroed tail where the allocation is
-    /// [`zeroed`](Self::zeroed); from now on they are held too.
+    /// What a block of `len` bytes at `base`, a range taken from the free bytes, is. It reads zero
+    /// where the allocation is [`zeroed`](Self::zeroed) and it lies past every range a block held
+    /// before; from now on its bytes are held too.
     fn carve(&mut self, base: u64, len: u64) -> Carve {
-        let zeroed_from = match self.zeroed {
-            true => self.taken_to.saturating_sub(base).min(len),
-            false => len,
-        };
+        let zeroed = self.zeroed && base >= self.taken_to;
         self.taken_to = self.taken_to.max(base + len);
         Carve {
             allocation: self.id,
@@ -1055,7 +1041,7 @@ impl Allocation {
                 .map(|mapping| Mapping(unsafe { mapping.at(base) })),
             device_local: self.device_local,
             spilled: self.spilled,
-            zeroed_from,
+            zeroed,
         }
     }
 
@@ -1503,7 +1489,7 @@ pub(crate) unsafe fn import(
         device_local: core.device_local & (1 << info.memory_type_index) != 0,
         spilled: false,
         own: Some(Own::Import),
-        zeroed_from: len,
+        zeroed: false,
     })
 }
 
@@ -1608,7 +1594,7 @@ pub(crate) unsafe fn export(
         device_local: core.device_local & (1 << index) != 0,
         spilled: false,
         own: Some(Own::Export(handle)),
-        zeroed_from: len,
+        zeroed: false,
     };
     Ok((memory, needs.size))
 }
@@ -1663,7 +1649,7 @@ pub(crate) unsafe fn export_surface(
         device_local: core.device_local & (1 << index) != 0,
         spilled: false,
         own: Some(Own::Export(handle)),
-        zeroed_from: len,
+        zeroed: false,
     })
 }
 

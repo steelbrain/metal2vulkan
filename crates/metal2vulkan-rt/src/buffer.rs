@@ -7,7 +7,7 @@ use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
 use crate::fill;
 use crate::hazard::HeapId;
-use crate::memory::{self, Block, BlockId, Mapping, Memory, MemoryClass};
+use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
 use crate::over::ManagedOvers;
 use crate::submit::Held;
 use crate::texture::{HeapRange, SizeAndAlign};
@@ -153,11 +153,7 @@ impl Device {
     /// the call returns; in one it does not map (Private, or an imported dma-buf) by a GPU fill in
     /// the upload, which is submitted ahead of every command buffer committed after this call and
     /// ends with a barrier that orders the fill before every later command (a copy into the buffer
-    /// among them), and which holds the block until it completes. Where the device enabled
-    /// `zeroInitializeDeviceMemory`, the bytes of the range that no block or placement held
-    /// since the driver made the allocation zeroed read zero already, and nothing writes them
-    /// ([`floor::Capabilities::zero_initialize_memory`](crate::floor::Capabilities::zero_initialize_memory)).
-    /// The bytes the runtime zeroes are counted in
+    /// among them), and which holds the block until it completes. The bytes zeroed are counted in
     /// [`Metrics::bytes_zeroed`](crate::Metrics::bytes_zeroed).
     ///
     /// Err: [`Refusal::EmptyBuffer`] for a length of 0, [`Refusal::BufferTooLong`] for a length
@@ -230,27 +226,21 @@ impl Device {
             crate::command::not_in_scheduled_handler()?;
         }
         let end = offset + length;
-        // The buffer may write its range from now on; what the block's zeroed tail covered of it
-        // reads zero already.
-        let zeroed_from = block.placed(end);
         let contents = block.memory.mapping.map(|mapping| {
             // SAFETY: `offset` is inside the block.
             Mapping::new(unsafe { mapping.at(offset) })
         });
-        let zeroing = zero_from
-            .filter(|&from| from < length)
-            .and_then(|from| memory::to_zero(offset + from, end, zeroed_from));
-        if let Some((start, stop)) = zeroing {
+        if let Some(from) = zero_from.filter(|&from| from < length) {
             match contents {
-                // SAFETY: `start..stop` lies in the new buffer, whose range is in the block.
+                // SAFETY: `from..length` lies in the new buffer, whose range is in the block.
                 Some(contents) => unsafe {
                     (contents.get().as_ptr())
-                        .add((start - offset) as usize)
-                        .write_bytes(0, (stop - start) as usize)
+                        .add(from as usize)
+                        .write_bytes(0, (length - from) as usize)
                 },
-                None => (self.core().work).zero(self.core(), &block, start, stop)?,
+                None => (self.core().work).zero(self.core(), &block, offset + from, end)?,
             }
-            self.core().counters.zeroed(stop - start);
+            self.core().counters.zeroed(length - from);
         }
         Ok(self.buffer(block, offset, length, contents, None, heap))
     }
@@ -269,8 +259,7 @@ impl Device {
     /// - elsewhere shaders reach a device copy at `copy`, `length` bytes at that offset in a
     ///   Private block the consumer holds, its [`Buffer::gpu_address`] that block's address plus
     ///   the offset. The rest past its first `copied` bytes is zeroed, ahead of every command
-    ///   buffer committed after this call (but the bytes that read zero already, as
-    ///   [`Device::new_buffer`] skips them), and those first bytes (all of them where `copied` is
+    ///   buffer committed after this call, and those first bytes (all of them where `copied` is
     ///   the length or more) are named as [`Buffer::did_modify_range`] names a range: the next
     ///   commit takes them from the consumer's bytes. The consumer's own bytes are as it wrote
     ///   them.
@@ -332,8 +321,6 @@ impl Device {
                 Some((copy_block, copy_offset))
             }
         };
-        // The consumer writes the bytes.
-        block.placed(offset + length);
         // SAFETY: `offset` is inside the block.
         let contents = Some(Mapping::new(unsafe { mapping.at(offset) }));
         let Some((copy_block, copy_offset)) = copy else {
@@ -342,9 +329,6 @@ impl Device {
         if copy_block.memory.spilled() {
             core.counters.rise_by(Gauge::ManagedSpilledBytes, length);
         }
-        // The copy is written from now on; what the copy block's zeroed tail covered of it reads
-        // zero already.
-        let zeroed_from = copy_block.placed(copy_offset + length);
         let copy = Arc::new(DeviceCopy {
             core: Arc::clone(core),
             block: copy_block,
@@ -352,10 +336,9 @@ impl Device {
             len: length,
         });
         let copied = copied.min(length);
-        let zeroing = memory::to_zero(copy_offset + copied, copy_offset + length, zeroed_from);
-        if let Some((from, to)) = zeroing {
-            let (copy_buffer, start) = copy.range(from - copy_offset);
-            let end = start + (to - from);
+        if copied < length {
+            let (copy_buffer, start) = copy.range(copied);
+            let end = start + (length - copied);
             core.work.upload(
                 core,
                 None,
@@ -374,7 +357,7 @@ impl Device {
                     )
                 },
             )?;
-            core.counters.zeroed(to - from);
+            core.counters.zeroed(length - copied);
         }
         let buffer = self.buffer(block, offset, length, contents, Some(copy), None);
         if copied > 0 {
@@ -393,10 +376,7 @@ impl Device {
     /// buffer committed after this call, ending with a barrier that orders the fill before every
     /// later command, and holding the block until it completes. The call never waits for the
     /// GPU. Metal owes zeros for that call's buffers only, not for a heap's memory or a
-    /// texture's. Where the device enabled `zeroInitializeDeviceMemory`, the bytes of the range
-    /// that no block or placement held since the driver made the allocation zeroed read zero
-    /// already, and no fill writes them.
-    /// [`Metrics::block_zero_fills`](crate::Metrics::block_zero_fills) and
+    /// texture's. [`Metrics::block_zero_fills`](crate::Metrics::block_zero_fills) and
     /// [`Metrics::block_zero_fill_bytes`](crate::Metrics::block_zero_fill_bytes) count the fills
     /// and their bytes. A length of 0 zeroes nothing.
     ///
@@ -423,11 +403,11 @@ impl Device {
                 block: block.memory.id,
             }));
         }
-        let Some((start, stop)) = memory::to_zero(offset, end, block.zeroed_from()) else {
+        if length == 0 {
             return Ok(());
-        };
-        (self.core().work).zero(self.core(), &block, start, stop)?;
-        self.core().counters.zero_filled(stop - start);
+        }
+        (self.core().work).zero(self.core(), &block, offset, end)?;
+        self.core().counters.zero_filled(length);
         Ok(())
     }
 

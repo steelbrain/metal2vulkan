@@ -860,8 +860,6 @@ impl Device {
                 pixel_format: descriptor.pixel_format,
             }));
         }
-        // The image may write any byte of the heap from now on.
-        block.placed(heap.offset.saturating_add(heap.len));
         self.texture(
             descriptor,
             Reach::Index(index),

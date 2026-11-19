@@ -69,7 +69,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
 /// `VK_EXT_zero_initialize_device_memory`'s name, which `ash 0.38` predates: where the device
 /// lists it and reports its feature ([`Capabilities::zero_initialize_memory`]), the pool's
 /// allocations are made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` and read zero until
-/// written, so nothing of the runtime zeroes a range no block held before.
+/// written.
 pub(crate) const ZERO_INITIALIZE_DEVICE_MEMORY: &CStr = c"VK_EXT_zero_initialize_device_memory";
 
 /// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which `ash 0.38` predates: the memory is zeroed
@@ -81,8 +81,8 @@ pub(crate) const ZERO_INITIALIZE: vk::MemoryAllocateFlags = vk::MemoryAllocateFl
 /// defines it (extension number 621).
 ///
 /// No Metal counterpart: Metal zeroes a new buffer of `newBufferWithLength:options:` whatever the
-/// device. Here the feature chooses who writes those zeros in memory no block held before: the
-/// driver, where it is enabled, or the runtime.
+/// device. Here the feature decides whether a block no block held before reads zero as it is
+/// taken (`BlockInfo::zeroed`), so the consumer can leave those zeros to the driver.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ZeroInitializeDeviceMemoryFeatures {
@@ -683,8 +683,9 @@ pub struct Capabilities {
     pub attachment_reads: bool,
     /// The device lists `VK_EXT_zero_initialize_device_memory` and reports
     /// `zeroInitializeDeviceMemory`: the pool's allocations are made zeroed by the driver
-    /// (`VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`), and a buffer's zeros in bytes no block held
-    /// before are the driver's. Elsewhere the runtime writes them.
+    /// (`VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`), and a take of a range no block held before
+    /// answers [`BlockInfo::zeroed`](crate::BlockInfo::zeroed). Elsewhere every take answers
+    /// false.
     pub zero_initialize_memory: bool,
     /// The attachment reads hold, and so does every attachment-read feature, with
     /// [`ATTACHMENT_READ_EXTENSIONS`]: a draw reads an attachment through the attachment feedback

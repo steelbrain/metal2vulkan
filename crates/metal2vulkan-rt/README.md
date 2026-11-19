@@ -210,12 +210,30 @@ in its memory.
   NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD Graphics 630, and
   4,096, Vulkan's minimum, on Mesa's Mac driver.
 - A block's bytes are undefined, new or taken again: the runtime zeroes nothing ahead of need,
-  and nothing the driver or the memory type does counts. A buffer reads zero where
+  and nothing the driver or the memory type does counts but the zeroed allocations below, which
+  a take answers as `BlockInfo::zeroed`. A buffer reads zero where
   `Device::new_buffer` zeroes its range (below), as Metal zeroes a buffer from
   `newBufferWithLength:options:`, and Metal owes zeros for that call's buffers alone: not for a
   heap's memory or a texture's, whose bytes are undefined, as Metal is silent on them. The
   consumer passes `zero_from` for a buffer Metal zeroes, or zeroes the range at its own carve,
   once.
+- Where the device lists `VK_EXT_zero_initialize_device_memory` and reports
+  `zeroInitializeDeviceMemory` (`floor::Capabilities::zero_initialize_memory`), every allocation of
+  the pool, of either class, is made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` and reads
+  zero until written, by the driver's promise; imports never carry the flag
+  (`VUID-VkMemoryAllocateFlagsInfo-flags-10760`). A take then answers `BlockInfo::zeroed`: true
+  only where no block of the allocation ever held a byte at or past the block's first byte (each
+  allocation keeps the end of the furthest range a block held; the runtime writes the pool's bytes
+  only through blocks), so every byte reads zero as the block is handed out; false for a range
+  below that end (a range given back and taken again among them), on a device without the
+  feature, and for an imported or exported block. Nothing of the runtime touches those bytes, on
+  any thread, and a driver whose allocation call is lazy (RADV's and ANV's are) leaves their pages
+  unmade until the first write. `Metrics::zeroed_takes` and `zeroed_take_bytes` count those
+  blocks. It is a fact at the take: what the consumer or its guest writes through the mapping
+  afterwards is the consumer's to know, and a consumer skips its own zeroing only for bytes it has
+  not exposed for writing since the take. The runtime zeroes what it is asked to on every device
+  (`Device::new_buffer`'s `zero_from`, `Device::zero_block_range`, a Managed buffer's device
+  copy), so the consumer's path is one: zero unless `zeroed`.
 - `Device::zero_block_range(block, offset, length)` zeroes a range of a Private block the
   consumer holds, where it places a buffer Metal zeroes: by a GPU fill in the upload, ahead of
   every command buffer committed after the call, as a zeroed Private buffer's fill is. The
@@ -352,9 +370,10 @@ A consumer that maps the pool's memory itself, into a guest for instance, passes
 
 The pool's allocations are in the guest's range whole, their free ranges and the runtime's own
 staging blocks included; the consumer hands the guest blocks only. A block given back stays mapped
-with its allocation, and the block-maker thread zeroes free Shared bytes while the consumer's
-mappings of them stand: from a block's give-back to the next take that lands on its bytes, they are
-the runtime's. A guest kernel that writes a free range damages only its own later buffers.
+with its allocation: from a block's give-back to the next take that lands on its bytes, they are
+the runtime's. A guest kernel that writes a free range damages only its own later buffers: among
+them, where the driver zeroes allocations, a block of a range no block held before, which still
+answers `BlockInfo::zeroed`.
 
 ### Imported blocks
 
@@ -653,6 +672,14 @@ through the runtime, the consumer encodes no read of its planes.
   memory where the card has no other device-local type, and the kernels that read a Managed
   buffer's device copy placed there read it across the host link:
   `Gauges::managed_spilled_bytes` counts those buffers' bytes while they live.
+- A device without `VK_EXT_zero_initialize_device_memory` and its feature answers
+  `BlockInfo::zeroed` false for every block, so a new buffer's zeros are the runtime's: a Shared
+  buffer's are written through the mapping inside `Device::new_buffer`, which pulls the first
+  touch of every page into the call, where Metal pays it at the program's first write. On the
+  Iris Xe (Mesa's ANV, which lists no such extension) a new Shared buffer of 144 MiB takes 24 to 34
+  ms to make, almost all of it that zeroing: the driver's `vkAllocateMemory` of it takes 0.01 ms.
+  The extension is listed by RADV, NVIDIA's Linux driver and lavapipe, and not by ANV, Mesa's Mac
+  driver or Intel's Windows driver for the UHD Graphics 630.
 
 ## Set 1 and index grants
 
@@ -2734,8 +2761,9 @@ apart from 1.8 to 3% Private, so the host link's rate above is not on their path
 
 ### Chosen by a query
 
-Five features choose between two forms by the device's answer: 16-bit floats, storage-image reads
-without a format, 64-bit atomics, 64-bit floats and SIMD groups. Beside them, a device without the
+Six features choose between two forms by the device's answer: 16-bit floats, storage-image reads
+without a format, 64-bit atomics, 64-bit floats, SIMD groups and zeroed allocations (the pool's
+allocations made zeroed by the driver, which a take answers as `BlockInfo::zeroed`). Beside them, a device without the
 attachment feedback loop reads attachments through a copy, the one form left there, which is a
 known gap (Known gaps of render encoders). `floor::Capabilities` holds each answer the floor
 reads, and the features and extensions to enable: the floor's, and each optional one the device
@@ -2745,7 +2773,7 @@ has.
 |---|---|---|
 | SIMD groups | `minSubgroupSize`, `maxSubgroupSize` and `requiredSubgroupSizeStages` (`VkPhysicalDeviceVulkan13Properties`); `subgroupSupportedStages` and `subgroupSupportedOperations` (`VkPhysicalDeviceVulkan11Properties`); `shaderMaximalReconvergence` (`VK_KHR_shader_maximal_reconvergence`) and `shaderSubgroupUniformControlFlow` (`VK_KHR_shader_subgroup_uniform_control_flow`) | the translator's choice of how a kernel's SIMD groups run (its tier), and their reconvergence mode: maximal where offered, else subgroup-uniform control flow where offered |
 
-The other four are one feature each:
+The other five are one feature each:
 
 | Optional feature | Structure | Used for |
 |---|---|---|
@@ -2756,7 +2784,7 @@ The other four are one feature each:
 | `shaderFloat64` | `VkPhysicalDeviceFeatures` | 64-bit floats |
 | `shaderMaximalReconvergence` | `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR` | SIMD groups that reconverge as Metal's do |
 | `shaderSubgroupUniformControlFlow` | `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR` | SIMD groups' reconvergence where maximal reconvergence is not offered |
-| `zeroInitializeDeviceMemory` | `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT` | the pool's allocations made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, where the device also lists `VK_EXT_zero_initialize_device_memory`: a buffer's zeros in bytes no block held before are the driver's (Memory blocks and buffers); elsewhere the runtime writes them |
+| `zeroInitializeDeviceMemory` | `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT` | the pool's allocations made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, where the device also lists `VK_EXT_zero_initialize_device_memory`: a take of a range no block held before answers `BlockInfo::zeroed` (Memory blocks and buffers); elsewhere every take answers false |
 
 ### Attachment reads
 

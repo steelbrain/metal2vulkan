@@ -830,12 +830,10 @@ impl Device {
     /// Metal is silent on the bytes of a placement heap's memory and of a texture placed there.
     /// Where the device enabled `zeroInitializeDeviceMemory`
     /// ([`floor::Capabilities::zero_initialize_memory`]), every allocation of the pool is made
-    /// zeroed by the driver, and the bytes of a block that no block held before read zero until a
-    /// buffer or texture is placed over them: [`Device::new_buffer`] and
-    /// [`Device::zero_block_range`] write no zero there. So the consumer writes a block's bytes
-    /// only through what it placed: a byte it writes through
-    /// [`BlockInfo::contents`](crate::BlockInfo::contents) outside every buffer placed in the
-    /// block may keep its value through a later zeroing of a buffer over it.
+    /// zeroed by the driver, and a block that no block of its allocation held any byte of before
+    /// reads zero as it is handed out: [`BlockInfo::zeroed`](crate::BlockInfo::zeroed) says so,
+    /// so the consumer may skip the zeroing it would ask for. The runtime still zeroes every
+    /// range it is asked to: it does not see what is written after the take.
     ///
     /// Err: [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's largest allocation or
     /// buffer; [`Limit::BlockIds`](crate::Limit::BlockIds);
@@ -850,6 +848,9 @@ impl Device {
         }
         let memory = core.take_memory(class, len)?;
         let info = memory.info();
+        if info.zeroed {
+            core.counters.zeroed_take(info.len);
+        }
         let block = memory::Block::new(memory, Arc::clone(core));
         Ok(Block::claim(core, info, block))
     }

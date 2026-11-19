@@ -244,6 +244,8 @@ struct Atomics {
     bytes_copied: AtomicU64,
     bytes_zeroed: AtomicU64,
     takes_from_free_ranges: AtomicU64,
+    zeroed_takes: AtomicU64,
+    zeroed_take_bytes: AtomicU64,
     block_zero_fills: AtomicU64,
     block_zero_fill_bytes: AtomicU64,
     cache_bytes_written: AtomicU64,
@@ -578,6 +580,13 @@ impl Counters {
         self.atomics.takes_from_free_ranges.fetch_add(1, Relaxed);
     }
 
+    /// A block of `bytes` handed out that reads zero as taken ([`Metrics::zeroed_takes`]).
+    pub(crate) fn zeroed_take(&self, bytes: u64) {
+        let a = &self.atomics;
+        a.zeroed_takes.fetch_add(1, Relaxed);
+        a.zeroed_take_bytes.fetch_add(bytes, Relaxed);
+    }
+
     /// A zero fill of `bytes` the consumer asked of a Private block
     /// ([`Metrics::block_zero_fills`]).
     pub(crate) fn zero_filled(&self, bytes: u64) {
@@ -738,6 +747,8 @@ impl Counters {
             bytes_copied: a.bytes_copied.load(Relaxed),
             bytes_zeroed: a.bytes_zeroed.load(Relaxed),
             takes_from_free_ranges: a.takes_from_free_ranges.load(Relaxed),
+            zeroed_takes: a.zeroed_takes.load(Relaxed),
+            zeroed_take_bytes: a.zeroed_take_bytes.load(Relaxed),
             block_zero_fills: a.block_zero_fills.load(Relaxed),
             block_zero_fill_bytes: a.block_zero_fill_bytes.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
@@ -895,23 +906,24 @@ pub struct Metrics {
     /// shadows ([`attachment_read_copy_bytes`](Self::attachment_read_copy_bytes)). A blit's own
     /// copy, and a synchronize's, is the program's and is not counted.
     pub bytes_copied: u64,
-    /// Bytes of new buffers the runtime zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s
-    /// from its `zero_from` to the buffer's end, and a Managed buffer's device copy's past its
-    /// copied bytes ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)). The
-    /// bytes that read zero already, in an allocation the driver made zeroed that no block or
-    /// placement held there before
-    /// ([`floor::Capabilities::zero_initialize_memory`](crate::floor::Capabilities::zero_initialize_memory)),
-    /// are not written, and not counted.
+    /// Bytes of new buffers zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s from its
+    /// `zero_from` to the buffer's end, and a Managed buffer's device copy's past its copied bytes
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
     pub bytes_zeroed: u64,
     /// Takes carved from a free range of an allocation already made: under the pool's lock, with
     /// no Vulkan call and no call to the consumer's hook. A take that no free range fits makes an
     /// allocation instead ([`consumer_allocations`](Self::consumer_allocations),
     /// [`allocations_mapped_on_takes`](Self::allocations_mapped_on_takes)).
     pub takes_from_free_ranges: u64,
+    /// Blocks the consumer took that answered
+    /// [`BlockInfo::zeroed`](crate::BlockInfo::zeroed): each byte read zero as handed out, the
+    /// driver having made the allocation zeroed and no block having held the range before. Zero
+    /// on a device without `zeroInitializeDeviceMemory`.
+    pub zeroed_takes: u64,
+    /// The bytes of those blocks.
+    pub zeroed_take_bytes: u64,
     /// Zero fills the consumer asked of Private blocks
-    /// ([`Device::zero_block_range`](crate::Device::zero_block_range)) that wrote bytes: a range
-    /// whose bytes all read zero already, as [`bytes_zeroed`](Self::bytes_zeroed) skips them, is
-    /// not filled.
+    /// ([`Device::zero_block_range`](crate::Device::zero_block_range)).
     pub block_zero_fills: u64,
     /// The bytes of those fills.
     pub block_zero_fill_bytes: u64,
