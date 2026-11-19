@@ -2541,7 +2541,8 @@ fn named_ranges_merge_where_they_overlap_or_touch() {
 /// A dispatch whose pipeline state writes texture slot 0 covers what the texture there meets in
 /// its placement heap: a buffer and a texture placed at offset 0 too. A check of either is not
 /// compared until it is written again: the buffer, written whole, is compared again. A dispatch
-/// of a state that only reads the slot covers nothing.
+/// of a state that only reads the slot covers nothing. A binding of the buffer covered again
+/// takes the cover off too, and is counted apart, as it may be a read.
 #[test]
 fn a_heap_texture_write_covers_the_buffer_and_texture_it_meets_until_they_are_written() {
     let mut kept = Kept::default();
@@ -2607,20 +2608,34 @@ fn a_heap_texture_write_covers_the_buffer_and_texture_it_meets_until_they_are_wr
             0,
             &[Value::Object(3), Value::Object(10)],
             &[],
-        )
+        )?;
+        // Covered again, then bound: the binding, which may be a read, takes the cover off.
+        encoded(w, 40, 9)?;
+        w.call("commandBuffer", 6, 50, &[], &[])?;
+        w.call("computeCommandEncoder", 50, 51, &[], &[])?;
+        let bound = [Value::Object(3), Value::Uint(0), Value::Uint(0)];
+        w.call("setBuffer:offset:atIndex:", 51, 0, &bound, &[])?;
+        w.call("endEncoding", 51, 0, &[], &[])?;
+        w.call("commit", 50, 0, &[], &[])?;
+        w.call("m2v.check", 0, 0, &[Value::Object(3)], &[])
     });
     ended.unwrap();
     let covered: Vec<(u64, bool)> = (report.checks.iter())
         .map(|check| (check.object, check.covered))
         .collect();
-    assert_eq!(covered, [(3, true), (10, true), (3, false), (10, true)]);
     assert_eq!(
-        report.covered, 2,
-        "the one write covers the buffer and the other texture"
+        covered,
+        [(3, true), (10, true), (3, false), (10, true), (3, false)]
     );
+    assert_eq!(
+        report.covered, 4,
+        "each write covers the buffer and the other texture"
+    );
+    assert_eq!(report.binding_uncovers, 1);
     let lines = report.lines();
-    let line = "covered 2: texture writes over other objects of a placement heap; 3 checks and 0 \
-                snapshot ranges they covered not compared";
+    let line = "covered 4: texture writes over other objects of a placement heap; 3 checks and 0 \
+                snapshot ranges they covered not compared; 1 covers taken off by a binding, which \
+                may be a read";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
     assert_eq!(
         lines

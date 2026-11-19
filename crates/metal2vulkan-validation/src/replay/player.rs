@@ -382,6 +382,10 @@ pub struct Report {
     /// `PrivateBytes::covered`). Texture writes count from the slots the backend answers
     /// (`Backend::texture_writes`), render passes, blits and the CPU.
     pub covered: u64,
+    /// The times a binding (a `set…Buffer…` or a `useHeap:`) took a cover off, as a write: the
+    /// stream carries no buffer access, and the binding may be a read, so a difference in that
+    /// object's later compares may be the covering texture's bytes.
+    pub binding_uncovers: u64,
     /// The placement heaps the player laid out again for the runtime's sizes and alignments
     /// (`relay`).
     pub relaid: Relaid,
@@ -771,8 +775,9 @@ impl Report {
                 .count();
             lines.push(format!(
                 "covered {}: texture writes over other objects of a placement heap; {checks} \
-                 checks and {ranges} snapshot ranges they covered not compared",
-                self.covered
+                 checks and {ranges} snapshot ranges they covered not compared; {} covers taken \
+                 off by a binding, which may be a read",
+                self.covered, self.binding_uncovers
             ));
         }
         if self.parted > 0 {
@@ -1222,6 +1227,7 @@ impl<'b, B: Backend> Player<'b, B> {
         self.report.total = Counts { stream, executed };
         self.report.texture_writes = self.texwrites.counts();
         self.report.covered = self.covers.covers;
+        self.report.binding_uncovers = self.covers.binding_uncovers;
         (self.report, ended)
     }
 

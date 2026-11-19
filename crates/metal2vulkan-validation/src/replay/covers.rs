@@ -15,7 +15,9 @@
 //! written again by the player's writes into it (`m2v.write`, its contents at creation, a copy
 //! from the guest's RAM, a snapshot's bytes before), a blit into it, a write of a texture over it,
 //! and, as the stream carries no buffer access, any binding of it to an encoder, a
-//! `useResource:usage:` with write usage, or a `useHeap:` of its heap.
+//! `useResource:usage:` with write usage, or a `useHeap:` of its heap. A binding may be a read, so
+//! the times one took a cover off are counted apart: a difference in such an object's later
+//! compares may be the texture's bytes, not the play's.
 
 use super::stream::Call;
 use super::value::Value;
@@ -68,6 +70,9 @@ pub(super) struct Covers {
     writes: HashMap<(u64, SlotStage), Vec<u64>>,
     /// The times an object was covered.
     pub(super) covers: u64,
+    /// The times a binding (a `set…Buffer…` or a `useHeap:`) took a covered object's cover off:
+    /// the stream carries no buffer access, so the binding counts as a write, which it may not be.
+    pub(super) binding_uncovers: u64,
 }
 
 /// The objects `values` name, lists and maps included.
@@ -140,6 +145,14 @@ impl Covers {
         if ranges.is_empty() {
             self.covered.remove(&object);
         }
+    }
+
+    /// `object` bound to an encoder, written whole, counted where that took a cover off.
+    fn bound(&mut self, object: u64) {
+        if self.covered.contains_key(&object) {
+            self.binding_uncovers += 1;
+        }
+        self.written(object, None);
     }
 
     /// Texture `texture` (a view: its texture) written: over a buffer, the buffer; placed in a
@@ -338,7 +351,7 @@ impl Covers {
                 let live = object(0).and_then(|heap| self.heaps.get(&heap)).cloned();
                 for placed in live.into_iter().flatten() {
                     if !self.textures.contains(&placed) {
-                        self.written(placed, None);
+                        self.bound(placed);
                     }
                 }
             }
@@ -356,7 +369,7 @@ impl Covers {
             }
             _ if selector.starts_with("set") && selector.contains("Buffer") => {
                 for &buffer in names {
-                    self.written(buffer, None);
+                    self.bound(buffer);
                 }
             }
             _ if selector.starts_with("dispatch") || selector.starts_with("draw") => {

@@ -817,7 +817,8 @@ the recording's, and its high word with `WORD`, the document's own function of t
 object was made of (a texture's `TextureWord`, a sampler state's `SamplerWord`), never with the
 recording's high word, which is the recording runtime's own; `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS|covered` for each
 `m2v.privateBytes` range compared, `covered N: texture writes over other objects of a placement
-heap; C checks and R snapshot ranges they covered not compared` where a texture write covered
+heap; C checks and R snapshot ranges they covered not compared; B covers taken off by a binding,
+which may be a read` where a texture write covered
 bytes of another object the stream placed in its placement heap (`N` the times one did): Metal
 leaves an aliased resource's contents undefined once another resource is written over its
 memory, so from that write until the object is written again its check (`covered`) and the
@@ -830,7 +831,8 @@ to its destination, `generateMipmapsForTexture:`, a `useResource:usage:` with wr
 CPU's `replaceRegion:…`; a write of a texture over a buffer is the buffer's. An object is written
 again by the player's writes into it, a blit into it, and, as the stream carries no buffer
 access, any binding of it to an encoder, a `useResource:usage:` with write usage or a `useHeap:`
-of its heap. `split N executed COUNTS` where the player split compute
+of its heap; a binding may be a read, so `B` counts the covers a binding or a `useHeap:` took off,
+and a difference in that object's later compares may be the covering texture's bytes. `split N executed COUNTS` where the player split compute
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
 `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),
