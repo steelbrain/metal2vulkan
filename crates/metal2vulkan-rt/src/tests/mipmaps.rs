@@ -110,8 +110,16 @@ mod on_device {
             let counters = device.counters();
             settled(&device);
             let before = counters.metrics();
+            let closings = counters.closings();
             (generate(name, &device, &mipmapped)).unwrap_or_else(|e| panic!("{name}: {e}"));
             let after = counters.metrics();
+            // The chain's last barrier holds one global memory barrier beside its image barriers.
+            let closed = counters.closings();
+            assert_eq!(
+                (closed.0 - closings.0, closed.1 - closings.1),
+                (1, 1),
+                "{name}: the chain's closing barrier and its global memory barrier"
+            );
             assert_eq!(
                 (
                     after.submissions - before.submissions,

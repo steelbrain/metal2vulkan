@@ -4,14 +4,15 @@
 //! texture's level and slice from its home layout to a transfer layout after every earlier
 //! command, and makes every earlier command's writes visible to every later command: it pays the
 //! barrier an earlier encoder owed, and the hazard sets start again. The second moves them home
-//! once the copy has run, its writes visible to every later command. Nothing is copied but the
-//! region Metal names.
+//! once the copy has run, and holds one global memory barrier beside the image barriers, so the
+//! copy's writes are visible to every later command through any resource over the same bytes (a
+//! heap's aliases), not through the image alone. Nothing is copied but the region Metal names.
 //!
 //! A copy between a buffer and a texture is the same: `vkCmdCopyBufferToImage` or
 //! `vkCmdCopyImageToBuffer` against the bytes shaders reach (the buffer's range of its block, or a
 //! Managed buffer's device copy where it has one), one region per image of
-//! the region, between the same two barriers; the second also makes a write into the buffer
-//! visible to every later command, and to the host where the buffer is Shared.
+//! the region, between the same two barriers; a write into a Shared buffer is also visible to the
+//! host. A mipmap chain ends on the same kind of barrier.
 //!
 //! A copy between buffers is one `vkCmdCopyBuffer` region between the bytes shaders reach, and a
 //! fill one `vkCmdFillBuffer`, each between two barriers: the first after every earlier command,
@@ -202,10 +203,7 @@ impl BlitCommandEncoder {
                 named_write,
                 &regions,
             );
-            device.cmd_pipeline_barrier2(
-                command,
-                &vk::DependencyInfo::default().image_memory_barriers(&back),
-            );
+            close(core, command, &back);
         }
         building.count(Metric::Barriers);
         building.count(Metric::Barriers);
@@ -432,11 +430,6 @@ impl BlitCommandEncoder {
                 (&away_each, &back_each)
             }
         };
-        let written = [written()];
-        let written = match into_image {
-            true => &written[..0],
-            false => &written[..],
-        };
         let device = &core.device;
         let named = texture.copy_layout(layout);
         // SAFETY: the command buffer records outside any render pass and keeps the image and the
@@ -469,12 +462,7 @@ impl BlitCommandEncoder {
                     ),
                 }
             }
-            device.cmd_pipeline_barrier2(
-                command,
-                &vk::DependencyInfo::default()
-                    .memory_barriers(written)
-                    .image_memory_barriers(back),
-            );
+            close(core, command, back);
         }
         building.count(Metric::Barriers);
         building.count(Metric::Barriers);
@@ -690,10 +678,7 @@ impl BlitCommandEncoder {
                     &vk::DependencyInfo::default().image_memory_barriers(&written),
                 );
             }
-            device.cmd_pipeline_barrier2(
-                command,
-                &vk::DependencyInfo::default().image_memory_barriers(&back),
-            );
+            close(core, command, &back);
         }
         // The chain's barriers: before it, between each level and the next, and after it.
         for _ in 0..levels {
@@ -856,13 +841,34 @@ impl Drop for BlitCommandEncoder {
     }
 }
 
-/// The barrier after a blit's write into a buffer: the write visible to every later command.
+/// The barrier after a blit's write: the write visible to every later command.
 fn written() -> vk::MemoryBarrier2<'static> {
     vk::MemoryBarrier2::default()
         .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
         .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
         .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
         .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
+}
+
+/// Records the barrier that ends a blit of an image: `back`, its subresources' moves home, with
+/// one global memory barrier ([`written`]) in the same call. An image barrier makes the blit's
+/// writes visible through that image alone; a heap texture's bytes may be another heap resource's
+/// too, and Vulkan's memory aliasing asks the barrier between two aliases' uses to reach every
+/// byte they share.
+///
+/// # Safety
+///
+/// `command` is recording outside any render pass, and each subresource of `back` is in the
+/// layout its move starts from.
+unsafe fn close(core: &Core, command: vk::CommandBuffer, back: &[vk::ImageMemoryBarrier2<'_>]) {
+    let written = [written()];
+    let dependency = vk::DependencyInfo::default()
+        .memory_barriers(&written)
+        .image_memory_barriers(back);
+    // SAFETY: the caller's contract.
+    unsafe { core.device.cmd_pipeline_barrier2(command, &dependency) };
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    core.counters.closed(dependency.memory_barrier_count);
 }
 
 /// One texture of a copy: its descriptor, its image's format, the unit its copies move, and

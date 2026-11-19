@@ -345,6 +345,10 @@ struct Atomics {
     /// Calibrations of the GPU's clock against the host's, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     calibrations: AtomicU64,
+    /// Barriers that ended a blit of an image, and the global memory barriers they held, for the
+    /// tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    closings: [AtomicU64; 2],
 }
 
 impl Counters {
@@ -627,6 +631,21 @@ impl Counters {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn calibrations(&self) -> u64 {
         self.atomics.calibrations.load(Relaxed)
+    }
+
+    /// One more barrier that ended a blit of an image, holding `globals` global memory barriers.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn closed(&self, globals: u32) {
+        let closings = &self.atomics.closings;
+        closings[0].fetch_add(1, Relaxed);
+        closings[1].fetch_add(u64::from(globals), Relaxed);
+    }
+
+    /// The barriers that ended a blit of an image, and the global memory barriers they held.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn closings(&self) -> (u64, u64) {
+        let closings = &self.atomics.closings;
+        (closings[0].load(Relaxed), closings[1].load(Relaxed))
     }
 
     /// One more live resource of `gauge`'s kind.

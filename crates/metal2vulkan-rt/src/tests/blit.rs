@@ -1129,11 +1129,20 @@ pub(crate) mod on_device {
             let counters = device.counters();
             settled(&device);
             let before = counters.metrics();
+            let closings = counters.closings();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             into_array.record(name, &command_buffer);
             command_buffer.commit().expect("a commit");
             finished(name, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{name}");
+            // The copy's last barrier holds one global memory barrier beside its image barriers:
+            // what it wrote is visible through any resource over the same bytes.
+            let closed = counters.closings();
+            assert_eq!(
+                (closed.0 - closings.0, closed.1 - closings.1),
+                (1, 1),
+                "{name}: the copy's closing barrier and its global memory barrier"
+            );
             let after = counters.metrics();
             assert_eq!(
                 (
@@ -1482,6 +1491,7 @@ pub(crate) mod on_device {
                 block: 4,
             });
             let blocks_before = blocks0.as_ref().map(|level| level.write(20));
+            let closings = device.counters().closings();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
             let copied = [
@@ -1525,6 +1535,15 @@ pub(crate) mod on_device {
             command_buffer.commit().expect("a commit");
             finished(name, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{name}");
+            // Each copy, into a texture or out of one, ends on one barrier that holds one global
+            // memory barrier beside its image barriers.
+            let copies = 3 + u64::from(bc1.is_some());
+            let closed = device.counters().closings();
+            assert_eq!(
+                (closed.0 - closings.0, closed.1 - closings.1),
+                (copies, copies),
+                "{name}: the copies' closing barriers and their global memory barriers"
+            );
             let rows = (0..2).map(|y| (16 + y * 32, ((1 + y) * 6 + 1) * 4));
             assert_eq!(
                 level1.read(),

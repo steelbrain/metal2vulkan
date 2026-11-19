@@ -1271,9 +1271,12 @@ that touch blocks first.
 - A copy records two barriers. The first moves each texture's level and slice from its home
   layout to the transfer layout after every earlier command, and makes every earlier write visible
   to every later command; it pays a barrier an encoder owed, and the hazard sets start again. The
-  second moves them home once the copy has run, its writes visible to every later command. A copy
-  so needs no hazard tracking and leaves none: a command buffer of one copy has three barriers,
-  the segment's end among them. The encoder owes nothing at its end.
+  second moves them home once the copy has run, and holds one global memory barrier beside the
+  image barriers, so its writes are visible to every later command through any resource over the
+  same bytes, a heap's aliases among them, not through the image alone (Vulkan's memory aliasing
+  asks a barrier between two aliases' uses to reach every byte they share). A copy so needs no
+  hazard tracking and leaves none: a command buffer of one copy has three barriers, the segment's
+  end among them. The encoder owes nothing at its end.
 - Refused: what Metal's validation refuses, textures of two pixel formats or two sample counts
   (`Refusal::TextureCopyMismatch`), and a region outside either texture or off its block grid
   (`Refusal::TextureRegion`). Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the
@@ -1289,10 +1292,10 @@ that touch blocks first.
   bytes shaders reach (a Managed buffer's device copy, where the device keeps one), one region an
   image of the region, each at its own offset, so an image stride of no whole number of rows
   copies too. The bytes between the region's rows and
-  images are kept. It records the same two barriers as a copy between textures; the second also
-  makes a write into the buffer visible to every later command, and a write into a Shared buffer
-  marks the segment, whose end barrier then reaches the host. A command buffer of one copy into a
-  Shared buffer has three barriers.
+  images are kept. It records the same two barriers as a copy between textures, the second's
+  global memory barrier making a write into either visible to every later command, and a write
+  into a Shared buffer marks the segment, whose end barrier then reaches the host. A command
+  buffer of one copy into a Shared buffer has three barriers.
 - Refused (`Refusal::BufferCopyLayout`), as Metal's validation stops them: an offset or row
   stride of no whole number of a format's texels, rows or images closer than the region's, and a
   region past the buffer's end. Metal reads no row stride of a region one row high and no image
@@ -1330,7 +1333,8 @@ that touch blocks first.
   filter, the device's filter under the static note `PrecisionNote::DeviceFilteredMipmaps`
   (`BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`; Apple states no filter). A view's levels and
   slices are its own. The levels leave home behind the copy's first barrier, with one barrier
-  between each level and the next, and come back in the last. A texture of one level records
+  between each level and the next, and come back in the last, which holds a copy's global memory
+  barrier. A texture of one level records
   nothing. Refused (`Refusal::MipmapFormat`), as Apple defines mipmaps of colour-renderable,
   filterable formats alone: a depth or stencil, compressed, YCbCr or integer format. Not built
   (`Gap::MipmapFilter`): an image the device's blits do not filter linearly (its format query),
