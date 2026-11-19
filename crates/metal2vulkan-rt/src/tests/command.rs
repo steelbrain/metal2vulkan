@@ -1845,16 +1845,13 @@ pub(crate) mod on_device {
         }
     }
 
+    /// Unmaps: each allocation and the name of the thread its unmap ran on.
+    type Unmaps = Vec<(AllocationId, Option<String>)>;
+
     impl Hook {
         /// The unmaps, sorted, and what they are where each allocation mapped was unmapped once,
         /// on `thread`.
-        fn unmaps(
-            &self,
-            thread: Option<&str>,
-        ) -> (
-            Vec<(AllocationId, Option<String>)>,
-            Vec<(AllocationId, Option<String>)>,
-        ) {
+        fn unmaps(&self, thread: Option<&str>) -> (Unmaps, Unmaps) {
             let mut unmapped = lock(&self.unmapped).clone();
             unmapped.sort();
             let mut mapped: Vec<_> = (lock(&self.mapped).iter())
