@@ -1689,12 +1689,24 @@ impl Side for RtSide<'_> {
                 ))
             )
         };
+        let in_place = |answer: &Result<(rt::Surface, rt::SurfaceExport), rt::Error>| match answer {
+            Ok((_, export)) => export.form == rt::SurfaceForm::InPlace,
+            Err(_) => false,
+        };
+        // The handles in turn, as a consumer takes the route its device lays in place: the first
+        // surface made in place is kept, and where none is, the first made at all, in the copy
+        // form. A handle the platform or the device does not export is passed over. Measured on
+        // the RTX 3090 (53555): its dma-buf surfaces of two planes took the copy form, the known
+        // gap rt's README states, where the opaque fd's are in place.
         let mut answer = make(rt::ExportHandle::DmaBuf);
         for handle in [rt::ExportHandle::OpaqueFd, rt::ExportHandle::OpaqueWin32] {
-            if !unexported(&answer) {
+            if in_place(&answer) || (answer.is_err() && !unexported(&answer)) {
                 break;
             }
-            answer = make(handle);
+            let next = make(handle);
+            if in_place(&next) || answer.is_err() {
+                answer = next;
+            }
         }
         let (surface, _export) = answer.map_err(|error| on.failure(&error))?;
         let texture = surface.planes()[at].clone();
