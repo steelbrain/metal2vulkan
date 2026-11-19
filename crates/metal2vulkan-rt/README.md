@@ -1532,7 +1532,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
 ### Known gaps of render pipeline states
 
 - Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: more than one
-  sample, vertex amplification, a post-tessellation vertex function,
+  sample, vertex amplification, a post-tessellation vertex function (the translation states one;
+  a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
   stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
   fragment function's stencil output, alpha to one, constant data the binder supplies, a
   specialization other than the sample and amplification counts, dynamic state beyond Vulkan

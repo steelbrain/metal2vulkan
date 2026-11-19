@@ -1056,6 +1056,38 @@ mod on_device {
         });
     }
 
+    /// A descriptor's tessellation state with a vertex function that is not a post-tessellation
+    /// one is ignored, as Metal ignores it: with Metal's defaults and with another state (each
+    /// field moved but the factor format, which has one value), the pipeline state is made.
+    #[test]
+    fn every_device_ignores_the_tessellation_state_of_a_plain_vertex_function() {
+        use metal2vulkan::metal::{
+            TessellationControlPointIndexType, TessellationFactorStepFunction,
+            TessellationPartitionMode, Winding,
+        };
+        use metal2vulkan::pipeline::TessellationDescriptor;
+        let Some(library) = examples() else {
+            return;
+        };
+        let mut moved = TessellationDescriptor::default();
+        moved.max_tessellation_factor = 64;
+        moved.partition_mode = TessellationPartitionMode::FractionalOdd;
+        moved.factor_step_function = TessellationFactorStepFunction::PerInstance;
+        moved.output_winding_order = Winding::CounterClockwise;
+        moved.control_point_index_type = TessellationControlPointIndexType::UInt32;
+        moved.factor_scale_enabled = true;
+        each_device("draw_tessellation_ignored", |name, _, device| {
+            for tessellation in [TessellationDescriptor::default(), moved] {
+                let mut d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+                d.tessellation = Some(tessellation);
+                state(name, &device, &d);
+            }
+            println!(
+                "{name}: a plain vertex function's pipeline made under two tessellation states"
+            );
+        });
+    }
+
     /// Each pixel samples its own texel through the constexpr sampler at the consumer's index.
     #[test]
     fn every_device_samples_a_texture_through_a_constexpr_sampler_in_a_draw() {

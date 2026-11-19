@@ -449,7 +449,9 @@ fn draws(
     Ok((draws, (numbered, constexprs)))
 }
 
-/// What the descriptor asks that the runtime does not build.
+/// What the descriptor asks that the runtime does not build. Its tessellation state is not
+/// among them: Metal reads it only for a post-tessellation vertex function, and ignores it for any
+/// other, as the translator does; the translation states such a function (`unbuilt`).
 fn refuse(d: &RenderPipelineDescriptor) -> Result<(), Error> {
     let kind = if d.support_indirect_command_buffers {
         return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
@@ -457,8 +459,6 @@ fn refuse(d: &RenderPipelineDescriptor) -> Result<(), Error> {
         RenderPipelineKind::Multisample
     } else if d.max_vertex_amplification_count != 1 {
         RenderPipelineKind::VertexAmplification
-    } else if d.tessellation.is_some() {
-        RenderPipelineKind::Tessellation
     } else {
         return Ok(());
     };
@@ -470,9 +470,8 @@ fn refuse(d: &RenderPipelineDescriptor) -> Result<(), Error> {
 fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPipelineKind> {
     let g = &pipeline.graphics;
     let requirements = &pipeline.requirements;
-    let synthesized = g.tessellation.is_some()
-        || g.emulated_tessellation.is_some()
-        || g.line_band.is_some()
+    let tessellated = g.tessellation.is_some() || g.emulated_tessellation.is_some();
+    let synthesized = g.line_band.is_some()
         || g.region_fan_out.is_some()
         || g.mesh_records.is_some()
         || pipeline.stages.iter().any(|stage| {
@@ -484,7 +483,9 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
         });
     let unenabled = !(requirements.features).is_subset(&enabled.features)
         || !(requirements.extensions).is_subset(&enabled.extensions);
-    Some(if synthesized {
+    Some(if tessellated {
+        RenderPipelineKind::Tessellation
+    } else if synthesized {
         RenderPipelineKind::SynthesizedStages
     } else if !g.input_attachments.is_empty()
         || !g.storage_attachments.is_empty()

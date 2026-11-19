@@ -972,10 +972,11 @@ pub enum RenderPipelineKind {
     Multisample,
     /// Vertex amplification (`maxVertexAmplificationCount` above 1).
     VertexAmplification,
-    /// A post-tessellation vertex function.
+    /// A post-tessellation vertex function. A descriptor's tessellation state with any other
+    /// vertex function is ignored, as Metal ignores it.
     Tessellation,
-    /// Stages the translator synthesizes beside the functions': tessellation, geometry stages,
-    /// lines drawn as bands of triangles, a rate map's fan-out, or mesh records.
+    /// Stages the translator synthesizes beside the functions' but a tessellation's: geometry
+    /// stages, lines drawn as bands of triangles, a rate map's fan-out, or mesh records.
     SynthesizedStages,
     /// A fragment function that reads its colour attachments (framebuffer fetch).
     FramebufferFetch,
