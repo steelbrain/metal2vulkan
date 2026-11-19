@@ -292,6 +292,11 @@ pub(crate) struct Core {
     /// the barrier twice before it allocates, once parked and once released.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) park_region: Mutex<Option<Arc<std::sync::Barrier>>>,
+    /// For the device tests: where set, the reaper, once it has lowered a content's variant and
+    /// still holding the content, meets the test at the barrier twice, once parked and once
+    /// released. It parks once: the lowering takes the barrier.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) park_lowered: Mutex<Option<Arc<std::sync::Barrier>>>,
     /// For the device tests: while a test holds it for writing, the completion thread, with work
     /// in flight, waits at the top of its round, so no completion is seen, as on a loaded host.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -661,6 +666,8 @@ impl Device {
             tick_spans: Mutex::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             park_region: Mutex::new(None),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            park_lowered: Mutex::new(None),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             hold_completions: std::sync::RwLock::new(()),
             pool,

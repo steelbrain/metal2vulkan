@@ -1014,6 +1014,117 @@ mod on_device {
         });
     }
 
+    /// The device's last handle, dropped on a consumer's thread while the reaper still works for
+    /// it, waits for that work. A dispatch in a threadgroup of one, on another thread, waits for
+    /// the reaper's lowering of the state's emulated-SIMD-group variant. The reaper, once it has
+    /// lowered that variant, parks still holding the state's content. The test's drops of its
+    /// device and state tear nothing down, as the dispatching thread holds its own handles. That
+    /// thread's last drop, after its dispatch returned and its command buffer completed, waits for
+    /// the parked reaper until the test lets it go. It makes no translation and no `VkPipeline`
+    /// more, and every gauge reads zero as it returns, `Gauges::threads` among them.
+    #[test]
+    fn every_device_s_last_drop_waits_for_the_reaper_s_work() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Barrier};
+        use std::time::Duration;
+
+        /// How long the parked reaper holds the last drop before the test lets it go: a drop that
+        /// did not wait for the reaper returns well within it.
+        const HELD: Duration = Duration::from_millis(250);
+
+        let Some(descriptor) = descriptor_of("gsm2_simd_products", "simd_float_products") else {
+            return;
+        };
+        each_device("compute_simd_last_drop", |name, _, device| {
+            let Ok(state) =
+                device.new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
+            else {
+                println!("{name}: the kernel is refused; nothing to lower");
+                return;
+            };
+            if state.inner.compiled.whole.interface.multiples.is_empty() {
+                println!("{name}: every threadgroup size runs on the state's module; no lowering");
+                return;
+            }
+            let counters = device.counters();
+            let park = Arc::new(Barrier::new(2));
+            *crate::device::lock(&device.core().park_lowered) = Some(Arc::clone(&park));
+            let dropping = AtomicBool::new(false);
+            let (early, made, at_return) = std::thread::scope(|scope| {
+                let (own_device, own_state) = (device.clone(), state.clone());
+                let dropping = &dropping;
+                let counters = &counters;
+                let dispatching = scope.spawn(move || {
+                    let queue = own_device.new_command_queue(1).expect("a queue");
+                    let mut buffers = Buffers::new(&own_device, 1 << 12);
+                    let a = buffers.buffer(4);
+                    let out = buffers.buffer(16);
+                    write(&a, 0, &simd_input(0).to_le_bytes());
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let mut encoder = command_buffer
+                        .compute_command_encoder(DispatchType::Serial)
+                        .expect("an encoder");
+                    encoder
+                        .set_compute_pipeline_state(&own_state)
+                        .expect("a state");
+                    encoder.set_buffer(Some(&a), 0, 0).expect("a buffer");
+                    encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
+                    encoder
+                        .dispatch_threadgroups([1, 1, 1], [1, 1, 1])
+                        .unwrap_or_else(|error| panic!("{name}: a threadgroup of one: {error}"));
+                    encoder.end_encoding();
+                    command_buffer.commit().expect("a commit");
+                    finished(name, &command_buffer);
+                    assert_eq!(command_buffer.error(), None, "{name}");
+                    let made = counters.metrics();
+                    dropping.store(true, Ordering::SeqCst);
+                    drop((
+                        command_buffer,
+                        a,
+                        out,
+                        buffers,
+                        queue,
+                        own_state,
+                        own_device,
+                    ));
+                    (made, counters.gauges(), counters.metrics())
+                });
+                // The reaper lowered the variant and is parked, holding the content.
+                park.wait();
+                drop((state, device));
+                within("the dispatching thread's last drop", || {
+                    dropping.load(Ordering::SeqCst)
+                });
+                std::thread::sleep(HELD);
+                let early = dispatching.is_finished();
+                // The reaper goes on, and the last drop with it.
+                park.wait();
+                let (made, gauges, metrics) = dispatching.join().expect("the dispatching thread");
+                (early, (made, metrics), gauges)
+            });
+            assert!(
+                !early,
+                "{name}: the last drop returned while the reaper still worked for the device"
+            );
+            assert_eq!(
+                at_return,
+                Gauges::default(),
+                "{name}: every gauge zero as the last drop returns"
+            );
+            let (before, after) = made;
+            assert_eq!(
+                (after.translations, after.pipelines_created),
+                (before.translations, before.pipelines_created),
+                "{name}: nothing translated or made once the last drop began"
+            );
+            println!(
+                "{name}: the last drop waited {HELD:?} for the parked reaper; every gauge zero as \
+                 it returned, {} translations and {} pipelines made before it",
+                after.translations, after.pipelines_created
+            );
+        });
+    }
+
     /// Every file the store keeps under `dir`, its count (`state`) aside: its path under it, its
     /// length and its time on disk, in order.
     fn files(dir: &Path) -> Vec<(String, u64, SystemTime)> {

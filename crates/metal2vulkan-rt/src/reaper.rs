@@ -318,6 +318,14 @@ pub(crate) fn run(core: Arc<Core>) {
             Next::Lower(lowering, which) => {
                 if let Some(content) = lowering.upgrade() {
                     content.lower_later(which);
+                    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                    {
+                        let park = lock(&core.park_lowered).take();
+                        if let Some(park) = park {
+                            park.wait();
+                            park.wait();
+                        }
+                    }
                 }
             }
             Next::End(left) => {
