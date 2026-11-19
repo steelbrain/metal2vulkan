@@ -23,7 +23,7 @@ struct Inner {
 }
 
 /// A depth/stencil descriptor's tests as Vulkan's dynamic state takes them.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Tests {
     /// Whether the depth test runs: it compares by other than `Always` or writes
     /// (`depth_stencil_state`).
@@ -39,7 +39,7 @@ pub(crate) struct Tests {
 }
 
 /// One face's stencil state.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Face {
     pub(crate) fail: vk::StencilOp,
     pub(crate) pass: vk::StencilOp,
@@ -50,6 +50,16 @@ pub(crate) struct Face {
 }
 
 impl Tests {
+    /// The depth test's part: whether it runs, whether it writes, and its compare operation.
+    pub(crate) fn depth(&self) -> (bool, bool, vk::CompareOp) {
+        (self.depth_test, self.depth_write, self.depth_compare)
+    }
+
+    /// The stencil test's part: whether it runs, and each face's state.
+    pub(crate) fn stencil(&self) -> (bool, [Face; 2]) {
+        (self.stencil, self.faces)
+    }
+
     /// The tests of `descriptor`, by the translator's mapping.
     pub(crate) fn of(descriptor: &DepthStencilDescriptor) -> Tests {
         let state = depth_stencil_state(descriptor);

@@ -74,7 +74,7 @@
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
-use crate::depth_stencil::{DepthStencilState, Tests};
+use crate::depth_stencil::{DepthStencilState, Face, Tests};
 use crate::device::Core;
 use crate::encoder::{check_alignment, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS};
 use crate::error::{DrawKind, Error, Gap, Limit, Refusal};
@@ -143,17 +143,21 @@ pub struct IndexBuffer<'a> {
 }
 
 /// The dynamic state a draw records before it: the viewport and scissor, the cull mode, the
-/// front face, the depth and stencil tests, the stencil references, the blend constants, the
-/// depth bias, and the feedback loop's enable where the device reads attachments.
+/// front face, the depth test, the stencil references, the blend constants, the depth bias, the
+/// feedback loop's enable where the device reads attachments, and the stencil test. A setter
+/// marks its state only where the value it sets differs from the one it replaces, and a draw
+/// records of the depth and stencil tests only the fields that differ from the ones the encoder
+/// last recorded.
 const VIEWPORT: u32 = 1;
 const CULL: u32 = 2;
 const FRONT: u32 = 4;
-const TESTS: u32 = 8;
+const DEPTH: u32 = 8;
 const REFERENCE: u32 = 16;
 const BLEND: u32 = 32;
 const BIAS: u32 = 64;
 const LOOP: u32 = 128;
-const ALL: u32 = 255;
+const STENCIL: u32 = 256;
+const ALL: u32 = 511;
 
 /// An image the pass moved whole to the feedback layout, which its second barrier moves home.
 struct Moved {
@@ -409,6 +413,8 @@ pub struct RenderCommandEncoder {
     renders_into: bool,
     /// The depth-stencil state's tests, Metal's default state's where none is set.
     tests: Tests,
+    /// The tests the encoder last recorded, none before its first draw.
+    recorded: Option<Tests>,
     viewport: Viewport,
     /// Metal's scissor rectangle cut to the render area, per axis `[first, end)`.
     scissor: [[u32; 2]; 2],
@@ -500,6 +506,7 @@ impl CommandBuffer {
                     blend_color: [0.0; 4],
                     depth_bias: [0.0; 2],
                     biased: false,
+                    recorded: None,
                     dirty: ALL,
                     topology: None,
                     wrote: false,
@@ -957,14 +964,15 @@ impl RenderCommandEncoder {
         self.dirty |= FRONT;
     }
 
-    /// `setDepthStencilState:`; `None` sets Metal's default state again, which tests nothing.
+    /// `setDepthStencilState:`; `None` sets Metal's default state again, which tests nothing. A
+    /// state whose depth or stencil tests are the ones set already records nothing of them.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's state.
     pub fn set_depth_stencil_state(
         &mut self,
         state: Option<&DepthStencilState>,
     ) -> Result<(), Error> {
-        self.tests = match state {
+        let tests = match state {
             Some(state) => {
                 if !state.is_of(self.building().device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
@@ -973,7 +981,13 @@ impl RenderCommandEncoder {
             }
             None => Tests::of(&DepthStencilDescriptor::default()),
         };
-        self.dirty |= TESTS;
+        if tests.depth() != self.tests.depth() {
+            self.dirty |= DEPTH;
+        }
+        if tests.stencil() != self.tests.stencil() {
+            self.dirty |= STENCIL;
+        }
+        self.tests = tests;
         Ok(())
     }
 
@@ -1005,6 +1019,8 @@ impl RenderCommandEncoder {
     /// ([`DEPTH_BIAS_NOTE`](Self::DEPTH_BIAS_NOTE)). A biased depth past the viewport's depth
     /// range is undefined in Vulkan.
     ///
+    /// A bias equal to the one set already records nothing.
+    ///
     /// Err: [`Gap::Draw`] of [`DrawKind::DepthBiasClamp`] for a clamp other than 0; the encoder's
     /// bias is unchanged.
     pub fn set_depth_bias(
@@ -1018,8 +1034,10 @@ impl RenderCommandEncoder {
                 kind: DrawKind::DepthBiasClamp,
             }));
         }
-        self.depth_bias = [depth_bias, slope_scale];
-        self.dirty |= BIAS;
+        if [depth_bias, slope_scale] != self.depth_bias {
+            self.depth_bias = [depth_bias, slope_scale];
+            self.dirty |= BIAS;
+        }
         Ok(())
     }
 
@@ -1866,24 +1884,47 @@ impl RenderCommandEncoder {
                 };
                 device.cmd_set_front_face(command, face);
             }
-            if dirty & TESTS != 0 {
-                device.cmd_set_depth_test_enable(command, self.tests.depth_test);
-                device.cmd_set_depth_write_enable(command, self.tests.depth_write);
-                device.cmd_set_depth_compare_op(command, self.tests.depth_compare);
-                device.cmd_set_stencil_test_enable(command, self.tests.stencil);
-                for (face, f) in both.iter().zip(&self.tests.faces) {
-                    device.cmd_set_stencil_op(
-                        command,
-                        *face,
-                        f.fail,
-                        f.pass,
-                        f.depth_fail,
-                        f.compare,
-                    );
-                    device.cmd_set_stencil_compare_mask(command, *face, f.compare_mask);
-                    device.cmd_set_stencil_write_mask(command, *face, f.write_mask);
+            // Of the tests, the fields that differ from the ones last recorded; every field
+            // before the first draw.
+            let (t, was) = (self.tests, self.recorded);
+            if dirty & DEPTH != 0 {
+                if was.is_none_or(|w| w.depth_test != t.depth_test) {
+                    device.cmd_set_depth_test_enable(command, t.depth_test);
+                }
+                if was.is_none_or(|w| w.depth_write != t.depth_write) {
+                    device.cmd_set_depth_write_enable(command, t.depth_write);
+                }
+                if was.is_none_or(|w| w.depth_compare != t.depth_compare) {
+                    device.cmd_set_depth_compare_op(command, t.depth_compare);
                 }
             }
+            if dirty & STENCIL != 0 {
+                if was.is_none_or(|w| w.stencil != t.stencil) {
+                    device.cmd_set_stencil_test_enable(command, t.stencil);
+                }
+                for (at, face) in both.iter().enumerate() {
+                    let f = &t.faces[at];
+                    let old = was.map(|w| w.faces[at]);
+                    let ops = |f: &Face| (f.fail, f.pass, f.depth_fail, f.compare);
+                    if old.is_none_or(|o| ops(&o) != ops(f)) {
+                        device.cmd_set_stencil_op(
+                            command,
+                            *face,
+                            f.fail,
+                            f.pass,
+                            f.depth_fail,
+                            f.compare,
+                        );
+                    }
+                    if old.is_none_or(|o| o.compare_mask != f.compare_mask) {
+                        device.cmd_set_stencil_compare_mask(command, *face, f.compare_mask);
+                    }
+                    if old.is_none_or(|o| o.write_mask != f.write_mask) {
+                        device.cmd_set_stencil_write_mask(command, *face, f.write_mask);
+                    }
+                }
+            }
+            self.recorded = Some(t);
             if dirty & REFERENCE != 0 {
                 for (face, reference) in both.iter().zip(self.stencil_reference) {
                     device.cmd_set_stencil_reference(command, *face, reference);

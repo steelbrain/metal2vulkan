@@ -938,11 +938,15 @@ mod on_device {
     }
 
     /// The user-space instructions a draw retires on the encoding thread: on the draw path with no
-    /// depth attachment (Metal's default depth-stencil state), under a depth test set once, and
-    /// under one whose state and bias change every draw; and the two setters' own, called as
-    /// often with no draw between, so that the third less the second and the fourth is what a
-    /// draw records of the changed state (ten dynamic-state commands for the depth-stencil state,
-    /// two for the bias). Printed per draw where the kernel offers the counter (Linux).
+    /// depth attachment (Metal's default depth-stencil state), under a depth test set once, under
+    /// one whose state and bias are set again unchanged every draw, and under one whose state and
+    /// bias change every draw; and the two changing setters' own, called as often with no draw
+    /// between, so that the fourth less the second and the fifth is what a draw records of the
+    /// changed state: the depth write and compare of two states alike but for them, and the bias.
+    /// Printed per draw where the kernel offers the counter (Linux). A state and bias set again
+    /// record nothing, so their draw is held within a quarter of the draw under a test set once,
+    /// which the ten commands a recorded state takes would pass on a device whose commands cost
+    /// what lavapipe's do.
     #[test]
     fn every_device_counts_a_depth_tested_draw_s_instructions() {
         use metal2vulkan_devtools::instructions::InstructionCounter;
@@ -986,15 +990,17 @@ mod on_device {
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
             let mut per_draw = Vec::new();
             // The draw path with no depth attachment, a depth-tested draw whose state is set
-            // once, one whose depth-stencil state and bias change every draw, and the changes
-            // with no draw.
+            // once, one whose state and bias are set again unchanged every draw, one whose
+            // depth-stencil state and bias change every draw, and the changes with no draw.
+            let (once, again, change) = (0, 1, 2);
             let arms = [
-                (false, false, true),
-                (true, false, true),
-                (true, true, true),
-                (true, true, false),
+                (false, once, true),
+                (true, once, true),
+                (true, again, true),
+                (true, change, true),
+                (true, change, false),
             ];
-            for (tested, changing, drawn) in arms {
+            for (tested, setting, drawn) in arms {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut p = pass(&color, None);
                 if tested {
@@ -1015,7 +1021,11 @@ mod on_device {
                 draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
                 let ((), counted) = (counter.measure(|| {
                     for at in 0..DRAWS {
-                        if changing {
+                        if setting == again {
+                            draw(encoder.set_depth_stencil_state(Some(&states[0])));
+                            draw(encoder.set_depth_bias(0.0, 0.0, 0.0));
+                        }
+                        if setting == change {
                             let state = &states[at as usize % 2];
                             draw(encoder.set_depth_stencil_state(Some(state)));
                             draw(encoder.set_depth_bias(at as f32, 0.0, 0.0));
@@ -1032,9 +1042,16 @@ mod on_device {
             }
             println!(
                 "{name}: user-space instructions a draw: {} with no depth attachment, {} under a \
-                 depth test set once, {} under a depth test whose state and bias change every \
-                 draw, of which the two setters alone {}",
-                per_draw[0], per_draw[1], per_draw[2], per_draw[3]
+                 depth test set once, {} with its state and bias set again unchanged, {} under a \
+                 depth test whose state and bias change every draw, of which the two setters \
+                 alone {}",
+                per_draw[0], per_draw[1], per_draw[2], per_draw[3], per_draw[4]
+            );
+            assert!(
+                per_draw[2] * 4 <= per_draw[1] * 5,
+                "{name}: a state and bias set again unchanged record nothing ({} against {})",
+                per_draw[2],
+                per_draw[1]
             );
         });
     }
