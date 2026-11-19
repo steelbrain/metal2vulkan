@@ -3119,7 +3119,8 @@ impl Texture {
     /// texture's own type, a slice subrange of a 1D or 2D array, or one slice of a 2D array as a
     /// 2D texture, each over any level subrange. A texture's image lists the formats Metal views
     /// it as that the device holds in a viewed form of the image format's compatibility class: its
-    /// sRGB sibling whatever its usage, and with `PixelFormatView` usage every uncompressed colour
+    /// sRGB sibling whatever its usage, and with `PixelFormatView` usage, or an empty usage (Metal's
+    /// `MTLTextureUsageUnknown`, which the runtime takes as every usage), every uncompressed colour
     /// format of the same bytes a texel; such an image is mutable, with that format list. A view
     /// of another format takes the image's usage that its format's features hold: it has no
     /// storage element where the image has no storage usage, and renders where its format holds
@@ -3129,7 +3130,7 @@ impl Texture {
     ///
     /// Err: [`Refusal::TextureViewRange`] for an empty range of levels or slices or one past the
     /// texture's, and [`Refusal::TextureViewFormat`] for another pixel format of a texture made
-    /// without `PixelFormatView` usage, as Metal's validation stops them; [`Gap::TextureView`]
+    /// with a usage that is not empty and lacks `PixelFormatView`, as Metal's validation stops them; [`Gap::TextureView`]
     /// for another kind Metal makes, naming it; [`Refusal::TextureIndex`],
     /// [`Refusal::IndicesNotGranted`] as [`Device::new_texture`];
     /// [`Error::Vulkan`] where a view cannot be made.
