@@ -2484,6 +2484,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   under depth biases with no clamp; every attachment they read through a texture is
   a shader-read colour render target of `Private` storage, read from the fragment function; and
   their stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0.
+  A draw that reads its own target over a buffer in place, a linear image on the buffer's memory
+  that never leaves the general layout, is refused on every device (`AttachmentRead`): no play
+  of the replay streams met it. The forms ruled for it, should a stream meet it, are the read
+  through the image's shadow, the counted copy a device without the feedback loop takes, first,
+  and then, where the device has the feedback loop, unified image layouts and a `LINEAR` image
+  with the feedback usage, the loop on the attachment in the general layout.
 - A draw that reaches an attachment of its own pass through an argument buffer's texture is not
   seen: it reads through the texture's own element, in its home layout, while the pass may have
   moved the image to the feedback layout, or, without the feedback loop, while the pass renders

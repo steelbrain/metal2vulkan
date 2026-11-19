@@ -27,8 +27,9 @@
 //!
 //! A sample is the owned fixture `tvc_samples`'s: a nearest sample at an explicit level, at the
 //! texel's centre, of a 2D texture, a 2D array or a cube (along the direction through the texel's
-//! centre, by the face table Metal and Vulkan share), whichever the sampled texture is. A colour's four channels are halves exactly ([`colour`]), so each sample is the
-//! colour cleared where the view and the parent share the texel, or it is a difference.
+//! centre, by the face table Metal and Vulkan share), whichever the sampled texture is. A colour
+//! names its level and slice in sixteenths and eighths, which a half holds exactly, so each sample
+//! is the colour cleared where the view and the parent share the texel, or it is a difference.
 
 use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
