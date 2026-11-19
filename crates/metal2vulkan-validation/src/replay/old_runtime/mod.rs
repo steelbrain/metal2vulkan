@@ -23,6 +23,7 @@ use metal2vulkan_runtime::{
     RenderPipelineState, ResourceId, ResourceIdKind, ResourceOptions, SamplerState, SharedEvent,
     Size, StorageMode, Texture, TextureDescriptor, TextureLevelQuery,
 };
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 /// One object of the stream, as the runtime holds it.
@@ -87,7 +88,7 @@ pub struct OldRuntime {
     read_backs_left_out: u64,
     /// The heap the next call makes, where the stream places no buffer in it
     /// (`Backend::holds_no_buffer`): it is made outside the space.
-    no_buffer: Option<u64>,
+    no_buffer: Cell<Option<u64>>,
 }
 
 /// A made object with no address.
@@ -184,7 +185,7 @@ impl OldRuntime {
             marked: false,
             read_backs_left_out: 0,
             display: None,
-            no_buffer: None,
+            no_buffer: Cell::new(None),
         }
     }
 
@@ -1096,7 +1097,7 @@ impl Backend for OldRuntime {
     /// The heap goes outside the space: no address the program holds lies in it, and a heap the
     /// player grew for the runtime's sizes would hold pages past its recorded span.
     fn holds_no_buffer(&mut self, heap: u64) {
-        self.no_buffer = Some(heap);
+        self.no_buffer.set(Some(heap));
     }
 
     fn managed_texture(&self, texture: u64) -> Option<bool> {
