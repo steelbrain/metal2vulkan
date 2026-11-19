@@ -6,9 +6,9 @@
 //!   8 by 8 `RGBA8Unorm` texture of four levels is, in every channel, within one code of the box
 //!   of the four texels it halves in the level above as the device left them (the static note
 //!   `BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`: the filter is the device's), its first level
-//!   kept; the chain is one submission and its four barriers, besides the segment's end. A
-//!   texture of one level records nothing,
-//!   and one of an integer format is `Refusal::MipmapFormat`.
+//!   kept; the chain is one submission and its four barriers, besides the segment's end, its
+//!   first level's bytes uploaded and read back before it. A texture of one level records
+//!   nothing, and one of an integer format is `Refusal::MipmapFormat`.
 
 use crate::blit::mipmapped;
 use crate::PixelFormat;
@@ -99,6 +99,14 @@ mod on_device {
             let row = u64::from(SIDE) * 4;
             (mipmapped.replace_region(whole, 0, 0, &first, row, row * u64::from(SIDE)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // Where the bytes are staged, they wait for the device's upload, which goes ahead of
+            // the next submission; reading them back submits any such upload and waits for it, so
+            // the chain's command buffer is measured alone, its upload's barrier outside it.
+            assert_eq!(
+                level_bytes(name, &mipmapped, 0),
+                first,
+                "{name}: level 0 uploaded"
+            );
             let counters = device.counters();
             settled(&device);
             let before = counters.metrics();
