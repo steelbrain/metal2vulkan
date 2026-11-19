@@ -383,6 +383,7 @@ pub struct NewRuntime {
     /// The frame and the stream position of the call being played (`Backend::locate`).
     at: (u64, u64),
     substitutes: Substitutes,
+    unrecorded_tessellation: render::UnrecordedTessellation,
     /// Each open encoder's command buffer.
     owners: HashMap<u64, u64>,
     /// How the recording's device kept Managed buffers; `None` where the player was not told,
@@ -798,6 +799,7 @@ impl NewRuntime {
             skips: Skips::default(),
             at: (0, 0),
             substitutes: Substitutes::default(),
+            unrecorded_tessellation: render::UnrecordedTessellation::default(),
             owners: HashMap::new(),
             managed: None,
             display: None,
@@ -2172,6 +2174,7 @@ impl Backend for NewRuntime {
             self.resource_indices.remove(&call.receiver);
             self.surfaces.released(call.receiver);
             self.substitutes.live.remove(&call.receiver);
+            self.unrecorded_tessellation.released(call.receiver);
             match self.objects.remove(&call.receiver) {
                 // Its place and its device copy's, where it has them: a no-copy buffer's memory
                 // is an import, and one in a block or heap the stream's.
@@ -2650,6 +2653,10 @@ impl Backend for NewRuntime {
             ("substituted_tiled_textures", self.substitutes.tiled),
             ("substituted_gap_textures", self.substitutes.gaps),
             ("substitutes_read", self.substitutes.read),
+            (
+                "patch_draws_unrecorded_tessellation",
+                self.unrecorded_tessellation.patch_draws,
+            ),
             ("skipped_calls", self.skips.calls),
             ("skipped_resource_ids", self.skips.resource_ids),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
@@ -2792,6 +2799,7 @@ impl Backend for NewRuntime {
             self.substitutes.gaps,
             if first.is_empty() { " -" } else { &first },
         ));
+        lines.push(self.unrecorded_tessellation.line());
         lines.push(self.asides.line());
         lines.push(self.places.line());
         lines.push(self.unwritten.line());

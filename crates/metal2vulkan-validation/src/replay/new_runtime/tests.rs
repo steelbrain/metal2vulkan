@@ -2,6 +2,7 @@
 
 use super::{Skips, Substituted, Substitutes};
 use crate::replay::stream::Call;
+use crate::replay::value::{Name, Value};
 use metal2vulkan::error::{Error, Feature, Limit, LowerFamily, Unsupported};
 use metal2vulkan_rt as rt;
 use std::collections::BTreeMap;
@@ -74,5 +75,34 @@ fn substitutes_are_counted_by_kind() {
             "substituted textures TextureView { kind: TextureType } 2, the first #9",
             "substituted textures Tiled 1, the first #5",
         ]
+    );
+}
+
+/// A render pipeline record with the `tessellation` key holds the program's tessellation state;
+/// one without it (a recorder that did not carry the key) does not, and the report says how many
+/// patch draws the player drew with Metal's defaults in its place.
+#[test]
+fn a_record_without_the_tessellation_key_is_unrecorded() {
+    let map = |keys: &[&str]| {
+        vec![Value::Map(
+            (keys.iter())
+                .map(|&key| (Name::from(key), Value::Nil))
+                .collect(),
+        )]
+    };
+    assert!(super::render::records_tessellation(&map(&[
+        "vertex",
+        "tessellation"
+    ])));
+    assert!(!super::render::records_tessellation(&map(&[
+        "vertex", "fragment"
+    ])));
+    assert!(!super::render::records_tessellation(&[]));
+    let mut unrecorded = super::render::UnrecordedTessellation::default();
+    unrecorded.patch_draws = 3;
+    assert_eq!(
+        unrecorded.line(),
+        "patch draws through a render pipeline state whose record lacks tessellation 3: the \
+         program's tessellation state is unknown, and the player drew them with Metal's defaults"
     );
 }

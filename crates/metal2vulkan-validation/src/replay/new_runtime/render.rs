@@ -35,6 +35,44 @@ pub(super) struct Render {
     skipped: HashSet<Slot>,
     skipped_samplers: HashSet<(bool, u32)>,
     skipped_pipeline: bool,
+    /// The bound pipeline state's record lacks the `tessellation` key.
+    unrecorded_tessellation: bool,
+}
+
+/// The render pipeline states whose record lacks the `tessellation` key, and the patch draws
+/// played through one. Such a record comes from a recorder that did not carry the key, so the
+/// program's tessellation state is unknown. The player draws these patches with Metal's defaults,
+/// its stand-in for that state.
+#[derive(Default)]
+pub(super) struct UnrecordedTessellation {
+    states: HashSet<u64>,
+    /// The patch draws played through such a state.
+    pub(super) patch_draws: u64,
+}
+
+/// Whether a render pipeline record's arguments carry the `tessellation` key.
+pub(super) fn records_tessellation(args: &[Value]) -> bool {
+    match args.first() {
+        Some(Value::Map(map)) => map.iter().any(|(key, _)| &**key == "tessellation"),
+        _ => false,
+    }
+}
+
+impl UnrecordedTessellation {
+    /// A released object: a state's mark goes with it.
+    pub(super) fn released(&mut self, object: u64) {
+        self.states.remove(&object);
+    }
+
+    /// The report's line: the patch draws played with the player's stand-in.
+    pub(super) fn line(&self) -> String {
+        format!(
+            "patch draws through a render pipeline state whose record lacks tessellation {}: \
+             the program's tessellation state is unknown, and the player drew them with Metal's \
+             defaults",
+            self.patch_draws
+        )
+    }
 }
 
 /// The attachment index of the pass's own properties in [`Pass::unheld`].
@@ -174,7 +212,12 @@ impl NewRuntime {
             device.new_render_pipeline_state(&descriptor, |samplers| ids(samplers))
         });
         match made {
-            Ok(state) => unaddressed(Object::RenderPipeline(state)),
+            Ok(state) => {
+                if !records_tessellation(&call.args) {
+                    self.unrecorded_tessellation.states.insert(call.result);
+                }
+                unaddressed(Object::RenderPipeline(state))
+            }
             Err(error) if Skips::skipped_state(&mut self.skips.render_states, call, &error) => {
                 unaddressed(Object::Skipped)
             }
@@ -211,6 +254,7 @@ impl NewRuntime {
                 skipped: HashSet::new(),
                 skipped_samplers: HashSet::new(),
                 skipped_pipeline: false,
+                unrecorded_tessellation: false,
             }))),
             Err(rt::Error::Unsupported(gap)) => self.skip_encoder(format!("{gap:?}")),
             Err(error) => Err(failed(call)(error)),
@@ -478,13 +522,16 @@ impl NewRuntime {
                 Ok(())
             }
             "setRenderPipelineState:" => {
-                let state = match self.get(call, Self::id(call, 0)?)? {
+                let state_id = Self::id(call, 0)?;
+                let state = match self.get(call, state_id)? {
                     Object::RenderPipeline(state) => Some(state.clone()),
                     Object::Skipped => None,
                     _ => return Err(refuse(call, "argument 0 is no render pipeline state")),
                 };
+                let unrecorded = self.unrecorded_tessellation.states.contains(&state_id);
                 let render = self.render(id);
                 render.skipped_pipeline = state.is_none();
+                render.unrecorded_tessellation = unrecorded;
                 match state {
                     Some(state) => render.encoder.set_render_pipeline_state(&state),
                     None => Ok(()),
@@ -753,6 +800,9 @@ impl NewRuntime {
                 };
                 if self.draw_skipped(id) {
                     return Ok(());
+                }
+                if self.render(id).unrecorded_tessellation {
+                    self.unrecorded_tessellation.patch_draws += 1;
                 }
                 (self.render(id).encoder).draw_patches(
                     points,

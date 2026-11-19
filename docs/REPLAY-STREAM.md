@@ -451,11 +451,14 @@ and the (name id, value) answer pairs.
     a recorder carries them: `tessellation` is `{partitionMode, maxFactor, factorScaleEnabled,
     factorFormat, controlPointIndexType, factorStepFunction, outputWinding}`, Metal's raw values,
     and the depths are uints. A record without them, as every stream recorded before the recorder
-    carried them, means Metal's defaults: `{0, 16, false, 0, 0, 0, 0}` and depths 1 and 1. A player
-    gives a tessellation state other than the defaults to the pipeline; the translator draws a
-    post-tessellation vertex function's patch with it, which it knows from the function's AIR, and
-    ignores it for any other, as Metal does. The vertex
-    descriptor is `{layouts: [{bufferIndex, stride, stepFunction, stepRate}], attributes:
+    carried them, does not hold the program's state: a player plays Metal's defaults in its place,
+    `{0, 16, false, 0, 0, 0, 0}` and depths 1 and 1, and the new runtime's backend counts the patch
+    draws it plays through such a state (`patch_draws_unrecorded_tessellation`, in each frame and
+    the total, and the report's `patch draws through a render pipeline state whose record lacks
+    tessellation` line), so a report that quotes their pass says the tessellation state there is
+    unknown. A player gives a tessellation state other than the defaults to the pipeline; the
+    translator draws a post-tessellation vertex function's patch with it, which it knows from the
+    function's AIR, and ignores it for any other, as Metal does. The vertex descriptor is `{layouts: [{bufferIndex, stride, stepFunction, stepRate}], attributes:
     [{attributeIndex, format, offset, bufferIndex}]}` (a stride of 2^64 - 1 is
     `MTLBufferLayoutStrideDynamic`); `colors` is `[[index, {pixelFormat, blendingEnabled,
     sourceRgbBlendFactor, destinationRgbBlendFactor, rgbBlendOperation, sourceAlphaBlendFactor,
