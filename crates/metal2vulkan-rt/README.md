@@ -779,6 +779,16 @@ that touch blocks first.
   buffers of one dispatch each took 23.88 µs a command buffer with the start alone, 21.57 with
   the end alone and 21.29 with neither, medians of 40 runs. Writing the start at the
   bottom-of-pipe stage costs the same, 23.68.
+- On lavapipe a command buffer's completion waits for all the device's later work, of every
+  queue: the driver's read of query results waits for the whole device to idle
+  (`lvp_GetQueryPoolResults`, with or without `VK_QUERY_RESULT_WAIT_BIT`), and the completion
+  thread reads each command buffer's two timestamps before its completed handlers run. A short
+  command buffer committed beside another queue's long one completes once the long one ends.
+  Measured with Vulkan alone on Mesa 26.2.6: a read of a completed submission's timestamps
+  returned 500.4 ms later, once a later batch that waited on the host could run. It delays and
+  never hangs: the runtime submits no wait that only the host can meet (it holds such a segment
+  on the host), so the device always reaches idle. A command buffer waiting on an event that
+  another queue's completed handler set completed 2.2 ms after its commit there.
 - A command buffer that finds every pair of the device's timestamp pools taken, where the device
   then refuses a new pool, runs untimed: its `gpu_start_time` and `gpu_end_time` are 0, and
   `Metrics::untimed_command_buffers` counts it. Once the device refuses a pool it asks for none
