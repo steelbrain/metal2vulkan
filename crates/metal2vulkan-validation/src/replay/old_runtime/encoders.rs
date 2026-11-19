@@ -253,11 +253,16 @@ impl OldRuntime {
                 self.compute(id).use_resource(resource.as_ref(), usage)
             }
             "useHeap:" => {
-                let heap = self.kind(call, Self::id(call, 0)?, "heap", |object| match object {
-                    Object::Heap(heap) | Object::Block(heap, _) => Some(heap.clone()),
+                let heaps = self.kind(call, Self::id(call, 0)?, "heap", |object| match object {
+                    Object::Heap(heap, textures) => Some((heap.clone(), textures.clone())),
+                    Object::Block(heap, _) => Some((heap.clone(), None)),
                     _ => None,
                 })?;
-                self.compute(id).use_heap(&heap)
+                // A heap the player split is both of the runtime's heaps.
+                match heaps {
+                    (heap, None) => self.compute(id).use_heap(&heap),
+                    (heap, Some(textures)) => self.compute(id).use_heaps(&[&heap, &textures]),
+                }
             }
             "updateFence:" => {
                 let fence = self.fence(call, 0)?;

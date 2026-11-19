@@ -182,19 +182,35 @@ and the (name id, value) answer pairs.
 - **Recorded addresses on the old runtime.** The old runtime's player makes every object that
   answered a `gpuAddress` at that address (`AddressPlacement::At`): a buffer, a block or a heap
   at its own answer, the descriptor's `pinnedGpuAddress` aside; a buffer in a heap lands at the
-  heap's address plus its offset. A heap the stream places no buffer in (read ahead: no
-  `newBufferWithLength:options:offset:` or `newBufferWithLength:options:` of it) is the exception:
-  a texture has no address and a heap answers none, so no address the program holds lies in it.
-  It goes outside the space whatever size the player lays it out at (section 10), and its range
-  keeps its recorded address in the address map. Every other object, and the player's own
-  buffers (its staging, readback and host copies), goes outside the space a pin can take
-  (`AddressPlacement::Outside`, `[2^47, 2^48)`; a pin's span ends at or below 2^47). A recorded
-  address the runtime refuses (its span meets a live pin's, its first page starts no 32-KiB
-  granule, or it leaves the space), or an object the runtime made at another address than it
-  recorded, stops the play, naming the object and its recorded address (`PlayError::Unpinned`);
-  no other placement is tried. Each range's address in the play is then its recorded one, so no
-  address argument moves (below). The report says how many objects it pinned and how many heaps
-  without buffers it made outside the space (section 10).
+  heap's address plus its offset. A heap with a recorded range plays as its buffers and its
+  textures apart, decided by what the stream places in it (read ahead), whatever the heap's type:
+  - its buffers (`newBufferWithLength:options:offset:` or `newBufferWithLength:options:` of it)
+    go in a heap at its recorded address and of its recorded size, each at its recorded offset,
+    never laid out again: a pinned span never grows;
+  - its textures (`newTextureWithDescriptor:offset:` or `newTextureWithDescriptor:` of it) go in
+    a heap outside the space, laid out for the runtime's sizes (section 10). A texture has no
+    address and a heap answers none, so no address the program holds lies in it. It is one heap,
+    so textures the stream placed at one offset still share memory.
+
+  A heap the stream places only buffers in is the first heap alone; one it places no buffer in is
+  the second alone, and its range keeps its recorded address in the address map; one it places
+  both in is both. A texture and a buffer that shared memory in the recording no longer share it.
+  The report counts such textures: those whose range in the recording (the heap's recorded
+  address plus the texture's offset, for the bytes the runtime answers for its descriptor, as the
+  stream holds no texture's size) met the recorded range of a buffer live in the same heap. A
+  count above 0 is reported, and the play goes on. Every heap the streams recorded so far hold is
+  a placement heap; the rule for an automatic one is held by the player's unit test alone. A heap
+  without a recorded range goes outside the space whole, laid out as on any runtime. Every other
+  object, and the player's own buffers (its staging, readback and host copies), goes outside the
+  space a pin can take (`AddressPlacement::Outside`, `[2^47, 2^48)`; a pin's span ends at or
+  below 2^47). A recorded address the runtime refuses (its span meets a live pin's, its first page
+  starts no 32-KiB granule, or it leaves the space), a buffer the runtime will not place at its
+  recorded offset in its heap's recorded span, or an object the runtime made at another address
+  than it recorded, stops the play, naming the object and its recorded address
+  (`PlayError::Unpinned`); no other placement is tried. Each range's address in the play is then
+  its recorded one, so no address argument moves (below). The report says how many objects it
+  pinned, how many heaps' textures it made outside the space and how many textures met a live
+  buffer (section 10).
 - **Address arguments move.** On the new runtime the player makes each object where the runtime
   has room. Every address value (tag 8) whose value lies in a live range becomes the player's
   address of that range's object plus its offset into the range; the innermost range wins, so an
@@ -417,7 +433,8 @@ and the (name id, value) answer pairs.
   - `newBufferWithDescriptor:`: `{length, options, pinnedGpuAddress, contents, noCopy,
     deallocator, zeroFrom}`.
   - `newHeapWithDescriptor:`: `{size, heapType, options, pinnedGpuAddress}`. The old runtime's
-    player makes the heap at its pin only where the stream places a buffer in it (section 5).
+    player makes the heap's buffers in a heap at its pin and its textures in a heap outside the
+    pinned space (section 5).
   - `newSamplerStateWithDescriptor:`: `{minFilter, magFilter, lodAverage, compareFunction,
     sAddressMode, tAddressMode, rAddressMode, mipFilter, maxAnisotropy, normalizedCoordinates,
     supportArgumentBuffers, reductionMode, lodMinClamp, lodMaxClamp, lodBias, borderColor,
@@ -591,9 +608,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   stream's did, on every runtime. Where every resource ends before the next offset and every offset
   is aligned, the layout is the stream's. A placement whose size the runtime does not answer keeps
   its offset, and the play meets the runtime's refusal where it lies. On the old runtime a heap
-  grown past its recorded span holds pages the recording gave the objects after it: a heap the
-  stream places no buffer in goes outside the space (section 5); one it places a buffer in keeps
-  its recorded address, and where its span then meets another pin, the play stops there.
+  grown past its recorded span would hold pages the recording gave the objects after it, so a heap
+  with a recorded range is laid out by its textures alone, which go in a heap of their own outside
+  the space, while its buffers keep their recorded offsets in a heap of its recorded size at its
+  recorded address (section 5).
 - It reports, for each group of command buffers it waited for (normally the one just committed),
   for each frame and in total, two sets of counts:
   - **Fixed by the stream** (`stream`), the same on every play of the stream on any runtime: the
@@ -770,10 +788,13 @@ recording's high word, which is the recording runtime's own; `private ID DISPATC
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
 `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),
-`pinned N of N; K heaps without buffers outside: every other object with a recorded range at its
-recorded address; the address map moves no word` on the old runtime (`N` the objects made at their
-recorded addresses, `K` the heaps the stream places no buffer in, made outside the space; section
-5),
+`pinned N of N; K heaps' textures outside; S textures whose recorded range (by the runtime's
+texture sizes) met a live buffer's` on the old runtime (`N` the objects made at their recorded
+addresses, every other object with a recorded range there too, so the address map moves no word;
+`K` the heaps with a recorded range whose textures it made in a heap outside the space, those the
+stream places a texture or no buffer in; `S` the textures whose range in the recording, by the
+runtime's size for each, met the recorded range of a buffer live in the same heap, read ahead and
+not a stop; section 5),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
 offsets it moved in them and the bytes it added to their sizes), `texture_writes ...` (the
 CPU's writes into Managed textures, below), `total COUNTS` (its `calls` the

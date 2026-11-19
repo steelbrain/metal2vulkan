@@ -12,7 +12,9 @@
 //!   the object, with no other placement tried.
 //! - A heap the stream places no buffer in is made outside the recorded addresses: grown for a
 //!   texture the runtime makes larger than the heap, it leaves the buffer pinned past its recorded
-//!   span that address.
+//!   span that address. One it places a buffer in too is made as two: its buffers in a heap at its
+//!   recorded address and size, its textures in a grown one outside, so both buffers keep their
+//!   addresses.
 //! - A command buffer waiting on an event the CPU signals later does not stop another queue's.
 //! - Textures made from descriptor records read back as written.
 //! - A render pass its setter records describe clears a drawable the stream never saw made.
@@ -313,8 +315,8 @@ fn a_data_word_in_a_live_range_plays_as_written() {
         assert_eq!(report.total.stream["address_looking_words"], 2);
         assert_eq!(report.total.stream["relocated_words"], 0);
         assert_eq!(report.pinned, Some(2));
-        let line = "pinned 2 of 2; 0 heaps without buffers outside: every other object with a \
-                    recorded range at its recorded address; the address map moves no word";
+        let line = "pinned 2 of 2; 0 heaps' textures outside; 0 textures whose recorded range \
+                    (by the runtime's texture sizes) met a live buffer's";
         assert!(report.lines().contains(&line.to_string()), "{report:?}");
     });
 }
@@ -344,6 +346,29 @@ fn a_recorded_address_the_runtime_refuses_stops_the_play() {
     });
 }
 
+/// Heap #2: 64 KiB, Private, pinned at `heap`, the stream placing at its start texture #4, 256 by
+/// 256 RGBA8Unorm (256 KiB, larger than the heap), of descriptor #3.
+fn heap_with_a_texture(w: &mut StreamWriter<File>, heap: u64) -> std::io::Result<()> {
+    let descriptor = Value::Map(vec![
+        ("size".into(), Value::Uint(64 << 10)),
+        ("heapType".into(), Value::Uint(1)),
+        ("options".into(), Value::List(Vec::new())),
+        ("pinnedGpuAddress".into(), Value::Address(heap)),
+    ]);
+    let made = addressed(heap, 64 << 10);
+    w.call("newHeapWithDescriptor:", 1, 2, &[descriptor], &made)?;
+    // RGBA8Unorm, 256 by 256, not mipmapped, Private as the heap is.
+    let two_d = [70, 256, 256].map(Value::Uint);
+    let two_d = [&two_d[..], &[Value::Bool(false)]].concat();
+    let selector = "MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:\
+                    mipmapped:";
+    w.call(selector, 0, 3, &two_d, &[])?;
+    w.call("setUsage:", 3, 0, &[Value::Uint(1)], &[])?;
+    w.call("setResourceOptions:", 3, 0, &[Value::Uint(2 << 4)], &[])?;
+    let texture = [Value::Object(3), Value::Uint(0)];
+    w.call("newTextureWithDescriptor:offset:", 2, 4, &texture, &[])
+}
+
 /// A 64-KiB heap pinned at its recorded address, the stream placing only a 256-KiB texture in it,
 /// and a buffer pinned at the first granule past the heap's recorded span (its four pages and a
 /// guard page, rounded up to 96 KiB): the player grows the heap for the texture, and since the
@@ -355,32 +380,46 @@ fn a_heap_without_buffers_leaves_the_next_pin_its_address() {
     let (heap, after) = (BLOCK, BLOCK + (96 << 10));
     let path = written(&dir, |w| {
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
-        let descriptor = Value::Map(vec![
-            ("size".into(), Value::Uint(64 << 10)),
-            ("heapType".into(), Value::Uint(1)),
-            ("options".into(), Value::List(Vec::new())),
-            ("pinnedGpuAddress".into(), Value::Address(heap)),
-        ]);
-        let made = addressed(heap, 64 << 10);
-        w.call("newHeapWithDescriptor:", 1, 2, &[descriptor], &made)?;
-        // RGBA8Unorm, 256 by 256, not mipmapped, Private as the heap is.
-        let two_d = [70, 256, 256].map(Value::Uint);
-        let two_d = [&two_d[..], &[Value::Bool(false)]].concat();
-        let selector = "MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:\
-                        mipmapped:";
-        w.call(selector, 0, 3, &two_d, &[])?;
-        w.call("setUsage:", 3, 0, &[Value::Uint(1)], &[])?;
-        w.call("setResourceOptions:", 3, 0, &[Value::Uint(2 << 4)], &[])?;
-        let texture = [Value::Object(3), Value::Uint(0)];
-        w.call("newTextureWithDescriptor:offset:", 2, 4, &texture, &[])?;
+        heap_with_a_texture(w, heap)?;
         pinned_buffer(w, 5, after, 0x100)
     });
     on_device_with(at_plan, |device| {
         let report = play("heap-without-buffers", device, &path);
         assert!(report.relaid.grown >= 192 << 10, "{:?}", report.relaid);
-        assert_eq!((report.pinned, report.heaps_outside), (Some(1), 1));
-        let line = "pinned 1 of 1; 1 heaps without buffers outside: every other object with a \
-                    recorded range at its recorded address; the address map moves no word";
+        assert_eq!((report.pinned, report.textures_outside), (Some(1), 1));
+        let line = "pinned 1 of 1; 1 heaps' textures outside; 0 textures whose recorded range \
+                    (by the runtime's texture sizes) met a live buffer's";
+        assert!(report.lines().contains(&line.to_string()), "{report:?}");
+    });
+}
+
+/// The same heap and texture, the stream placing also a buffer 32 KiB into the heap (the texture's
+/// range meets it), and the same buffer pinned past the heap's recorded span: the player makes
+/// the heap's buffers in a heap at its recorded address and size, so the buffer in it keeps its
+/// recorded address, and its textures in one outside the recorded addresses, grown for the
+/// texture, so the buffer past the span keeps its own. Laid out as one heap at its recorded
+/// address, the heap would move its buffer past the texture, and grown, its span would hold the
+/// next buffer's.
+#[test]
+fn a_heap_of_buffers_and_textures_leaves_every_pin_its_address() {
+    let dir = ScratchDir::new("replay-heap-split").unwrap();
+    let (heap, after) = (BLOCK, BLOCK + (96 << 10));
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        heap_with_a_texture(w, heap)?;
+        // 256 bytes, Private as the heap is, 32 KiB in.
+        let buffer = [0x100, 2 << 4, 32 << 10].map(Value::Uint);
+        let made = addressed(heap + (32 << 10), 0x100);
+        w.call("newBufferWithLength:options:offset:", 2, 5, &buffer, &made)?;
+        pinned_buffer(w, 6, after, 0x100)
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("heap-split", device, &path);
+        assert!(report.relaid.grown >= 192 << 10, "{:?}", report.relaid);
+        let counts = (report.textures_outside, report.textures_met);
+        assert_eq!((report.pinned, counts), (Some(3), (1, 1)));
+        let line = "pinned 3 of 3; 1 heaps' textures outside; 1 textures whose recorded range \
+                    (by the runtime's texture sizes) met a live buffer's";
         assert!(report.lines().contains(&line.to_string()), "{report:?}");
     });
 }

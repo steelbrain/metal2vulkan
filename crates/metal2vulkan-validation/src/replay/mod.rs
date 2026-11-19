@@ -3,6 +3,7 @@
 
 mod addresses;
 mod args;
+mod heaps;
 mod new_runtime;
 mod old_runtime;
 mod player;
@@ -12,6 +13,7 @@ mod texwrites;
 mod translator;
 mod value;
 
+pub use heaps::HeapSplit;
 pub use new_runtime::{ManagedCopies, NewRuntime};
 pub use old_runtime::OldRuntime;
 pub use player::WAIT_COMPLETED;

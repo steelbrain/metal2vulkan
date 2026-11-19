@@ -8,6 +8,7 @@ mod args;
 mod descriptors;
 mod encoders;
 
+use super::heaps::HeapSplit;
 use super::player::{Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::value::Value;
@@ -38,7 +39,10 @@ enum Object {
     Buffer(Buffer),
     /// A block: its heap, and the buffer over all of it where the CPU writes it.
     Block(Heap, Option<Buffer>),
-    Heap(Heap),
+    /// A heap: the runtime's heap its buffers go in, and, where the player split it (`HeapSplit`)
+    /// and the stream places both buffers and textures in it, the heap outside the space its
+    /// textures go in. Otherwise its textures go in the first.
+    Heap(Heap, Option<Heap>),
     Texture(Texture),
     TextureDescriptor(Box<TextureDescriptor>),
     Pass(Box<RenderPassDescriptor>),
@@ -86,9 +90,8 @@ pub struct OldRuntime {
     /// arguments is made of.
     display: Option<Vec<u8>>,
     read_backs_left_out: u64,
-    /// The heap the next call makes, where the stream places no buffer in it
-    /// (`Backend::holds_no_buffer`): it is made outside the space.
-    no_buffer: Cell<Option<u64>>,
+    /// The heap the next call makes and how the player split it (`Backend::split_heap`).
+    split: Cell<Option<(u64, HeapSplit)>>,
 }
 
 /// A made object with no address.
@@ -185,7 +188,7 @@ impl OldRuntime {
             marked: false,
             read_backs_left_out: 0,
             display: None,
-            no_buffer: Cell::new(None),
+            split: Cell::new(None),
         }
     }
 
@@ -383,16 +386,35 @@ impl OldRuntime {
                 (Object::Block(heap, whole), made)
             }
             "newHeapWithDescriptor:" => {
-                let at = match self.no_buffer.take() {
-                    Some(heap) if heap == call.result => AddressPlacement::Outside,
-                    _ => address_placement(call)?,
+                let descriptor = descriptors::heap(call)?;
+                let split = self.split.take().filter(|&(heap, _)| heap == call.result);
+                // The heap the buffers go in, at the recorded address and size; the one the
+                // textures go in, outside the space at the size the player laid them out at.
+                let pinned = || -> Result<Heap, PlayError> {
+                    let at = address_placement(call)?;
+                    let pinned = descriptor.with_placement(at);
+                    device.new_heap(&pinned).map_err(unplaced(call, at))
                 };
-                let descriptor = descriptors::heap(call)?.with_placement(at);
-                let heap = device.new_heap(&descriptor).map_err(unplaced(call, at))?;
+                let outside = |size: u64| -> Result<Heap, PlayError> {
+                    let mut outside = descriptor.with_placement(AddressPlacement::Outside);
+                    outside.size = size;
+                    device.new_heap(&outside).map_err(failed(call))
+                };
+                let (heap, textures) = match split.map(|(_, split)| split) {
+                    None => (pinned()?, None),
+                    Some(HeapSplit {
+                        buffers: false,
+                        textures,
+                    }) => (outside(textures.unwrap_or(descriptor.size))?, None),
+                    Some(HeapSplit {
+                        buffers: true,
+                        textures,
+                    }) => (pinned()?, textures.map(outside).transpose()?),
+                };
                 let made = Made {
                     address: Some(heap.gpu_address().0),
                 };
-                (Object::Heap(heap), made)
+                (Object::Heap(heap, textures), made)
             }
             "newLibraryWithData:error:" => {
                 let library = device.new_library_with_data(data(call, 0)?);
@@ -532,8 +554,15 @@ impl OldRuntime {
         Ok(Some(unaddressed(Object::Texture(texture))))
     }
 
-    /// A call of a heap or a block, and what it made.
-    fn heap_call(&self, call: &Call, heap: &Heap) -> Result<(Object, Made), PlayError> {
+    /// A call of a heap or a block, and what it made: a buffer in `heap`, at its recorded address
+    /// where it has one (a refusal stops the play naming it, `PlayError::Unpinned`), a texture in
+    /// `textures`.
+    fn heap_call(
+        &self,
+        call: &Call,
+        heap: &Heap,
+        textures: &Heap,
+    ) -> Result<(Object, Made), PlayError> {
         match &*call.selector {
             "m2v.newBufferInBlock:offset:length:options:" => {
                 if Self::id(call, 0)? != call.receiver {
@@ -545,12 +574,13 @@ impl OldRuntime {
             }
             "newBufferWithLength:options:offset:" => {
                 let options = options(call, uint(call, 1)?)?;
+                let at = address_placement(call)?;
                 let buffer = heap.new_buffer_at_offset(uint(call, 0)?, options, uint(call, 2)?);
-                Ok(addressed(buffer.map_err(failed(call))?))
+                Ok(addressed(buffer.map_err(unplaced(call, at))?))
             }
             "newTextureWithDescriptor:offset:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
-                let texture = heap.new_texture_at_offset(&descriptor, uint(call, 1)?);
+                let texture = textures.new_texture_at_offset(&descriptor, uint(call, 1)?);
                 Ok(unaddressed(Object::Texture(texture.map_err(failed(call))?)))
             }
             _ => Err(refuse(call, "not played on a heap")),
@@ -850,7 +880,11 @@ impl Backend for OldRuntime {
                 None
             }
             Some(Object::Buffer(buffer)) => self.buffer_call(call, buffer)?,
-            Some(Object::Block(heap, _) | Object::Heap(heap)) => Some(self.heap_call(call, heap)?),
+            Some(Object::Block(heap, _)) => Some(self.heap_call(call, heap, heap)?),
+            Some(Object::Heap(heap, textures)) => {
+                let textures = textures.as_ref().unwrap_or(heap);
+                Some(self.heap_call(call, heap, textures)?)
+            }
             Some(Object::Texture(texture)) => self.texture_call(call, texture)?,
             Some(Object::TextureDescriptor(_)) => {
                 self.texture_descriptor_call(call)?;
@@ -1094,10 +1128,11 @@ impl Backend for OldRuntime {
         true
     }
 
-    /// The heap goes outside the space: no address the program holds lies in it, and a heap the
-    /// player grew for the runtime's sizes would hold pages past its recorded span.
-    fn holds_no_buffer(&mut self, heap: u64) {
-        self.no_buffer.set(Some(heap));
+    /// The heap's buffers go in a heap at its recorded address and size, its textures in one
+    /// outside the space: no address the program holds lies in a texture, and a heap the player
+    /// grew for the runtime's texture sizes would hold pages past its recorded span.
+    fn split_heap(&mut self, heap: u64, split: HeapSplit) {
+        self.split.set(Some((heap, split)));
     }
 
     fn managed_texture(&self, texture: u64) -> Option<bool> {

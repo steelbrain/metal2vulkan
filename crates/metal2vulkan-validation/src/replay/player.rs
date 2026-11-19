@@ -6,6 +6,10 @@
 //! a dispatch compared.
 
 use super::addresses::AddressMap;
+use super::heaps::{
+    heap_size, placement_heap, placement_offset, places_buffer, places_texture, recorded_range,
+    relay, HeapSplit, Layout, Overlaps, Placements,
+};
 use super::stream::{Call, StreamError, StreamReader};
 use super::texwrites::TexWrites;
 use super::value::{Hash, Value};
@@ -159,12 +163,16 @@ pub trait Backend {
     /// recording's runtime did ignores it.
     fn recorded_id(&mut self, _object: u64, _id: u64) {}
 
-    /// The stream places no buffer in heap `heap`, which the next call makes (read ahead): no
-    /// address the program holds lies in it, as a texture has none and a heap answers none. A
-    /// backend that makes objects at their recorded addresses (`places_at_recorded`) makes it
-    /// outside them, so that a heap the player grew for the runtime's sizes (`relay`) meets no
-    /// other object's recorded range; another ignores it.
-    fn holds_no_buffer(&mut self, _heap: u64) {}
+    /// How to make heap `heap`, which the next call makes with a recorded range, by what the
+    /// stream places in it (read ahead), told only to a backend that makes objects at their
+    /// recorded addresses (`places_at_recorded`): its buffers in a heap at the recorded address
+    /// and size, each at its recorded offset, and its textures in a heap outside the recorded
+    /// addresses of the size the player laid them out at (`relay`). A texture has no address the
+    /// program holds, so the textures' heap may grow for the runtime's sizes and meet no other
+    /// object's recorded range; the buffers' heap never grows. The next call carries the heap's
+    /// recorded size, and the heap's calls that place a texture the offsets of the textures'
+    /// layout.
+    fn split_heap(&mut self, _heap: u64, _split: HeapSplit) {}
 
     /// Whether the backend makes every object with a recorded range at its recorded address (the
     /// `gpuAddress` it answered) and every other object outside the addresses a recording holds.
@@ -342,10 +350,16 @@ pub struct Report {
     /// arguments for.
     pub pinned: Option<u64>,
     /// On a backend that makes objects at their recorded addresses, the heaps with a recorded
-    /// range the stream places no buffer in, which it made outside the recorded addresses
-    /// (`Backend::holds_no_buffer`). Their ranges keep their recorded addresses in the address
-    /// map.
-    pub heaps_outside: u64,
+    /// range whose textures it made in a heap outside the recorded addresses
+    /// (`Backend::split_heap`): those the stream places a texture in, or no buffer. A heap the
+    /// stream places no buffer in is that heap alone, and its range keeps its recorded address in
+    /// the address map.
+    pub textures_outside: u64,
+    /// On a backend that makes objects at their recorded addresses, the textures the stream
+    /// places in a heap with a recorded range whose recorded range met a buffer's live in that
+    /// heap, read ahead (`Overlaps`): memory they shared in the recording and no longer share.
+    /// Reported, not a stop.
+    pub textures_met: u64,
     /// The placement heaps the player laid out again for the runtime's sizes and alignments
     /// (`relay`).
     pub relaid: Relaid,
@@ -729,9 +743,9 @@ impl Report {
         }
         if let Some(pinned) = self.pinned {
             lines.push(format!(
-                "pinned {pinned} of {pinned}; {} heaps without buffers outside: every other object \
-                 with a recorded range at its recorded address; the address map moves no word",
-                self.heaps_outside
+                "pinned {pinned} of {pinned}; {} heaps' textures outside; {} textures whose \
+                 recorded range (by the runtime's texture sizes) met a live buffer's",
+                self.textures_outside, self.textures_met
             ));
         }
         let relaid = self.relaid;
@@ -832,73 +846,9 @@ struct Snapshot {
     ranges: Vec<(Around, u64)>,
 }
 
-/// What a placement heap holds at each recorded offset: the largest size and alignment the
-/// runtime answers for the resources placed there.
-type Placements = BTreeMap<u64, (u64, u64)>;
-
-/// A placement heap's layout on the runtime: its size, and the offset the player places each
-/// resource at by the offset the stream places it at.
-struct Layout {
-    size: u64,
-    offsets: HashMap<u64, u64>,
-}
-
-/// The layout of a placement heap of `size` bytes, as a program asking the runtime's sizes and
-/// alignments lays it out, whose resources the stream places at the offsets of `at`, each with the
-/// most bytes and the largest alignment the runtime answers for its resources there. Each offset
-/// keeps at least its distance from the one below, moves up until the resources below it end, and
-/// rounds up to its alignment; the heap keeps at least its distance past the last offset and holds
-/// the resources there. Resources at one offset still share it; resources at different offsets no
-/// longer meet. Where every resource ends before the next offset and every offset is aligned, the
-/// layout is the stream's.
-fn relay(size: u64, at: &Placements) -> Layout {
-    let mut offsets = HashMap::with_capacity(at.len());
-    let mut below: Option<(u64, u64, u64)> = None;
-    for (&recorded, &(bytes, align)) in at {
-        let floor = match below {
-            None => recorded,
-            Some((was, placed, held)) => (placed + (recorded - was)).max(placed + held),
-        };
-        let placed = floor.next_multiple_of(align.max(1));
-        offsets.insert(recorded, placed);
-        below = Some((recorded, placed, bytes));
-    }
-    let size = match below {
-        None => size,
-        Some((was, placed, held)) => (placed + size.saturating_sub(was)).max(placed + held),
-    };
-    Layout { size, offsets }
-}
-
 /// Whether `selector` makes a texture descriptor (`docs/REPLAY-STREAM.md`, section 9).
 fn makes_texture_descriptor(selector: &str) -> bool {
     selector == "m2v.textureDescriptor" || selector.starts_with("MTLTextureDescriptor.")
-}
-
-/// The recorded size of the heap `call` (`newHeapWithDescriptor:`) makes, where it is a placement
-/// heap (`MTLHeapTypePlacement`).
-fn placement_heap(call: &Call) -> Option<u64> {
-    let entries = call.args.first()?.as_map()?;
-    let field = |key: &str| entries.iter().find(|(k, _)| &**k == key)?.1.as_uint();
-    (field("heapType")? == 1).then_some(field("size")?)
-}
-
-/// Whether `selector` places a buffer in its receiver where that is a heap: a placement heap's
-/// `newBufferWithLength:options:offset:` or an automatic heap's `newBufferWithLength:options:`.
-fn places_buffer(selector: &str) -> bool {
-    matches!(
-        selector,
-        "newBufferWithLength:options:offset:" | "newBufferWithLength:options:"
-    )
-}
-
-/// The argument of a placement heap's call that is the offset it places at.
-fn placement_offset(selector: &str) -> Option<usize> {
-    match selector {
-        "newTextureWithDescriptor:offset:" => Some(1),
-        "newBufferWithLength:options:offset:" => Some(2),
-        _ => None,
-    }
 }
 
 /// Plays one stream on one backend.
@@ -922,10 +872,9 @@ pub struct Player<'b, B: Backend> {
     /// The live texture descriptors marked `outside` and the textures made of them: objects outside
     /// the program's IDs, whose `gpuResourceID` the program never saw (section 5).
     outside: HashSet<u64>,
-    /// On a backend that makes objects at their recorded addresses, the heaps with a recorded
-    /// range the stream places no buffer in, read ahead: each one's id and the position of the
-    /// call that makes it.
-    bufferless: HashSet<(u64, u64)>,
+    /// On a backend that makes objects at their recorded addresses, how it makes each heap with a
+    /// recorded range, read ahead, by the heap's id and the position of the call that makes it.
+    splits: HashMap<(u64, u64), HeapSplit>,
     /// The `m2v.privateBytes` records, read ahead, by the position of the dispatch each names.
     ahead: HashMap<u64, Vec<Around>>,
     /// The placement heaps' layouts on the runtime, read ahead, by heap.
@@ -1154,7 +1103,7 @@ impl<'b, B: Backend> Player<'b, B> {
             events: HashMap::new(),
             compared: HashSet::new(),
             outside: HashSet::new(),
-            bufferless: HashSet::new(),
+            splits: HashMap::new(),
             ahead: HashMap::new(),
             layouts: HashMap::new(),
             guest_device: None,
@@ -1268,10 +1217,12 @@ impl<'b, B: Backend> Player<'b, B> {
     /// Index the `m2v.privateBytes` records by the dispatch each names, which comes before it, and
     /// the ID the program saw of each object by its making (`recorded_ids`), lay out each
     /// placement heap for the runtime's answers (`relay`), and, on a backend that makes objects
-    /// at their recorded addresses, find the heaps with a recorded range the stream places no
-    /// buffer in (`bufferless`). A stream error ends the reading: the play meets it where it lies,
-    /// as it meets a placement whose size the runtime does not answer.
+    /// at their recorded addresses, decide how it makes each heap with a recorded range
+    /// (`splits`) and count the textures whose recorded range met a live buffer's (`Overlaps`).
+    /// A stream error ends the reading: the play meets it where it lies, as it meets a placement
+    /// whose size the runtime does not answer.
     fn read_ahead(&mut self, stream: &StreamReader) -> Result<(), PlayError> {
+        let pins = self.report.pinned.is_some();
         let mut ahead = stream.reopened()?;
         let mut position = 0;
         // The position of the call that made each object.
@@ -1279,15 +1230,18 @@ impl<'b, B: Backend> Player<'b, B> {
         // Each live texture descriptor's calls: the one that made it, then its setters.
         let mut descriptors: HashMap<u64, Vec<Call>> = HashMap::new();
         // Each placement heap's recorded size and, by offset, the most bytes and the largest
-        // alignment the runtime answers for what the stream places there.
-        let mut heaps: HashMap<u64, (u64, Placements)> = HashMap::new();
+        // alignment the runtime answers for what the stream places there: all of it, and its
+        // textures alone.
+        let mut heaps: HashMap<u64, (u64, Placements, Placements)> = HashMap::new();
         // The objects made on each recorded device.
         let mut made_on: BTreeMap<u64, u64> = BTreeMap::new();
-        // Each heap making with a recorded range (its id and position), the position of each live
-        // one's by its id, and those the stream places a buffer in.
+        // Each heap making with a recorded range (its id and position) and its recorded size; the
+        // position and recorded address of each such heap by its id; and the makings the stream
+        // places a buffer in and a texture in.
         let mut heap_makings = Vec::new();
-        let mut live_heaps: HashMap<u64, u64> = HashMap::new();
-        let mut with_buffer = HashSet::new();
+        let mut live_heaps: HashMap<u64, (u64, u64)> = HashMap::new();
+        let (mut with_buffer, mut with_texture) = (HashSet::new(), HashSet::new());
+        let mut overlaps = Overlaps::default();
         while let Ok(Some(call)) = ahead.next_call() {
             if &*call.selector == "MTLCreateSystemDefaultDevice" {
                 made_on.entry(call.result).or_default();
@@ -1305,12 +1259,15 @@ impl<'b, B: Backend> Player<'b, B> {
                     self.recorded_ids.entry((call.receiver, at)).or_insert(id);
                 }
             }
-            if &*call.selector == "newHeapWithDescriptor:" && call.answer("gpuAddress").is_some() {
-                heap_makings.push((call.result, position));
-                live_heaps.insert(call.result, position);
-            } else if places_buffer(&call.selector) {
-                if let Some(&at) = live_heaps.get(&call.receiver) {
+            let address = call.answer("gpuAddress").and_then(Value::as_address);
+            if let ("newHeapWithDescriptor:", Some(address)) = (&*call.selector, address) {
+                heap_makings.push(((call.result, position), heap_size(&call)));
+                live_heaps.insert(call.result, (position, address));
+            } else if let Some(&(at, _)) = live_heaps.get(&call.receiver) {
+                if places_buffer(&call.selector) {
                     with_buffer.insert((call.receiver, at));
+                } else if places_texture(&call.selector) {
+                    with_texture.insert((call.receiver, at));
                 }
             }
             match &*call.selector {
@@ -1323,10 +1280,13 @@ impl<'b, B: Backend> Player<'b, B> {
                     }
                     self.ahead.entry(dispatch).or_default().push(around);
                 }
-                "release" => drop(descriptors.remove(&call.receiver)),
+                "release" => {
+                    descriptors.remove(&call.receiver);
+                    overlaps.release(call.receiver);
+                }
                 "newHeapWithDescriptor:" => {
                     if let Some(size) = placement_heap(&call) {
-                        heaps.insert(call.result, (size, BTreeMap::new()));
+                        heaps.insert(call.result, (size, BTreeMap::new(), BTreeMap::new()));
                     }
                 }
                 selector if call.result != 0 && makes_texture_descriptor(selector) => {
@@ -1337,7 +1297,7 @@ impl<'b, B: Backend> Player<'b, B> {
                     None => {
                         let at = placement_offset(selector);
                         let heap = heaps.get_mut(&call.receiver);
-                        let (Some(at), Some((_, placed))) = (at, heap) else {
+                        let (Some(at), Some((_, placed, textures))) = (at, heap) else {
                             position += 1;
                             continue;
                         };
@@ -1346,9 +1306,29 @@ impl<'b, B: Backend> Player<'b, B> {
                         let descriptor = descriptor.and_then(|d| descriptors.get(&d));
                         let descriptor = descriptor.map_or(&[][..], Vec::as_slice);
                         let answer = self.backend.heap_size_and_align(&call, descriptor);
-                        if let (Some(offset), Ok((bytes, align))) = (offset, answer) {
+                        let answer = answer.ok();
+                        let texture = places_texture(selector);
+                        if let (Some(offset), Some((bytes, align))) = (offset, answer) {
                             let most = placed.entry(offset).or_default();
                             *most = (most.0.max(bytes), most.1.max(align));
+                            if texture {
+                                let most = textures.entry(offset).or_default();
+                                *most = (most.0.max(bytes), most.1.max(align));
+                            }
+                        }
+                        let heap = live_heaps.get(&call.receiver).filter(|_| pins);
+                        if let (Some(&(_, address)), Some(offset)) = (heap, offset) {
+                            if texture {
+                                let start = address + offset;
+                                let bytes = answer.map_or(1, |(bytes, _)| bytes.max(1));
+                                overlaps.texture(
+                                    call.receiver,
+                                    call.result,
+                                    (start, start + bytes),
+                                );
+                            } else if let Some(range) = recorded_range(&call) {
+                                overlaps.buffer(call.receiver, call.result, range);
+                            }
                         }
                     }
                 },
@@ -1361,8 +1341,14 @@ impl<'b, B: Backend> Player<'b, B> {
         self.report.other_devices = (made_on.keys().copied())
             .filter(|&device| self.guest_device.is_some_and(|guest| guest != device))
             .collect();
-        for (heap, (size, placed)) in heaps {
-            let layout = relay(size, &placed);
+        for (heap, (size, placed, textures)) in heaps {
+            // On a backend that makes objects at their recorded addresses, a heap with a recorded
+            // range keeps its buffers at their recorded offsets in its recorded size: only its
+            // textures are laid out again, in a heap of their own (`HeapSplit`).
+            let layout = match pins && live_heaps.contains_key(&heap) {
+                true => relay(size, &textures, true),
+                false => relay(size, &placed, false),
+            };
             let moved = layout.offsets.iter().filter(|(was, now)| was != now);
             let moved = moved.count() as u64;
             if moved > 0 || layout.size != size {
@@ -1372,18 +1358,31 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.layouts.insert(heap, layout);
             }
         }
-        if self.report.pinned.is_some() {
-            let bufferless = heap_makings.into_iter();
-            self.bufferless = bufferless.filter(|m| !with_buffer.contains(m)).collect();
+        if pins {
+            for (making, size) in heap_makings {
+                let Some(size) = size else {
+                    continue;
+                };
+                let buffers = with_buffer.contains(&making);
+                let laid = self.layouts.get(&making.0);
+                let outside = laid.map_or(size, |layout| layout.size);
+                let textures = (with_texture.contains(&making) || !buffers).then_some(outside);
+                self.splits.insert(making, HeapSplit { buffers, textures });
+            }
+            self.report.textures_met = overlaps.met;
         }
         Ok(())
     }
 
     /// `call` with the size of the placement heap it makes, or the offset it places at in one, as
-    /// the heap's layout on the runtime has it (`relay`).
+    /// the heap's layout on the runtime has it (`relay`). A layout of a heap's textures alone
+    /// (`Layout::textures_only`) moves only the offsets the stream places textures at: the heap
+    /// keeps its recorded size and its buffers their recorded offsets, and the backend makes the
+    /// textures' heap of the layout's size (`HeapSplit::textures`).
     fn placed(&self, mut call: Call) -> Call {
         if &*call.selector == "newHeapWithDescriptor:" {
-            let Some(layout) = self.layouts.get(&call.result) else {
+            let layout = self.layouts.get(&call.result);
+            let Some(layout) = layout.filter(|layout| !layout.textures_only) else {
                 return call;
             };
             if let Some(Value::Map(entries)) = call.args.first_mut() {
@@ -1401,6 +1400,9 @@ impl<'b, B: Backend> Player<'b, B> {
         ) else {
             return call;
         };
+        if layout.textures_only && !places_texture(&call.selector) {
+            return call;
+        }
         if let Some(offset) = call.args.get_mut(at) {
             let placed = offset.as_uint().and_then(|o| layout.offsets.get(&o));
             if let Some(&placed) = placed {
@@ -1684,9 +1686,10 @@ impl<'b, B: Backend> Player<'b, B> {
         if let Some(&id) = (self.recorded_ids).get(&(resolved.result, self.position)) {
             self.backend.recorded_id(resolved.result, id);
         }
-        let bufferless = self.bufferless.remove(&(resolved.result, self.position));
-        if bufferless {
-            self.backend.holds_no_buffer(resolved.result);
+        let split = self.splits.remove(&(resolved.result, self.position));
+        if let Some(split) = split {
+            self.report.textures_outside += u64::from(split.textures.is_some());
+            self.backend.split_heap(resolved.result, split);
         }
         let made = self.run(&resolved)?;
         self.track(&resolved);
@@ -1717,12 +1720,10 @@ impl<'b, B: Backend> Player<'b, B> {
                     *pinned += 1;
                     address
                 }
-                // A heap without buffers, made outside the recorded addresses: no address the
-                // program holds lies in it, so its range keeps its recorded address in the map.
-                Some(_) if bufferless => {
-                    self.report.heaps_outside += 1;
-                    address
-                }
+                // A heap the stream places no buffer in, made outside the recorded addresses: no
+                // address the program holds lies in it, so its range keeps its recorded address
+                // in the map.
+                Some(_) if split.is_some_and(|split| !split.buffers) => address,
                 Some(_) => {
                     return Err(PlayError::Unpinned {
                         object,

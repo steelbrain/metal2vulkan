@@ -2,6 +2,7 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
+use super::heaps::HeapSplit;
 use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
 use super::new_runtime::second::merge;
@@ -451,8 +452,8 @@ fn a_range_that_meets_a_live_one_in_part_ends_it() {
 /// A backend that keeps what it is asked: the calls, the waits, the bytes written, the objects
 /// whose resource IDs it gave. It places blocks and buffers apart from the recorded addresses, and
 /// a buffer in a block at its offset; where it `pins`, it makes heaps at their recorded addresses
-/// (one it is told holds no buffer outside them) and a heap's buffer at the heap's address plus
-/// its offset. It holds the bytes of the buffers made by length, which
+/// (one it is told to split with no buffer outside them) and a heap's buffer at the heap's address
+/// plus its offset. It holds the bytes of the buffers made by length, which
 /// writes and buffer copies change and a read gives; it runs no dispatch. It counts submissions,
 /// and buffer copies once there was one.
 #[derive(Default)]
@@ -473,8 +474,9 @@ struct Kept {
     memory: HashMap<u64, Vec<u8>>,
     copies: u64,
     /// The size and alignment it answers for a heap texture, by the id of its descriptor; a heap
-    /// buffer it answers its length at 256 bytes.
+    /// buffer it answers its length at `buffer_align` bytes (256 where that is 0).
     heap_answers: HashMap<u64, (u64, u64)>,
+    buffer_align: u64,
     /// Each heap size it was asked: the placing selector and how many calls made and set the
     /// texture descriptor.
     heap_asked: Vec<(String, usize)>,
@@ -493,8 +495,8 @@ struct Kept {
     located: Vec<(u64, u64)>,
     /// Whether it makes objects at their recorded addresses (`Backend::places_at_recorded`).
     pins: bool,
-    /// The heaps it was told hold no buffer, in order.
-    no_buffer: Vec<u64>,
+    /// The heaps it was told how to split, in order.
+    splits: Vec<(u64, HeapSplit)>,
 }
 
 impl Backend for Kept {
@@ -517,8 +519,8 @@ impl Backend for Kept {
                 made.address = Some(self.bases[&block] + call.args[1].as_uint().unwrap());
             }
             "newHeapWithDescriptor:" if self.pins => {
-                made.address = match self.no_buffer.last() {
-                    Some(&heap) if heap == call.result => Some(1 << 47),
+                made.address = match self.splits.last() {
+                    Some(&(heap, split)) if heap == call.result && !split.buffers => Some(1 << 47),
                     _ => call.answer("gpuAddress").and_then(Value::as_address),
                 };
             }
@@ -593,9 +595,13 @@ impl Backend for Kept {
     ) -> Result<(u64, u64), PlayError> {
         self.heap_asked
             .push((call.selector.to_string(), descriptor.len()));
+        let align = match self.buffer_align {
+            0 => 256,
+            align => align,
+        };
         Ok(match descriptor.first() {
             Some(made) => self.heap_answers[&made.result],
-            None => (call.args[0].as_uint().unwrap(), 256),
+            None => (call.args[0].as_uint().unwrap(), align),
         })
     }
 
@@ -639,8 +645,8 @@ impl Backend for Kept {
         self.pins
     }
 
-    fn holds_no_buffer(&mut self, heap: u64) {
-        self.no_buffer.push(heap);
+    fn split_heap(&mut self, heap: u64, split: HeapSplit) {
+        self.splits.push((heap, split));
     }
 }
 
@@ -664,33 +670,48 @@ fn addressed(address: u64, length: u64) -> [(&'static str, Value); 2] {
     ]
 }
 
+/// A heap descriptor of `size` bytes and type `kind` (`MTLHeapType`).
+fn heap_of(size: u64, kind: u64) -> [Value; 1] {
+    [map(&[
+        ("size", Value::Uint(size)),
+        ("heapType", Value::Uint(kind)),
+        ("options", Value::List(Vec::new())),
+    ])]
+}
+
+/// The `size` of the heap descriptor the backend was given for the call that made `heap`.
+fn made_size(kept: &Kept, heap: u64) -> Option<u64> {
+    let descriptor = args_of(kept, heap)[0].as_map()?;
+    descriptor
+        .iter()
+        .find(|(key, _)| &**key == "size")?
+        .1
+        .as_uint()
+}
+
 /// On a backend that makes objects at their recorded addresses, a heap the stream places only a
-/// texture in is told it holds no buffer before its making, and is made outside them; its range
-/// stays at its recorded address in the map, so a word into it is counted as an address and no
-/// word moves. A heap the stream places a buffer in, and its buffer, are made at their recorded
-/// addresses. The report counts each.
+/// texture in is told before its making that it splits with no buffer: it is made outside them, at
+/// the size its textures take on the runtime (here twice the heap's), while the call that makes it
+/// carries its recorded size. Its range stays at its recorded address in the map, so a word into
+/// it is counted as an address and no word moves. A heap the stream places only a buffer in, and
+/// its buffer, are made at their recorded addresses. The report counts each.
 #[test]
-fn a_heap_without_buffers_is_made_outside_the_recorded_addresses() {
+fn a_heap_of_textures_alone_is_made_outside_the_recorded_addresses() {
     let mut kept = Kept {
         pins: true,
         ..Kept::default()
     };
-    kept.heap_answers.insert(5, (0x4000, 0x4000));
-    let heap = [map(&[
-        ("size", Value::Uint(0x1_0000)),
-        ("heapType", Value::Uint(1)),
-        ("options", Value::List(Vec::new())),
-    ])];
+    kept.heap_answers.insert(5, (0x2_0000, 0x4000));
     let (with_buffer, textures_only) = (BLOCK, BLOCK + 0x2_0000);
     let (report, ended) = played(&mut kept, |w| {
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
         let made = addressed(with_buffer, 0x1_0000);
-        w.call("newHeapWithDescriptor:", 1, 2, &heap, &made)?;
+        w.call("newHeapWithDescriptor:", 1, 2, &heap_of(0x1_0000, 1), &made)?;
         let buffer = [Value::Uint(0x100), Value::Uint(0), Value::Uint(0x8000)];
         let made = addressed(with_buffer + 0x8000, 0x100);
         w.call("newBufferWithLength:options:offset:", 2, 3, &buffer, &made)?;
         let made = addressed(textures_only, 0x1_0000);
-        w.call("newHeapWithDescriptor:", 1, 4, &heap, &made)?;
+        w.call("newHeapWithDescriptor:", 1, 4, &heap_of(0x1_0000, 1), &made)?;
         w.call("m2v.textureDescriptor", 0, 5, &[map(&[])], &[])?;
         let texture = [Value::Object(5), Value::Uint(0)];
         w.call("newTextureWithDescriptor:offset:", 4, 6, &texture, &[])?;
@@ -704,14 +725,180 @@ fn a_heap_without_buffers_is_made_outside_the_recorded_addresses() {
         )
     });
     ended.unwrap();
-    assert_eq!(kept.no_buffer, [4]);
-    assert_eq!((report.pinned, report.heaps_outside), (Some(2), 1));
+    let buffers = HeapSplit {
+        buffers: true,
+        textures: None,
+    };
+    let textures = HeapSplit {
+        buffers: false,
+        textures: Some(0x2_0000),
+    };
+    assert_eq!(kept.splits, [(2, buffers), (4, textures)]);
+    assert_eq!(made_size(&kept, 4), Some(0x1_0000), "the recorded size");
+    assert_eq!((report.pinned, report.textures_outside), (Some(2), 1));
     assert_eq!(report.total.stream["address_looking_words"], 1);
     assert_eq!(report.total.stream["relocated_words"], 0);
-    let line =
-        "pinned 2 of 2; 1 heaps without buffers outside: every other object with a recorded \
-                range at its recorded address; the address map moves no word";
+    let line = "pinned 2 of 2; 1 heaps' textures outside; 0 textures whose recorded range \
+                (by the runtime's texture sizes) met a live buffer's";
     assert!(report.lines().contains(&line.to_owned()), "{report:?}");
+}
+
+/// On a backend that makes objects at their recorded addresses, a heap the stream places only
+/// buffers in is made at its recorded address and of its recorded size, each buffer at its
+/// recorded offset, though the runtime's alignment (here 64 KiB) would move the second up and grow
+/// the heap where it is laid out again: a pinned span never grows, and no heap goes outside.
+#[test]
+fn a_heap_of_buffers_alone_keeps_its_recorded_layout() {
+    let mut kept = Kept {
+        pins: true,
+        buffer_align: 0x1_0000,
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let made = addressed(BLOCK, 0x2_0000);
+        w.call("newHeapWithDescriptor:", 1, 2, &heap_of(0x2_0000, 1), &made)?;
+        for (buffer, offset) in [(3, 0), (4, 0x8000)] {
+            let args = [Value::Uint(0x100), Value::Uint(0), Value::Uint(offset)];
+            let made = addressed(BLOCK + offset, 0x100);
+            w.call(
+                "newBufferWithLength:options:offset:",
+                2,
+                buffer,
+                &args,
+                &made,
+            )?;
+        }
+        Ok(())
+    });
+    ended.unwrap();
+    let split = HeapSplit {
+        buffers: true,
+        textures: None,
+    };
+    assert_eq!(kept.splits, [(2, split)]);
+    assert_eq!(made_size(&kept, 2), Some(0x2_0000), "the recorded size");
+    assert_eq!(
+        args_of(&kept, 4)[2].as_uint(),
+        Some(0x8000),
+        "the recorded offset"
+    );
+    assert_eq!(report.relaid, Relaid::default());
+    let line = "pinned 3 of 3; 0 heaps' textures outside; 0 textures whose recorded range \
+                (by the runtime's texture sizes) met a live buffer's";
+    assert!(report.lines().contains(&line.to_owned()), "{report:?}");
+}
+
+/// On a backend that makes objects at their recorded addresses, a heap the stream places buffers
+/// and textures in is made as two: its buffers in a heap at its recorded address and of its
+/// recorded size, each at its recorded offset; its textures in one outside the recorded
+/// addresses, laid out alone for the runtime's sizes, where a texture larger than the room the
+/// stream left it moves the next texture up past it and no buffer. The texture whose recorded
+/// range met a live buffer's is counted; one placed there once that buffer was released is not.
+#[test]
+fn a_heap_of_buffers_and_textures_is_made_as_two() {
+    let mut kept = Kept {
+        pins: true,
+        ..Kept::default()
+    };
+    kept.heap_answers.insert(3, (0x1_8000, 0x4000));
+    kept.heap_answers.insert(6, (0x4000, 0x4000));
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let made = addressed(BLOCK, 0x1_0000);
+        w.call("newHeapWithDescriptor:", 1, 2, &heap_of(0x1_0000, 1), &made)?;
+        w.call("m2v.textureDescriptor", 0, 3, &[map(&[])], &[])?;
+        let texture = [Value::Object(3), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 2, 4, &texture, &[])?;
+        let buffer = [Value::Uint(0x100), Value::Uint(0), Value::Uint(0x8000)];
+        let made = addressed(BLOCK + 0x8000, 0x100);
+        w.call("newBufferWithLength:options:offset:", 2, 5, &buffer, &made)?;
+        w.call("release", 5, 0, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 6, &[map(&[])], &[])?;
+        let texture = [Value::Object(6), Value::Uint(0x8000)];
+        w.call("newTextureWithDescriptor:offset:", 2, 7, &texture, &[])
+    });
+    ended.unwrap();
+    let split = HeapSplit {
+        buffers: true,
+        textures: Some(0x2_0000),
+    };
+    assert_eq!(kept.splits, [(2, split)]);
+    assert_eq!(made_size(&kept, 2), Some(0x1_0000), "the recorded size");
+    assert_eq!(
+        args_of(&kept, 5)[2].as_uint(),
+        Some(0x8000),
+        "the recorded offset"
+    );
+    assert_eq!(
+        args_of(&kept, 7)[1].as_uint(),
+        Some(0x1_8000),
+        "past the larger texture"
+    );
+    let relaid = Relaid {
+        heaps: 1,
+        moved: 1,
+        grown: 0x1_0000,
+    };
+    assert_eq!(report.relaid, relaid);
+    assert_eq!((report.textures_outside, report.textures_met), (1, 1));
+    let line = "pinned 2 of 2; 1 heaps' textures outside; 1 textures whose recorded range \
+                (by the runtime's texture sizes) met a live buffer's";
+    assert!(report.lines().contains(&line.to_owned()), "{report:?}");
+}
+
+/// The split follows what the stream places in a heap, whatever the heap's type: of three
+/// automatic heaps (`MTLHeapTypeAutomatic`, whose resources take no offset and are not laid out
+/// again), the one with a buffer and a texture splits in two, its textures' heap of the recorded
+/// size; the one with a texture alone is made outside the recorded addresses; the one with a
+/// buffer alone at them.
+#[test]
+fn a_heap_splits_by_what_the_stream_places_whatever_its_type() {
+    let mut kept = Kept {
+        pins: true,
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 2, &[map(&[])], &[])?;
+        let (buffer, texture) = ([Value::Uint(0x100), Value::Uint(0)], [Value::Object(2)]);
+        let made = |at: u64| addressed(BLOCK + (at << 20), 0x1_0000);
+        w.call(
+            "newHeapWithDescriptor:",
+            1,
+            3,
+            &heap_of(0x1_0000, 0),
+            &made(0),
+        )?;
+        w.call("newBufferWithLength:options:", 3, 4, &buffer, &[])?;
+        w.call("newTextureWithDescriptor:", 3, 5, &texture, &[])?;
+        w.call(
+            "newHeapWithDescriptor:",
+            1,
+            6,
+            &heap_of(0x1_0000, 0),
+            &made(1),
+        )?;
+        w.call("newTextureWithDescriptor:", 6, 7, &texture, &[])?;
+        w.call(
+            "newHeapWithDescriptor:",
+            1,
+            8,
+            &heap_of(0x1_0000, 0),
+            &made(2),
+        )?;
+        w.call("newBufferWithLength:options:", 8, 9, &buffer, &[])
+    });
+    ended.unwrap();
+    let split = |buffers, textures| HeapSplit { buffers, textures };
+    let splits = [
+        (3, split(true, Some(0x1_0000))),
+        (6, split(false, Some(0x1_0000))),
+        (8, split(true, None)),
+    ];
+    assert_eq!(kept.splits, splits);
+    assert_eq!((report.pinned, report.textures_outside), (Some(2), 2));
+    assert_eq!(report.relaid, Relaid::default());
 }
 
 /// A buffer whose recorded range meets a live buffer's in part, as a guest's allocator reuses
@@ -2243,6 +2430,10 @@ fn placement_heaps_take_the_runtimes_sizes_and_alignments() {
     assert_eq!((offset(4, 1), offset(6, 1)), (Some(0), Some(0)));
     assert_eq!(offset(5, 2), Some(0xC000), "past the larger texture");
     assert_eq!(size(7), Some(0x1_0000), "every answer fits");
+    assert!(
+        kept.splits.is_empty(),
+        "a split is told only where the backend pins"
+    );
     assert_eq!((offset(10, 1), offset(11, 2)), (Some(0), Some(0x8000)));
     let asked = |selector: &str, calls| (selector.to_owned(), calls);
     let texture = "newTextureWithDescriptor:offset:";
