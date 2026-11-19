@@ -523,6 +523,8 @@ impl OldRuntime {
                 buffer.did_modify_range(range).map_err(failed(call))?;
                 return Ok(None);
             }
+            // Another API's write landed in the buffer: the textures over it read it in place.
+            "m2v.externalWriteDone" => return Ok(None),
             "newTextureWithDescriptor:offset:bytesPerRow:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
                 buffer.new_texture(&descriptor, uint(call, 1)?, uint(call, 2)?)

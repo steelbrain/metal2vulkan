@@ -16,6 +16,7 @@ pub(super) mod indices;
 pub(super) mod places;
 mod render;
 pub(super) mod second;
+mod surfaces;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
@@ -155,15 +156,34 @@ impl Skips {
 
 /// Textures the play made in place of what the runtime cannot make: an ordinary texture of the
 /// same descriptor, so that the IDs and addresses the program wrote name a live texture. The
-/// recording's artefact, never the runtime's: a guest's surface texture is its host's import.
+/// recording's artefact, never the runtime's. Its texels are not the program's: a command that
+/// names one reads them (`read`).
 #[derive(Default)]
 struct Substitutes {
-    /// Textures over an IOSurface (`newTextureWithDescriptor:iosurface:plane:`).
-    surfaces: u64,
     /// Tiled textures over a buffer (`newTiledTextureWithDescriptor:offset:bytesPerRow:`).
     tiled: u64,
     /// Textures over a buffer and views the runtime answers with a typed gap.
     gaps: u64,
+    /// Each live substitute, and the views of one, and whether a command named it yet.
+    live: HashMap<u64, bool>,
+    /// The substitutes a command named: how many, and the first few.
+    read: u64,
+    first_read: Vec<u64>,
+}
+
+impl Substitutes {
+    /// Notes the substitutes among `named`, which a command names.
+    fn named(&mut self, named: &[u64]) {
+        for object in named {
+            if let Some(seen) = self.live.get_mut(object).filter(|seen| !**seen) {
+                *seen = true;
+                self.read += 1;
+                if self.first_read.len() < 8 {
+                    self.first_read.push(*object);
+                }
+            }
+        }
+    }
 }
 
 /// One object of the stream, as the runtime holds it.
@@ -361,6 +381,8 @@ pub struct NewRuntime {
     textures_over: [u64; 2],
     /// Of those in an image of their own, how many of each pixel format and usage.
     copied_over_kinds: BTreeMap<String, u64>,
+    /// The textures over a surface's plane, and the entries under them.
+    surfaces: surfaces::Surfaces,
 }
 
 /// The objects `values` name, lists included.
@@ -696,6 +718,7 @@ impl NewRuntime {
             no_copies: imports::NoCopies::default(),
             textures_over: [0; 2],
             copied_over_kinds: BTreeMap::new(),
+            surfaces: surfaces::Surfaces::default(),
             device,
             objects: HashMap::new(),
             indices: indices::Indices::default(),
@@ -1679,6 +1702,7 @@ impl NewRuntime {
     ) -> Result<Option<(Object, Made)>, PlayError> {
         let texture = self.new_texture(call, descriptor, None, false)?;
         *count(&mut self.substitutes) += 1;
+        self.substitutes.live.insert(call.result, false);
         unaddressed(Object::Texture(texture))
     }
 
@@ -1916,10 +1940,8 @@ impl NewRuntime {
                 let descriptor = self.texture_descriptor(call, 0)?;
                 self.substitute(call, &descriptor, |s| &mut s.tiled)
             }
-            "newTextureWithDescriptor:iosurface:plane:" => {
-                let descriptor = self.descriptor_or_map(call, 0)?;
-                self.substitute(call, &descriptor, |s| &mut s.surfaces)
-            }
+            "newTextureWithDescriptor:iosurface:plane:" => self.surface_texture(call, buffer),
+            "m2v.externalWriteDone" => self.external_write_done(call, buffer),
             _ => Err(refuse(call, "not played on a buffer")),
         }
     }
@@ -1984,6 +2006,24 @@ impl NewRuntime {
     }
 }
 
+/// A texture's bytes for a check, laid out as the old runtime's backend lays them out: its first
+/// level and slice, the rows and the image as far apart as Metal's level info puts them, the bytes
+/// between rows zero.
+fn texture_bytes(device: &rt::Device, texture: &rt::Texture) -> Result<Vec<u8>, rt::Error> {
+    let d = texture.descriptor();
+    let raw = u64::from(d.pixel_format.as_raw());
+    let query = rt::TextureLevelQuery::plane_2d(raw, d.width.into(), d.height.into());
+    let level = device.texture_level_info(&query);
+    let mut bytes = vec![0; level.bytes_per_image as usize];
+    let region = rt::Region {
+        origin: [0; 3],
+        size: [d.width, d.height, 1],
+    };
+    let (row, image) = (level.bytes_per_row, level.bytes_per_image);
+    texture.get_bytes(&mut bytes, row, image, region, 0, 0)?;
+    Ok(bytes)
+}
+
 /// `bytes` into `buffer` at `offset`, through its mapping.
 fn write_into(buffer: &rt::Buffer, offset: u64, bytes: &[u8]) -> Result<(), PlayError> {
     if bytes.is_empty() {
@@ -2032,6 +2072,8 @@ impl Backend for NewRuntime {
             }
             self.indices.give(call.receiver);
             self.resource_indices.remove(&call.receiver);
+            self.surfaces.released(call.receiver);
+            self.substitutes.live.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
                 // Its place and its device copy's, where it has them: a no-copy buffer's memory
                 // is an import, and one in a block or heap the stream's.
@@ -2066,6 +2108,24 @@ impl Backend for NewRuntime {
                 _ => {}
             }
             return Ok(Made::default());
+        }
+        if !self.surfaces.is_empty() || !self.substitutes.live.is_empty() {
+            // Every object the call names, a descriptor's fields among them.
+            let mut named = Vec::new();
+            super::covers::named(&call.args, &mut named);
+            if !self.surfaces.is_empty() {
+                self.surface_names(call, &named)?;
+            }
+            // A call on a substitute reads it, but for one that makes a view of it, which is a
+            // substitute in turn.
+            let view = call.selector.starts_with("newTextureView");
+            if !view {
+                named.push(call.receiver);
+            }
+            self.substitutes.named(&named);
+            if view && self.substitutes.live.contains_key(&call.receiver) {
+                self.substitutes.live.insert(call.result, false);
+            }
         }
         if let Some(&command_buffer) = self.owners.get(&call.receiver) {
             // Skipped encoders too: what the program's GPU passes reach is the stream's.
@@ -2246,6 +2306,11 @@ impl Backend for NewRuntime {
                     })?;
                     self.from_first_use.insert(target);
                 }
+                // A surface's texels under the bytes (`surfaces`).
+                if self.surfaces.is_receiver(target) {
+                    let buffer = buffer.clone();
+                    return self.surface_written((target, &buffer), offset..end);
+                }
                 Ok(())
             }
             Some(Object::Block(range, rt::MemoryClass::Shared, _)) => {
@@ -2300,6 +2365,12 @@ impl Backend for NewRuntime {
             selector: "m2v.check".into(),
             why: why.into(),
         };
+        if let Some(Object::Texture(texture)) = self.objects.get(&object) {
+            return texture_bytes(&self.device, texture).map_err(|error| PlayError::Runtime {
+                selector: "m2v.check".into(),
+                error: error.to_string(),
+            });
+        }
         // The CPU's bytes of a buffer with a second copy, as Metal's `contents` answers them: its
         // aside from a read-back of a stream that records its announced bytes to its next
         // announcement (`aside`).
@@ -2319,9 +2390,7 @@ impl Backend for NewRuntime {
                 // work that writes it.
                 Ok(unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) }.to_vec())
             }
-            _ => Err(unread(
-                "no buffer, or not yet one the new runtime reads back",
-            )),
+            _ => Err(unread("no buffer or texture")),
         }
     }
 
@@ -2363,7 +2432,7 @@ impl Backend for NewRuntime {
     fn counters(&mut self) -> Counters {
         let metrics = self.device.counters().metrics();
         // Every metric that sums: a frame's is the difference of two reads.
-        Counters::from([
+        let mut counters = Counters::from([
             ("submissions", metrics.submissions),
             ("pushes", metrics.pushes),
             ("pushes_held", metrics.pushes_held),
@@ -2451,13 +2520,15 @@ impl Backend for NewRuntime {
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
             ("skipped_texture_syncs", self.skips.texture_syncs),
             ("skipped_clamped_samplers", self.skips.clamped_samplers),
-            ("substituted_surface_textures", self.substitutes.surfaces),
             ("substituted_tiled_textures", self.substitutes.tiled),
             ("substituted_gap_textures", self.substitutes.gaps),
+            ("substitutes_read", self.substitutes.read),
             ("skipped_calls", self.skips.calls),
             ("skipped_resource_ids", self.skips.resource_ids),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
-        ])
+        ]);
+        counters.extend(self.surfaces.counted());
+        counters
     }
 
     /// The runtime's gauges, and the bytes of the blocks the backend holds by class: the stream's
@@ -2578,6 +2649,18 @@ impl Backend for NewRuntime {
                 kinds.join(", ")
             ));
         }
+        lines.push(self.surfaces.line());
+        let first: String = (self.substitutes.first_read.iter())
+            .map(|object| format!(" #{object}"))
+            .collect();
+        lines.push(format!(
+            "substitutes read {}: of {} tiled textures and {} gap textures made, and their views; \
+             the first:{}",
+            self.substitutes.read,
+            self.substitutes.tiled,
+            self.substitutes.gaps,
+            if first.is_empty() { " -" } else { &first },
+        ));
         lines.push(self.asides.line());
         lines.push(self.places.line());
         lines.push(self.unwritten.line());
@@ -2587,7 +2670,7 @@ impl Backend for NewRuntime {
     }
 
     fn skips(&self) -> u64 {
-        self.skips.total()
+        self.skips.total() + self.surfaces.across_planes()
     }
 
     fn locate(&mut self, frame: u64, call: u64) {

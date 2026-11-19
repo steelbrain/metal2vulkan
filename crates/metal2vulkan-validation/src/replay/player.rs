@@ -283,6 +283,8 @@ pub struct Check {
     /// A texture write in its placement heap covered some of its bytes since it was last
     /// written (`Report::covered`): not compared.
     pub covered: bool,
+    /// A surface's receiver buffer (`Player::receivers`): not compared.
+    pub receiver: bool,
 }
 
 /// An object whose `gpuResourceID` in the runtime is not the one the program saw: the bytes that
@@ -312,6 +314,8 @@ pub struct PrivateBytes {
     /// A texture write in its placement heap covered some of the range since it was last
     /// written (`Report::covered`): not compared.
     pub covered: bool,
+    /// The range lies in a surface's receiver buffer (`Player::receivers`): not compared.
+    pub receiver: bool,
 }
 
 /// What one span of a play counted.
@@ -718,6 +722,7 @@ impl Report {
         }
         for check in &self.checks {
             let verdict = match check.recorded {
+                _ if check.receiver => "receiver",
                 _ if check.covered => "covered",
                 None => "unrecorded",
                 Some(recorded) if recorded == check.sha256 => "match",
@@ -746,6 +751,7 @@ impl Report {
         }
         for private in &self.private {
             let verdict = match private.differing {
+                _ if private.receiver => "receiver".to_owned(),
                 _ if private.covered => "covered".to_owned(),
                 0 => "match".to_owned(),
                 differing => format!("differs {differing}/{}", private.length.div_ceil(4)),
@@ -778,6 +784,18 @@ impl Report {
                  checks and {ranges} snapshot ranges they covered not compared; {} covers taken \
                  off by a binding, which may be a read",
                 self.covered, self.binding_uncovers
+            ));
+        }
+        let receivers = self.checks.iter().filter(|check| check.receiver).count();
+        let ranges = self
+            .private
+            .iter()
+            .filter(|private| private.receiver)
+            .count();
+        if receivers + ranges > 0 {
+            lines.push(format!(
+                "receivers: {receivers} checks and {ranges} snapshot ranges of surfaces' receiver \
+                 buffers not compared; the textures over the surfaces hold the texels"
             ));
         }
         if self.parted > 0 {
@@ -963,6 +981,11 @@ pub struct Player<'b, B: Backend> {
     texwrites: TexWrites,
     /// What texture writes covered in placement heaps (`Report::covered`).
     covers: Covers,
+    /// The live buffers a texture over a surface's plane was made on
+    /// (`newTextureWithDescriptor:iosurface:plane:`), which stand for the surfaces' pages. A
+    /// runtime may keep the texels apart from the buffer, as the product does: their checks and
+    /// snapshot ranges are compared on no runtime, and the textures' own carry the bytes.
+    receivers: HashSet<u64>,
     /// The runtime's size of each texture the stream places in a placement heap, read ahead, by
     /// the texture and the position of the call that places it.
     placed_sizes: HashMap<(u64, u64), u64>,
@@ -1175,6 +1198,7 @@ impl<'b, B: Backend> Player<'b, B> {
             frame_out: None,
             texwrites: TexWrites::default(),
             covers: Covers::default(),
+            receivers: HashSet::new(),
             placed_sizes: HashMap::new(),
         }
     }
@@ -1754,6 +1778,9 @@ impl<'b, B: Backend> Player<'b, B> {
             self.backend.split_heap(resolved.result, split);
         }
         let made = self.run(&resolved)?;
+        if &*resolved.selector == "newTextureWithDescriptor:iosurface:plane:" {
+            self.receivers.insert(resolved.receiver);
+        }
         self.track(&resolved);
         let size = self.placed_sizes.remove(&(resolved.result, self.position));
         let backend = &*self.backend;
@@ -2009,6 +2036,7 @@ impl<'b, B: Backend> Player<'b, B> {
             sha256: Sha256::digest(&bytes).into(),
             recorded,
             covered: self.covers.covered(object),
+            receiver: self.receivers.contains(&object),
         });
         Ok(())
     }
@@ -2227,6 +2255,7 @@ impl<'b, B: Backend> Player<'b, B> {
                     length: around.length,
                     differing: differing as u64,
                     covered,
+                    receiver: self.receivers.contains(&around.buffer),
                 });
             }
         }
@@ -2256,6 +2285,7 @@ impl<'b, B: Backend> Player<'b, B> {
     fn drop_object(&mut self, object: u64) -> Result<(), PlayError> {
         self.encoders.remove(&object);
         self.covers.released(object);
+        self.receivers.remove(&object);
         self.addresses.remove(object);
         self.escaped.remove(&object);
         self.owner.remove(&object);

@@ -3,6 +3,7 @@
 
 pub(super) use super::super::args::{
     arg, data, index, list, metal, narrow, option_sets, range, refuse, uint, variant, Fields,
+    SURFACE_FACT_KEYS, SURFACE_PLANE_KEYS,
 };
 use super::super::player::PlayError;
 use super::super::stream::Call;

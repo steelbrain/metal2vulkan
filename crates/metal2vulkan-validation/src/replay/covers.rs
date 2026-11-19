@@ -76,7 +76,7 @@ pub(super) struct Covers {
 }
 
 /// The objects `values` name, lists and maps included.
-fn named(values: &[Value], out: &mut Vec<u64>) {
+pub(super) fn named(values: &[Value], out: &mut Vec<u64>) {
     for value in values {
         match value {
             Value::Object(id) => out.push(*id),

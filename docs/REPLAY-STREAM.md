@@ -141,6 +141,7 @@ and the (name id, value) answer pairs.
 | `m2v.newExportableBufferOfLength` | `[length, options, alignedByte]` | the same buffer in an allocation of its own, which another API imports; result 0 where the host made none | the same, and nothing at result 0 |
 | `m2v.newDmaBufBufferOfLengthPaddingUnobserved` | `[length, options, alignedByte]` | the same, also exported as a dma-buf for video decoding; the video's writes arrive as a later commit's writes (section 6); result 0 where the host made none | the same, and nothing at result 0 |
 | `m2v.newCommandQueueUnshared` | `[]` | a queue the host kept apart | `newCommandQueue` |
+| `m2v.externalWriteDone` | `[]`, on an exported buffer | another API's write into the buffer landed (a decoded picture) | nothing where the textures over the buffer read it in place; the new runtime's backend refills the textures over it (section 10) |
 
 ## 5. Memory and addresses
 
@@ -726,14 +727,43 @@ counted from 0), completes the work committed so far, reports as at the stream's
   Textures over a buffer play as the runtime's (`Buffer::new_texture`) and texture views as its
   views (`Texture::new_texture_view`). Where the runtime cannot make a texture the program made,
   the backend makes an ordinary texture of the same descriptor in its place, so that the IDs and
-  addresses the program wrote name a live texture, and counts it: a texture over an IOSurface,
-  which is its host's import (`substituted_surface_textures`), a tiled texture over a buffer
+  addresses the program wrote name a live texture, and counts it: a tiled texture over a buffer
   (`substituted_tiled_textures`), and a texture over a buffer or a view the runtime answers with
   a typed gap (`substituted_gap_textures`). A substitute is the recording's artefact, never the
-  runtime's.
+  runtime's, and its texels are not the program's: `substitutes_read` counts the substitutes, and
+  the views of one, that a call other than the making of a view named (a binding, an attachment,
+  a blit, a descriptor's field, a call on it), and the report's `substitutes read` line gives the
+  first few. A play with a substitute read is equal at best where played; one with a substitute
+  only made is not touched by it.
 
-  The counts are among its executed counters. A play with any of them above zero is no gate
-  result: `report.txt` says so on a `skipped` line. It places buffers of their own, and the GPU
+  A texture over a surface's plane (section 7) plays as the product makes it: one texture of the
+  runtime's made for views (`Device::new_texture_for_views`) for each receiver range (the
+  receiver buffer, the plane, its offset and row pitch) and shape (width, height and bytes a
+  texel), with shader read and write, render-target and pixel-format-view usage, and each recorded
+  surface texture a view of it at the texture's own index, so a texture of another format of the
+  same bytes a texel shares its texels. The receiver buffer holds the pages' bytes as the stream
+  writes them. A new entry is filled from it, by a blit in a command buffer of the backend's own
+  committed at the making, after every earlier commit; a new shape over a range first downloads the
+  range's newest entry into the buffer at that entry's extent, so bytes map by byte offset. An
+  older shape's entry goes once no texture of it lives, and is not kept current: the
+  `surface_older_uses` counter counts the calls that name such a texture after a newer shape over
+  its range was made (calls through argument buffers are not seen). A copy from the guest's RAM
+  into a range also copies the range into its newest entry, and a copy back to the guest's RAM
+  first copies the newest entry into the range, both in the copy's own blit encoder, where the
+  GPU's order holds them. A recorded CPU write into a range reaches the texels it covers of the
+  newest entry through the runtime's upload (`Texture::replace_region`), until the buffer's first
+  `m2v.externalWriteDone`; that record refills every entry of its buffer from the buffer, by a blit
+  in a command buffer of the backend's own committed then. Another call that names a receiver
+  buffer as a buffer is refused, and a texture of a format that reads across a surface's two planes
+  (a two-plane YCbCr or XR10 format) is skipped (`skipped_surfaces_across_planes`). The counts
+  (`surface_textures`, `surface_entries`, `surface_fills`, `surface_shape_changes`,
+  `surface_cpu_writes`, `surface_external_writes`, `surface_refills`, `surface_copies_in`,
+  `surface_copies_out`, `surface_bytes`) are the player's work, among its executed counters, and
+  the report's `surfaces` line gives them with the frames of the first older-shape uses. A check
+  of a texture reads its first level and slice as the old runtime's backend lays them out.
+
+  The counts are among its executed counters; a `skipped_` one above zero makes the play no gate
+  result, and `report.txt` says so on a `skipped` line. It places buffers of their own, and the GPU
   copies of two-copy Managed buffers, in the runtime's blocks of 16 MiB of either class (a longer
   one in a block of its own), each place its length rounded up to the buffer's recorded granule:
   the largest power of two that divides its recorded `gpuAddress`, from 256 bytes to 64 KiB (256
@@ -809,13 +839,13 @@ Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
 `private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),
 `devices apart from the guest's: #ID ...` where the stream recorded devices besides the one the
-guest makes its objects on (section 4), `check ID SHA256 match|differs|unrecorded|covered`, `id ID RECORDED PLAYED` for each object whose runtime
+guest makes its objects on (section 4), `check ID SHA256 match|differs|unrecorded|covered|receiver`, `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
 runtime's getter raises), `id ID RECORDED PLAYED word WORD` on the new runtime, which lays its IDs
 out as [RESOURCE-ID.md](RESOURCE-ID.md) does: there the ID's low word, its index, is compared with
 the recording's, and its high word with `WORD`, the document's own function of the descriptor the
 object was made of (a texture's `TextureWord`, a sampler state's `SamplerWord`), never with the
-recording's high word, which is the recording runtime's own; `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS|covered` for each
+recording's high word, which is the recording runtime's own; `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS|covered|receiver` for each
 `m2v.privateBytes` range compared, `covered N: texture writes over other objects of a placement
 heap; C checks and R snapshot ranges they covered not compared; B covers taken off by a binding,
 which may be a read` where a texture write covered
@@ -832,7 +862,12 @@ CPU's `replaceRegion:…`; a write of a texture over a buffer is the buffer's. A
 again by the player's writes into it, a blit into it, and, as the stream carries no buffer
 access, any binding of it to an encoder, a `useResource:usage:` with write usage or a `useHeap:`
 of its heap; a binding may be a read, so `B` counts the covers a binding or a `useHeap:` took off,
-and a difference in that object's later compares may be the covering texture's bytes. `split N executed COUNTS` where the player split compute
+and a difference in that object's later compares may be the covering texture's bytes. `receivers:
+C checks and R snapshot ranges of surfaces' receiver buffers not compared; the textures over the
+surfaces hold the texels` where the stream checks a buffer a texture over a surface's plane was made
+on (section 7), while that buffer lives: a runtime may keep the texels apart from the buffer, as the
+product does, so such a check (`receiver`) and the snapshot ranges in such a buffer (`receiver`) are
+compared on no runtime, and the textures' own checks carry the bytes. `split N executed COUNTS` where the player split compute
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
 `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),

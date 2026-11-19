@@ -10,6 +10,7 @@ use crate::replay::stream::Call;
 use crate::replay::value::Value;
 use metal2vulkan_rt as rt;
 use std::collections::HashSet;
+use std::ops::Range;
 
 /// A compute encoder, its buffer and texture slots that hold a skipped object, and whether its
 /// pipeline state is a skipped one.
@@ -404,7 +405,8 @@ impl NewRuntime {
     /// RAM gives back its staging.
     fn copy_back(&mut self, call: &Call) -> Result<(), PlayError> {
         let id = call.receiver;
-        let from = self.buffer_of(call, Self::id(call, 0)?)?;
+        let object = Self::id(call, 0)?;
+        let from = self.buffer_of(call, object)?;
         let runs = crate::replay::player::placed_runs(arg(call, 1)?);
         let runs = runs.ok_or_else(|| refuse(call, "argument 1 is no list of placed runs"))?;
         let words = from.length() / 4 * 4;
@@ -425,6 +427,11 @@ impl NewRuntime {
         if len == 0 {
             return Ok(());
         }
+        // A surface's texels into those bytes first (`surfaces`).
+        let read: Vec<Range<u64>> = (spans.iter())
+            .map(|&(start, size, _)| start..start + size)
+            .collect();
+        self.surface_copying_out(call, id, (object, &from), &read)?;
         let completed = self.completed();
         // The player's own sink: no recorded slack.
         let place = (self
@@ -520,6 +527,9 @@ impl NewRuntime {
                 .copy_from_buffer_to_buffer(&staging, *from, &target, span.start, size);
             copied.map_err(failed(call))?;
         }
+        // A surface's texels under those bytes (`surfaces`).
+        let written: Vec<Range<u64>> = spans.iter().map(|(_, _, span, _)| span.clone()).collect();
+        self.surface_copied_in(call, id, (upload.target, &target), &written)?;
         self.staged_bytes += len;
         match self.owners.get(&id).copied() {
             Some(command_buffer) => self.staging.entry(command_buffer).or_default().push(place),
@@ -528,7 +538,7 @@ impl NewRuntime {
         Ok(())
     }
 
-    fn blit(&mut self, id: u64) -> &mut rt::BlitCommandEncoder {
+    pub(super) fn blit(&mut self, id: u64) -> &mut rt::BlitCommandEncoder {
         match self.objects.get_mut(&id) {
             Some(Object::Blit(encoder)) => encoder,
             _ => unreachable!("a blit encoder's call"),

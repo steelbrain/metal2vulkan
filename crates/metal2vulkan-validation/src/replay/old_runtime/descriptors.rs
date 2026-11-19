@@ -2,7 +2,9 @@
 //! each a recorder struct's map, nil for a property it leaves unset, applied as the host's
 //! platform applies it to the runtime's descriptor.
 
-use super::args::{metal, narrow, option_sets, options, refuse, Fields};
+use super::args::{
+    metal, narrow, option_sets, options, refuse, Fields, SURFACE_FACT_KEYS, SURFACE_PLANE_KEYS,
+};
 use super::{placement, Object, OldRuntime};
 use crate::replay::player::PlayError;
 use crate::replay::stream::Call;
@@ -209,26 +211,15 @@ pub(super) enum Surface {
     },
 }
 
-const FACT_KEYS: [&str; 7] = [
-    "pixelFormat",
-    "planeCount",
-    "width",
-    "height",
-    "chromaOffset",
-    "chromaBytesPerRow",
-    "ycbcrMatrix",
-];
-
 /// `newTextureWithDescriptor:iosurface:plane:`'s plane, `{plane, offset, bytesPerRow, planar,
 /// facts}`, for a texture of `format`: a two-plane YCbCr or XR10 format over a surface of two
 /// planes reads its facts.
 pub(super) fn surface_plane(call: &Call, format: PixelFormat) -> Result<Surface, PlayError> {
-    let known = ["plane", "offset", "bytesPerRow", "planar", "facts"];
-    let f = Fields::arg(call, 1, &known)?;
+    let f = Fields::arg(call, 1, &SURFACE_PLANE_KEYS)?;
     let plane = f.required("plane", Fields::uint)?;
     let offset = f.required("offset", Fields::uint)?;
     let bytes_per_row = f.required("bytesPerRow", Fields::uint)?;
-    let Some(facts) = f.fields("facts", &FACT_KEYS)? else {
+    let Some(facts) = f.fields("facts", &SURFACE_FACT_KEYS)? else {
         return Ok(Surface::None {
             offset,
             bytes_per_row,

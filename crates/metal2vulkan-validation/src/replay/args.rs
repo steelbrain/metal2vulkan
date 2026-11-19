@@ -7,6 +7,22 @@ use super::value::{Name, Value};
 use std::fmt::Display;
 use std::ops::Range;
 
+/// `newTextureWithDescriptor:iosurface:plane:`'s plane, `{plane, offset, bytesPerRow, planar,
+/// facts}` (`docs/REPLAY-STREAM.md`, section 7).
+pub(super) const SURFACE_PLANE_KEYS: [&str; 5] =
+    ["plane", "offset", "bytesPerRow", "planar", "facts"];
+
+/// Its `facts`: what the texture reads of the surface besides.
+pub(super) const SURFACE_FACT_KEYS: [&str; 7] = [
+    "pixelFormat",
+    "planeCount",
+    "width",
+    "height",
+    "chromaOffset",
+    "chromaBytesPerRow",
+    "ycbcrMatrix",
+];
+
 pub(super) fn refuse(call: &Call, why: impl Into<String>) -> PlayError {
     PlayError::Refused {
         selector: call.selector.to_string(),

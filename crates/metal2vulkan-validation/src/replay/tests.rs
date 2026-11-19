@@ -2005,6 +2005,7 @@ fn a_dispatch_plays_between_its_private_bytes() {
         length,
         differing,
         covered: false,
+        receiver: false,
     };
     assert_eq!(report.private, [compared(8, 24, 2), compared(0, 4, 0)]);
     let lines = report.lines();
@@ -2644,4 +2645,50 @@ fn a_heap_texture_write_covers_the_buffer_and_texture_it_meets_until_they_are_wr
             .count(),
         3
     );
+}
+
+/// A buffer a texture over a surface's plane was made on stands for the surface's pages: its checks
+/// are compared on no runtime, the texture's are, and once the buffer is released and made again
+/// as an ordinary buffer, its checks are compared again.
+#[test]
+fn a_surface_s_receiver_buffer_is_not_compared() {
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let pages = [Value::Uint(0x1000), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 2, &pages, &[])?;
+        w.call("m2v.textureDescriptor", 0, 3, &[map(&[])], &[])?;
+        let plane = map(&[
+            ("plane", Value::Uint(0)),
+            ("offset", Value::Uint(0)),
+            ("bytesPerRow", Value::Uint(256)),
+            ("planar", Value::Bool(false)),
+            ("facts", Value::Nil),
+        ]);
+        let made = "newTextureWithDescriptor:iosurface:plane:";
+        w.call(made, 2, 4, &[Value::Object(3), plane], &[])?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(2), Value::Object(4)],
+            &[],
+        )?;
+        w.call("release", 4, 0, &[], &[])?;
+        w.call("release", 2, 0, &[], &[])?;
+        w.call("newBufferWithLength:options:", 1, 2, &pages, &[])?;
+        w.call("m2v.check", 0, 0, &[Value::Object(2)], &[])
+    });
+    ended.unwrap();
+    let receivers: Vec<(u64, bool)> = (report.checks.iter())
+        .map(|check| (check.object, check.receiver))
+        .collect();
+    assert_eq!(receivers, [(2, true), (4, false), (2, false)]);
+    let lines = report.lines();
+    let line = "receivers: 1 checks and 0 snapshot ranges of surfaces' receiver buffers not \
+                compared; the textures over the surfaces hold the texels";
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+    assert!(lines
+        .iter()
+        .any(|l| l.starts_with("check #2 ") && l.ends_with(" receiver")));
 }

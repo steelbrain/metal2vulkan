@@ -26,10 +26,14 @@
 //!   program did not reserve: made and released past the class's 3,999 indices, they reuse the
 //!   released ones. A reserved index is taken only where the stream names it, by a descriptor's
 //!   resource index or by the ID the program saw of the state.
-//! - A texture over a surface, made as an ordinary texture in its place, takes the index its
-//!   descriptor names, inside a reservation of every storage-capable index (as a program that
-//!   reserves Metal's texture IDs 1 to 16,320 for its own textures makes them): made and released
-//!   past the class's 4,095 indices, each takes its own.
+//! - A texture over a surface, a view of the runtime's texture under the surface's range, takes the
+//!   index its descriptor names, inside a reservation of every storage-capable index (as a program
+//!   that reserves Metal's texture IDs 1 to 16,320 for its own textures makes them): made and
+//!   released past the class's 4,095 indices, each takes its own.
+//! - Two textures of different formats over one surface's plane share its texels: what a kernel
+//!   writes through the one, a later kernel reads through the other. A texture of another extent
+//!   over the range starts from those texels by byte offset, a copy from the guest's RAM into the
+//!   range reaches it, and a binding of the older extent's texture after it is counted.
 //! - A buffer placed in a block of the stream that the runtime may take from a released block's
 //!   bytes reads zero where nothing wrote it: the player zeroes each block and heap of the stream
 //!   once at its making, as the live system does.
@@ -808,6 +812,170 @@ fn surface_textures_take_the_reserved_index_their_descriptor_names() {
         lines.iter().any(|line| line.starts_with(named)),
         "{lines:?}"
     );
+}
+
+/// Two textures over plane 0 of one surface (#6, 2 by 2 texels, 8 bytes a row): #8, RGBA8Unorm,
+/// which a kernel writes the inverse of #7's texels into, and #9, BGRA8Unorm, which a later
+/// command buffer's kernel reads and writes the inverse of into #10, so that #10 holds #7's texels
+/// with red and blue swapped. Then #15, RGBA8Unorm of 1 by 2 over the same range, which starts from
+/// the texels at its bytes (the first and third of #8's), and a copy from the guest's RAM into the
+/// range's first 8 bytes, which reaches #15's first texel; a kernel that then reads #8, of the
+/// older extent, into #20 reads #8's texels from before the copy, and is counted.
+#[test]
+fn textures_over_one_surface_share_its_texels() {
+    /// A command buffer of queue #2 whose kernel (#5) reads `from` and writes the inverse into
+    /// `to`, waited for.
+    fn invert(
+        w: &mut StreamWriter<File>,
+        command_buffer: u64,
+        from: u64,
+        to: u64,
+    ) -> std::io::Result<()> {
+        let encoder = command_buffer + 1;
+        w.call("commandBuffer", 2, command_buffer, &[], &[])?;
+        w.call("computeCommandEncoder", command_buffer, encoder, &[], &[])?;
+        let state = [Value::Object(5)];
+        w.call("setComputePipelineState:", encoder, 0, &state, &[])?;
+        for (texture, index) in [(from, 0), (to, 1)] {
+            let bind = [Value::Object(texture), Value::Uint(index)];
+            w.call("setTexture:atIndex:", encoder, 0, &bind, &[])?;
+        }
+        let size = |n| uints(&[("width", n), ("height", n), ("depth", 1)]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, encoder, 0, &[size(1), size(2)], &[])?;
+        w.call("endEncoding", encoder, 0, &[], &[])?;
+        w.call("commit", command_buffer, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, command_buffer, 0, &[], &[])
+    }
+    let dir = ScratchDir::new("rt-replay-surface-views").unwrap();
+    let source = [0x10, 0x20, 0x30, 0x40].repeat(4);
+    let written_through = [0xEF, 0xDF, 0xCF, 0x40].repeat(4);
+    let read_through = [0x30, 0x20, 0x10, 0x40].repeat(4);
+    let copied: Vec<u8> = (1..=8).collect();
+    let path = written(&dir, |w| {
+        let library = w.blob(&library(&dir, &[("invert_texels", 2, 0)]))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let data = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &data, &[])?;
+        let kernel = [Value::Str("invert_texels".into())];
+        w.call("newFunctionWithName:", 3, 4, &kernel, &[])?;
+        let function = [Value::Object(4)];
+        let made = "newComputePipelineStateWithFunction:error:";
+        w.call(made, 1, 5, &function, &[])?;
+        let pages = [Value::Uint(16), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 6, &pages, &[])?;
+        // Shared, of `width` by 2 texels.
+        let texture = |format, usage, width| {
+            uints(&[
+                ("textureType", 2),
+                ("pixelFormat", format),
+                ("width", width),
+                ("height", 2),
+                ("usage", usage),
+                ("storageMode", 0),
+            ])
+        };
+        w.call("newTextureWithDescriptor:", 1, 7, &[texture(70, 1, 2)], &[])?;
+        let whole = Value::Map(vec![
+            ("origin".into(), uints(&[("x", 0), ("y", 0), ("z", 0)])),
+            (
+                "size".into(),
+                uints(&[("width", 2), ("height", 2), ("depth", 1)]),
+            ),
+        ]);
+        let args = [
+            whole,
+            Value::Uint(0),
+            Value::Bytes(source.clone()),
+            Value::Uint(8),
+        ];
+        let replace = "replaceRegion:mipmapLevel:withBytes:bytesPerRow:";
+        w.call(replace, 7, 0, &args, &[])?;
+        // Plane 0 of a surface of one plane, from the pages' start, 8 bytes a row.
+        let facts = Value::Map(vec![
+            (
+                "pixelFormat".into(),
+                Value::Uint(u64::from(u32::from_be_bytes(*b"BGRA"))),
+            ),
+            ("planeCount".into(), Value::Uint(0)),
+            ("width".into(), Value::Uint(2)),
+            ("height".into(), Value::Uint(2)),
+            ("chromaOffset".into(), Value::Uint(0)),
+            ("chromaBytesPerRow".into(), Value::Uint(0)),
+            ("ycbcrMatrix".into(), Value::Nil),
+        ]);
+        let plane = Value::Map(vec![
+            ("plane".into(), Value::Uint(0)),
+            ("offset".into(), Value::Uint(0)),
+            ("bytesPerRow".into(), Value::Uint(8)),
+            ("planar".into(), Value::Bool(false)),
+            ("facts".into(), facts),
+        ]);
+        let surface = "newTextureWithDescriptor:iosurface:plane:";
+        w.call(surface, 6, 8, &[texture(70, 2, 2), plane.clone()], &[])?;
+        w.call(surface, 6, 9, &[texture(80, 1, 2), plane.clone()], &[])?;
+        w.call(
+            "newTextureWithDescriptor:",
+            1,
+            10,
+            &[texture(70, 2, 2)],
+            &[],
+        )?;
+        invert(w, 11, 7, 8)?;
+        invert(w, 13, 9, 10)?;
+        w.call(surface, 6, 15, &[texture(70, 1, 1), plane], &[])?;
+        w.call("commandBuffer", 2, 16, &[], &[])?;
+        w.call("blitCommandEncoder", 16, 17, &[], &[])?;
+        let piece = Value::List(vec![Value::Uint(0), Value::Bytes(copied.clone())]);
+        let pieces = [Value::Object(6), Value::List(vec![piece])];
+        w.call("m2v.copyFromGuestRam", 17, 0, &pieces, &[])?;
+        w.call("endEncoding", 17, 0, &[], &[])?;
+        w.call("commit", 16, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 16, 0, &[], &[])?;
+        w.call(
+            "newTextureWithDescriptor:",
+            1,
+            20,
+            &[texture(70, 2, 2)],
+            &[],
+        )?;
+        invert(w, 18, 8, 20)?;
+        w.call("m2v.check", 0, 0, &[Value::Object(6)], &[])
+    });
+    // Each texture's rows as a check reads them: `width` texels a row, the rows as far apart as
+    // half the read's length (each texture has 2 rows).
+    let (report, lines, rows) = play_then("surface-views", &path, |backend| {
+        let mut rows = |object: u64, width: usize| {
+            let bytes = backend.read(object).unwrap();
+            let pitch = bytes.len() / 2;
+            [&bytes[..width * 4], &bytes[pitch..pitch + width * 4]].concat()
+        };
+        [rows(8, 2), rows(10, 2), rows(15, 1), rows(20, 2)]
+    });
+    let first = [&copied[..4], &written_through[8..12]].concat();
+    assert_eq!(
+        rows,
+        [written_through, read_through, first, source],
+        "{lines:?}"
+    );
+    let executed = &report.total.executed;
+    let counted = |key: &str| executed.get(key).copied().unwrap_or(0);
+    let counts = [
+        "surface_textures",
+        "surface_entries",
+        "surface_fills",
+        "surface_shape_changes",
+        "surface_copies_in",
+        "surface_older_uses",
+        "substitutes_read",
+    ]
+    .map(counted);
+    assert_eq!(counts, [3, 2, 2, 1, 1, 1, 0], "{executed:?}");
+    let receivers: Vec<(u64, bool)> = (report.checks.iter())
+        .map(|check| (check.object, check.receiver))
+        .collect();
+    assert_eq!(receivers, [(6, true)], "{lines:?}");
 }
 
 /// A stream of a placement at an index a held commit owes: command buffer #6 of queue #2 waits for
