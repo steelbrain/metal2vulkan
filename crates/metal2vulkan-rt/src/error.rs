@@ -166,10 +166,12 @@ pub enum Refusal {
         block: BlockId,
     },
     /// An acquire of another API's writes into a block that is not exported
-    /// ([`Block::external_writes_done`](crate::Block::external_writes_done)). Metal has no
-    /// counterpart.
+    /// ([`Block::external_writes_done`](crate::Block::external_writes_done)), or a release to
+    /// another API of a buffer whose block is not exported
+    /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external)).
+    /// Metal has no counterpart.
     ///
-    /// Basis: ours (only an exported block's memory is another API's to write).
+    /// Basis: ours (only an exported block's memory is another API's to write or read).
     NotExported {
         /// The block named.
         block: BlockId,
@@ -1553,7 +1555,7 @@ impl fmt::Display for Refusal {
             ),
             Refusal::NotExported { block } => write!(
                 f,
-                "an acquire of block {}, which is not exported",
+                "an acquire or a release of block {}, which is not exported",
                 block.get()
             ),
             Refusal::ZeroRangeShared { block } => write!(

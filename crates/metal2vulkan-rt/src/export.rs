@@ -259,10 +259,12 @@ impl Block {
     /// The contract has three parts: between this call and the other API's next write, the other
     /// API does not access the block; when it writes again, it reads nothing of the block but
     /// what it has itself written since; and after each acquire, a byte the other API has not
-    /// written since the previous acquire is undefined to the runtime. The runtime records no
-    /// release back to the other API: without one, Vulkan leaves the block's contents undefined to
+    /// written since the previous acquire is undefined to the runtime. No release back to the
+    /// other API follows the acquire: without one, Vulkan leaves the block's contents undefined to
     /// the other API's reads ("the contents of that resource are undefined for any read accesses
-    /// performed by the second queue family"), and that API reads only its own writes.
+    /// performed by the second queue family"), and in this direction that API reads only its own
+    /// writes. Where it is to read the runtime's writes, the consumer releases the block
+    /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external)).
     ///
     /// Err: [`Refusal::NotExported`] for a block that is not exported;
     /// [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`]; and

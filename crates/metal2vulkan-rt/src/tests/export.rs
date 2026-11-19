@@ -1,8 +1,10 @@
 //! Exports, under a device cfg, on every device of the cfg's kind: each handle the device exports
 //! gives a Private block of its own, counted live in `Gauges::exports` until its memory is freed,
-//! whose handle a second device of the same physical device imports, reading rt's bytes through it
-//! and writing the whole block, which rt acquires (`Block::external_writes_done`) and reads; an
-//! acquire of a block that is not exported is refused; each handle the device does not export is
+//! which rt writes and releases (`BlitCommandEncoder::release_to_external`) twice, with no acquire
+//! between, and whose handle a second device of the same physical device imports, reading rt's
+//! second bytes through it and writing the whole block, which rt acquires
+//! (`Block::external_writes_done`) and reads; an acquire or a release of a block that is not
+//! exported is refused; each handle the device does not export is
 //! refused typed; an exported block holds no image (a texture
 //! over a buffer in it is the counted copy, and a heap texture in it is refused); and what 64 live
 //! exports cost each submission, timed without the validation layer.
@@ -167,12 +169,15 @@ mod on_device {
     }
 
     /// Each handle the device exports gives a Private block of its own, counted live in
-    /// `Gauges::exports`, that rt writes and the test releases to the other API's queue family,
-    /// and that a second device of the same physical device imports and reads rt's bytes from;
-    /// the second device then fills the whole block and releases it, and rt's acquire
+    /// `Gauges::exports`, that rt fills and releases to the other API's queue family in one
+    /// command buffer (`BlitCommandEncoder::release_to_external`, counted), then fills and
+    /// releases again in a second with no acquire between, as Vulkan allows; a second device of
+    /// the same physical device imports it and reads rt's second bytes from it once both have
+    /// completed; the second device then fills the whole block and releases it, and rt's acquire
     /// (`Block::external_writes_done`, counted) lets a blit read its bytes. The gauge is back
-    /// once the block is given back. An acquire of a taken block is `Refusal::NotExported`. Each handle it does not export is `Limit::NoExport`,
-    /// and a dma-buf on a device without the foreign queue family `Limit::ExportType`.
+    /// once the block is given back. An acquire of a taken block, and a release of a buffer in
+    /// one, are `Refusal::NotExported`. Each handle it does not export is `Limit::NoExport`, and
+    /// a dma-buf on a device without the foreign queue family `Limit::ExportType`.
     #[test]
     fn every_device_exports_each_offered_handle_and_refuses_the_rest() {
         each_device("export", |name, instance, device| {
@@ -184,7 +189,16 @@ mod on_device {
                 Err(Error::Refused(Refusal::NotExported { block })) if block == taken.id => {}
                 other => panic!("{name}: an acquire of a taken block: {other:?}"),
             }
-            drop(taken);
+            let in_taken = (device.new_buffer(taken.id, 0, LEN, None)).expect("a buffer");
+            let queue = device.new_command_queue(4).expect("a queue");
+            let unused = queue.command_buffer().expect("a command buffer");
+            let mut encoder = unused.blit_command_encoder().expect("an encoder");
+            match encoder.release_to_external(&in_taken) {
+                Err(Error::Refused(Refusal::NotExported { block })) if block == taken.id => {}
+                other => panic!("{name}: a release of a buffer in a taken block: {other:?}"),
+            }
+            encoder.end_encoding();
+            drop((unused, queue, in_taken, taken));
             let mut exported = 0;
             for handle in ExportHandle::ALL {
                 if !device.core().exports.offers(handle) || (handle.foreign() && !foreign) {
@@ -216,28 +230,31 @@ mod on_device {
                     "{name}: {handle:?}"
                 );
 
-                // rt writes the block, then releases it to the other API.
+                // rt writes the block and releases it to the other API, twice: the second write
+                // takes no acquire after the first release, and the other API reads its bytes.
                 let buffer = (device.new_buffer(block.id, 0, LEN, None)).expect("a buffer");
                 let queue = device.new_command_queue(4).expect("a queue");
-                let command_buffer = queue.command_buffer().expect("a command buffer");
-                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
-                (encoder.fill_buffer(&buffer, 0..LEN / 2, 0x5a))
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
-                (encoder.fill_buffer(&buffer, LEN / 2..LEN, 0xa5))
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
-                encoder.end_encoding();
-                let family = device.raw().queue_family_index;
-                let (vk_buffer, _) = buffer.device_range();
+                let releases = counters.metrics().external_releases;
+                for (low, high) in [(0x11, 0x22), (0x5a, 0xa5)] {
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                    (encoder.fill_buffer(&buffer, 0..LEN / 2, low))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    (encoder.fill_buffer(&buffer, LEN / 2..LEN, high))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    (encoder.release_to_external(&buffer))
+                        .unwrap_or_else(|error| panic!("{name}: {handle:?}: {error}"));
+                    encoder.end_encoding();
+                    command_buffer.commit().expect("a commit");
+                    finished(name, &command_buffer);
+                    assert_eq!(command_buffer.error(), None, "{name}");
+                }
+                assert_eq!(
+                    counters.metrics().external_releases,
+                    releases + 2,
+                    "{name}: the releases, counted"
+                );
                 let external = handle.family();
-                command_buffer
-                    .record_for_test(&[&buffer], |raw, command| {
-                        // SAFETY: the command buffer is recording; the buffer is held.
-                        unsafe { record(raw, command, transfer(vk_buffer, family, external, true)) }
-                    })
-                    .expect("the release");
-                command_buffer.commit().expect("a commit");
-                finished(name, &command_buffer);
-                assert_eq!(command_buffer.error(), None, "{name}");
 
                 // The other API imports the handle, acquires the memory and reads rt's bytes.
                 let physical = (devices_of_the_cfgs_kind(instance).into_iter())
@@ -349,7 +366,7 @@ mod on_device {
                 }
                 drop(other);
 
-                drop((command_buffer, queue, buffer, block));
+                drop((queue, buffer, block));
                 within("the export's free", || {
                     counters.gauges().exports == before.exports
                 });
@@ -359,6 +376,10 @@ mod on_device {
                     "{name}: {handle:?}"
                 );
                 exported += 1;
+                println!(
+                    "release: {name}: {handle:?} written and released twice, no acquire between, \
+                     the second write read by a second device"
+                );
                 println!(
                     "export: {name}: {handle:?} exported ({} bytes, type {}), imported by a second \
                      device, read back, written there, acquired, read by rt, freed",

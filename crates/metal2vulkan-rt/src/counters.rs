@@ -83,10 +83,12 @@ pub(crate) enum Metric {
     WaitsBehindCounter,
     /// [`Metrics::external_acquires`].
     ExternalAcquires,
+    /// [`Metrics::external_releases`].
+    ExternalReleases,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::ExternalAcquires as usize + 1;
+const METRICS: usize = Metric::ExternalReleases as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -119,6 +121,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::StampsNotAvailable,
     Metric::WaitsBehindCounter,
     Metric::ExternalAcquires,
+    Metric::ExternalReleases,
 ];
 
 // Each metric of the order is at its own index.
@@ -292,6 +295,7 @@ struct Atomics {
     stamps_not_available: AtomicU64,
     waits_behind_counter: AtomicU64,
     external_acquires: AtomicU64,
+    external_releases: AtomicU64,
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
     capture_wait_nanos: AtomicU64,
@@ -409,6 +413,7 @@ impl Counters {
             Metric::StampsNotAvailable => &a.stamps_not_available,
             Metric::WaitsBehindCounter => &a.waits_behind_counter,
             Metric::ExternalAcquires => &a.external_acquires,
+            Metric::ExternalReleases => &a.external_releases,
         }
     }
 
@@ -781,6 +786,7 @@ impl Counters {
             stamps_not_available: a.stamps_not_available.load(Relaxed),
             waits_behind_counter: a.waits_behind_counter.load(Relaxed),
             external_acquires: a.external_acquires.load(Relaxed),
+            external_releases: a.external_releases.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
             capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
             capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
@@ -870,8 +876,9 @@ pub struct Metrics {
     /// feedback layout, one at a draw that reads an attachment after a memory barrier owed to it,
     /// and two around the copies a draw that reads an attachment makes into its image's shadow
     /// ([`attachment_read_copies`](Self::attachment_read_copies)), or the clear of the shadow
-    /// that stands for a copy of what its pass cleared, and one for each acquire of an exported
-    /// block ([`external_acquires`](Self::external_acquires)). Any other draw takes none.
+    /// that stands for a copy of what its pass cleared, one for each acquire of an exported
+    /// block ([`external_acquires`](Self::external_acquires)), and one for each release of one
+    /// ([`external_releases`](Self::external_releases)). Any other draw takes none.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
     /// between a texture over a buffer and its image of its own
@@ -1100,6 +1107,11 @@ pub struct Metrics {
     /// ([`Block::external_writes_done`](crate::Block::external_writes_done)): one buffer
     /// barrier each, in the upload, also counted in [`barriers`](Self::barriers).
     pub external_acquires: u64,
+    /// Releases of exported blocks to another API recorded
+    /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external)):
+    /// one buffer barrier each, in the command buffer's work, also counted in
+    /// [`barriers`](Self::barriers).
+    pub external_releases: u64,
 }
 
 /// A thread's slot in [`Gauges::threads`], given back as it drops.

@@ -144,12 +144,13 @@ pub(crate) struct Building {
     /// untimed.
     stamps: Option<Pair>,
     /// A barrier owed before the next command: an encoder that wrote ended, a memory barrier was
-    /// asked for, a dispatch wrote through an address outside its resources, or a render pass
-    /// ended. The segment's own end barrier pays it too.
+    /// asked for, a dispatch wrote through an address outside its resources, a render pass
+    /// ended, or a block was released to another API. The segment's own end barrier pays it too.
     owed: bool,
-    /// The barrier owed orders a render pass before what follows it ([`Building::owe_pass`]): it
-    /// reaches every later command ([`Reach::Commands`]), whatever the command that pays it names.
-    owed_pass: bool,
+    /// The barrier owed orders a render pass ([`Building::owe_pass`]) or a release
+    /// ([`Building::release_command`]) before what follows it: it reaches every later command
+    /// ([`Reach::Commands`]), whatever the command that pays it names.
+    owed_all: bool,
     /// A dispatch wrote since the last barrier that reached indirect argument reads: a barrier
     /// between dispatches leaves them out unless the dispatch after it is indirect, so an
     /// indirect dispatch after such a write needs one that reaches them.
@@ -342,7 +343,7 @@ impl CommandBuffer {
                         started: false,
                         stamps: None,
                         owed: false,
-                        owed_pass: false,
+                        owed_all: false,
                         args_unordered: false,
                         bound: None,
                         drawn: None,
@@ -897,7 +898,7 @@ impl Building {
                 }
                 // Its end barrier pays what is owed and starts the hazard sets again.
                 self.owed = false;
-                self.owed_pass = false;
+                self.owed_all = false;
                 self.args_unordered = false;
                 if let Some(recorder) = &mut self.gpu.recorder {
                     recorder.hazards.clear();
@@ -955,7 +956,7 @@ impl Building {
     pub(crate) fn ordered_command(&mut self) -> Result<vk::CommandBuffer, Error> {
         let command = self.current()?;
         self.owed = false;
-        self.owed_pass = false;
+        self.owed_all = false;
         self.args_unordered = false;
         self.hazards().clear();
         Ok(command)
@@ -977,15 +978,16 @@ impl Building {
     /// next (`reach`), and pays what is owed. The caller starts the hazard sets again where it
     /// has not.
     pub(crate) fn barrier(&mut self, command: vk::CommandBuffer, reach: Reach) {
-        // One owed after a render pass reaches every later command, whatever the caller names.
-        let reach = match self.owed && self.owed_pass {
+        // One owed after a render pass or a release reaches every later command, whatever the
+        // caller names.
+        let reach = match self.owed && self.owed_all {
             true => Reach::Commands,
             false => reach,
         };
         record::barrier(&self.device.core().device, command, reach);
         self.tally.count(Metric::Barriers);
         self.owed = false;
-        self.owed_pass = false;
+        self.owed_all = false;
         if reach.reaches_indirect() {
             self.args_unordered = false;
         }
@@ -1032,7 +1034,21 @@ impl Building {
     /// ends with a pass records one barrier after it, its end's.
     pub(crate) fn owe_pass(&mut self) {
         self.owe();
-        self.owed_pass = true;
+        self.owed_all = true;
+    }
+
+    /// The current segment's command buffer, for a release of a block to another API's queue
+    /// family, which the caller records next. A release's own barrier orders every earlier
+    /// command before it, and nothing after it: Vulkan ignores its second scope, and only a
+    /// barrier from every stage waits for it (`VK_PIPELINE_STAGE_ALL_COMMANDS_BIT`, the queue
+    /// family ownership transfer). So the barrier that orders it before later commands is owed,
+    /// as a render pass's is ([`owe_pass`](Self::owe_pass)): recorded first by the segment's next
+    /// command, reaching every later command, or paid by the segment's end barrier where none
+    /// follows.
+    pub(crate) fn release_command(&mut self) -> Result<vk::CommandBuffer, Error> {
+        let command = self.current()?;
+        self.owe_pass();
+        Ok(command)
     }
 
     /// Whether the next command opens a command buffer of the segments: the last segment has

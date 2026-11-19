@@ -23,6 +23,11 @@
 //! bytes a `vkCmdCopyImageToBuffer` of each level and slice into its place, between one pair of
 //! them; either marks the segment so its end reaches the host. Of any other resource it records
 //! nothing.
+//!
+//! A release of an exported block to another API, which Metal has no counterpart of, is one
+//! buffer barrier after every earlier command; the barrier that orders it before later commands
+//! is owed, as a render pass's is, and the command buffer's end barrier pays it where nothing
+//! follows.
 
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
@@ -33,6 +38,7 @@ use crate::encoder::Resource;
 use crate::error::{Error, Gap, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
+use crate::memory::Own;
 use crate::over;
 use crate::record::{memory_barrier, Reach};
 use crate::texture::{place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor};
@@ -76,7 +82,9 @@ pub struct BufferLayout {
 /// A copy runs after every earlier command of its command buffer, and every later command runs
 /// after it, with the writes on either side visible across it: a blit needs no hazard tracking of
 /// its own and leaves none for the encoders after it. Each texture's level and slice leaves its
-/// home layout for the copy and comes back in the same call; no element of set 1 is rewritten.
+/// home layout for the copy and comes back in the same call; no element of set 1 is rewritten. A
+/// release to another API ([`release_to_external`](Self::release_to_external)) leaves the barrier
+/// after it owed.
 ///
 /// Owned: one thread encodes at a time. Dropping it ends it, as
 /// [`end_encoding`](Self::end_encoding) does.
@@ -808,6 +816,72 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
+    /// No Metal counterpart: releases `buffer`'s exported block
+    /// ([`Device::new_exported_block`](crate::Device::new_exported_block)) to the other API, which
+    /// reads what this command buffer's commands wrote into it once the command buffer has
+    /// completed: a video encoder that reads the frames a blit wrote, for one. The consumer calls
+    /// it after the encoder's last copy into the block, and has the other API read the block
+    /// after its own wait on the command buffer's completion.
+    ///
+    /// The call records the whole block's release from the runtime's queue family to the other
+    /// API's (`VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle, `VK_QUEUE_FAMILY_FOREIGN_EXT` for
+    /// a dma-buf) into this command buffer, after every command before it, whose writes it makes
+    /// available: one buffer barrier, counted in
+    /// [`Metrics::external_releases`](crate::Metrics::external_releases). It is no submission of
+    /// its own and waits for nothing. A texture over a buffer in the block, in an image of its
+    /// own, is copied back into it first, as before any command that writes the buffer. The
+    /// barrier that orders the release before later commands is owed: the command buffer's next
+    /// command records it, or its end barrier where none follows.
+    ///
+    /// The contract: from the call until the consumer's next write into the block through the
+    /// runtime, the consumer encodes no read of the block (of a buffer in it, or of a texture
+    /// over one), and the runtime reads none of it. That next write needs no acquire: Vulkan lets
+    /// the releasing queue use the block again without one, its contents written anew ("It is
+    /// valid to never call the acquire operation after a release, and instead simply start using
+    /// the resource on any queue (even the releasing queue), but the contents should be
+    /// reinitialized before being read"). Where the other API writes the block in between,
+    /// [`Block::external_writes_done`](crate::Block::external_writes_done) comes before the
+    /// runtime's commands use what it wrote.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's buffer; [`Refusal::NotExported`] for
+    /// a buffer whose block is not exported; [`Error::Vulkan`] where the command buffer cannot
+    /// record.
+    pub fn release_to_external(&mut self, buffer: &Buffer) -> Result<(), Error> {
+        let (core, building) = self.parts();
+        if !buffer.is_of(core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        let (block, _) = buffer.held();
+        let Some(Own::Export(handle)) = block.memory.own else {
+            return Err(Error::Refused(Refusal::NotExported {
+                block: block.memory.id,
+            }));
+        };
+        let (whole, _) = block.memory.range(0);
+        building.keep(buffer);
+        // The textures over a buffer in the block go back to it first, as before a write of it.
+        let overs = [(buffer.id(), Access::Write)];
+        building.overs_before(&overs, false)?;
+        let command = building.release_command()?;
+        building.overs_after(&overs, false);
+        let release = [vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .src_queue_family_index(core.family)
+            .dst_queue_family_index(handle.family())
+            .buffer(whole)
+            .offset(0)
+            .size(vk::WHOLE_SIZE)];
+        let dependency = vk::DependencyInfo::default().buffer_memory_barriers(&release);
+        // SAFETY: the command buffer records outside any render pass and keeps the buffer, so its
+        // block, until it retires; the barrier spans the block's own allocation, its buffer's,
+        // and a dma-buf's foreign family is enabled (`Device::new_exported_block`).
+        unsafe { core.device.cmd_pipeline_barrier2(command, &dependency) };
+        building.count(Metric::Barriers);
+        building.count(Metric::ExternalReleases);
+        Ok(())
+    }
+
     /// `updateFence:`: encoders that wait on `fence` after this one see what this encoder and the
     /// ones before it wrote. It records nothing ([`Fence`]): each copy's own barrier already
     /// reaches them.
@@ -826,7 +900,7 @@ impl BlitCommandEncoder {
         fence.used_on(&self.core, self.command_buffer.queue())
     }
 
-    /// `endEncoding`. Each copy ordered itself, so the encoder owes no barrier.
+    /// `endEncoding`. Each copy ordered itself, so the encoder owes no barrier but a release's.
     pub fn end_encoding(mut self) {
         self.end();
     }

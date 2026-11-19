@@ -412,9 +412,24 @@ buffer barrier, counted in `Metrics::external_acquires`. A block that is not exp
 `Refusal::NotExported`. The contract has three parts: between `external_writes_done` and the
 other API's next write, the other API does not access the block; when it writes again, it reads
 nothing of the block but what it has itself written since; and after each acquire, a byte the
-other API has not written since the previous acquire is undefined to the runtime. The runtime
-records no release back: without one, Vulkan leaves the block's contents undefined to the other
-API's reads (section 7.7.6), and that API reads only its own writes.
+other API has not written since the previous acquire is undefined to the runtime. No release
+follows the acquire: without one, Vulkan leaves the block's contents undefined to the other API's
+reads (section 7.7.6), and in this direction that API reads only its own writes.
+
+Where the other API is to read what the runtime's commands wrote (a video encoder reading the
+frames a blit wrote), the consumer calls `BlitCommandEncoder::release_to_external(&buffer)`, with a
+buffer in the block, after the encoder's last copy into it. The call records the whole block's
+release from the runtime's queue family to the other API's (the acquire's family) into that
+command buffer, after every command before it: one buffer barrier, counted in
+`Metrics::external_releases`, with no submission of its own and no wait. The barrier that orders
+the release before later commands is owed, and the command buffer's end barrier pays it where
+nothing follows. A buffer whose block is not exported is `Refusal::NotExported`. The contract of
+this direction: the other API reads the block from that command buffer's completion, which the
+consumer waits for; from the call until the consumer's next write into the block through the
+runtime, the runtime does not read the block and the consumer encodes no read of it. That next
+write needs no acquire: after a release, Vulkan lets the releasing queue use the resource again
+without one, its contents written anew (section 7.7.6). Where the other API writes the block in
+between, `external_writes_done` comes first, as above.
 
 ### Known gaps of memory blocks
 
