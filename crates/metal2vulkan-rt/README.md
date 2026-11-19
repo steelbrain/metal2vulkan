@@ -486,7 +486,13 @@ between, `external_writes_done` comes first, as above.
 - A texture over a buffer in an imported or exported block is the counted copy of a texture over a
   buffer on every device (`Metrics::over_copies`): its bytes are copied into an image of its own
   before the submissions that use it, and back after a command writes it. The runtime makes no
-  image in imported memory, nor in an exported block's, which is dedicated to its buffer.
+  image in imported memory, nor in an exported block's, which is dedicated to its buffer. A
+  decoded picture in an exported block is then one copy a plane into the plane's image, made
+  before the first submission that uses the picture; a picture the decoder writes over before any
+  use is not copied. In the video decodes we replay (two planes a picture: 3,110,400 bytes for an
+  8-bit 1920x1080 picture, 24,883,200 for a 16-bit 3840x2160 one), that is 2 copies and about
+  8.6 MB a picture used, and a picture's copies take 0.288 ms of GPU time on the Radeon 780M,
+  0.294 ms on the RX 550, 0.520 ms on the Iris Xe (Raptor Lake) and 0.653 ms on the RTX 3090.
 - On the NVIDIA cards we measured in Thunderbolt enclosures, freeing host-visible memory takes
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one idle allocation at a time,
