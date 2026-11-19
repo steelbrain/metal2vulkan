@@ -108,3 +108,35 @@ fn the_readback_scan_finds_each_form_and_passes_prose() {
         ["a"]
     );
 }
+
+/// A timestamp pair no submission wrote, as one the device cancelled at a reset leaves it (its
+/// progress value signalled, its commands never run): the read reports no times, and returns at
+/// once rather than waiting for values that never come. RADV's waiting read of such a query spins
+/// for twice the kernel's 60 s compute timeout before it reports the device lost; the bound here
+/// turns that wait into a failure. On lavapipe a query no command wrote reads as not ready with or
+/// without the wait flag, so there the test passes either way.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[test]
+fn a_pair_no_submission_wrote_reads_as_no_times_at_once() {
+    use crate::tests::command::on_device::{each_device, PATIENCE};
+    use std::sync::{mpsc, Arc};
+    each_device("readback_unwritten_pair", |name, _, device| {
+        let core = Arc::clone(device.core());
+        let pair = (core.stamps.take(&core.device, &core.counters)).expect("a pair");
+        let (send, receive) = mpsc::channel();
+        let reader = Arc::clone(&core);
+        let thread = std::thread::spawn(move || {
+            // SAFETY: the pair is the device's, both its queries reset, and no other thread resets
+            // or reads them.
+            let read =
+                unsafe { crate::readback::timestamps(&reader.device, pair.pool, pair.first) };
+            let _ = send.send(read);
+        });
+        let read = (receive.recv_timeout(PATIENCE)).unwrap_or_else(|_| {
+            panic!("{name}: the read of a pair no submission wrote did not return in {PATIENCE:?}")
+        });
+        thread.join().expect("the reader");
+        assert_eq!(read, None, "{name}: times from a pair no submission wrote");
+        core.stamps.give_back(pair);
+    });
+}
