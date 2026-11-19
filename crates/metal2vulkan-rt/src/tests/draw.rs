@@ -2404,8 +2404,9 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
             encoder.end_encoding();
             run(name, &command_buffer);
-            let words: Vec<u32> = (read(&flat, 4).chunks_exact(4))
-                .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+            let bytes = read(&flat, 4);
+            let words: Vec<u32> = (bytes.as_chunks::<4>().0.iter())
+                .map(|&word| u32::from_le_bytes(word))
                 .collect();
             assert_eq!(words, [1; (SIDE * SIDE) as usize], "{name}: one sample");
 
