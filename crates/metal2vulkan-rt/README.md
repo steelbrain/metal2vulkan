@@ -1532,6 +1532,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
 - Metal's triangle fill mode and depth clip mode, which Vulkan 1.3 bakes into a `VkPipeline`, are
   their defaults.
+- On a driver that keeps the topology class in a pipeline (dynamicPrimitiveTopologyUnrestricted
+  false; RADV), a render pipeline state's first draw in a second topology class compiles a second
+  pipeline in full when the driver's cache is cold: 225 ms for the heaviest pipeline measured on a
+  780M, 0.9 to 1.5 ms for the others, nothing once the driver's cache holds it. A driver without
+  the restriction serves it from its cache (0.1 ms on ANV). Linking from pipeline libraries would
+  avoid it; the floor does not have them.
 
 ## Render encoders
 
