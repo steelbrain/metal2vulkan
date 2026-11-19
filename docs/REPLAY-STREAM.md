@@ -141,7 +141,7 @@ and the (name id, value) answer pairs.
 | `m2v.newExportableBufferOfLength` | `[length, options, alignedByte]` | the same buffer in an allocation of its own, which another API imports; result 0 where the host made none | the same, and nothing at result 0 |
 | `m2v.newDmaBufBufferOfLengthPaddingUnobserved` | `[length, options, alignedByte]` | the same, also exported as a dma-buf for video decoding; the video's writes arrive as a later commit's writes (section 6); result 0 where the host made none | the same, and nothing at result 0 |
 | `m2v.newCommandQueueUnshared` | `[]` | a queue the host kept apart | `newCommandQueue` |
-| `m2v.externalWriteDone` | `[]`, on an exported buffer | another API's write into the buffer landed (a decoded picture) | nothing where the textures over the buffer read it in place; the new runtime's backend refills the textures over it (section 10) |
+| `m2v.externalWriteDone` | `[]`, on an exported buffer | another API's write into the buffer landed (a decoded picture) | nothing where the textures over the buffer read it in place; the new runtime's backend fills the textures over it at their next use (section 10) |
 
 ## 5. Memory and addresses
 
@@ -778,8 +778,12 @@ counted from 0), completes the work committed so far, reports as at the stream's
   every shape they reach, in the copy's own blit encoder, the guest's bytes winning over a shape's
   write not yet in the buffer. A recorded CPU write reaches the texels it covers of every shape
   through the runtime's upload (`Texture::replace_region`), until the buffer's first
-  `m2v.externalWriteDone`; that record refills every shape of its buffer from the buffer, by a blit
-  in a command buffer of the backend's own committed then. Another call that names a receiver
+  `m2v.externalWriteDone`. That record (a picture landed) makes every shape of its buffer owe a
+  fill from the buffer, its own write lost, as the product's shapes owe one after a video command
+  buffer: the first command buffer whose encoders use a texture of the buffer fills every owing
+  shape of the buffers it uses before its commit, by blits in a command buffer of the backend's
+  own committed then, and a picture that another one lands over before any use is never copied
+  (`surface_pictures_filled`, `surface_pictures_unfilled`). Another call that names a receiver
   buffer as a buffer is refused, and a texture of a format that reads across a surface's two planes
   (a two-plane YCbCr or XR10 format) is skipped (`skipped_surfaces_across_planes`). The counts
   (`surface_textures`, `surface_shapes`, `surface_shapes_found`, `surface_order_shapes`,
@@ -787,7 +791,8 @@ counted from 0), completes the work committed so far, reports as at the stream's
   `surface_overlap_copies`, `surface_overlap_bytes`, `surface_straddled`,
   `surface_unordered_writes`, `surface_usage_writes`, `surface_declared_writes`,
   `surface_cpu_writes`, `surface_external_writes`, `surface_refills`, `surface_refill_bytes`,
-  `surface_refill_gpu_nanos`, `surface_copies_in`, `surface_copies_out`, `surface_bytes`,
+  `surface_refill_gpu_nanos`, `surface_pictures_filled`, `surface_pictures_unfilled`,
+  `surface_copies_in`, `surface_copies_out`, `surface_bytes`,
   `surface_format_refusals`, `surface_plain_format_views`) are the player's work, among its
   executed counters; `surface_refill_gpu_nanos` is the GPU time of the refills' command buffers, counted in the frame whose end first sees each
   complete. The report's `surfaces` line gives them with the longest refill command buffer. A

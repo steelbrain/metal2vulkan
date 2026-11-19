@@ -172,6 +172,7 @@ impl NewRuntime {
                 self.skip_encoder("ParallelRenderCommandEncoder".to_owned())
             }
             "commit" => {
+                self.surface_fill_owed(call)?;
                 self.copy_named(call)?;
                 let queue = self.queue_for(call)?;
                 self.commit(&queue, command_buffer, call.receiver)

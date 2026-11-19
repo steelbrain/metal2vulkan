@@ -43,13 +43,17 @@
 //! shapes, or dirty. Besides:
 //! - A copy from the guest's RAM into the buffer also copies the bytes into every shape they
 //!   reach, in the copy's own blit encoder: the guest's bytes win over a shape's write not yet in
-//!   the buffer, as the product's refill does.
+//!   the buffer, as the CPU's bytes win in the product's fill of the buffer from the pages.
 //! - A recorded CPU write into the buffer reaches the texels it covers of every shape through the
 //!   runtime's upload, which orders it as Metal orders a CPU write.
 //! - `m2v.externalWriteDone` on a receiver buffer, another API's write landed in it (a decoded
-//!   picture), refills every shape of the buffer from it, by a blit in a command buffer of the
-//!   play's own committed then. From the first such record, the recorded CPU writes into that
-//!   buffer, which stand for the other API's, reach its shapes only this way.
+//!   picture): every shape of the buffer owes a fill from it, its own write lost, as the product's
+//!   shapes owe one after a video command buffer. The first command buffer whose encoders use a
+//!   texture of an owing shape's buffer fills, before its commit, every owing shape of the buffers
+//!   it uses, by blits in a command buffer of the play's own committed then; a picture no command
+//!   buffer used before the next one landed is never copied, counted. From the first such record,
+//!   the recorded CPU writes into that buffer, which stand for the other API's, reach its shapes
+//!   only this way.
 //! - Any other command that names a receiver buffer as a buffer is refused: the buffer does not
 //!   hold the texels.
 //! - A texture of a format that reads across a surface's planes (a two-plane YCbCr or XR10 format
@@ -194,6 +198,8 @@ struct Entry {
     live: usize,
     /// Written since it was last copied into the buffer, by a committed command buffer.
     dirty: bool,
+    /// Owes a fill from the buffer: another API wrote the buffer since its last fill.
+    owed: bool,
     /// When a texture of it was last made or let go (`Surfaces::tick`).
     used: u64,
 }
@@ -224,6 +230,11 @@ pub(super) struct Surfaces {
     encoders: HashMap<u64, Notes>,
     /// Each command buffer's shapes its ended encoders may have written, dirty at its commit.
     pending: HashMap<u64, Vec<(Span, Shape)>>,
+    /// Each command buffer's receiver buffers whose textures its encoders use, filled where
+    /// owing at its commit.
+    used: HashMap<u64, HashSet<u64>>,
+    /// Each receiver buffer's pictures landed since its shapes were last filled.
+    landed: HashMap<u64, u64>,
     /// The receiver buffers another API writes (`m2v.externalWriteDone`).
     external: HashSet<u64>,
     /// The queue of the play's own that the fills at a making and the refills go on.
@@ -265,10 +276,13 @@ struct Counts {
     declared_writes: u64,
     /// Recorded CPU writes into a buffer after a shape's making.
     cpu_writes: u64,
-    /// `m2v.externalWriteDone` records, the shapes they refilled and the bytes of those.
+    /// `m2v.externalWriteDone` records; the shapes filled for them at a use, and the bytes of
+    /// those; the pictures a fill took, and those another landed over before any use.
     external_writes: u64,
     refills: u64,
     refill_bytes: u64,
+    pictures_filled: u64,
+    pictures_unfilled: u64,
     /// The GPU time of the refills' command buffers seen complete, and the longest one's.
     refill_nanos: u64,
     refill_max_nanos: u64,
@@ -352,6 +366,10 @@ impl Surfaces {
         self.writable.remove(&object);
         self.encoders.remove(&object);
         self.pending.remove(&object);
+        self.used.remove(&object);
+        if let Some(landed) = self.landed.remove(&object) {
+            self.counts.pictures_unfilled += landed;
+        }
         let Some((span, shape)) = self.views.remove(&object) else {
             return;
         };
@@ -436,13 +454,15 @@ impl Surfaces {
     }
 
     /// The executed counters.
-    pub(super) fn counted(&self) -> [(&'static str, u64); 24] {
+    pub(super) fn counted(&self) -> [(&'static str, u64); 26] {
         let c = &self.counts;
         [
             ("surface_external_writes", c.external_writes),
             ("surface_refills", c.refills),
             ("surface_refill_bytes", c.refill_bytes),
             ("surface_refill_gpu_nanos", c.refill_nanos),
+            ("surface_pictures_filled", c.pictures_filled),
+            ("surface_pictures_unfilled", c.pictures_unfilled),
             ("surface_textures", c.views),
             ("surface_shapes", c.made),
             ("surface_shapes_found", c.found),
@@ -474,7 +494,8 @@ impl Surfaces {
              as views, {} order-case shapes, {} dropped); {} overlap copies ({} bytes), {} straddled texels, {} \
              unordered writes, {} usage writes and {} declared slot writes (writes through an \
              argument buffer with no use named unseen, not counted); {} dirty shapes written back ({} bytes); {} CPU writes, \
-             {} external writes refilling {} shapes ({} bytes, {} ns of GPU time, the longest \
+             {} external writes, {} of them filled at a use and {} landed over before any (and \
+             {} not used yet), filling {} shapes ({} bytes, {} ns of GPU time, the longest \
              command buffer {} ns), {} copies from the guest's RAM into a shape and {} back, {} \
              bytes in all; {} refused for a format a plain shape does not view as, {} declaring \
              pixel-format-view usage over a plain shape; {} across planes skipped",
@@ -493,6 +514,9 @@ impl Surfaces {
             c.written_back_bytes,
             c.cpu_writes,
             c.external_writes,
+            c.pictures_filled,
+            c.pictures_unfilled,
+            self.landed.values().sum::<u64>(),
             c.refills,
             c.refill_bytes,
             c.refill_nanos,
@@ -682,6 +706,7 @@ impl NewRuntime {
             texture: texture.clone(),
             live: 0,
             dirty: false,
+            owed: false,
             used: surfaces.tick,
         });
         let ranges = surfaces.receivers.entry(span.buffer).or_default();
@@ -739,38 +764,83 @@ impl NewRuntime {
     }
 
     /// `m2v.externalWriteDone` on buffer `buffer`: another API's write landed in it, and every
-    /// shape of its planes takes its bytes again, by one blit encoder in a command buffer of the
-    /// play's own committed now. The one place the record's position decides.
+    /// shape of its planes owes a fill from it, its own write lost, made at the first commit
+    /// that uses one (`surface_fill_owed`). The one place the record's position decides.
     pub(super) fn external_write_done(
         &mut self,
         call: &Call,
-        buffer: &rt::Buffer,
     ) -> Result<Option<(Object, Made)>, PlayError> {
-        self.surfaces.counts.external_writes += 1;
-        self.surfaces.external.insert(call.receiver);
-        let shapes = (self.surfaces).shapes_of(call.receiver, |_, _| true);
-        if shapes.is_empty() {
-            return Ok(None);
+        let surfaces = &mut self.surfaces;
+        surfaces.counts.external_writes += 1;
+        surfaces.external.insert(call.receiver);
+        let spans = surfaces
+            .receivers
+            .get(&call.receiver)
+            .cloned()
+            .unwrap_or_default();
+        let mut any = false;
+        for span in spans {
+            for entry in surfaces.ranges.get_mut(&span).into_iter().flatten() {
+                entry.owed = true;
+                entry.dirty = false;
+                any = true;
+            }
+        }
+        if any {
+            *surfaces.landed.entry(call.receiver).or_default() += 1;
+        }
+        Ok(None)
+    }
+
+    /// Before command buffer `call.receiver` commits: every owing shape of the receiver buffers
+    /// its encoders used is filled from its buffer, by blits in a command buffer of the play's own
+    /// committed now, ahead of it.
+    pub(super) fn surface_fill_owed(&mut self, call: &Call) -> Result<(), PlayError> {
+        let Some(used) = self.surfaces.used.remove(&call.receiver) else {
+            return Ok(());
+        };
+        let mut owing = Vec::new();
+        for id in used {
+            let shapes = (self.surfaces).shapes_of(id, |_, entry| entry.owed);
+            if !shapes.is_empty() {
+                owing.push((id, self.buffer_of(call, id)?, shapes));
+            }
+        }
+        if owing.is_empty() {
+            return Ok(());
         }
         let queue = self.surface_queue(call)?;
         let command_buffer = queue.command_buffer().map_err(failed(call))?;
         let mut blit = command_buffer
             .blit_command_encoder()
             .map_err(failed(call))?;
-        for (span, shape, entry) in &shapes {
-            let layout = span.layout(shape.height);
-            (blit.copy_from_buffer(buffer, layout, shape.size(), entry, ORIGIN))
-                .map_err(failed(call))?;
-            self.surfaces.counts.refills += 1;
-            self.surfaces.counts.refill_bytes += shape.bytes();
-            self.surfaces.counts.bytes += shape.bytes();
+        for (_, buffer, shapes) in &owing {
+            for (span, shape, entry) in shapes {
+                let layout = span.layout(shape.height);
+                (blit.copy_from_buffer(buffer, layout, shape.size(), entry, ORIGIN))
+                    .map_err(failed(call))?;
+            }
         }
         blit.end_encoding();
         self.surfaces.refilling.push_back(command_buffer.clone());
         self.commit(&queue, command_buffer, 0)
             .map_err(failed(call))?;
-        self.surfaces.clean(&shapes);
-        Ok(None)
+        let surfaces = &mut self.surfaces;
+        for (id, _, shapes) in &owing {
+            for (span, shape, _) in shapes {
+                if let Some(entry) = surfaces.entry(span, *shape) {
+                    entry.owed = false;
+                }
+                surfaces.counts.refills += 1;
+                surfaces.counts.refill_bytes += shape.bytes();
+                surfaces.counts.bytes += shape.bytes();
+            }
+            if let Some(landed) = surfaces.landed.remove(id) {
+                surfaces.counts.pictures_filled += 1;
+                surfaces.counts.pictures_unfilled += landed.saturating_sub(1);
+            }
+        }
+        Ok(())
     }
 
     /// Before `call` plays: refused where it names a receiver buffer as a buffer, other than a
@@ -813,6 +883,8 @@ impl NewRuntime {
                         let views = &self.surfaces.views;
                         let attached = pass.textures().filter_map(|id| views.get(&id).copied());
                         notes.written.extend(attached);
+                        let used = self.surfaces.used.entry(call.receiver).or_default();
+                        used.extend(notes.written.iter().map(|(span, _)| span.buffer));
                     }
                 }
                 self.surfaces.encoders.insert(call.result, notes);
@@ -833,6 +905,18 @@ impl NewRuntime {
     pub(super) fn surface_encoded(&mut self, call: &Call) {
         let (selector, encoder) = (&*call.selector, call.receiver);
         let object = |at: usize| call.args.get(at).and_then(Value::as_object);
+        if let Some(notes) = self.surfaces.encoders.get(&encoder) {
+            let mut named = Vec::new();
+            super::super::covers::named(&call.args, &mut named);
+            let views = &self.surfaces.views;
+            let buffers: Vec<u64> = (named.iter().filter_map(|id| views.get(id)))
+                .map(|(span, _)| span.buffer)
+                .collect();
+            if !buffers.is_empty() {
+                let command_buffer = notes.command_buffer;
+                (self.surfaces.used.entry(command_buffer).or_default()).extend(buffers);
+            }
+        }
         if let Some((stage, ranged)) = binding(selector) {
             let bound: Vec<(u64, Option<u64>)> = match ranged {
                 false => {

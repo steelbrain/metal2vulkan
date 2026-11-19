@@ -814,6 +814,31 @@ fn surface_textures_take_the_reserved_index_their_descriptor_names() {
     );
 }
 
+/// A command buffer of queue #2 whose kernel (#5) reads `from` and writes the inverse into
+/// `to`, waited for.
+fn invert(
+    w: &mut StreamWriter<File>,
+    command_buffer: u64,
+    from: u64,
+    to: u64,
+) -> std::io::Result<()> {
+    let encoder = command_buffer + 1;
+    w.call("commandBuffer", 2, command_buffer, &[], &[])?;
+    w.call("computeCommandEncoder", command_buffer, encoder, &[], &[])?;
+    let state = [Value::Object(5)];
+    w.call("setComputePipelineState:", encoder, 0, &state, &[])?;
+    for (texture, index) in [(from, 0), (to, 1)] {
+        let bind = [Value::Object(texture), Value::Uint(index)];
+        w.call("setTexture:atIndex:", encoder, 0, &bind, &[])?;
+    }
+    let size = |n| uints(&[("width", n), ("height", n), ("depth", 1)]);
+    let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+    w.call(dispatch, encoder, 0, &[size(1), size(2)], &[])?;
+    w.call("endEncoding", encoder, 0, &[], &[])?;
+    w.call("commit", command_buffer, 0, &[], &[])?;
+    w.call(WAIT_COMPLETED, command_buffer, 0, &[], &[])
+}
+
 /// Two textures over plane 0 of one surface (#6, 2 by 2 texels, 8 bytes a row): #8, RGBA8Unorm,
 /// which a kernel writes the inverse of #7's texels into, and #9, BGRA8Unorm, a view of the same
 /// shape, which a later command buffer's kernel reads and writes the inverse of into #10, so that
@@ -825,30 +850,6 @@ fn surface_textures_take_the_reserved_index_their_descriptor_names() {
 /// #8's shape through the buffer, so a kernel reading #8 into #24 reads it in #8's first column.
 #[test]
 fn textures_over_one_surface_share_its_texels() {
-    /// A command buffer of queue #2 whose kernel (#5) reads `from` and writes the inverse into
-    /// `to`, waited for.
-    fn invert(
-        w: &mut StreamWriter<File>,
-        command_buffer: u64,
-        from: u64,
-        to: u64,
-    ) -> std::io::Result<()> {
-        let encoder = command_buffer + 1;
-        w.call("commandBuffer", 2, command_buffer, &[], &[])?;
-        w.call("computeCommandEncoder", command_buffer, encoder, &[], &[])?;
-        let state = [Value::Object(5)];
-        w.call("setComputePipelineState:", encoder, 0, &state, &[])?;
-        for (texture, index) in [(from, 0), (to, 1)] {
-            let bind = [Value::Object(texture), Value::Uint(index)];
-            w.call("setTexture:atIndex:", encoder, 0, &bind, &[])?;
-        }
-        let size = |n| uints(&[("width", n), ("height", n), ("depth", 1)]);
-        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
-        w.call(dispatch, encoder, 0, &[size(1), size(2)], &[])?;
-        w.call("endEncoding", encoder, 0, &[], &[])?;
-        w.call("commit", command_buffer, 0, &[], &[])?;
-        w.call(WAIT_COMPLETED, command_buffer, 0, &[], &[])
-    }
     let dir = ScratchDir::new("rt-replay-surface-views").unwrap();
     let source = [0x10, 0x20, 0x30, 0x40].repeat(4);
     let written_through = [0xEF, 0xDF, 0xCF, 0x40].repeat(4);
@@ -1025,6 +1026,81 @@ fn textures_over_one_surface_share_its_texels() {
         .map(|check| (check.object, check.receiver))
         .collect();
     assert_eq!(receivers, [(6, true)], "{lines:?}");
+}
+
+/// A surface's pictures fill its shapes at their first use, not at their landing: over Shared
+/// buffer #6 (2 by 2 RGBA8Unorm texels, 8 bytes a row), #8 is a texture of plane 0 that a kernel
+/// reads. Two pictures land (`m2v.write` of the bytes, then `m2v.externalWriteDone`) before any
+/// command buffer uses #8: the first is never copied, and the kernel that then reads #8 into #10
+/// reads the second, filled once before its command buffer.
+#[test]
+fn a_surface_picture_fills_its_shapes_at_their_first_use() {
+    let dir = ScratchDir::new("rt-replay-surface-lazy").unwrap();
+    let first = [0x10, 0x20, 0x30, 0x40].repeat(4);
+    let second = [0x50, 0x60, 0x70, 0x80].repeat(4);
+    let path = written(&dir, |w| {
+        let library = w.blob(&library(&dir, &[("invert_texels", 2, 0)]))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call(
+            "newLibraryWithData:error:",
+            1,
+            3,
+            &[Value::Blob(library)],
+            &[],
+        )?;
+        let kernel = [Value::Str("invert_texels".into())];
+        w.call("newFunctionWithName:", 3, 4, &kernel, &[])?;
+        let made = "newComputePipelineStateWithFunction:error:";
+        w.call(made, 1, 5, &[Value::Object(4)], &[])?;
+        let pages = [Value::Uint(16), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 6, &pages, &[])?;
+        let texture = |usage| {
+            uints(&[
+                ("textureType", 2),
+                ("pixelFormat", 70),
+                ("width", 2),
+                ("height", 2),
+                ("usage", usage),
+                ("storageMode", 0),
+            ])
+        };
+        let plane = Value::Map(vec![
+            ("plane".into(), Value::Uint(0)),
+            ("offset".into(), Value::Uint(0)),
+            ("bytesPerRow".into(), Value::Uint(8)),
+            ("planar".into(), Value::Bool(false)),
+            ("facts".into(), Value::Nil),
+        ]);
+        let surface = "newTextureWithDescriptor:iosurface:plane:";
+        w.call(surface, 6, 8, &[texture(1), plane], &[])?;
+        for picture in [&first, &second] {
+            let bytes = [Value::Uint(0), Value::Bytes(picture.clone())];
+            w.call("m2v.write", 6, 0, &bytes, &[])?;
+            w.call("m2v.externalWriteDone", 6, 0, &[], &[])?;
+        }
+        w.call("newTextureWithDescriptor:", 1, 10, &[texture(2)], &[])?;
+        invert(w, 11, 8, 10)
+    });
+    let (report, lines, rows) = play_then("surface-lazy", &path, |backend| {
+        let bytes = backend.read(10).unwrap();
+        let pitch = bytes.len() / 2;
+        [&bytes[..8], &bytes[pitch..pitch + 8]].concat()
+    });
+    let inverse: Vec<u8> = (second.chunks(4))
+        .flat_map(|t| [0xFF - t[0], 0xFF - t[1], 0xFF - t[2], t[3]])
+        .collect();
+    assert_eq!(rows, inverse, "{lines:?}");
+    let executed = &report.total.executed;
+    let counted = |key: &str| executed.get(key).copied().unwrap_or(0);
+    let counts = [
+        "surface_external_writes",
+        "surface_refills",
+        "surface_pictures_filled",
+        "surface_pictures_unfilled",
+    ]
+    .map(counted);
+    assert_eq!(counts, [2, 1, 1, 1], "{executed:?}");
 }
 
 /// Textures over plane 0 of one surface (#2), 2 by 2, none declaring shader write: #3,

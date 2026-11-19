@@ -1942,7 +1942,7 @@ impl NewRuntime {
                 self.substitute(call, &descriptor, |s| &mut s.tiled)
             }
             "newTextureWithDescriptor:iosurface:plane:" => self.surface_texture(call, buffer),
-            "m2v.externalWriteDone" => self.external_write_done(call, buffer),
+            "m2v.externalWriteDone" => self.external_write_done(call),
             _ => Err(refuse(call, "not played on a buffer")),
         }
     }
