@@ -9,18 +9,25 @@ use ash::vk;
 /// A completed command buffer's two timestamps, from its pair in the device's pools; None where
 /// the driver does not report both available, so the command buffer's GPU times stay 0.
 ///
-/// The read does not wait (no `VK_QUERY_RESULT_WAIT_BIT`). The caller reads a pair only once the
-/// completion thread has seen its submission's progress value. The signal's first synchronization
-/// scope "includes every command in the same batch that the signal operation is defined in, and
-/// all commands that occur earlier in submission order" (`vkQueueSubmit2`, all commands' stages);
-/// the host wait that sees the value happens after the signal ("signal operations happening
-/// before host operations that wait on them"); and "a query is made available by the operation of
-/// ... `vkCmdWriteTimestamp2`". So both queries of a submission that ran are available, and a
-/// read without the wait reports them. A submission the device cancelled at a reset may still
-/// signal its value having run nothing: its queries stay unavailable ("`vkGetQueryPoolResults`
-/// may return `VK_NOT_READY` if there are queries in the unavailable state"), and the read reports
-/// no times at once, where a waiting read runs until the driver gives up (RADV: twice the
-/// kernel's 60 s compute timeout).
+/// The read does not wait (no `VK_QUERY_RESULT_WAIT_BIT`). A submission the device cancelled at a
+/// reset may still signal its progress value having run nothing, its queries never made
+/// available: a waiting read of them runs until the driver gives up (RADV: twice the kernel's
+/// 60 s compute timeout), and the read without the wait reports no times at once
+/// ("`vkGetQueryPoolResults` may return `VK_NOT_READY` if there are queries in the unavailable
+/// state").
+///
+/// The caller reads a pair only once the completion thread has seen its submission's progress
+/// value. The signal's first synchronization scope "includes every command in the same batch that
+/// the signal operation is defined in, and all commands that occur earlier in submission order"
+/// (`vkQueueSubmit2`), "a query is made available by the operation of ... `vkCmdWriteTimestamp2`",
+/// and a host wait that sees the value happens after the signal ("signal operations happening
+/// before host operations that wait on them"): the pair of a submission that ran is available at
+/// the read. The completion thread also learns values from `vkGetSemaphoreCounterValue`, for which
+/// the specification states no such ordering. A driver that makes timestamps available only
+/// after the signal (MoltenVK 1.4.2 on an M3 Max did, for most command buffers; it is below the
+/// floor) would read none here and leave the GPU times 0 with no other sign, so the caller counts
+/// each pair that reads as not available (`Metrics::stamps_not_available`), and every play and
+/// suite leg reports the count.
 ///
 /// Bound: the values only decide that command buffer's `GPUStartTime`, through arithmetic defined
 /// for every value that gives a time no later than its `GPUEndTime`.

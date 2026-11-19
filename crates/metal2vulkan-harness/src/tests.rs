@@ -947,6 +947,10 @@ impl Device for HostDevice {
         None
     }
 
+    fn totals(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
+    }
+
     fn threads(&self) -> Vec<u64> {
         Vec::new()
     }
@@ -1150,6 +1154,10 @@ impl Session for Answers {
 
     fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>> {
         None
+    }
+
+    fn totals(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
     }
 
     fn pipelines_created(&self) -> u64 {

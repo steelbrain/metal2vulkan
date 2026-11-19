@@ -110,14 +110,17 @@ fn the_readback_scan_finds_each_form_and_passes_prose() {
 }
 
 /// A timestamp pair no submission wrote, as one the device cancelled at a reset leaves it (its
-/// progress value signalled, its commands never run): the read reports no times, and returns at
-/// once rather than waiting for values that never come. RADV's waiting read of such a query spins
-/// for twice the kernel's 60 s compute timeout before it reports the device lost; the bound here
-/// turns that wait into a failure. On lavapipe a query no command wrote reads as not ready with or
-/// without the wait flag, so there the test passes either way.
+/// progress value signalled, its commands never run): the read reports no times, returns at once
+/// rather than waiting for values that never come, and is counted
+/// (`Metrics::stamps_not_available`, here on counters of the test's own, so the device's record
+/// for the matrix stays that of its real command buffers). RADV's waiting read of such a query spins for twice the
+/// kernel's 60 s compute timeout before it reports the device lost; the bound here turns that wait
+/// into a failure. On lavapipe a query no command wrote reads as not ready with or without the
+/// wait flag, so there only the count tells the forms apart.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn a_pair_no_submission_wrote_reads_as_no_times_at_once() {
+    use crate::counters::Counters;
     use crate::tests::command::on_device::{each_device, PATIENCE};
     use std::sync::{mpsc, Arc};
     each_device("readback_unwritten_pair", |name, _, device| {
@@ -125,11 +128,12 @@ fn a_pair_no_submission_wrote_reads_as_no_times_at_once() {
         let pair = (core.stamps.take(&core.device, &core.counters)).expect("a pair");
         let (send, receive) = mpsc::channel();
         let reader = Arc::clone(&core);
+        let counters = Counters::new();
+        let counting = counters.clone();
         let thread = std::thread::spawn(move || {
             // SAFETY: the pair is the device's, both its queries reset, and no other thread resets
             // or reads them.
-            let read =
-                unsafe { crate::readback::timestamps(&reader.device, pair.pool, pair.first) };
+            let read = unsafe { pair.times(&reader.device, &counting) };
             let _ = send.send(read);
         });
         let read = (receive.recv_timeout(PATIENCE)).unwrap_or_else(|_| {
@@ -137,6 +141,8 @@ fn a_pair_no_submission_wrote_reads_as_no_times_at_once() {
         });
         thread.join().expect("the reader");
         assert_eq!(read, None, "{name}: times from a pair no submission wrote");
+        let counted = counters.metrics().stamps_not_available;
+        assert_eq!(counted, 1, "{name}: the pairs counted as not available");
         core.stamps.give_back(pair);
     });
 }

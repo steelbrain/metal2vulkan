@@ -822,7 +822,10 @@ that touch blocks first.
 - A command buffer that finds every pair of the device's timestamp pools taken, where the device
   then refuses a new pool, runs untimed: its `gpu_start_time` and `gpu_end_time` are 0, and
   `Metrics::untimed_command_buffers` counts it. Once the device refuses a pool it asks for none
-  again. Vulkan states no most queries a pool may hold or most pools a device may make; the
+  again. A command buffer whose pair reads as not available once its submission signalled has
+  times of 0 too, and `Metrics::stamps_not_available` counts it: a submission the device
+  cancelled at a reset, or a driver that makes timestamps available only after the signal. The
+  device tests, the harness and the replay player report the count. Vulkan states no most queries a pool may hold or most pools a device may make; the
   runtime's 4,096 a pool is the smallest met: Mesa's Apple-GPU driver makes each pool a Metal
   counter heap, of at most 4,096 entries and at most 32 live in a process, so there at most
   65,536 command buffers of a process are timed at once, fewer where other devices of the

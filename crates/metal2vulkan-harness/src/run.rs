@@ -404,6 +404,9 @@ pub trait Session {
     /// gauges outlive the device.
     fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>>;
 
+    /// The device's [`Device::totals`].
+    fn totals(&self) -> Vec<(&'static str, u64)>;
+
     /// The device's [`Device::pipelines_created`].
     fn pipelines_created(&self) -> u64;
 
@@ -1261,6 +1264,10 @@ impl<D: ComputeDevice> Session for Harness<D> {
         let reader = self.device.gauges_after_drop();
         drop(self);
         reader.map(|read| read())
+    }
+
+    fn totals(&self) -> Vec<(&'static str, u64)> {
+        self.device.totals()
     }
 
     fn pipelines_created(&self) -> u64 {

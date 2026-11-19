@@ -81,10 +81,12 @@ pub(crate) enum Metric {
     UntimedCommandBuffers,
     /// [`Metrics::sampler_element_writes`].
     SamplerElementWrites,
+    /// [`Metrics::stamps_not_available`].
+    StampsNotAvailable,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::SamplerElementWrites as usize + 1;
+const METRICS: usize = Metric::StampsNotAvailable as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -116,6 +118,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::CaptureOverflows,
     Metric::UntimedCommandBuffers,
     Metric::SamplerElementWrites,
+    Metric::StampsNotAvailable,
 ];
 
 // Each metric of the order is at its own index.
@@ -274,6 +277,7 @@ struct Atomics {
     capture_overflows: AtomicU64,
     untimed_command_buffers: AtomicU64,
     sampler_element_writes: AtomicU64,
+    stamps_not_available: AtomicU64,
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
     capture_wait_nanos: AtomicU64,
@@ -372,6 +376,7 @@ impl Counters {
             Metric::CaptureOverflows => &a.capture_overflows,
             Metric::UntimedCommandBuffers => &a.untimed_command_buffers,
             Metric::SamplerElementWrites => &a.sampler_element_writes,
+            Metric::StampsNotAvailable => &a.stamps_not_available,
         }
     }
 
@@ -669,6 +674,7 @@ impl Counters {
             capture_overflows: a.capture_overflows.load(Relaxed),
             untimed_command_buffers: a.untimed_command_buffers.load(Relaxed),
             sampler_element_writes: a.sampler_element_writes.load(Relaxed),
+            stamps_not_available: a.stamps_not_available.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
             capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
             capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
@@ -956,6 +962,13 @@ pub struct Metrics {
     /// differs from what the index's element holds, so an equal state made at the index of one
     /// released, while work that used it is pending, writes none.
     pub sampler_element_writes: u64,
+    /// Command buffers whose submission the completion thread saw signal its progress value while
+    /// their timestamp pair read as not available, so their GPU start and end times stay 0
+    /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time)). A driver whose
+    /// timestamps become available only after the signal it orders them before counts every such
+    /// command buffer here; a submission the device cancelled at a reset, which signals having run
+    /// nothing, counts too.
+    pub stamps_not_available: u64,
 }
 
 /// A thread's slot in [`Gauges::threads`], given back as it drops.

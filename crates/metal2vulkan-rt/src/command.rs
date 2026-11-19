@@ -13,7 +13,6 @@ use crate::memory::Block;
 use crate::over::{self, Overs};
 use crate::pipeline::ComputePipelineState;
 use crate::queue::QueueInner;
-use crate::readback;
 use crate::record::{self, Reach, Recorder};
 use crate::render::RenderPipelineState;
 use crate::ring::{Placed, Writes};
@@ -1226,12 +1225,13 @@ impl CbInner {
         lock(&self.state).ended = Some(error);
     }
 
-    /// Its start and end timestamps, once it completed having written both.
+    /// Its start and end timestamps, once its submission signalled having recorded both: none
+    /// where it took no pair, or where its pair reads as not available ([`Pair::times`]).
     pub(crate) fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
         let pair = lock(&self.state).stamps?;
-        // SAFETY: the pair's pool holds its two queries, which only this command buffer's
-        // retirement resets, after this read.
-        unsafe { readback::timestamps(&core.device, pair.pool, pair.first) }
+        // SAFETY: the pair's pool is the device's, and only this command buffer's retirement
+        // resets its two queries, after this read.
+        unsafe { pair.times(&core.device, &core.counters) }
     }
 }
 

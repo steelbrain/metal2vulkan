@@ -58,6 +58,11 @@ impl crate::Device for runtime::Device {
         None
     }
 
+    /// None: the old runtime keeps no such count.
+    fn totals(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
+    }
+
     /// None: the old runtime gives no account of its threads.
     fn threads(&self) -> Vec<u64> {
         Vec::new()

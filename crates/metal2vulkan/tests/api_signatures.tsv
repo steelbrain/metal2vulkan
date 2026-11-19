@@ -2376,6 +2376,7 @@ field	metal2vulkan-rt::Metrics.pushes_held	pub pushes_held: u64
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.sampler_element_writes	pub sampler_element_writes: u64
 field	metal2vulkan-rt::Metrics.staging_sleeps	pub staging_sleeps: u64
+field	metal2vulkan-rt::Metrics.stamps_not_available	pub stamps_not_available: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-rt::Metrics.submissions_during_frees	pub submissions_during_frees: u64
 field	metal2vulkan-rt::Metrics.submit_infos	pub submit_infos: u64

@@ -10,8 +10,9 @@
 //! the last. The kernel times are the host time at commit and when the submit call that passed the
 //! last segment returned.
 
-use crate::counters::{Counters, Gauge};
+use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
+use crate::readback;
 use ash::vk;
 use std::sync::{Mutex, PoisonError};
 
@@ -193,6 +194,28 @@ pub(crate) const POOL_QUERIES: u32 = 4096;
 pub(crate) struct Pair {
     pub(crate) pool: vk::QueryPool,
     pub(crate) first: u32,
+}
+
+impl Pair {
+    /// Its two timestamps, read once its command buffer's submission signalled: none where they
+    /// read as not available ([`readback::timestamps`]), each such read counted
+    /// (`Metrics::stamps_not_available`).
+    ///
+    /// # Safety
+    ///
+    /// The pair's pool is `device`'s, and no other thread resets its two queries while it reads.
+    pub(crate) unsafe fn times(
+        self,
+        device: &ash::Device,
+        counters: &Counters,
+    ) -> Option<(u64, u64)> {
+        // SAFETY: by the caller.
+        let read = unsafe { readback::timestamps(device, self.pool, self.first) };
+        if read.is_none() {
+            counters.count(Metric::StampsNotAvailable);
+        }
+        read
+    }
 }
 
 /// The device's timestamp pools, which every queue's command buffers take their pairs from: made

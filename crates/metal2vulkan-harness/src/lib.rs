@@ -133,7 +133,9 @@
 //! M2V-MATRIX metric harness-<runtime>/<workload>/<count>_per_run <n>
 //! ```
 //!
-//! and once every workload has run, where the runtime's gauges outlive its device,
+//! and once every workload has run, the runtime's totals over the device's life
+//! ([`Device::totals`]), `M2V-MATRIX metric harness-<runtime>/device/<total> <n>`, and where the
+//! runtime's gauges outlive its device,
 //! `M2V-MATRIX gauge harness-<runtime>/device/<gauge>@drop <value>` read after the device dropped.
 //! A workload that fails prints `M2V-FAILED harness-<runtime>/<workload>` beside its `FAILED`
 //! line, for the runtime it failed on ([`Failed`]), or for each runtime where it names none.
@@ -244,6 +246,11 @@ pub trait Device: Sized {
     /// What reads the gauges once the device is dropped, where they outlive it; `None` where
     /// they end with it. No Metal counterpart.
     fn gauges_after_drop(&self) -> Option<GaugeReader>;
+
+    /// The runtime's counts over the device's whole life so far, by name, that the matrix holds
+    /// at 0: what went wrong without failing a call. Empty where it keeps none. No Metal
+    /// counterpart.
+    fn totals(&self) -> Vec<(&'static str, u64)>;
 
     /// The OS ids of the threads the runtime started for the device and runs now, by its own
     /// account; empty where it gives none. The harness counts these and its own thread as the

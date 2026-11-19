@@ -387,6 +387,9 @@ fn run_all(args: &Args) -> Result<bool> {
         }
     }
     for (runtime, session) in sessions {
+        for (total, value) in session.totals() {
+            println!("M2V-MATRIX metric harness-{runtime}/device/{total} {value}");
+        }
         if let Some(gauges) = session.finish() {
             let list: Vec<String> = (gauges.iter())
                 .map(|(gauge, value)| format!("{gauge} {value}"))

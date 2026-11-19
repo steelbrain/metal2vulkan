@@ -85,6 +85,9 @@ pub(crate) mod on_device {
             body(name, instance, device);
             within("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop(test, counters.gauges());
+            // The matrix holds this at 0 (`readback::timestamps`).
+            let unavailable = counters.metrics().stamps_not_available;
+            println!("M2V-MATRIX metric {test}/stamps_not_available {unavailable}");
         }
     }
 

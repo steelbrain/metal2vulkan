@@ -430,6 +430,13 @@ impl crate::Device for Device {
         Some(Box::new(move || named(counters.gauges())))
     }
 
+    /// `Metrics::stamps_not_available`: command buffers whose GPU times read none though their
+    /// submission signalled.
+    fn totals(&self) -> Vec<(&'static str, u64)> {
+        let metrics = self.device.counters().metrics();
+        vec![("stamps_not_available", metrics.stamps_not_available)]
+    }
+
     /// `Metrics::pipelines_created`.
     fn pipelines_created(&self) -> u64 {
         self.device.counters().metrics().pipelines_created
