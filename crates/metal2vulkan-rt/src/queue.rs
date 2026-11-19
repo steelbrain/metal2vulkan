@@ -5,7 +5,7 @@ use crate::counters::{Counters, Gauge};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::kept::Objects;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
 /// `MTLCommandQueue`: one FIFO on the submit thread. Every queue submits to the device's one
@@ -32,6 +32,10 @@ pub(crate) struct QueueInner {
     /// the next one's kernel start is placed at the latest, as Metal schedules a queue's command
     /// buffers in order.
     pub(crate) last_scheduled: AtomicU64,
+    /// The GPU run, in nanoseconds, its next command buffer is expected to take
+    /// ([`expected_run`](Self::expected_run)); `u64::MAX` before one of its command buffers
+    /// retired with its GPU times.
+    run: AtomicU64,
     counters: Counters,
     /// The device, without keeping it: a command buffer handle that outlives the device's
     /// handles holds its queue, and neither keeps the device from its teardown.
@@ -70,6 +74,7 @@ impl Device {
                 room: Condvar::new(),
                 last_end: AtomicU64::new(0),
                 last_scheduled: AtomicU64::new(0),
+                run: AtomicU64::new(u64::MAX),
                 counters: core.counters.clone(),
                 core: Arc::downgrade(core),
             }),
@@ -150,6 +155,21 @@ impl CommandQueue {
 }
 
 impl QueueInner {
+    /// The GPU run, in nanoseconds, its next command buffer is expected to take: its command
+    /// buffers' own, by their timestamps, as each retires ([`ran`](Self::ran)); None before one
+    /// retired with its GPU times.
+    pub(crate) fn expected_run(&self) -> Option<u64> {
+        Some(self.run.load(Ordering::Relaxed)).filter(|&run| run != u64::MAX)
+    }
+
+    /// One of its command buffers ran `nanos` on the GPU: the expected run rises to a longer one
+    /// at once and halves toward a shorter one ([`next_run`]).
+    pub(crate) fn ran(&self, nanos: u64) {
+        let _ = (self.run).fetch_update(Ordering::Relaxed, Ordering::Relaxed, |run| {
+            Some(next_run((run != u64::MAX).then_some(run), nanos))
+        });
+    }
+
     /// Whether `queue` is this queue.
     pub(crate) fn is(&self, queue: &QueueInner) -> bool {
         std::ptr::eq(self, queue)
@@ -171,5 +191,16 @@ impl QueueInner {
         live.objects.push(kept);
         drop(live);
         self.room.notify_one();
+    }
+}
+
+/// The expected run after a command buffer that ran `nanos`, from the one before (`None` for
+/// none): a longer run raises it at once, so a queue whose work grows stops grouping at its first
+/// long command buffer; a shorter one halves the way toward it, so one short command buffer among
+/// long ones does not start grouping them again.
+pub(crate) fn next_run(expected: Option<u64>, nanos: u64) -> u64 {
+    match expected {
+        Some(expected) if nanos < expected => expected - (expected - nanos) / 2,
+        _ => nanos.min(u64::MAX - 1),
     }
 }

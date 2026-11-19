@@ -6,7 +6,12 @@
 //! not seen complete, each of its command buffers goes at once, alone. While that many run, the
 //! ones committed meanwhile are held in one group of at most [`GROUP`], which goes when it fills,
 //! when a completion leaves fewer running (the completion thread wakes the thread as it retires),
-//! when the host is to wait for one of them ([`Work::send`]), or at teardown. A segment that
+//! when the host is to wait for one of them ([`Work::send`]), or at teardown. The driver runs a
+//! submission's command buffers as one kernel job, which a job timeout ends as a whole (Linux's
+//! amdgpu ends a job past its timeout and resets the ring), so a command buffer joins the group
+//! only while the group's expected GPU runs, summed, stay within [`GROUP_RUN`]; one whose queue
+//! has no run yet, or whose run is past the bound, goes alone, the group held going first. A
+//! segment that
 //! signals an event ends its group, which goes at once; one that waits on a semaphore leads a new
 //! group, the one held going first. A group is one submission with one signal of the progress
 //! semaphore, which the completion thread follows in commit order. A command buffer that takes no
@@ -50,6 +55,14 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 /// the group grows past what a completion can release: on the UHD 630, sixteen ran a burst of 160
 /// command buffers in half the time no bound did (probe 06860a3848, job m3-max-44105).
 pub(crate) const GROUP: usize = 16;
+
+/// The most expected GPU run, in nanoseconds, of the command buffers one group holds, summed: 16
+/// ms, the old runtime's bound and the owner's line for an intolerable wait. Each command buffer's
+/// expected run is its queue's (`QueueInner::expected_run`), from the GPU times of the queue's
+/// command buffers as they retire. A job of command buffers each within amdgpu's job timeout may
+/// pass it summed: on a Radeon 780M a replay's frame of 5,114 dispatches, 29 GB written in 35 s,
+/// lost the device to a ring timeout of one submission.
+pub(crate) const GROUP_RUN: u64 = 16_000_000;
 
 /// The submissions of a queue not yet seen complete at which its command buffers are held in a
 /// group. Three, not two: with two, the GPU idles between a group's end and the next
@@ -274,6 +287,9 @@ struct Batch {
     count: usize,
     /// It holds segments of its queue's head, whose last is not yet staged.
     partial: bool,
+    /// The expected GPU runs of its command buffers, summed, in nanoseconds ([`GROUP_RUN`]);
+    /// `u64::MAX` where one's was not known.
+    run: u64,
     /// Events it signals that the completion thread is not yet watching.
     watch: Vec<Arc<EventInner>>,
     /// What its segments wrote of buffers under textures over a buffer in an image of their own
@@ -1433,6 +1449,16 @@ impl WorkState {
         if (fifo.group.as_ref()).is_some_and(|group| group.leans.conflicts(&segment.overs)) {
             return Step::Goes(index);
         }
+        // A command buffer joins the group held only while the group's expected GPU runs, summed,
+        // stay within the bound: the group goes first where its own run is not known or would take
+        // the sum past it.
+        let run = fifo.queue.expected_run();
+        let leads = pending.next == 0;
+        if let (true, Some(group)) = (leads, &fifo.group) {
+            if run.is_none_or(|run| group.run.saturating_add(run) > GROUP_RUN) {
+                return Step::Goes(index);
+            }
+        }
         let place = entry.place;
         if fifo.group.is_none() && others_hold {
             self.counters.count(Metric::GroupsBesideAnotherQueue);
@@ -1443,6 +1469,7 @@ impl WorkState {
             finished: Vec::new(),
             count: 0,
             partial: false,
+            run: 0,
             watch: Vec::new(),
             leans: Leans::default(),
             overs: Vec::new(),
@@ -1451,6 +1478,9 @@ impl WorkState {
             wrote: Vec::new(),
             spans: Vec::new(),
         });
+        if leads {
+            group.run = group.run.saturating_add(run.unwrap_or(u64::MAX));
+        }
         group.leans.join(&segment.overs);
         for buffer in &segment.managed_written {
             if !group.written.iter().any(|kept| kept.id() == buffer.id()) {
@@ -1852,6 +1882,7 @@ impl Batch {
             finished: Vec::new(),
             count: 0,
             partial: false,
+            run: 0,
             watch: Vec::new(),
             leans: Leans::default(),
             overs: Vec::new(),

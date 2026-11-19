@@ -1282,6 +1282,11 @@ pub(crate) fn retire(
     gpu_times: Option<(u64, u64)>,
     written: u32,
 ) {
+    // Its own GPU run, by its timestamps, sets what its queue expects of the next
+    // (`QueueInner::expected_run`, which bounds the groups `submit.rs` joins).
+    if let Some((start, end)) = gpu_times {
+        inner.queue.ran(end.saturating_sub(start));
+    }
     let stamps = {
         let mut state = lock(&inner.state);
         // One with nothing for the GPU, as Metal reports it: its start and end equal, at its

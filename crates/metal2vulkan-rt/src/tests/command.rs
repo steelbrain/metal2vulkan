@@ -4,10 +4,24 @@
 //! with work held; refusals of what has started; a loss; a released block kept until its last
 //! command buffer retires; a block whose last handle drops freed once its last command buffer
 //! retires; a block's clones, one dropped giving nothing back, and a handle outliving its
-//! device; and the thread gauge holding the device's four threads as it is made. Without a
-//! device: a push whose bytes the command buffer holds is not recorded again.
+//! device; the thread gauge holding the device's four threads as it is made; and a command
+//! buffer joining a held group only within the group's expected GPU run. Without a device: a push
+//! whose bytes the command buffer holds is not recorded again; a queue's expected run rises to a
+//! longer run at once and halves toward a shorter one.
 
 use crate::command::Pushed;
+use crate::queue::next_run;
+
+/// A queue's expected GPU run: its first command buffer's run; a longer run raises it at once, a
+/// shorter one halves the way toward it, and the "none yet" mark (`u64::MAX`) is never a run.
+#[test]
+fn a_queues_expected_run_rises_at_once_and_halves_toward_a_shorter_run() {
+    assert_eq!(next_run(None, 5_000), 5_000);
+    assert_eq!(next_run(Some(10_000), 30_000), 30_000);
+    assert_eq!(next_run(Some(30_000), 10_000), 20_000);
+    assert_eq!(next_run(Some(20_000), 10_000), 15_000);
+    assert_eq!(next_run(None, u64::MAX), u64::MAX - 1);
+}
 
 /// A push whose bytes the command buffer already holds from offset 0 records nothing; one that
 /// changes any of them records, and keeps the held bytes past its end.
@@ -26,7 +40,7 @@ fn a_push_of_the_bytes_a_command_buffer_holds_records_nothing() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
     use crate::device::lock;
-    use crate::submit::IN_FLIGHT;
+    use crate::submit::{GROUP_RUN, IN_FLIGHT};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
@@ -1331,6 +1345,62 @@ pub(crate) mod on_device {
                 assert_eq!(after, AHEAD + 1, "{name}: one submission each");
             });
             drop((buffer, arena, queue, device));
+        });
+    }
+
+    /// A command buffer joins a held group only while the group's expected GPU runs, summed, stay
+    /// within `GROUP_RUN`, each its queue's expected run: behind three running submissions, three
+    /// fills on a queue whose command buffers ran 1 ms go as one group, and on a queue whose
+    /// command buffers ran past the bound as three submissions, the first two before the busy
+    /// work ends. The expected run is set as a retiring command buffer's GPU times set it
+    /// (`QueueInner::ran`); the busy work retires only after the fills were staged, and the
+    /// retirements move it.
+    #[test]
+    fn every_device_joins_a_held_group_only_within_its_expected_run() {
+        each_device("command_group_run", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            for (run, alone) in [(1_000_000, false), (GROUP_RUN + 1, true)] {
+                let queue = queue(&device);
+                let first = queue.command_buffer().expect("a command buffer");
+                first.queue().ran(run);
+                drop(first);
+                behind_busy(name, &device, &queue, |busy, before, _| {
+                    let held: Vec<CommandBuffer> = (1..=3)
+                        .map(|word| queue_fill(&queue, &buffer, word))
+                        .collect();
+                    for command_buffer in &held {
+                        within(name, || {
+                            command_buffer.status() != CommandBufferStatus::Committed
+                        });
+                    }
+                    let sent = || device.counters().metrics().submissions - before;
+                    let early = if alone { 2 } else { 0 };
+                    within(name, || sent() >= AHEAD + early);
+                    assert_eq!(
+                        sent(),
+                        AHEAD + early,
+                        "{name}: {run} ns, sent behind the busy work"
+                    );
+                    busy.open();
+                    for command_buffer in &held {
+                        finished(name, command_buffer);
+                    }
+                    assert_eq!(word(&buffer), 3, "{name}");
+                    let all = device.counters().metrics().submissions - before;
+                    let groups = if alone { 3 } else { 1 };
+                    assert_eq!(all, AHEAD + groups, "{name}: {run} ns, submissions");
+                });
+                // The busy work and the fills retired since, each moving the expected run toward
+                // its own GPU run.
+                let next = queue.command_buffer().expect("a command buffer");
+                let expected = next.queue().expected_run().expect("an expected run");
+                assert_ne!(
+                    expected, run,
+                    "{name}: the retirements moved the expected run"
+                );
+            }
+            drop((buffer, arena, device));
         });
     }
 
