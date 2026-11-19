@@ -1,7 +1,8 @@
 //! Memory: the blocks the consumer takes and releases, each a range of one of the device's
 //! allocations; the pool that hands them out from the allocations' free ranges and frees idle
 //! allocations; the allocations its own thread makes ahead of need, while a class's free bytes run
-//! low; and how memory is made and freed. A block's bytes are undefined: the runtime zeroes
+//! low, and the runtime's fixed-size internals it makes for the rest of the device ([`Internal`]);
+//! and how memory is made and freed. A block's bytes are undefined: the runtime zeroes
 //! nothing ahead of need. A buffer reads zero where
 //! [`Device::new_buffer`](crate::Device::new_buffer) zeroes its range.
 //!
@@ -570,6 +571,56 @@ pub(crate) struct Pool {
     frees: Mutex<Vec<(u64, u64, u64)>>,
 }
 
+/// What the block-maker thread makes for the device's other parts besides the pool's
+/// allocations: the runtime's fixed-size internals, off every caller's thread. The device's making
+/// asks it for the zero source, the parameter ring's first block and the staging region, its first
+/// work once it starts, and the ring asks it for each later block ([`crate::ring`]). A call that
+/// needs one while it is asked waits for its make ([`Pool::await_made`]), counted in
+/// [`Metrics::maker_waits`](crate::Metrics::maker_waits); where the make failed, or the thread had
+/// stopped, the call makes it on its own thread with the same function, counted at its [`Site`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Internal {
+    /// The zero source of the fills' and new textures' copies ([`crate::fill::Filler`]).
+    ZeroSource,
+    /// The parameter ring's next block ([`crate::ring`]).
+    RingBlock,
+    /// The 16 MiB staging region of the copies between textures and the CPU
+    /// ([`crate::staging`]).
+    StagingRegion,
+}
+
+/// The number of [`Internal`]s.
+const INTERNALS: usize = 3;
+
+impl Internal {
+    /// Every internal, in the order the block-maker thread makes those asked.
+    const ALL: [Internal; INTERNALS] = [
+        Internal::ZeroSource,
+        Internal::RingBlock,
+        Internal::StagingRegion,
+    ];
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// For the device tests: what the block-maker thread does with the internals asked of it
+/// ([`DeviceOptions::maker`](crate::DeviceOptions)).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+#[derive(Clone, Default)]
+pub(crate) enum MakerTest {
+    /// Makes them.
+    #[default]
+    Make,
+    /// Meets the test at the barrier twice before its first work, once parked and once released;
+    /// then makes them.
+    Park(Arc<std::sync::Barrier>),
+    /// Every make of an internal fails, before the driver is called, so the calls that need them
+    /// make them.
+    Fail,
+}
+
 /// What the idle rule asks of a class.
 enum Rule {
     /// No idle allocation that the rule weighs.
@@ -591,6 +642,9 @@ struct State {
     /// Per class, the block-maker thread could not make the last allocation it tried. It tries
     /// again after the class's next take or give-back.
     failed: [bool; 2],
+    /// The internals asked of the block-maker thread and not yet made, by [`Internal::index`]:
+    /// the zero source, the ring's first block and the staging region from the device's making.
+    asked: [bool; INTERNALS],
     stop: bool,
     next_id: u32,
     next_allocation: u32,
@@ -607,9 +661,9 @@ struct State {
 }
 
 thread_local! {
-    /// Whether this thread makes allocations ahead of need: the block-maker thread ([`run`]), or
-    /// the device's making while it makes the first allocations ([`stock`]). For the
-    /// allocation-time metrics.
+    /// Whether this thread makes allocations ahead of need: the block-maker thread ([`run`]), its
+    /// internals among them, or the device's making while it makes the first allocations
+    /// ([`stock`]). For the allocation-time metrics.
     static ON_MAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -664,6 +718,8 @@ impl Pool {
                 allocations: [Vec::new(), Vec::new()],
                 owned: VecDeque::new(),
                 failed: [false, false],
+                // The device's fixed-size internals: the block-maker thread's first work.
+                asked: [true; INTERNALS],
                 stop: false,
                 next_id: 1,
                 next_allocation: 1,
@@ -986,6 +1042,53 @@ impl Pool {
         self.lock().stop = true;
         self.changed.notify_all();
     }
+
+    /// Asks the block-maker thread to make `internal`, which it makes before its other work. False
+    /// where the thread has stopped: the call that needs it makes it.
+    pub(crate) fn ask(&self, internal: Internal) -> bool {
+        let mut state = self.lock();
+        if state.stop {
+            return false;
+        }
+        state.asked[internal.index()] = true;
+        self.changed.notify_all();
+        true
+    }
+
+    /// Waits while `internal` is asked of the block-maker thread: until it has made it, its make
+    /// failed, or it stopped. A wait is counted in [`Metrics::maker_waits`] and its time in
+    /// [`Metrics::maker_wait_max_nanos`]; where it is not asked, the call returns at once.
+    ///
+    /// [`Metrics::maker_waits`]: crate::Metrics::maker_waits
+    /// [`Metrics::maker_wait_max_nanos`]: crate::Metrics::maker_wait_max_nanos
+    pub(crate) fn await_made(&self, internal: Internal) {
+        let mut state = self.lock();
+        if !state.asked[internal.index()] {
+            return;
+        }
+        let since = crate::host_time();
+        while state.asked[internal.index()] {
+            state = self.wait(state);
+        }
+        drop(state);
+        (self.counters).maker_wait(crate::host_time().saturating_sub(since));
+    }
+
+    /// For the device tests: whether the block-maker thread is told to stop.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn stopped(&self) -> bool {
+        self.lock().stop
+    }
+
+    /// For the device tests: waits until the block-maker thread has made, or failed to make,
+    /// every internal asked of it.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn settle(&self) {
+        let mut state = self.lock();
+        while state.asked.contains(&true) {
+            state = self.wait(state);
+        }
+    }
 }
 
 impl State {
@@ -1192,20 +1295,41 @@ pub(crate) fn stock(core: &Core) {
     ON_MAKER.set(false);
 }
 
-/// The block-maker thread, until the device's teardown stops it. Off every caller's path, in
-/// order: it frees each imported or exported block given back, then runs an import's release; it
-/// makes an allocation
-/// of a class whose free bytes are fewer than [`MAKE_BELOW`], having the consumer map it before it
-/// joins the pool; and it frees each allocation idle for [`IDLE_AGE_NANOS`], after the consumer's
-/// unmap of it, one at a time. It sleeps until the next change, or until the oldest idle
-/// allocation reaches the idle age.
+/// The block-maker thread, until the device's teardown or a quiesce stops it. Off every caller's
+/// path, in order: it makes each internal asked of it ([`Internal`]), the device's fixed-size
+/// ones first of all; it frees each imported or exported block given back, then runs an import's
+/// release; it makes an allocation of a class whose free bytes are fewer than [`MAKE_BELOW`],
+/// having the consumer map it before it joins the pool; and it frees each allocation idle for
+/// [`IDLE_AGE_NANOS`], after the consumer's unmap of it, one at a time. It sleeps until the next
+/// change, or until the oldest idle allocation reaches the idle age. Stopped, it makes nothing
+/// more: what is asked of it and not made, the calls that need it make.
 pub(crate) fn run(core: Arc<Core>) {
     ON_MAKER.set(true);
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    if let MakerTest::Park(park) = &core.maker_test {
+        park.wait();
+        park.wait();
+    }
     let pool = &core.pool;
     let mut state = pool.lock();
     loop {
         if state.stop {
+            let ring = state.asked[Internal::RingBlock.index()];
+            state.asked = [false; INTERNALS];
+            pool.changed.notify_all();
+            drop(state);
+            if ring {
+                core.ring.unasked();
+            }
             return;
+        }
+        if let Some(internal) = (Internal::ALL.into_iter()).find(|i| state.asked[i.index()]) {
+            drop(state);
+            make_internal(&core, internal);
+            state = pool.lock();
+            state.asked[internal.index()] = false;
+            pool.changed.notify_all();
+            continue;
         }
         if let Some((memory, release)) = state.owned.pop_front() {
             drop(state);
@@ -1256,6 +1380,24 @@ pub(crate) fn run(core: Arc<Core>) {
             None => pool.wait(state),
         };
     }
+}
+
+/// On the block-maker thread: makes `internal` with the function a call that needs it makes it
+/// with, into the part of the device that holds it. A make that fails leaves it unmade: the call
+/// that needs it makes it on its own thread, where the allocation may succeed then.
+fn make_internal(core: &Arc<Core>, internal: Internal) {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    if let MakerTest::Fail = core.maker_test {
+        if internal == Internal::RingBlock {
+            core.ring.unasked();
+        }
+        return;
+    }
+    let _ = match internal {
+        Internal::ZeroSource => crate::fill::make(core),
+        Internal::RingBlock => core.ring.make_ahead(core),
+        Internal::StagingRegion => core.work.make_staging_region(core),
+    };
 }
 
 /// [`allocate`] of `info`, and for Private memory, where the device-local type is out of device

@@ -1,16 +1,20 @@
 //! The per-site allocation counters (`Metrics::texture_allocations` and the other sites'): under a
 //! device cfg, on every device of the cfg's kind, each site's counter moves, by one call of at
 //! least the site's bytes, when the site allocates on the consumer's thread, and no other site's
-//! moves with it; a call that reuses what a site made moves none.
+//! moves with it; a call that reuses what a site made moves none. The device's block-maker thread
+//! fails every make of the runtime's internals (`MakerTest::Fail`), so the calls that need them
+//! make them, at their sites, as they do where its makes fail.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::capture::CAPTURE_LEN;
+    use crate::fill::ZEROS;
+    use crate::memory::MakerTest;
     use crate::ring::{Writes, CHUNK};
-    use crate::tests::command::on_device::each_device;
+    use crate::tests::command::on_device::each_device_with;
     use crate::{
-        Device, HostBytes, MemoryClass, Metrics, PixelFormat, Region, SiteAllocations, StorageMode,
-        Texture, TextureDescriptor, TextureType, TextureUsage,
+        Device, DeviceOptions, HostBytes, MemoryClass, Metrics, PixelFormat, Region,
+        SiteAllocations, StorageMode, Texture, TextureDescriptor, TextureType, TextureUsage,
     };
     use std::sync::atomic::Ordering::Relaxed;
 
@@ -94,187 +98,212 @@ mod on_device {
 
     #[test]
     fn every_device_counts_each_allocation_site_apart() {
-        each_device("allocation_sites", |name, _, device| {
-            let core = device.core();
-            const MIB: u64 = 1 << 20;
+        let options = || DeviceOptions {
+            maker: MakerTest::Fail,
+            ..DeviceOptions::default()
+        };
+        each_device_with("allocation_sites", options, |name, _, device| {
+            count_each_site(name, &device);
+        });
+    }
 
-            // The device's making allocates the zero source on the consumer's thread, and at no
-            // other site.
-            let made = device.counters().metrics();
-            let at_making: Vec<(&str, SiteAllocations)> = (sites(&made).into_iter())
-                .filter(|(_, site)| *site != SiteAllocations::default())
-                .collect();
-            assert_eq!(
-                at_making.iter().map(|&(site, _)| site).collect::<Vec<_>>(),
-                ["zero source"],
-                "{name}: the making's sites"
-            );
-            let zeros = made.zero_source_allocations;
-            assert!(
-                zeros.count == 1 && zeros.bytes > 0 && zeros.longest_nanos > 0,
-                "{name}: the zero source: {zeros:?}"
-            );
-            println!("sites: {name}: the device's making: {at_making:?}");
+    /// Every site, on `device`, whose block-maker thread makes none of the internals.
+    fn count_each_site(name: &str, device: &Device) {
+        let core = device.core();
+        const MIB: u64 = 1 << 20;
 
-            // A texture of 24 MiB, past every allocation of the pool, whose texture block's
-            // device-local allocation fails: an allocation of its own. A spill of the block into
-            // another type the device offers is the texture block's.
-            core.fail_private.store(1, Relaxed);
-            let before = device.counters().metrics();
-            let own = texture(name, &device, 2048, 3072);
-            assert_eq!(
-                core.fail_private.load(Relaxed),
-                0,
-                "{name}: the failure ran"
-            );
-            let moved = moved(&before, &device.counters().metrics());
-            let texture_moved = moved.iter().find(|&&(site, ..)| site == "texture");
-            assert!(
-                texture_moved.is_some_and(|&(_, count, bytes, longest)| count == 1
-                    && bytes >= 24 * MIB
-                    && longest > 0),
-                "{name}: a texture of its own: {moved:?}"
-            );
-            assert!(
-                (moved.iter()).all(|&(site, ..)| site == "texture" || site == "texture block"),
-                "{name}: a texture of its own: {moved:?}"
-            );
-            println!("sites: {name}: a texture of its own: moved {moved:?}");
+        // The device's making allocates at no site.
+        let made = device.counters().metrics();
+        let at_making: Vec<(&str, SiteAllocations)> = (sites(&made).into_iter())
+            .filter(|(_, site)| *site != SiteAllocations::default())
+            .collect();
+        assert!(
+            at_making.is_empty(),
+            "{name}: the making's sites: {at_making:?}"
+        );
 
-            // A texture of 32 MiB, longer than any free range: its texture block's take
-            // allocates.
-            let mut large = None;
-            step(
-                name,
-                &device,
-                "a 32 MiB texture",
-                &[("texture block", 32 * MIB)],
-                || {
-                    large = Some(texture(name, &device, 2048, 4096));
-                },
-            );
-            let large = large.expect("the 32 MiB texture");
+        // The first fill that copies from the zero source makes it; the next reuses it.
+        let private = (device.take_block(MemoryClass::Private, 4096))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        step(
+            name,
+            &device,
+            "the first fill beside whole words",
+            &[("zero source", ZEROS)],
+            || {
+                (device.zero_block_range(private.id, 1, 8))
+                    .unwrap_or_else(|error| panic!("{name}: a fill: {error}"));
+            },
+        );
+        step(
+            name,
+            &device,
+            "a second fill beside whole words",
+            &[],
+            || {
+                (device.zero_block_range(private.id, 9, 8))
+                    .unwrap_or_else(|error| panic!("{name}: a fill: {error}"));
+            },
+        );
 
-            // A texture whose texture block has room allocates nothing.
-            let small = texture(name, &device, 64, 64);
-            let mut placed = None;
-            step(name, &device, "a texture in a block with room", &[], || {
-                placed = Some(texture(name, &device, 64, 64));
-            });
-            let placed = placed.expect("the second small texture");
+        // A texture of 24 MiB, past every allocation of the pool, whose texture block's
+        // device-local allocation fails: an allocation of its own. A spill of the block into
+        // another type the device offers is the texture block's.
+        core.fail_private.store(1, Relaxed);
+        let before = device.counters().metrics();
+        let own = texture(name, &device, 2048, 3072);
+        assert_eq!(
+            core.fail_private.load(Relaxed),
+            0,
+            "{name}: the failure ran"
+        );
+        let moved = moved(&before, &device.counters().metrics());
+        let texture_moved = moved.iter().find(|&&(site, ..)| site == "texture");
+        assert!(
+            texture_moved.is_some_and(|&(_, count, bytes, longest)| count == 1
+                && bytes >= 24 * MIB
+                && longest > 0),
+            "{name}: a texture of its own: {moved:?}"
+        );
+        assert!(
+            (moved.iter()).all(|&(site, ..)| site == "texture" || site == "texture block"),
+            "{name}: a texture of its own: {moved:?}"
+        );
+        println!("sites: {name}: a texture of its own: moved {moved:?}");
 
-            // The device's first copy of 16 MiB or less makes the staging region; the next reuses
-            // it.
-            step(
-                name,
-                &device,
-                "the first small replace",
-                &[("staging region", 16 * MIB)],
-                || {
-                    replace(name, &small, 64, 64);
-                },
-            );
-            step(name, &device, "a second small replace", &[], || {
-                replace(name, &placed, 64, 64);
-            });
+        // A texture of 32 MiB, longer than any free range: its texture block's take
+        // allocates.
+        let mut large = None;
+        step(
+            name,
+            &device,
+            "a 32 MiB texture",
+            &[("texture block", 32 * MIB)],
+            || {
+                large = Some(texture(name, &device, 2048, 4096));
+            },
+        );
+        let large = large.expect("the 32 MiB texture");
 
-            // A copy larger than the region has a staging buffer of its own.
-            step(
-                name,
-                &device,
-                "a 32 MiB replace",
-                &[("staging buffer", 32 * MIB)],
-                || {
-                    replace(name, &large, 2048, 4096);
-                },
-            );
+        // A texture whose texture block has room allocates nothing.
+        let small = texture(name, &device, 64, 64);
+        let mut placed = None;
+        step(name, &device, "a texture in a block with room", &[], || {
+            placed = Some(texture(name, &device, 64, 64));
+        });
+        let placed = placed.expect("the second small texture");
 
-            // A ring write with no chunk free makes a ring block; one after the chunks are given
-            // back takes one of them.
-            let free = core.ring.chunks().expect("the ring's lock is free").1;
-            let bytes = vec![7u8; CHUNK as usize];
-            let mut writes = Writes::default();
-            step(
-                name,
-                &device,
-                "a ring write past its chunks",
-                &[("ring block", 2 * MIB)],
-                || {
-                    for _ in 0..=free {
-                        writes.write(core, &bytes).expect("a ring write");
-                    }
-                },
-            );
-            writes.give_back(core);
-            let mut again = Writes::default();
-            step(
-                name,
-                &device,
-                "a ring write into a chunk given back",
-                &[],
-                || {
-                    again.write(core, &bytes).expect("a ring write");
-                },
-            );
-            again.give_back(core);
+        // The device's first copy of 16 MiB or less makes the staging region; the next reuses
+        // it.
+        step(
+            name,
+            &device,
+            "the first small replace",
+            &[("staging region", 16 * MIB)],
+            || {
+                replace(name, &small, 64, 64);
+            },
+        );
+        step(name, &device, "a second small replace", &[], || {
+            replace(name, &placed, 64, 64);
+        });
 
-            // A take longer than any free range allocates; a short one fits a free range.
-            let mut taken = Vec::new();
-            step(
-                name,
-                &device,
-                "a 64 MiB take",
-                &[("take", 64 * MIB)],
-                || {
-                    taken.push(
-                        device
-                            .take_block(MemoryClass::Shared, 64 * MIB)
-                            .expect("a take"),
-                    );
-                },
-            );
-            step(name, &device, "a 4 KiB take", &[], || {
+        // A copy larger than the region has a staging buffer of its own.
+        step(
+            name,
+            &device,
+            "a 32 MiB replace",
+            &[("staging buffer", 32 * MIB)],
+            || {
+                replace(name, &large, 2048, 4096);
+            },
+        );
+
+        // A ring write with no chunk free makes a ring block; one after the chunks are given
+        // back takes one of them.
+        let free = core.ring.chunks().expect("the ring's lock is free").1;
+        let bytes = vec![7u8; CHUNK as usize];
+        let mut writes = Writes::default();
+        step(
+            name,
+            &device,
+            "a ring write past its chunks",
+            &[("ring block", 2 * MIB)],
+            || {
+                for _ in 0..=free {
+                    writes.write(core, &bytes).expect("a ring write");
+                }
+            },
+        );
+        writes.give_back(core);
+        let mut again = Writes::default();
+        step(
+            name,
+            &device,
+            "a ring write into a chunk given back",
+            &[],
+            || {
+                again.write(core, &bytes).expect("a ring write");
+            },
+        );
+        again.give_back(core);
+
+        // A take longer than any free range allocates; a short one fits a free range.
+        let mut taken = Vec::new();
+        step(
+            name,
+            &device,
+            "a 64 MiB take",
+            &[("take", 64 * MIB)],
+            || {
                 taken.push(
                     device
-                        .take_block(MemoryClass::Shared, 4096)
+                        .take_block(MemoryClass::Shared, 64 * MIB)
                         .expect("a take"),
                 );
-            });
-
-            // A device that keeps a device copy of a Managed buffer makes the capture ring at the
-            // first range named; one that keeps none names nothing.
-            let two = !device.has_unified_memory();
-            let copy = two.then(|| {
-                (device.take_block(MemoryClass::Private, 4096 + 4096))
-                    .unwrap_or_else(|error| panic!("{name}: {error}"))
-            });
-            let bytes_block = (device.take_block(MemoryClass::Shared, 4096))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let at = copy.as_ref().map(|copy| (copy.id, 4096));
-            let managed = (device.new_managed_buffer((bytes_block.id, 0), at, 4096, 0))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let expected: &[(&str, u64)] = match two {
-                true => &[("capture ring", CAPTURE_LEN)],
-                false => &[],
-            };
-            step(
-                name,
-                &device,
-                "a Managed buffer's first named range",
-                expected,
-                || {
-                    (managed.did_modify_range(0, 4096))
-                        .unwrap_or_else(|error| panic!("{name}: {error}"));
-                },
-            );
-
-            drop((managed, own, large, small, placed));
-            for block in taken.into_iter().chain(copy).chain([bytes_block]) {
-                (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
-            println!(
-                "sites: {name}: every site counted apart (a device copy of Managed buffers: {two})"
+            },
+        );
+        step(name, &device, "a 4 KiB take", &[], || {
+            taken.push(
+                device
+                    .take_block(MemoryClass::Shared, 4096)
+                    .expect("a take"),
             );
         });
+
+        // A device that keeps a device copy of a Managed buffer makes the capture ring at the
+        // first range named; one that keeps none names nothing.
+        let two = !device.has_unified_memory();
+        let copy = two.then(|| {
+            (device.take_block(MemoryClass::Private, 4096 + 4096))
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+        });
+        let bytes_block = (device.take_block(MemoryClass::Shared, 4096))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let at = copy.as_ref().map(|copy| (copy.id, 4096));
+        let managed = (device.new_managed_buffer((bytes_block.id, 0), at, 4096, 0))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let expected: &[(&str, u64)] = match two {
+            true => &[("capture ring", CAPTURE_LEN)],
+            false => &[],
+        };
+        step(
+            name,
+            &device,
+            "a Managed buffer's first named range",
+            expected,
+            || {
+                (managed.did_modify_range(0, 4096))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            },
+        );
+
+        drop((managed, own, large, small, placed));
+        for block in taken.into_iter().chain(copy).chain([bytes_block, private]) {
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+        println!(
+            "sites: {name}: every site counted apart (a device copy of Managed buffers: {two})"
+        );
     }
 }

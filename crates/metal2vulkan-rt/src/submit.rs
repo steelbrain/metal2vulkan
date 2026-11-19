@@ -45,7 +45,7 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
 use crate::fill;
-use crate::memory::Block;
+use crate::memory::{Block, Internal};
 use crate::over::{self, Leans};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
@@ -320,10 +320,12 @@ impl Upload {
         if zeroings.is_empty() {
             return;
         }
+        // Made before the upload holds an image whose zeroing copies from it (`Work::home`).
+        let zeros = fill::made(core);
         for zeroing in &zeroings {
             // SAFETY: as above, outside any render pass; the first barrier moved the image to
             // the transfer destination layout.
-            unsafe { zeroing.record(device, self.command, core.filler.zeros()) };
+            unsafe { zeroing.record(device, self.command, zeros) };
             core.counters.texture_cleared(zeroing.bytes);
         }
         let moves: Vec<_> = zeroings.iter().map(|zeroing| zeroing.home).collect();
@@ -955,8 +957,11 @@ impl Work {
         Ok(())
     }
 
-    /// Staging for a copy of `len` bytes: a span of the device's staging region, made at the first
-    /// copy; a staging buffer of its own for a copy larger than the region. Where the region has
+    /// Staging for a copy of `len` bytes: a span of the device's staging region, which the
+    /// block-maker thread makes as its first work, so a copy before then waits for that make
+    /// ([`Pool::await_made`](crate::memory::Pool::await_made)), and where that thread made none,
+    /// the copy makes it ([`make_staging_region`](Self::make_staging_region)); a staging buffer
+    /// of its own for a copy larger than the region. Where the region has
     /// no room, the call waits, without the lock, for what frees its oldest span: the submission
     /// that carries it, after submitting the pending upload where it is in that. Where another
     /// call holds that span, still writing its bytes or reading them, the call sleeps on
@@ -976,17 +981,14 @@ impl Work {
             return Ok(Stage::Own(Arc::new(Staging::new(core, len)?)));
         }
         let mut state = self.lock();
+        if state.closed {
+            return Err(Error::Quiesced);
+        }
         if state.region.is_none() {
             drop(state);
-            let made = Region::new(core, REGION_LEN, Site::StagingRegion)?;
+            core.pool.await_made(Internal::StagingRegion);
+            self.make_staging_region(core)?;
             state = self.lock();
-            if state.region.is_none() {
-                state.region = Some(made);
-                core.counters.rise_by(Gauge::StagingBytes, REGION_LEN);
-            } else {
-                // SAFETY: another call made the region first; nothing used this one.
-                unsafe { made.free(core) };
-            }
         }
         // The progress value known complete: what the completion thread has seen, or what this
         // call waited for.
@@ -1070,6 +1072,30 @@ impl Work {
         }
     }
 
+    /// Makes the staging region where none is made yet: on the block-maker thread, its first work
+    /// (`crate::memory::Internal::StagingRegion`), or on a copy's own thread where that thread
+    /// made none, counted in
+    /// [`Metrics::staging_region_allocations`](crate::Metrics::staging_region_allocations).
+    ///
+    /// Err: what [`Region::new`] returns.
+    pub(crate) fn make_staging_region(&self, core: &Core) -> Result<(), Error> {
+        if self.lock().region.is_some() {
+            return Ok(());
+        }
+        let made = Region::new(core, REGION_LEN, Site::StagingRegion)?;
+        let mut state = self.lock();
+        if state.region.is_none() && !state.closed {
+            state.region = Some(made);
+            core.counters.rise_by(Gauge::StagingBytes, REGION_LEN);
+        } else {
+            drop(state);
+            // SAFETY: another call made the region first, or the device closed; nothing used this
+            // one.
+            unsafe { made.free(core) };
+        }
+        Ok(())
+    }
+
     /// At teardown: the staging region, for the core to free.
     pub(crate) fn take_region(&mut self) -> Option<Region> {
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
@@ -1079,10 +1105,15 @@ impl Work {
     /// A new texture's `image`, or a drawable's acquired again: the next submission's upload moves
     /// it to its home layout where it still lives, holding it from then; until then nothing holds
     /// it. An upload is begun now if none is pending, so that the submission has one to record
-    /// into.
+    /// into. Where its move home copies from the zero source, the zero source is made first
+    /// ([`fill::zeros`]), off the work lock.
     ///
-    /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made.
+    /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made;
+    /// what [`fill::zeros`] returns.
     pub(crate) fn home(&self, core: &Core, image: &Arc<Image>) -> Result<(), Error> {
+        if image.copies_zeros() {
+            fill::zeros(core)?;
+        }
         let mut state = self.lock();
         if state.closed {
             return Err(Error::Quiesced);
@@ -1140,7 +1171,7 @@ impl Work {
 
     /// Records the zero fill of `offset..end` of `block` into the upload.
     ///
-    /// Err: as [`upload`](Self::upload).
+    /// Err: as [`upload`](Self::upload); what [`fill::zeros_for`] returns.
     pub(crate) fn zero(
         &self,
         core: &Core,
@@ -1148,25 +1179,18 @@ impl Work {
         offset: u64,
         end: u64,
     ) -> Result<(), Error> {
+        let (buffer, base) = block.memory.range(0);
+        let (start, end) = (base + offset, base + end);
+        let zeros = fill::zeros_for(core, start, end)?;
         self.upload(
             core,
             None,
             [Held::Block(Arc::clone(block))],
             |device, command| {
-                let (buffer, base) = block.memory.range(0);
                 // SAFETY: the upload's command buffer is recording, under the lock; the block's
-                // allocation's buffer has every usage, and `offset..end` of the block lies in it
-                // from `base`.
-                unsafe {
-                    fill::record(
-                        device,
-                        command,
-                        core.filler.zeros(),
-                        buffer,
-                        base + offset,
-                        base + end,
-                    )
-                }
+                // allocation's buffer has every usage, `start..end` lies in it, and `zeros` is
+                // what `zeros_for` answered for it.
+                unsafe { fill::record(device, command, zeros, buffer, start, end) }
             },
         )
     }

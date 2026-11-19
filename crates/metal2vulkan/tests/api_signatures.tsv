@@ -2404,6 +2404,8 @@ field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
+field	metal2vulkan-rt::Metrics.maker_wait_max_nanos	pub maker_wait_max_nanos: u64
+field	metal2vulkan-rt::Metrics.maker_waits	pub maker_waits: u64
 field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64
 field	metal2vulkan-rt::Metrics.over_copies	pub over_copies: u64
 field	metal2vulkan-rt::Metrics.over_copies_imported	pub over_copies_imported: u64

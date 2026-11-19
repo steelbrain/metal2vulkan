@@ -2,8 +2,9 @@
 //! fill and copy commands, recorded into the upload that goes ahead of later commits.
 
 use crate::counters::{Counters, Gauge, Metric, Site};
+use crate::device::Core;
 use crate::error::Error;
-use crate::memory;
+use crate::memory::{self, Internal};
 use crate::texture::CopyUnit;
 use ash::vk;
 
@@ -44,16 +45,28 @@ pub(crate) fn plan(offset: u64, end: u64) -> Plan {
     }
 }
 
+/// The zero source the commands that zero `offset..end` copy from ([`plan`]): made where they copy
+/// bytes outside whole words ([`zeros`]), so a call before the block-maker thread made it waits
+/// for that make; `None` where they fill whole words alone, which waits for nothing.
+///
+/// Err: what [`zeros`] returns.
+pub(crate) fn zeros_for(core: &Core, offset: u64, end: u64) -> Result<Option<vk::Buffer>, Error> {
+    match plan(offset, end).copies.is_empty() {
+        true => Ok(None),
+        false => zeros(core).map(Some),
+    }
+}
+
 /// Records the commands that zero `offset..end` of `buffer` into `command`.
 ///
 /// # Safety
 ///
-/// `command` is recording; `zeros` is the zero source; `buffer` has transfer-destination usage and
-/// `offset..end` lies in it.
+/// `command` is recording; `zeros` is what [`zeros_for`] answered for `offset..end`; `buffer` has
+/// transfer-destination usage and `offset..end` lies in it.
 pub(crate) unsafe fn record(
     device: &ash::Device,
     command: vk::CommandBuffer,
-    zeros: vk::Buffer,
+    zeros: Option<vk::Buffer>,
     buffer: vk::Buffer,
     offset: u64,
     end: u64,
@@ -73,7 +86,7 @@ pub(crate) unsafe fn record(
         if let Some((start, end)) = plan.fill {
             device.cmd_fill_buffer(command, buffer, start, end - start, 0);
         }
-        if !copies.is_empty() {
+        if let Some(zeros) = zeros.filter(|_| !copies.is_empty()) {
             device.cmd_copy_buffer(command, zeros, buffer, &copies);
         }
     }
@@ -136,6 +149,57 @@ pub(crate) fn zero_regions(
         }
     }
     regions
+}
+
+/// The zero source, made: the block-maker thread makes it as its first work once the device's
+/// making starts it (`crate::memory::Internal::ZeroSource`), off every caller's thread, so a call
+/// before then waits for that make
+/// ([`Metrics::maker_waits`](crate::Metrics::maker_waits)). Where that make failed, the call makes
+/// it on its own thread, counted in
+/// [`Metrics::zero_source_allocations`](crate::Metrics::zero_source_allocations).
+///
+/// Err: what [`Filler::new`] returns, where the block-maker thread made none.
+pub(crate) fn zeros(core: &Core) -> Result<vk::Buffer, Error> {
+    if core.filler.get().is_none() {
+        core.pool.await_made(Internal::ZeroSource);
+        make(core)?;
+    }
+    Ok(made(core))
+}
+
+/// The zero source where it is made, for commands recorded under the work lock: a call that
+/// records a copy from it made it first ([`zeros`]); a null handle, which no command reads, before
+/// then.
+pub(crate) fn made(core: &Core) -> vk::Buffer {
+    core.filler.get().map_or(vk::Buffer::null(), Filler::zeros)
+}
+
+/// Makes the device's zero source where none is made yet: on the block-maker thread, or on a
+/// call's own thread where that thread made none. One made while another call's was kept first is
+/// destroyed.
+///
+/// Err: what [`Filler::new`] returns.
+pub(crate) fn make(core: &Core) -> Result<(), Error> {
+    if core.filler.get().is_some() {
+        return Ok(());
+    }
+    // SAFETY: the device is live; the Shared type is host-visible and host-coherent, and the
+    // floor chose it for buffers of every usage.
+    let filler = unsafe {
+        Filler::new(
+            &core.device,
+            core.memory_types.shared,
+            &core.counters,
+            core.max_allocations,
+        )
+    }?;
+    if let Err(mut second) = core.filler.set(filler) {
+        // SAFETY: nothing used it.
+        if unsafe { second.destroy(&core.device) } {
+            core.counters.fall(Gauge::Blocks);
+        }
+    }
+    Ok(())
 }
 
 /// The zero source of the copies [`record`] and [`zero_regions`] make: [`ZEROS`] bytes that read

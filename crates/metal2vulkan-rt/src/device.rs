@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, CString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -46,14 +46,16 @@ use std::time::{Duration, Instant};
 /// itself counts as a handle of the device: what a command buffer keeps of a buffer, a texture or
 /// a sampler state it used is the object alone.
 ///
-/// The runtime runs four threads: the block-maker, the submit thread, which runs every scheduled
-/// handler, the completion thread, which runs every completed handler and listener, and the
-/// reaper, which frees the semaphores and command
-/// pools the others give up, one at a time, so no driver free runs on the completion thread. The
-/// device is torn down when the last handle is dropped: the submit thread submits what is ready
-/// and ends what it holds with [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun);
-/// the completion thread retires the rest as the GPU completes it; the threads are joined; then
-/// every allocation is freed, after [`BlockMappings::unmap`] for each the consumer mapped, and the
+/// The runtime runs four threads: the block-maker, which makes the pool's allocations ahead of need
+/// and the runtime's fixed-size internals (the zero source, the parameter ring's blocks and the
+/// staging region) off every caller's thread; the submit thread, which runs every scheduled
+/// handler; the completion thread, which runs every completed handler and listener; and the
+/// reaper, which frees the semaphores and command pools the others give up, one at a time, so no
+/// driver free runs on the completion thread. The device is torn down when the last handle is
+/// dropped: the submit thread submits what is ready and ends what it holds with
+/// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun); the completion thread
+/// retires the rest as the GPU completes it; the threads are joined; then every allocation is
+/// freed, after [`BlockMappings::unmap`] for each the consumer mapped, and the
 /// `VkDevice` is destroyed; every gauge reads zero only then. A last handle dropped on the
 /// consumer's thread tears the device down in that drop. Where the last handle drops in a handler
 /// or a listener, the reaper runs the teardown once the handler returns, and the consumer calls
@@ -297,6 +299,10 @@ pub(crate) struct Core {
     /// released. It parks once: the lowering takes the barrier.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) park_lowered: Mutex<Option<Arc<std::sync::Barrier>>>,
+    /// For the device tests: what the block-maker thread does with the internals asked of it
+    /// ([`DeviceOptions::maker`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) maker_test: memory::MakerTest,
     /// For the device tests: while a test holds it for writing, the completion thread, with work
     /// in flight, waits at the top of its round, so no completion is seen, as on a loaded host.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -311,7 +317,8 @@ pub(crate) struct Core {
     pub(crate) claims: Mutex<HashMap<BlockId, Weak<Claim>>>,
     /// The blocks textures are placed in.
     pub(crate) places: Places,
-    pub(crate) filler: Filler,
+    /// The zero source, once the block-maker thread made it ([`crate::fill::zeros`]).
+    pub(crate) filler: OnceLock<Filler>,
     pub(crate) recorders: Recorders,
     pub(crate) work: Work,
     pub(crate) done: Done,
@@ -419,6 +426,10 @@ pub struct DeviceOptions {
     /// share its files and one count of their bytes, and should pass one cap: each starts a new
     /// generation at half its own.
     pub pipeline_cache_cap: Option<u64>,
+    /// For the device tests: what the block-maker thread does with the internals asked of it,
+    /// from its first work on.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) maker: memory::MakerTest,
 }
 
 /// Takes a lock. A panic while another thread held it leaves what it guards usable (a queue, the
@@ -436,13 +447,18 @@ impl Device {
     /// features the consumer needs, and chooses its memory types on it. It takes one queue of the floor's queue
     /// family for the runtime and, where that family has a second queue, a queue for presenting;
     /// where it has one, presenting shares the runtime's queue and its lock. It makes one
-    /// allocation of each memory class for blocks, then starts the block-maker thread, which makes
-    /// another while a class's free bytes run low, the submit thread and the completion thread.
+    /// allocation of each memory class for blocks, then starts the block-maker thread, the submit
+    /// thread and the completion thread. The block-maker thread's first work, after the call
+    /// returns, is the runtime's fixed-size internals: the zero source (64 KiB), the parameter
+    /// ring's first block (2 MiB) and the staging region (16 MiB). A call that needs one before it
+    /// is made waits for that make, counted in
+    /// [`Metrics::maker_waits`](crate::Metrics::maker_waits); where the make failed, the call
+    /// makes it on its own thread. After that the thread makes a class's next allocation while
+    /// the class's free bytes run low.
     ///
     /// Err: [`Error::BelowFloor`] with every item the device lacks; [`Error::Vulkan`] where a
-    /// Vulkan call fails; [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) at a
-    /// device whose `maxMemoryAllocationCount` does not take the zero source; [`Error::Thread`];
-    /// [`Error::Translation`] where the translator takes no description of the device.
+    /// Vulkan call fails; [`Error::Thread`]; [`Error::Translation`] where the translator takes no
+    /// description of the device.
     pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error> {
         Device::open(physical, options, |_| {})
     }
@@ -583,8 +599,8 @@ impl Device {
         );
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
-        let made = unsafe { objects(&device, &capabilities, &counters, max_allocations) };
-        let (memory_types, filler, done, arrays, layout) = match made {
+        let made = unsafe { objects(&device, &capabilities, &counters) };
+        let (memory_types, done, arrays, layout) = match made {
             Ok(made) => made,
             Err(error) => {
                 // SAFETY: nothing made from the device is left.
@@ -690,13 +706,15 @@ impl Device {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             park_lowered: Mutex::new(None),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            maker_test: options.maker,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             hold_completions: std::sync::RwLock::new(()),
             pool,
             imports,
             exports,
             claims: Mutex::new(HashMap::new()),
             places: Places::new(),
-            filler,
+            filler: OnceLock::new(),
             recorders: Recorders::new(family),
             work,
             done,
@@ -1194,12 +1212,6 @@ fn join(core: &Arc<Core>, threads: Threads) {
     }
 }
 
-/// The memory types the floor chooses on a new device, the zero source, and the completion
-/// thread's semaphores.
-///
-/// # Safety
-///
-/// `device` was made with `capabilities.features`.
 /// The translator for `raw` with what device creation enables of `capabilities`, under the identity
 /// domains: a buffer argument is the guest's address of the buffer, a push field, and a texture or
 /// a sampler its resource ID. It is decided by the device's Vulkan queries alone
@@ -1272,19 +1284,20 @@ unsafe fn consumer_features(
     (enabled, granted)
 }
 
+/// The memory types the floor chooses on a new device, the completion thread's semaphores, set 1's
+/// arrays and the pipeline layout.
+///
+/// # Safety
+///
+/// `device` was made with `capabilities.features`.
 unsafe fn objects(
     device: &ash::Device,
     capabilities: &floor::Capabilities,
     counters: &Counters,
-    max_allocations: u32,
-) -> Result<(floor::MemoryTypes, Filler, Done, Arrays, vk::PipelineLayout), Error> {
+) -> Result<(floor::MemoryTypes, Done, Arrays, vk::PipelineLayout), Error> {
     // SAFETY: the caller's contract.
     let memory_types =
         unsafe { floor::memory_types(device, capabilities) }.map_err(Error::BelowFloor)?;
-    // SAFETY: the caller's contract; the Shared type is host-visible and host-coherent, and the
-    // floor chose it for buffers of every usage.
-    let mut filler =
-        unsafe { Filler::new(device, memory_types.shared, counters, max_allocations) }?;
     // SAFETY: the device is live.
     let made = unsafe { Done::new(device) }.and_then(|mut done| {
         // SAFETY: the device is live, with the floor's features.
@@ -1322,16 +1335,8 @@ unsafe fn objects(
             }
         }
     });
-    match made {
-        Ok((done, arrays, layout)) => Ok((memory_types, filler, done, arrays, layout)),
-        Err(error) => {
-            // SAFETY: the zero source is unused.
-            if unsafe { filler.destroy(device) } {
-                counters.fall(Gauge::Blocks);
-            }
-            Err(error)
-        }
-    }
+    let (done, arrays, layout) = made?;
+    Ok((memory_types, done, arrays, layout))
 }
 
 /// The device's limits a dispatch or a render encoder's state is checked against.
@@ -1538,22 +1543,21 @@ impl Drop for Core {
         self.stamps.destroy(&self.device, &self.counters);
         // SAFETY: the device is idle; nothing reads the ring.
         let ring_blocks = unsafe { self.ring.destroy(&self.device) };
-        for _ in 0..ring_blocks {
-            self.counters.fall(Gauge::Blocks);
-        }
+        let filler = self.filler.take();
         // SAFETY: the device is idle, and nothing made from it is left but these objects.
         let zero_source = unsafe {
             self.device.destroy_pipeline_layout(self.layout, None);
             self.arrays.destroy(&self.device, &self.counters);
             self.done.destroy(&self.device);
-            let zero_source = self.filler.destroy(&self.device);
+            let zero_source = filler.is_some_and(|mut filler| filler.destroy(&self.device));
             self.device.destroy_device(None);
             zero_source
         };
-        // The zero source's gauge falls last, once the `VkDevice` is destroyed: every gauge reads
-        // zero only when the teardown has made its last Vulkan call, so a consumer whose last
-        // handle dropped in a handler can wait for that before it exits.
-        if zero_source {
+        // The ring's and the zero source's gauges fall last, once the `VkDevice` is destroyed:
+        // where the block-maker thread made them, every gauge reads zero only when the teardown
+        // has made its last Vulkan call, so a consumer whose last handle dropped in a handler can
+        // wait for that before it exits.
+        for _ in 0..ring_blocks + usize::from(zero_source) {
             self.counters.fall(Gauge::Blocks);
         }
     }

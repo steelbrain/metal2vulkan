@@ -3,14 +3,21 @@
 //! range and the bytes of `set_bytes`, which a draw's vertex input also reads through the block's
 //! buffer.
 //!
-//! The ring is made of 2 MiB blocks, each split into 64 KiB chunks. A command buffer takes chunks
-//! as it records, writes each byte once, and gives them back when it retires, so the GPU never
-//! reads a chunk the host is writing. A block is made when no chunk is free and kept for the
-//! device's life: the ring holds what the command buffers in flight at once have needed. One take
-//! at a time makes a block, without the ring's lock: a take or a give-back on another thread
-//! never waits for the driver's allocation, and a take that finds no chunk while a block is being
-//! made waits for it, or for a chunk given back, so no block is made beyond what was needed. The
-//! runtime never reads the ring back.
+//! The ring is made of 2 MiB blocks, each split into 32 chunks of 64 KiB. A command buffer takes
+//! chunks as it records, writes each byte once, and gives them back when it retires, so the GPU
+//! never reads a chunk the host is writing. Each block is kept for the device's life. The
+//! block-maker thread makes them, off every caller's thread (`crate::memory::Internal`): the
+//! first as its first work once the device's making starts it, and the next each time a take
+//! leaves fewer chunks free than a block holds, so a block's chunks are free ahead of the takes
+//! and the ring holds at most one block more than the most chunks in use at once need. It makes
+//! one block at a time, without the ring's lock: a take or a give-back never waits for the
+//! driver's allocation. A take that finds no chunk free while the block-maker thread makes the
+//! next waits for it, or for a chunk given back, counted in
+//! [`Metrics::maker_waits`](crate::Metrics::maker_waits). Where it made none (its make failed, or
+//! it had stopped), a take that finds no chunk free makes the block on its own thread, without
+//! the ring's lock, counted in
+//! [`Metrics::ring_block_allocations`](crate::Metrics::ring_block_allocations), and takes that
+//! meet it then wait for it. The runtime never reads the ring back.
 //!
 //! One chunk, taken at the first ask and kept for the device's life, is the nil buffer
 //! ([`Ring::nil`]): 64 KiB of zeros, at a multiple of 16 like every chunk, so it meets any buffer
@@ -21,7 +28,7 @@ use crate::counters::{Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::floor;
-use crate::memory::{self, Mapping};
+use crate::memory::{self, Internal, Mapping};
 use ash::vk;
 use std::ptr::NonNull;
 use std::sync::{Condvar, Mutex, PoisonError};
@@ -30,6 +37,9 @@ use std::sync::{Condvar, Mutex, PoisonError};
 pub(crate) const CHUNK: u64 = 64 * 1024;
 /// A ring block's length.
 pub(crate) const BLOCK: u64 = 32 * CHUNK;
+/// The chunks of a block: a take that leaves fewer free asks the block-maker thread for the
+/// next block.
+pub(crate) const SPARE: usize = (BLOCK / CHUNK) as usize;
 /// The alignment of every write: a parameter block's, and Metal's for `setBytes` data.
 const ALIGN: u64 = 16;
 
@@ -38,8 +48,9 @@ pub(crate) struct Ring {
     state: Mutex<State>,
     /// A block made, or chunks given back, while a block was being made.
     changed: Condvar,
-    /// For the device tests: where set, a take that makes a block meets the test at the barrier
-    /// twice before it makes it, once parked and once released.
+    /// For the device tests: where set, the making of a block, the block-maker thread's or a
+    /// take's, meets the test at the barrier twice before it allocates, once parked and once
+    /// released.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) park: Mutex<Option<std::sync::Arc<std::sync::Barrier>>>,
 }
@@ -49,8 +60,19 @@ struct State {
     free: Vec<Chunk>,
     /// The nil buffer's address, once asked ([`Ring::nil`]).
     nil: Option<u64>,
-    /// A take is making a block.
-    making: bool,
+    /// Who makes the next block.
+    next: Next,
+}
+
+/// Who makes the ring's next block.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Next {
+    /// No one: a block's chunks are free, or the block-maker thread made none.
+    Unasked,
+    /// The block-maker thread, asked for it ([`Internal::RingBlock`]).
+    Maker,
+    /// A take, on its own thread, where the block-maker thread made none.
+    Take,
 }
 
 struct RingBlock {
@@ -77,13 +99,15 @@ pub(crate) struct Placed {
 }
 
 impl Ring {
+    /// The ring of a new device, whose first block the block-maker thread makes as its first
+    /// work (`crate::memory::run`).
     pub(crate) fn new() -> Ring {
         Ring {
             state: Mutex::new(State {
                 blocks: Vec::new(),
                 free: Vec::new(),
                 nil: None,
-                making: false,
+                next: Next::Maker,
             }),
             changed: Condvar::new(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -91,54 +115,72 @@ impl Ring {
         }
     }
 
-    /// A free chunk, making a block where none is free and no other take is making one; where one
-    /// is, the take waits for it.
+    /// A free chunk. A take that leaves fewer than [`SPARE`] free, with no block being made, asks
+    /// the block-maker thread for the next. Where none is free, the take waits while the
+    /// block-maker thread or another take makes a block (a wait for the block-maker thread is
+    /// counted), and makes one itself where neither does.
     fn take(&self, core: &Core) -> Result<Chunk, Error> {
         let mut state = lock(&self.state);
+        // When this take began to wait for the block-maker thread's block.
+        let mut since = None;
         loop {
             if let Some(chunk) = state.free.pop() {
+                let ask = state.next == Next::Unasked && state.free.len() < SPARE;
+                if ask {
+                    state.next = Next::Maker;
+                }
+                drop(state);
+                waited(core, since);
+                if ask && !core.pool.ask(Internal::RingBlock) {
+                    self.unasked();
+                }
                 return Ok(chunk);
             }
-            if !state.making {
-                break;
+            match state.next {
+                Next::Unasked => break,
+                Next::Maker => {
+                    since.get_or_insert_with(crate::host_time);
+                }
+                Next::Take => {}
             }
             state = self
                 .changed
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        state.making = true;
+        waited(core, since);
+        state.next = Next::Take;
         drop(state);
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        {
-            let park = lock(&self.park).clone();
-            if let Some(park) = park {
-                park.wait();
-                park.wait();
-            }
-        }
         let made = make(core);
         let mut state = lock(&self.state);
-        state.making = false;
+        state.next = Next::Unasked;
         self.changed.notify_all();
         let (block, address, host) = made?;
-        let buffer = block.buffer;
-        state.blocks.push(block);
-        for index in (1..BLOCK / CHUNK).rev() {
-            state.free.push(Chunk {
-                address: address + index * CHUNK,
-                // SAFETY: the chunk lies in the block's mapping.
-                host: Mapping::new(unsafe { host.at(index * CHUNK) }),
-                buffer,
-                offset: index * CHUNK,
-            });
+        Ok(state.add(block, address, host))
+    }
+
+    /// On the block-maker thread: makes the block asked of it ([`Internal::RingBlock`]) and hands
+    /// its chunks to the takes. Err where the make failed: a take that finds no chunk free then
+    /// makes the next block.
+    pub(crate) fn make_ahead(&self, core: &Core) -> Result<(), Error> {
+        let made = make(core);
+        let mut state = lock(&self.state);
+        state.next = Next::Unasked;
+        self.changed.notify_all();
+        let (block, address, host) = made?;
+        let first = state.add(block, address, host);
+        state.free.push(first);
+        Ok(())
+    }
+
+    /// The block-maker thread makes no block asked of it: it has stopped, or (in the device
+    /// tests) its make fails at once. A take that finds no chunk free makes the block.
+    pub(crate) fn unasked(&self) {
+        let mut state = lock(&self.state);
+        if state.next == Next::Maker {
+            state.next = Next::Unasked;
+            self.changed.notify_all();
         }
-        Ok(Chunk {
-            address,
-            host,
-            buffer,
-            offset: 0,
-        })
     }
 
     /// The nil buffer's address (the module docs): a chunk of zeros, taken and zeroed at the
@@ -156,7 +198,7 @@ impl Ring {
             // Another thread's ask made it first: the chunk goes back.
             Some(address) => {
                 state.free.push(chunk);
-                if state.making {
+                if state.next != Next::Unasked {
                     self.changed.notify_all();
                 }
                 Ok(address)
@@ -172,7 +214,7 @@ impl Ring {
     fn give_back(&self, chunks: Vec<Chunk>) {
         let mut state = lock(&self.state);
         state.free.extend(chunks);
-        if state.making {
+        if state.next != Next::Unasked {
             self.changed.notify_all();
         }
     }
@@ -208,9 +250,43 @@ impl Ring {
     }
 }
 
+impl State {
+    /// Keeps a block made at `address`, mapped at `host`: its chunks but the first are free, and
+    /// the first is the caller's.
+    fn add(&mut self, block: RingBlock, address: u64, host: Mapping) -> Chunk {
+        let buffer = block.buffer;
+        self.blocks.push(block);
+        let chunk = |index: u64| Chunk {
+            address: address + index * CHUNK,
+            // SAFETY: the chunk lies in the block's mapping.
+            host: Mapping::new(unsafe { host.at(index * CHUNK) }),
+            buffer,
+            offset: index * CHUNK,
+        };
+        self.free.extend((1..BLOCK / CHUNK).rev().map(chunk));
+        chunk(0)
+    }
+}
+
+/// Counts a take's wait for the block-maker thread's block, begun at `since` where it waited.
+fn waited(core: &Core, since: Option<u64>) {
+    if let Some(since) = since {
+        (core.counters).maker_wait(crate::host_time().saturating_sub(since));
+    }
+}
+
 /// Makes a ring block: a buffer with every buffer usage on an allocation of the ring type with a
-/// device address, mapped. Returns it with its device and host addresses.
+/// device address, mapped. Returns it with its device and host addresses. Its allocation is
+/// counted at [`Site::RingBlock`] on a consumer's thread.
 fn make(core: &Core) -> Result<(RingBlock, u64, Mapping), Error> {
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    {
+        let park = lock(&core.ring.park).clone();
+        if let Some(park) = park {
+            park.wait();
+            park.wait();
+        }
+    }
     let device = &core.device;
     let info = vk::BufferCreateInfo::default()
         .size(BLOCK)

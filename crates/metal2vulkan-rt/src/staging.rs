@@ -1,7 +1,10 @@
 //! Staging: the bytes a copy between a texture and the CPU passes through.
 //!
 //! The device has one staging region of [`REGION_LEN`] bytes, an allocation of the Shared type
-//! made at the first copy and kept for the device's life: no copy allocates memory. It is a ring:
+//! that the block-maker thread makes as its first work once the device's making starts it
+//! (`crate::memory::Internal::StagingRegion`), and kept for the device's life: no copy allocates
+//! memory. A copy before that make ends waits for it; where it failed, the first copy makes the
+//! region ([`Work::make_staging_region`](crate::submit::Work::make_staging_region)). It is a ring:
 //! each copy takes a span, which the host writes before the copy is recorded (`replace_region`) or
 //! reads once the copy has completed (`get_bytes`), every row packed, so nothing reads a byte of a
 //! span that its own copy's writer did not write, and the region's bytes are never zeroed. A span is free again once the submission that carries its

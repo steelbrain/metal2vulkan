@@ -103,12 +103,14 @@ them over this crate's items:
 
 ### Teardown
 
-The runtime runs four threads per device: the block-maker, the submit thread, the completion
-thread, and the reaper, which frees the semaphores and command pools the others give up, one at a
-time, so no driver free runs on the completion thread and a submission waits behind at most one,
-lowers the compute pipeline states' variants an encoding call waits for (the emulated-SIMD-group
-and the partial-threadgroups ones), and makes the device's pipeline cache when it starts and writes
-it to the cache directory once pipeline creation is quiet. While an old generation of the cache
+The runtime runs four threads per device: the block-maker, which makes the pool's allocations
+ahead of need and the runtime's fixed-size internals off every caller's thread (Memory blocks and
+buffers), the submit thread, the completion thread, and the reaper, which frees the semaphores
+and command pools the others give up, one at a time, so no driver free runs on the completion
+thread and a submission waits behind at most one, lowers the compute pipeline states' variants an
+encoding call waits for (the emulated-SIMD-group and the partial-threadgroups ones), and makes the
+device's pipeline cache when it starts and writes it to the cache directory once pipeline creation
+is quiet. While an old generation of the cache
 directory is removed, a thread of the store's own does it, and ends with the removal; the teardown
 waits for it. `Gauges::threads` holds the OS id of each of these threads while it runs, so a tool
 can tell the runtime's own work from the threads a driver starts for itself.
@@ -205,6 +207,17 @@ in its memory.
   `ring_block_allocations`, `staging_region_allocations`, `staging_buffer_allocations` (a copy
   larger than the staging region), `capture_ring_allocations`, `zero_source_allocations` and
   `take_allocations` (a take that no free range fits).
+- The runtime's fixed-size internals are made by the block-maker thread, never on a caller's
+  thread and never inside `Device::new`: its first work once `Device::new` starts it is the zero
+  source (64 KiB), the parameter ring's first block (2 MiB) and the staging region (16 MiB). The
+  ring's next block is made one ahead: when a take leaves fewer free chunks than a block holds
+  (32 of 64 KiB), the block-maker thread makes the next, so the ring holds at most one block more
+  than the most chunks in use at once need. A call that needs one of these before it is made
+  waits for the make: `Metrics::maker_waits` counts those waits and `maker_wait_max_nanos` the
+  longest. Where the block-maker thread's make failed, or the thread had stopped, the call makes
+  it on its own thread with the same function, counted at its site. Every device holds these
+  18 MiB from its start, used or not, and the ring's second block of 2 MiB from its first take of
+  a chunk (a parameter write, or a buffer argument bound to nothing).
 - A Private allocation takes the device-local Private type. Where that allocation itself fails
   out of device memory (never a budget poll), it takes the next memory type the resource allows,
   in the device's order: `BlockInfo::device_local` is false for such a block, and
@@ -216,8 +229,8 @@ in its memory.
   Metal's two-copy rule.
 - Every `VkDeviceMemory` the runtime holds counts against the device's `maxMemoryAllocationCount`:
   each block (texture blocks among them), each imported block, each texture's own allocation, the
-  staging region (from the first texture copy on), the staging buffer of a copy larger than the
-  region while it runs, the parameter ring's blocks and the zero source. Vulkan leaves an
+  staging region, the staging buffer of a copy larger than the region while it runs, the
+  parameter ring's blocks and the zero source. Vulkan leaves an
   allocation past the count undefined and does not promise `VK_ERROR_TOO_MANY_OBJECTS` for it, so
   the runtime counts its own: one more past it is `Limit::MemoryAllocations`, refused before the
   driver is called; `Gauges::blocks` counts those live. The limit is about 4.29 billion on RADV,
@@ -1030,8 +1043,9 @@ made, with no lock, and never rewritten for layouts.
   linear images' memory to 4,096; ANV (Mesa 26.2.6) on the Iris Xe of RPL-P lays each row at the row
   itself with its memory aligned to the texel, so it answers the texel's bytes (4 for `RGBA8Unorm`,
   1 for `R8Unorm`), below Metal's 16. The answer promises nothing for widths not tried.
-- The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
-  copy and kept for the device's life, so no copy allocates memory. Its bytes are never zeroed:
+- The staging region is 16 MiB of the Shared type in an allocation of its own, made by the
+  block-maker thread as its first work and kept for the device's life, so no copy allocates
+  memory. Its bytes are never zeroed:
   each copy's span is written, by the host or by the copy, before anything reads it. It is a ring: each copy takes a span at a multiple of 256 bytes,
   free again once the submission that carries the copy completes and no `get_bytes` reads it. The
   upload is submitted, without a wait, once its copies' spans take 8 MiB, so the GPU copies while

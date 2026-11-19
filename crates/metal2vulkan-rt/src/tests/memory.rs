@@ -127,8 +127,13 @@ mod on_device {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    /// The runtime's own allocation besides the pool's: the zero source of Private fills.
-    const ZERO_SOURCE: u64 = 1;
+    /// The runtime's own allocations besides the pool's, which the block-maker thread makes as
+    /// its first work: the zero source, the parameter ring's first block and the staging region.
+    const INTERNALS: u64 = 3;
+
+    /// Of [`INTERNALS`], those `Metrics::blocks_made` counts: the zero source and the ring's
+    /// block.
+    const INTERNAL_BLOCKS: u64 = 2;
 
     /// The consumer's hooks as a test sees them: each allocation mapped, as the runtime described
     /// it and the thread the map ran on, and each unmap, the thread it ran on and the
@@ -371,7 +376,10 @@ mod on_device {
             block_mappings: Some(Arc::clone(hook) as Arc<dyn BlockMappings>),
             ..DeviceOptions::default()
         };
-        Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"))
+        let device =
+            Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"));
+        device.core().pool.settle();
+        device
     }
 
     /// The matrix's leak records: each kind's live count after the device dropped.
@@ -524,8 +532,8 @@ mod on_device {
             let clone = view.clone();
             let live = counters.gauges();
             assert_eq!(live.buffers, 2, "{name}: a clone is the same buffer");
-            assert!(live.blocks >= ZERO_SOURCE + 2, "{name}: {live:?}");
-            assert!(counters.metrics().blocks_made >= ZERO_SOURCE + 2);
+            assert!(live.blocks >= INTERNALS + 2, "{name}: {live:?}");
+            assert!(counters.metrics().blocks_made >= INTERNAL_BLOCKS + 2);
             drop(clone);
             assert_eq!(counters.gauges().buffers, 2);
 
@@ -724,6 +732,7 @@ mod on_device {
             let device = Device::new(physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let core = device.core();
+            core.pool.settle();
             let counters = device.counters();
             let before = counters.metrics();
             let made = before.blocks_made;
@@ -739,8 +748,8 @@ mod on_device {
                     gauges.shared_idle_bytes,
                     gauges.private_idle_bytes
                 ),
-                (ZERO_SOURCE + 2, len, len),
-                "{name}: the zero source and the first allocations"
+                (INTERNALS + 2, len, len),
+                "{name}: the internals and the first allocations"
             );
             let small = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: a small block: {error}"));
@@ -1265,7 +1274,7 @@ mod on_device {
                     gauges.shared_idle_bytes,
                     gauges.shared_idle_age_nanos
                 ),
-                (ZERO_SOURCE + 2, len, 0),
+                (INTERNALS + 2, len, 0),
                 "{name}: the reserve of each class, kept and unweighed"
             );
             let metrics = counters.metrics();
@@ -1333,7 +1342,7 @@ mod on_device {
                     gauges.shared_reserve_bytes,
                     gauges.shared_idle_age_nanos
                 ),
-                (ZERO_SOURCE + 2, unit, unit, 0),
+                (INTERNALS + 2, unit, unit, 0),
                 "{name}: one unit allocation of each class, the Shared one the reserve"
             );
             assert_eq!(
@@ -1611,17 +1620,19 @@ mod on_device {
         }
     }
 
-    /// With the device's `maxMemoryAllocationCount` answered as the zero source's, the first two
-    /// allocations' and one more (`Device::open`), the count is reached once a texture's block
-    /// takes the first Private allocation whole and the block-maker thread makes the next. Past
-    /// it, a texture longer than an allocation, whose block takes an allocation of its own, and
-    /// the staging region of a first copy are `Limit::MemoryAllocations` with the device's count,
-    /// refused before the driver is called, the gauges unchanged; textures placed in the texture
-    /// block still come and go; and every gauge reads zero after teardown.
+    /// With the device's `maxMemoryAllocationCount` answered as the first two allocations', the
+    /// zero source's and the ring block's (`Device::open`), the count is reached once the
+    /// block-maker thread made those two: its staging region is refused, and so is its next
+    /// Private allocation once a texture's block takes the first one whole. Past the count, a
+    /// texture longer than an allocation, whose block takes an allocation of its own, and the
+    /// staging region the first copy makes where the block-maker thread made none are
+    /// `Limit::MemoryAllocations` with the device's count, refused before the driver is called,
+    /// the gauges unchanged; textures placed in the texture block still come and go; and every
+    /// gauge reads zero after teardown.
     #[test]
     fn every_device_refuses_an_allocation_past_its_count() {
         use crate::{IndexClass, PixelFormat, Region, TextureDescriptor, TextureType};
-        const MAX: u32 = ZERO_SOURCE as u32 + 3;
+        const MAX: u32 = INTERNAL_BLOCKS as u32 + 2;
         let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
@@ -1631,18 +1642,19 @@ mod on_device {
             })
             .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
-            wait_until("the first allocation of each class", || {
-                counters.gauges().blocks == ZERO_SOURCE + 2
-            });
+            device.core().pool.settle();
+            let gauges = counters.gauges();
+            assert_eq!(
+                (gauges.blocks, gauges.staging_bytes),
+                (u64::from(MAX), 0),
+                "{name}: the first allocations, the zero source and the ring's block, no region"
+            );
             device
                 .grant_indices(IndexClass::Texture, 4096, 16)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
             let first = (device.new_texture(&d, Some(4096)))
                 .unwrap_or_else(|error| panic!("{name}: the first texture: {error}"));
-            wait_until("the next Private allocation", || {
-                counters.gauges().blocks == u64::from(MAX)
-            });
             // Three layers of 4096 x 4096 RGBA16Float, 384 MiB: longer than an allocation.
             let mut large = TextureDescriptor::new(
                 TextureType::Type2DArray,

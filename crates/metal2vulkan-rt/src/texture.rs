@@ -631,6 +631,11 @@ impl Image {
         })
     }
 
+    /// Whether its move home copies from the zero source ([`Zero::Copy`]).
+    pub(crate) fn copies_zeros(&self) -> bool {
+        matches!(self.zero, Some(Zero::Copy { .. }))
+    }
+
     /// Its move home is owed, recorded by the next upload that holds it ([`homing`](Self::homing)):
     /// a new image's, or a drawable's at each acquire. Under the work lock.
     pub(crate) fn owe_home(&self) {

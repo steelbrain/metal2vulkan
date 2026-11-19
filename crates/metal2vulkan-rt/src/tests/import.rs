@@ -73,8 +73,9 @@ pub(crate) mod on_device {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    /// The runtime's own allocation besides the pool's: the zero source of Private fills.
-    const ZERO_SOURCE: u32 = 1;
+    /// The runtime's own allocations besides the pool's, which the block-maker thread makes as
+    /// its first work: the zero source, the parameter ring's first block and the staging region.
+    const INTERNALS: u32 = 3;
 
     pub(crate) fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -440,11 +441,12 @@ pub(crate) mod on_device {
     }
 
     /// An import counts against the device's `maxMemoryAllocationCount`: with the count answered
-    /// as one past the device's allocations at its making, one import is made, and the next is
-    /// `Limit::MemoryAllocations` before the driver is called, its release dropped unrun.
+    /// as one past the device's allocations once its block-maker thread made its internals, one
+    /// import is made, and the next is `Limit::MemoryAllocations` before the driver is called, its
+    /// release dropped unrun.
     #[test]
     fn every_device_counts_imports_against_its_allocations() {
-        const MAX: u32 = ZERO_SOURCE + 3;
+        const MAX: u32 = INTERNALS + 3;
         let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
@@ -459,9 +461,12 @@ pub(crate) mod on_device {
                 continue;
             };
             let alignment = *alignment;
-            wait_until("the first allocation of each class", || {
-                counters.gauges().blocks == u64::from(MAX - 1)
-            });
+            device.core().pool.settle();
+            assert_eq!(
+                counters.gauges().blocks,
+                u64::from(MAX - 1),
+                "{name}: the first allocation of each class and the internals"
+            );
             let len = (64u64 << 10).next_multiple_of(alignment);
             let (first, first_mapping) = host_memory(len, alignment);
             let (second, second_mapping) = host_memory(len, alignment);

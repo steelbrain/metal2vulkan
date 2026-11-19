@@ -161,7 +161,8 @@ impl Device {
     /// block, where Metal answers nil; [`Error::NoSuchBlock`] for a block the
     /// consumer does not hold; for a buffer zeroed by a GPU fill, [`Refusal::InScheduledHandler`]
     /// in a scheduled handler, [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's
-    /// command buffer cannot be made.
+    /// command buffer cannot be made, or what making the zero source returns where a fill copies
+    /// from it and the block-maker thread made none.
     pub fn new_buffer(
         &self,
         block: BlockId,
@@ -280,8 +281,10 @@ impl Device {
     /// bytes in a block the host does not map; [`Refusal::ManagedCopyMissing`] for no `copy` where
     /// the device keeps one, [`Refusal::ManagedCopyOnUnified`] for a `copy` where it keeps none
     /// and [`Refusal::ManagedCopyNotPrivate`] for a `copy` in a Shared block; for a device copy,
-    /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be made;
-    /// for one whose first bytes are copied, what [`Buffer::did_modify_range`] returns.
+    /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be made,
+    /// or what making the zero source returns where the fill copies from it and the block-maker
+    /// thread made none; for one whose first bytes are copied, what [`Buffer::did_modify_range`]
+    /// returns.
     pub fn new_managed_buffer(
         &self,
         bytes: (BlockId, u64),
@@ -339,22 +342,16 @@ impl Device {
         if copied < length {
             let (copy_buffer, start) = copy.range(copied);
             let end = start + (length - copied);
+            let zeros = fill::zeros_for(core, start, end)?;
             core.work.upload(
                 core,
                 None,
                 [Held::Copy(Arc::clone(&copy))],
                 // SAFETY: the upload's command buffer is recording, under the work lock; the copy
-                // block's buffer has every usage, `start..end` lies in it, and the upload holds
-                // the copy.
+                // block's buffer has every usage, `start..end` lies in it, `zeros` is what
+                // `zeros_for` answered for it, and the upload holds the copy.
                 |device, command| unsafe {
-                    fill::record(
-                        device,
-                        command,
-                        core.filler.zeros(),
-                        copy_buffer,
-                        start,
-                        end,
-                    )
+                    fill::record(device, command, zeros, copy_buffer, start, end)
                 },
             )?;
             core.counters.zeroed(length - copied);
@@ -385,7 +382,8 @@ impl Device {
     /// the block;
     /// [`Refusal::ZeroRangeShared`] for a Shared block, whose bytes the consumer writes through
     /// the mapping; [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer
-    /// cannot be made.
+    /// cannot be made, or what making the zero source returns where the fill copies from it and
+    /// the block-maker thread made none.
     pub fn zero_block_range(&self, block: BlockId, offset: u64, length: u64) -> Result<(), Error> {
         crate::command::not_in_scheduled_handler()?;
         let block = self.block(block)?;

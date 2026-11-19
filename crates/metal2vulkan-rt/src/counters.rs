@@ -300,6 +300,8 @@ struct Atomics {
     /// Each [`Site`]'s allocations, at its index: their count, their bytes and the longest's
     /// nanoseconds.
     sites: [[AtomicU64; 3]; SITES],
+    maker_waits: AtomicU64,
+    maker_wait_max_nanos: AtomicU64,
     dispatches_without_effects: AtomicU64,
     shared_long_reuses: AtomicU64,
     private_long_reuses: AtomicU64,
@@ -567,6 +569,14 @@ impl Counters {
             a.consumer_allocation_nanos.fetch_add(nanos, Relaxed);
             a.consumer_allocation_max_nanos.fetch_max(nanos, Relaxed);
         }
+    }
+
+    /// A call that waited `nanos` nanoseconds for the block-maker thread's make of an internal it
+    /// needs ([`Metrics::maker_waits`]).
+    pub(crate) fn maker_wait(&self, nanos: u64) {
+        let a = &self.atomics;
+        a.maker_waits.fetch_add(1, Relaxed);
+        a.maker_wait_max_nanos.fetch_max(nanos, Relaxed);
     }
 
     /// A `vkAllocateMemory` of `bytes` that took `nanos` nanoseconds at `site`, on a thread of the
@@ -867,6 +877,8 @@ impl Counters {
             capture_ring_allocations: site(Site::CaptureRing),
             zero_source_allocations: site(Site::ZeroSource),
             take_allocations: site(Site::Take),
+            maker_waits: a.maker_waits.load(Relaxed),
+            maker_wait_max_nanos: a.maker_wait_max_nanos.load(Relaxed),
             shared_long_reuses: a.shared_long_reuses.load(Relaxed),
             private_long_reuses: a.private_long_reuses.load(Relaxed),
             allocations_mapped: a.allocations_mapped.load(Relaxed),
@@ -1086,9 +1098,10 @@ pub struct Metrics {
     /// frame allocated.
     pub block_bytes_made: u64,
     /// `vkAllocateMemory` calls made on the consumer's threads, inside its calls: takes that no
-    /// free range fits, textures' allocations of their own, the staging region and the parameter
-    /// ring's blocks, and the zero source. A driver may hold the device's other calls for an
-    /// allocation's whole length.
+    /// free range fits, textures' allocations of their own, copies' staging buffers of their own
+    /// and the capture ring; and the runtime's fixed-size internals (the zero source, the
+    /// parameter ring's blocks and the staging region) only where the block-maker thread's make
+    /// of one failed. A driver may hold the device's other calls for an allocation's whole length.
     pub consumer_allocations: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) those calls took, in total.
     pub consumer_allocation_nanos: u64,
@@ -1096,8 +1109,9 @@ pub struct Metrics {
     /// difference of two reads does not apply to it.
     pub consumer_allocation_max_nanos: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) the allocations made ahead of need
-    /// took, in total: the block-maker thread's, off the consumer's threads, and each class's
-    /// first allocation in the device's making.
+    /// took, in total: the block-maker thread's, off the consumer's threads (the runtime's
+    /// fixed-size internals among them), and each class's first allocation in the device's
+    /// making.
     pub maker_allocation_nanos: u64,
     /// Of [`consumer_allocations`](Self::consumer_allocations), those of textures' images that
     /// took an allocation of their own, not a place in a texture block: an image the device
@@ -1109,10 +1123,13 @@ pub struct Metrics {
     /// Private block, and no free range of the pool, which the block-maker thread keeps 8 MiB of
     /// ahead per class, fit it, so the take allocated.
     pub texture_block_allocations: SiteAllocations,
-    /// Those of the parameter ring's 2 MiB blocks: a write into the ring that found no chunk free.
+    /// Those of the parameter ring's 2 MiB blocks: a write into the ring that found no chunk free
+    /// where the block-maker thread, which makes each block ahead of need, made none (its make
+    /// failed, or it had stopped).
     pub ring_block_allocations: SiteAllocations,
-    /// Those of the staging region, made at the device's first `replace_region` or `get_bytes`
-    /// copy of 16 MiB or less.
+    /// Those of the staging region, which the block-maker thread makes as its first work: made
+    /// by the device's first `replace_region` or `get_bytes` copy of 16 MiB or less only where
+    /// that make failed.
     pub staging_region_allocations: SiteAllocations,
     /// Those of staging buffers of their own, one for each `replace_region` or `get_bytes` copy
     /// larger than the 16 MiB staging region.
@@ -1122,14 +1139,25 @@ pub struct Metrics {
     /// [`Buffer::did_modify_range`](crate::Buffer::did_modify_range) of a Managed buffer with a
     /// device copy.
     pub capture_ring_allocations: SiteAllocations,
-    /// Those of the zero source, the buffer of zeros Private fills copy from, made in the device's
-    /// making ([`Device::new`](crate::Device::new)).
+    /// Those of the zero source, the buffer of zeros that Private fills and new block-compressed
+    /// textures copy from, which the block-maker thread makes as its first work: made by the
+    /// first such fill or texture only where that make failed.
     pub zero_source_allocations: SiteAllocations,
     /// Those of takes from the pool that no free range fit: the consumer's
     /// ([`Device::take_block`](crate::Device::take_block)), and a capture's staging blocks of its
     /// own ([`capture_overflows`](Self::capture_overflows)). Texture blocks' are
     /// [`texture_block_allocations`](Self::texture_block_allocations).
     pub take_allocations: SiteAllocations,
+    /// Calls that waited for the block-maker thread's make of one of the runtime's fixed-size
+    /// internals they need, which it makes off every caller's thread: the zero source, a
+    /// parameter ring block or the staging region (the sites above). Such a
+    /// wait is a stall of the call as an allocation on its thread would be, made only while the
+    /// make runs: in the first moments of the device's life, or where the ring's writes outrun
+    /// its next block.
+    pub maker_waits: u64,
+    /// The longest of those waits, in nanoseconds of [`host_time`](crate::host_time); a maximum
+    /// since the device was made, so the difference of two reads does not apply to it.
+    pub maker_wait_max_nanos: u64,
     /// Shared takes carved from a long allocation, one a take longer than the 16 MiB unit made for
     /// itself, after that take: a take of the same length, which a long allocation alone serves.
     pub shared_long_reuses: u64,
@@ -1485,7 +1513,7 @@ pub struct Gauges {
     /// the staging blocks of overflows that command buffers not yet retired hold.
     pub capture_bytes: u64,
     /// Bytes of staging for copies between textures and the CPU (`replace_region`, `get_bytes`):
-    /// the staging region, once a copy made it, and the staging buffers of their own that copies
+    /// the staging region, once made, and the staging buffers of their own that copies
     /// larger than the region hold until the upload that copies through them is gone.
     pub staging_bytes: u64,
     /// The translator's specialized entries and module decodes the device keeps for its pipeline

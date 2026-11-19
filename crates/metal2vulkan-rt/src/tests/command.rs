@@ -117,24 +117,48 @@ pub(crate) mod on_device {
         }
     }
 
-    /// Opens each device of the cfg's kind with `options`, under the validation layer, runs
-    /// `body`, which drops the device, and checks that every gauge reaches zero.
+    /// Opens each device of the cfg's kind, under the validation layer, waits for the block-maker
+    /// thread's first work, runs `body`, which drops the device, and checks that every gauge
+    /// reaches zero.
     pub(crate) fn each_device(test: &str, body: impl FnMut(&str, &Instance, Device)) {
         let instance = crate::tests::validation::instance(&[]);
         on_each_device(test, &instance, body);
+    }
+
+    /// [`each_device`] with `options` for each device.
+    pub(crate) fn each_device_with(
+        test: &str,
+        options: impl Fn() -> DeviceOptions,
+        body: impl FnMut(&str, &Instance, Device),
+    ) {
+        let instance = crate::tests::validation::instance(&[]);
+        open_each_device(test, &instance, options, body);
     }
 
     /// [`each_device`] on `instance`.
     pub(crate) fn on_each_device(
         test: &str,
         instance: &Instance,
+        body: impl FnMut(&str, &Instance, Device),
+    ) {
+        open_each_device(test, instance, DeviceOptions::default, body);
+    }
+
+    /// [`each_device_with`] on `instance`.
+    fn open_each_device(
+        test: &str,
+        instance: &Instance,
+        options: impl Fn() -> DeviceOptions,
         mut body: impl FnMut(&str, &Instance, Device),
     ) {
         let devices = devices_of_the_cfgs_kind(instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
-            let device = Device::new(physical, DeviceOptions::default())
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let device =
+                Device::new(physical, options()).unwrap_or_else(|error| panic!("{name}: {error}"));
+            // The block-maker thread's first work done, so a body's counts start from a device
+            // that holds its fixed-size internals.
+            device.core().pool.settle();
             let counters = device.counters();
             body(name, instance, device);
             within("the teardown", || counters.gauges() == Gauges::default());
