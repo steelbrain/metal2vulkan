@@ -1213,7 +1213,7 @@ const-value	metal2vulkan-rt::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attac
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
-const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME]
+const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ZERO_INITIALIZE_DEVICE_MEMORY]
 const-value	metal2vulkan-rt::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-rt::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-rt::floor::VERSION	vk::API_VERSION_1_3
@@ -2581,6 +2581,7 @@ field	metal2vulkan-rt::floor::Capabilities.queue_family	pub queue_family: u32
 field	metal2vulkan-rt::floor::Capabilities.shared_int64_atomics	pub shared_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.storage_read_without_format	pub storage_read_without_format: bool
 field	metal2vulkan-rt::floor::Capabilities.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: bool
+field	metal2vulkan-rt::floor::Capabilities.zero_initialize_memory	pub zero_initialize_memory: bool
 field	metal2vulkan-rt::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
 field	metal2vulkan-rt::floor::Features.divisor	pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.feedback_loop	pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>
@@ -2592,9 +2593,11 @@ field	metal2vulkan-rt::floor::Features.subgroup_uniform_control_flow	pub subgrou
 field	metal2vulkan-rt::floor::Features.vulkan11	pub vulkan11: vk::PhysicalDeviceVulkan11Features<'static>
 field	metal2vulkan-rt::floor::Features.vulkan12	pub vulkan12: vk::PhysicalDeviceVulkan12Features<'static>
 field	metal2vulkan-rt::floor::Features.vulkan13	pub vulkan13: vk::PhysicalDeviceVulkan13Features<'static>
+field	metal2vulkan-rt::floor::Features.zero_initialize	pub zero_initialize: ZeroInitializeDeviceMemoryFeatures
 field	metal2vulkan-rt::floor::MemoryTypes.private	pub private: u32
 field	metal2vulkan-rt::floor::MemoryTypes.ring	pub ring: u32
 field	metal2vulkan-rt::floor::MemoryTypes.shared	pub shared: u32
+field	metal2vulkan-rt::floor::ZeroInitializeDeviceMemoryFeatures.zero_initialize_device_memory	pub zero_initialize_device_memory: vk::Bool32
 field	metal2vulkan-runtime::AddressRange.length	pub length: u64
 field	metal2vulkan-runtime::AddressRange.start	pub start: GpuAddress
 field	metal2vulkan-runtime::BinaryArchiveDescriptor.url	pub url: Option<PathBuf>
@@ -11889,6 +11892,7 @@ struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)]
 struct	metal2vulkan-rt::floor::Capabilities	pub struct Capabilities
 struct	metal2vulkan-rt::floor::Features	#[derive(Clone, Copy, Default)] pub struct Features
 struct	metal2vulkan-rt::floor::MemoryTypes	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct MemoryTypes
+struct	metal2vulkan-rt::floor::ZeroInitializeDeviceMemoryFeatures	#[derive(Clone, Copy)] #[repr(C)] pub struct ZeroInitializeDeviceMemoryFeatures
 struct	metal2vulkan-runtime::AddressModeMap	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct AddressModeMap
 struct	metal2vulkan-runtime::AddressPool	pub struct AddressPool
 struct	metal2vulkan-runtime::AddressRange	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct AddressRange
@@ -12461,6 +12465,12 @@ trait-impl	metal2vulkan-rt::TextureSwizzleChannels impl Default	impl Default for
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl std::error::Error	impl std::error::Error for BelowFloor
 trait-impl	metal2vulkan-rt::floor::Missing impl fmt::Display	impl fmt::Display for Missing
+trait-impl	metal2vulkan-rt::floor::ZeroInitializeDeviceMemoryFeatures impl Default	impl Default for ZeroInitializeDeviceMemoryFeatures
+trait-impl	metal2vulkan-rt::floor::ZeroInitializeDeviceMemoryFeatures impl fe impl Send	unsafe impl Send for ZeroInitializeDeviceMemoryFeatures
+trait-impl	metal2vulkan-rt::floor::ZeroInitializeDeviceMemoryFeatures impl fe impl Sync	unsafe impl Sync for ZeroInitializeDeviceMemoryFeatures
+trait-impl	metal2vulkan-rt::floor::ZeroInitializeDeviceMemoryFeatures impl fe impl vk::ExtendsDeviceCreateInfo	unsafe impl vk::ExtendsDeviceCreateInfo for ZeroInitializeDeviceMemoryFeatures
+trait-impl	metal2vulkan-rt::floor::ZeroInitializeDeviceMemoryFeatures impl fe impl vk::ExtendsPhysicalDeviceFeatures2	unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for ZeroInitializeDeviceMemoryFeatures
+trait-impl	metal2vulkan-rt::floor::ZeroInitializeDeviceMemoryFeatures impl fe impl vk::TaggedStructure	unsafe impl vk::TaggedStructure for ZeroInitializeDeviceMemoryFeatures
 trait-impl	metal2vulkan-runtime::AddressModeMap impl Default	impl Default for AddressModeMap
 trait-impl	metal2vulkan-runtime::AddressPool impl Drop	impl Drop for AddressPool
 trait-impl	metal2vulkan-runtime::AddressPool impl std::fmt::Debug	impl std::fmt::Debug for AddressPool
