@@ -24,7 +24,10 @@
 //!   partitions (`InvalidDescriptor(MaxTessellationFactor)` otherwise), and at most the device's
 //!   `maxTessellationGenerationLevel` (`Unsupported{Tessellation; Limit}`);
 //! - a pipeline of vertex amplification above 1 (multiview) with tessellation stages needs
-//!   `multiviewTessellationShader` (`Unsupported{VertexAmplification; Feature}` without it).
+//!   `multiviewTessellationShader` (`Unsupported{VertexAmplification; Feature}` without it);
+//! - under the identity domains, whose control stage reads the factors through their address
+//!   ([`control`]'s address form), a control-point index type is not implemented
+//!   (`Unsupported{Tessellation; NotImplemented}`).
 //!
 //! Link numbers the factor buffer (`SyntheticBinding::TessellationFactors`), the patch index
 //! buffer (`SyntheticBinding::PatchIndices`), and, for a pipeline with a control-point index
@@ -35,6 +38,11 @@
 //! otherwise). A fragment function that reads `[[primitive_id]]` behind the evaluation stage is
 //! not implemented ([`check_fragment`]): Vulkan's primitive id there counts patches, and what
 //! Metal's is for a tessellated triangle has not been read.
+//!
+//! In the address form the control stage binds no buffer: link numbers none for it, places its
+//! push range ([`control::Control::push_bytes`]) 8-aligned for the address, and states its push
+//! fields in the pipeline's interface as a vertex-stage placement ([`ControlPlan::placement`]), as
+//! a function's own fields are stated.
 
 pub mod control;
 
@@ -56,11 +64,13 @@ use crate::pipeline::artifact::{
 };
 use crate::pipeline::descriptor::{TessellationDescriptor, VertexDescriptor};
 use crate::pipeline::graphics::{EmulatedTessellation, TessellationState};
-use crate::pipeline::interface::{StageInterface, TessellationStage};
+use crate::pipeline::interface::{
+    PlacedField, PushLoc, PushPlacement, StageInterface, TessellationStage,
+};
 use crate::pipeline::layout::PushConstantRange;
 use crate::pipeline::lower_inputs::{VertexFetch, VertexFetchProjection};
 use crate::pipeline::stage_io::{IoNumeric, StageBuiltin};
-use crate::pipeline::sym::ResourceSlot;
+use crate::pipeline::sym::{ResourceSlot, Stage};
 use crate::pipeline::vertex::{PulledAttribute, VertexInputState, VertexStride};
 use crate::spirv::serialize::{SymbolTable, ENTRY_NAME};
 use crate::vk;
@@ -154,6 +164,9 @@ pub fn vertex_input_state(
 pub struct ControlPlan {
     pub desc: TessellationDescriptor,
     pub stage: TessellationStage,
+    /// Whether the control stage reads the factors through their address (the identity
+    /// domains' form).
+    pub addressed: bool,
 }
 
 impl ControlPlan {
@@ -169,12 +182,52 @@ impl ControlPlan {
             push_offset,
             control_points: self.stage.control_points,
             index_type: self.desc.control_point_index_type,
+            addressed: self.addressed,
         }
     }
 
+    /// Bytes and alignment of the control stage's push range.
+    pub fn push_bytes(&self) -> (u32, u32) {
+        Control::push_bytes(
+            self.addressed,
+            self.desc.factor_step_function,
+            self.desc.factor_scale_enabled,
+        )
+    }
+
+    /// The address form's push fields at `push_offset`, as the pipeline interface's placement of
+    /// a vertex-stage range (the control stage belongs to Metal's vertex stage); `None` in the
+    /// bound form, whose fields its consumer writes from the pipeline's `TessellationState`.
+    pub fn placement(&self, push_offset: u32) -> Option<PushPlacement> {
+        if !self.addressed {
+            return None;
+        }
+        let fields = control::address_fields(
+            self.desc.factor_step_function,
+            self.desc.factor_scale_enabled,
+        );
+        Some(PushPlacement {
+            stage: Stage::Vertex,
+            fields: (fields.into_iter())
+                .map(|(field, at)| PlacedField {
+                    field,
+                    loc: PushLoc::Push {
+                        offset: push_offset + at,
+                    },
+                    size: crate::lower::push::shape(field).size(),
+                })
+                .collect(),
+            push_range: Some((push_offset, self.push_bytes().0)),
+            argument_table_size: 0,
+        })
+    }
+
     /// The control stage's binding symbols: the factor and patch index buffers, and the
-    /// control-point index buffer for a control-point index type.
+    /// control-point index buffer for a control-point index type; none in the address form.
     pub fn slots(&self) -> Vec<ResourceSlot> {
+        if self.addressed {
+            return Vec::new();
+        }
         let mut slots = vec![control::FACTOR_SLOT, control::PATCH_INDEX_SLOT];
         if self.desc.control_point_index_type != TessellationControlPointIndexType::None {
             slots.push(control::CONTROL_POINT_INDEX_SLOT);
@@ -205,6 +258,10 @@ pub fn control_plan(
     p: &DeviceProfile,
 ) -> Result<ControlPlan, Error> {
     let desc = checked(desc)?;
+    let addressed = crate::lower::access::identity(p);
+    if addressed && desc.control_point_index_type != TessellationControlPointIndexType::None {
+        return Err(Unsupported::not_implemented(Feature::Tessellation).into());
+    }
     let max = desc.max_tessellation_factor;
     let f = p.fields();
     let level = f.limits.max_tessellation_generation_level;
@@ -231,7 +288,11 @@ pub fn control_plan(
         )
         .into());
     }
-    Ok(ControlPlan { desc, stage })
+    Ok(ControlPlan {
+        desc,
+        stage,
+        addressed,
+    })
 }
 
 /// The descriptor's tessellation state `desc` (`None`: Metal's defaults), held to Metal's rules: a

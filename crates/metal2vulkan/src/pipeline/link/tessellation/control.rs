@@ -106,6 +106,17 @@
 //! (NaN, zero, negative) or upper end (`+∞`). The pushed scale is a positive `half` or 2^32, so
 //! the scaled product lies in `[2^-48, 2^48)`: every float the stage computes is finite.
 //!
+//! **The address form.** Under the identity domains (`Device::from_queries`' profile) the control
+//! stage binds nothing: it reads the factors through their device address, the pushed
+//! `PushField::TessellationFactorAddress` (the factor buffer's address plus the encoder's offset, a
+//! `u64`), at the same bytes and with the same rules as above, from the word that holds the even
+//! byte the address names. Nothing contains the read: as Metal's own, a read past the buffer reads
+//! whatever memory is there. The patch index is the patch's position: the form reads no patch
+//! index buffer, and its consumer refuses a draw that names one. A control-point index type is not
+//! implemented in it ([`super::control_plan`]). Its push fields ([`address_fields`]) are the
+//! address and, where read, the instance stride and the scale, which the pipeline's interface
+//! places as its vertex stage's (`PipelineInterface::push`).
+//!
 //! Noted on the pipeline's evaluation stage ([`Control::notes`]): the output winding's vertex
 //! order, measured on four drivers (above) and not on the rest; and, read from Metal's
 //! documentation but not observed: whether the fractional partitions'
@@ -172,6 +183,26 @@ pub const PUSH_FIELDS: [PushField; 6] = [
 /// Bytes of the control stage's push range.
 pub const PUSH_BYTES: u32 = 24;
 
+/// The address form's push fields (the module docs), for step function `step` and a scale
+/// enabled or not: each with its byte offset from the stage's push offset, a multiple of 8. The
+/// factors' address (`u64`), then, where the stage reads them, the instance stride (`u32`, a
+/// per-instance step) and the scale (`float`).
+pub fn address_fields(step: Step, scale_enabled: bool) -> Vec<(PushField, u32)> {
+    let mut fields = vec![(PushField::TessellationFactorAddress, 0)];
+    if per_instance(step) {
+        fields.push((PushField::TessellationFactorInstanceStride, 8));
+    }
+    if scale_enabled {
+        fields.push((PushField::TessellationFactorScale, 12));
+    }
+    fields
+}
+
+/// Whether step function `step` addresses a patch's factors by its instance.
+fn per_instance(step: Step) -> bool {
+    matches!(step, Step::PerInstance | Step::PerPatchAndPerInstance)
+}
+
 /// The size of the vertex stage's `VertexIndex`-carrying output array the control stage reads:
 /// `gl_MaxPatchVertices`, the smallest `maxTessellationPatchSize` Vulkan allows.
 const INPUT_ARRAY: u32 = 32;
@@ -194,6 +225,9 @@ pub struct Control {
     pub control_points: u32,
     /// `tessellationControlPointIndexType`.
     pub index_type: IndexType,
+    /// Whether the stage reads the factors through their address (the module docs' address
+    /// form, under the identity domains) rather than through a bound factor buffer.
+    pub addressed: bool,
 }
 
 impl Control {
@@ -202,6 +236,21 @@ impl Control {
         match self.domain {
             PatchDomain::Triangle => (3, 1),
             PatchDomain::Quad => (4, 2),
+        }
+    }
+
+    /// Bytes and alignment of the stage's push range: [`PUSH_BYTES`] of words, or the address
+    /// form's fields ([`address_fields`]), 8-aligned for the address.
+    pub fn push_bytes(addressed: bool, step: Step, scale_enabled: bool) -> (u32, u32) {
+        match addressed {
+            false => (PUSH_BYTES, 4),
+            true => {
+                let end = (address_fields(step, scale_enabled).iter())
+                    .map(|&(field, at)| at + crate::lower::push::shape(field).size())
+                    .max()
+                    .unwrap_or(0);
+                (end, 8)
+            }
         }
     }
 
@@ -223,7 +272,7 @@ impl Control {
         if self.scale_enabled {
             notes.push(PrecisionNote::TessellationFactorScale);
         }
-        if matches!(self.step, Step::PerInstance | Step::PerPatchAndPerInstance) {
+        if per_instance(self.step) {
             notes.push(PrecisionNote::TessellationFactorInstance);
         }
         if matches!(
@@ -258,24 +307,49 @@ impl Control {
 /// Where the control stage reads what a draw binds: the factor buffer, the patch index buffer,
 /// and, for a pipeline with a control-point index type, the control-point index buffer (each a
 /// `Block { uint[] }` storage buffer), and the push block with [`PUSH_FIELDS`] at member indices
-/// `members`.
+/// `members`. In the address form no buffer is bound, and `members` holds the member of each of
+/// [`address_fields`] at its field's place in [`PUSH_FIELDS`] (the address at the offset's).
 #[derive(Clone, Copy, Debug)]
 pub struct Sources {
-    pub factors: GlobalId,
-    pub patch_indices: GlobalId,
+    pub factors: Option<GlobalId>,
+    pub patch_indices: Option<GlobalId>,
     pub control_point_indices: Option<GlobalId>,
     pub push: GlobalId,
     pub members: [u32; 6],
 }
 
 /// Declare the factor, patch index, and (for `c`'s control-point index type) control-point
-/// index buffers, the push fields at `c.push_offset`, and the push block.
+/// index buffers, the push fields at `c.push_offset`, and the push block; in the address form, the
+/// push fields of [`address_fields`] and the push block alone.
 pub fn declare_sources(mb: &mut ModuleBuilder, c: &Control) -> BResult<Sources> {
     let u32_ = mb.ty(Type::Int {
         width: 32,
         signed: false,
     })?;
     let f32_ = mb.ty(Type::Float { width: 32 })?;
+    if c.addressed {
+        let u64_ = mb.ty(Type::Int {
+            width: 64,
+            signed: false,
+        })?;
+        let mut members = [0; 6];
+        for (field, at) in address_fields(c.step, c.scale_enabled) {
+            let (k, ty) = match field {
+                PushField::TessellationFactorInstanceStride => (1, u32_),
+                PushField::TessellationFactorScale => (2, f32_),
+                _ => (0, u64_),
+            };
+            members[k] = mb.push_member(field, ty, c.push_offset + at)?.index;
+        }
+        let push = mb.push_global()?;
+        return Ok(Sources {
+            factors: None,
+            patch_indices: None,
+            control_point_indices: None,
+            push,
+            members,
+        });
+    }
     let words = mb.ty(Type::RuntimeArray {
         elem: u32_,
         stride: Some(4),
@@ -299,8 +373,8 @@ pub fn declare_sources(mb: &mut ModuleBuilder, c: &Control) -> BResult<Sources> 
     }
     let push = mb.push_global()?;
     Ok(Sources {
-        factors,
-        patch_indices,
+        factors: Some(factors),
+        patch_indices: Some(patch_indices),
         control_point_indices,
         push,
         members,
@@ -402,15 +476,18 @@ fn pow2(fb: &mut FunctionBuilder<'_>, x: Value) -> BResult<Value> {
 /// patch's index in the draw): the patch index buffer's word at byte `residual + 4 · position`
 /// of its bound range (wrapping `u32`; the pushed residual bind offset is a multiple of 4 modulo
 /// `2^32`), 0 where the range does not hold it, when the pushed `PatchIndexBound` is nonzero;
-/// `position` otherwise (the module docs).
+/// `position` otherwise, and in the address form (the module docs).
 pub fn patch_index(fb: &mut FunctionBuilder<'_>, src: &Sources, position: Value) -> BResult<Value> {
+    let Some(patch_indices) = src.patch_indices else {
+        return Ok(position);
+    };
     let residual = push_word(fb, src.push, src.members[3])?;
     let four = ku(fb, 4)?;
     let bytes = fb.binary(BinOp::IMul, position, four)?;
     let address = fb.binary(BinOp::IAdd, residual, bytes)?;
     let two = ku(fb, 2)?;
     let at = fb.binary(BinOp::ShiftRightLogical, address, two)?;
-    let indexed = word(fb, src.patch_indices, at)?;
+    let indexed = word(fb, patch_indices, at)?;
     let bound = push_word(fb, src.push, src.members[4])?;
     let zero = ku(fb, 0)?;
     let bound = fb.binary(BinOp::INotEqual, bound, zero)?;
@@ -479,18 +556,26 @@ pub fn levels(
     instance: Value,
 ) -> BResult<(Vec<Value>, Vec<Value>)> {
     let (edges, insides) = c.counts();
-    let mut address = push_word(fb, src.push, src.members[0])?;
-    if matches!(c.step, Step::PerPatch | Step::PerPatchAndPerInstance) {
-        let size = ku(fb, Control::factor_bytes(c.domain))?;
-        let at = fb.binary(BinOp::IMul, position, size)?;
-        address = fb.binary(BinOp::IAdd, address, at)?;
-    }
-    if matches!(c.step, Step::PerInstance | Step::PerPatchAndPerInstance) {
-        let stride = push_word(fb, src.push, src.members[1])?;
-        let at = fb.binary(BinOp::IMul, instance, stride)?;
-        address = fb.binary(BinOp::IAdd, address, at)?;
-    }
-    let halves = factor_halves(fb, src.factors, address, edges + insides)?;
+    let halves = match src.factors {
+        Some(factors) => {
+            let mut address = push_word(fb, src.push, src.members[0])?;
+            if matches!(c.step, Step::PerPatch | Step::PerPatchAndPerInstance) {
+                let size = ku(fb, Control::factor_bytes(c.domain))?;
+                let at = fb.binary(BinOp::IMul, position, size)?;
+                address = fb.binary(BinOp::IAdd, address, at)?;
+            }
+            if per_instance(c.step) {
+                let stride = push_word(fb, src.push, src.members[1])?;
+                let at = fb.binary(BinOp::IMul, instance, stride)?;
+                address = fb.binary(BinOp::IAdd, address, at)?;
+            }
+            factor_halves(fb, factors, address, edges + insides)?
+        }
+        None => {
+            let address = factor_address(fb, c, src, position, instance)?;
+            address_halves(fb, address, edges + insides)?
+        }
+    };
     // Each factor is classified on its bits (the module docs).
     // 1. An edge factor that is not above zero (negative, zero, or NaN: bits outside
     //    `[0x0001, 0x7c00]`) culls the patch.
@@ -551,6 +636,98 @@ pub fn levels(
         None => out,
     };
     Ok((outer, inner))
+}
+
+/// The address form's address of the factors of the patch at `position` of instance `instance`:
+/// the pushed address plus `position · size` (per-patch steps) and `instance · instanceStride`
+/// (per-instance ones), the two terms summed as Metal's offset is, in `u32`.
+fn factor_address(
+    fb: &mut FunctionBuilder<'_>,
+    c: &Control,
+    src: &Sources,
+    position: Value,
+    instance: Value,
+) -> BResult<Value> {
+    let base = push_word(fb, src.push, src.members[0])?;
+    let mut offset = None;
+    if matches!(c.step, Step::PerPatch | Step::PerPatchAndPerInstance) {
+        let size = ku(fb, Control::factor_bytes(c.domain))?;
+        offset = Some(fb.binary(BinOp::IMul, position, size)?);
+    }
+    if per_instance(c.step) {
+        let stride = push_word(fb, src.push, src.members[1])?;
+        let at = fb.binary(BinOp::IMul, instance, stride)?;
+        offset = Some(match offset {
+            Some(o) => fb.binary(BinOp::IAdd, o, at)?,
+            None => at,
+        });
+    }
+    let Some(offset) = offset else {
+        return Ok(base);
+    };
+    let u64_ = fb.module().ty(Type::Int {
+        width: 64,
+        signed: false,
+    })?;
+    let wide = fb.convert(ConvOp::UConvert, offset, u64_)?;
+    fb.binary(BinOp::IAdd, base, wide)
+}
+
+/// The `count` factors' `half` bits (each a `uint`) at the even device address `address` (a
+/// `u64`), as [`factor_halves`] reads them from a bound buffer: the words from the one that holds
+/// the address, each loaded through a read-only `PhysicalStorageBuffer` pointer, unpacked low half
+/// first, from that word's high half where the address is 2 past a multiple of 4.
+fn address_halves(
+    fb: &mut FunctionBuilder<'_>,
+    address: Value,
+    count: usize,
+) -> BResult<Vec<Value>> {
+    let u32_ = uint(fb)?;
+    let u64_ = fb.module().ty(Type::Int {
+        width: 64,
+        signed: false,
+    })?;
+    let k64 = |fb: &mut FunctionBuilder<'_>, v: u64| -> BResult<Value> {
+        let c = fb.module().constant(Constant::Scalar {
+            ty: u64_,
+            bits: ConstBits(v),
+        })?;
+        fb.module().const_value(c)
+    };
+    let aligned = k64(fb, !3)?;
+    let first = fb.binary(BinOp::BitwiseAnd, address, aligned)?;
+    let mask = ku(fb, 0xffff)?;
+    let sixteen = ku(fb, 16)?;
+    let mut unpacked = Vec::with_capacity(count + 2);
+    for k in 0..(count + 1).div_ceil(2) {
+        let at = match k {
+            0 => first,
+            _ => {
+                let offset = k64(fb, 4 * k as u64)?;
+                fb.binary(BinOp::IAdd, first, offset)?
+            }
+        };
+        let ptr = fb.device_place_read_only(at, u32_)?;
+        let w = fb.load(
+            ptr,
+            MemAccess {
+                aligned: Some(4),
+                ..MemAccess::default()
+            },
+        )?;
+        unpacked.push(fb.binary(BinOp::BitwiseAnd, w, mask)?);
+        unpacked.push(fb.binary(BinOp::ShiftRightLogical, w, sixteen)?);
+    }
+    let low = fb.convert(ConvOp::UConvert, address, u32_)?;
+    let two = ku(fb, 2)?;
+    let high = fb.binary(BinOp::BitwiseAnd, low, two)?;
+    let zero = ku(fb, 0)?;
+    let shifted = fb.binary(BinOp::INotEqual, high, zero)?;
+    let mut halves = Vec::with_capacity(count);
+    for (&low, &high) in unpacked.iter().zip(unpacked.iter().skip(1)).take(count) {
+        halves.push(fb.select(shifted, high, low)?);
+    }
+    Ok(halves)
 }
 
 /// The execution modes of the control stage: domain, spacing, vertex order, one output vertex.

@@ -1265,9 +1265,16 @@ pub enum PushField {
     /// specialization constant from the bound textures and samplers (a boolean key as 1 or 0; a
     /// `SamplerState` word masked by its `fields`). A function that reads a key this way declares
     /// no specialization constant for it, so its pipelines' keys do not carry the value and one
-    /// `VkPipeline` serves every value. Last in the order, so these fields follow every other kind
-    /// into the window and from there into the `ArgumentTable`.
+    /// `VkPipeline` serves every value. Last in the order of the fields a function places, so
+    /// these fields follow every other kind into the window and from there into the
+    /// `ArgumentTable`.
     Specialized(SpecKey),
+    /// Under the identity domains, the device address of the factors a tessellation pipeline's
+    /// synthesized control stage reads (`u64`): the factor buffer's address plus the encoder's
+    /// offset (`setTessellationFactorBuffer:offset:instanceStride:`). No function places it: the
+    /// pipeline's interface states it in a vertex-stage placement of its own, at the
+    /// `TessellationState::push_offset`.
+    TessellationFactorAddress,
 }
 
 /// A relocatable literal: which decoration operand the serializer reserved, and for what.

@@ -922,6 +922,7 @@ codec_enum! {
         TexelRows(f0),
         ArgumentTableAddress,
         ConstexprSampler(f0),
+        TessellationFactorAddress,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }

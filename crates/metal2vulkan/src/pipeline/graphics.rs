@@ -376,7 +376,11 @@ pub struct TessellationState {
     /// `TESSELLATION_CONTROL`): five words, the factor buffer's residual bind offset, its
     /// instance stride, the factor scale, the patch index buffer's residual bind offset, and
     /// whether the draw binds one; and a sixth, the control-point index buffer's residual bind
-    /// offset, for a pipeline with a control-point index type.
+    /// offset, for a pipeline with a control-point index type. Under the identity domains the
+    /// control stage binds no buffer and reads the factors through their address: its fields
+    /// (`PushField::TessellationFactorAddress`, and where read the instance stride and the scale)
+    /// are a vertex-stage placement of `PipelineInterface::push` from this offset, and it reads
+    /// no patch index buffer.
     pub push_offset: u32,
     /// The descriptor's `tessellationControlPointIndexType`: other than `None`, the pipeline
     /// draws indexed patches only (`DrawCall::IndexedPatches`), whose control-point index buffer

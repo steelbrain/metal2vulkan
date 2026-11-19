@@ -97,7 +97,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         | PushField::CaptureIndexAddress
         | PushField::MergedDrawAddress
         | PushField::CommandRecordsAddress
-        | PushField::ReplayRegionAddress => FieldShape::U64,
+        | PushField::ReplayRegionAddress
+        | PushField::TessellationFactorAddress => FieldShape::U64,
         // A Metal address, low word first: the same eight bytes as a `u64`, readable without
         // `shaderInt64`.
         PushField::SlotGuestBase(_) => FieldShape::UVec2,

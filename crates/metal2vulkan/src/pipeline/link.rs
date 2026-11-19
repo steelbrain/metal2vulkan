@@ -466,16 +466,17 @@ pub fn link(
     count_variables(&mut layout, stages, &table);
     let control = match plan {
         Some(plan) => {
+            let (bytes, align) = plan.push_bytes();
             let offset = tessellation::push_offset(
                 &layout.push_constants,
-                (tessellation::control::PUSH_BYTES, 4),
+                (bytes, align),
                 Feature::Tessellation,
                 p,
             )?;
             layout.push_constants.push(PushConstantRange {
                 stages: vk::ShaderStageFlags::TESSELLATION_CONTROL,
                 offset,
-                size: tessellation::control::PUSH_BYTES,
+                size: bytes,
             });
             Some((plan, offset))
         }
@@ -521,7 +522,11 @@ pub fn link(
     if let Some(g) = &mut geometry {
         g.check_limits(&table.locations, p)?;
     }
-    let interface = pipeline_interface(&ifaces);
+    let mut interface = pipeline_interface(&ifaces);
+    // The address form's control stage states its push fields as the vertex stage's.
+    if let Some(placement) = control.and_then(|(plan, offset)| plan.placement(offset)) {
+        interface.push.push(placement);
+    }
     let mut vertex_notes = vertex::FixedFunctionNotes::default();
     let (vertex_input, graphics) = match inputs {
         LinkInputs::Render(r) => {
