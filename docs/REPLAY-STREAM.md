@@ -854,7 +854,11 @@ the states skipped, `ID` the first one's object and `WHY` the runtime's answer),
 `skipped render commands GAP N, the first at frame F, call C` for each typed gap a render command
 met, a draw the runtime does not build among them (`GAP` the runtime's gap as Rust prints it for
 debugging, such as `Draw { kind: Points }`, `N` the commands skipped, `F`
-and `C` the first one's frame and stream position), `cut SEGMENT OFFSET` where the last segment ends
+and `C` the first one's frame and stream position), its `skipped render encoders KIND N, the first
+at frame F, call C` for each kind of render encoder it does not build (`KIND`
+`ParallelRenderCommandEncoder`, `Unheld(KEYS)` for a pass whose descriptor sets properties `KEYS`
+the runtime's does not hold, or the runtime's gap for the pass as Rust prints it for debugging),
+`cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute and
 render pipeline states whose `gpuResourceID` the player asked, which the new runtime does not

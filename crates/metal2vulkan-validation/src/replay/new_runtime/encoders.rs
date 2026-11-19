@@ -167,7 +167,9 @@ impl NewRuntime {
                 super::unaddressed(Object::Blit(Box::new(encoder)))
             }
             "renderCommandEncoderWithDescriptor:" => self.render_encoder(call, &command_buffer),
-            "parallelRenderCommandEncoderWithDescriptor:" => self.skip_encoder(),
+            "parallelRenderCommandEncoderWithDescriptor:" => {
+                self.skip_encoder("ParallelRenderCommandEncoder".to_owned())
+            }
             "commit" => {
                 self.copy_named(call)?;
                 let queue = self.queue_for(call)?;

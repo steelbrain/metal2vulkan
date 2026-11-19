@@ -42,6 +42,10 @@ struct Skips {
     /// Encoders the runtime does not build: parallel render encoders, and render encoders of a
     /// pass it does not build (`render`).
     encoders: u64,
+    /// Those encoders by kind: `ParallelRenderCommandEncoder`, `Unheld(…)` for a pass naming a
+    /// property the runtime's descriptor does not hold, or the runtime's gap as Rust prints it
+    /// for debugging; how many, and the frame and call of the first.
+    encoder_kinds: BTreeMap<String, (u64, u64, u64)>,
     /// Objects it does not build: libraries from source.
     objects: u64,
     /// Render pipeline states the runtime answers with a typed gap or the translator refuses, by
@@ -116,6 +120,7 @@ impl Skips {
     fn total(&self) -> u64 {
         let Skips {
             encoders,
+            encoder_kinds: _,
             objects,
             render_states: _,
             compute_states: _,
@@ -2537,6 +2542,11 @@ impl Backend for NewRuntime {
         for (gap, (count, frame, at)) in &self.skips.render_commands {
             lines.push(format!(
                 "skipped render commands {gap} {count}, the first at frame {frame}, call {at}"
+            ));
+        }
+        for (kind, (count, frame, at)) in &self.skips.encoder_kinds {
+            lines.push(format!(
+                "skipped render encoders {kind} {count}, the first at frame {frame}, call {at}"
             ));
         }
         if self.managed == Some(ManagedCopies::Two) && self.device.has_unified_memory() {

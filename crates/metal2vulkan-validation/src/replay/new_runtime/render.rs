@@ -182,11 +182,20 @@ impl NewRuntime {
         command_buffer: &rt::CommandBuffer,
     ) -> Result<Option<(Object, Made)>, PlayError> {
         let descriptor = match self.get(call, Self::id(call, 0)?)? {
-            Object::Pass(pass) => (pass.unheld.is_empty()).then(|| pass.descriptor.clone()),
+            Object::Pass(pass) => match pass.unheld.is_empty() {
+                true => Ok(pass.descriptor.clone()),
+                false => {
+                    let mut keys: Vec<&str> = pass.unheld.iter().map(|&(_, key)| key).collect();
+                    keys.sort_unstable();
+                    keys.dedup();
+                    Err(format!("Unheld({})", keys.join(", ")))
+                }
+            },
             _ => return Err(refuse(call, "argument 0 is no render pass descriptor")),
         };
-        let Some(descriptor) = descriptor else {
-            return self.skip_encoder();
+        let descriptor = match descriptor {
+            Ok(descriptor) => descriptor,
+            Err(unheld) => return self.skip_encoder(unheld),
         };
         match command_buffer.render_command_encoder(&descriptor) {
             Ok(encoder) => unaddressed(Object::Render(Box::new(Render {
@@ -195,14 +204,20 @@ impl NewRuntime {
                 skipped_samplers: HashSet::new(),
                 skipped_pipeline: false,
             }))),
-            Err(rt::Error::Unsupported(_)) => self.skip_encoder(),
+            Err(rt::Error::Unsupported(gap)) => self.skip_encoder(format!("{gap:?}")),
             Err(error) => Err(failed(call)(error)),
         }
     }
 
-    /// A render encoder the runtime does not build, counted.
-    pub(super) fn skip_encoder(&mut self) -> Result<Option<(Object, Made)>, PlayError> {
+    /// A render encoder the runtime does not build, counted, by `kind`.
+    pub(super) fn skip_encoder(
+        &mut self,
+        kind: String,
+    ) -> Result<Option<(Object, Made)>, PlayError> {
         self.skips.encoders += 1;
+        let (frame, at) = self.at;
+        let kinds = self.skips.encoder_kinds.entry(kind);
+        kinds.or_insert((0, frame, at)).0 += 1;
         unaddressed(Object::Skipped)
     }
 
