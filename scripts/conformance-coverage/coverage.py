@@ -561,6 +561,82 @@ def known_gaps() -> list[tuple[str, str]]:
     return out
 
 
+#: A facts type's struct, and one field of it.
+STRUCT = re.compile(r"\npub struct (\w+) \{\n(.*?)\n\}", re.S)
+FIELD = re.compile(r"^    pub (\w+): (.+),$", re.M)
+#: A field a side answers or refuses on its own, `crate::case::Field`.
+REFUSABLE = re.compile(r"^(?:crate::case::)?Field<")
+#: The leaf a facts type's node records a refusable field at: `Node::leaf("site", field(&self.x`.
+FIELD_SITE = re.compile(r'Node::leaf\(\s*"([^"]+)",\s*field\(\s*&self\.(\w+)')
+
+
+def field_facts(families: dict[str, dict]) -> list[dict]:
+    """The facts types a side answers field by field: each one's fields, and of them the ones a
+    side may refuse on their own (`crate::case::Field`), with the leaf each records at and the new
+    runtime's ledger rows that refuse it, of the cases whose module calls a `Side` method
+    answering the type.
+
+    A facts call answers many getters at once, so its call running says nothing of which of its
+    fields were compared: a field the new runtime's side refuses is a refusal at its own leaf, and
+    is counted here as a field, not covered by the call beside it."""
+    rows = []
+    path = SUITE / "known-gaps-rt.tsv"
+    if path.exists():
+        for line in path.read_text().splitlines():
+            fields = line.split("\t")
+            if line.startswith("#") or len(fields) != 6 or fields[2] != "refused":
+                continue
+            rows.append(fields)
+    side = (SRC / "case.rs").read_text()
+    out = []
+    for source in sorted(SRC.glob("*.rs")):
+        text = source.read_text()
+        sites = {name: site for site, name in FIELD_SITE.findall(text)}
+        for name, body in STRUCT.findall(text):
+            fields = FIELD.findall(body)
+            refusable = [field for field, ty in fields if REFUSABLE.match(ty)]
+            if not refusable:
+                continue
+            answering = set(
+                re.findall(
+                    r"\bfn (\w+)\s*\([^)]*\)\s*->\s*Answer<[\w:]*\b" + name + ">", side
+                )
+            )
+            cases = {
+                case
+                for family in families.values()
+                if family["calls"] & answering
+                for case in family["cases"]
+            }
+            each = []
+            for field in refusable:
+                site = sites.get(field)
+                if site is None:
+                    raise SystemExit(
+                        f"{source.name}: {name}.{field} is a Field, and its node records it at no "
+                        "leaf this can read (`Node::leaf(\"site\", field(&self.{field}, ..))`)"
+                    )
+                refused = [
+                    row for row in rows
+                    if row[0] in cases
+                    and row[3].rsplit("/", 1)[-1] == site
+                    and row[4].startswith('Err(Unavailable({call: ')
+                ]
+                each.append(
+                    {
+                        "field": field,
+                        "site": site,
+                        "rows": len(refused),
+                        "every_venue": len([row for row in refused if row[1] == "*"]),
+                        "cases": len({row[0] for row in refused}),
+                    }
+                )
+            out.append(
+                {"type": name, "file": source.name, "fields": len(fields), "refusable": each}
+            )
+    return out
+
+
 # --------------------------------------------------------------------------------------------
 # The join
 
@@ -708,6 +784,7 @@ def inventory():
         "unbound": unbound(rows, index, api),
         "unlisted": unlisted,
         "gaps": known_gaps(),
+        "field_facts": field_facts(families),
         # The second axis. A case whose answer Metal never ran puts no value to Metal, which is
         # the same gate the items axis applies to a call; the axis reads the values a module states
         # and the crossings a case declares, so it is handed the cases and joins them itself.
@@ -1744,6 +1821,31 @@ def write(data) -> str:
         for ty, selector in data["unlisted"]:
             w(f"| `{ty}` | `{selector}` |")
         w("")
+
+    w("## Facts answered field by field")
+    w("")
+    w(
+        "A facts call answers many getters at once, and a side answers or refuses each of them on "
+        "its own (`Field` in the suite's `case.rs`): a field it cannot answer is a refusal at its "
+        "own leaf, held to the ledger as a call's refusal is, and the fields beside it still "
+        "compare. So the call running says nothing of which fields were compared, and these "
+        "types are counted by field: each one's fields, the ones a side may refuse, and the new "
+        "runtime's ledger rows (`known-gaps-rt.tsv`) that refuse each at its leaf."
+    )
+    w("")
+    if data["field_facts"]:
+        w("| type | fields | refusable | refusable field: its leaf, the new runtime's refusal rows (every venue), cases |")
+        w("|---|---|---|---|")
+        for facts in data["field_facts"]:
+            each = "; ".join(
+                f"`{field['field']}`: `{field['site']}`, {field['rows']} ({field['every_venue']}), "
+                f"{field['cases']}"
+                for field in facts["refusable"]
+            )
+            w(f"| `{facts['type']}` | {facts['fields']} | {len(facts['refusable'])} | {each} |")
+    else:
+        w("No facts type answers field by field.")
+    w("")
 
     w("## The ledger")
     w("")
