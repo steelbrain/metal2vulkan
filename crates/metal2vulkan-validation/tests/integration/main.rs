@@ -31,6 +31,7 @@ mod drm_shim;
 mod engine_linked_cases;
 mod fast_trig_within_apples_bound;
 mod fixtures_assemble_with_the_pinned_llvm;
+mod half_division_cases;
 mod linux_gate_policy;
 mod metal_coverage;
 mod no_conflict_markers;
