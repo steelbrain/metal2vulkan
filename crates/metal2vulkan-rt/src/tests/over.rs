@@ -436,9 +436,8 @@ mod on_device {
                 );
                 for y in 0..u64::from(height) {
                     let at = (y * pitch) as usize;
-                    now[at..at + SIDE_ROW as usize]
-                        .chunks_exact_mut(4)
-                        .for_each(|texel| texel.copy_from_slice(&RED));
+                    let (texels, _) = now[at..at + SIDE_ROW as usize].as_chunks_mut::<4>();
+                    texels.fill(RED);
                 }
                 assert!(
                     held(&span) == now.as_slice(),
