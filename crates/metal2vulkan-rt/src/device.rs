@@ -1442,8 +1442,9 @@ impl Drop for Shared {
             join(core, left);
             // The blocks the consumer still holds handles of go back to the pool once the threads
             // have stopped and the consumer's unmap hook has returned for each allocation
-            // (`halt`), for the core to free; a handle dropped later finds its claim empty. No buffer of them is
-            // left: each holds a handle of the device.
+            // (`halt`), for the core to free; a handle dropped later finds its claim empty. No buffer
+            // of them is left: the consumer's each hold a handle of the device, and the command
+            // buffers that kept one have retired.
             let claims: Vec<Weak<Claim>> = lock(&core.claims).drain().map(|(_, c)| c).collect();
             let blocks: Vec<Arc<memory::Block>> = (claims.iter())
                 .filter_map(Weak::upgrade)

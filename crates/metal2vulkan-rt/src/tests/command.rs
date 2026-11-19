@@ -2479,7 +2479,7 @@ pub(crate) mod on_device {
 
     /// The last handle dropped in a scheduled handler, on the submit thread, while a completed
     /// handler holds the completion thread: the drop returns at once, and the reaper, which tears
-    /// down and which nothing joins, joins every other thread before anything of the device goes.
+    /// down, joins every other thread before anything of the device goes.
     /// While the completion thread is held, at least it and the reaper hold their slots of
     /// `Gauges::threads` (where the OS gives ids), no allocation is unmapped and the blocks live;
     /// once it is let go, the reaper unmaps each allocation and the device is destroyed, and every

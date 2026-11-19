@@ -930,11 +930,11 @@ made, with no lock, and never rewritten for layouts.
   same on every device and ask Vulkan nothing: a format described there may be one this device
   makes no texture of (`Gap::TextureFormat`), and the flags are Apple's GPU's and promise nothing
   about this device (a write to a texture with no storage element here is `Gap::StorageElement`).
-- A texture holds the device. Once its last handle and the last command buffer that used it are
-  gone, its elements read null and its index is free at once; the reaper frees its image once the
-  last upload that moves or copies it has retired, and a view's image views once the view is
-  gone. `Gauges::textures` counts images and views until then, `Gauges::descriptor_slots` the
-  indices held.
+- A texture's handle holds the device; what a command buffer keeps of it does not (Teardown).
+  Once its last handle and the last command buffer that used it are gone, its elements read null
+  and its index is free at once; the reaper frees its image once the last upload that moves or
+  copies it has retired, and a view's image views once the view is gone. `Gauges::textures`
+  counts images and views until then, `Gauges::descriptor_slots` the indices held.
 
 ### Known gaps of textures
 
@@ -1028,9 +1028,9 @@ made, with no lock, and never rewritten for layouts.
   them, `Gauges::samplers` the states.
 - `SamplerState::gpu_resource_id` is its index and the translator's `SamplerWord` of its
   descriptor (`docs/RESOURCE-ID.md`).
-- A state holds the device. Once its last handle and the last command buffer that used it are
-  gone, its elements read the defaults again and its index is free; a device sampler no other
-  state holds goes to the reaper.
+- A state's handle holds the device; what a command buffer keeps of it does not (Teardown).
+  Once its last handle and the last command buffer that used it are gone, its elements read the
+  defaults again and its index is free; a device sampler no other state holds goes to the reaper.
 - Anisotropy is the device's own filter (`samplerAnisotropy` is in the floor). A cubic filter is
   `Gap::CubicSampler`. A descriptor the translator makes no device sampler of is
   `Error::Translation`.
