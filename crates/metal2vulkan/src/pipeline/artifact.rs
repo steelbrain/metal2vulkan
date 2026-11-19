@@ -857,10 +857,11 @@ pub enum PrecisionNote {
     /// its vertices to the implementation (its two shorter segments' length need only fall
     /// monotonically with the rounded level less the level, and their place on the edge is the
     /// implementation's, "Tessellator Spacing"), where Metal's tessellator places them by its own
-    /// rule. Measured equal to Metal's by a consumer's device tests on RADV (Radeon 780M, RX 7900
-    /// XTX), NVIDIA Turing and MoltenVK; other drivers, ANV and lavapipe among them, are not
-    /// measured. A device without `tessellationShader` draws Metal's tessellator through the
-    /// emulation and records none. Recorded on the evaluation stage.
+    /// rule. Measured equal to Metal's, at factors within the device's range, by a consumer's
+    /// device tests on RADV (Radeon 780M, RX 7900 XTX), NVIDIA Turing, ANV (Intel Iris Xe) and
+    /// MoltenVK; other drivers, lavapipe among them, and factors past the range are not measured.
+    /// A device without `tessellationShader` draws Metal's tessellator through the emulation and
+    /// records none. Recorded on the evaluation stage.
     ///
     /// Validation derives no tolerance from it.
     TessellationFractionalSpacing,
