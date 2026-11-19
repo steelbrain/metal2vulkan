@@ -248,6 +248,13 @@ impl Device {
     /// pages of a shared mapping of a memfd with `VK_ERROR_INVALID_EXTERNAL_HANDLE`, after its
     /// query offered a type), which returns its [`Error::Vulkan`] with nothing imported.
     ///
+    /// The pages are pinnable host memory: anonymous memory, or a mapping of a file (a memfd's
+    /// among them). Pages the consumer maps through a dma-buf's fd go through
+    /// [`Device::import_dma_buf`] instead. On NVIDIA's Linux driver (620.70.06, an RTX 3090), a
+    /// pointer into a mapping of a udmabuf is refused with `VK_ERROR_OUT_OF_DEVICE_MEMORY` in each
+    /// type its query offers, and the process's later allocations fail too: a device-local one
+    /// after either refusal, and a host-cached one after the refusal in the host-cached type.
+    ///
     /// The block lives, and `release` runs, as for [`Device::import_dma_buf`]: `release`,
     /// Metal's deallocator, runs once the memory is freed, and from then the pages are the
     /// consumer's alone. Each import is one `VkDeviceMemory` allocation and counts against the

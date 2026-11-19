@@ -385,7 +385,12 @@ first, and what to do where both refuse, is the consumer's.
   (`VK_EXT_external_memory_host`), at a multiple of the device's
   `minImportedHostPointerAlignment`, into the first memory type the pointer's query offers that is
   host-visible and host-coherent and that the buffer's requirements list. The block's `contents`
-  is the pointer.
+  is the pointer. The pages are pinnable host memory: anonymous memory, or a mapping of a file (a
+  memfd's among them). Pages the consumer maps through a dma-buf's fd go through `import_dma_buf`
+  instead. On NVIDIA's Linux driver (620.70.06, an RTX 3090), a pointer into a mapping of a
+  udmabuf is refused with `VK_ERROR_OUT_OF_DEVICE_MEMORY` in each type its query offers, and the
+  process's later allocations fail too: a device-local one after either refusal, and a host-cached
+  one after the refusal in the host-cached type.
 - `Device::import_dma_buf(fd, len, release)` (unix) imports a dma-buf
   (`VK_EXT_external_memory_dma_buf`) only into the first memory type the fd's query offers, and
   only where that type is host-visible and host-coherent and the buffer's requirements list it;
