@@ -7,7 +7,8 @@
 //! and bytes a texel, so a texture of another pixel format of the same bytes a texel is a view of
 //! the same shape, and whether shaders may write it. A shape is made with shader read,
 //! render-target and pixel-format-view usage, and shader write (a storage view) only for a texture
-//! whose usage has it or is Metal's unknown; a shape shaders may write serves a later texture of
+//! whose usage has shader write or shader atomic (a storage image's operation), or is Metal's
+//! unknown, with shader atomic where the texture declares it; a shape shaders may write serves a later texture of
 //! its extent that does not declare it, and a texture that declares it over a plane whose shape of
 //! its extent has none is another shape of the plane. Textures over the same pages at another byte
 //! or pitch are another plane, and nothing moves between two planes but through the buffer, at the
@@ -365,7 +366,7 @@ impl Surfaces {
                     .collect::<Vec<_>>()
             })
             .collect();
-        idle.sort_by(|a, b| b.0.cmp(&a.0));
+        idle.sort_unstable_by_key(|shape| std::cmp::Reverse(shape.0));
         for (_, span, shape, dirty) in idle.into_iter().skip(UNREFERENCED_KEPT) {
             if !dirty {
                 self.drop_shape(&span, shape);
@@ -539,7 +540,10 @@ impl NewRuntime {
         let raw = u64::from(d.pixel_format.as_raw());
         let query = rt::TextureLevelQuery::plane_2d(raw, d.width.into(), d.height.into());
         let texel = self.device.texture_level_info(&query).bytes_per_block;
-        let writes = d.usage.is_empty() || d.usage.contains(rt::TextureUsage::SHADER_WRITE);
+        // Storage: shader write, shader atomic (a storage image's operation) or Metal's unknown.
+        let writes = d.usage.is_empty()
+            || d.usage.contains(rt::TextureUsage::SHADER_WRITE)
+            || d.usage.contains(rt::TextureUsage::SHADER_ATOMIC);
         let shape = Shape {
             width: d.width,
             height: d.height,
@@ -607,6 +611,9 @@ impl NewRuntime {
             | rt::TextureUsage::PIXEL_FORMAT_VIEW;
         if shape.storage {
             d.usage |= rt::TextureUsage::SHADER_WRITE;
+        }
+        if descriptor.usage.contains(rt::TextureUsage::SHADER_ATOMIC) {
+            d.usage |= rt::TextureUsage::SHADER_ATOMIC;
         }
         d.swizzle = rt::TextureSwizzleChannels::DEFAULT;
         let texture = (self.device.new_texture_for_views(&d)).map_err(failed(call))?;
@@ -903,7 +910,7 @@ impl NewRuntime {
                 continue;
             };
             let gone = |entry: &Entry| entry.shape != source && entry.live == 0 && !entry.dirty;
-            let dropped = entries.iter().filter(|entry| gone(entry)).count();
+            let dropped = entries.iter().filter(|&entry| gone(entry)).count();
             entries.retain(|entry| !gone(entry));
             self.surfaces.counts.dropped += dropped as u64;
             let from = entries.iter().find(|entry| entry.shape == source);

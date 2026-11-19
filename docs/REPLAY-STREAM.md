@@ -740,8 +740,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
   texture of the runtime's made for views (`Device::new_texture_for_views`) for each plane (the
   receiver buffer, the plane, its offset and row pitch) and shape (width, height and bytes a
   texel, and whether shaders may write it), with shader read, render-target and pixel-format-view
-  usage, and shader write only where the texture it is made for declares it or Metal's unknown
-  usage, and each recorded surface texture, and each view of one, a view of it at the texture's
+  usage, and shader write only where the texture it is made for declares shader write or shader
+  atomic (a storage image's operation), or Metal's unknown usage (shader atomic too where the
+  texture declares it), and each recorded surface texture, and each view of one, a view of it at the texture's
   own index, so a texture of another format of the same bytes a texel shares its texels. A shape
   shaders may write serves a later texture of its extent that does not declare it; a texture that
   declares it over a plane whose shape of its extent has none is another shape of the plane. Textures over the same pages at
