@@ -2582,15 +2582,18 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A quiesce past its deadline joins every runtime thread before it returns, so nothing a
-    /// live thread can reach (the device, the instance, a queue) is destroyed before that thread
-    /// is joined: with the submit thread held in a scheduled handler past a zero deadline, the
-    /// call returns only after the handler let it go, answers false, and by then none of the
-    /// device's four threads holds a slot of `Gauges::threads` (its thread ids, where the OS
-    /// gives them). The command buffer ends, and the device then tears down.
+    /// A drop after a late quiesce joins the thread the quiesce left running before anything that
+    /// thread can reach goes (the device, the instance, a queue): the shape of a process that ends
+    /// with a runtime thread still running. With the submit thread held in a scheduled handler, a
+    /// quiesce with no time to wait answers false at once and leaves that thread running, its
+    /// slot of `Gauges::threads` held (its thread id, where the OS gives one). The device's last
+    /// handle, dropped on another thread, has not returned half a second later, the blocks live,
+    /// and the thread holds its slot; once the handler lets it go, the drop returns, every gauge
+    /// reads zero and no thread of the device's holds a slot. Under the validation layer, as
+    /// every device test.
     #[test]
-    fn every_device_joins_each_thread_past_a_quiesce_deadline_before_destroying_what_it_reaches() {
-        each_device("quiesce_joins", |name, _, device| {
+    fn every_device_dropped_after_a_late_quiesce_joins_the_late_thread_first() {
+        each_device("late_quiesce_drop", |name, _, device| {
             let counters = device.counters();
             let four: Vec<u64> = (counters.gauges().threads.iter())
                 .copied()
@@ -2617,24 +2620,35 @@ pub(crate) mod on_device {
             inside
                 .recv_timeout(PATIENCE)
                 .expect("the handler holds the submit thread");
-            let quiescing = device.clone();
-            let quiesced = thread::spawn(move || quiescing.quiesce(Duration::ZERO));
-            // The stop began, past its zero deadline, while the handler holds the submit thread.
-            within("the quiesce's stop", || {
-                matches!(queue.command_buffer(), Err(Error::Quiesced))
-            });
-            release.send(()).expect("the handler waits");
-            let idle = quiesced.join().expect("the quiescing thread");
-            assert!(!idle, "{name}: the submit thread ended past the deadline");
-            assert_eq!(
-                alive(),
-                0,
-                "{name}: every thread joined before quiesce returned: {:?}",
-                counters.gauges().threads
+            assert!(
+                !device.quiesce(Duration::ZERO),
+                "{name}: no time to wait, an answer at once"
             );
+            assert!(
+                alive() >= four.len().min(1),
+                "{name}: the held thread is left running"
+            );
+            let (dropped, gone) = mpsc::channel::<()>();
+            let dropping = thread::spawn(move || {
+                drop((a, arena, queue, device));
+                let _ = dropped.send(());
+            });
+            assert!(
+                gone.recv_timeout(Duration::from_millis(500)).is_err(),
+                "{name}: the drop waits for the held thread"
+            );
+            assert!(
+                counters.gauges().blocks > 0,
+                "{name}: the blocks live while the held thread runs"
+            );
+            assert!(alive() >= four.len().min(1), "{name}: the held thread runs");
+            release.send(()).expect("the handler waits");
+            (gone.recv_timeout(PATIENCE)).expect("the drop returns once the held thread ended");
+            dropping.join().expect("the dropping thread");
             finished(name, &command_buffer);
-            drop((a, arena, queue, command_buffer, device));
+            drop(command_buffer);
             within("the teardown", || counters.gauges() == Gauges::default());
+            assert_eq!(alive(), 0, "{name}: every thread ended");
         });
     }
 

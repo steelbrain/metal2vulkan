@@ -431,12 +431,11 @@ mod on_device {
         }
     }
 
-    /// A quiesce past its deadline while busy work the host holds ([`Busy`]) keeps the GPU, with a
-    /// `get_bytes` copy submitted behind it, waits for the completion thread all the same: once
-    /// the busy work opens, the thread retires the copy, which held what it used (the core among
-    /// it), and ends, and only then does the quiesce answer, late. The device's last handle then
-    /// frees everything: every gauge reads zero, and the instance goes within the validation
-    /// guard's patience.
+    /// A quiesce that answers past its deadline while busy work the host holds ([`Busy`]) keeps
+    /// the GPU, with a `get_bytes` copy submitted behind it, leaves the completion thread to end
+    /// alone: once the busy work opens, it retires the copy, which held what it used (the core
+    /// among it), and ends. The device's last handle then frees everything: every gauge reads
+    /// zero, and the instance goes within the validation guard's patience.
     #[test]
     fn every_device_frees_itself_after_a_quiesce_past_its_deadline() {
         let instance = crate::tests::validation::instance(&[]);
@@ -467,15 +466,11 @@ mod on_device {
             wait_until("the read's submission", || {
                 counters.metrics().submissions > submitted
             });
-            let quiescing = device.clone();
-            let quiesced = thread::spawn(move || quiescing.quiesce(Duration::ZERO));
-            // The stop began, past its zero deadline, while the busy work holds the GPU.
-            wait_until("the quiesce's stop", || core.closed());
-            busy.open();
             assert!(
-                !quiesced.join().expect("the quiescing thread"),
+                !device.quiesce(Duration::from_millis(100)),
                 "{name}: the quiesce answers past its deadline while the busy work holds the GPU"
             );
+            busy.open();
             let _ = reader.join().expect("the reader");
             drop(busy);
             drop(device);

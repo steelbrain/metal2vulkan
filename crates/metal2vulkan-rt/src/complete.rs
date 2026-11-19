@@ -348,8 +348,8 @@ impl Done {
     /// Tells the completion thread to end once nothing is in flight. The submit thread tells it
     /// as it ends, after the last command buffers it ended came here, so none comes after the
     /// thread. The thread ends then whatever a stop's deadline was: one past a quiesce's deadline
-    /// ends once the GPU completed what was in flight and it retired that, so nothing in flight
-    /// is left holding what it used, the core among it, and the stop joins it then.
+    /// ends alone, once the GPU completed what was in flight and it retired that, so nothing in
+    /// flight is left holding what it used, the core among it; the teardown joins it.
     pub(crate) fn stop(&self, core: &Core) {
         let mut state = self.lock();
         state.stop = true;

@@ -729,16 +729,17 @@ impl Device {
     /// listener (the submit thread, which runs the scheduled handlers, and the completion thread,
     /// which runs the completed handlers and listeners, cannot wait for themselves).
     ///
-    /// In order: the submit thread submits what is ready, ends every command buffer it holds or
-    /// has not yet submitted with [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun),
-    /// and ends; the block-maker thread ends; the GPU completes everything submitted; the
-    /// completion thread retires it, runs the completed handlers, and ends; the reaper ends; then
-    /// [`BlockMappings::unmap`] runs on this thread for every allocation still mapped. `timeout`
-    /// bounds only how long that may take before the answer is false: every thread is joined
-    /// before the call returns, past the timeout too, so nothing a live runtime thread can reach
-    /// (the device, the instance, a queue) is destroyed while it runs. A thread that never
-    /// returns from a driver call keeps the call from returning. After it, no runtime thread
-    /// touches a block, unless the call ran in a handler or a listener.
+    /// In order, each wait bounded by `timeout`: the submit thread submits what is ready, ends
+    /// every command buffer it holds or has not yet submitted with
+    /// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun), and ends; the
+    /// block-maker thread ends; the GPU completes everything submitted; the completion thread
+    /// retires it, runs the completed handlers, and ends; then [`BlockMappings::unmap`] runs on
+    /// this thread for every allocation still mapped. After it, no runtime thread touches a block,
+    /// unless the call answered false. A thread past the timeout ends alone: the completion
+    /// thread once the GPU completed what was submitted and it retired that, running its
+    /// completed handlers, so what the work held, the device among it, goes once the device's
+    /// last handle has dropped. Such a thread is not joined here; the device's last handle joins
+    /// it, with no deadline, before it destroys anything the thread can reach.
     ///
     /// It frees nothing: every allocation's memory and mapping stays valid until the process ends,
     /// or until the device's last handle drops, which then frees it without the hook. Later calls
@@ -746,19 +747,17 @@ impl Device {
     /// an enqueue or commit, a zeroed Private buffer, and a listener.
     ///
     /// The consumer calls it before `exit()`. It can also run in an `atexit` handler on whichever
-    /// thread calls `exit()`: it waits for each thread to end and joins it, reads no
+    /// thread calls `exit()`: it joins a thread only once that thread has ended, reads no
     /// thread-local that `exit()` tears down, and takes no lock a consumer's thread can hold. Such
     /// a handler runs before the driver's own exit teardown only where it was registered after the
     /// driver loaded, after `Device::new`. A second call returns at once, with the first call's
     /// answer, or false while the first is still running.
     pub fn quiesce(&self, timeout: Duration) -> bool {
         let threads = self.shared.take_threads();
-        halt(
-            &self.shared.core,
-            threads,
-            Instant::now().checked_add(timeout),
-            true,
-        )
+        let deadline = Instant::now().checked_add(timeout);
+        let (idle, left) = halt(&self.shared.core, threads, deadline, true);
+        self.shared.keep_threads(left);
+        idle
     }
 
     /// No Metal counterpart: gives a block back where `block` is its last handle: the drop of the
@@ -907,22 +906,47 @@ impl Shared {
             reaper: threads.reaper.take(),
         }
     }
+
+    /// The threads a stop left running, kept for the teardown to join.
+    fn keep_threads(&self, left: Threads) {
+        let mut threads = lock(&self.threads);
+        let Threads {
+            blocks,
+            submit,
+            complete,
+            reaper,
+        } = left;
+        for (slot, runner) in [
+            (&mut threads.blocks, blocks),
+            (&mut threads.submit, submit),
+            (&mut threads.complete, complete),
+            (&mut threads.reaper, reaper),
+        ] {
+            if runner.is_some() {
+                *slot = runner;
+            }
+        }
+    }
 }
 
 /// Stops the runtime's threads and its GPU work, and runs the consumer's unmap hook for every
 /// allocation still mapped, on this thread: for [`Device::quiesce`] (`quiesce`, with its deadline)
-/// and for teardown. Only the first call stops anything; a later one answers at once. Every
-/// thread but this one is joined before it returns, past `deadline` too: nothing a live thread
-/// can reach (the device, the instance, a queue) is destroyed before that thread is joined.
-/// `deadline` bounds only how long the queued work may take before it counts late. True once the
-/// GPU went idle and every thread ended by `deadline`.
-fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: bool) -> bool {
+/// and for teardown, with none. Only the first call stops anything; a later one answers at once
+/// and hands `threads` back. Each wait is bounded by `deadline`: a thread that has not ended by
+/// then is left running, not joined, and handed back, with this thread's own, for the teardown to
+/// join ([`join`]). True once the GPU went idle and every thread ended by `deadline`.
+fn halt(
+    core: &Arc<Core>,
+    threads: Threads,
+    deadline: Option<Instant>,
+    quiesce: bool,
+) -> (bool, Threads) {
     match core
         .halt
         .compare_exchange(RUNNING, HALTING, Ordering::AcqRel, Ordering::Acquire)
     {
         Ok(_) => {}
-        Err(halt) => return halt == HALTED_IDLE,
+        Err(halt) => return (halt == HALTED_IDLE, threads),
     }
     core.closed.store(true, Ordering::Release);
     let Threads {
@@ -931,72 +955,75 @@ fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: 
         complete,
         reaper,
     } = threads;
+    let mut left = Threads::default();
     // Where a scheduled handler quiesces, on the submit thread, the thread's own submission and
     // the completion thread wait for the handler to return: neither is waited for.
     let on_submit = role(core) == Role::Submit;
     // Submission stops: what is ready goes, and what is held ends.
     core.work.stop();
-    let submitted = finish(submit, core, deadline);
-    let mut idle = submitted.in_time;
+    let submitted = finish(submit, core, deadline, &mut left.submit);
+    let mut idle = submitted;
     core.pool.stop();
-    idle &= finish(blocks, core, deadline).in_time;
+    idle &= finish(blocks, core, deadline, &mut left.blocks);
     if quiesce && !on_submit {
         idle &= core.wait_progress(core.work.progress(), deadline);
     }
     // The submit thread stops the completion thread as it ends; here only where it has ended, or
-    // never ran.
-    if submitted.joined {
+    // never ran. One past the deadline stops it when it ends alone.
+    if submitted {
         core.done.stop(core);
     }
-    if !on_submit {
-        idle &= finish(complete, core, deadline).in_time;
+    match on_submit {
+        false => idle &= finish(complete, core, deadline, &mut left.complete),
+        true => left.complete = complete,
     }
     core.reaper.stop();
-    idle &= finish(reaper, core, deadline).in_time;
+    idle &= finish(reaper, core, deadline, &mut left.reaper);
     // The consumer's mappings go here, on the thread that stops the device, whichever thread
     // later drops the core's last reference and frees the memory.
     core.pool.unmap_all();
     let answer = if idle { HALTED_IDLE } else { HALTED_LATE };
     core.halt.store(answer, Ordering::Release);
-    idle
+    (idle, left)
 }
 
-/// How a stop waited for one thread.
-struct Finished {
-    /// It ended by the deadline.
-    in_time: bool,
-    /// It was joined, or never ran.
-    joined: bool,
-}
-
-/// Joins a thread: it ended by `deadline` or later, and a thread past the deadline is waited for
-/// all the same, never left behind. A thread is never waited for by itself: the completion
-/// thread where a completed handler or a listener quiesces, the submit thread where a scheduled
-/// handler does, the reaper where it runs a teardown; it ends once the call returns.
-fn finish(runner: Option<Runner>, core: &Arc<Core>, deadline: Option<Instant>) -> Finished {
-    let Some(Runner {
-        handle,
-        ended,
-        role: of,
-    }) = runner
-    else {
-        return Finished {
-            in_time: true,
-            joined: true,
-        };
+/// Waits for a thread to end, up to `deadline`, and joins it once it has: true. A thread past the
+/// deadline is left running, not joined, its handle put in `left` for the teardown to join; so is
+/// this thread's own, which is never waited for by itself (the completion thread where a
+/// completed handler or a listener quiesces, the submit thread where a scheduled handler does,
+/// the reaper where it runs a teardown) and ends once the call returns.
+fn finish(
+    runner: Option<Runner>,
+    core: &Arc<Core>,
+    deadline: Option<Instant>,
+    left: &mut Option<Runner>,
+) -> bool {
+    let Some(runner) = runner else {
+        return true;
     };
-    if role(core) == of {
-        return Finished {
-            in_time: false,
-            joined: false,
-        };
+    if role(core) == runner.role || !runner.ended.wait(deadline) {
+        *left = Some(runner);
+        return false;
     }
-    let in_time = ended.wait(deadline);
     // A thread that panicked has ended all the same.
-    let _ = handle.join();
-    Finished {
-        in_time,
-        joined: true,
+    let _ = runner.handle.join();
+    true
+}
+
+/// Joins each thread a stop left running ([`halt`]), with no deadline, before the teardown
+/// destroys anything such a thread can reach (the device, the instance, a queue): after a late
+/// quiesce, the threads still in the driver or ending alone. This thread's own handle is let go:
+/// it ends once the call returns.
+fn join(core: &Arc<Core>, threads: Threads) {
+    let Threads {
+        blocks,
+        submit,
+        complete,
+        reaper,
+    } = threads;
+    for runner in [submit, blocks, complete, reaper] {
+        let mut own = None;
+        finish(runner, core, None, &mut own);
     }
 }
 
@@ -1271,7 +1298,10 @@ impl Drop for Shared {
     fn drop(&mut self) {
         let threads = self.take_threads();
         let teardown = move |core: &Arc<Core>| {
-            halt(core, threads, None, false);
+            // Every thread is joined before anything it can reach goes: those this stop waits
+            // for, and those a late quiesce left running.
+            let (_, left) = halt(core, threads, None, false);
+            join(core, left);
             // The blocks the consumer still holds handles of go back to the pool once the threads
             // have stopped and the consumer's unmap hook has returned for each allocation
             // (`halt`), for the core to free; a handle dropped later finds its claim empty. No buffer of them is
