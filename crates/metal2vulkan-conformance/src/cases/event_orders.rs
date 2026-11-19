@@ -36,6 +36,12 @@
 //! alone ([`LONG_FILLS`] of [`LONG_FILL_BYTES`] into a private buffer): no loop runs on the GPU,
 //! so nothing can hang.
 //!
+//! On `metal2vulkan-rt` the `MTLEvent` row's waiting command buffer may still read `Committed`,
+//! with no handler run, though its wait is met: the new runtime schedules a command buffer once
+//! its device's one submit thread is free, and Metal promises no time between a command buffer's
+//! dependencies resolving and its scheduling. The case declares that on the new runtime's run
+//! alone, in its allowances.
+//!
 //! # What this pulls forward
 //!
 //! Every one of these numbers was ours before. `runtime_lane::events` runs the shapes on the
@@ -77,12 +83,13 @@
 //! such a design is written down and left unbuilt. The runtime's typed refusals of both stay
 //! `runtime_lane` assertions.
 
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Input, MetalSource, Side};
 use crate::event_orders::{
     COMPLETED, HELD_FOR, LONG_FILLS, LONG_FILL_BYTES, RUNNING_WINDOW, SCHEDULED, SCRATCH,
     SIGNAL_WAIT,
 };
-use crate::transcript::{Node, Observed, Sites, Value};
+use crate::transcript::{Negative, Node, Observed, Sites, Value};
 
 /// A wait committed before the signal that meets it.
 pub const CROSS_QUEUE_WAIT: &str = "event-cross-queue-wait";
@@ -163,7 +170,7 @@ impl Case for EventOrder {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+    fn allowances(&self) -> Vec<Allowance> {
         // The cross-queue row is the one row of the family that reads an answer back out of a
         // `Shared` buffer, and on a device without unified memory the runtime announces
         // `shared-in-system-memory` for it (`crate::replay::shared_memory_notice` holds the whole
@@ -176,8 +183,11 @@ impl Case for EventOrder {
         match self.shape {
             // The waiting command buffer's scratch is read back out of a `Shared` buffer, as
             // the cross-queue row's is.
-            Shape::CrossQueueWait | Shape::WaitBehindRunningSignal => {
-                vec![crate::replay::shared_memory_notice()]
+            Shape::CrossQueueWait => vec![crate::replay::shared_memory_notice()],
+            Shape::WaitBehindRunningSignal => {
+                let mut allowances = vec![crate::replay::shared_memory_notice()];
+                allowances.extend(scheduled_once_the_submit_thread_is_free());
+                allowances
             }
             Shape::HighestSignal | Shape::Held | Shape::SignalBeforeWait => Vec::new(),
         }
@@ -289,4 +299,48 @@ impl Case for EventOrder {
         }
         Ok(())
     }
+}
+
+/// The slug of `docs/API.md`'s accepted difference that says when `metal2vulkan-rt` schedules a
+/// command buffer ([`scheduled_once_the_submit_thread_is_free`]).
+const SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE: &str =
+    "the-new-runtime-schedules-a-command-buffer-once-its-submit-thread-is-free";
+
+/// The declaration [`WAIT_BEHIND_A_RUNNING_SIGNAL`]'s `MTLEvent` row needs on `metal2vulkan-rt`'s
+/// run: the waiting command buffer's status while the signaller runs may be `Committed` or
+/// `Scheduled`, and its handlers then none or the scheduled one.
+///
+/// **What it rests on**, the accepted difference [`SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE`]
+/// names: Apple's `Scheduled` is "All dependencies have been resolved and the command buffer has
+/// been scheduled for execution", with no time promised between the two, and the new runtime
+/// schedules a command buffer on its device's one submit thread, once that thread's earlier
+/// `vkQueueSubmit2` calls have returned, whichever queue they were for. Where the signaller's call
+/// outlasts the reading, the waiting one, its wait already met by that signal, is still
+/// `Committed` with no handler run.
+///
+/// **It loosens those two sites alone, and only on the new runtime**
+/// ([`Justification::NewRuntimeAccepted`]), so the old runtime's answers still compare exactly.
+/// The shared event's row is not loosened: both runtimes hold its waiting command buffer until
+/// the value is reached, as Metal does.
+fn scheduled_once_the_submit_thread_is_free() -> Vec<Allowance> {
+    let justified =
+        || Justification::new_runtime_accepted(SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE);
+    vec![
+        Allowance::new(
+            "case/order/event/waiting/status-while-the-signaller-runs",
+            Loosening::AnyOf(vec![
+                Value::unit_variant("Committed"),
+                Value::unit_variant("Scheduled"),
+            ]),
+            justified(),
+        ),
+        Allowance::new(
+            "case/order/event/waiting/handlers-while-the-signaller-runs",
+            Loosening::AnyOf(vec![
+                Value::Nothing(Negative::RanNothing),
+                Value::Lines(vec![SCHEDULED.to_owned()]),
+            ]),
+            justified(),
+        ),
+    ]
 }

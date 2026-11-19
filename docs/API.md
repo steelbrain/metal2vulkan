@@ -6625,6 +6625,19 @@ each item named states the rule in full.
   of the same functions answered an object maximum of 64, where a first compile answers 1024
   (`mesh_pipeline_limits.m`).
 
+**Queues and command buffers**
+
+- **The new runtime schedules a command buffer once its submit thread is free**
+  (`metal2vulkan-rt`'s `CommandBuffer::status`, `add_scheduled_handler` and
+  `wait_until_scheduled`). Apple defines `MTLCommandBufferStatusScheduled` as "All dependencies
+  have been resolved and the command buffer has been scheduled for execution", and promises no
+  time between the two. The new runtime schedules each command buffer on the device's one submit
+  thread, once that thread's earlier `vkQueueSubmit2` calls have returned, whichever queue they
+  were for (the runtime's README, the known gaps of queues). So a command buffer whose wait an
+  earlier submission's signal meets stays `Committed`, its scheduled handlers not run, for as long
+  as that submission's driver call lasts, where an Apple M3 Max had scheduled it while the
+  signalling command buffer still ran.
+
 **Process exit**
 
 - **On Linux, an exit while the driver still runs the runtime's work past the exit's wait for it

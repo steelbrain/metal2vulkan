@@ -3008,6 +3008,81 @@ fn a_new_texture_s_fresh_read_is_unchecked_on_the_new_runtime_alone() {
     assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
 }
 
+/// **The running-signal case's `MTLEvent` reading may be `Committed` on the new runtime's run
+/// alone.** The case names the accepted difference that the new runtime schedules a command
+/// buffer once its submit thread is free ([`Justification::NewRuntimeAccepted`]): on
+/// `metal2vulkan-rt`'s run a waiting command buffer still `Committed` with no handler run, where
+/// Metal had scheduled it, is no divergence; on the old runtime's the same answers are the sites'
+/// rows. The shared event's reading is not loosened, and a status other than the two is a row on
+/// either run.
+#[test]
+fn a_wait_met_by_a_running_signal_may_read_committed_on_the_new_runtime_alone() {
+    let case = (crate::cases::event_orders::all().into_iter())
+        .find(|case| case.name() == crate::cases::event_orders::WAIT_BEHIND_A_RUNNING_SIGNAL)
+        .expect("the running-signal case");
+    let allowances = case.allowances();
+    let row = |name: &str, status: &str, handlers: Value| {
+        Node::branch(
+            name,
+            vec![
+                Node::leaf(
+                    "waiting/status-while-the-signaller-runs",
+                    Observed::value(Value::unit_variant(status)),
+                ),
+                Node::leaf(
+                    "waiting/handlers-while-the-signaller-runs",
+                    Observed::value(handlers),
+                ),
+            ],
+        )
+    };
+    let scheduled = || Value::Lines(vec!["scheduled".to_owned()]);
+    let none = || Value::Nothing(Negative::RanNothing);
+    let transcript = |event: (&str, Value), shared: (&str, Value)| {
+        Transcript::new(vec![
+            row("order/event", event.0, event.1),
+            row("order/shared-event", shared.0, shared.1),
+        ])
+    };
+    let metal = transcript(("Scheduled", scheduled()), ("Committed", none()));
+    let ours = transcript(("Committed", none()), ("Committed", none()));
+    // The divergences' paths, sorted: the handlers' site ahead of the status's.
+    let paths = |found: &crate::compare::Comparison| -> Vec<String> {
+        let mut paths: Vec<String> = found.divergences.iter().map(|at| at.path.clone()).collect();
+        paths.sort();
+        paths
+    };
+    let event_sites = [
+        "case/order/event/waiting/handlers-while-the-signaller-runs",
+        "case/order/event/waiting/status-while-the-signaller-runs",
+    ];
+    let old = Offered::notices(&[]);
+    let found = compare(&metal, &ours, &allowances, old);
+    assert_eq!(paths(&found), event_sites, "{found:?}");
+
+    let rt = old.on_new_runtime(true);
+    let found = compare(&metal, &ours, &allowances, rt);
+    assert!(found.divergences.is_empty(), "{found:?}");
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+
+    // The shared event's reading is not the declaration's.
+    let shared = transcript(("Scheduled", scheduled()), ("Scheduled", scheduled()));
+    let found = compare(&metal, &shared, &allowances, rt);
+    assert_eq!(
+        paths(&found),
+        [
+            "case/order/shared-event/waiting/handlers-while-the-signaller-runs",
+            "case/order/shared-event/waiting/status-while-the-signaller-runs",
+        ],
+        "{found:?}"
+    );
+
+    // Nor is a status other than `Committed` or `Scheduled`.
+    let completed = transcript(("Completed", scheduled()), ("Committed", none()));
+    let found = compare(&metal, &completed, &allowances, rt);
+    assert_eq!(paths(&found), event_sites[1..], "{found:?}");
+}
+
 /// **A venue's own answer at a site that differs on a venue presenting Metal's compression is the
 /// site's one row.** [`crate::replay::without_compression`] holds only where the venue keeps no
 /// texture compressed; on the Mac that recorded the case (MoltenVK on the M3 Max) it holds
