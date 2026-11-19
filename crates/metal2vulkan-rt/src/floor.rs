@@ -9,7 +9,7 @@
 
 use ash::vk;
 use metal2vulkan::device::{EnableSet, VkExtension, VkFeature};
-use std::ffi::{CStr, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::fmt;
 
 /// The Vulkan version the runtime requires of the instance and of every device.
@@ -48,7 +48,9 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// exports' ([`Device::new_exported_block`](crate::Device::new_exported_block)): the fd's and
 /// the dma-buf's again, an NT handle's, and the foreign queue family a dma-buf's ownership
 /// transfers name, and the DRM format modifier, through which a dma-buf's surface lies in place
-/// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)).
+/// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), and
+/// `VK_EXT_zero_initialize_device_memory`, for the pool's allocations made zeroed by the driver
+/// ([`Capabilities::zero_initialize_memory`]).
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
@@ -61,7 +63,67 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::external_memory_win32::NAME,
     ash::ext::queue_family_foreign::NAME,
     ash::ext::image_drm_format_modifier::NAME,
+    ZERO_INITIALIZE_DEVICE_MEMORY,
 ];
+
+/// `VK_EXT_zero_initialize_device_memory`'s name, which `ash 0.38` predates: where the device
+/// lists it and reports its feature ([`Capabilities::zero_initialize_memory`]), the pool's
+/// allocations are made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` and read zero until
+/// written, so nothing of the runtime zeroes a range no block held before.
+pub(crate) const ZERO_INITIALIZE_DEVICE_MEMORY: &CStr = c"VK_EXT_zero_initialize_device_memory";
+
+/// `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which `ash 0.38` predates: the memory is zeroed
+/// by the implementation before the application can access it.
+pub(crate) const ZERO_INITIALIZE: vk::MemoryAllocateFlags = vk::MemoryAllocateFlags::from_raw(0x8);
+
+/// `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT`, of
+/// `VK_EXT_zero_initialize_device_memory`, which `ash 0.38` predates, laid out as the registry
+/// defines it (extension number 621).
+///
+/// No Metal counterpart: Metal zeroes a new buffer of `newBufferWithLength:options:` whatever the
+/// device. Here the feature chooses who writes those zeros in memory no block held before: the
+/// driver, where it is enabled, or the runtime.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ZeroInitializeDeviceMemoryFeatures {
+    s_type: vk::StructureType,
+    p_next: *mut c_void,
+    /// `zeroInitializeDeviceMemory`.
+    pub zero_initialize_device_memory: vk::Bool32,
+}
+
+impl Default for ZeroInitializeDeviceMemoryFeatures {
+    fn default() -> Self {
+        ZeroInitializeDeviceMemoryFeatures {
+            s_type: <Self as vk::TaggedStructure>::STRUCTURE_TYPE,
+            p_next: std::ptr::null_mut(),
+            zero_initialize_device_memory: vk::FALSE,
+        }
+    }
+}
+
+impl ZeroInitializeDeviceMemoryFeatures {
+    /// Unlinks it from the chain it was read through.
+    fn unlink(&mut self) {
+        self.p_next = std::ptr::null_mut();
+    }
+}
+
+// SAFETY: plain data, as ash's own feature structures, which are `Send`: the link is only read
+// while the chain it heads is passed to a Vulkan call.
+unsafe impl Send for ZeroInitializeDeviceMemoryFeatures {}
+// SAFETY: as above.
+unsafe impl Sync for ZeroInitializeDeviceMemoryFeatures {}
+// SAFETY: the layout is the registry's `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT`,
+// which begins with `sType` and `pNext` as every chained structure must, and this is its
+// structure type (`VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ZERO_INITIALIZE_DEVICE_MEMORY_FEATURES_EXT`).
+unsafe impl vk::TaggedStructure for ZeroInitializeDeviceMemoryFeatures {
+    const STRUCTURE_TYPE: vk::StructureType = vk::StructureType::from_raw(1_000_620_000);
+}
+// SAFETY: the registry lists `VkDeviceCreateInfo` in the structure's `structextends`.
+unsafe impl vk::ExtendsDeviceCreateInfo for ZeroInitializeDeviceMemoryFeatures {}
+// SAFETY: the registry lists `VkPhysicalDeviceFeatures2` in the structure's `structextends`.
+unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for ZeroInitializeDeviceMemoryFeatures {}
 
 /// The device extensions of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`
 /// and its dynamic state), through which a draw reads, through a texture, an attachment its own
@@ -217,6 +279,9 @@ pub struct Features {
     /// and `VK_EXT_vertex_attribute_divisor` (the same structure): read and enabled only where the
     /// device lists one of them, and then only the step-rate feature.
     pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>,
+    /// `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT`, of
+    /// `VK_EXT_zero_initialize_device_memory`: read and enabled only where the device lists it.
+    pub zero_initialize: ZeroInitializeDeviceMemoryFeatures,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -261,6 +326,9 @@ macro_rules! feature {
     };
     (@structure divisor) => {
         "VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR"
+    };
+    (@structure zero_initialize) => {
+        "VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT"
     };
     (@translator) => {
         None
@@ -415,6 +483,8 @@ pub(crate) const OPTIONAL: &[Feature] = &[
     // control flow where it offers that.
     feature!(maximal_reconvergence.shader_maximal_reconvergence => ShaderMaximalReconvergence),
     feature!(subgroup_uniform_control_flow.shader_subgroup_uniform_control_flow => ShaderSubgroupUniformControlFlow),
+    // The pool's allocations made zeroed by the driver, where the device lists the extension.
+    feature!(zero_initialize.zero_initialize_device_memory),
 ];
 
 /// The features of the attachment feedback loop ([`ATTACHMENT_READ_EXTENSIONS`]): enabled together
@@ -611,6 +681,11 @@ pub struct Capabilities {
     /// Metal reads a render target. It reads through the attachment feedback loop where
     /// [`feedback_loop`](Self::feedback_loop) holds, and through a copy of the image otherwise.
     pub attachment_reads: bool,
+    /// The device lists `VK_EXT_zero_initialize_device_memory` and reports
+    /// `zeroInitializeDeviceMemory`: the pool's allocations are made zeroed by the driver
+    /// (`VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`), and a buffer's zeros in bytes no block held
+    /// before are the driver's. Elsewhere the runtime writes them.
+    pub zero_initialize_memory: bool,
     /// The attachment reads hold, and so does every attachment-read feature, with
     /// [`ATTACHMENT_READ_EXTENSIONS`]: a draw reads an attachment through the attachment feedback
     /// loop.
@@ -725,6 +800,7 @@ unsafe fn query(
             listed(ash::ext::attachment_feedback_loop_dynamic_state::NAME);
         let divisor_listed = listed(ash::khr::vertex_attribute_divisor::NAME)
             || listed(ash::ext::vertex_attribute_divisor::NAME);
+        let zero_initialize_listed = listed(ZERO_INITIALIZE_DEVICE_MEMORY);
 
         let Features {
             core,
@@ -738,6 +814,7 @@ unsafe fn query(
             feedback_loop,
             feedback_loop_dynamic,
             divisor,
+            zero_initialize,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -764,6 +841,9 @@ unsafe fn query(
         if divisor_listed {
             features = features.push_next(&mut *divisor);
         }
+        if zero_initialize_listed {
+            features = features.push_next(&mut *zero_initialize);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -776,6 +856,7 @@ unsafe fn query(
         feedback_loop.p_next = std::ptr::null_mut();
         feedback_loop_dynamic.p_next = std::ptr::null_mut();
         divisor.p_next = std::ptr::null_mut();
+        zero_initialize.unlink();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -888,6 +969,8 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             .shader_subgroup_uniform_control_flow
             == vk::TRUE,
         attachment_reads,
+        zero_initialize_memory: listed(ZERO_INITIALIZE_DEVICE_MEMORY)
+            && features.zero_initialize.zero_initialize_device_memory == vk::TRUE,
         feedback_loop,
         features,
         extensions: DEVICE_EXTENSIONS

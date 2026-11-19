@@ -2559,6 +2559,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_external_memory_win32` | device, where listed | exporting a block as an NT handle (`Device::new_exported_block`) |
 | `VK_EXT_queue_family_foreign` | device, where listed | the foreign queue family that a dma-buf export's ownership transfers name |
 | `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
+| `VK_EXT_zero_initialize_device_memory` | device, where listed | the pool's allocations made zeroed by the driver, through the optional feature below |
 
 ### Features
 
@@ -2755,6 +2756,7 @@ The other four are one feature each:
 | `shaderFloat64` | `VkPhysicalDeviceFeatures` | 64-bit floats |
 | `shaderMaximalReconvergence` | `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR` | SIMD groups that reconverge as Metal's do |
 | `shaderSubgroupUniformControlFlow` | `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR` | SIMD groups' reconvergence where maximal reconvergence is not offered |
+| `zeroInitializeDeviceMemory` | `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT` | the pool's allocations made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, where the device also lists `VK_EXT_zero_initialize_device_memory`: a buffer's zeros in bytes no block held before are the driver's (Memory blocks and buffers); elsewhere the runtime writes them |
 
 ### Attachment reads
 

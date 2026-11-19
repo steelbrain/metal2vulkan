@@ -1426,6 +1426,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut feedback_loop,
             mut feedback_loop_dynamic,
             mut divisor,
+            mut zero_initialize,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -1452,6 +1453,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             || enabled(ash::ext::vertex_attribute_divisor::NAME)
         {
             features = features.push_next(&mut divisor);
+        }
+        if enabled(crate::floor::ZERO_INITIALIZE_DEVICE_MEMORY) {
+            features = features.push_next(&mut zero_initialize);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

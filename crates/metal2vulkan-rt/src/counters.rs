@@ -895,9 +895,13 @@ pub struct Metrics {
     /// shadows ([`attachment_read_copy_bytes`](Self::attachment_read_copy_bytes)). A blit's own
     /// copy, and a synchronize's, is the program's and is not counted.
     pub bytes_copied: u64,
-    /// Bytes of new buffers zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s from its
-    /// `zero_from` to the buffer's end, and a Managed buffer's device copy's past its copied bytes
-    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    /// Bytes of new buffers the runtime zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s
+    /// from its `zero_from` to the buffer's end, and a Managed buffer's device copy's past its
+    /// copied bytes ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)). The
+    /// bytes that read zero already, in an allocation the driver made zeroed that no block or
+    /// placement held there before
+    /// ([`floor::Capabilities::zero_initialize_memory`](crate::floor::Capabilities::zero_initialize_memory)),
+    /// are not written, and not counted.
     pub bytes_zeroed: u64,
     /// Takes carved from a free range of an allocation already made: under the pool's lock, with
     /// no Vulkan call and no call to the consumer's hook. A take that no free range fits makes an
@@ -905,7 +909,9 @@ pub struct Metrics {
     /// [`allocations_mapped_on_takes`](Self::allocations_mapped_on_takes)).
     pub takes_from_free_ranges: u64,
     /// Zero fills the consumer asked of Private blocks
-    /// ([`Device::zero_block_range`](crate::Device::zero_block_range)).
+    /// ([`Device::zero_block_range`](crate::Device::zero_block_range)) that wrote bytes: a range
+    /// whose bytes all read zero already, as [`bytes_zeroed`](Self::bytes_zeroed) skips them, is
+    /// not filled.
     pub block_zero_fills: u64,
     /// The bytes of those fills.
     pub block_zero_fill_bytes: u64,
