@@ -2,7 +2,8 @@
 //! Shared take longer than the 16 MiB unit is one take of its bytes, one wait for the pool's lock
 //! and one make of an allocation of its own on the caller's thread, and adds its bytes to the
 //! placed Shared bytes; a buffer zeroed over it is one zero write of its bytes and adds its length
-//! to the Shared buffer bytes; a take that fits a free range makes nothing; a placed texture adds
+//! to the Shared buffer bytes and is one zero write of a take past the unit; a take that fits a
+//! free range makes nothing, and its buffer's zeros are no such write; a placed texture adds
 //! its image's bytes to the texture block bytes; and each gauge falls back as its object goes.
 //! Each call's total time holds its longest, and the buckets over 1, 5 and 20 ms each hold no more
 //! calls than the one below.
@@ -73,6 +74,11 @@ mod on_device {
                 "{name}: the buffer's zeros"
             );
             assert_eq!(
+                added(taken.long_take_zero_writes, zeroed.long_take_zero_writes),
+                (1, len),
+                "{name}: the zeros of a take past the unit"
+            );
+            assert_eq!(
                 counters.gauges().shared_buffer_bytes - gauged.shared_buffer_bytes,
                 len,
                 "{name}: the Shared buffer bytes"
@@ -98,7 +104,20 @@ mod on_device {
             let after = counters.metrics();
             assert_eq!(added(before.takes, after.takes), (1, small.len), "{name}");
             assert_eq!(added(before.take_makes, after.take_makes), (0, 0), "{name}");
-            drop(small);
+            let buffer = (device.new_buffer(small.id, 0, small.len, Some(0)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let zeroed = counters.metrics();
+            assert_eq!(
+                added(after.zero_writes, zeroed.zero_writes),
+                (1, small.len),
+                "{name}: the small buffer's zeros"
+            );
+            assert_eq!(
+                added(after.long_take_zero_writes, zeroed.long_take_zero_writes),
+                (0, 0),
+                "{name}: a take within the unit"
+            );
+            drop((buffer, small));
 
             // A placed texture's bytes.
             let gauged = counters.gauges();
@@ -128,6 +147,7 @@ mod on_device {
                 ("maps", m.take_maps),
                 ("maker makes", m.maker_makes),
                 ("zero writes", m.zero_writes),
+                ("long take zero writes", m.long_take_zero_writes),
             ] {
                 whole(name, part, t);
             }
@@ -136,9 +156,9 @@ mod on_device {
                 "{name}: the allocations made ahead"
             );
             println!(
-                "{name}: take {:?}; lock {:?}; make {:?}; zero {:?}; texture bytes placed {placed}, \
-                 own {own}",
-                m.takes, m.take_lock_waits, m.take_makes, m.zero_writes
+                "{name}: take {:?}; lock {:?}; make {:?}; zero {:?}; long take zero {:?}; texture \
+                 bytes placed {placed}, own {own}",
+                m.takes, m.take_lock_waits, m.take_makes, m.zero_writes, m.long_take_zero_writes
             );
         });
     }

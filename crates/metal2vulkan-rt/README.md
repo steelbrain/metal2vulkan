@@ -214,7 +214,8 @@ in its memory.
   (an allocation it made for itself on the caller's thread: the buffer, `vkAllocateMemory`, the
   bind, the address and a Shared one's map), `take_maps` (the consumer's `BlockMappings::map` of
   it) and `maker_makes` (the allocations made ahead of need, off every take); `zero_writes` times
-  `Device::new_buffer`'s host writes of zeros (`memset` through the block's mapping).
+  `Device::new_buffer`'s host writes of zeros (`memset` through the block's mapping), and
+  `long_take_zero_writes` those of them into a take past the 16 MiB unit.
 - The runtime's fixed-size internals are made by the block-maker thread, never on a caller's
   thread and never inside `Device::new`: its first work once `Device::new` starts it is the zero
   source (64 KiB), the parameter ring's first block (2 MiB) and the staging region (16 MiB). The
@@ -868,7 +869,13 @@ planes' first use, so `Surface::wait_until_ready()` returns at once.
   the mapping inside `Device::new_buffer`, which pulls the first touch of every page into the
   call, where Metal pays it at the program's first write. On the Iris Xe a new Shared buffer of
   144 MiB takes 24 to 34 ms to make, almost all of it that zeroing: the driver's
-  `vkAllocateMemory` of it takes 0.01 ms. The runtime does not use
+  `vkAllocateMemory` of it takes 0.01 ms. Into the fresh pages of a new allocation the write runs
+  at 7.9 to 8.5 GB/s under RADV (Mesa 26.2.6) on the Radeon 780M (Phoenix and Hawk Point), the
+  RX 550 and the RX 7900 XTX, against 25.5 to 27.4 GB/s under NVIDIA's driver (620.70.06) on the
+  RTX 3090 and RTX 2080, and 24 to 27 GB/s for the same `memset` into fresh pages of the host's
+  own memory on those hosts; into pages written before, 73 to 97 GB/s on every one of them.
+  `Metrics::long_take_zero_writes` counts the zeroing of takes past the 16 MiB unit. The runtime
+  does not use
   `VK_EXT_zero_initialize_device_memory`: under RADV (Mesa 26.2.6) an RX 7900 XTX's memory
   allocated with its flag read other processes' bytes.
 

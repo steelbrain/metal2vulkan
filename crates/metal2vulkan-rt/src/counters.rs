@@ -41,10 +41,12 @@ pub(crate) enum Part {
     MakerMake,
     /// [`Metrics::zero_writes`].
     ZeroWrite,
+    /// [`Metrics::long_take_zero_writes`].
+    LongTakeZeroWrite,
 }
 
 /// The number of [`Part`]s.
-const PARTS: usize = Part::ZeroWrite as usize + 1;
+const PARTS: usize = Part::LongTakeZeroWrite as usize + 1;
 
 /// A metric the runtime adds to.
 #[derive(Clone, Copy)]
@@ -1008,6 +1010,7 @@ impl Counters {
             take_maps: part(Part::TakeMap),
             maker_makes: part(Part::MakerMake),
             zero_writes: part(Part::ZeroWrite),
+            long_take_zero_writes: part(Part::LongTakeZeroWrite),
         }
     }
 
@@ -1458,6 +1461,11 @@ pub struct Metrics {
     /// zeros. A block the host does not map is zeroed by a GPU fill instead, which is not timed
     /// here ([`block_zero_fills`](Self::block_zero_fills)).
     pub zero_writes: Timed,
+    /// Of the [`zero_writes`](Self::zero_writes), those into a block longer than
+    /// [`MemoryClass::block_len`](crate::MemoryClass::block_len): a take past the pool's unit,
+    /// which made its allocation on the consumer's thread
+    /// ([`take_makes`](Self::take_makes)), zeroed through its mapping; their bytes the zeros.
+    pub long_take_zero_writes: Timed,
 }
 
 /// No Metal counterpart: the calls of one part of the consumer's takes and buffer makes
