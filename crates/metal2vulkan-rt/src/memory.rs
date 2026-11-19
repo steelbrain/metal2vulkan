@@ -866,7 +866,7 @@ impl Pool {
             return Err(Error::Limit(Limit::AllocationNotMapped { class, len }));
         }
         let base = allocation.free.take(len, align).unwrap_or(0);
-        let memory = allocation.carve(base, len).block(id, class, len);
+        let memory = allocation.carve(base).block(id, class, len);
         allocation.live = 1;
         self.lock().allocations[class.index()].push(allocation);
         Ok(memory)
@@ -1101,7 +1101,7 @@ impl State {
         if long {
             allocation.reused = true;
         }
-        Some((allocation.carve(base, len), idle_since, long))
+        Some((allocation.carve(base), idle_since, long))
     }
 
     /// The class's idle allocations the idle rule weighs, as when each became idle and its memory,
@@ -1135,8 +1135,8 @@ impl State {
 }
 
 impl Allocation {
-    /// What a block of `len` bytes at `base`, a range taken from the free bytes, is.
-    fn carve(&self, base: u64, len: u64) -> Carve {
+    /// What a block at `base`, a range taken from the free bytes, is.
+    fn carve(&self, base: u64) -> Carve {
         Carve {
             allocation: self.id,
             memory: self.memory,
