@@ -16,8 +16,8 @@ them over this crate's items:
 - `MTLRenderPassDescriptor`'s read-back of its own fields. `RenderPassDescriptor` is a value the
   consumer fills, so what Metal's descriptor answers after its setters is the consumer's to keep.
 - `MTLHeap` and its getters. A heap is a range of a block the consumer took (`HeapRange`); the
-  device's size and alignment of a resource placed in a heap
-  (`Device::heap_texture_size_and_align`) is this crate's.
+  size and alignment of a resource placed in a heap (`Device::heap_texture_size_and_align`,
+  `Device::heap_buffer_size_and_align`) are this crate's.
 - `MTLComputeCommandEncoder`'s `dispatchType`. `CommandBuffer::compute_command_encoder` takes it
   as its argument and keeps no getter.
 - `MTLTexture`'s `cpuCacheMode`, `hazardTrackingMode` and `allowGPUOptimizedContents`.
@@ -227,6 +227,13 @@ in its memory.
   completes. `Metrics::bytes_zeroed` counts the bytes. A length of 0, a length
   past `MAX_BUFFER_LENGTH` (2 GiB) and a range past the block are refused, as Metal answers nil for
   each.
+- `Device::heap_buffer_size_and_align(length, options)` is `heapBufferSizeAndAlignWithLength:options:`:
+  the length itself at a multiple of 256, whatever the options, as an Apple M3 Max answers under
+  macOS 27.0.1, and the same on every device. The alignment is the runtime's placement rule: the
+  runtime takes a buffer at any byte of a block, and every rule a use of a buffer has (an
+  argument's alignment, indirect arguments' and indices' places, a fill's words, a copy's texel
+  blocks) holds for one at a multiple of 256, which is also no less than Vulkan lets any device
+  ask of a buffer's offset.
 - A shader reaches a buffer argument's bytes by 32-bit offsets from its bind address, which the
   translator may read as signed, so the consumer states a maximum buffer length (Metal's
   `maxBufferLength`) no larger than `MAX_BUFFER_LENGTH`, and places no buffer longer than that in

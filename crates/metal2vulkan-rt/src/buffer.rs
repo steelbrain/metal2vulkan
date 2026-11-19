@@ -9,6 +9,7 @@ use crate::fill;
 use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
 use crate::over::ManagedOvers;
 use crate::submit::Held;
+use crate::texture::SizeAndAlign;
 use ash::vk;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -18,6 +19,30 @@ use std::sync::Arc;
 /// either side of it; a byte of a longer buffer could lie where no access reaches it. Metal
 /// answers nil past a device's `maxBufferLength`; the consumer states one no larger than this.
 pub const MAX_BUFFER_LENGTH: u64 = 1 << 31;
+
+/// What a buffer's offset in a heap is a multiple of ([`Device::heap_buffer_size_and_align`]):
+/// 256 bytes on every device, Metal's answer (an Apple M3 Max, macOS 27.0.1, the conformance
+/// recording `device-heap-buffer-sizes`).
+///
+/// The runtime takes a buffer at any byte of a block ([`Device::new_buffer`]); what it asks of
+/// a buffer's place is per use, and every such rule holds for a buffer that starts at a multiple
+/// of 256 of its block, whose own first byte lies at a multiple of 64 KiB of its allocation: a
+/// bound argument's alignment, at most 16
+/// ([`Refusal::BufferOffsetAlignment`]), indirect arguments at a multiple of 4 and indices at a
+/// multiple of their size ([`Refusal::ArgumentPlace`]), a fill's 4-byte words and a copy's texel
+/// block. It is also no less than any device may ask of a buffer's offset: Vulkan bounds
+/// `minUniformBufferOffsetAlignment`, `minStorageBufferOffsetAlignment` and
+/// `minTexelBufferOffsetAlignment` at 256. So it is a constant, not a device query: an answer
+/// that moved with the host would buy nothing. A placement rule added later changes it here.
+const HEAP_BUFFER_ALIGNMENT: u64 = 256;
+
+/// [`Device::heap_buffer_size_and_align`]'s answer for `length` bytes.
+pub(crate) fn heap_buffer_size_and_align(length: u64) -> SizeAndAlign {
+    SizeAndAlign {
+        size: length,
+        align: HEAP_BUFFER_ALIGNMENT,
+    }
+}
 
 /// `MTLBuffer`: `length` bytes at `offset` in a block the consumer took, with no `VkBuffer` or
 /// memory of its own. Shaders reach it by its device address.
@@ -92,6 +117,22 @@ impl Drop for Inner {
 }
 
 impl Device {
+    /// `heapBufferSizeAndAlignWithLength:options:`: the bytes and alignment a buffer of `length`
+    /// bytes takes in a heap, `length` itself at a multiple of 256, whatever the options (Metal's
+    /// raw `MTLResourceOptions`, which the answer does not read). It is Metal's answer: an Apple
+    /// M3 Max under macOS 27.0.1 answers the length unrounded and 256 for lengths from 1 to
+    /// 1,048,576 and the default, Private, Managed, write-combined and untracked options (the
+    /// conformance recording `device-heap-buffer-sizes`). What differs: nothing, but that it is
+    /// the same on every device, where Metal's answer is its GPU's. The alignment is the runtime's
+    /// placement rule: every rule a use of a buffer has (an argument's alignment, indirect
+    /// arguments' and indices' places, a fill's words, a copy's texel blocks) holds for a buffer
+    /// that starts at a multiple of 256 of its block, and Vulkan bounds every buffer offset
+    /// alignment a device may ask at 256. So a buffer the consumer places by these answers
+    /// ([`Device::new_buffer`]) meets every use the runtime makes of it. No Vulkan call is made.
+    pub fn heap_buffer_size_and_align(&self, length: u64, _options: u64) -> SizeAndAlign {
+        heap_buffer_size_and_align(length)
+    }
+
     /// `newBufferWithLength:options:offset:` of a placement heap, over a block the consumer
     /// holds. The consumer chooses the range; it reuses a range only once the work that named the
     /// buffer there before has completed, as Metal frees a buffer's memory only then.

@@ -9582,6 +9582,7 @@ method	metal2vulkan-rt::Device::extensions	pub fn extensions(&self) -> &[CString
 method	metal2vulkan-rt::Device::features	pub fn features(&self) -> &[ConsumerFeature]
 method	metal2vulkan-rt::Device::grant_indices	pub fn grant_indices(&self, class: IndexClass, first: u32, count: u32) -> Result<IndexGrant, Error>
 method	metal2vulkan-rt::Device::has_unified_memory	pub fn has_unified_memory(&self) -> bool
+method	metal2vulkan-rt::Device::heap_buffer_size_and_align	pub fn heap_buffer_size_and_align(&self, length: u64, _options: u64) -> SizeAndAlign
 method	metal2vulkan-rt::Device::heap_texture_size_and_align	pub fn heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<SizeAndAlign, Error>
 method	metal2vulkan-rt::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-rt::Device::minimum_linear_texture_alignment	pub fn minimum_linear_texture_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>

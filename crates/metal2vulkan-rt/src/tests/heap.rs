@@ -5,7 +5,8 @@
 //! heap's end, one off the image's alignment, a heap range past its block and a heap in a Shared
 //! block are refused; and every gauge reads zero after teardown. A compute encoder's `use_heap`
 //! holds the heap's block for its command buffer once, past the consumer's release, until the
-//! command buffer retires, and a released block's number names nothing.
+//! command buffer retires, and a released block's number names nothing. On no device: a heap
+//! buffer's size and alignment are Metal's, its length at a multiple of 256.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -205,5 +206,36 @@ mod on_device {
             assert_eq!(command_buffer.error(), None, "{name}");
             drop((command_buffer, queue));
         });
+    }
+}
+
+/// `heapBufferSizeAndAlignWithLength:options:` answers the length itself at a multiple of 256,
+/// as Metal answers on an Apple M3 Max under macOS 27.0.1 (the conformance recording
+/// `device-heap-buffer-sizes`: 1, 15, 255, 256, 257, 511, 4096 and 1 MiB), and past it.
+#[test]
+fn a_heap_buffer_is_its_length_at_a_multiple_of_256() {
+    use crate::buffer::heap_buffer_size_and_align;
+    use crate::{SizeAndAlign, MAX_BUFFER_LENGTH};
+    for length in [
+        0,
+        1,
+        15,
+        255,
+        256,
+        257,
+        511,
+        4096,
+        1 << 20,
+        MAX_BUFFER_LENGTH,
+        u64::MAX,
+    ] {
+        assert_eq!(
+            heap_buffer_size_and_align(length),
+            SizeAndAlign {
+                size: length,
+                align: 256
+            },
+            "{length}"
+        );
     }
 }
