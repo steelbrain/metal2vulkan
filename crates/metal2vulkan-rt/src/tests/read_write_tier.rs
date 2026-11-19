@@ -256,10 +256,14 @@ declare void @air.write_texture_2d.s.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
                 let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
                     FunctionDescriptor::new(function),
                 ));
-                // A texture read numbers one sampler, its own; sampler 0 serves it.
+                // The texture's read and its write number a sampler each; sampler 0 serves both.
                 (device.new_compute_pipeline_state(&descriptor, |samplers| {
-                    assert_eq!(samplers, [NumberedSampler::Read], "{name}");
-                    Ok(vec![0])
+                    assert_eq!(
+                        samplers,
+                        [NumberedSampler::Read, NumberedSampler::Write],
+                        "{name}"
+                    );
+                    Ok(vec![0; samplers.len()])
                 }))
                 .unwrap_or_else(|error| panic!("{name}: {entry}: {error}"))
             };
