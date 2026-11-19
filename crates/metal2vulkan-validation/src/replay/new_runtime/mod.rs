@@ -2229,6 +2229,8 @@ impl Backend for NewRuntime {
             ("timestamp_pools", gauges.timestamp_pools),
             ("spilled_bytes", gauges.spilled_bytes),
             ("managed_spilled_bytes", gauges.managed_spilled_bytes),
+            ("shared_allocation_bytes", gauges.shared_allocation_bytes),
+            ("private_allocation_bytes", gauges.private_allocation_bytes),
             ("shared_idle_bytes", gauges.shared_idle_bytes),
             ("private_idle_bytes", gauges.private_idle_bytes),
             ("shared_idle_age_nanos", gauges.shared_idle_age_nanos),

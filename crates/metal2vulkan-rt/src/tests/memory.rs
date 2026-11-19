@@ -2052,6 +2052,12 @@ mod on_device {
             let block = (device.take_block(MemoryClass::Shared, LONG))
                 .unwrap_or_else(|error| panic!("{name}: a long block: {error}"));
             let (id, allocation) = (block.id, block.allocation);
+            let gauges = counters.gauges();
+            assert!(
+                gauges.shared_allocation_bytes >= LONG + MemoryClass::Shared.block_len()
+                    && gauges.private_allocation_bytes >= MemoryClass::Private.block_len(),
+                "{name}: the long allocation's bytes and each class's first: {gauges:?}"
+            );
             bytes(&block).fill(0xCD);
             let before = counters.metrics();
             let fill = core.pool.fill();

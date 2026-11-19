@@ -2313,6 +2313,7 @@ field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
 field	metal2vulkan-rt::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.pipeline_cache_bytes	pub pipeline_cache_bytes: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
+field	metal2vulkan-rt::Gauges.private_allocation_bytes	pub private_allocation_bytes: u64
 field	metal2vulkan-rt::Gauges.private_idle_age_nanos	pub private_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.private_long_reused_bytes	pub private_long_reused_bytes: u64
@@ -2321,6 +2322,7 @@ field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-rt::Gauges.shadow_bytes	pub shadow_bytes: u64
 field	metal2vulkan-rt::Gauges.shadows	pub shadows: u64
+field	metal2vulkan-rt::Gauges.shared_allocation_bytes	pub shared_allocation_bytes: u64
 field	metal2vulkan-rt::Gauges.shared_idle_age_nanos	pub shared_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.shared_long_reused_bytes	pub shared_long_reused_bytes: u64

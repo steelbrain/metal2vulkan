@@ -99,6 +99,14 @@ impl MemoryClass {
         ALLOCATION_LEN
     }
 
+    /// The gauge of the bytes of the class's live allocations.
+    fn allocation_gauge(self) -> Gauge {
+        match self {
+            MemoryClass::Private => Gauge::PrivateAllocationBytes,
+            MemoryClass::Shared => Gauge::SharedAllocationBytes,
+        }
+    }
+
     /// The gauge of the class's idle bytes.
     fn idle_gauge(self) -> Gauge {
         match self {
@@ -386,6 +394,7 @@ impl Drop for Block {
 /// holds.
 struct Allocation {
     id: AllocationId,
+    class: MemoryClass,
     memory: vk::DeviceMemory,
     buffer: vk::Buffer,
     /// The device address of its first byte.
@@ -1419,6 +1428,7 @@ fn make_allocation(core: &Core, class: MemoryClass, len: u64) -> Result<Allocati
     };
     let mut allocation = Allocation {
         id,
+        class,
         memory,
         buffer,
         address: 0,
@@ -1435,6 +1445,7 @@ fn make_allocation(core: &Core, class: MemoryClass, len: u64) -> Result<Allocati
     };
     core.counters.count(Metric::BlocksMade);
     core.counters.allocated(len);
+    core.counters.rise_by(class.allocation_gauge(), len);
     if spilled {
         core.counters.rise_by(Gauge::SpilledBytes, len);
     }
@@ -1507,6 +1518,7 @@ fn free_allocation(core: &Core, allocation: Allocation) {
         core.device.free_memory(allocation.memory, None);
     }
     core.counters.fall(Gauge::Blocks);
+    (core.counters).fall_by(allocation.class.allocation_gauge(), allocation.len);
     if allocation.spilled {
         core.counters.fall_by(Gauge::SpilledBytes, allocation.len);
     }

@@ -184,6 +184,10 @@ pub(crate) enum Gauge {
     SpilledBytes,
     /// [`Gauges::managed_spilled_bytes`].
     ManagedSpilledBytes,
+    /// [`Gauges::shared_allocation_bytes`].
+    SharedAllocationBytes,
+    /// [`Gauges::private_allocation_bytes`].
+    PrivateAllocationBytes,
     /// [`Gauges::shared_idle_bytes`].
     SharedIdleBytes,
     /// [`Gauges::private_idle_bytes`].
@@ -304,6 +308,8 @@ struct Atomics {
     device_samplers: AtomicU64,
     spilled_bytes: AtomicU64,
     managed_spilled_bytes: AtomicU64,
+    shared_allocation_bytes: AtomicU64,
+    private_allocation_bytes: AtomicU64,
     shared_idle_bytes: AtomicU64,
     private_idle_bytes: AtomicU64,
     /// When the oldest idle Shared allocation the idle rule weighs became idle, in nanoseconds of
@@ -686,6 +692,8 @@ impl Counters {
             Gauge::DeviceSamplers => &a.device_samplers,
             Gauge::SpilledBytes => &a.spilled_bytes,
             Gauge::ManagedSpilledBytes => &a.managed_spilled_bytes,
+            Gauge::SharedAllocationBytes => &a.shared_allocation_bytes,
+            Gauge::PrivateAllocationBytes => &a.private_allocation_bytes,
             Gauge::SharedIdleBytes => &a.shared_idle_bytes,
             Gauge::PrivateIdleBytes => &a.private_idle_bytes,
             Gauge::CaptureBytes => &a.capture_bytes,
@@ -810,6 +818,8 @@ impl Counters {
             device_samplers: a.device_samplers.load(Relaxed),
             spilled_bytes: a.spilled_bytes.load(Relaxed),
             managed_spilled_bytes: a.managed_spilled_bytes.load(Relaxed),
+            shared_allocation_bytes: a.shared_allocation_bytes.load(Relaxed),
+            private_allocation_bytes: a.private_allocation_bytes.load(Relaxed),
             shared_idle_bytes: a.shared_idle_bytes.load(Relaxed),
             private_idle_bytes: a.private_idle_bytes.load(Relaxed),
             shared_idle_age_nanos: age(&a.shared_idle_since),
@@ -1197,6 +1207,13 @@ pub struct Gauges {
     /// the block's allocation was made), so their kernels read host memory; counted per buffer
     /// while it lives. Metal has no counterpart.
     pub managed_spilled_bytes: u64,
+    /// Bytes of the pool's live Shared allocations: the blocks handed out, the free ranges
+    /// between them and the idle allocations, as `VkDeviceMemory` the device holds for the
+    /// consumer's blocks. Metal's nearest counterpart is `MTLDevice.currentAllocatedSize`, which
+    /// counts every class together.
+    pub shared_allocation_bytes: u64,
+    /// As [`shared_allocation_bytes`](Self::shared_allocation_bytes), of Private allocations.
+    pub private_allocation_bytes: u64,
     /// Bytes of idle Shared allocations, which hold no block anyone holds: those idle for less
     /// than 250 ms, which the idle rule frees at that age, and the reserve made ahead of need
     /// that keeps the free bytes at 8 MiB or more (one allocation of 16 MiB, at most).
