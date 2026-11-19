@@ -154,6 +154,8 @@ impl Tally {
 /// A gauge the runtime moves.
 #[derive(Clone, Copy)]
 pub(crate) enum Gauge {
+    /// [`Gauges::handles_out`].
+    HandlesOut,
     /// [`Gauges::buffers`].
     Buffers,
     /// [`Gauges::textures`].
@@ -297,6 +299,7 @@ struct Atomics {
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
     capture_wait_nanos: AtomicU64,
+    handles_out: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -687,6 +690,7 @@ impl Counters {
     fn gauge(&self, gauge: Gauge) -> &AtomicU64 {
         let a = &self.atomics;
         match gauge {
+            Gauge::HandlesOut => &a.handles_out,
             Gauge::Buffers => &a.buffers,
             Gauge::Textures => &a.textures,
             Gauge::Samplers => &a.samplers,
@@ -813,6 +817,7 @@ impl Counters {
         };
         Gauges {
             threads: std::array::from_fn(|slot| a.threads[slot].load(Relaxed)),
+            handles_out: a.handles_out.load(Relaxed),
             buffers: a.buffers.load(Relaxed),
             textures: a.textures.load(Relaxed),
             samplers: a.samplers.load(Relaxed),
@@ -1159,6 +1164,12 @@ pub struct Gauges {
     /// slot no thread holds; all 0 on an OS whose thread ids the runtime does not read. The
     /// harness tells the runtime's own threads from the driver's by them.
     pub threads: [u64; THREADS],
+    /// 1 while a handle of the device is out, the consumer's or one a handler or a listener
+    /// holds; 0 from the moment the last one drops, which starts the teardown. After
+    /// [`Instance::wait_until_devices_torn_down`](crate::Instance::wait_until_devices_torn_down)
+    /// answers false, 1 says a handle is still out; 0 with a thread in
+    /// [`threads`](Self::threads) says the teardown still runs on that thread.
+    pub handles_out: u64,
     /// Buffers.
     pub buffers: u64,
     /// Textures: each one's image, its views and its memory, until the reaper frees them.

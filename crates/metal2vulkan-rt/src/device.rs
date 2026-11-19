@@ -42,7 +42,9 @@ use std::time::{Duration, Instant};
 /// compositor share.
 ///
 /// A cheap handle: clones share one device, and every object made from it holds a clone, except
-/// a committed command buffer. Blocks the consumer holds do not.
+/// a committed command buffer. Blocks the consumer holds do not, and nothing the runtime keeps for
+/// itself counts as a handle of the device: what a command buffer keeps of a buffer, a texture or
+/// a sampler state it used is the object alone.
 ///
 /// The runtime runs four threads: the block-maker, the submit thread, which runs every scheduled
 /// handler, the completion thread, which runs every completed handler and listener, and the
@@ -52,10 +54,11 @@ use std::time::{Duration, Instant};
 /// and ends what it holds with [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun);
 /// the completion thread retires the rest as the GPU completes it; the threads are joined; then
 /// every allocation is freed, after [`BlockMappings::unmap`] for each the consumer mapped, and the
-/// `VkDevice` is destroyed; every gauge reads zero only then. Where the last handle drops in a
-/// handler or a listener, the reaper runs the teardown once the handler returns, and the consumer
-/// waits for the gauges to read zero before it drops its instance or exits. No thread of the
-/// runtime outlives the teardown, and nothing relies on a static destructor or an `atexit`
+/// `VkDevice` is destroyed; every gauge reads zero only then. A last handle dropped on the
+/// consumer's thread tears the device down in that drop. Where the last handle drops in a handler
+/// or a listener, the reaper runs the teardown once the handler returns, and the consumer calls
+/// [`Instance::wait_until_devices_torn_down`](crate::Instance::wait_until_devices_torn_down)
+/// before it drops its instance or exits. Nothing relies on a static destructor or an `atexit`
 /// handler: the consumer drops every handle before the process exits, or, where a handle is still
 /// out, calls [`quiesce`](Device::quiesce) and ends with `_exit`. `exit()` with a live device is
 /// supported on no device.
@@ -116,6 +119,92 @@ impl Drop for Ending {
     }
 }
 
+/// The devices of one instance not yet torn down, and the runtime threads that ran a teardown,
+/// until a wait joins them ([`Instance::wait_until_devices_torn_down`]).
+#[derive(Default)]
+pub(crate) struct Teardowns {
+    state: Mutex<Torn>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Torn {
+    /// The devices whose core has not dropped its last field.
+    live: usize,
+    /// The runtime threads that ran a teardown and are not yet joined: those still ending, as
+    /// each hand joins the ones that have ended.
+    threads: Vec<Runner>,
+}
+
+/// A device's count among its instance's [`Teardowns`]: the core's last field, which drops once
+/// every other field has, the `VkDevice` destroyed among them.
+pub(crate) struct Live(Arc<Teardowns>);
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        lock(&self.0.state).live -= 1;
+        self.0.changed.notify_all();
+    }
+}
+
+impl Teardowns {
+    /// Counts a new device of the instance until its core's last field drops.
+    pub(crate) fn live(self: &Arc<Self>) -> Live {
+        lock(&self.state).live += 1;
+        Live(Arc::clone(self))
+    }
+
+    /// Keeps `runner`, the runtime thread that ran a teardown and ends once it returns, for a
+    /// wait to join, and joins those kept earlier that have ended.
+    fn hand(&self, runner: Runner) {
+        let ended: Vec<Runner> = {
+            let mut torn = lock(&self.state);
+            let (ended, running) =
+                (torn.threads.drain(..)).partition(|kept: &Runner| kept.handle.is_finished());
+            torn.threads = running;
+            torn.threads.push(runner);
+            ended
+        };
+        for kept in ended {
+            // A thread that panicked has ended all the same.
+            let _ = kept.handle.join();
+        }
+    }
+
+    /// Waits, up to `deadline`, for every device counted to drop its core's last field, then
+    /// for each thread handed to end, and joins it: true once all have. False at once on a
+    /// thread of the runtime, which would wait for itself.
+    pub(crate) fn wait(&self, deadline: Option<Instant>) -> bool {
+        if SERVES.get().1 != Role::None {
+            return false;
+        }
+        let mut torn = lock(&self.state);
+        while torn.live > 0 {
+            torn = match deadline {
+                None => (self.changed.wait(torn)).unwrap_or_else(PoisonError::into_inner),
+                Some(deadline) => {
+                    let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                        return false;
+                    };
+                    (self.changed.wait_timeout(torn, left))
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                }
+            };
+        }
+        // No device is left to hand a thread: each one handed has ended its teardown, and ends.
+        while let Some(runner) = torn.threads.pop() {
+            if !runner.ended.wait(deadline) {
+                torn.threads.push(runner);
+                return false;
+            }
+            // A thread that panicked has ended all the same.
+            let _ = runner.handle.join();
+        }
+        true
+    }
+}
+
 thread_local! {
     /// The core a runtime thread serves, by address, and its role; 0 and `Role::None` on every
     /// other thread. Constant and without a destructor, so it reads the same while the thread's
@@ -145,7 +234,8 @@ fn role(core: &Arc<Core>) -> Role {
     }
 }
 
-/// The device itself: what the runtime's threads and every block hold.
+/// The device itself: what the runtime's threads, every block and every object a command buffer
+/// keeps hold.
 pub(crate) struct Core {
     pub(crate) instance: Instance,
     pub(crate) physical: vk::PhysicalDevice,
@@ -258,6 +348,9 @@ pub(crate) struct Core {
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
     halt: AtomicU8,
+    /// Its count among its instance's devices not yet torn down: the last field, so it drops
+    /// once every other field has.
+    live: Live,
 }
 
 /// No stop has begun.
@@ -532,6 +625,7 @@ impl Device {
             granularity,
             alignment,
         );
+        let live = instance.teardowns().live();
         let core = Arc::new(Core {
             instance,
             physical: raw,
@@ -588,6 +682,7 @@ impl Device {
             entries: metal2vulkan::pipeline::StageEntries::new(),
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
+            live,
         });
         let device = Device {
             shared: Arc::new(Shared {
@@ -595,6 +690,7 @@ impl Device {
                 threads: Mutex::new(Threads::default()),
             }),
         };
+        device.shared.core.counters.rise(Gauge::HandlesOut);
         // A thread that does not start drops the device, which stops those that did.
         let core = &device.shared.core;
         memory::stock(core);
@@ -1045,8 +1141,9 @@ fn finish(
 
 /// Joins each thread a stop left running ([`halt`]), with no deadline, before the teardown
 /// destroys anything such a thread can reach (the device, the instance, a queue): after a late
-/// quiesce, the threads still in the driver or ending alone. This thread's own handle is let go:
-/// it ends once the call returns.
+/// quiesce, the threads still in the driver or ending alone. This thread's own handle goes to the
+/// instance, for [`Instance::wait_until_devices_torn_down`] to join: it ends once the teardown
+/// returns.
 fn join(core: &Arc<Core>, threads: Threads) {
     let Threads {
         blocks,
@@ -1057,6 +1154,9 @@ fn join(core: &Arc<Core>, threads: Threads) {
     for runner in [submit, blocks, complete, reaper] {
         let mut own = None;
         finish(runner, core, None, &mut own);
+        if let Some(own) = own {
+            core.instance.teardowns().hand(own);
+        }
     }
 }
 
@@ -1329,6 +1429,8 @@ pub struct RawDevice<'a> {
 
 impl Drop for Shared {
     fn drop(&mut self) {
+        // The last handle is gone, and the teardown starts.
+        self.core.counters.fall(Gauge::HandlesOut);
         let threads = self.take_threads();
         let teardown = move |core: &Arc<Core>| {
             // Every thread is joined before anything it can reach goes: those this stop waits

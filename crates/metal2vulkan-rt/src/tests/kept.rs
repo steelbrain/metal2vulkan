@@ -1,35 +1,54 @@
 //! What a recording keeps (`crate::kept`): each object once, its first use the one reference
-//! taken; a later use and every borrow of it change no count; clearing releases every object, and
-//! frees a list grown past the bound.
+//! taken, of the object alone, never of the device; a later use and every borrow of it change no
+//! count; clearing releases every object, and frees a list grown past the bound.
 
 use crate::kept::{Handle, Kept, KEPT_BOUND};
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
-/// A handle of one `Arc`, as the runtime's objects are.
+/// A handle of an object and of its device, as the runtime's buffers, textures and sampler
+/// states are.
 #[derive(Clone)]
 struct Probe {
     inner: Arc<u32>,
+    device: Arc<()>,
 }
 
 impl Handle for Probe {
+    type Kept = Arc<u32>;
+
     fn address(&self) -> usize {
         Arc::as_ptr(&self.inner) as usize
+    }
+
+    fn kept(&self) -> Arc<u32> {
+        Arc::clone(&self.inner)
     }
 
     unsafe fn uncounted(&self) -> ManuallyDrop<Probe> {
         // SAFETY: as the runtime's handles do.
         let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        ManuallyDrop::new(Probe { inner })
+        // SAFETY: as above.
+        let device = unsafe { Arc::from_raw(Arc::as_ptr(&self.device)) };
+        ManuallyDrop::new(Probe { inner, device })
+    }
+}
+
+/// A probe of a new object on `device`.
+fn probe(value: u32, device: &Arc<()>) -> Probe {
+    Probe {
+        inner: Arc::new(value),
+        device: Arc::clone(device),
     }
 }
 
 /// An object kept, then used again, held again and borrowed many times, has one reference of the
-/// list's; the borrows read it; clearing the list gives the reference back, and the next
-/// recording keeps the object again.
+/// list's, and the device none; the borrows read it; clearing the list gives the reference back,
+/// and the next recording keeps the object again.
 #[test]
 fn a_recording_keeps_an_object_once_and_its_borrows_change_no_count() {
-    let (a, b) = (Probe { inner: Arc::new(1) }, Probe { inner: Arc::new(2) });
+    let device = Arc::new(());
+    let (a, b) = (probe(1, &device), probe(2, &device));
     let mut kept = Kept::default();
     // SAFETY: every borrow ends before the list is cleared.
     let lent = unsafe { kept.keep(&a) };
@@ -56,9 +75,11 @@ fn a_recording_keeps_an_object_once_and_its_borrows_change_no_count() {
         .chain(&copies)
         .all(|borrow| *borrow.inner == 1));
     assert!(kept.hold(&b), "another object is kept");
+    assert_eq!(kept.iter().map(|kept| **kept).collect::<Vec<_>>(), [1, 2]);
     assert_eq!(
-        kept.iter().map(|probe| *probe.inner).collect::<Vec<_>>(),
-        [1, 2]
+        Arc::strong_count(&device),
+        3,
+        "nothing the list keeps, and no borrow, counts as a handle of the device"
     );
     drop((lent, borrows, copies));
     assert_eq!(
@@ -82,10 +103,9 @@ fn a_recording_keeps_an_object_once_and_its_borrows_change_no_count() {
 /// recording starts with no room.
 #[test]
 fn a_list_grown_past_the_bound_is_freed_at_its_clear() {
+    let device = Arc::new(());
     let probes: Vec<Probe> = (0..=KEPT_BOUND)
-        .map(|index| Probe {
-            inner: Arc::new(index as u32),
-        })
+        .map(|index| probe(index as u32, &device))
         .collect();
     let mut kept = Kept::default();
     for probe in &probes[..KEPT_BOUND] {

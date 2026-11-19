@@ -1,6 +1,6 @@
 //! Compute command encoders: their binding state, their dispatches, and where barriers go.
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::device::Core;
@@ -18,7 +18,7 @@ use crate::pipeline::{
 use crate::record::Reach;
 use crate::ring::CHUNK;
 use crate::sampler::SamplerState;
-use crate::texture::{Region, Texture};
+use crate::texture::{Region, Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::metal::format::integer_channels_word;
 use metal2vulkan::metal::PixelFormat;

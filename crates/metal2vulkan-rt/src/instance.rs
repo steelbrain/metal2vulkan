@@ -1,11 +1,13 @@
 //! The Vulkan instance the runtime creates, and the physical devices it lists.
 
+use crate::device::Teardowns;
 use crate::error::Error;
 use crate::floor;
 use ash::vk;
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// No Metal counterpart: Metal has no instance. The Vulkan instance the runtime creates for its
 /// devices, at the floor's version ([`floor::VERSION`]) with the floor's instance extensions
@@ -16,7 +18,9 @@ use std::sync::Arc;
 ///
 /// A cheap handle: clones share one instance, which lives until the last clone, and the last
 /// [`PhysicalDevice`] and [`Device`](crate::Device) made from it, are dropped. Whatever the
-/// consumer makes with [`Instance::raw`] (a window surface) it destroys before that.
+/// consumer makes with [`Instance::raw`] (a window surface) it destroys before that, and it waits
+/// for its devices' teardowns ([`Instance::wait_until_devices_torn_down`]) before it drops its
+/// last handle.
 #[derive(Clone)]
 pub struct Instance {
     pub(crate) shared: Arc<Shared>,
@@ -26,6 +30,8 @@ pub(crate) struct Shared {
     entry: ash::Entry,
     instance: ash::Instance,
     extensions: Vec<CString>,
+    /// Its devices not yet torn down, which each device's core counts itself among.
+    teardowns: Arc<Teardowns>,
 }
 
 impl Instance {
@@ -127,6 +133,7 @@ impl Instance {
                 entry,
                 instance,
                 extensions: names,
+                teardowns: Arc::default(),
             }),
         })
     }
@@ -157,9 +164,33 @@ impl Instance {
         (&self.shared.entry, &self.shared.instance)
     }
 
+    /// No Metal counterpart (a Metal device lives as long as the process): waits up to `timeout`
+    /// for every device made from the instance to be torn down, its `VkDevice` destroyed, every
+    /// object of it freed and the runtime thread that tore it down joined. True once every one
+    /// is, at once where none is pending. False once `timeout` passes first, and at once on a
+    /// thread of the runtime (in a handler or a listener), which the wait could need to end.
+    ///
+    /// A device whose last handle drops on the consumer's thread is torn down in that drop. One
+    /// whose last handle drops in a handler or a listener is torn down on the runtime's reaper
+    /// once the handler returns, after the drop: the consumer calls this before it drops its last
+    /// handle of the instance or ends the process. A device with a handle still out, or an object
+    /// made from it still held, is not torn down, and the wait answers false once `timeout`
+    /// passes. After a false answer, the device's [`Counters`](crate::Counters), taken before the
+    /// drops, tell which: [`Gauges::handles_out`](crate::Gauges::handles_out).
+    pub fn wait_until_devices_torn_down(&self, timeout: Duration) -> bool {
+        self.shared
+            .teardowns
+            .wait(Instant::now().checked_add(timeout))
+    }
+
     /// The instance's function table.
     pub(crate) fn vk(&self) -> &ash::Instance {
         &self.shared.instance
+    }
+
+    /// Its devices not yet torn down.
+    pub(crate) fn teardowns(&self) -> &Arc<Teardowns> {
+        &self.shared.teardowns
     }
 }
 

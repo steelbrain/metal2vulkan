@@ -71,7 +71,7 @@
 //! are the device's ([`PrecisionNote::DeviceDepthBias`]); a state that tests or writes depth
 //! carries [`PrecisionNote::DepthDenormals`].
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Face, Tests};
@@ -89,7 +89,7 @@ use crate::render::{Draws, RenderPipelineState, FRAGMENT, VERTEX};
 use crate::ring::{Placed, CHUNK};
 use crate::sampler::SamplerState;
 use crate::shadow::{self, Area, Held};
-use crate::texture::Texture;
+use crate::texture::{Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::bind::alpha_test_code;
 use metal2vulkan::metal::format::integer_channels_word;

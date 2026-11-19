@@ -13,10 +13,10 @@
 //! smallest attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are
 //! set.
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferObject};
 use crate::device::Core;
 use crate::error::{Error, Gap, Refusal, RenderPassKind};
-use crate::texture::{Attachment, Texture};
+use crate::texture::{Attachment, Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
 use metal2vulkan::metal::PixelFormat;

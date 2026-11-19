@@ -29,7 +29,7 @@
 //! is owed, as a render pass's is, and the command buffer's end barrier pays it where nothing
 //! follows.
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::copy_out;
 use crate::counters::Metric;
@@ -42,7 +42,9 @@ use crate::memory::Own;
 use crate::over;
 use crate::record::{memory_barrier, Reach};
 use crate::surface::Surface;
-use crate::texture::{place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor};
+use crate::texture::{
+    place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor, TextureObject,
+};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
 use metal2vulkan::metal::{PixelFormat, TextureType};

@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 /// `MTLDepthStencilState`.
 ///
-/// A cheap handle: clones share one state. It holds no Vulkan object: a draw under it sets its
-/// tests as dynamic state.
+/// A cheap handle: clones share one state, and a handle holds the device. It holds no Vulkan
+/// object: a draw under it sets its tests as dynamic state.
 #[derive(Clone)]
 pub struct DepthStencilState {
     inner: Arc<Inner>,
@@ -92,6 +92,7 @@ impl Device {
                 descriptor: *descriptor,
                 tests: Tests::of(descriptor),
             }),
+            device: self.clone(),
         }
     }
 }
