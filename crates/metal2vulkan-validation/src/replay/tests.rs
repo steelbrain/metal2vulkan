@@ -223,6 +223,20 @@ fn a_recording_range_comes_from_the_sidecar_then_the_table() {
     assert!(why.ends_with("is neither last-frame F nor whole"), "{why}");
 }
 
+/// A play ends at the recording range's last frame, or earlier at `--until-frame`; past the range
+/// only where asked, and a whole stream's play ends only where `--until-frame` says.
+#[test]
+fn a_play_ends_at_the_recording_range_unless_asked_past_it() {
+    use super::range::RecordingRange::{LastFrame, Whole};
+    assert_eq!(LastFrame(1128).last_frame(false, None), Some(1128));
+    assert_eq!(LastFrame(1128).last_frame(false, Some(1200)), Some(1128));
+    assert_eq!(LastFrame(1128).last_frame(false, Some(100)), Some(100));
+    assert_eq!(LastFrame(1128).last_frame(true, None), None);
+    assert_eq!(LastFrame(1128).last_frame(true, Some(1200)), Some(1200));
+    assert_eq!(Whole.last_frame(false, None), None);
+    assert_eq!(Whole.last_frame(false, Some(5)), Some(5));
+}
+
 /// The header's flags, the same in every segment, are the stream's; a segment with another bit,
 /// or with flags unlike the first segment's, is refused.
 #[test]

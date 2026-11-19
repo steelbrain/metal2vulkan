@@ -302,13 +302,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
-    // The play ends at the recording range unless --past-range yes takes it past.
-    let until = match (range, past) {
-        (RecordingRange::LastFrame(last), false) => {
-            Some(until.map_or(last, |until| until.min(last)))
-        }
-        _ => until,
-    };
+    let until = range.last_frame(past, until);
     // The first line says which mode ran: a timing table never comes from a snapshotting play
     // unnoticed.
     let mode = match snapshots {

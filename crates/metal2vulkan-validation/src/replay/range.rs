@@ -12,6 +12,19 @@ pub enum RecordingRange {
     Whole,
 }
 
+impl RecordingRange {
+    /// The last frame a play plays, given `--until-frame`'s `until`: the earlier of `until` and
+    /// the range's last frame, unless `past` (`--past-range yes`) takes the play past the range.
+    pub fn last_frame(self, past: bool, until: Option<usize>) -> Option<usize> {
+        match (self, past) {
+            (RecordingRange::LastFrame(last), false) => {
+                Some(until.map_or(last, |until| until.min(last)))
+            }
+            _ => until,
+        }
+    }
+}
+
 /// Where a stream's recording range came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RangeSource {
