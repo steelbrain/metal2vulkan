@@ -61,7 +61,7 @@ fn a_recording_keeps_an_object_once_and_its_borrows_change_no_count() {
         2,
         "1,000 uses and 1,000 borrows' copies change no count"
     );
-    assert!(borrows.iter().chain(&copies).all(|borrow| **borrow == 1));
+    assert!(borrows.iter().chain(&copies).all(|borrow| ***borrow == 1));
     assert!(kept.hold(&b), "another object is kept");
     assert_eq!(kept.iter().map(|kept| **kept).collect::<Vec<_>>(), [1, 2]);
     assert_eq!(

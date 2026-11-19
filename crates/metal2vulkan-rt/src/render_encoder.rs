@@ -275,7 +275,7 @@ impl Facts {
             self.vertex.push((binding, buffer, offset));
         }
         for &(table, slot) in &draws.storage_reads {
-            if tables[table].texture(slot).is_some_and(Texture::swizzled) {
+            if tables[table].texture(slot).is_some_and(|t| t.swizzled()) {
                 return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
             }
         }
@@ -298,7 +298,7 @@ impl Facts {
                 pass.targets().any(|t| t.texture.hazard_id() == hazard)
             })
         });
-        let copied = |buffer: &Buffer| buffer.held().1.is_some();
+        let copied = |buffer: &Arc<BufferInner>| buffer.held().1.is_some();
         self.managed = (draws.buffers.iter())
             .any(|&(table, slot, _)| tables[table].buffer(slot).is_some_and(copied))
             || (draws.bindings.iter())
@@ -309,10 +309,10 @@ impl Facts {
             });
         self.host = draws.writes_unbound
             || (draws.buffers.iter()).any(|&(table, slot, access)| {
-                access.writes() && tables[table].buffer(slot).is_some_and(Buffer::is_shared)
+                access.writes() && tables[table].buffer(slot).is_some_and(|b| b.is_shared())
             })
             || (draws.textures.iter()).any(|&(table, slot, access)| {
-                access.writes() && tables[table].texture(slot).is_some_and(Texture::host_reads)
+                access.writes() && tables[table].texture(slot).is_some_and(|t| t.host_reads())
             });
         Ok(())
     }
@@ -2012,7 +2012,7 @@ impl RenderCommandEncoder {
             .expect("an encoder holds its command buffer's recording until it ends");
         let vertex_reads = (draws.bindings.iter())
             .filter_map(|&(_, index)| tables[VERTEX].buffer(index))
-            .chain(index)
+            .chain(index.map(BufferObject::object))
             .chain(factors);
         let accesses: Vec<(u32, Access)> = match building.copies_over() {
             false => Vec::new(),

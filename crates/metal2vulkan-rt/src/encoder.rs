@@ -1,6 +1,6 @@
 //! Compute command encoders: their binding state, their dispatches, and where barriers go.
 
-use crate::buffer::{Buffer, BufferObject};
+use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::device::Core;
@@ -111,7 +111,7 @@ enum Slot {
 pub(crate) fn check_alignment(
     slot: u32,
     mask: u64,
-    buffer: &Buffer,
+    buffer: &Arc<BufferInner>,
     offset: u64,
 ) -> Result<(), Error> {
     if buffer.gpu_address().wrapping_add(offset) & mask != 0 {
@@ -1083,9 +1083,9 @@ impl ComputeCommandEncoder {
                 for &(slot, access) in &interface.buffers {
                     if let Some(Slot::Buffer { buffer, .. }) = self.slots.get(slot as usize) {
                         if buffer.managed_overs().is_some() {
-                            backs.extend(over::backs(buffer, None, true));
+                            backs.extend(over::backs(&**buffer, None, true));
                             if access.writes() {
-                                building.wrote_managed(buffer);
+                                building.wrote_managed(&**buffer);
                             }
                         }
                     }
@@ -1095,7 +1095,7 @@ impl ComputeCommandEncoder {
                     if let (true, Some(Some(texture))) =
                         (access.writes(), self.textures.get(slot as usize))
                     {
-                        building.wrote_texture_managed(texture);
+                        building.wrote_texture_managed(&**texture);
                     }
                 }
             }
