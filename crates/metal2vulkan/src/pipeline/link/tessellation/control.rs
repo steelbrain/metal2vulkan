@@ -25,8 +25,10 @@
 //! `position_in_patch` lane for lane, Metal's clockwise output winding is `VertexOrderCcw` and its
 //! counter-clockwise one `VertexOrderCw`: MoltenVK maps Vulkan's orders to Metal's windings
 //! reversed (`mvkMTLWindingFromSpvExecutionMode`, with SPIRV-Cross passing `gl_TessCoord` through
-//! unchanged for that origin). That is read from MoltenVK's conformant mapping, not observed on
-//! Metal (an A-track reading).
+//! unchanged for that origin). Measured: a consumer's device test,
+//! `tessellation_states_tessellate_as_metals`, matches Metal's bytes (recorded on an Apple M3 Max)
+//! for both windings, the clockwise default and the counter-clockwise one, on RADV (Radeon 780M,
+//! RX 7900 XTX), NVIDIA Turing and MoltenVK; other drivers are not measured.
 //!
 //! **The patch index**. Metal's patch index (`[[patch_id]]`, the element of the patch's control
 //! points and per-patch attributes) is the patch's position, or, for a draw with a patch index
@@ -104,8 +106,9 @@
 //! (NaN, zero, negative) or upper end (`+∞`). The pushed scale is a positive `half` or 2^32, so
 //! the scaled product lies in `[2^-48, 2^48)`: every float the stage computes is finite.
 //!
-//! Read from Metal's documentation but not observed, and noted on the pipeline's evaluation stage
-//! ([`Control::notes`]): the output winding's vertex order; whether the fractional partitions'
+//! Noted on the pipeline's evaluation stage ([`Control::notes`]): the output winding's vertex
+//! order, measured on four drivers (above) and not on the rest; and, read from Metal's
+//! documentation but not observed: whether the fractional partitions'
 //! levels take the scaled factor in `float` (Metal's `integer` levels take it unrounded, and a
 //! product below `half`'s least subnormal does not cull); a subnormal edge factor and a NaN inside
 //! factor under the fractional partitions (under `integer`, Metal's answer is this stage's); and
@@ -207,10 +210,11 @@ impl Control {
         factors::factor_bytes(domain)
     }
 
-    /// The readings this control stage takes without a Metal observation, as precision notes
-    /// (the module docs): the winding and the edge cases always, the scale when it is enabled,
-    /// and the instance addressing under a per-instance step function. Link notes them on the
-    /// pipeline's evaluation stage ([`super::note_evaluation_stage`]).
+    /// The readings this control stage takes without a Metal observation on every driver, as
+    /// precision notes (the module docs): the winding (measured on four drivers) and the edge
+    /// cases always, the scale when it is enabled, and the instance addressing under a
+    /// per-instance step function. Link notes them on the pipeline's evaluation stage
+    /// ([`super::note_evaluation_stage`]).
     pub fn notes(&self) -> Vec<PrecisionNote> {
         let mut notes = vec![
             PrecisionNote::TessellationWinding,

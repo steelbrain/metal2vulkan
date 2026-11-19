@@ -4737,7 +4737,10 @@ bound.
 - `metal2vulkan-degrade-tessellation-winding` (precision). `PrecisionNote::TessellationWinding`: A
   tessellation pipeline's vertex order: Metal's clockwise output winding is declared
   `VertexOrderCcw` and its counter-clockwise one `VertexOrderCw`, as MoltenVK maps them under
-  Vulkan's default upper-left domain origin.
+  Vulkan's default upper-left domain origin. Measured for both windings against Metal's bytes
+  (recorded on an Apple M3 Max) by a consumer's device test,
+  `tessellation_states_tessellate_as_metals`, on RADV (Radeon 780M, RX 7900 XTX), NVIDIA Turing
+  and MoltenVK; other drivers are not measured.
 - `metal2vulkan-degrade-tessellation-factor-edge-cases` (precision).
   `PrecisionNote::TessellationFactorEdgeCases`: A tessellation pipeline's factors at the edges of
   Metal's stated rules: a subnormal edge factor is positive and does not cull (its level is the
