@@ -2013,9 +2013,11 @@ fn an_identity_fetch_reads_its_attachments_pushed_texture_in_the_attachments_cla
     ] {
         without.features.remove(&f);
     }
-    let mut policy = DevicePolicy::default();
-    policy.pointer_domain = PointerDomain::Identity;
-    policy.handle_domain = HandleDomain::Identity;
+    let policy = DevicePolicy {
+        pointer_domain: PointerDomain::Identity,
+        handle_domain: HandleDomain::Identity,
+        ..DevicePolicy::default()
+    };
     let dev = Device::from_queries(without, policy).expect("device");
     let compile =
         |d: &RenderPipelineDescriptor| dev.compile_render_pipeline(d, &Budget::standard());
