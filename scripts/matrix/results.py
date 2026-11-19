@@ -531,6 +531,15 @@ HARNESS_CEILINGS = {
     # first GPU zero fill's recording and the first GPU use of the new block, are open, and their
     # fixes lower the ceiling.
     "8086:a7a0": {"create_private_16MiB/first_take": 1.88},
+    # Ruled by the planner on 2026-11-18, 1.40: NVIDIA's driver holds a submit for the whole of
+    # another thread's vkAllocateMemory, and the first take, the first to take a new Private block,
+    # sets the block-maker making the class's next 16 MiB allocation, which its own first
+    # submission then waits out (the rt README's known gaps of memory blocks). Driver 620.70.06,
+    # rt at ac1896537f: a submit of 603 us inside an allocation of 661 us on the 3090, 579 us inside
+    # 647 us on the 2080, against a median submit of 2 to 3 us. The hold is one allocation per
+    # block made, about as long as the take would spend allocating on its own thread.
+    "10de:1e87": {"create_private_16MiB/first_take": 1.40},
+    "10de:2204": {"create_private_16MiB/first_take": 1.40},
     # 8086:3e9b's zero_products has none: the row runs level with old, the new runtime about 1%
     # ahead (m3-max-47846). A grid-edge test that decodes and compares the position ahead of the
     # region's ragged branch once ran 5-6% faster on this card, by the driver compiler's accident

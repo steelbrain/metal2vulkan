@@ -327,6 +327,21 @@ the runtime's. A guest kernel that writes a free range damages only its own late
   at its idle age, whatever the queues are doing, so a submit can meet a free and wait for the
   rest of it. `Metrics::allocations_freed` counts the frees, and
   `Metrics::submissions_during_frees` the submits made while one was in progress.
+- NVIDIA's Linux driver also holds a submit made while another thread is inside
+  `vkAllocateMemory` until the allocation returns, device-local memory included. A take that
+  leaves its class fewer than 8 MiB free sets the block-maker making the class's next allocation
+  at once, so the take's own first submission can wait out that allocation. On an RTX 3090
+  (driver 620.70.06, rt at ac1896537f) a 16 MiB Private allocation of 661 µs held the submit of
+  the first command buffer to read a new 16 MiB Private buffer for 603 µs; on an RTX 2080 one of
+  647 µs held it for 579 µs; the other submits took a median of 2 to 3 µs. A submit waits at most
+  the rest of one allocation, and the pool makes one per 16 MiB the consumer takes, about what the
+  take would spend allocating on its own thread.
+- A commit that fills the capture ring waits for each ring-full's copy into the device copies,
+  which crosses the card's link to the host. On an RTX 3090 in a Thunderbolt 3 enclosure whose
+  link runs at 20 Gb/s (rt at ac1896537f), a ring-full of 63.3 MiB took 33.4 ms on the GPU (1.99
+  GB/s) of the 33.6 ms the commit waited; the runtime's own part (its submission, the queue ahead
+  of the copy and the commit's wake) was about 0.2 ms. In one consumer's replay stream on that
+  card, 258 ring-fulls took 7.3 s of a 98 s play.
 - NVIDIA's Linux driver allocates host-visible memory at about 0.14 ms per MiB on an RTX 3090 and
   0.2 ms per MiB on an RTX 2080, in every form we tried (plain, with a device address, dedicated,
   cached or not), against about 0.03 ms per MiB for device-local memory on the 3090. A take longer
