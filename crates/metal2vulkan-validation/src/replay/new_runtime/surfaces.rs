@@ -40,7 +40,7 @@ use crate::replay::args::{refuse, Fields, SURFACE_FACT_KEYS, SURFACE_PLANE_KEYS}
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use metal2vulkan_rt as rt;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 
 /// How many older-shape uses the report places.
@@ -169,6 +169,8 @@ pub(super) struct Surfaces {
     external: HashSet<u64>,
     /// The queue of the play's own that the fills at a making and the refills go on.
     queue: Option<rt::CommandQueue>,
+    /// The refills' command buffers not yet seen complete (`timed`).
+    refilling: VecDeque<rt::CommandBuffer>,
     counts: Counts,
 }
 
@@ -183,9 +185,13 @@ struct Counts {
     shape_changes: u64,
     /// Recorded CPU writes into a range after its entry's making.
     cpu_writes: u64,
-    /// `m2v.externalWriteDone` records, and the entries they refilled.
+    /// `m2v.externalWriteDone` records, the entries they refilled and the bytes of those.
     external_writes: u64,
     refills: u64,
+    refill_bytes: u64,
+    /// The GPU time of the refills' command buffers seen complete, and the longest one's.
+    refill_nanos: u64,
+    refill_max_nanos: u64,
     /// Copies from the guest's RAM into an entry, and from an entry back to it.
     copies_in: u64,
     copies_out: u64,
@@ -267,17 +273,36 @@ impl Surfaces {
         }
     }
 
+    /// Adds the GPU time of the refills' command buffers that completed since the last call.
+    pub(super) fn timed(&mut self) {
+        while let Some(front) = self.refilling.front() {
+            match front.status() {
+                rt::CommandBufferStatus::Completed => {
+                    let (start, end) = (front.gpu_start_time(), front.gpu_end_time());
+                    let nanos = end.saturating_sub(start);
+                    self.counts.refill_nanos += nanos;
+                    self.counts.refill_max_nanos = self.counts.refill_max_nanos.max(nanos);
+                }
+                rt::CommandBufferStatus::Error => {}
+                _ => return,
+            }
+            self.refilling.pop_front();
+        }
+    }
+
     /// The textures skipped: those of a format that reads across a surface's planes.
     pub(super) fn across_planes(&self) -> u64 {
         self.counts.across_planes
     }
 
     /// The executed counters.
-    pub(super) fn counted(&self) -> [(&'static str, u64); 12] {
+    pub(super) fn counted(&self) -> [(&'static str, u64); 14] {
         let c = &self.counts;
         [
             ("surface_external_writes", c.external_writes),
             ("surface_refills", c.refills),
+            ("surface_refill_bytes", c.refill_bytes),
+            ("surface_refill_gpu_nanos", c.refill_nanos),
             ("surface_textures", c.views),
             ("surface_entries", c.entries),
             ("surface_fills", c.fills),
@@ -299,9 +324,10 @@ impl Surfaces {
             .collect();
         format!(
             "surfaces {} textures as views of {} entries: {} fills at a making, {} of them at a new \
-             shape after a download; {} CPU writes, {} external writes refilling {} entries, {} \
-             copies from the guest's RAM into an entry and {} back, {} bytes; {} across planes \
-             skipped; {} older-shape surface uses (those through argument buffers unseen){}{}",
+             shape after a download; {} CPU writes, {} external writes refilling {} entries ({} \
+             bytes, {} ns of GPU time, the longest command buffer {} ns), {} copies from the \
+             guest's RAM into an entry and {} back, {} bytes in all; {} across planes skipped; {} \
+             older-shape surface uses (those through argument buffers unseen){}{}",
             c.views,
             c.entries,
             c.fills,
@@ -309,6 +335,9 @@ impl Surfaces {
             c.cpu_writes,
             c.external_writes,
             c.refills,
+            c.refill_bytes,
+            c.refill_nanos,
+            c.refill_max_nanos,
             c.copies_in,
             c.copies_out,
             c.bytes,
@@ -377,8 +406,8 @@ impl NewRuntime {
         self.surfaces.counts.views += 1;
         if self.substitutes.gaps == gaps {
             self.surfaces.views.insert(call.result, (span, shape));
-            let entries = self.surfaces.ranges.get_mut(&span).into_iter().flatten();
-            if let Some(entry) = entries.filter(|entry| entry.shape == shape).last() {
+            let mut entries = self.surfaces.ranges.get_mut(&span).into_iter().flatten();
+            if let Some(entry) = entries.find(|entry| entry.shape == shape) {
                 entry.live += 1;
             }
         }
@@ -497,9 +526,11 @@ impl NewRuntime {
             (blit.copy_from_buffer(buffer, span.layout(shape), shape.size(), &entry, ORIGIN))
                 .map_err(failed(call))?;
             self.surfaces.counts.refills += 1;
+            self.surfaces.counts.refill_bytes += shape.bytes();
             self.surfaces.counts.bytes += shape.bytes();
         }
         blit.end_encoding();
+        self.surfaces.refilling.push_back(command_buffer.clone());
         self.commit(&queue, command_buffer, 0)
             .map_err(failed(call))?;
         Ok(None)

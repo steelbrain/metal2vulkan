@@ -2527,6 +2527,7 @@ impl Backend for NewRuntime {
             ("skipped_resource_ids", self.skips.resource_ids),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
         ]);
+        self.surfaces.timed();
         counters.extend(self.surfaces.counted());
         counters
     }
