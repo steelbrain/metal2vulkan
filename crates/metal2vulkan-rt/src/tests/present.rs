@@ -395,9 +395,10 @@ mod on_device {
 
     /// Three frames into each of a render-target drawable and a shader-read one: each texel the
     /// stand-in present reads is the frame's, the second frame's those the first left; a
-    /// presenting command buffer is one submission and one pass, with two barriers (its upload's,
-    /// which moves the image home, and its end's, which moves it to the present layout) where the
-    /// pass renders at home and four where it moves the image to the attachment layout and back.
+    /// presenting command buffer is one submission and one pass, with three barriers (its
+    /// upload's two, one that moves the image home and the upload's end, and its own end's, which
+    /// moves the image to the present layout) where the pass renders at home and five where it
+    /// moves the image to the attachment layout and back.
     /// The second frame presents from the command buffer's scheduled handler. The image is
     /// destroyed once the frames' command buffers completed and the texture is dropped, before
     /// its views go.
@@ -424,8 +425,8 @@ mod on_device {
             let first_texels = [0u8, 153, 51, 255].repeat(32);
             let third_texels = [102u8, 0, 255, 255].repeat(32);
             for (usage, index, barriers) in [
-                (TextureUsage::RENDER_TARGET, None, 2),
-                (read_render, Some(4096), 4),
+                (TextureUsage::RENDER_TARGET, None, 3),
+                (read_render, Some(4096), 5),
             ] {
                 let kind = match index {
                     Some(_) => "shader-read",
