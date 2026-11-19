@@ -345,7 +345,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceReconvergence
         | N::SnormMinimumKept
         | N::DeviceDepthBias
-        | N::DepthDenormals => Allowance::Unbounded,
+        | N::DepthDenormals
+        | N::DeviceFilteredMipmaps => Allowance::Unbounded,
     }
 }
 

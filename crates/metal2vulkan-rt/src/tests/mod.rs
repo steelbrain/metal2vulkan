@@ -23,6 +23,7 @@ pub(crate) mod layouts;
 mod locks;
 mod managed;
 mod memory;
+mod mipmaps;
 mod narrow;
 mod null_descriptor;
 mod one_path;

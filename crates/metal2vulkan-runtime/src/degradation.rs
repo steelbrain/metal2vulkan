@@ -245,13 +245,15 @@ macro_rules! degradations {
             /// profile of `Device::from_queries` records, announces this runtime's kind for the
             /// same codes, [`Degradation::SnormMinimumKept`]; [`PrecisionNote::DepthDenormals`],
             /// which `metal2vulkan-rt`'s depth-stencil state carries, announces
-            /// [`Degradation::DepthDenormals`].
+            /// [`Degradation::DepthDenormals`]; and [`PrecisionNote::DeviceFilteredMipmaps`], which
+            /// its blit encoder carries, [`Degradation::DeviceFilteredMipmaps`].
             pub const fn from_precision_note(note: PrecisionNote) -> Degradation {
                 match note {
                     $(PrecisionNote::$note => Degradation::$note,)*
                     PrecisionNote::CappedLodBias => Degradation::CappedLodBias,
                     PrecisionNote::SnormMinimumKept => Degradation::SnormMinimumKept,
                     PrecisionNote::DepthDenormals => Degradation::DepthDenormals,
+                    PrecisionNote::DeviceFilteredMipmaps => Degradation::DeviceFilteredMipmaps,
                     PrecisionNote::DeviceReconvergence => {
                         Degradation::ImplementationDefinedReconvergence
                     }

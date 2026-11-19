@@ -2476,6 +2476,32 @@ impl TextureInner {
     fn base(&self) -> [u32; 2] {
         self.view.as_ref().map_or([0, 0], |view| view.base)
     }
+
+    /// A layout change of the texture's levels `levels`, counted from its first, over each of its
+    /// slices and every aspect, from `old` to `new`, `None` naming the image's home layout, with
+    /// no scopes yet.
+    fn levels_barrier(
+        &self,
+        levels: Range<u32>,
+        old: Option<vk::ImageLayout>,
+        new: Option<vk::ImageLayout>,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        let [level, layer] = self.base();
+        let home = self.image.home;
+        vk::ImageMemoryBarrier2::default()
+            .old_layout(old.unwrap_or(home))
+            .new_layout(new.unwrap_or(home))
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(self.image.image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: self.image.aspects,
+                base_mip_level: level + levels.start,
+                level_count: levels.end - levels.start,
+                base_array_layer: layer,
+                layer_count: slices(&self.descriptor),
+            })
+    }
 }
 
 impl Texture {
@@ -2879,6 +2905,24 @@ impl Texture {
     /// Its image's format.
     pub(crate) fn format(&self) -> vk::Format {
         self.inner.format
+    }
+
+    /// The format its image is made in, which a blit of the image filters by: a view in another
+    /// format's differs from [`format`](Self::format).
+    pub(crate) fn image_format(&self) -> vk::Format {
+        self.inner.image.format
+    }
+
+    /// A layout change of its levels `levels`, counted from its first, over each of its slices,
+    /// from `old` to `new`, `None` naming its home layout, with no scopes yet
+    /// ([`BlitCommandEncoder::generate_mipmaps`](crate::BlitCommandEncoder::generate_mipmaps)).
+    pub(crate) fn levels_barrier(
+        &self,
+        levels: Range<u32>,
+        old: Option<vk::ImageLayout>,
+        new: Option<vk::ImageLayout>,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        self.inner.levels_barrier(levels, old, new)
     }
 
     /// How its image holds its pixel format.

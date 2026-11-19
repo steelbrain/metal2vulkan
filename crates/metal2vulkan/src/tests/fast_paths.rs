@@ -233,6 +233,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             SnormMinimumKept,
             DeviceDepthBias,
             DepthDenormals,
+            DeviceFilteredMipmaps,
         ],
     }
 }

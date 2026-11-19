@@ -2456,6 +2456,22 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DepthDenormals,
+    /// `generateMipmapsForTexture:` of a filterable colour format: each level below the first is
+    /// the device's linear filter of the one above, its blit (`vkCmdBlitImage` with
+    /// `VK_FILTER_LINEAR`, the level above sampled at each texel's centre scaled into it).
+    /// Apple's documentation states no filter. Metal filters bilinearly at the same scaled
+    /// centres, measured on an M3 Max and an M4, but by Apple's datapath, whose answers differ
+    /// between those GPUs by up to a unit in the last place (`metal2vulkan-runtime`'s
+    /// `device-filtered-mipmaps`). Where a level halves an even size, each sample falls between
+    /// two texels on the axis, so the filter is a box of them at the device's filter precision; an
+    /// sRGB format is filtered in linear space. Static per operation: no
+    /// pipeline stage records it; `metal2vulkan-rt`'s blit encoder carries it
+    /// (`BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`). `metal2vulkan-runtime` announces the same
+    /// difference as its `device-filtered-mipmaps` kind, which this note announces too.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    DeviceFilteredMipmaps,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

@@ -1124,6 +1124,17 @@ that touch blocks first.
   reads where shaders write it, and of a texture without named bytes, which has none the host
   reads apart from its image, it records nothing. Metal's validation stops it on a resource
   that is not Managed; the runtime keeps no storage mode for those and does not refuse it.
+- `generate_mipmaps` is `generateMipmapsForTexture:`: each level below the texture's first made
+  from the level above it, over each slice, by one `vkCmdBlitImage` a level with the linear
+  filter, the device's filter under the static note `PrecisionNote::DeviceFilteredMipmaps`
+  (`BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`; Apple states no filter). A view's levels and
+  slices are its own. The levels leave home behind the copy's first barrier, with one barrier
+  between each level and the next, and come back in the last. A texture of one level records
+  nothing. Refused (`Refusal::MipmapFormat`), as Apple defines mipmaps of colour-renderable,
+  filterable formats alone: a depth or stencil, compressed, YCbCr or integer format. Not built
+  (`Gap::MipmapFilter`): an image the device's blits do not filter linearly (its format query),
+  one that holds its pixel format through a conversion (extended-range, YCbCr), and a view in
+  another format than its image's.
 - The slice-and-level and whole-texture forms of `copyFromTexture`,
   `synchronizeTexture:slice:level:` (no recorded stream calls it), and the other blit commands
   are not built yet.

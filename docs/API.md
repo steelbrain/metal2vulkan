@@ -3321,6 +3321,9 @@ bound.
   above (its blit, or a bilinear filter in float where its blits cannot filter the format), not
   Apple's: a channel can differ from Metal's where the filtered value lies near a rounding boundary,
   and wholly where a box averages infinities, NaNs or a float format's extremes.
+  On `metal2vulkan-rt` it is the static note `PrecisionNote::DeviceFilteredMipmaps` of
+  `generate_mipmaps` (`BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`), its blit chain alone, on every
+  device: a format the device's blits cannot filter is `Gap::MipmapFilter`.
 - `metal2vulkan-degrade-heap-depth-stencil-apart` (precision). `HeapDepthStencilApart`: A depth or
   stencil texture made in a heap on a device whose driver lays depth and stencil images apart from
   the memory they are bound to (`DriverFact::DepthStencilImagesLieApart`) that no shadow of the

@@ -1063,10 +1063,17 @@ impl Side for RtSide<'_> {
         Ok(keep(&mut self.textures, texture))
     }
 
-    /// The program on the runtime, as the old runtime's side runs it (`rt_side::work`).
+    /// The program on the runtime, as the old runtime's side runs it (`rt_side::work`); a
+    /// program that generates mipmaps announces the blit encoder's static note of them.
     fn work(&mut self, work: &crate::work::Work) -> Answer<crate::work::Done> {
         let on = self.on;
-        work::run(on, self.queue()?, work)
+        let done = work::run(on, self.queue()?, work)?;
+        let mipmaps =
+            |step: &crate::work::Step| matches!(step, crate::work::Step::GenerateMipmaps { .. });
+        if work.steps.iter().any(mipmaps) {
+            (self.encoder_notes).insert(rt::BlitCommandEncoder::GENERATE_MIPMAPS_NOTE);
+        }
+        Ok(done)
     }
 
     /// At the next sampler index. Every state the runtime makes has a resource ID, so

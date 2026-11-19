@@ -664,8 +664,8 @@ impl NewRuntime {
                 Ok(())
             }
             "generateMipmapsForTexture:" => {
-                self.skips.mipmaps += 1;
-                Ok(())
+                let texture = self.texture_of(call, Self::id(call, 0)?)?;
+                self.blit(id).generate_mipmaps(&texture)
             }
             _ => return Err(refuse(call, "not played on a blit encoder")),
         };

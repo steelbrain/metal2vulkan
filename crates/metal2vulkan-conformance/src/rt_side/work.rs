@@ -10,7 +10,7 @@
 //!
 //! A step the runtime has no counterpart of answers `Unavailable` with its Metal call: the two
 //! fills (Apple SPI, whose Metal answers are carried), the whole-texture and slice copies,
-//! `generateMipmapsForTexture:`, the two optimize calls, `synchronizeTexture:slice:level:`, and a
+//! the two optimize calls, `synchronizeTexture:slice:level:`, and a
 //! copy with a depth, stencil or PVRTC blit option. A heap other than Private or Shared, and a
 //! buffer of Memoryless storage, which Metal makes no buffer of, are unavailable too.
 
@@ -577,7 +577,10 @@ impl Run<'_> {
                 "copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:\
                  destinationLevel:sliceCount:levelCount:",
             )),
-            Step::GenerateMipmaps { .. } => Err(Failure::unavailable("generateMipmapsForTexture:")),
+            Step::GenerateMipmaps { texture } => {
+                let texture = self.texture(*texture)?;
+                (self.encoder()?.generate_mipmaps(&texture)).map_err(of_rt)
+            }
             Step::OptimizeForGpuAccess { .. } => {
                 Err(Failure::unavailable("optimizeContentsForGPUAccess:"))
             }

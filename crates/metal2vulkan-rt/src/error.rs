@@ -517,6 +517,18 @@ pub enum Refusal {
         /// The view's.
         view: PixelFormat,
     },
+    /// [`BlitCommandEncoder::generate_mipmaps`](crate::BlitCommandEncoder::generate_mipmaps) of a
+    /// texture of more than one level whose pixel format is not a colour-renderable, filterable
+    /// one: a depth or stencil, compressed, YCbCr or integer format.
+    ///
+    /// Basis: metal-measured (Apple's `generateMipmaps(for:)` page: mipmap generation works only
+    /// for textures with colour-renderable and colour-filterable pixel formats; Metal's API
+    /// validation stops the others, measured on an Apple M3 Max and an M4 for
+    /// `metal2vulkan-runtime`'s mipmap plan).
+    MipmapFormat {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// between textures of two pixel formats, or of two sample counts.
     ///
@@ -795,6 +807,17 @@ pub enum Gap {
     /// texture through its view alone).
     TextureFormat {
         /// The pixel format asked for.
+        pixel_format: PixelFormat,
+    },
+    /// [`BlitCommandEncoder::generate_mipmaps`](crate::BlitCommandEncoder::generate_mipmaps) of a
+    /// texture whose image the device's blits do not filter: its format query lacks blits from
+    /// or to the image's format, or its linear filtering, or the image holds the pixel format
+    /// through a conversion (an extended-range or YCbCr format), or the texture is a view in
+    /// another format than its image's, whose blit would filter the image's.
+    ///
+    /// Basis: ours (the device's format query; the levels are the device's blit chain alone).
+    MipmapFilter {
+        /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
     /// A sampler state whose minification or magnification filter is cubic
@@ -1428,6 +1451,11 @@ impl fmt::Display for Refusal {
                 f,
                 "a {view:?} view of a {texture:?} texture made without PixelFormatView usage"
             ),
+            Refusal::MipmapFormat { pixel_format } => write!(
+                f,
+                "mipmaps of a {pixel_format:?} texture, which is not a colour-renderable, \
+                 filterable format"
+            ),
             Refusal::TextureCopyMismatch {
                 source,
                 destination,
@@ -1548,6 +1576,10 @@ impl fmt::Display for Gap {
             Gap::TextureFormat { pixel_format } => write!(
                 f,
                 "no texture of {pixel_format:?} is made on this device for the usage"
+            ),
+            Gap::MipmapFilter { pixel_format } => write!(
+                f,
+                "mipmaps of a {pixel_format:?} texture, whose image this device's blits do not filter"
             ),
             Gap::TextureBytes { pixel_format } => write!(
                 f,

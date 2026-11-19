@@ -612,10 +612,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
     whose samples read otherwise than the sampler's own: `skipped_clamped_samplers`), the draws
     while the slot holds one skipped with them; a bind it takes plays with its clamps;
   - blit commands that name a skipped object (`skipped_blits`), and by kind:
-    `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), mipmaps (`skipped_mipmaps`), and
-    the pieces of a copy from the guest's RAM that are not whole 4-byte words at a 4-byte offset,
-    into a buffer with no mapping (`skipped_guest_ram_writes`). `optimizeContentsForGPUAccess:`,
-    a layout hint, plays as nothing.
+    `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), and the pieces of a copy from
+    the guest's RAM that are not whole 4-byte words at a 4-byte offset, into a buffer with no
+    mapping (`skipped_guest_ram_writes`). `optimizeContentsForGPUAccess:`, a layout hint, plays
+    as nothing, and `generateMipmapsForTexture:` as the runtime's `generate_mipmaps`.
 
   A buffer-to-buffer copy plays as the runtime's (`copy_from_buffer_to_buffer`). A copy from the
   guest's RAM, the recording's plumbing, plays as its pieces' bytes in a Shared staging place of

@@ -61,10 +61,8 @@ struct Skips {
     /// Pieces of the host's copies from the guest's RAM that the play cannot copy: a piece not of
     /// whole 4-byte words at a 4-byte offset into a buffer with no mapping to fill the rest from.
     guest_ram_writes: u64,
-    /// `synchronizeTexture:slice:level:` and `generateMipmapsForTexture:`, which the runtime
-    /// does not build yet.
+    /// `synchronizeTexture:slice:level:`, which the runtime does not build yet.
     texture_syncs: u64,
-    mipmaps: u64,
     /// Sampler binds of LOD clamps the runtime answers with `Gap::LodClamps`: clamps whose samples
     /// read otherwise than the sampler's own.
     clamped_samplers: u64,
@@ -125,7 +123,6 @@ impl Skips {
             blits,
             guest_ram_writes,
             texture_syncs,
-            mipmaps,
             clamped_samplers,
             calls,
             resource_ids,
@@ -138,7 +135,6 @@ impl Skips {
             blits,
             guest_ram_writes,
             texture_syncs,
-            mipmaps,
             clamped_samplers,
             calls,
             resource_ids,
@@ -2198,7 +2194,6 @@ impl Backend for NewRuntime {
             ("copied_back_guest_ram_bytes", self.copied_back_bytes),
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
             ("skipped_texture_syncs", self.skips.texture_syncs),
-            ("skipped_mipmaps", self.skips.mipmaps),
             ("skipped_clamped_samplers", self.skips.clamped_samplers),
             ("substituted_surface_textures", self.substitutes.surfaces),
             ("substituted_tiled_textures", self.substitutes.tiled),

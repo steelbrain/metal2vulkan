@@ -35,7 +35,9 @@ use crate::over;
 use crate::record::{memory_barrier, Reach};
 use crate::texture::{place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor};
 use ash::vk;
-use metal2vulkan::metal::TextureType;
+use metal2vulkan::metal::format::{self as formats, FormatEmulation};
+use metal2vulkan::metal::{PixelFormat, TextureType};
+use metal2vulkan::pipeline::{PrecisionNote, SampledType};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -535,6 +537,168 @@ impl BlitCommandEncoder {
         }
         building.count(Metric::Barriers);
         building.count(Metric::Barriers);
+        Ok(())
+    }
+
+    /// The static precision note of [`generate_mipmaps`](Self::generate_mipmaps): each level is
+    /// the device's linear filter of the one above, where Apple states no filter.
+    pub const GENERATE_MIPMAPS_NOTE: PrecisionNote = PrecisionNote::DeviceFilteredMipmaps;
+
+    /// `generateMipmapsForTexture:`: each level of `texture` below its first made from the level
+    /// above it, over each of its slices, as Apple defines the call: one `vkCmdBlitImage` a level
+    /// with the linear filter, the device's ([`GENERATE_MIPMAPS_NOTE`](Self::GENERATE_MIPMAPS_NOTE)).
+    /// A view's levels and slices are its own, its first level the source of the rest. A texture
+    /// of one level has none to make: the call records nothing. The levels leave the texture's
+    /// home layout for the chain and come back in the same call, between a copy's barriers with
+    /// one between each level and the next; the command buffer keeps the texture until it retires.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's texture; [`Refusal::MipmapFormat`] for
+    /// a format Apple defines no mipmaps of; [`Gap::MipmapFilter`] where the device's blits do not
+    /// filter the texture's image; [`Error::Vulkan`] where the command buffer cannot record.
+    pub fn generate_mipmaps(&mut self, texture: &Texture) -> Result<(), Error> {
+        let (core, building) = self.parts();
+        if !texture.is_of(core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        let d = *texture.descriptor();
+        let pixel_format = d.pixel_format;
+        if d.mipmap_level_count < 2 {
+            return Ok(());
+        }
+        if !mipmapped(pixel_format) {
+            return Err(Error::Refused(Refusal::MipmapFormat { pixel_format }));
+        }
+        // The blit filters the image's own format, so a view in another format's levels, or a
+        // format the image holds through a conversion, would be filtered as other values.
+        use vk::FormatFeatureFlags2 as F;
+        let filters = F::BLIT_SRC | F::BLIT_DST | F::SAMPLED_IMAGE_FILTER_LINEAR;
+        let (_, optimal) = core.format_features(texture.image_format());
+        if texture.format() != texture.image_format()
+            || !filtered(texture.emulation())
+            || !optimal.contains(filters)
+        {
+            return Err(Error::Unsupported(Gap::MipmapFilter { pixel_format }));
+        }
+        building.keep_texture(texture);
+        building.wrote_texture_managed(texture);
+        let overs = [(texture.hazard_id(), Access::ReadWrite)];
+        building.overs_before(&overs, false)?;
+        let command = building.ordered_command()?;
+        if texture.host_reads() {
+            building.wrote_host();
+        }
+        building.overs_after(&overs, false);
+        use vk::AccessFlags2 as A;
+        use vk::PipelineStageFlags2 as S;
+        let (read, write) = (
+            texture.copy_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL),
+            texture.copy_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL),
+        );
+        let levels = d.mipmap_level_count;
+        let earlier = [memory_barrier(Reach::Commands)];
+        // The first level is read; every other is written whole, its contents discarded.
+        let away = [
+            texture
+                .levels_barrier(0..1, None, Some(read))
+                .src_stage_mask(S::ALL_COMMANDS)
+                .src_access_mask(A::MEMORY_WRITE)
+                .dst_stage_mask(S::BLIT)
+                .dst_access_mask(A::TRANSFER_READ),
+            texture
+                .levels_barrier(1..levels, Some(vk::ImageLayout::UNDEFINED), Some(write))
+                .src_stage_mask(S::ALL_COMMANDS)
+                .src_access_mask(A::NONE)
+                .dst_stage_mask(S::BLIT)
+                .dst_access_mask(A::TRANSFER_WRITE),
+        ];
+        // Home: every level but the last from the layout it was read in, the last from the one
+        // it was written in, its writes visible to every later command.
+        let back = [
+            texture
+                .levels_barrier(0..levels - 1, Some(read), None)
+                .src_stage_mask(S::BLIT)
+                .src_access_mask(A::NONE)
+                .dst_stage_mask(S::ALL_COMMANDS)
+                .dst_access_mask(A::MEMORY_READ | A::MEMORY_WRITE),
+            texture
+                .levels_barrier(levels - 1..levels, Some(write), None)
+                .src_stage_mask(S::BLIT)
+                .src_access_mask(A::TRANSFER_WRITE)
+                .dst_stage_mask(S::ALL_COMMANDS)
+                .dst_access_mask(A::MEMORY_READ | A::MEMORY_WRITE),
+        ];
+        let [level, layer] = texture.base();
+        let slices = match d.texture_type {
+            TextureType::Cube | TextureType::CubeArray => d.array_length * 6,
+            TextureType::Type3D => 1,
+            _ => d.array_length,
+        };
+        let extent = |at: u32| [d.width, d.height, d.depth].map(|e| (e >> at).max(1));
+        let corner = |e: [u32; 3]| vk::Offset3D {
+            // A level's extent is a `u32` the image format query bounds far below 2^31.
+            x: e[0] as i32,
+            y: e[1] as i32,
+            z: e[2] as i32,
+        };
+        let layers = |at: u32| vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: level + at,
+            base_array_layer: layer,
+            layer_count: slices,
+        };
+        let device = &core.device;
+        // SAFETY: the command buffer records outside any render pass and keeps the image until it
+        // retires; its levels are in their home layout between commands and in the chain's
+        // layouts between its barriers; each blit reads one level and writes the next, two
+        // different subresources, inside both; the image has the transfer usages every image
+        // takes, and its format filters linearly in blits (checked above).
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default()
+                    .memory_barriers(&earlier)
+                    .image_memory_barriers(&away),
+            );
+            for at in 1..levels {
+                let region = vk::ImageBlit {
+                    src_subresource: layers(at - 1),
+                    src_offsets: [vk::Offset3D::default(), corner(extent(at - 1))],
+                    dst_subresource: layers(at),
+                    dst_offsets: [vk::Offset3D::default(), corner(extent(at))],
+                };
+                device.cmd_blit_image(
+                    command,
+                    texture.image(),
+                    read,
+                    texture.image(),
+                    write,
+                    &[region],
+                    vk::Filter::LINEAR,
+                );
+                if at + 1 == levels {
+                    break;
+                }
+                // The level written is read by the next blit.
+                let written = [texture
+                    .levels_barrier(at..at + 1, Some(write), Some(read))
+                    .src_stage_mask(S::BLIT)
+                    .src_access_mask(A::TRANSFER_WRITE)
+                    .dst_stage_mask(S::BLIT)
+                    .dst_access_mask(A::TRANSFER_READ)];
+                device.cmd_pipeline_barrier2(
+                    command,
+                    &vk::DependencyInfo::default().image_memory_barriers(&written),
+                );
+            }
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default().image_memory_barriers(&back),
+            );
+        }
+        // The chain's barriers: before it, between each level and the next, and after it.
+        for _ in 0..levels {
+            building.count(Metric::Barriers);
+        }
         Ok(())
     }
 
@@ -1058,4 +1222,26 @@ pub(crate) fn texture_copy(
         to,
         aspect: unit.aspect,
     }))
+}
+
+/// Whether Apple defines mipmaps of `pf`: a colour-renderable, filterable format, which is not a
+/// depth or stencil, compressed, YCbCr or integer one ("generateMipmapsForTexture:").
+pub(crate) fn mipmapped(pf: PixelFormat) -> bool {
+    !formats::is_depth_stencil(pf)
+        && formats::block_extent(pf).is_none()
+        && !formats::ycbcr(pf)
+        && formats::sampled_type(pf) == Some(SampledType::Float)
+}
+
+/// Whether an image holding its pixel format as `emulation` holds each channel as one channel of
+/// the same values, which a blit filters as the pixel format's.
+fn filtered(emulation: FormatEmulation) -> bool {
+    matches!(
+        emulation,
+        FormatEmulation::Direct
+            | FormatEmulation::SwizzledView
+            | FormatEmulation::AlphaInRed
+            | FormatEmulation::RotatedView
+            | FormatEmulation::XChannel
+    )
 }
