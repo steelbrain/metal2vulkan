@@ -1581,11 +1581,11 @@ pub(crate) mod trace {
     }
 
     /// The address of the shared part of the command buffer whose timestamps read unavailable
-    /// once, as a driver that dropped its work answers ([`unstamp_of`]).
+    /// once ([`unstamp_of`]).
     static UNSTAMPED_OF: Mutex<Option<usize>> = Mutex::new(None);
 
     /// The completion turn that reads `command_buffer`'s timestamps takes their availability as
-    /// 0, as where the driver dropped its work (`CommandBufferShared::read_stamps`); the work runs.
+    /// 0 (`CommandBufferShared::read_stamps`); the work runs.
     pub(crate) fn unstamp_of(command_buffer: &CommandBuffer) {
         *UNSTAMPED_OF.lock().unwrap() = Some(Arc::as_ptr(&command_buffer.0).addr());
     }

@@ -6433,8 +6433,8 @@ impl CommandBufferShared {
     }
 
     /// Read the command buffer's timestamps, now that its work completed, and give its slot
-    /// back: in the completion turn, inside its section. One read unavailable says the driver
-    /// dropped its work ([`Stamped::Read`], which its completion answers as Metal's victim).
+    /// back: in the completion turn, inside its section. One read unavailable reads as no times
+    /// ([`Stamped::Read`], which its completion counts).
     pub(super) fn read_stamps(&self) {
         let mut state = lock(&self.state);
         let Some(slot) = state.times.slot.take() else {
@@ -6470,7 +6470,7 @@ impl CommandBufferShared {
             }
         };
         let read = read(start).and_then(|start| Ok(start.zip(read(slot.first() + 1)?)));
-        // A test's timestamps unavailable, as a driver that dropped the work answers.
+        // A test's timestamps unavailable, as a driver's that has not made them available.
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         let read = match completion::trace::unstamped(self) {
             true => read.map(|_| None),
@@ -7168,21 +7168,14 @@ impl CommandBufferShared {
                 }
                 result => result,
             };
-            // Its queue's timeline passed its last batch, whose signal's first scope holds "all
-            // commands that occur earlier in submission order" (Semaphore Signaling), its
-            // timestamp writes among them, each of which makes its query available (Queries): one
-            // read unavailable was never written. The driver dropped its work with no error the
-            // device reports, as Linux's amdgpu does with a job its timeout ended and those its
-            // context queued behind it (`gpu_time.rs`): it fails as Metal's victim of a GPU
-            // recovery, which does not count against its queue. Its writes never ran: its logs of
-            // host pages hear of it as of a failed one's (below).
-            let result = match result {
-                Ok(()) if state.times.stamped == Stamped::Read(None) => {
-                    self.device.shared().counts.command_buffer_unrun();
-                    Err(CommandBufferError::GpuRecoveryVictim)
-                }
-                result => result,
-            };
+            // Its queue's timeline passed its last batch while a timestamp of it read
+            // unavailable: counted, its GPU times 0, and it completes. A signal with its
+            // timestamps unavailable is no loss of the GPU: an Intel UHD Graphics 630 (Windows
+            // driver 101.2145) read one so among a burst's 2,010 submissions, its device going on
+            // with no error (`gpu_time.rs`).
+            if result.is_ok() && state.times.stamped == Stamped::Read(None) {
+                self.device.shared().counts.command_buffer_unrun();
+            }
             let lost_hang = state.hang_of_loss && result == Err(CommandBufferError::GpuHang);
             // The logs of host pages hear of its shadows' copies back and its writes in place
             // again where its last batch's completion did not tell them (`completion.rs`), and let

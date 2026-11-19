@@ -1232,12 +1232,13 @@ meanwhile wait for it.
   `Device::raw` answered is parked: a consumer leaves what it made with those handles (a
   swapchain among them) and waits for none of its queues. Counted: `stall_probes_sent`,
   `wedges_declared`, `watchdog_timeouts`, `longest_stall_nanos`.
-- A command buffer whose work the driver dropped while its `VkDevice` goes on fails with
-  `GpuRecoveryVictim`, as Metal fails one its GPU's recovery discards, and its queue runs on: its
-  queue's timeline passed it while its own timestamps read unavailable. Linux's amdgpu ends a job
-  past its timeout (2 s by default); on a Radeon 780M (RADV) the command buffer queued behind such
-  a job on the same queue never ran either, and the device reported no error. A device that writes no timestamps for the command buffer cannot tell
-  (docs/FAST-PATHS.md, known gaps). Counted: `unrun_command_buffers`.
+- A command buffer whose queue's timeline passed it while its own timestamps read unavailable
+  completes, its GPU times 0: a signal with its timestamps unavailable is no loss of the GPU (an
+  Intel UHD Graphics 630 on Windows read one so, its device going on). So work the driver dropped
+  while its `VkDevice` goes on completes with no error (docs/FAST-PATHS.md, known gaps): Linux's
+  amdgpu ends a job past its timeout (2 s by default), and on a Radeon 780M (RADV) the command
+  buffer queued behind such a job on the same queue never ran either, with no error the device
+  reported. Counted: `unrun_command_buffers`.
 - `Device::raw` answers the new `VkDevice`'s handles once a later call asks; the handles it
   answered before stay valid until then, and the lost `VkDevice` stays alive until then, so the
   consumer destroys what it made with those handles (a swapchain, an import) first.

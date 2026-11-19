@@ -2433,14 +2433,6 @@ pub enum CommandBufferError {
     /// its encoder on as its work completes, and an indirect draw's as its arguments pass reports
     /// it, the rest of its work running; it runs the queue's other command buffers (docs/API.md,
     /// "Accepted differences").
-    ///
-    /// Also a command buffer whose work the driver dropped with no error the device reports: its
-    /// queue's timeline passed it while its own timestamps read unavailable, never written. Linux's
-    /// amdgpu ends a job its timeout (2 s by default) caught, and drops those its context queued
-    /// behind it, with its device going on; each such command buffer fails so, as Metal fails the
-    /// command buffers its GPU's recovery discards, and the queue runs on
-    /// (`WorkCounts::unrun_command_buffers`). A device that writes no timestamps for the command
-    /// buffer cannot tell (docs/FAST-PATHS.md, known gaps).
     GpuRecoveryVictim,
     /// Metal ignored the command buffer, committed on a queue whose second command buffer with a
     /// GPU error it caused ([`PageFault`](Self::PageFault), [`GpuHang`](Self::GpuHang), or

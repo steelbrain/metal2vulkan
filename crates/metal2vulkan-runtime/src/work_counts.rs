@@ -2705,8 +2705,8 @@ impl Counters {
         self.watchdog_timeouts.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// A command buffer's queue passed it while its timestamps read unavailable: the driver
-    /// dropped its work, and it failed as Metal's victim (`command_buffer/mod.rs`).
+    /// A command buffer's queue passed it while its timestamps read unavailable: it completed,
+    /// its GPU times 0 (`command_buffer/mod.rs`).
     pub(crate) fn command_buffer_unrun(&self) {
         self.unrun_command_buffers.fetch_add(1, Ordering::Relaxed);
     }
@@ -6778,10 +6778,10 @@ pub struct WorkCounts {
     /// timeout (`command_buffer/stall.rs`).
     pub watchdog_timeouts: u64,
     /// The command buffers whose queue's timeline passed them while their own timestamps read
-    /// unavailable: work the driver dropped with no error the device reports (Linux's amdgpu, a
-    /// job its timeout ended and those its context queued behind it). Each failed as Metal's
-    /// victim of a GPU recovery (`GpuRecoveryVictim`), not counted against its queue, and the
-    /// device went on (`command_buffer/mod.rs`).
+    /// unavailable. Each completed, its GPU times 0 (`command_buffer/mod.rs`): a driver that has
+    /// not made a signalled submission's timestamps available (an Intel UHD Graphics 630 on
+    /// Windows), or work a driver dropped with no error the device reports (Linux's amdgpu, a job
+    /// its timeout ended and those its context queued behind it), which completes so too.
     pub unrun_command_buffers: u64,
     /// The longest time, in nanoseconds, that no queue's work advanced while some was pending, as
     /// the completion's waiters saw it at their probes and its end.

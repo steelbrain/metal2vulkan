@@ -1,18 +1,14 @@
-//! A command buffer whose queue's timeline passed it while its own timestamps read unavailable:
-//! work the driver dropped with no error the device reports (`gpu_time.rs`), as Linux's amdgpu
-//! drops a job its timeout ended. It fails as Metal's victim of a GPU recovery
-//! (`GpuRecoveryVictim`), its GPU times 0, counted (`WorkCounts::unrun_command_buffers`), and its
-//! queue runs on, nothing counted against it. The unavailable read is injected
+//! A command buffer whose queue's timeline passed it while its own timestamps read unavailable
+//! (`gpu_time.rs`), as an Intel UHD Graphics 630's Windows driver read one among a burst's
+//! submissions: no loss of the GPU. It completes with no error, its GPU times 0, counted
+//! (`WorkCounts::unrun_command_buffers`), and its queue runs on. The unavailable read is injected
 //! (`completion::trace::unstamp_of`): the work runs, and no GPU hangs.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs, on the kind of device
 //! the cfg selects (docs/VALIDATION.md).
 
 use super::device_recovery::{device, outcome, Scratch};
-use crate::{
-    Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device,
-    ResourceOptions,
-};
+use crate::{Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, ResourceOptions};
 
 /// A command buffer of `queue` that fills `buffer`'s first 4096 bytes with `value`.
 fn filled_by(queue: &CommandQueue, buffer: &Buffer, value: u8) -> CommandBuffer {
@@ -29,13 +25,13 @@ fn bytes(buffer: &Buffer) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(buffer.contents().unwrap().as_ptr(), 4096) }.to_vec()
 }
 
-/// The command buffers `device` failed as dropped work so far.
+/// The command buffers of `device` whose timestamps read unavailable so far.
 fn unrun(device: &Device) -> u64 {
     device.work_counts().unrun_command_buffers
 }
 
 #[test]
-fn a_command_buffer_whose_timestamps_read_unavailable_fails_as_a_victim() {
+fn a_command_buffer_whose_timestamps_read_unavailable_completes_counted() {
     let scratch = Scratch::new();
     let device = device(&scratch.0);
     let timing = &device.shared().timing;
@@ -54,24 +50,19 @@ fn a_command_buffer_whose_timestamps_read_unavailable_fails_as_a_victim() {
     assert_eq!(outcome(&ran), (CommandBufferStatus::Completed, None));
     assert!(ran.gpu_end_time().unwrap() > 0.0, "its GPU times were read");
     assert_eq!(unrun(&device), 0);
-    // One whose timestamps read unavailable fails as a victim, its GPU times 0.
-    let dropped = filled_by(&queue, &buffer, 2);
-    crate::command_buffer::completion::trace::unstamp_of(&dropped);
-    dropped.commit().unwrap();
-    assert_eq!(
-        outcome(&dropped),
-        (
-            CommandBufferStatus::Error,
-            Some(CommandBufferError::GpuRecoveryVictim)
-        )
-    );
+    // One whose timestamps read unavailable completes with no error, its GPU times 0, counted.
+    let unstamped = filled_by(&queue, &buffer, 2);
+    crate::command_buffer::completion::trace::unstamp_of(&unstamped);
+    unstamped.commit().unwrap();
+    assert_eq!(outcome(&unstamped), (CommandBufferStatus::Completed, None));
     let times = (
-        dropped.gpu_start_time().unwrap(),
-        dropped.gpu_end_time().unwrap(),
+        unstamped.gpu_start_time().unwrap(),
+        unstamped.gpu_end_time().unwrap(),
     );
     assert_eq!(times, (0.0, 0.0));
     assert_eq!(unrun(&device), 1);
-    // Its queue runs on: a victim does not count against it, as Metal's does not.
+    assert!(bytes(&buffer).iter().all(|&byte| byte == 2), "its fill ran");
+    // Its queue runs on.
     let next = filled_by(&queue, &buffer, 3);
     next.commit().unwrap();
     assert_eq!(outcome(&next), (CommandBufferStatus::Completed, None));
