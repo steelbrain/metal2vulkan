@@ -2,7 +2,7 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
-use super::compare::compare_plays;
+use super::compare::{compare_plays, shown_differences};
 use super::covers::SlotStage;
 use super::dumps::{compare_dumps, Difference};
 use super::heaps::HeapSplit;
@@ -11,9 +11,10 @@ use super::new_runtime::places::Waiting;
 use super::new_runtime::second::merge;
 use super::new_runtime::unwritten::Unwritten;
 use super::new_runtime::{judged_records, Ended};
+use super::pixels::{difference, Shape};
 use super::player::{
     Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
-    TextureWrites, WAIT_COMPLETED,
+    Shown, TextureWrites, WAIT_COMPLETED,
 };
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
@@ -2975,6 +2976,129 @@ fn a_listed_present_checks_the_shown_texture() {
     let lines = report.lines();
     assert!(lines.contains(&line), "{lines:?}");
     assert_eq!(report.frames.len(), 4, "every present still ends its frame");
+}
+
+/// A listed present the player keeps (`Player::keeping_presents`): the shown texture's bytes go to
+/// `frame-F.bytes` in the directory, the report names it with its shape (unknown to a backend
+/// that gives none) and every frame's end carries the system's clock.
+#[test]
+fn a_kept_present_writes_the_shown_texture_s_bytes_and_each_end_its_time() {
+    let build = |w: &mut StreamWriter<File>| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 2, &[map(&[])], &[])?;
+        for _ in 0..2 {
+            w.call("m2v.present", 1, 0, &[Value::Object(2)], &[])?;
+        }
+        Ok(())
+    };
+    let dir = ScratchDir::new("replay-kept-presents").unwrap();
+    let path = written(&dir, "s.m2vr", build);
+    let kept_dir = dir.path().join("presents");
+    let mut kept = Kept::default();
+    let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+    let player = (Player::new(&mut kept).checking_presents([1])).keeping_presents(kept_dir.clone());
+    let (report, ended) = player.play(&mut reader);
+    ended.unwrap();
+    let shown = Shown {
+        object: 2,
+        frame: 1,
+        shape: None,
+    };
+    assert_eq!(report.shown, [shown]);
+    assert_eq!(
+        std::fs::read(kept_dir.join("frame-1.bytes")).unwrap(),
+        2u64.to_le_bytes(),
+        "`Kept` reads an object it holds no memory of as its id"
+    );
+    assert!(
+        !kept_dir.join("frame-0.bytes").exists(),
+        "an unlisted present keeps nothing"
+    );
+    let lines = report.lines();
+    assert!(
+        lines.contains(&"shown #2 frame 1 shape unknown".to_owned()),
+        "{lines:?}"
+    );
+    let ends: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("end "))
+        .collect();
+    assert_eq!(ends.len(), 2, "{lines:?}");
+    for end in ends {
+        let time = end
+            .split_whitespace()
+            .find_map(|word| word.strip_prefix("unix_nanos="));
+        let time: u64 = time.expect("a time").parse().unwrap();
+        assert!(time > 1_700_000_000_000_000_000, "{end}");
+    }
+}
+
+/// A picture difference's size: the texels that differ and their share, the largest difference
+/// of each channel in the format's units, in its channels' order, and the box the differing
+/// texels lie in; a packed format reads its channels from its words; with no shape, bytes.
+#[test]
+fn a_picture_difference_is_sized_by_texels_channels_and_box() {
+    // BGRA8Unorm, 3 by 2: texel (1, 0) is 7 redder, texel (2, 1) 2 bluer.
+    let a = vec![0u8; 24];
+    let mut b = a.clone();
+    b[4 + 2] = 7;
+    b[12 + 8] = 2;
+    let bgra = Shape {
+        pixel_format: 80,
+        width: 3,
+        height: 2,
+    };
+    assert_eq!(
+        difference(Some(bgra), &a, &b),
+        "2 of 6 texels of format 80 3x2 differ (33.33%); largest difference per channel B 2, G 0, \
+         R 7, A 0 (levels of 1/255); box x 1..2, y 0..1"
+    );
+    // RGB10A2Unorm, one texel: red from 0 to 1023, alpha from 0 to 3.
+    let packed = Shape {
+        pixel_format: 90,
+        width: 1,
+        height: 1,
+    };
+    let word = (0x3ffu32 | (0x3 << 30)).to_le_bytes();
+    assert_eq!(
+        difference(Some(packed), &[0; 4], &word),
+        "1 of 1 texels of format 90 1x1 differ (100.00%); largest difference per channel R 1023, \
+         G 0, B 0, A 3 (levels of 1/1023, A of 1/3); box x 0..0, y 0..0"
+    );
+    assert_eq!(
+        difference(None, &[1, 2, 3], &[1, 5, 3]),
+        "1 of 3 bytes differ (33.33%); largest difference per channel byte 3 (bytes); box x 1..1, \
+         y 0..0"
+    );
+    assert_eq!(
+        difference(None, &[1], &[1, 2]),
+        "sizes differ: a 1 bytes, b 2 bytes"
+    );
+}
+
+/// The compare sizes a frame's picture difference where both reports name the shown texture they
+/// kept and the frame's digests differ; equal digests print nothing.
+#[test]
+fn two_plays_kept_pictures_that_differ_are_sized() {
+    let dir = ScratchDir::new("replay-shown-differences").unwrap();
+    let (a_kept, b_kept) = (dir.path().join("a"), dir.path().join("b"));
+    for (kept, red) in [(&a_kept, 0u8), (&b_kept, 9)] {
+        std::fs::create_dir_all(kept).unwrap();
+        std::fs::write(kept.join("frame-1.bytes"), [0, 0, red, 255, 0, 0, 0, 255]).unwrap();
+        std::fs::write(kept.join("frame-2.bytes"), [1; 8]).unwrap();
+    }
+    let report = |frame_1: &str| {
+        format!(
+            "shown #4 frame 1 format 80 width 2 height 1\ncheck #4 frame 1 {frame_1} unrecorded\n\
+             shown #4 frame 2 format 80 width 2 height 1\ncheck #4 frame 2 cc unrecorded\n"
+        )
+    };
+    let lines = shown_differences(&report("aa"), &report("bb"), &a_kept, &b_kept);
+    assert_eq!(
+        lines,
+        ["pixels at frame 1: 1 of 2 texels of format 80 2x1 differ (50.00%); largest difference \
+          per channel B 0, G 0, R 9, A 0 (levels of 1/255); box x 0..0, y 0..0"]
+    );
 }
 
 /// A play of `build` on `backend` that dumps command buffers 20 to 29 into `dir`.

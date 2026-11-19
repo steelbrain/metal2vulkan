@@ -523,7 +523,11 @@ counted from 0), completes the work committed so far, reports as at the stream's
 `until-frame F`. With `--check-presents F,...` it checks, at the `m2v.present` of each listed frame (counted from
 0), the texture the present shows, as an `m2v.check` of it with no recorded checksum would: a
 `check ID frame F SHA256 unrecorded` line, which `compare-plays` reads as the frame's digest
-(below). A present of nil checks nothing. The readback is the player's own work, in none of the
+(below); it also writes the bytes it read to `presents/frame-F.bytes` in the `--out` directory
+and names them with a `shown ID frame F format P width W height H` line (`P` the
+`MTLPixelFormat`'s raw value; `shape unknown` where the backend gives none), so two plays'
+pictures that differ there can be sized (below). The bytes are the program's picture: they stay
+on the host that played them. A present of nil checks nothing. The readback is the player's own work, in none of the
 counts, and its time is the frame's `read`, so a play timed for a verdict lists no frame and the
 digests come from a play of their own. `command-replay dump --stream FILE` prints the call
 records as text, and
@@ -954,9 +958,11 @@ whose ID differs from the recording's, those of the compute pipeline states' typ
 the skipped objects aside: any such object makes the play an error, as a word that names it
 names something else in the play),
 `completed IDS COUNTS`, `frame N COUNTS`,
-`end N wall_nanos=NANOS resident_bytes=BYTES times KEY=NANOS ... live KEY=VALUE ...` for each
-frame (the nanoseconds from the frame before's end, or the first call played, to this frame's,
-the wait for its work included; the process's resident memory then where the system tells it,
+`end N wall_nanos=NANOS unix_nanos=NANOS resident_bytes=BYTES times KEY=NANOS ... live KEY=VALUE ...`
+for each frame (the nanoseconds from the frame before's end, or the first call played, to this
+frame's, the wait for its work included; the system's clock at the frame's end, in nanoseconds
+since the Unix epoch, which sets the present beside samples another tool takes of the device;
+the process's resident memory then where the system tells it,
 `VmRSS` on Linux; where the frame's wall time went on the player's thread, in nanoseconds:
 `stream` reading and decoding the stream and its blobs, `write` putting bytes in the runtime's
 memory, `read` reading bytes back, `wait` waiting for command buffers, `resource` the calls that
@@ -1099,8 +1105,13 @@ checks in both; equal in E, differ in X` and `digests differ at frame F` for the
 frames whose `check` lines differ, ending `; stale reads from frame S, the first suspect` where a
 play kept two copies and its stale reads start at or before `F`. With `--frame F` it ends with
 `verdict at frame F: b is P% faster|slower than a by GPU-busy time (a A ns, b B ns); wall a W ns,
-b V ns` (or `level`), or `no verdict at frame F: WHY`. A timing verdict between two plays needs
-all three of:
+b V ns` (or `level`), or `no verdict at frame F: WHY`. Without `--frame`, for each frame whose
+digests differ and whose shown texture both plays kept (`shown` lines, and `presents` beside each
+report), it ends with `pixels at frame F: N of M texels of format P WxH differ (S%); largest
+difference per channel C D, ... (UNITS); box x X0..X1, y Y0..Y1`: the texels that differ and
+their share, the largest difference of each channel in the format's units and in its channels'
+order, and the box the differing texels lie in (the bytes compared as bytes for a format it
+does not read). A timing verdict between two plays needs all three of:
 
 1. both plays by a player that serves every read class the stream has, which a report shows by
    its `managed reads` line: a player that prints none may not serve the made-with reads or, for
@@ -1109,7 +1120,15 @@ all three of:
 3. equal digests at the judged frame: its `check` lines alike in both. A frame with no check in
    both plays gets no verdict until a play adds one: a stream's own `m2v.check`, or the shown
    texture that `--check-presents` checks at the frame's present, in a play of each arm apart
-   from the timed ones.
+   from the timed ones. A picture difference at the judged frame is accepted only when its size
+   is printed and its first parting draw on that card is traced to a function that carries a
+   static precision note, with no state difference. Such a row reads "pictures differ within
+   <note>: N pixels, largest difference D", and its time verdict stands. No trace means no
+   verdict.
+
+An NVIDIA time row is GPU ms a present over presents whose covering clock sample is the same
+state on both arms, the state named, at least 30 presents an arm; otherwise 'not comparable by
+time' with the counts.
 
 Stale reads bar no verdict: Metal leaves those bytes undefined and both runtimes play them by one
 rule. Where the digests differ, they are the first suspect, as the old runtime takes a no-copy

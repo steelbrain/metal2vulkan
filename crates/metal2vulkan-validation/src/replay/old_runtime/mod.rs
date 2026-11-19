@@ -10,6 +10,7 @@ mod encoders;
 
 use super::heaps::HeapSplit;
 use super::new_runtime::{objects_named, ManagedCopies};
+use super::pixels::Shape;
 use super::player::{Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::value::Value;
@@ -1140,6 +1141,17 @@ impl Backend for OldRuntime {
         let (start, end) = (done.gpu_start_time().ok()?, done.gpu_end_time().ok()?);
         let nanos = |seconds: f64| (seconds * 1e9) as u64;
         (start > 0.0 && end >= start).then(|| (nanos(start), nanos(end)))
+    }
+
+    fn texture_shape(&mut self, object: u64) -> Option<Shape> {
+        match self.objects.get(&object) {
+            Some(Object::Texture(texture)) => Some(Shape {
+                pixel_format: texture.pixel_format().as_raw().into(),
+                width: texture.width(),
+                height: texture.height(),
+            }),
+            _ => None,
+        }
     }
 
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError> {

@@ -16,8 +16,9 @@
 //! Managed buffer stops the new runtime's play and plays as the old runtime's own), `--until-frame` stopping the play after frame `F`'s present
 //! (frames counted from 0), and `--check-presents` checking the texture each listed frame's
 //! present shows, at that present, as a recorded check of it would (a `check` line of the
-//! frame, compared by `compare-plays`; its readback's time is the frame's, so a timed play lists
-//! none). The play ends at the stream's recording range (its sidecar's, else
+//! frame, compared by `compare-plays`, and the bytes read kept as `DIR/presents/frame-F.bytes`,
+//! which `compare-plays` sizes where two plays' digests differ; its readback's time is the
+//! frame's, so a timed play lists none). The play ends at the stream's recording range (its sidecar's, else
 //! its row of `RECORDED_RANGES`, else the whole stream) unless `--past-range yes` takes it past.
 //! It writes `DIR/report.txt`, each line to the standard error too: first, where the stream's
 //! header lacks `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's
@@ -70,8 +71,9 @@ use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout, W
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
     compare_dumps, compare_plays, display_library, judged_records, recording_range, segments,
-    Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player, RangeSource, RecordingRange,
-    StreamError, StreamReader, Value, VideoHandle, FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
+    shown_differences, Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player,
+    RangeSource, RecordingRange, StreamError, StreamReader, Value, VideoHandle,
+    FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -163,7 +165,8 @@ fn compare(options: &BTreeMap<String, String>) -> i32 {
 }
 
 /// `compare-plays`: two plays' reports (each a `report.txt` or the directory holding it) compared
-/// for a timing verdict, a line each; 0 where the frame `--frame` names has a verdict (or none is
+/// for a timing verdict, a line each, and with no frame named, the size of each picture difference
+/// whose bytes both plays kept (`shown_differences`); 0 where the frame `--frame` names has a verdict (or none is
 /// named), 1 where it has none, 2 where a report cannot be read.
 fn compare_two_plays(options: &BTreeMap<String, String>) -> i32 {
     let frame = match options.get("frame").map(|f| f.parse::<u64>()) {
@@ -192,6 +195,22 @@ fn compare_two_plays(options: &BTreeMap<String, String>) -> i32 {
     let (lines, verdict) = compare_plays(&a, &b, frame);
     for line in lines {
         println!("{line}");
+    }
+    // The size of each picture difference, where both plays kept the shown texture's bytes in
+    // `presents` beside their reports: printed with the whole compare, so a verdict stays the last
+    // line of a compare at a frame.
+    if frame.is_none() {
+        let kept = |name: &str| {
+            let path = PathBuf::from(&options[name]);
+            let dir = match path.is_dir() {
+                true => path,
+                false => path.parent().map(Path::to_path_buf).unwrap_or_default(),
+            };
+            dir.join("presents")
+        };
+        for line in shown_differences(&a, &b, &kept("a"), &kept("b")) {
+            println!("{line}");
+        }
     }
     match verdict {
         true => 0,
@@ -465,8 +484,8 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         let frames = listed.split(',').map(|frame| frame.parse::<u64>());
         frames.collect::<Result<Vec<_>, _>>()
     }) {
-        None => Vec::new(),
-        Some(Ok(frames)) => frames,
+        None => (Vec::new(), out.join("presents")),
+        Some(Ok(frames)) => (frames, out.join("presents")),
         Some(Err(_)) => {
             report.line(&format!(
                 "error check-presents: {} is no list of frame numbers",
@@ -635,7 +654,8 @@ type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
 
 /// Play `reader` through `backend` into `report`, taking snapshots or not, to the last frame where
 /// one is given, dumping the command buffers where asked, checking the shown texture at the
-/// listed frames' presents, and on the new runtime, where `judged`
+/// listed frames' presents and keeping its bytes in the directory given, and on the new runtime,
+/// where `judged`
 /// names the stream's first segment, writing the matrix's judged metrics of a play that finished
 /// its range (`judged_records`): the exit status.
 fn run<B: Backend>(
@@ -646,7 +666,7 @@ fn run<B: Backend>(
         bool,
         Option<usize>,
         Dumped,
-        Vec<u64>,
+        (Vec<u64>, PathBuf),
         Option<&Path>,
     ),
 ) -> i32 {
@@ -663,7 +683,11 @@ fn run<B: Backend>(
         Some((command_buffers, dir)) => player.dumping(command_buffers, dir),
         None => player,
     };
-    let player = player.checking_presents(presents);
+    let (presents, kept) = presents;
+    let player = match presents.is_empty() {
+        true => player,
+        false => player.checking_presents(presents).keeping_presents(kept),
+    };
     let (played, ended) = player.play(reader);
     let counters = backend.counters();
     // The objects whose ID the program saw that the runtime gives otherwise: a word that names one

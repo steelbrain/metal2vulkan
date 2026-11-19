@@ -28,6 +28,7 @@ pub use judged::judged_records;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
 use super::covers::SlotStage;
+use super::pixels::Shape;
 use super::player::{Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::translator;
@@ -2541,6 +2542,20 @@ impl Backend for NewRuntime {
         // Both are 0 for one that ended with an error.
         let (start, end) = (done.gpu_start_time(), done.gpu_end_time());
         (start != 0 && end >= start).then_some((start, end))
+    }
+
+    fn texture_shape(&mut self, object: u64) -> Option<Shape> {
+        match self.objects.get(&object) {
+            Some(Object::Texture(texture)) => {
+                let d = texture.descriptor();
+                Some(Shape {
+                    pixel_format: d.pixel_format.as_raw().into(),
+                    width: d.width.into(),
+                    height: d.height.into(),
+                })
+            }
+            _ => None,
+        }
     }
 
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError> {

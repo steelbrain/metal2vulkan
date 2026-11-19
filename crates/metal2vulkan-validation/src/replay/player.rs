@@ -12,6 +12,7 @@ use super::heaps::{
     heap_size, placement_heap, placement_offset, places_buffer, places_texture, recorded_range,
     relay, HeapSplit, Layout, Overlaps, Placements,
 };
+use super::pixels::Shape;
 use super::stale::Stale;
 use super::stream::{Call, StreamError, StreamReader};
 use super::texwrites::TexWrites;
@@ -23,6 +24,7 @@ use std::io::Write;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A runtime's counters, cumulative, by name.
 pub type Counters = BTreeMap<&'static str, u64>;
@@ -95,6 +97,11 @@ pub trait Backend {
     fn gpu_interval(&mut self, command_buffer: u64) -> Option<(u64, u64)>;
     /// The bytes of buffer or texture `object`, for a checksum.
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError>;
+    /// The pixel format and size of texture `object` as the backend made it, which a picture
+    /// of its bytes (`read`) is read by; none for an object that is no texture of the backend's.
+    fn texture_shape(&mut self, _object: u64) -> Option<Shape> {
+        None
+    }
     /// The `gpuResourceID` the runtime gives `object`; none where its getter raises.
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError>;
     /// The high word docs/RESOURCE-ID.md gives `object`'s ID: its function of the descriptor the
@@ -286,6 +293,15 @@ impl From<StreamError> for PlayError {
     }
 }
 
+/// A present's shown texture whose bytes the player kept (`Player::keeping_presents`): the
+/// object, the frame and the texture's shape where the backend gives it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Shown {
+    pub object: u64,
+    pub frame: u64,
+    pub shape: Option<Shape>,
+}
+
 /// One `m2v.check` or present readback.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Check {
@@ -418,6 +434,8 @@ pub struct Report {
     /// The GPU's reads of Managed bytes that no announcement took to the GPU copy, as a play that
     /// keeps two copies holds them (`stale.rs`).
     pub managed_reads: ManagedReads,
+    /// The shown textures whose bytes the player kept, one a listed present.
+    pub shown: Vec<Shown>,
     /// The recorded devices other than the one the guest makes its objects on, whose identity
     /// records the play takes nothing from (`Player::guest_device`).
     pub other_devices: Vec<u64>,
@@ -546,6 +564,9 @@ pub struct End {
     /// Nanoseconds from the end of the frame before (the first call played, for the first) to
     /// this one's, the wait for its work included.
     pub wall_nanos: u64,
+    /// The system's clock at the frame's end, in nanoseconds since the Unix epoch: a time to
+    /// set the present beside samples another tool takes of the device.
+    pub unix_nanos: u64,
     /// The process's resident memory then, in bytes, where the system tells it (`VmRSS` on
     /// Linux).
     pub resident_bytes: Option<u64>,
@@ -777,10 +798,11 @@ impl Report {
                 .collect();
             let t = &end.times;
             lines.push(format!(
-                "end {at} wall_nanos={}{resident} times stream={} write={} read={} wait={} \
+                "end {at} wall_nanos={} unix_nanos={}{resident} times stream={} write={} read={} wait={} \
                  resource={} resource_max={} pipeline={} pipeline_max={} other={} upload={} \
                  count={} player={} gpu_busy={} gpu_longest={} gpu_longest_cb={} live{live}",
                 end.wall_nanos,
+                end.unix_nanos,
                 t.stream,
                 t.write,
                 t.read,
@@ -808,6 +830,18 @@ impl Report {
         for (ids, counters) in &self.completed {
             let ids: String = ids.iter().map(|id| format!(" #{id}")).collect();
             lines.push(format!("completed{ids}{}", counted(counters)));
+        }
+        for shown in &self.shown {
+            let shape = shown.shape.map_or("shape unknown".to_owned(), |shape| {
+                format!(
+                    "format {} width {} height {}",
+                    shape.pixel_format, shape.width, shape.height
+                )
+            });
+            lines.push(format!(
+                "shown #{} frame {} {shape}",
+                shown.object, shown.frame
+            ));
         }
         for check in &self.checks {
             let verdict = match check.recorded {
@@ -1071,6 +1105,8 @@ pub struct Player<'b, B: Backend> {
     /// The frames whose shown texture the player checks at their `m2v.present`
     /// (`checking_presents`), counted as `last_frame` is.
     checked_presents: BTreeSet<u64>,
+    /// Where the checked presents' bytes go (`keeping_presents`).
+    presents_dir: Option<PathBuf>,
     /// Where each frame's lines go as it ends (`with_frame_lines`).
     frame_out: Option<&'b mut dyn Write>,
     /// The CPU's writes into Managed textures and their textures' users.
@@ -1300,6 +1336,7 @@ impl<'b, B: Backend> Player<'b, B> {
             report,
             last_frame: None,
             checked_presents: BTreeSet::new(),
+            presents_dir: None,
             frame_out: None,
             texwrites: TexWrites::default(),
             covers: Covers::default(),
@@ -1325,6 +1362,15 @@ impl<'b, B: Backend> Player<'b, B> {
     /// count, and its time is the frame's `read`: a play timed for a verdict checks no present.
     pub fn checking_presents(mut self, frames: impl IntoIterator<Item = u64>) -> Self {
         self.checked_presents = frames.into_iter().collect();
+        self
+    }
+
+    /// The player that, at each present it checks (`checking_presents`), also writes the shown
+    /// texture's bytes to `frame-F.bytes` in `dir` and reports its shape (`Report::shown`), so
+    /// two plays' pictures that differ there can be read texel by texel (`shown_differences`).
+    /// The bytes are the program's picture: they stay where the play ran.
+    pub fn keeping_presents(mut self, dir: PathBuf) -> Self {
+        self.presents_dir = Some(dir);
         self
     }
 
@@ -1674,7 +1720,24 @@ impl<'b, B: Backend> Player<'b, B> {
                 let frame = self.report.frames.len() as u64;
                 let shown = call.args.first().and_then(Value::as_object);
                 if let (true, Some(shown)) = (self.checked_presents.contains(&frame), shown) {
-                    self.check(shown, None, left_out)?;
+                    let bytes = self.check(shown, None, left_out)?;
+                    if let Some(dir) = &self.presents_dir {
+                        let written = std::fs::create_dir_all(dir).and_then(|()| {
+                            std::fs::write(dir.join(format!("frame-{frame}.bytes")), &bytes)
+                        });
+                        written.map_err(|error| {
+                            invalid(format!(
+                                "the shown texture's bytes of frame {frame}: {error}"
+                            ))
+                        })?;
+                        let shape = self.backend.texture_shape(shown);
+                        let object = shown;
+                        (self.report.shown).push(Shown {
+                            object,
+                            frame,
+                            shape,
+                        });
+                    }
                 }
                 self.texwrites.presented();
                 self.report.frames.push(self.frame.clone());
@@ -1687,6 +1750,9 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.intervals.clear();
                 self.report.ends.push(End {
                     wall_nanos: u64::try_from((now - began).as_nanos()).unwrap_or(u64::MAX),
+                    unix_nanos: (SystemTime::now().duration_since(UNIX_EPOCH)).map_or(0, |since| {
+                        u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
+                    }),
                     resident_bytes: resident_bytes(),
                     live: self.backend.live(),
                     times,
@@ -2239,12 +2305,13 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     /// Read `object` and record its checksum; the readback's own work is no command buffer's.
+    /// The bytes read.
     fn check(
         &mut self,
         object: u64,
         recorded: Option<Hash>,
         left_out: &mut Counters,
-    ) -> Result<(), PlayError> {
+    ) -> Result<Vec<u8>, PlayError> {
         let bytes = self.uncounted(left_out, |player| player.read_back(object))?;
         self.report.checks.push(Check {
             object,
@@ -2254,7 +2321,7 @@ impl<'b, B: Backend> Player<'b, B> {
             covered: self.covers.covered(object),
             receiver: self.receivers.contains(&object),
         });
-        Ok(())
+        Ok(bytes)
     }
 
     /// Run `work`, the player's own, and leave what the runtime counted while it ran out of the

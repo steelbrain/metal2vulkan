@@ -6,7 +6,9 @@
 //! the frame). The stale reads the line counts bar nothing: where the digests differ, they are the
 //! first suspect.
 
+use super::pixels::{self, Shape};
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// The most lines of one kind the compare names one by one.
 const NAMED: usize = 8;
@@ -218,4 +220,60 @@ fn faster(a: u64, b: u64) -> String {
         true => format!("{percent:.1}% faster"),
         false => format!("{percent:.1}% slower"),
     }
+}
+
+/// Each listed present's shown texture a report says the play kept (its `shown` lines): the
+/// frame, and the texture's shape where the play gave it.
+fn shown(report: &str) -> BTreeMap<u64, Option<Shape>> {
+    let mut shown = BTreeMap::new();
+    for line in report.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let ["shown", _, "frame", frame, rest @ ..] = words.as_slice() else {
+            continue;
+        };
+        let Ok(frame) = frame.parse() else { continue };
+        let shape = match rest {
+            ["format", format, "width", width, "height", height] => {
+                match (format.parse(), width.parse(), height.parse()) {
+                    (Ok(pixel_format), Ok(width), Ok(height)) => Some(Shape {
+                        pixel_format,
+                        width,
+                        height,
+                    }),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        shown.insert(frame, shape);
+    }
+    shown
+}
+
+/// For each frame whose digests differ and whose shown texture both plays kept
+/// (`Player::keeping_presents`: `frame-F.bytes` in `a_kept` and `b_kept`), the size of the
+/// difference (`pixels::difference`): `pixels at frame F: ...`, or why it cannot be read.
+pub fn shown_differences(a: &str, b: &str, a_kept: &Path, b_kept: &Path) -> Vec<String> {
+    let (checks_a, checks_b) = (read(a).checks, read(b).checks);
+    let (shown_a, shown_b) = (shown(a), shown(b));
+    let mut lines = Vec::new();
+    for (frame, shape) in &shown_a {
+        let Some(other) = shown_b.get(frame) else {
+            continue;
+        };
+        if checks_a.get(frame) == checks_b.get(frame) {
+            continue;
+        }
+        let at = format!("pixels at frame {frame}");
+        if shape != other {
+            lines.push(format!("{at}: the shown textures' shapes differ"));
+            continue;
+        }
+        let bytes = |dir: &Path| std::fs::read(dir.join(format!("frame-{frame}.bytes")));
+        lines.push(match (bytes(a_kept), bytes(b_kept)) {
+            (Ok(x), Ok(y)) => format!("{at}: {}", pixels::difference(*shape, &x, &y)),
+            (Err(error), _) | (_, Err(error)) => format!("{at}: the kept bytes: {error}"),
+        });
+    }
+    lines
 }

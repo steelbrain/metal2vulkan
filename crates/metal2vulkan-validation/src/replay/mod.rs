@@ -9,6 +9,7 @@ mod dumps;
 mod heaps;
 mod new_runtime;
 mod old_runtime;
+mod pixels;
 mod player;
 mod range;
 mod stale;
@@ -17,16 +18,17 @@ mod texwrites;
 mod translator;
 mod value;
 
-pub use compare::compare_plays;
+pub use compare::{compare_plays, shown_differences};
 pub use covers::SlotStage;
 pub use dumps::{compare_dumps, Comparison, Difference};
 pub use heaps::HeapSplit;
 pub use new_runtime::{judged_records, Ended, ManagedCopies, NewRuntime, VideoHandle};
 pub use old_runtime::OldRuntime;
+pub use pixels::Shape;
 pub use player::WAIT_COMPLETED;
 pub use player::{
     Backend, Check, Counters, Counts, End, IdDiffers, Made, ManagedReads, PlayError, Player,
-    PrivateBytes, ReadClass, Relaid, Report, TextureWrites,
+    PrivateBytes, ReadClass, Relaid, Report, Shown, TextureWrites,
 };
 pub use range::{
     display_library, recording_range, sidecar, RangeRow, RangeSource, RecordingRange,
