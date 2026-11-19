@@ -485,6 +485,8 @@ struct Kept {
     commits: u64,
     /// The resource IDs it gives; an object not here has none (its getter raises).
     ids: HashMap<u64, u64>,
+    /// The documented high words it gives (`Backend::resource_word`); an object not here has none.
+    words: HashMap<u64, u32>,
     asked: Vec<u64>,
     memory: HashMap<u64, Vec<u8>>,
     copies: u64,
@@ -582,6 +584,10 @@ impl Backend for Kept {
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError> {
         self.asked.push(object);
         Ok(self.ids.get(&object).copied())
+    }
+
+    fn resource_word(&mut self, object: u64) -> Option<u32> {
+        self.words.get(&object).copied()
     }
 
     fn heap_size_and_align(
@@ -1246,6 +1252,7 @@ fn a_resource_id_the_runtime_gives_otherwise_is_reported() {
         object,
         recorded,
         played,
+        word: None,
     };
     let ids = [differs(3, 0x1_0000_0005, Some(0x99)), differs(4, 7, None)];
     assert_eq!(report.ids, ids);
@@ -1255,6 +1262,49 @@ fn a_resource_id_the_runtime_gives_otherwise_is_reported() {
         "{lines:?}"
     );
     assert!(lines.contains(&"id #4 0x7 none".to_owned()), "{lines:?}");
+}
+
+/// Where the backend gives the documented high word of an object's ID, the player compares the
+/// ID's low word with the recording's and its high word with that word, never with the
+/// recording's high word: an ID of the recording's index and the word passes whatever high word
+/// the recording holds; another index, or another high word, is reported with the word.
+#[test]
+fn a_resource_id_s_high_word_is_checked_against_the_documented_word() {
+    let mut kept = Kept {
+        ids: HashMap::from([
+            (2, 0x0001_0800_0000_0005),
+            (3, 0x0001_0800_0000_0006),
+            (4, 0x0002_0000_0000_0007),
+        ]),
+        words: HashMap::from([(2, 0x0001_0800), (3, 0x0001_0800), (4, 0x0001_0800)]),
+        ..Kept::default()
+    };
+    let id = |id: u64| [("gpuResourceID", Value::Uint(id))];
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        for object in 2..=4 {
+            w.call("newSamplerStateWithDescriptor:", 1, object, &[], &[])?;
+        }
+        // The recording's high words are its runtime's: 0 and 1.
+        w.call("gpuResourceID", 2, 0, &[], &id(5))?;
+        w.call("gpuResourceID", 3, 0, &[], &id(0x1_0000_0005))?;
+        w.call("gpuResourceID", 4, 0, &[], &id(7))
+    });
+    ended.unwrap();
+    let differs = |object, recorded, played| IdDiffers {
+        object,
+        recorded,
+        played: Some(played),
+        word: Some(0x0001_0800),
+    };
+    let ids = [
+        differs(3, 0x1_0000_0005, 0x0001_0800_0000_0006),
+        differs(4, 7, 0x0002_0000_0000_0007),
+    ];
+    assert_eq!(report.ids, ids);
+    let lines = report.lines();
+    let line = "id #4 0x7 0x200000000007 word 0x10800";
+    assert!(lines.contains(&line.to_owned()), "{lines:?}");
 }
 
 /// A texture its descriptor marks `outside` is outside the program's IDs: a `gpuResourceID`

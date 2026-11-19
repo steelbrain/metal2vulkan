@@ -25,6 +25,8 @@ use super::value::Value;
 use crate::gpu::wait::new_runtime::{wait_until_retired, Retired};
 use crate::gpu::wait::SubmissionBackend;
 use crate::gpu::DeviceType;
+use metal2vulkan::metal::resource_word::TextureWord;
+use metal2vulkan::metal::sampler::SamplerWord;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions};
 use metal2vulkan_rt as rt;
 use places::{class_index, granule, Place, Places};
@@ -2090,6 +2092,18 @@ impl Backend for NewRuntime {
             }
         };
         Ok(Some(id.to_bits()))
+    }
+
+    fn resource_word(&mut self, object: u64) -> Option<u32> {
+        match self.objects.get(&object)? {
+            Object::Texture(texture) => {
+                let descriptor = texture.descriptor();
+                let word = TextureWord::of(descriptor.pixel_format, descriptor.swizzle);
+                word.map(|word| word.0)
+            }
+            Object::Sampler(sampler) => Some(SamplerWord::of(sampler.descriptor()).0),
+            _ => None,
+        }
     }
 
     fn counters(&mut self) -> Counters {

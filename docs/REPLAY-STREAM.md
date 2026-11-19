@@ -707,7 +707,11 @@ of the blocks the backend holds for the stream by class, `shared_block_bytes` an
 `devices apart from the guest's: #ID ...` where the stream recorded devices besides the one the
 guest makes its objects on (section 4), `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
-runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
+runtime's getter raises), `id ID RECORDED PLAYED word WORD` on the new runtime, which lays its IDs
+out as [RESOURCE-ID.md](RESOURCE-ID.md) does: there the ID's low word, its index, is compared with
+the recording's, and its high word with `WORD`, the document's own function of the descriptor the
+object was made of (a texture's `TextureWord`, a sampler state's `SamplerWord`), never with the
+recording's high word, which is the recording runtime's own; `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
 `m2v.privateBytes` range compared, `split N executed COUNTS` where the player split compute
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
 `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),

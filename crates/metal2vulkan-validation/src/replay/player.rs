@@ -85,6 +85,14 @@ pub trait Backend {
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError>;
     /// The `gpuResourceID` the runtime gives `object`; none where its getter raises.
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError>;
+    /// The high word docs/RESOURCE-ID.md gives `object`'s ID: its function of the descriptor the
+    /// backend made the object of (a texture's `TextureWord`, a sampler state's `SamplerWord`).
+    /// The player then compares only the ID's low word, its index, with the recording's, and
+    /// checks the high word against this one. None where the runtime lays out no such word: the
+    /// player compares the whole ID with the recording's.
+    fn resource_word(&mut self, _object: u64) -> Option<u32> {
+        None
+    }
     /// The runtime's size and alignment, in bytes, of what `call` places in a placement heap: for
     /// `newTextureWithDescriptor:offset:`, its `heapTextureSizeAndAlignWithDescriptor:` of the
     /// texture descriptor that `descriptor`'s calls make and set, in order (the call that made
@@ -194,13 +202,16 @@ pub struct Check {
 }
 
 /// An object whose `gpuResourceID` in the runtime is not the one the program saw: the bytes that
-/// hold the program's ID name no object of the play.
+/// hold the program's ID name no object of the play. Where the backend gives the documented high
+/// word (`word`, [`Backend::resource_word`]), the ID differs where its low word is not the
+/// recording's or its high word is not that word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IdDiffers {
     pub object: u64,
     pub recorded: u64,
     /// None where the runtime's getter raises.
     pub played: Option<u64>,
+    pub word: Option<u32>,
 }
 
 /// One `m2v.privateBytes` record compared after its dispatch: how many of the range's 4-byte words
@@ -602,7 +613,13 @@ impl Report {
             let played = id
                 .played
                 .map_or("none".to_owned(), |played| format!("{played:#x}"));
-            lines.push(format!("id #{} {:#x} {played}", id.object, id.recorded));
+            let word = id
+                .word
+                .map_or(String::new(), |word| format!(" word {word:#x}"));
+            lines.push(format!(
+                "id #{} {:#x} {played}{word}",
+                id.object, id.recorded
+            ));
         }
         if !self.other_devices.is_empty() {
             let devices: String = (self.other_devices.iter())
@@ -1463,7 +1480,10 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     /// Compare the ID the program saw of `call`'s receiver, where it saw one, with the runtime's,
-    /// once per object, and report the object where they differ.
+    /// once per object, and report the object where they differ: where the backend gives the
+    /// documented high word ([`Backend::resource_word`]), the runtime's low word against the
+    /// recording's and its high word against that word, as the recording's high word is the
+    /// recording runtime's layout; else the whole ID.
     fn resource_id(&mut self, call: &Call) -> Result<(), PlayError> {
         let object = call.receiver;
         if !self.kinds.contains_key(&object) {
@@ -1487,11 +1507,19 @@ impl<'b, B: Backend> Player<'b, B> {
             return Ok(());
         }
         let played = self.backend.resource_id(object)?;
-        if played != Some(recorded) {
+        let word = self.backend.resource_word(object);
+        let same = match (played, word) {
+            (Some(played), Some(word)) => {
+                played as u32 == recorded as u32 && (played >> 32) as u32 == word
+            }
+            (played, _) => played == Some(recorded),
+        };
+        if !same {
             let differs = IdDiffers {
                 object,
                 recorded,
                 played,
+                word,
             };
             self.report.ids.push(differs);
         }
