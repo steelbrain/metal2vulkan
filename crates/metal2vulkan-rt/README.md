@@ -999,7 +999,18 @@ made, with no lock, and never rewritten for layouts.
   was 385.1 ms, within a quarter of amdgpu's default job timeout of 2,000 ms, and over sixteen
   1,536.6 ms. The thread holds a segment whose event waits are not met, and its queue's later
   command buffers behind it, while the segments before it run, so the host can see a signal the
-  command buffer makes before its wait. Other queues go on. `Scheduled` means the last segment is in
+  command buffer makes before its wait. Other queues go on. Each queue groups on its own count:
+  a command buffer of a queue with nothing running is submitted at once, ahead of every command
+  buffer committed after it on any queue, while one its queue holds in a group may be passed by
+  another queue's command buffer committed after it, which only a fence or an event then orders
+  after it. Metal's hazard tracking orders such a pair against work already submitted, and no
+  more. Recorded on an M3 Max with macOS 27.0.1, with tracked buffers and no fence, a blit fill on
+  one queue and a copy of what it filled on another, committed after it, five runs each: where the
+  fill's queue had nothing ahead of it, the copy read the fill, starting 0.004 to 0.065 ms after
+  the fill ended (job m3-max-52432, and with compute dispatches, job m3-max-52186); where the fill
+  was committed behind one command buffer of long work on its queue (job m3-max-52432) or three
+  (job m3-max-52415), the copy read none of it, and behind one it reached the GPU about 1 ms
+  before any of that queue's work. `Scheduled` means the last segment is in
   a submission: passed to `vkQueueSubmit2`, or in a group held; a command buffer that presents a
   drawable is never held, and is scheduled once its submission has passed `vkQueueSubmit2` (see
   "Presenting"). One that waits for a shared event's value not yet reached when its last segment
