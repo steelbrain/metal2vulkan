@@ -310,6 +310,9 @@ struct Atomics {
     translations: AtomicU64,
     translations_loaded: AtomicU64,
     creations_before_seed: AtomicU64,
+    pipeline_cache_looks_skipped: AtomicU64,
+    pipeline_cache_lock_wait_nanos: AtomicU64,
+    pipeline_cache_lock_wait_max_nanos: AtomicU64,
     cache_writes_dropped: AtomicU64,
     ring_writes: AtomicU64,
     pushes: AtomicU64,
@@ -496,6 +499,21 @@ impl Counters {
         let a = &self.atomics;
         a.commit_lock_wait_nanos.fetch_add(nanos, Relaxed);
         a.commit_lock_wait_max_nanos.fetch_max(nanos, Relaxed);
+    }
+
+    /// A look of the reaper's at the pipeline cache skipped
+    /// ([`Metrics::pipeline_cache_looks_skipped`]).
+    pub(crate) fn pipeline_cache_look_skipped(&self) {
+        (self.atomics.pipeline_cache_looks_skipped).fetch_add(1, Relaxed);
+    }
+
+    /// A creation through the pipeline cache that waited `nanos` nanoseconds for the reaper's look
+    /// at it ([`Metrics::pipeline_cache_lock_wait_nanos`]).
+    pub(crate) fn pipeline_cache_lock_wait(&self, nanos: u64) {
+        let a = &self.atomics;
+        a.pipeline_cache_lock_wait_nanos.fetch_add(nanos, Relaxed);
+        a.pipeline_cache_lock_wait_max_nanos
+            .fetch_max(nanos, Relaxed);
     }
 
     /// A submission of `infos` submit infos ([`Metrics::submit_infos`]).
@@ -886,6 +904,9 @@ impl Counters {
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
             creations_before_seed: a.creations_before_seed.load(Relaxed),
+            pipeline_cache_looks_skipped: a.pipeline_cache_looks_skipped.load(Relaxed),
+            pipeline_cache_lock_wait_nanos: a.pipeline_cache_lock_wait_nanos.load(Relaxed),
+            pipeline_cache_lock_wait_max_nanos: a.pipeline_cache_lock_wait_max_nanos.load(Relaxed),
             cache_writes_dropped: a.cache_writes_dropped.load(Relaxed),
             cache_bytes_written: a.cache_bytes_written.load(Relaxed),
             ring_writes: a.ring_writes.load(Relaxed),
@@ -1183,11 +1204,23 @@ pub struct Metrics {
     pub translations_loaded: u64,
     /// `VkPipeline` creations that went through the device's empty pipeline cache while the
     /// reaper read and took in the device's blob ([`DeviceOptions::pipeline_cache_dir`]): each
-    /// compiled without the blob's data, and is in the blob only where the merge took it. Zero
-    /// with no directory, or where the device's first creation came after the seed.
+    /// compiled without the blob's data. What they compiled is merged into the blob's cache at
+    /// the reaper's next look at it, or at the device's drop. Zero with no directory, or where the
+    /// device's first creation came after the seed.
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     pub creations_before_seed: u64,
+    /// The reaper's looks at the pipeline cache skipped because a creation began after creation
+    /// was quiet: a look merges into the cache and reads its size and data only while no creation
+    /// runs, and never waits for one, so it looks again once creation is quiet again.
+    pub pipeline_cache_looks_skipped: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) creations through the pipeline cache
+    /// waited for the reaper's looks at it, in total: a creation that begins during a look waits
+    /// for that look's merge and reads alone.
+    pub pipeline_cache_lock_wait_nanos: u64,
+    /// The longest such wait, in nanoseconds; a maximum since the device was made, so the
+    /// difference of two reads does not apply to it.
+    pub pipeline_cache_lock_wait_max_nanos: u64,
     /// Lowerings and refusals not kept in the cache directory: each was handed to the reaper,
     /// which writes them off every guest thread, while the ones waiting for it held 8 MiB, and was
     /// dropped rather than waited for. A later device lowers it again.

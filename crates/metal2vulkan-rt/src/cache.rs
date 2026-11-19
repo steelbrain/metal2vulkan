@@ -11,11 +11,11 @@
 //! [`BLOBS_KEPT`] blobs: a device's seed removes the oldest past that, by last write, its own
 //! counted among the kept. The reaper
 //! makes an empty cache first when it starts, which a creation that comes before it waits for
-//! (microseconds); then it reads the blob and makes a cache from it, merges into that what
-//! creations compiled in the empty cache meanwhile, and makes it the cache creations take. So no
-//! creation waits for the blob's read or parse. A blob that does not check, whose data does not
-//! begin with the device's header, or that the driver refuses, is removed, and the empty cache
-//! stays.
+//! (microseconds); then it reads the blob, makes a cache from it and makes that the cache
+//! creations take. So no creation waits for the blob's read or parse. What creations compiled in
+//! the empty cache meanwhile is merged into the blob's cache at the reaper's first look after it
+//! (below), or at the device's drop. A blob that does not check, whose data does not begin with
+//! the device's header, or that the driver refuses, is removed, and the empty cache stays.
 //!
 //! The reaper writes the cache's data over the blob, a temporary file renamed over it and never
 //! appended to, once creation is quiet (no creation running and none for [`QUIET_NANOS`]) after a
@@ -23,7 +23,17 @@
 //! than an eighth since the last write, so a run that makes nothing new writes nothing and a
 //! device's writes over its life come to a few times the blob's size. The device's drop writes it
 //! once more where the size changed at all. A crash between writes loses only the pipelines made
-//! since the last. No guest call waits for a write or a size query.
+//! since the last. No guest call waits for a write.
+//!
+//! **Reads exclude creations.** Every creation holds a lock shared ([`Caches::creations`]) from
+//! before it takes a cache until it ends, and the reaper's look holds it exclusive around its
+//! merge and its reads of the cache's size and data, taken by a try: where a creation began after
+//! creation was quiet, the look is skipped and counted (`Metrics::pipeline_cache_looks_skipped`),
+//! and the reaper looks again once creation is quiet again. So the reaper never waits for a
+//! creation, and a creation that begins during a look waits for that look alone, its wait counted
+//! (`Metrics::pipeline_cache_lock_wait_nanos`). Vulkan lets a thread read an internally
+//! synchronized cache's data while another creates through it, but Intel's Windows driver
+//! (101.2145) for the UHD Graphics 630 has faulted inside `vkGetPipelineCacheData` so.
 //!
 //! The cache holds at most [`PIPELINE_CACHE_BOUND`]: a cache past it when the reaper looks is
 //! replaced by a fresh, empty one that creations take from then on, and destroyed once no creation
@@ -82,7 +92,10 @@ use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed, Ordering::SeqCst};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::sync::{
+    Arc, Condvar, Mutex, OnceLock, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    TryLockError,
+};
 use std::time::{Duration, SystemTime};
 
 /// The cap of the lowerings in a cache directory where the consumer names none: half of it, what
@@ -702,7 +715,12 @@ pub(crate) struct Caches {
     pipelines: Mutex<Pipelines>,
     /// Signalled once the reaper made the cache.
     made: Condvar,
-    /// Creations through the cache that have not ended.
+    /// Held shared by each creation from before it takes a cache until it ends, and exclusive by
+    /// the reaper's look around its merge and its reads of the cache's size and data, which it
+    /// takes by a try (the module's doc). Taken before [`Caches::pipelines`].
+    creations: RwLock<()>,
+    /// Creations through the cache that have not ended, those waiting for [`Caches::creations`]
+    /// among them.
     creating: AtomicUsize,
     /// When the last creation ended, in nanoseconds of [`host_time`].
     created: AtomicU64,
@@ -724,18 +742,79 @@ pub(crate) struct Caches {
     /// The blob's writes.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     writes: AtomicUsize,
-    /// Whether the seed waits before its merge, for a test.
+    /// Where the seed waits before it makes the blob's cache the one creations take.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    merge_held: AtomicBool,
-    /// Whether the seed is waiting before its merge.
+    pub(crate) seed_hold: Hold,
+    /// Where a look waits before it tries [`Caches::creations`].
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    merge_waiting: AtomicBool,
+    pub(crate) look_hold: Hold,
+    /// Where a look waits once it holds [`Caches::creations`] exclusive, before its merge and
+    /// reads.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) alone_hold: Hold,
+    /// Creations holding [`Caches::creations`] shared.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    sharing: AtomicUsize,
+    /// Whether a look holds [`Caches::creations`] exclusive.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    alone: AtomicBool,
+    /// Creations that held [`Caches::creations`] shared while a look held it exclusive, counted at
+    /// the start or the end of either.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    overlaps: AtomicUsize,
 }
 
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 thread_local! {
-    /// Whether the caches made next on this thread hold their seed before its merge, for a test.
-    static HOLD_NEXT_MERGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the caches made next on this thread hold their seed before it takes the blob's
+    /// cache, for a test.
+    static HOLD_NEXT_SEED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A point the reaper waits at while a test holds it.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) struct Hold {
+    held: AtomicBool,
+    waiting: AtomicBool,
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl Hold {
+    /// A point held from the start where `held`.
+    fn new(held: bool) -> Hold {
+        Hold {
+            held: AtomicBool::new(held),
+            waiting: AtomicBool::new(false),
+        }
+    }
+
+    /// Makes the reaper wait at the point when it next comes to it, until [`Hold::release`].
+    pub(crate) fn hold(&self) {
+        self.held.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether the reaper is waiting at the point.
+    pub(crate) fn waiting(&self) -> bool {
+        self.waiting.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Lets the reaper go on.
+    pub(crate) fn release(&self) {
+        self.held.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// On the reaper, at the point: waits while it is held.
+    fn pass(&self) {
+        use std::sync::atomic::Ordering::{Acquire, Release};
+        if !self.held.load(Acquire) {
+            return;
+        }
+        self.waiting.store(true, Release);
+        while self.held.load(Acquire) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.waiting.store(false, Release);
+    }
 }
 
 /// The `VkPipelineCache` creations take, and those a fresh one replaced.
@@ -747,6 +826,10 @@ struct Pipelines {
     seeding: bool,
     /// The cache creations take; none where the driver made none.
     current: Option<Arc<PipelineCache>>,
+    /// The empty cache, where a creation went through it while the reaper seeded: once the blob's
+    /// cache replaced it, what it compiled is merged into the current cache at the reaper's next
+    /// look, or at the drop, and it is held here, among the retired, until then.
+    unmerged: Option<Arc<PipelineCache>>,
     /// The caches a fresh one replaced, each destroyed once no creation holds it.
     retired: Vec<Arc<PipelineCache>>,
     /// The size of the current cache's data when the blob was last written from it, or when it
@@ -822,10 +905,12 @@ impl Pending {
     }
 }
 
-/// A creation through the device's `VkPipelineCache`, from [`creation`] until it is dropped.
+/// A creation through the device's `VkPipelineCache`, from [`creation`] until it is dropped,
+/// holding [`Caches::creations`] shared: let go last, after the cache.
 pub(crate) struct Creation<'a> {
     core: &'a Core,
     cache: Option<Arc<PipelineCache>>,
+    _shared: RwLockReadGuard<'a, ()>,
 }
 
 impl Creation<'_> {
@@ -840,6 +925,8 @@ impl Creation<'_> {
 impl Drop for Creation<'_> {
     fn drop(&mut self) {
         let caches = &self.core.caches;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        caches.sharing.fetch_sub(1, SeqCst);
         caches.created.fetch_max(host_time(), Relaxed);
         caches.creating.fetch_sub(1, SeqCst);
         // The first creation since the reaper's last look tells it to look again once creation
@@ -851,19 +938,30 @@ impl Drop for Creation<'_> {
 }
 
 /// A creation through `core`'s `VkPipelineCache`: where the reaper has not made the cache yet,
-/// which it does first when it starts, the calling thread waits for it.
+/// which it does first when it starts, the calling thread waits for it, and where the reaper's
+/// look holds [`Caches::creations`], for that look.
 pub(crate) fn creation(core: &Core) -> Creation<'_> {
     let caches = &core.caches;
     caches.creating.fetch_add(1, SeqCst);
+    let shared = caches.share(&core.counters);
     let mut pipelines = lock(&caches.pipelines);
     while !pipelines.made {
         pipelines = (caches.made.wait(pipelines)).unwrap_or_else(PoisonError::into_inner);
     }
     if pipelines.seeding {
         core.counters.count(Metric::CreationsBeforeSeed);
+        // Through the empty cache, merged into the blob's at the reaper's next look.
+        pipelines.unmerged = pipelines.current.clone();
     }
     let cache = pipelines.current.clone();
-    Creation { core, cache }
+    drop(pipelines);
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    caches.shared_by_a_creation();
+    Creation {
+        core,
+        cache,
+        _shared: shared,
+    }
 }
 
 /// A `VkPipelineCache` of `device` started from `data`, internally synchronized.
@@ -913,10 +1011,12 @@ impl Caches {
                 made: false,
                 seeding: false,
                 current: None,
+                unmerged: None,
                 retired: Vec::new(),
                 written: 0,
             }),
             made: Condvar::new(),
+            creations: RwLock::new(()),
             creating: AtomicUsize::new(0),
             created: AtomicU64::new(0),
             grown: AtomicBool::new(false),
@@ -931,43 +1031,68 @@ impl Caches {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             writes: AtomicUsize::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            merge_held: AtomicBool::new(HOLD_NEXT_MERGE.with(std::cell::Cell::take)),
+            seed_hold: Hold::new(HOLD_NEXT_SEED.with(std::cell::Cell::take)),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            merge_waiting: AtomicBool::new(false),
+            look_hold: Hold::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            alone_hold: Hold::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            sharing: AtomicUsize::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            alone: AtomicBool::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            overlaps: AtomicUsize::new(0),
         }
     }
 
-    /// Makes the seed of the device made next on this thread wait before its merge, until
-    /// [`Caches::release_merge`], for a test.
+    /// Makes the seed of the device made next on this thread wait before it takes the blob's
+    /// cache, until its [`Caches::seed_hold`] is released, for a test.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn hold_next_merge() {
-        HOLD_NEXT_MERGE.with(|hold| hold.set(true));
+    pub(crate) fn hold_next_seed() {
+        HOLD_NEXT_SEED.with(|hold| hold.set(true));
     }
 
-    /// Whether the seed is waiting before its merge.
+    /// Whether what creations compiled in the empty cache while the reaper seeded waits for a
+    /// look to merge it.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn merge_waiting(&self) -> bool {
-        (self.merge_waiting).load(std::sync::atomic::Ordering::Acquire)
+    pub(crate) fn merge_pending(&self) -> bool {
+        lock(&self.pipelines).unmerged.is_some()
     }
 
-    /// Lets the seed's merge go on.
+    /// Creations that have not ended, those waiting for [`Caches::creations`] among them.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn release_merge(&self) {
-        (self.merge_held).store(false, std::sync::atomic::Ordering::Release);
+    pub(crate) fn creating(&self) -> usize {
+        self.creating.load(SeqCst)
     }
 
-    /// On the reaper, before the seed's merge: waits while a test holds the merge.
+    /// Creations that held [`Caches::creations`] shared while a look held it exclusive.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    fn wait_while_merge_held(&self) {
-        use std::sync::atomic::Ordering::{Acquire, Release};
-        if !self.merge_held.load(Acquire) {
-            return;
+    pub(crate) fn overlaps(&self) -> usize {
+        self.overlaps.load(SeqCst)
+    }
+
+    /// A creation's start, holding [`Caches::creations`] shared: an overlap where a look holds it.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    fn shared_by_a_creation(&self) {
+        self.sharing.fetch_add(1, SeqCst);
+        if self.alone.load(SeqCst) {
+            self.overlaps.fetch_add(1, SeqCst);
         }
-        self.merge_waiting.store(true, Release);
-        while self.merge_held.load(Acquire) {
-            std::thread::sleep(Duration::from_millis(1));
+    }
+
+    /// A look's start or end holding [`Caches::creations`] exclusive (`alone` at its start): an
+    /// overlap where a creation holds it.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    fn held_alone(&self, alone: bool) {
+        if alone {
+            self.alone.store(true, SeqCst);
         }
-        self.merge_waiting.store(false, Release);
+        if self.sharing.load(SeqCst) > 0 {
+            self.overlaps.fetch_add(1, SeqCst);
+        }
+        if !alone {
+            self.alone.store(false, SeqCst);
+        }
     }
 
     /// The device's blob, where it has a cache directory and the reaper has seeded the cache.
@@ -1095,12 +1220,11 @@ impl Caches {
     /// On the reaper, first: makes the device's `VkPipelineCache` empty, which creations waiting
     /// for a cache take at once; then, where the device has a blob that checks, whose data begins
     /// with the header the device's driver writes and that the driver takes, makes a cache from
-    /// it, merges into it what creations compiled in the empty cache meanwhile, and makes it the
-    /// cache creations take from then on. A blob that is not taken is removed. So no creation
-    /// waits for the blob's read or the driver's parse of it, which for a blob of 32 MiB take tens
-    /// of milliseconds, or for the merge, which takes hundreds on some drivers: a creation during
-    /// it goes through the empty cache. A creation through the empty cache that ends once the
-    /// merge has begun is not in this run's blob, and the next start compiles it again.
+    /// it and makes that the cache creations take from then on. A blob that is not taken is
+    /// removed. So no creation waits for the blob's read or the driver's parse of it, which for a
+    /// blob of 32 MiB take tens of milliseconds: a creation meanwhile goes through the empty
+    /// cache, and what it compiles there is merged into the blob's cache at the reaper's next look
+    /// ([`Caches::look`]), with no creation running, or at the drop.
     ///
     /// The blob is named by the whole header in hex ([`blob_name`]); before its read, the blobs
     /// past the [`BLOBS_KEPT`] most recently written are removed. A device whose cache data
@@ -1112,6 +1236,7 @@ impl Caches {
     pub(crate) unsafe fn seed(&self, device: &ash::Device, counters: &Counters) {
         // SAFETY: no data.
         let empty = unsafe { make_cache(device, &[]) };
+        // Read before any creation takes the cache: creations wait for `made`.
         let header = empty.and_then(|empty| {
             // SAFETY: the cache is the device's.
             let data = unsafe { device.get_pipeline_cache_data(empty) }.ok()?;
@@ -1148,15 +1273,23 @@ impl Caches {
             }
             let _ = self.blob.set(path);
         }
-        lock(&self.pipelines).seeding = false;
+        let mut pipelines = lock(&self.pipelines);
+        // Still seeding where no blob was taken: the empty cache stays the one creations take, and
+        // nothing is merged into it.
+        if pipelines.seeding {
+            pipelines.seeding = false;
+            pipelines.unmerged = None;
+        }
+        drop(pipelines);
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.seeded
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    /// Makes `seeded`, made from the blob, the cache creations take, once what they compiled in
-    /// the empty cache meanwhile is merged into it; the empty cache is destroyed once no creation
-    /// holds it. Its size is what the next write must grow past: the blob's, without the merge.
+    /// Makes `seeded`, made from the blob, the cache creations take; the empty cache is destroyed
+    /// once no creation holds it and what creations compiled in it is merged
+    /// ([`Pipelines::unmerged`]). `seeded`'s size is what the next write must grow past: the
+    /// blob's, without the merge.
     ///
     /// # Safety
     ///
@@ -1167,29 +1300,17 @@ impl Caches {
         seeded: vk::PipelineCache,
         counters: &Counters,
     ) {
-        // SAFETY: the cache is the device's.
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.seed_hold.pass();
+        // SAFETY: the cache is the device's, and no creation takes it yet.
         let written = unsafe { data_size(device, seeded) };
-        // Taken in a statement of its own, so the lock is let go before the merge, which takes
-        // hundreds of milliseconds on some drivers: a creation meanwhile takes the empty cache and
-        // never waits for it.
-        let empty = lock(&self.pipelines).current.clone();
-        if let Some(empty) = empty {
-            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            self.wait_while_merge_held();
-            // SAFETY: both caches are the device's; `seeded`, the destination, is this thread's
-            // alone, and the source is internally synchronized against the creations through it.
-            // Where the merge fails, `seeded` holds the blob's pipelines alone.
-            let _ = unsafe { device.merge_pipeline_caches(seeded, &[empty.0]) };
-        }
-        // SAFETY: the cache is the device's.
-        let size = unsafe { data_size(device, seeded) };
         let mut pipelines = lock(&self.pipelines);
         let empty = pipelines.current.replace(Arc::new(PipelineCache(seeded)));
         pipelines.retired.extend(empty);
         pipelines.written = written;
         pipelines.seeding = false;
         drop(pipelines);
-        counters.set(Gauge::PipelineCacheBytes, size);
+        counters.set(Gauge::PipelineCacheBytes, written);
         // SAFETY: the caller's contract.
         unsafe { self.reap(device) };
     }
@@ -1208,41 +1329,93 @@ impl Caches {
         Some(Duration::from_nanos(quiet.saturating_sub(now)))
     }
 
-    /// On the reaper, creation quiet: destroys each replaced cache no creation holds, reads the
-    /// cache's size, and past the bound starts a fresh cache, else writes the blob where the
-    /// data grew by more than an eighth since the last write.
+    /// [`Caches::creations`] held shared, for a creation: at once where no look holds it, else
+    /// once the look lets it go, the wait counted (`Metrics::pipeline_cache_lock_wait_nanos`).
+    fn share(&self, counters: &Counters) -> RwLockReadGuard<'_, ()> {
+        match self.creations.try_read() {
+            Ok(shared) => shared,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                let start = host_time();
+                let shared = (self.creations.read()).unwrap_or_else(PoisonError::into_inner);
+                counters.pipeline_cache_lock_wait(host_time().saturating_sub(start));
+                shared
+            }
+        }
+    }
+
+    /// [`Caches::creations`] held exclusive, for a look, where no creation holds it: taken by a
+    /// try, so the reaper never waits for a creation.
+    fn alone(&self) -> Option<RwLockWriteGuard<'_, ()>> {
+        match self.creations.try_write() {
+            Ok(alone) => Some(alone),
+            Err(TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
+    /// On the reaper, creation quiet: where no creation began since, holds [`Caches::creations`]
+    /// exclusive while it merges what creations compiled in the empty cache while it seeded, reads
+    /// the cache's size, and past the bound starts a fresh cache, else reads its data where it grew
+    /// by more than an eighth since the last write; then lets creations go on, writes the blob, and
+    /// destroys each replaced cache no creation holds. Where a creation began since creation was
+    /// quiet, the look is skipped and counted (`Metrics::pipeline_cache_looks_skipped`), and the
+    /// reaper looks again once creation is quiet again.
     ///
     /// # Safety
     ///
     /// `device` is the device of the caches.
     pub(crate) unsafe fn look(&self, device: &ash::Device, counters: &Counters) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.look_hold.pass();
+        let Some(alone) = self.alone() else {
+            counters.pipeline_cache_look_skipped();
+            return;
+        };
+        self.grown.store(false, SeqCst);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.held_alone(true);
+        // SAFETY: the caller's contract; no creation runs while `alone` is held.
+        let write = unsafe { self.look_alone(device, counters) };
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.held_alone(false);
+        drop(alone);
+        if let Some((path, data, size)) = write {
+            self.write(path, &data, size, counters);
+        }
         // SAFETY: the caller's contract.
-        unsafe { self.replace_or_write(device, counters) };
+        unsafe { self.reap(device) };
         // Counted once the look's effects are in place, so a test that waits for it sees them.
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.looks
             .fetch_add(1, std::sync::atomic::Ordering::Release);
     }
 
-    /// The work of [`Caches::look`].
+    /// The work of [`Caches::look`] while it holds [`Caches::creations`] exclusive: the blob, the
+    /// cache's data and its size where the look writes them.
     ///
     /// # Safety
     ///
-    /// `device` is the device of the caches.
-    unsafe fn replace_or_write(&self, device: &ash::Device, counters: &Counters) {
-        self.grown.store(false, SeqCst);
-        // SAFETY: the caller's contract.
-        let Some(current) = (unsafe { self.reap(device) }) else {
-            return;
+    /// `device` is the device of the caches, and no creation runs.
+    unsafe fn look_alone(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+    ) -> Option<(&Path, Vec<u8>, u64)> {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.alone_hold.pass();
+        let (current, unmerged) = {
+            let mut pipelines = lock(&self.pipelines);
+            (pipelines.current.clone()?, pipelines.unmerged.take())
         };
+        // SAFETY: the caller's contract.
+        unsafe { merge(device, &current, unmerged) };
         // SAFETY: the cache is the device's.
         let size = unsafe { data_size(device, current.0) };
         counters.set(Gauge::PipelineCacheBytes, size);
         if size > self.bound.load(Relaxed) {
             // SAFETY: no data.
-            let Some(fresh) = (unsafe { make_cache(device, &[]) }) else {
-                return;
-            };
+            let fresh = unsafe { make_cache(device, &[]) }?;
             // SAFETY: the cache is the device's.
             let fresh_size = unsafe { data_size(device, fresh) };
             let mut pipelines = lock(&self.pipelines);
@@ -1251,65 +1424,49 @@ impl Caches {
             pipelines.written = fresh_size;
             drop(pipelines);
             counters.set(Gauge::PipelineCacheBytes, fresh_size);
-            drop(current);
-            // SAFETY: the caller's contract.
-            unsafe { self.reap(device) };
-            return;
+            return None;
         }
         let written = lock(&self.pipelines).written;
-        if size > written + written / 8 {
-            // SAFETY: the cache is the device's.
-            unsafe { self.write(device, &current, size, counters) };
-        }
+        let path = self
+            .blob_to_write()
+            .filter(|_| size > written + written / 8)?;
+        // SAFETY: the cache is the device's.
+        let data = unsafe { device.get_pipeline_cache_data(current.0) }.ok()?;
+        Some((path, data, size))
     }
 
-    /// Destroys each replaced cache no creation holds; the current cache.
+    /// Destroys each replaced cache that neither a creation nor a merge to come holds.
     ///
     /// # Safety
     ///
     /// `device` is the device of the caches.
-    unsafe fn reap(&self, device: &ash::Device) -> Option<Arc<PipelineCache>> {
+    unsafe fn reap(&self, device: &ash::Device) {
         let mut pipelines = lock(&self.pipelines);
         // A replaced cache is never handed out again: once the list holds its last reference,
-        // no creation holds it.
+        // no creation holds it, and no merge waits for it.
         let (idle, held) =
             (pipelines.retired.drain(..)).partition(|old| Arc::strong_count(old) == 1);
         pipelines.retired = held;
-        let current = pipelines.current.clone();
         drop(pipelines);
         // SAFETY: the caches are the device's, and no creation holds them.
         unsafe { destroy(device, idle) };
-        current
     }
 
-    /// Writes `cache`'s data, of size `size` as the driver last gave it, over the device's blob,
-    /// where the directory is writable and the data is within the bound.
-    ///
-    /// # Safety
-    ///
-    /// The cache is `device`'s.
-    unsafe fn write(
-        &self,
-        device: &ash::Device,
-        cache: &PipelineCache,
-        size: u64,
-        counters: &Counters,
-    ) {
-        let (Some(path), Some(store)) = (self.blob.get(), &self.store) else {
-            return;
-        };
-        if !store.writable() {
-            return;
-        }
-        // SAFETY: the caller's contract; the cache is internally synchronized.
-        let Ok(data) = (unsafe { device.get_pipeline_cache_data(cache.0) }) else {
-            return;
-        };
+    /// The device's blob, where it keeps one and its directory is writable.
+    fn blob_to_write(&self) -> Option<&Path> {
+        let path = self.blob.get()?;
+        let store = self.store.as_ref()?;
+        store.writable().then_some(path.as_path())
+    }
+
+    /// Writes `data`, the cache's data the driver gave at size `size`, over the device's blob at
+    /// `path`, where it is within the bound.
+    fn write(&self, path: &Path, data: &[u8], size: u64, counters: &Counters) {
         let len = data.len() as u64;
         if len > self.bound.load(Relaxed) {
             return;
         }
-        if write_whole(path, &[&frame(&data), &data]).is_ok() {
+        if write_whole(path, &[&frame(data), data]).is_ok() {
             counters.cache_written(24 + len);
             lock(&self.pipelines).written = size;
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1318,12 +1475,6 @@ impl Caches {
         }
     }
 
-    /// At the device's drop, no creation running: writes the blob where the cache's data changed
-    /// since the last write, then destroys every cache.
-    ///
-    /// # Safety
-    ///
-    /// `device` is the device of the caches, and no creation runs.
     /// At the device's teardown, once nothing writes to the store: waits for its removal thread.
     pub(crate) fn join_removal(&self) {
         if let Some(store) = &self.store {
@@ -1331,23 +1482,54 @@ impl Caches {
         }
     }
 
+    /// At the device's drop, no creation running: merges what creations compiled in the empty
+    /// cache while the reaper seeded, where no look has, and writes the blob where the cache's
+    /// data changed since the last write; then destroys every cache.
+    ///
+    /// # Safety
+    ///
+    /// `device` is the device of the caches, and no creation runs.
     pub(crate) unsafe fn close(&self, device: &ash::Device, counters: &Counters) {
-        let (current, written) = {
+        let (current, unmerged, written) = {
             let mut pipelines = lock(&self.pipelines);
-            (pipelines.current.take(), pipelines.written)
+            let (current, unmerged) = (pipelines.current.take(), pipelines.unmerged.take());
+            (current, unmerged, pipelines.written)
         };
         if let Some(current) = &current {
+            // SAFETY: the caller's contract.
+            unsafe { merge(device, current, unmerged) };
             // SAFETY: the cache is the device's.
             let size = unsafe { data_size(device, current.0) };
-            if size != written {
+            if let Some(path) = self.blob_to_write().filter(|_| size != written) {
                 // SAFETY: the cache is the device's.
-                unsafe { self.write(device, current, size, counters) };
+                if let Ok(data) = unsafe { device.get_pipeline_cache_data(current.0) } {
+                    self.write(path, &data, size, counters);
+                }
             }
         }
         let mut pipelines = lock(&self.pipelines);
         // SAFETY: the caches are the device's, and no creation runs.
         unsafe { destroy(device, pipelines.retired.drain(..).chain(current)) };
         counters.set(Gauge::PipelineCacheBytes, 0);
+    }
+}
+
+/// Merges into `current`, the cache creations take, what creations compiled in `unmerged`, the
+/// empty cache the blob's replaced, where it is some; where the merge fails, `current` holds its
+/// own pipelines alone.
+///
+/// # Safety
+///
+/// Both caches are `device`'s, and no creation runs: the merge's destination is externally
+/// synchronized.
+unsafe fn merge(
+    device: &ash::Device,
+    current: &PipelineCache,
+    unmerged: Option<Arc<PipelineCache>>,
+) {
+    if let Some(empty) = unmerged {
+        // SAFETY: the caller's contract; `empty` is retired and never `current`.
+        let _ = unsafe { device.merge_pipeline_caches(current.0, &[empty.0]) };
     }
 }
 

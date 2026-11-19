@@ -1615,11 +1615,12 @@ mod on_device {
         }
     }
 
-    /// A creation while the seed merges the empty cache into the cache made from the blob goes
-    /// through the empty cache and never waits for the merge, which takes hundreds of
-    /// milliseconds on some drivers; it counts as a creation before the seed.
+    /// A creation while the seed reads and takes in the blob goes through the empty cache and
+    /// never waits for it; it counts as a creation before the seed, and what it compiled is merged
+    /// into the blob's cache at the reaper's next look, with no creation holding the lock
+    /// creations take.
     #[test]
-    fn every_device_creates_through_the_empty_cache_while_its_seed_merges() {
+    fn every_device_creates_through_the_empty_cache_while_its_seed_takes_the_blob() {
         let (Some(first), Some(second)) = (
             descriptor("a1_bool_from_float"),
             descriptor("a1_sign_and_division_precise"),
@@ -1633,7 +1634,7 @@ mod on_device {
             let dir = std::env::temp_dir().join(format!("m2v-rt-merge-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let device = on_directory(name, physical, &dir);
-            // With no blob there is no merge.
+            // With no blob there is no seed to take.
             if !keeps_a_blob(name, &device) {
                 drop(device);
                 let _ = std::fs::remove_dir_all(&dir);
@@ -1643,10 +1644,10 @@ mod on_device {
             drop(state(name, &device, &first));
             drop(device);
             assert!(blob.exists(), "{name}: the drop wrote the blob");
-            crate::cache::Caches::hold_next_merge();
+            crate::cache::Caches::hold_next_seed();
             let device = on_directory(name, physical, &dir);
             let caches = &device.core().caches;
-            within("the merge", || caches.merge_waiting());
+            within("the seed", || caches.seed_hold.waiting());
             let counters = device.counters();
             let before = counters.metrics().creations_before_seed;
             let (made, during) = std::thread::scope(|scope| {
@@ -1657,21 +1658,125 @@ mod on_device {
                     let _ = ended.send(());
                     made
                 });
-                // Let go either way, so a creation that waits for the merge ends.
+                // Let go either way, so a creation that waits for the seed ends.
                 let during = end.recv_timeout(std::time::Duration::from_secs(30)).is_ok();
-                caches.release_merge();
+                caches.seed_hold.release();
                 (creating.join().expect("the creation"), during)
             });
-            assert!(during, "{name}: the creation waited for the merge");
+            assert!(during, "{name}: the creation waited for the seed");
             assert!(
                 counters.metrics().creations_before_seed > before,
                 "{name}: the creation counted before the seed"
             );
             within("the seed", || caches.is_seeded());
+            within("the merge at the look", || !caches.merge_pending());
+            assert_eq!(caches.overlaps(), 0, "{name}: a creation during a look");
             drop(made);
             drop(device);
             within("the teardown", || counters.gauges() == Gauges::default());
             let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// The reaper's look at the pipeline cache holds the lock creations take exclusive around its
+    /// merge and its reads of the cache's size and data, and takes it by a try. A creation that
+    /// begins once the reaper chose to look, before its try, makes the look skip, counted
+    /// (`Metrics::pipeline_cache_looks_skipped`), and the reaper looks again once creation is
+    /// quiet again. A creation that begins while a look holds the lock waits for that look, and
+    /// its wait is counted (`Metrics::pipeline_cache_lock_wait_max_nanos`). No creation holds the
+    /// lock while a look does.
+    #[test]
+    fn every_device_reads_its_pipeline_cache_only_while_no_creation_runs() {
+        /// How long the look holds the lock while a creation waits.
+        const HELD: std::time::Duration = std::time::Duration::from_millis(100);
+        let (Some(first), Some(second), Some(third)) = (
+            descriptor("a1_bool_from_float"),
+            descriptor("a1_sign_and_division"),
+            descriptor("a1_sign_and_division_precise"),
+        ) else {
+            return;
+        };
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-alone-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let device = on_directory(name, physical, &dir);
+            let caches = &device.core().caches;
+            let counters = device.counters();
+            let a = state_and_look(name, &device, &first);
+            // A creation that begins once the reaper chose to look, before it tries the lock.
+            let looks = caches.looks_and_writes().0;
+            let skipped = counters.metrics().pipeline_cache_looks_skipped;
+            caches.look_hold.hold();
+            let b = state(name, &device, &second);
+            within("the look", || caches.look_hold.waiting());
+            let creation = crate::cache::creation(device.core());
+            caches.look_hold.release();
+            within("the look's try", || {
+                counters.metrics().pipeline_cache_looks_skipped > skipped
+                    || caches.looks_and_writes().0 > looks
+            });
+            assert_eq!(
+                caches.looks_and_writes().0,
+                looks,
+                "{name}: the reaper looked while a creation ran"
+            );
+            assert_eq!(
+                counters.metrics().pipeline_cache_looks_skipped,
+                skipped + 1,
+                "{name}: the look skipped once"
+            );
+            // The look after it, once creation is quiet again, holds the lock while a creation
+            // begins.
+            caches.alone_hold.hold();
+            drop(creation);
+            within("the look holding the lock", || caches.alone_hold.waiting());
+            assert_eq!(caches.looks_and_writes().0, looks, "{name}: still looking");
+            let (c, during) = std::thread::scope(|scope| {
+                let (ended, end) = std::sync::mpsc::channel();
+                let (device, third) = (&device, &third);
+                let creating = scope.spawn(move || {
+                    let made = state(name, device, third);
+                    let _ = ended.send(());
+                    made
+                });
+                within("the creation's start", || {
+                    caches.creating() > 0 || creating.is_finished()
+                });
+                std::thread::sleep(HELD);
+                let during = end.try_recv().is_ok();
+                caches.alone_hold.release();
+                (creating.join().expect("the creation"), during)
+            });
+            assert!(
+                !during,
+                "{name}: the creation ran while the look held the lock"
+            );
+            within("the look's end", || caches.looks_and_writes().0 > looks);
+            let metrics = counters.metrics();
+            let held = HELD.as_nanos() as u64;
+            assert!(
+                metrics.pipeline_cache_lock_wait_max_nanos >= held / 2,
+                "{name}: the creation's longest wait {} ns, the look held the lock {held} ns",
+                metrics.pipeline_cache_lock_wait_max_nanos
+            );
+            assert!(
+                metrics.pipeline_cache_lock_wait_nanos
+                    >= metrics.pipeline_cache_lock_wait_max_nanos
+            );
+            let overlaps = caches.overlaps();
+            assert_eq!(overlaps, 0, "{name}: a creation during a look");
+            drop((a, b, c));
+            drop(device);
+            within("the teardown", || counters.gauges() == Gauges::default());
+            let _ = std::fs::remove_dir_all(&dir);
+            println!(
+                "{name}: {} look skipped, a creation waited {} ns for a look, {overlaps} overlaps",
+                metrics.pipeline_cache_looks_skipped - skipped,
+                metrics.pipeline_cache_lock_wait_max_nanos,
+            );
         }
     }
 
