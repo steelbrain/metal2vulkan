@@ -329,6 +329,9 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // blends with its first, as Metal's dual-source blending does. A device without it is below
     // the floor.
     feature!(core.dual_src_blend => DualSrcBlend),
+    // A fragment function that reads its `[[sample_id]]`, or an interpolant at a sample, runs once
+    // per covered sample, as Metal runs it. Vulkan 1.4 and Roadmap 2022 require it of every device.
+    feature!(core.sample_rate_shading => SampleRateShading),
     // A vertex or post-tessellation vertex function writes and atomically updates device memory,
     // as Metal's may. A device without it is below the floor.
     feature!(core.vertex_pipeline_stores_and_atomics => VertexPipelineStoresAndAtomics),

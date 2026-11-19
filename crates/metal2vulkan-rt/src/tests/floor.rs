@@ -72,6 +72,7 @@ fn at_the_floor() -> Queried {
     features.core.fragment_stores_and_atomics = vk::TRUE;
     features.core.tessellation_shader = vk::TRUE;
     features.core.dual_src_blend = vk::TRUE;
+    features.core.sample_rate_shading = vk::TRUE;
     features.core.vertex_pipeline_stores_and_atomics = vk::TRUE;
     features.vulkan11.multiview = vk::TRUE;
     features.vulkan11.shader_draw_parameters = vk::TRUE;
@@ -457,6 +458,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.dual_src_blend = vk::FALSE,
             feature(CORE, "dualSrcBlend"),
+        ),
+        (
+            |f| f.core.sample_rate_shading = vk::FALSE,
+            feature(CORE, "sampleRateShading"),
         ),
         (
             |f| f.core.vertex_pipeline_stores_and_atomics = vk::FALSE,

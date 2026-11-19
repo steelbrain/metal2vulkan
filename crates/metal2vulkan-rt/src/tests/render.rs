@@ -1,5 +1,5 @@
 //! Render pipeline states, under a device cfg on every device of the cfg's kind, of the owned
-//! fixture `examples/runtime_examples.ll`.
+//! fixtures `examples/runtime_examples.ll` and `engine/rt6_samples.ll`.
 //!
 //! - The first state of a content lowers its two functions and makes one `VkPipeline` (the
 //!   triangle class's); a second state of that descriptor lowers nothing, makes nothing and
@@ -10,12 +10,14 @@
 //!   which lives while a state holds it and goes once that state does; a forgotten content
 //!   compiles again, and one the map holds does not.
 //! - More than one sample is refused by kind, making no `VkPipeline`.
+//! - A fragment function that reads its `[[sample_id]]` makes its state, on the floor's
+//!   `sampleRateShading`.
 //! - A device on a cache directory a device before it used lowers nothing at creation: both
 //!   lowerings are read from the directory, and the triangle class's `VkPipeline` is made from
 //!   its file; the first device writes one pipeline file for each `VkPipeline` it made, and the
 //!   second writes nothing.
 //!
-//! `llvm-as` assembles the fixture; without it a test skips visibly.
+//! `llvm-as` assembles the fixtures; without it a test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -32,9 +34,15 @@ mod on_device {
     use std::sync::Arc;
     use std::time::SystemTime;
 
-    /// The fixture's library, or None where `llvm-as` is missing.
+    /// The fixture `examples/runtime_examples.ll`'s library, or None where `llvm-as` is missing.
     fn library() -> Option<Library> {
-        let ll = fixtures_dir().join("examples/runtime_examples.ll");
+        library_of("examples/runtime_examples.ll")
+    }
+
+    /// The library of the fixture at `fixture` under the fixtures directory, or None where
+    /// `llvm-as` is missing.
+    fn library_of(fixture: &str) -> Option<Library> {
+        let ll = fixtures_dir().join(fixture);
         match llvm_assemble(&ll) {
             Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
             Err(AssembleError::Missing(why)) => {
@@ -81,6 +89,36 @@ mod on_device {
                 - (before.translations + before.translations_loaded),
             after.pipelines_created - before.pipelines_created,
         )
+    }
+
+    /// Every device makes the state of `rt6_samples`' full-screen fill, whose fragment function
+    /// reads its `[[sample_id]]`: SPIR-V's `SampleRateShading`, which the floor's
+    /// `sampleRateShading` enables on every device. Without it in the floor, the translator
+    /// refuses the function on every device.
+    #[test]
+    fn every_device_makes_a_state_whose_fragment_reads_its_sample() {
+        let Some(library) = library_of("engine/rt6_samples.ll") else {
+            return;
+        };
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let mut d = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
+        d.fragment = Some(function("rt6_fill_rgba16float"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
+        each_device("render_sample_id", |name, _, device| {
+            let counters = device.counters();
+            let before = counters.metrics();
+            let made_state = state(name, &device, &d);
+            assert_eq!(
+                made(&before, &counters.metrics()).1,
+                1,
+                "{name}: the fill's pipeline"
+            );
+            drop(made_state);
+        });
     }
 
     #[test]
