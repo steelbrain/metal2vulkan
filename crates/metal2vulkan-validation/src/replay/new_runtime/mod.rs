@@ -22,6 +22,7 @@ mod surfaces;
 #[cfg(test)]
 mod tests;
 pub(super) mod unwritten;
+mod videos;
 
 pub use judged::judged_records;
 
@@ -42,6 +43,7 @@ use places::{class_index, granule, Place, Places};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
+pub use videos::VideoHandle;
 
 /// What the play skipped because the runtime does not build it yet.
 #[derive(Default)]
@@ -446,6 +448,8 @@ pub struct NewRuntime {
     copied_over_kinds: BTreeMap<String, u64>,
     /// The textures over a surface's plane, and the entries under them.
     surfaces: surfaces::Surfaces,
+    /// The video surfaces, made through the surface call.
+    videos: videos::Videos,
 }
 
 /// The objects `values` name, lists included.
@@ -729,6 +733,7 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
         ("blocks", gauges.blocks),
         ("imports", gauges.imports),
         ("exports", gauges.exports),
+        ("surface_imports", gauges.surface_imports),
         ("events", gauges.events),
         ("device_samplers", gauges.device_samplers),
         ("spilled_bytes", gauges.spilled_bytes),
@@ -781,6 +786,7 @@ impl NewRuntime {
             textures_over: [0; 2],
             copied_over_kinds: BTreeMap::new(),
             surfaces: surfaces::Surfaces::default(),
+            videos: videos::Videos::new(VideoHandle::DmaBuf),
             device,
             objects: HashMap::new(),
             indices: indices::Indices::default(),
@@ -824,6 +830,13 @@ impl NewRuntime {
     /// The backend told how the stream's recording device kept Managed buffers.
     pub fn with_managed(mut self, copies: ManagedCopies) -> Self {
         self.managed = Some(copies);
+        self
+    }
+
+    /// The backend told the consumer's decoder route, the handle its video surfaces are made
+    /// with (`videos`); a dma-buf where it is not told.
+    pub fn with_video_handle(mut self, handle: VideoHandle) -> Self {
+        self.videos = videos::Videos::new(handle);
         self
     }
 
@@ -2040,6 +2053,9 @@ impl NewRuntime {
                 self.substitute(call, &descriptor, Substituted::Tiled)
             }
             "newTextureWithDescriptor:iosurface:plane:" => self.surface_texture(call, buffer),
+            "m2v.externalWriteDone" if self.videos.is_video(call.receiver) => {
+                self.video_picture(call)
+            }
             "m2v.externalWriteDone" => self.external_write_done(call),
             _ => Err(refuse(call, "not played on a buffer")),
         }
@@ -2172,6 +2188,7 @@ impl Backend for NewRuntime {
             self.indices.give(call.receiver);
             self.resource_indices.remove(&call.receiver);
             self.surfaces.released(call.receiver);
+            self.videos.released(call.receiver);
             self.substitutes.live.remove(&call.receiver);
             self.unrecorded_tessellation.released(call.receiver);
             match self.objects.remove(&call.receiver) {
@@ -2632,6 +2649,8 @@ impl Backend for NewRuntime {
             ("external_acquires", metrics.external_acquires),
             ("external_releases", metrics.external_releases),
             ("sparse_binds", metrics.sparse_binds),
+            ("surfaces_in_place", metrics.surfaces_in_place),
+            ("surfaces_copied", metrics.surfaces_copied),
             ("skipped_encoders", self.skips.encoders),
             ("skipped_objects", self.skips.objects),
             ("skipped_render_states", self.skips.render_state_count()),
@@ -2656,6 +2675,7 @@ impl Backend for NewRuntime {
         ]);
         self.surfaces.timed();
         counters.extend(self.surfaces.counted());
+        counters.extend(self.videos.counted());
         counters.extend(self.guest_ram.counted());
         counters
     }
@@ -2673,6 +2693,7 @@ impl Backend for NewRuntime {
             ("blocks", gauges.blocks),
             ("imports", gauges.imports),
             ("exports", gauges.exports),
+            ("surface_imports", gauges.surface_imports),
             ("buffers", gauges.buffers),
             ("textures", gauges.textures),
             ("textures_copied_over", gauges.textures_copied_over),
@@ -2779,6 +2800,7 @@ impl Backend for NewRuntime {
             ));
         }
         lines.push(self.surfaces.line());
+        lines.push(self.videos.line());
         lines.extend(self.substitutes.lines());
         let first: String = (self.substitutes.first_read.iter())
             .map(|object| format!(" #{object}"))
@@ -2827,6 +2849,10 @@ impl Backend for NewRuntime {
 
     fn recorded_id(&mut self, object: u64, id: u64) {
         self.recorded = Some((object, id));
+    }
+
+    fn video_pages(&mut self, buffer: u64) {
+        self.videos.pages(buffer);
     }
 
     fn texture_writes(&self, pipeline: u64, stage: SlotStage) -> Option<Vec<u64>> {

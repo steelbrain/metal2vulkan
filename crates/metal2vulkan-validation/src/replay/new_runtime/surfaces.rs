@@ -58,6 +58,9 @@
 //!   hold the texels.
 //! - A texture of a format that reads across a surface's planes (a two-plane YCbCr or XR10 format
 //!   over a surface of two planes) is skipped and counted.
+//!
+//! A buffer made as a video surface's pages plays through the surface call instead (`videos`),
+//! but where its first texture reads no two-plane 4:2:0 surface.
 
 use super::super::covers::SlotStage;
 use super::{failed, whole_slices, NewRuntime, Object};
@@ -580,6 +583,12 @@ impl NewRuntime {
             if planes >= 2 && across_planes(d.pixel_format) {
                 self.surfaces.counts.across_planes += 1;
                 return Ok(Some((Object::Skipped, Made::default())));
+            }
+        }
+        // A video surface's pages: a view of its surface's plane (`videos`).
+        if self.videos.is_video(call.receiver) {
+            if let Some(made) = self.video_texture(call, &d, plane, &f)? {
+                return Ok(made);
             }
         }
         let raw = u64::from(d.pixel_format.as_raw());

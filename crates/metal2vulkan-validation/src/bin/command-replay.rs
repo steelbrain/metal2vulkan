@@ -3,8 +3,11 @@
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
-//! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]` plays the stream whose
+//! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
+//! [--video-handle dma-buf|opaque-fd]` plays the stream whose
 //! first segment is `FILE` through the old runtime (the default) or the new one (`rt`), with
+//! `--video-handle dma-buf|opaque-fd` telling the new runtime the consumer's decoder route, the
+//! handle its video surfaces are made with (a dma-buf unless it says otherwise), and
 //! `--gpu-wait-timeout` bounding each device wait (10 s unless it says otherwise; a CPU device's
 //! work can take longer than a GPU's), with `--snapshots no` taking no
 //! `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), `--managed`
@@ -65,7 +68,7 @@ use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
     compare_dumps, compare_plays, display_library, judged_records, recording_range, segments,
     Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player, RangeSource, RecordingRange,
-    StreamError, StreamReader, Value, FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
+    StreamError, StreamReader, Value, VideoHandle, FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -75,7 +78,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
-                     [--gpu-wait-timeout SECONDS] \
+                     [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
                      command-replay compare-plays --a REPORT --b REPORT [--frame F]\n       \
@@ -428,6 +431,20 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    let video = match options
+        .get("video-handle")
+        .map(|name| VideoHandle::parse(name))
+    {
+        None => VideoHandle::DmaBuf,
+        Some(Some(handle)) => handle,
+        Some(None) => {
+            report.line(&format!(
+                "error video-handle: {} is neither dma-buf nor opaque-fd",
+                options["video-handle"]
+            ));
+            return 2;
+        }
+    };
     let until = match options.get("until-frame").map(|f| f.parse::<usize>()) {
         None => None,
         Some(Ok(last)) => Some(last),
@@ -505,6 +522,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                         Some(copies) => backend.with_managed(copies),
                         None => backend,
                     };
+                    let backend = backend.with_video_handle(video);
                     match display {
                         Some(metallib) => backend.with_display_library(metallib),
                         None => backend,

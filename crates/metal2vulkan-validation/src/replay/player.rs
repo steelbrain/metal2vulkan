@@ -177,6 +177,12 @@ pub trait Backend {
     /// recording's runtime did ignores it.
     fn recorded_id(&mut self, _object: u64, _id: u64) {}
 
+    /// Buffer `buffer` was made as a video surface's pages
+    /// (`m2v.newDmaBufBufferOfLengthPaddingUnobserved`), which another API decodes pictures into
+    /// for the textures over its planes. A backend that makes such a surface as the product does
+    /// takes it from here; one that plays the buffer alone ignores it.
+    fn video_pages(&mut self, _buffer: u64) {}
+
     /// How to make heap `heap`, which the next call makes with a recorded range, by what the
     /// stream places in it (read ahead), told only to a backend that makes objects at their
     /// recorded addresses (`places_at_recorded`): its buffers in a heap at the recorded address
@@ -1921,6 +1927,7 @@ impl<'b, B: Backend> Player<'b, B> {
     /// A call the backend runs, its blobs and addresses resolved, and what it made recorded; a
     /// copied buffer's `contents` written once it is made.
     fn make(&mut self, stream: &mut StreamReader, call: Call) -> Result<(), PlayError> {
+        let video = &*call.selector == "m2v.newDmaBufBufferOfLengthPaddingUnobserved";
         let Some(call) = plain(call) else {
             return Ok(());
         };
@@ -1961,6 +1968,9 @@ impl<'b, B: Backend> Player<'b, B> {
             self.backend.split_heap(resolved.result, split);
         }
         let made = self.run(&resolved)?;
+        if video {
+            self.backend.video_pages(resolved.result);
+        }
         if &*resolved.selector == "newTextureWithDescriptor:iosurface:plane:" {
             self.receivers.insert(resolved.receiver);
         }
