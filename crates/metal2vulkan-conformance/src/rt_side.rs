@@ -809,6 +809,18 @@ impl Side for RtSide<'_> {
         Err(heap_is_the_consumers())
     }
 
+    /// A heap's `newTextureWithDescriptor:`, which places the texture where the heap's own
+    /// suballocation puts it: the consumer's own, as an automatic heap's buffer is. The runtime's
+    /// `Device::new_heap_texture` binds a texture at the offset the consumer chose.
+    fn heap_texture(
+        &mut self,
+        heap: Handle,
+        _spec: &crate::sparse_query::SparseTextureSpec,
+    ) -> Answer<Handle> {
+        self.held_heap(heap)?;
+        Err(heap_is_the_consumers())
+    }
+
     fn heap_max_available_size(&mut self, _heap: Handle, _alignment: u64) -> Answer<u64> {
         Err(heap_is_the_consumers())
     }
@@ -1598,7 +1610,7 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 17] = [
+    const CALLS: [(&str, &str); 18] = [
         (
             "heap_buffer_size_and_align",
             crate::cases::device_queries::HEAP_BUFFERS,
@@ -1643,6 +1655,10 @@ mod answered {
             "pipeline-facts-compute-plain",
         ),
         ("plane_texture", "buffer-tails-kernels"),
+        (
+            "heap_texture",
+            crate::cases::texture_descriptor_pairs::HEAP_TEXTURES,
+        ),
     ];
 
     /// The calls `value` records as unavailable, wherever in it they sit.
