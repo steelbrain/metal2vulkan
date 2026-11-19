@@ -28,6 +28,7 @@ mod large;
 pub(crate) mod layouts;
 #[cfg(m2v_gpu)]
 mod locks;
+mod lowered;
 mod managed;
 mod memory;
 mod mipmaps;

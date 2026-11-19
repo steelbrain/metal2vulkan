@@ -300,8 +300,15 @@ pub(crate) enum Which {
 pub(crate) enum Lowered {
     /// The module, and the translator's notes of it.
     Made(Box<Kernel>, Vec<PrecisionNote>),
-    /// The translator refused the variant, or it reads what the compute encoder does not supply.
+    /// The translator refused the variant (`Unsupported`), now or on a device on the cache
+    /// directory before (which keeps that it refused, not why): the need's own refusal, the
+    /// variant's gap.
     Refused,
+    /// The translator's lowering or compile of the variant failed otherwise, a translator bug or
+    /// a limit among them: the need reports this error.
+    Translation(TranslationError),
+    /// The variant reads what the compute encoder does not supply ([`Gap::KernelInput`]).
+    Unsupplied,
     /// `vkCreateShaderModule` failed.
     Failed(vk::Result),
     /// The device was quiesced before the reaper lowered it.
@@ -1383,7 +1390,9 @@ impl Compiled {
     /// The module of the content's `which` variant: where it is not lowered yet, the calling
     /// thread gives the lowering to the reaper and waits for it, a first-use wait.
     ///
-    /// Err: `refused` where the content has no such variant or the translator refused it;
+    /// Err: `refused` where the content has no such variant or the translator refused it
+    /// ([`Lowered::Refused`]); [`Error::Translation`] where its lowering or compile failed
+    /// otherwise; [`Gap::KernelInput`] where it reads what the encoder does not supply;
     /// [`Error::Quiesced`]; [`Error::Vulkan`] where its shader module failed.
     pub(crate) fn later_kernel(
         self: &Arc<Self>,
@@ -1405,9 +1414,19 @@ impl Compiled {
                 lowered
             }
         };
-        match lowered {
+        lowered.kernel(refused)
+    }
+}
+
+impl Lowered {
+    /// The module, or the error a need of the variant reports: `refused` for the translator's
+    /// refusal alone, so no other failure reads as the variant's gap.
+    pub(crate) fn kernel(&self, refused: impl FnOnce() -> Error) -> Result<&Kernel, Error> {
+        match self {
             Lowered::Made(kernel, _) => Ok(&**kernel),
             Lowered::Refused => Err(refused()),
+            Lowered::Translation(error) => Err(Error::Translation(error.clone())),
+            Lowered::Unsupplied => Err(gap()),
             &Lowered::Failed(result) => Err(Error::Vulkan {
                 call: "vkCreateShaderModule",
                 result,
@@ -1437,12 +1456,14 @@ impl Later {
                 cache::keep_refusal(core, &key);
                 return Lowered::Refused;
             }
-            Err(_) => return Lowered::Refused,
+            Err(error) => return Lowered::Translation(error),
         };
         let mut descriptor = self.descriptor.clone();
         descriptor.kernel = StageSource::Compiled(compiled);
-        let Ok(pipeline) = translator.compile_compute_pipeline(&descriptor, &budget) else {
-            return Lowered::Refused;
+        let pipeline = match translator.compile_compute_pipeline(&descriptor, &budget) {
+            Ok(pipeline) => pipeline,
+            Err(TranslationError::Unsupported(_)) => return Lowered::Refused,
+            Err(error) => return Lowered::Translation(error),
         };
         let notes = pipeline.stage.precision_notes.clone();
         match Kernel::new(core, pipeline, descriptor.required_threads_per_threadgroup) {
@@ -1450,11 +1471,12 @@ impl Later {
             // what the encoder does not supply.
             Ok(mut kernel) if !covers(whole, &kernel.interface) => {
                 kernel.release(core);
-                Lowered::Refused
+                Lowered::Unsupplied
             }
             Ok(kernel) => Lowered::Made(Box::new(kernel), notes),
             Err(Error::Vulkan { result, .. }) => Lowered::Failed(result),
-            Err(_) => Lowered::Refused,
+            // Every other error of `Kernel::new` is `gap`'s.
+            Err(_) => Lowered::Unsupplied,
         }
     }
 }

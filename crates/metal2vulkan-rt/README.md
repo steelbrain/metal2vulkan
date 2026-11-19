@@ -2051,8 +2051,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - A threadgroup that is not whole SIMD groups of a kernel whose SIMD groups run one per subgroup
   of 32 is refused (`Gap::PartialSimdgroups`) where the state has no emulated-SIMD-group module:
   for a kernel the consumer compiled (`StageSource::Compiled`), and where the translator refuses
-  the emulated variant. The emulated module's scratch counts in the dispatch's threadgroup memory
-  (`Limit::ThreadgroupMemory`).
+  the emulated variant. Any other failure of a later variant's lowering, this one's or the
+  partial-threadgroups one's, is reported as itself (`Error::Translation`, or `Gap::KernelInput`
+  for an input the compute encoder does not supply). The emulated module's scratch counts in the
+  dispatch's threadgroup memory (`Limit::ThreadgroupMemory`).
 - `dispatch_threads` with a grid that is not a whole number of threadgroups on some axis is
   refused (`Gap::PartialThreadgroups`) at a threadgroup that is not whole subgroups of a kernel
   that runs only whole subgroups, and for a kernel that observes its threadgroup
