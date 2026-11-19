@@ -625,6 +625,29 @@ impl NewRuntime {
         self
     }
 
+    /// Ends the play's device before the process exits, as the runtime's contract asks of a
+    /// consumer (`rt::Device`): quiesces it within `timeout` (a committed command buffer waiting
+    /// on an event no played record signals ends unrun), drops every handle the backend holds, the
+    /// device's last among them, and reads the gauges once it is torn down. Err names the gauges
+    /// not at zero: a handle or a resource that outlived the play, or a quiesce past `timeout`
+    /// whose threads run on into `exit()`.
+    pub fn end(self, timeout: std::time::Duration) -> Result<(), String> {
+        let counters = self.device.counters();
+        let idle = self.device.quiesce(timeout);
+        drop(self);
+        let gauges = counters.gauges();
+        match (idle, gauges == rt::Gauges::default()) {
+            (true, true) => Ok(()),
+            (idle, _) => Err(format!(
+                "the device {} and its gauges read {gauges:?} after the backend dropped",
+                match idle {
+                    true => "quiesced",
+                    false => "did not quiesce in time",
+                },
+            )),
+        }
+    }
+
     /// How a Managed buffer of `call` plays: as a Shared buffer for a one-copy stream, the
     /// runtime's Managed buffer for a two-copy one; refused where the player was not told.
     fn managed_form(&mut self, call: &Call) -> Result<ManagedCopies, PlayError> {

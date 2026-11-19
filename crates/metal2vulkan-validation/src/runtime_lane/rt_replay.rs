@@ -40,6 +40,9 @@
 //!   its own.
 //! - A command buffer that names a sampler state after a later one took its index owes the index
 //!   nothing: of two live sampler states placed at one index, the index is the later one's.
+//! - A play that ends with a command buffer held (it waits for an event no record signals, and
+//!   holds a sampler state, whose handle holds the device) ends its device all the same: the
+//!   backend's end quiesces it and drops every handle, and the gauges read zero.
 //! - A buffer's linear texture (the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:
 //!   bytesPerImage:`) of a 2D descriptor plays as the public texture over the buffer, and one of a
 //!   2D array, whose slices Metal lays out itself, is refused.
@@ -865,6 +868,45 @@ fn a_placement_a_held_commit_owes_takes_the_index_without_waiting_and_is_counted
         indices.contains("0 placed at an index whose holders' commits were in flight"),
         "{indices}"
     );
+}
+
+#[test]
+fn a_play_that_ends_with_a_command_buffer_held_ends_its_device() {
+    let dir = ScratchDir::new("rt-replay-end-held").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("newEvent", 1, 3, &[], &[])?;
+        w.call(
+            "newSamplerStateWithDescriptor:",
+            1,
+            4,
+            &[sampler(None)],
+            &[],
+        )?;
+        w.call("commandBuffer", 2, 5, &[], &[])?;
+        let event = [Value::Object(3), Value::Uint(1)];
+        w.call("encodeWaitForEvent:value:", 5, 0, &event, &[])?;
+        w.call("computeCommandEncoder", 5, 6, &[], &[])?;
+        let bound = [
+            Value::List(vec![Value::Object(4)]),
+            uints(&[("location", 0), ("length", 1)]),
+        ];
+        w.call("setSamplerStates:withRange:", 6, 0, &bound, &[])?;
+        w.call("endEncoding", 6, 0, &[], &[])?;
+        w.call("commit", 5, 0, &[], &[])?;
+        w.call("release", 4, 0, &[], &[])
+    });
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let (_, ended) = Player::new(&mut backend).play(&mut reader);
+    let ended = format!("{ended:?}");
+    assert!(
+        ended.contains("still wait on events at the stream's end"),
+        "{ended}"
+    );
+    backend.end(std::time::Duration::from_secs(10)).unwrap();
 }
 
 #[test]
