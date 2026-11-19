@@ -2957,6 +2957,64 @@ fn a_notice_scoped_to_the_new_runtime_leaves_the_old_runtimes_site_its_one_row()
     assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
 }
 
+/// **A site only Metal reached after a refusal beside it is folded under that refusal.** A row
+/// whose rate map we refused never reaches its labels or its later sites, so those are the
+/// refusal's and no divergence of their own; a site before the refusal, and a site of another row
+/// that refused nothing, still read as only Metal's.
+#[test]
+fn a_site_only_metal_reached_after_a_refusal_is_that_refusal_s() {
+    let uint = |word: u64| Observed::value(Value::Uint(word));
+    let refused = || {
+        Observed::value(Value::error(
+            "Error::Unavailable",
+            Value::Lines(vec!["rate_map".to_owned()]),
+        ))
+    };
+    let metal = Transcript::new(vec![
+        Node::branch(
+            "refused-then-more",
+            vec![
+                Node::leaf("map", uint(1)),
+                Node::branch("labelled", vec![Node::leaf("0-0", uint(2))]),
+                Node::leaf("after", uint(3)),
+            ],
+        ),
+        Node::branch(
+            "missing-before",
+            vec![Node::leaf("first", uint(4)), Node::leaf("map", uint(5))],
+        ),
+        Node::branch("refused-nothing", vec![Node::leaf("x", uint(6))]),
+    ]);
+    let ours = Transcript::new(vec![
+        Node::branch(
+            "refused-then-more",
+            vec![
+                Node::leaf("map", refused()),
+                Node::branch("labelled", Vec::new()),
+            ],
+        ),
+        Node::branch("missing-before", vec![Node::leaf("map", refused())]),
+        Node::branch("refused-nothing", Vec::new()),
+    ]);
+    let found = compare(&metal, &ours, &[], Offered::notices(&[]));
+    let divergences: Vec<&str> = found
+        .divergences
+        .iter()
+        .map(|at| at.path.as_str())
+        .collect();
+    assert_eq!(
+        divergences,
+        ["case/missing-before/first", "case/refused-nothing/x"],
+        "{found:?}"
+    );
+    let refusals: Vec<&str> = found.refusals.iter().map(|at| at.path.as_str()).collect();
+    assert_eq!(
+        refusals,
+        ["case/refused-then-more/map", "case/missing-before/map"],
+        "{found:?}"
+    );
+}
+
 /// **The running-signal case's `MTLEvent` reading may be `Committed` on the new runtime's run
 /// alone.** The case names the accepted difference that the new runtime schedules a command
 /// buffer once its submit thread is free ([`Justification::NewRuntimeAccepted`]): on

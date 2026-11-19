@@ -296,7 +296,7 @@ pub fn compare_run(
         fired: &mut fired,
         found: &mut found,
     };
-    walk.node("", &metal.root, &ours.root);
+    walk.node("", &metal.root, &ours.root, false);
     // An allowance no site needed is the case naming a tolerance this run cannot vouch for. It is
     // counted rather than failed, and the justification is re-read here without the exemption the
     // up-front check gives a notice, because "the tolerance fired nowhere and the notice was never
@@ -436,8 +436,18 @@ struct Walk<'a> {
 }
 
 impl Walk<'_> {
-    /// Compare one pair of sites, under `parent`'s path, and descend.
-    fn node(&mut self, parent: &str, metal: &Node, ours: &Node) {
+    /// Compare one pair of sites, under `parent`'s path, and descend; answer whether the site is
+    /// one **we refused**.
+    ///
+    /// `after_refusal` says a site before this one, beside it or beside a site above it, is one we
+    /// refused. A site under this one that only Metal reached is then folded under that refusal
+    /// and is no divergence of its own: a case records a piece of work's sites in order, and the
+    /// ones after a refused call are the ones the refusal kept our side from reaching (a row's
+    /// labels after its refused `setLabel:`, its sites after its refused rate map). The fold runs
+    /// forward over the refused site's later siblings and down into them, and never up: a site
+    /// before the refusal, or one beside the site that holds it (another row of the case), still
+    /// reads as only Metal's.
+    fn node(&mut self, parent: &str, metal: &Node, ours: &Node, after_refusal: bool) -> bool {
         let path = if parent.is_empty() {
             metal.name.clone()
         } else {
@@ -449,7 +459,7 @@ impl Walk<'_> {
             // the reasoning [`compare_run`]'s `stopped` rests on, applied at one site rather than
             // at a whole case. Without this, a site whose answer is a tree reported the refusal
             // nowhere and its children everywhere.
-            return;
+            return true;
         }
         // Before pairing anything: a name held twice under one parent is a pair this walk cannot
         // settle, and `Node::child` below would answer with the first namesake and compare the
@@ -466,10 +476,11 @@ impl Walk<'_> {
                 ));
             }
         }
+        let mut after_refusal = after_refusal;
         for child in &metal.children {
             match ours.child(&child.name) {
-                Some(theirs) => self.node(&path, child, theirs),
-                None if self.stopped => {}
+                Some(theirs) => after_refusal |= self.node(&path, child, theirs, after_refusal),
+                None if self.stopped || after_refusal => {}
                 None => self.found.divergences.push(Divergence::new(
                     format!("{path}/{}", child.name),
                     DivergenceKind::Site {
@@ -494,6 +505,7 @@ impl Walk<'_> {
                 ));
             }
         }
+        false
     }
 
     /// Compare what one site observed, and say whether the site is one **we refused**, whose
