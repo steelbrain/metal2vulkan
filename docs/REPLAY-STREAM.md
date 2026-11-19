@@ -160,9 +160,13 @@ and the (name id, value) answer pairs.
   set, `noCopy` not) carries the bytes it starts with as its descriptor's `contents`: a blob where
   they are 64 bytes or longer, bytes otherwise. The player makes the buffer, then puts them at its
   first byte as a write's bytes (section 6).
-- **Textures over memory:** a buffer's `newTextureWithDescriptor:offset:bytesPerRow:` and
-  `newTiledTextureWithDescriptor:offset:bytesPerRow:`, a heap's `newTextureWithDescriptor:offset:`,
-  each taking a texture descriptor object (section 9).
+- **Textures over memory:** a buffer's `newTextureWithDescriptor:offset:bytesPerRow:`,
+  `newTiledTextureWithDescriptor:offset:bytesPerRow:` and
+  `newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:`, a heap's
+  `newTextureWithDescriptor:offset:`, each taking a texture descriptor object (section 9). The
+  linear form (Apple's SPI) makes what the first makes of a 2D descriptor, and also a 2D array,
+  whose slices Metal lays out itself; the new runtime's player plays a 2D one as the first and
+  refuses another.
 - **The address map** is the ranges `[gpuAddress, gpuAddress + gpuLength)` of the live objects that
   answered them; `release` removes an object's range. A range that meets a live one in part (the
   program put a newer object in memory an older one still held, as a guest's own allocator in a

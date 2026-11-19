@@ -28,6 +28,9 @@
 //! - A sampler state placed at an index a held commit owes (its command buffer waits for an event
 //!   only a later record signals) takes it without waiting where its descriptor is the one placed
 //!   there last, and otherwise stops the play naming what holds the commit.
+//! - A buffer's linear texture (the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:
+//!   bytesPerImage:`) of a 2D descriptor plays as the public texture over the buffer, and one of a
+//!   2D array, whose slices Metal lays out itself, is refused.
 //! - Buffers keep the slack of their recorded granule: two recorded at addresses of 32 KiB and
 //!   64 KiB granules lie apart by at least the lower one's granule, as the recording's addresses
 //!   that a third buffer holds come back from the player relocated.
@@ -697,6 +700,50 @@ fn a_placement_a_held_commit_owes_stops_the_play_naming_what_holds_it() {
             );
         }
         other => panic!("a held placement's stop: {other:?}"),
+    }
+}
+
+#[test]
+fn a_linear_texture_over_a_buffer_plays_where_2d_and_is_refused_as_an_array() {
+    let dir = ScratchDir::new("rt-replay-linear").unwrap();
+    // An RGBA8Unorm 4 by 4 texture of `fields`, shader-read, over Shared buffer #2's first 1 KiB,
+    // 256 bytes a row.
+    let linear = |fields: &[(&str, u64)]| {
+        written(&dir, |w| {
+            w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+            let made = [Value::Uint(4096), Value::Uint(0)];
+            w.call("newBufferWithLength:options:", 1, 2, &made, &[])?;
+            let mut keys = vec![
+                ("pixelFormat", 70),
+                ("width", 4),
+                ("height", 4),
+                ("usage", 1),
+            ];
+            keys.extend_from_slice(fields);
+            w.call("m2v.textureDescriptor", 0, 3, &[uints(&keys)], &[])?;
+            let at = [
+                Value::Object(3),
+                Value::Uint(0),
+                Value::Uint(256),
+                Value::Uint(0),
+            ];
+            let selector = "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:";
+            w.call(selector, 2, 4, &at, &[])
+        })
+    };
+    let (report, _) = play("linear", &linear(&[("textureType", 2)]));
+    let executed = &report.total.executed;
+    assert_eq!(executed["skipped_objects"], 0, "{executed:?}");
+    let array = linear(&[("textureType", 3), ("arrayLength", 2)]);
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(&[array], None).unwrap();
+    let (_, ended) = Player::new(&mut backend).play(&mut reader);
+    match ended {
+        Err(PlayError::Refused { why, .. }) => {
+            assert_eq!(why, "a linear texture of a type other than 2D");
+        }
+        other => panic!("a linear 2D array's refusal: {other:?}"),
     }
 }
 

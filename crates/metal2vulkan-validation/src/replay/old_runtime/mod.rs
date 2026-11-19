@@ -417,6 +417,11 @@ impl OldRuntime {
                 let descriptor = self.texture_descriptor(call, 0)?;
                 buffer.new_texture(&descriptor, uint(call, 1)?, uint(call, 2)?)
             }
+            "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:" => {
+                let descriptor = self.texture_descriptor(call, 0)?;
+                let (offset, bytes_per_row) = (uint(call, 1)?, uint(call, 2)?);
+                buffer.new_linear_texture(&descriptor, offset, bytes_per_row, uint(call, 3)?)
+            }
             "newTiledTextureWithDescriptor:offset:bytesPerRow:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
                 buffer.new_tiled_texture(&descriptor, uint(call, 1)?, uint(call, 2)?)

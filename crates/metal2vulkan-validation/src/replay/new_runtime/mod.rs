@@ -987,6 +987,7 @@ impl NewRuntime {
             "newTextureWithDescriptor:"
             | "newTextureWithDescriptor:offset:"
             | "newTextureWithDescriptor:offset:bytesPerRow:"
+            | "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:"
             | "newTextureWithDescriptor:iosurface:plane:"
             | "newTiledTextureWithDescriptor:offset:bytesPerRow:" => {
                 return match arg(call, 0)? {
@@ -1625,8 +1626,15 @@ impl NewRuntime {
                 did.map_err(failed(call))?;
                 Ok(None)
             }
-            "newTextureWithDescriptor:offset:bytesPerRow:" => {
+            "newTextureWithDescriptor:offset:bytesPerRow:"
+            | "newLinearTextureWithDescriptor:offset:bytesPerRow:bytesPerImage:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
+                // The linear form of a 2D texture is the public one; Metal lays out the slices
+                // of the array it also makes itself, which the runtime takes no form of.
+                let linear = call.selector.starts_with("newLinear");
+                if linear && descriptor.texture_type != rt::TextureType::Type2D {
+                    return Err(refuse(call, "a linear texture of a type other than 2D"));
+                }
                 let (offset, bytes_per_row) = (uint(call, 1)?, uint(call, 2)?);
                 let make = |index| buffer.new_texture(&descriptor, index, offset, bytes_per_row);
                 self.texture_or_substitute(call, descriptor.usage, &descriptor, make)
