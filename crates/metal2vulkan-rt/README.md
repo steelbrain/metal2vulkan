@@ -609,6 +609,14 @@ made, with no lock, and never rewritten for layouts.
   view is a view of the first parent. Refused, as Metal's validation stops them: an empty range of
   levels or slices, or one past the parent's (`Refusal::TextureViewRange`), and another pixel format
   of a texture made without `PixelFormatView` usage (`Refusal::TextureViewFormat`).
+- `Device::pixel_format_info(raw)` is `MTLPixelFormatGetInfoForDevice` (Apple SPI): Metal's
+  description of a raw pixel format value, its name, Apple's flags word, cast class and four
+  words (a block's bytes and extent for a format of blocks), as an Apple M3 Max answers it under
+  macOS 27.0.1, `PixelFormatInfo::INVALID` for a value it describes no format for.
+  `Device::texture_level_info(query)` is `MTLGetTextureLevelInfoForDeviceWithOptions`: Metal's
+  layout of one level of a texture, its 13 words, computed from that description. Both answer the
+  same on every device and ask Vulkan nothing: a format described there may be one this device
+  makes no texture of (`Gap::TextureFormat`), and the flags are Apple's GPU's.
 - A texture holds the device. Once its last handle and the last command buffer that used it are
   gone, its elements read null and its index is free at once; the reaper frees its image once the
   last upload that moves or copies it has retired, and a view's image views once the view is
@@ -628,6 +636,9 @@ made, with no lock, and never rewritten for layouts.
   does not require, and no recorded stream uploads one.
 - Their bytes are not copied for a format of depth and stencil both or a multisample texture
   (`Gap::TextureBytes`).
+- `Device::pixel_format_info` answers as an Apple M3 Max under macOS 27.0.1, which describes
+  none of the values from 630 to 645 (`BGRA10Unorm`, its packed, sRGB, PQ and HLG forms,
+  `R10UintX6`, `RG10UintX12` and the rest); an Apple M4 under that release describes them.
 - A texture's memory is device-local; where the device has none left, the call fails
   (`Error::Vulkan`).
 - A texture over a buffer other than 2D of one level, sample and slice, or of a depth, stencil

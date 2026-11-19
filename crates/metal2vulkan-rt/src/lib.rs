@@ -34,6 +34,7 @@ mod memory;
 mod over;
 mod pass;
 mod pipeline;
+mod pixel_format_info;
 mod places;
 mod queue;
 mod readback;
@@ -107,6 +108,7 @@ pub use pass::{
     RenderPassStencilAttachmentDescriptor, StoreAction, MAX_COLOR_ATTACHMENTS,
 };
 pub use pipeline::ComputePipelineState;
+pub use pixel_format_info::{PixelFormatInfo, TextureLevelInfo, TextureLevelQuery};
 pub use queue::CommandQueue;
 pub use render::RenderPipelineState;
 pub use render_encoder::{IndexBuffer, RenderCommandEncoder, ScissorRect, Viewport};

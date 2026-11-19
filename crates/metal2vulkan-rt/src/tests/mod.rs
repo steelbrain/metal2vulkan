@@ -31,6 +31,7 @@ mod over;
 mod over_aliases;
 mod pass;
 mod patch;
+mod pixel_format_info;
 mod places;
 mod push_window;
 mod readback;
