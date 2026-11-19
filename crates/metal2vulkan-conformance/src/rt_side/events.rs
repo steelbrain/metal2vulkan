@@ -24,17 +24,17 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// A typed error of the runtime as the failure it records.
-fn of_rt(error: rt::Error) -> Failure {
+pub(super) fn of_rt(error: rt::Error) -> Failure {
     Failure::of_rt(&error)
 }
 
 /// The command buffer's status now, as the probes read it.
-fn status(command_buffer: &rt::CommandBuffer) -> Status {
+pub(super) fn status(command_buffer: &rt::CommandBuffer) -> Status {
     Status::read(format!("{:?}", command_buffer.status()))
 }
 
 /// The command buffer's status once its wait returned within `bound`, or that it never did.
-fn settled(command_buffer: &rt::CommandBuffer, bound: Duration) -> Status {
+pub(super) fn settled(command_buffer: &rt::CommandBuffer, bound: Duration) -> Status {
     waited_for(command_buffer, bound).map_or(Status::NeverSettled, Status::read)
 }
 
@@ -64,7 +64,7 @@ fn read(buffer: &rt::Buffer, length: u64) -> Answer<Vec<u8>> {
 
 /// Raises a shared event to 1 when dropped: the command buffer it holds is released wherever the
 /// probe returns, a refusal past its commit included.
-struct Raise<'a>(&'a rt::SharedEvent);
+pub(super) struct Raise<'a>(pub(super) &'a rt::SharedEvent);
 
 impl Drop for Raise<'_> {
     fn drop(&mut self) {
@@ -126,13 +126,13 @@ impl HandlerLog {
 
 impl RtSide<'_> {
     /// A queue of the probe's own, as `newCommandQueue`.
-    fn own_queue(&self) -> Answer<rt::CommandQueue> {
+    pub(super) fn own_queue(&self) -> Answer<rt::CommandQueue> {
         (self.on.device.new_command_queue(QUEUE_COMMAND_BUFFERS)).map_err(of_rt)
     }
 
     /// A buffer of `length` bytes in a block of `class` of its own: a Shared one zeroed, as
     /// `newBufferWithLength:options:` zeroes, and a Private one, which nothing reads, not.
-    fn scratch(&self, class: rt::MemoryClass, length: u64) -> Answer<rt::Buffer> {
+    pub(super) fn scratch(&self, class: rt::MemoryClass, length: u64) -> Answer<rt::Buffer> {
         let device = &self.on.device;
         let block = device.take_block(class, length).map_err(of_rt)?;
         let zeroed = (class == rt::MemoryClass::Shared).then_some(0);

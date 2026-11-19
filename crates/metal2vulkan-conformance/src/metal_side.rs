@@ -6060,6 +6060,166 @@ impl Side for MetalSide {
         })
     }
 
+    fn fence_order(
+        &mut self,
+        shape: crate::fence_orders::FenceShape,
+    ) -> Answer<crate::fence_orders::FenceOrder> {
+        use crate::event_orders::{Status, COMPLETION};
+        use crate::fence_orders::{
+            written_words, FenceOrder, FenceShape, BUSY, BYTES, HELD_BOUND, LONG_FILLS,
+            LONG_FILL_BYTES, WRITTEN,
+        };
+        objc2::rc::autoreleasepool(|_| {
+            let device = &self.device;
+            let queue = || {
+                device
+                    .newCommandQueue()
+                    .ok_or_else(|| Failure::named("NewCommandQueue", "returned nil"))
+            };
+            let (updating_queue, waiting_queue) = (queue()?, queue()?);
+            let tracking = match shape.untracked() {
+                true => MTLResourceOptions::HazardTrackingModeUntracked,
+                false => MTLResourceOptions::HazardTrackingModeDefault,
+            };
+            let buffer = |bytes: u64, options: MTLResourceOptions| {
+                device
+                    .newBufferWithLength_options(bytes as usize, options)
+                    .ok_or_else(|| Failure::named("NewBuffer", "returned nil"))
+            };
+            let shared = MTLResourceOptions::StorageModeShared | tracking;
+            let (x, y) = (buffer(BYTES, shared)?, buffer(BYTES, shared)?);
+            let long = buffer(LONG_FILL_BYTES, MTLResourceOptions::StorageModePrivate)?;
+            let fence = device
+                .newFence()
+                .ok_or_else(|| Failure::named("NewFence", "returned nil"))?;
+            let gate = device
+                .newSharedEvent()
+                .ok_or_else(|| Failure::named("NewSharedEvent", "returned nil"))?;
+            let command_buffer = |queue: &ProtocolObject<dyn MTLCommandQueue>| {
+                queue
+                    .commandBuffer()
+                    .ok_or_else(|| Failure::named("CommandBuffer", "returned nil"))
+            };
+            let blit = |command_buffer: &ProtocolObject<dyn MTLCommandBuffer>| {
+                command_buffer
+                    .blitCommandEncoder()
+                    .ok_or_else(|| Failure::named("BlitCommandEncoder", "returned nil"))
+            };
+            let long_job = |encoder: &ProtocolObject<dyn MTLBlitCommandEncoder>| {
+                for fill in 0..LONG_FILLS {
+                    encoder.fillBuffer_range_value(
+                        &long,
+                        objc2_foundation::NSRange::new(0, LONG_FILL_BYTES as usize),
+                        fill as u8,
+                    );
+                }
+            };
+            // The busy command buffers ahead of the updater, each a long job, committed at once.
+            let mut busy = Vec::new();
+            if shape == FenceShape::TrackedBehindBusy {
+                for _ in 0..BUSY {
+                    let ahead = command_buffer(&updating_queue)?;
+                    let encoder = blit(&ahead)?;
+                    long_job(&encoder);
+                    encoder.endEncoding();
+                    ahead.commit();
+                    busy.push(ahead);
+                }
+            }
+            let updater = command_buffer(&updating_queue)?;
+            if shape == FenceShape::HeldUpdater {
+                updater.encodeWaitForEvent_value(ProtocolObject::from_ref(&*gate), 1);
+            }
+            let encoder = blit(&updater)?;
+            if matches!(shape, FenceShape::Ordered | FenceShape::EmptyWaiter) {
+                long_job(&encoder);
+            }
+            encoder.fillBuffer_range_value(
+                &x,
+                objc2_foundation::NSRange::new(0, BYTES as usize),
+                WRITTEN,
+            );
+            if shape != FenceShape::TrackedBehindBusy {
+                encoder.updateFence(&fence);
+            }
+            encoder.endEncoding();
+            let updater_done = completion_channel(&updater);
+            updater.commit();
+            let waiter = command_buffer(&waiting_queue)?;
+            let encoder = blit(&waiter)?;
+            if shape != FenceShape::TrackedBehindBusy {
+                encoder.waitForFence(&fence);
+            }
+            if shape != FenceShape::EmptyWaiter {
+                // SAFETY: both ranges are the whole of their own `BYTES`-byte buffer.
+                unsafe {
+                    encoder.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                        &x,
+                        0,
+                        &y,
+                        0,
+                        BYTES as usize,
+                    );
+                }
+            }
+            encoder.endEncoding();
+            // The waiter's completed handler counts X's words as it runs: what the updater had
+            // written by the waiter's completion.
+            let (sender, counted) = std::sync::mpsc::channel();
+            let x_address = x.contents().as_ptr() as usize;
+            let counting = block2::RcBlock::new(
+                move |_: std::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>| {
+                    // SAFETY: X is `BYTES` bytes of shared memory the probe keeps alive until it
+                    // has waited for this handler or its bound; a read races no CPU write.
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(x_address as *const u8, BYTES as usize)
+                    };
+                    let _ = sender.send(written_words(bytes));
+                },
+            );
+            // SAFETY: the block is a valid heap block kept alive until the probe returns, which
+            // is after every wait for it.
+            unsafe { waiter.addCompletedHandler(block2::RcBlock::as_ptr(&counting)) };
+            waiter.commit();
+            let mut waiter_completed_before_the_release = None;
+            let mut updater_before_the_release = None;
+            let mut source_words = None;
+            if shape == FenceShape::HeldUpdater {
+                let completed = counted.recv_timeout(HELD_BOUND);
+                updater_before_the_release = Some(Status::read(status_word(updater.status())));
+                waiter_completed_before_the_release = Some(completed.is_ok());
+                source_words = completed.ok();
+                gate.setSignaledValue(1);
+            }
+            let source_words = match source_words {
+                Some(words) => Some(words),
+                None => counted.recv_timeout(COMPLETION).ok(),
+            };
+            let waiter_at_the_end = match source_words {
+                Some(_) => Status::read(status_word(waiter.status())),
+                None => Status::NeverSettled,
+            };
+            let updater_at_the_end = settled(&updater_done, &updater);
+            for ahead in &busy {
+                ahead.waitUntilCompleted();
+            }
+            // SAFETY: Y's `BYTES` bytes of shared memory, read once the waiter completed.
+            let copied = unsafe {
+                std::slice::from_raw_parts(y.contents().as_ptr().cast::<u8>(), BYTES as usize)
+            };
+            Ok(FenceOrder {
+                waiter_completed_before_the_release,
+                updater_before_the_release,
+                source_words_when_the_waiter_completed: (shape == FenceShape::EmptyWaiter)
+                    .then_some(source_words)
+                    .flatten(),
+                copied_words: (shape != FenceShape::EmptyWaiter).then(|| written_words(copied)),
+                updater_at_the_end,
+                waiter_at_the_end,
+            })
+        })
+    }
+
     fn signal_before_a_wait(&mut self) -> Answer<crate::event_orders::SignalBeforeWait> {
         use crate::event_orders::{Status, HELD_FOR, SCRATCH, SIGNAL_WAIT};
         objc2::rc::autoreleasepool(|_| {

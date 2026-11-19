@@ -93,6 +93,7 @@ pub mod extended_range_planes;
 pub mod extended_range_targets;
 pub mod extended_range_two_planes;
 pub mod extended_swizzles;
+pub mod fence_orders;
 pub mod fetch_ordered;
 pub mod format_copies;
 pub mod format_footprints;
@@ -518,6 +519,11 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.push(Box::new(shared_events::handle_round_trip()));
     cases.extend(
         event_orders::all()
+            .into_iter()
+            .map(|case| Box::new(case) as Box<dyn Case>),
+    );
+    cases.extend(
+        fence_orders::all()
             .into_iter()
             .map(|case| Box::new(case) as Box<dyn Case>),
     );

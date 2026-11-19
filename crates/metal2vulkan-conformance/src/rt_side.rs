@@ -46,6 +46,7 @@ use std::time::Duration;
 mod compute;
 mod descriptors;
 mod events;
+mod fences;
 mod functions;
 mod render;
 mod state_facts;
@@ -1474,6 +1475,13 @@ impl Side for RtSide<'_> {
         self.wait_behind_a_running_signal(shared)
     }
 
+    fn fence_order(
+        &mut self,
+        shape: crate::fence_orders::FenceShape,
+    ) -> Answer<crate::fence_orders::FenceOrder> {
+        self.fence_probe(shape)
+    }
+
     fn scheduled_handler_order(
         &mut self,
     ) -> Answer<crate::scheduled_handlers::ScheduledHandlerOrder> {
@@ -1716,10 +1724,14 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 19] = [
+    const CALLS: [(&str, &str); 20] = [
         (
             "heap_buffer_size_and_align",
             crate::cases::device_queries::HEAP_BUFFERS,
+        ),
+        (
+            "fence_order",
+            crate::cases::fence_orders::TRACKED_BEHIND_BUSY,
         ),
         (
             "event_cross_queue_wait",

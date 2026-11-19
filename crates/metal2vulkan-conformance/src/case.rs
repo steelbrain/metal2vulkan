@@ -2341,6 +2341,19 @@ pub trait Side {
         Err(Failure::unavailable("event_wait_behind_a_running_signal"))
     }
 
+    /// What one fence experiment between two queues observed ([`crate::fence_orders::FenceOrder`])
+    /// in `shape`: an updater on one queue fills a buffer and updates a fence, and a waiter on
+    /// another, committed after it, waits on the fence and copies the buffer.
+    ///
+    /// One call, because the facts are orders between two command buffers.
+    fn fence_order(
+        &mut self,
+        shape: crate::fence_orders::FenceShape,
+    ) -> Answer<crate::fence_orders::FenceOrder> {
+        let _ = shape;
+        Err(Failure::unavailable("fence_order"))
+    }
+
     /// What the scheduled-handler order probe observed
     /// ([`crate::scheduled_handlers::ScheduledHandlerOrder`]): a command buffer whose scheduled
     /// handler is held inside itself while the probe reads the status and a wait for the scheduling

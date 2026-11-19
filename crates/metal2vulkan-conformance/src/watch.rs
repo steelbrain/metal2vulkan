@@ -927,6 +927,14 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
         self.inner.event_wait_behind_a_running_signal(shared)
     }
 
+    fn fence_order(
+        &mut self,
+        shape: crate::fence_orders::FenceShape,
+    ) -> Answer<crate::fence_orders::FenceOrder> {
+        let _span = self.watch("fence_order");
+        self.inner.fence_order(shape)
+    }
+
     fn scheduled_handler_order(
         &mut self,
     ) -> Answer<crate::scheduled_handlers::ScheduledHandlerOrder> {
