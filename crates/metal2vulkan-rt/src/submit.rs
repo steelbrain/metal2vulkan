@@ -74,6 +74,14 @@ pub(crate) const GROUP_RUN: u64 = 16_000_000;
 /// command buffers of one queue in a replay stream on an RTX 3090 was 385.1 ms over four, within
 /// a quarter of amdgpu's default job timeout of 2,000 ms, and 1,536.6 ms over sixteen, past it
 /// (job m3-max-49358).
+///
+/// Its measured price, against sixteen, is paid where command buffers come faster than they
+/// complete. On the UHD 630, a burst of 2,000 command buffers of one dispatch each made 344
+/// submissions a run against 127 and took 40.2 ms against 19.8. A burst of 160 command buffers of
+/// two dispatches made 27 against 10 and took 3.28 ms against 1.85 (job m3-max-49576). On an RTX
+/// 3090, sixteen ran such bursts 5.1-6.5% faster (job m3-max-49575). No replay stream pays it:
+/// glbench, gb and windrag on a 780M made the same submissions in every frame under both, as none
+/// of their groups passed four (jobs m3-max-49698 and m3-max-49721).
 pub(crate) const UNSEEN_JOINS: usize = 4;
 
 /// Whether a command buffer whose queue's expected run is `run` (none before one of its command
