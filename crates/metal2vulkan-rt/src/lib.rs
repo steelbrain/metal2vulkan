@@ -16,6 +16,7 @@ mod cache;
 mod capture;
 mod command;
 mod complete;
+mod copy_out;
 mod counters;
 mod depth_stencil;
 mod device;

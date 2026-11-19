@@ -31,6 +31,7 @@
 //! by buffer: a write of any of a buffer's bytes makes every such texture over it stale.
 
 use crate::buffer::Buffer;
+use crate::copy_out;
 use crate::counters::{Counters, Metric};
 use crate::device::lock;
 use crate::hazard::Access;
@@ -336,7 +337,7 @@ pub(crate) unsafe fn record_side(
                     copy.image,
                     layout,
                     copy.buffer,
-                    &[copy.region],
+                    copy_out::regions(&copy.unit, copy.region).as_slice(),
                 ),
             }
             counters.over_copied(copy.bytes, copy.imported);

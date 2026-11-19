@@ -4,6 +4,7 @@ mod cache;
 mod choice;
 mod command;
 mod compute;
+mod copy_out;
 mod copy_over;
 mod device;
 mod draw;

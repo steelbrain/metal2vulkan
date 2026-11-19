@@ -26,6 +26,7 @@
 
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
+use crate::copy_out;
 use crate::counters::Metric;
 use crate::device::Core;
 use crate::encoder::Resource;
@@ -444,22 +445,24 @@ impl BlitCommandEncoder {
                     .memory_barriers(&earlier)
                     .image_memory_barriers(away),
             );
-            for region in copies.iter().flat_map(BufferCopy::regions) {
-                match into_image {
-                    true => device.cmd_copy_buffer_to_image(
-                        command,
-                        vk_buffer,
-                        texture.image(),
-                        named,
-                        &[region],
-                    ),
-                    false => device.cmd_copy_image_to_buffer(
-                        command,
-                        texture.image(),
-                        named,
-                        vk_buffer,
-                        &[region],
-                    ),
+            for copy in copies {
+                for region in copy.regions() {
+                    match into_image {
+                        true => device.cmd_copy_buffer_to_image(
+                            command,
+                            vk_buffer,
+                            texture.image(),
+                            named,
+                            &[region],
+                        ),
+                        false => device.cmd_copy_image_to_buffer(
+                            command,
+                            texture.image(),
+                            named,
+                            vk_buffer,
+                            copy_out::regions(&copy.unit, region).as_slice(),
+                        ),
+                    }
                 }
             }
             close(core, command, back);
@@ -982,11 +985,11 @@ pub(crate) struct Lies {
     pub(crate) layout: BufferLayout,
 }
 
-/// A copy between a buffer and a texture, checked: the texture's region, its aspect, and where
+/// A copy between a buffer and a texture, checked: the texture's region, its copy unit, and where
 /// each image of it lies in the `VkBuffer` shaders reach the buffer through.
 pub(crate) struct BufferCopy {
     pub(crate) placed: Placed,
-    pub(crate) aspect: vk::ImageAspectFlags,
+    pub(crate) unit: CopyUnit,
     /// The first image's first byte in the block.
     pub(crate) offset: u64,
     /// A row's stride in texels; 0 for a region one row high.
@@ -1004,7 +1007,7 @@ impl BufferCopy {
             buffer_offset: self.offset + u64::from(image) * self.bytes_per_image,
             buffer_row_length: self.row_length,
             buffer_image_height: 0,
-            image_subresource: self.placed.layers(self.aspect),
+            image_subresource: self.placed.layers(self.unit.aspect),
             image_offset: vk::Offset3D {
                 x: x as i32,
                 y: y as i32,
@@ -1132,7 +1135,7 @@ pub(crate) fn buffer_copy(
     };
     Ok(Some(BufferCopy {
         placed,
-        aspect: unit.aspect,
+        unit,
         offset: start,
         row_length,
         bytes_per_image,

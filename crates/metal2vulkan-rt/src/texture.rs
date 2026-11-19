@@ -31,6 +31,7 @@
 
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::Buffer;
+use crate::copy_out;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
@@ -2736,7 +2737,6 @@ impl TextureInner {
             true => back,
             false => back.memory_barriers(&host),
         };
-        let regions = [region];
         // SAFETY: the caller's contract; the subresource is in `named` between the barriers.
         unsafe {
             device.cmd_pipeline_barrier2(
@@ -2749,14 +2749,14 @@ impl TextureInner {
                     buffer,
                     self.image.image,
                     named,
-                    &regions,
+                    &[region],
                 ),
                 false => device.cmd_copy_image_to_buffer(
                     command,
                     self.image.image,
                     named,
                     buffer,
-                    &regions,
+                    copy_out::regions(&copy.unit, region).as_slice(),
                 ),
             }
             device.cmd_pipeline_barrier2(command, &back);
@@ -3582,6 +3582,7 @@ impl Texture {
             aspects: inner.image.aspects,
             buffer,
             region,
+            unit,
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
             imported: device_copy.is_none() && block.memory.own == Some(memory::Own::Import),
@@ -3943,6 +3944,8 @@ pub(crate) struct OverCopy {
     /// The `VkBuffer` of the bytes shaders reach: the block's, or a Managed buffer's device copy's.
     pub(crate) buffer: vk::Buffer,
     pub(crate) region: vk::BufferImageCopy,
+    /// The texture's copy unit, which a copy back's regions take ([`copy_out::regions`]).
+    pub(crate) unit: CopyUnit,
     /// The texels' bytes.
     pub(crate) bytes: u64,
     /// The buffer is Shared: the host reads what a copy back writes.
