@@ -1437,8 +1437,7 @@ impl WorkState {
     /// The FIFO, other than the one at `index`, whose held group holds a command buffer, finished
     /// or its queue's head, that updates a fence the head at `index` waits on.
     fn updater_held(&self, index: usize) -> Option<usize> {
-        let head = |fifo: &Fifo| (fifo.entries.front()).and_then(|entry| entry.pending.as_ref());
-        let waiter = &head(&self.fifos[index])?.gpu.fences;
+        let waiter = &self.fifos[index].head()?.gpu.fences;
         if !waiter.waits() {
             return None;
         }
@@ -1449,7 +1448,7 @@ impl WorkState {
                     (group.finished.iter())
                         .any(|(_, pending, _)| pending.gpu.fences.updates_for(waiter))
                         || (group.partial
-                            && head(fifo)
+                            && (fifo.head())
                                 .is_some_and(|pending| pending.gpu.fences.updates_for(waiter)))
                 })
         })
@@ -1761,6 +1760,11 @@ impl WorkState {
 }
 
 impl Fifo {
+    /// Its head's pending part, where its head is committed.
+    fn head(&self) -> Option<&Pending> {
+        (self.entries.front()).and_then(|entry| entry.pending.as_ref())
+    }
+
     /// Ends `entry` with `error` (its own, where it has one): behind the group held, which it
     /// joins to retire with; else once the queue's submissions in flight and the command buffers
     /// it ended before complete, at once where none is. One not committed ends at its commit.
