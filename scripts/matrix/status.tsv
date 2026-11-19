@@ -22,21 +22,19 @@ card      | row                              | status | who                     
 8086:3e9b | create_private_16MiB/first_take  | open   | memory2                            | 5f2494bfc5 | -
 8086:a7a0 | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | -
 8086:a7a0 | create_private_16MiB/first_take  | open   | memory2                            | 5f2494bfc5 | -
-10de:2204 | create_state/first               | open   | entry                              | 5f2494bfc5 | -
-1002:699f | wide_bindings                    | open   | identity                           | 5f2494bfc5 | -
-8086:3e9b | sampling_deep_64x64x16           | open   | identity                           | 5f2494bfc5 | -
-8086:a7a0 | row_cells                        | open   | identity                           | 795c834ded | -
-8086:a7a0 | constant_managed                 | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | constant_private                 | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | constexpr_sampling               | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | sampling_deep_512x512x16         | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | sampling_deep_512x512x16_16x16x1 | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | sampling_deep_512x512x16_4x4x4   | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | sampling_deep_512x512x16_8x8x1   | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | sampling_deep_64x64x16           | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | threadgroup_scan                 | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-8086:a7a0 | waves                            | open   | identity                           | 5f2494bfc5 | Iris swing unresolved
-10de:1e87 | frame_5cb                        | open   | core                               | 140714ceae | latency from idle equal; throughput 8-14% behind
+1002:699f | wide_bindings                    | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:3e9b | sampling_deep_64x64x16           | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | row_cells                        | open   | identity                           | 795c834ded | waits for the card's native table
+8086:a7a0 | constant_managed                 | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | constant_private                 | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | constexpr_sampling               | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | sampling_deep_512x512x16         | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | sampling_deep_512x512x16_16x16x1 | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | sampling_deep_512x512x16_4x4x4   | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | sampling_deep_512x512x16_8x8x1   | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | sampling_deep_64x64x16           | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | threadgroup_scan                 | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+8086:a7a0 | waves                            | open   | identity                           | 5f2494bfc5 | waits for the card's native table
+10de:1e87 | frame_5cb                        | gap    | the planner's ruling of 2026-11-18 | -          | the runtime guide's known gaps: NVIDIA's latency per submission; throughput 8-14% behind, latency from idle equal
 10de:1e87 | frame                            | note   | -                                  | -          | new ahead in throughput and in latency from idle
-8086:a7a0 | frame_5cb                        | open   | core                               | 140714ceae | latency from idle ahead; throughput about 8% behind, the ranges overlapping
 8086:a7a0 | frame                            | note   | -                                  | -          | new ahead in throughput and in latency from idle

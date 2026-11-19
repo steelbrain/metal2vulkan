@@ -88,6 +88,14 @@ KEEP = r"""f == 0 { print; if ($0 ~ /^ *Summary \[/) f = 1; next }
 /^ +[A-Z][A-Z-]* +\[ *[0-9.]+s\]/ { k = ($1 != "PASS") }
 k || /M2V-MATRIX / { print }"""
 NEXTEST_OUT = "--no-fail-fast --success-output final --failure-output final"
+#: The packages of the GPU legs' device-test archive, and the tests of it a leg runs:
+#: `metal2vulkan-rt`'s, and the replay player's stream device tests on both runtimes
+#: (`metal2vulkan-validation`'s `runtime_lane::replay_streams` and `runtime_lane::rt_replay`), each
+#: of which writes and plays its own small stream. A break in the player or in a runtime's stream
+#: path that only a GPU shows would otherwise wait for a lane's play of a recorded stream to find it.
+DEVICE_TEST_PACKAGES = ("metal2vulkan-rt", "metal2vulkan-validation")
+DEVICE_TEST_FILTER = ("package(metal2vulkan-rt) | (package(metal2vulkan-validation)"
+                      " & test(/^runtime_lane::(replay_streams|rt_replay)::/))")
 #: A failed allocation in a job's output: a device or host allocation Vulkan refused, or Rust's.
 STARVED = re.compile(r"OUT_OF_(DEVICE|HOST)_MEMORY|memory allocation of \d+ bytes failed")
 DEVICE_LINES = (r"""vulkaninfo --summary 2>/dev/null | tr -d '\r' | sed -n 's/^[[:space:]]*\(deviceName\|driverName\|driverInfo\|driverVersion\)[[:space:]]*= */M2V-DEVICE '"{leg}"' \1 /p'""")
@@ -288,7 +296,7 @@ cargo build --release -p metal2vulkan-harness --bin harness && cp -f target/rele
 h=$?""" if harness else "\nh=0")
     return linux_head(short, setup) + f"""W=$PWD
 lay_out || exit 3
-cd "$S" && RUSTFLAGS='--cfg m2v_gpu' CARGO_TARGET_DIR="$S/target/gpucfg" cargo nextest archive -p metal2vulkan-rt --all-features --archive-file "$W/{ARCHIVE}"
+cd "$S" && RUSTFLAGS='--cfg m2v_gpu' CARGO_TARGET_DIR="$S/target/gpucfg" cargo nextest archive {" ".join(f"-p {p}" for p in DEVICE_TEST_PACKAGES)} --all-features --archive-file "$W/{ARCHIVE}"
 a=$?
 cd "$W" && rm -rf "$S"{timed}
 echo "M2V-BUILD exit $a $h"
@@ -305,7 +313,7 @@ def gpu_script(short, setup, legs, mirror, rev, suite, last, layer=None, cpu=Non
                      for leg in legs)
     if suite == "rt":
         file, body = ARCHIVE, f"""{layer_lines(layer, 'linux', '$1')}
-    cargo nextest run --archive-file "$F" --workspace-remap "$S" {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+    cargo nextest run --archive-file "$F" --workspace-remap "$S" -E '{DEVICE_TEST_FILTER}' {NEXTEST_OUT} 2>&1 | awk "$KEEP"
     exit ${{PIPESTATUS[0]}}"""
     else:
         file, body = HARNESS, harness_runs('"$S/crates/metal2vulkan-harness"', '"$F"', '$1', cpu=cpu)

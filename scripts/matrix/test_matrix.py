@@ -234,5 +234,25 @@ class JudgingRuleTests(unittest.TestCase):
         self.assertIn(f"-v skipre='{matrix.results.retime_skip(cpu)}'", script)
 
 
+class DeviceTestTests(unittest.TestCase):
+    """The GPU legs' archive holds the replay player's stream device tests beside the runtime's,
+    and a leg runs exactly those two sets."""
+
+    def test_the_archive_holds_the_validation_crate_beside_the_runtime(self):
+        script = matrix.build_script("abc", "", False)
+        self.assertIn("cargo nextest archive -p metal2vulkan-rt -p metal2vulkan-validation --all-features", script)
+
+    def test_a_leg_runs_the_runtime_s_tests_and_the_two_stream_modules(self):
+        leg = matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")
+        script = matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40, "rt", False)
+        self.assertIn(f"-E '{matrix.DEVICE_TEST_FILTER}'", script)
+        self.assertIn("test(/^runtime_lane::(replay_streams|rt_replay)::/)", matrix.DEVICE_TEST_FILTER)
+
+    def test_the_harness_suite_takes_no_test_filter(self):
+        leg = matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")
+        script = matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40, "harness", False)
+        self.assertNotIn(matrix.DEVICE_TEST_FILTER, script)
+
+
 if __name__ == "__main__":
     unittest.main()
