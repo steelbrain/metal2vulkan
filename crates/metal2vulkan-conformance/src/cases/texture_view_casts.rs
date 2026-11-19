@@ -631,6 +631,47 @@ mod tests {
         assert_eq!(names.len(), PAIRS.len());
     }
 
+    /// Metal's recorded samples are, at every texel, the colour the way cleared the level and
+    /// slice that lies there: the views and parents share their texels as the module states, and
+    /// a side that answers otherwise differs from Metal rather than from a guess.
+    #[test]
+    fn every_recorded_sample_is_the_colour_its_way_cleared() {
+        for pair in &PAIRS {
+            let Ok(recording) = crate::recording::read(pair.case) else {
+                panic!("{}: no recording", pair.case);
+            };
+            let answer = recording.answers.first().expect("an answer");
+            assert_eq!(answer.outcomes.len(), 1, "{}", pair.case);
+            let root = &answer.outcomes[0].transcript.root;
+            let case = root.child("case").unwrap_or(root);
+            for way in Way::BOTH {
+                let plan = pair.plan(way);
+                let node = case
+                    .child(way.site())
+                    .unwrap_or_else(|| panic!("{}: no {}", pair.case, way.site()));
+                for spot in &plan.spots {
+                    let [level, slice] = spot.sampled;
+                    let at = format!("level-{level}-slice-{slice}");
+                    let leaf = node
+                        .child(&at)
+                        .unwrap_or_else(|| panic!("{}: no {at}", pair.case));
+                    let Value::Bytes(bytes) = &leaf.observed.value else {
+                        panic!("{}: {at} holds no bytes", pair.case);
+                    };
+                    let want = colour(way, spot.rendered[0], spot.rendered[1]).map(|c| c as f32);
+                    assert_eq!(bytes.len() as u32, plan.texels(spot) * SAMPLE, "{at}");
+                    for sample in bytes.chunks(SAMPLE as usize) {
+                        let got: Vec<f32> = sample
+                            .chunks(4)
+                            .map(|word| f32::from_le_bytes(word.try_into().expect("a word")))
+                            .collect();
+                        assert_eq!(got, want, "{}: {}: {at}", pair.case, way.site());
+                    }
+                }
+            }
+        }
+    }
+
     /// Each way samples every texel of every level and slice it names once, and the colours of
     /// two levels or two slices of what it renders differ, so a sample of the wrong one reads as
     /// a difference.

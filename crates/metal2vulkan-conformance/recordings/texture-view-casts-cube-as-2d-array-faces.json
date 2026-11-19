@@ -1,0 +1,1002 @@
+{
+  "format": 1,
+  "case": "texture-view-casts-cube-as-2d-array-faces",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "tvc_samples.ll",
+      "entry": "tvc_cube+tvc_2d_array",
+      "source_sha256": "92e70cc075dc6f17ca06a5a7afbc55eb6c5466a3e278a8c03a2fac4b7ac5ade6"
+    },
+    {
+      "fixture": "tvc_samples.air.ll",
+      "entry": "tvc_cube+tvc_2d_array",
+      "source_sha256": "00c083bfe52df58b68baacf739fc05ea080809eb75d9463baaee862148badbdc"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "92e70cc075dc6f17ca06a5a7afbc55eb6c5466a3e278a8c03a2fac4b7ac5ade6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "00c083bfe52df58b68baacf739fc05ea080809eb75d9463baaee862148badbdc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:parent",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "d817a78d4e8b9349d3e025e64df9195fc9f8e6242374129eb505b36f93dd3007"
+                        }
+                      }
+                    },
+                    {
+                      "name": "view",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c4a61e21b1c4e7ca534bbfe06b2742a9613355266ba40bcb35d9d8dfd42deeb2"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-view:clears",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "bb5f52509b2a4cd71e38cea4fef401e7c1d3e78a3e7fae982bafef898f493148"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-view:points",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "f77d1d7f8b6bf1c1473f4c1b374001668f569c757902d265b2deadc6a7467300"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-parent:clears",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fbec0f793bee378c7df32af089d30af85e841f4bbb7c6da75361e073a43a6a3e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-parent:points",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "fbe8128748e68cf3dea68ede52f6c70f4b66d28eaae34c34641646d6c34555f2"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:parent",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:view",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "parent",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view-facts",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view-descriptor",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "texture_type",
+                      "observed": {
+                        "value": {
+                          "uint": 3
+                        }
+                      }
+                    },
+                    {
+                      "name": "pixel_format",
+                      "observed": {
+                        "value": {
+                          "uint": 115
+                        }
+                      }
+                    },
+                    {
+                      "name": "mipmap_level_count",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
+                    },
+                    {
+                      "name": "array_length",
+                      "observed": {
+                        "value": {
+                          "uint": 3
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "into-the-view:points",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:sample",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "level-1-slice-2",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-3",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 256,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-4",
+                      "observed": {
+                        "value": {
+                          "bytes": "AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 512,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-2",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPQAAgD4AAIA+AACAPwAAgD0AAIA+AACAPgAAgD8AAIA9AACAPgAAgD4AAIA/AACAPQAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 768,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-3",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPgAAgD4AAIA+AACAPwAAAD4AAIA+AACAPgAAgD8AAAA+AACAPgAAgD4AAIA/AAAAPgAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 832,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-4",
+                      "observed": {
+                        "value": {
+                          "bytes": "AABAPgAAgD4AAIA+AACAPwAAQD4AAIA+AACAPgAAgD8AAEA+AACAPgAAgD4AAIA/AABAPgAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 896,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "into-the-parent:points",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:sample",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "level-0-slice-0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-0-slice-1",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 256,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-0-slice-2",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 512,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AABAPgAAwD4AAEA/AACAPwAAQD4AAMA+AABAPwAAgD8AAEA+AADAPgAAQD8AAIA/AABAPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 768,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-1",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPgAAwD4AAEA/AACAPwAAgD4AAMA+AABAPwAAgD8AAIA+AADAPgAAQD8AAIA/AACAPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 832,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-2",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACgPgAAwD4AAEA/AACAPwAAoD4AAMA+AABAPwAAgD8AAKA+AADAPgAAQD8AAIA/AACgPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 896,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 6.98 and ours at 7.44; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 242,
+      "times": {
+        "case": "texture-view-casts-cube-as-2d-array-faces",
+        "calls": 16,
+        "in_calls": 36035332,
+        "on_cpu": 1382835,
+        "blocked": 34683291,
+        "elsewhere": 7932667,
+        "spend": 44220206,
+        "spend_least": 43118375,
+        "spend_most": 52768749,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 5875,
+            "on_cpu": 6041,
+            "blocked": 0,
+            "wall_least": 5291,
+            "wall_most": 6916,
+            "wall_total": 17458,
+            "on_cpu_total": 17791,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 31209,
+            "on_cpu": 31334,
+            "blocked": 0,
+            "wall_least": 29708,
+            "wall_most": 38541,
+            "wall_total": 134292,
+            "on_cpu_total": 134666,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 25506333,
+            "on_cpu": 703833,
+            "blocked": 24818250,
+            "wall_least": 25115667,
+            "wall_most": 33899375,
+            "wall_total": 25506333,
+            "on_cpu_total": 703833,
+            "blocked_total": 24818250
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 333,
+            "on_cpu": 500,
+            "blocked": 0,
+            "wall_least": 250,
+            "wall_most": 500,
+            "wall_total": 1375,
+            "on_cpu_total": 1750,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 4,
+            "most_calls": 4,
+            "wall": 1079833,
+            "on_cpu": 82167,
+            "blocked": 922583,
+            "wall_least": 1067417,
+            "wall_most": 1407041,
+            "wall_total": 10390791,
+            "on_cpu_total": 507418,
+            "blocked_total": 9848166
+          },
+          {
+            "call": "texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 36750,
+            "on_cpu": 36875,
+            "blocked": 0,
+            "wall_least": 35000,
+            "wall_most": 48375,
+            "wall_total": 36750,
+            "on_cpu_total": 36875,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4417,
+            "on_cpu": 4542,
+            "blocked": 0,
+            "wall_least": 4208,
+            "wall_most": 6959,
+            "wall_total": 4417,
+            "on_cpu_total": 4542,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 500,
+            "on_cpu": 667,
+            "blocked": 0,
+            "wall_least": 458,
+            "wall_most": 958,
+            "wall_total": 500,
+            "on_cpu_total": 667,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 2458,
+            "on_cpu": 2583,
+            "blocked": 0,
+            "wall_least": 2000,
+            "wall_most": 3084,
+            "wall_total": 5167,
+            "on_cpu_total": 5375,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 6.98 and ours at 7.44; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 239,
+      "times": {
+        "case": "texture-view-casts-cube-as-2d-array-faces",
+        "calls": 16,
+        "in_calls": 4922873,
+        "on_cpu": 1175294,
+        "blocked": 3799792,
+        "elsewhere": 1424542,
+        "spend": 6349583,
+        "spend_least": 5616249,
+        "spend_most": 6811875,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 5791,
+            "on_cpu": 5917,
+            "blocked": 0,
+            "wall_least": 4792,
+            "wall_most": 8458,
+            "wall_total": 18084,
+            "on_cpu_total": 18417,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 11291,
+            "on_cpu": 11500,
+            "blocked": 0,
+            "wall_least": 11167,
+            "wall_most": 15500,
+            "wall_total": 67874,
+            "on_cpu_total": 68291,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 201000,
+            "on_cpu": 201584,
+            "blocked": 0,
+            "wall_least": 191375,
+            "wall_most": 228709,
+            "wall_total": 201000,
+            "on_cpu_total": 201584,
+            "blocked_total": 0
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 333,
+            "on_cpu": 500,
+            "blocked": 0,
+            "wall_least": 250,
+            "wall_most": 458,
+            "wall_total": 750,
+            "on_cpu_total": 1084,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 4,
+            "most_calls": 4,
+            "wall": 643625,
+            "on_cpu": 158583,
+            "blocked": 549083,
+            "wall_least": 573709,
+            "wall_most": 777791,
+            "wall_total": 4609542,
+            "on_cpu_total": 853207,
+            "blocked_total": 3799792
+          },
+          {
+            "call": "texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 30458,
+            "on_cpu": 30667,
+            "blocked": 0,
+            "wall_least": 28916,
+            "wall_most": 45792,
+            "wall_total": 30458,
+            "on_cpu_total": 30667,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 3625,
+            "on_cpu": 3750,
+            "blocked": 0,
+            "wall_least": 3291,
+            "wall_most": 4166,
+            "wall_total": 3625,
+            "on_cpu_total": 3750,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 458,
+            "on_cpu": 542,
+            "blocked": 0,
+            "wall_least": 375,
+            "wall_most": 583,
+            "wall_total": 458,
+            "on_cpu_total": 542,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 1250,
+            "on_cpu": 1375,
+            "blocked": 0,
+            "wall_least": 1083,
+            "wall_most": 1750,
+            "wall_total": 3333,
+            "on_cpu_total": 3542,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,794 @@
+{
+  "format": 1,
+  "case": "texture-view-casts-2d-as-2d-array",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "tvc_samples.ll",
+      "entry": "tvc_2d+tvc_2d_array",
+      "source_sha256": "92e70cc075dc6f17ca06a5a7afbc55eb6c5466a3e278a8c03a2fac4b7ac5ade6"
+    },
+    {
+      "fixture": "tvc_samples.air.ll",
+      "entry": "tvc_2d+tvc_2d_array",
+      "source_sha256": "00c083bfe52df58b68baacf739fc05ea080809eb75d9463baaee862148badbdc"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "92e70cc075dc6f17ca06a5a7afbc55eb6c5466a3e278a8c03a2fac4b7ac5ade6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "00c083bfe52df58b68baacf739fc05ea080809eb75d9463baaee862148badbdc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:parent",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "8ba7ba17a812b7256591512f6ec8fed234995eb3a58b8b01ba315babc3f9dd55"
+                        }
+                      }
+                    },
+                    {
+                      "name": "view",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "825597c400bbc346b2dfbccb7e073692d6c106efc4c17d18c6920f65997aec24"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-view:clears",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b59b5084bf18de76d4744f2ce966774e3a79d48ab6e43f270439168722c3f4ed"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-view:points",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "86cc34b08ae2d0aad7f945612719404956aa08d5cdb5bc1466a221492808980c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-parent:clears",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "64f88c5671e4cae4646e90345c70dff51f9e4543c2d09aa5c1a6035ff5657d5f"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-parent:points",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "321001d4cbe225cbdee28d1191e14c27181e8c41d8097d87de37870eb3a905a9"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:parent",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:view",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "parent",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view-facts",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view-descriptor",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "texture_type",
+                      "observed": {
+                        "value": {
+                          "uint": 3
+                        }
+                      }
+                    },
+                    {
+                      "name": "pixel_format",
+                      "observed": {
+                        "value": {
+                          "uint": 115
+                        }
+                      }
+                    },
+                    {
+                      "name": "mipmap_level_count",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
+                    },
+                    {
+                      "name": "array_length",
+                      "observed": {
+                        "value": {
+                          "uint": 1
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "into-the-view:points",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:sample",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "level-1-slice-0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPQAAgD4AAIA+AACAPwAAgD0AAIA+AACAPgAAgD8AAIA9AACAPgAAgD4AAIA/AACAPQAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 256,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "into-the-parent:points",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:sample",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "level-0-slice-0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPQAAgD4AAEA/AACAPwAAgD0AAIA+AABAPwAAgD8AAIA9AACAPgAAQD8AAIA/AACAPQAAgD4AAEA/AACAPwAAgD0AAIA+AABAPwAAgD8AAIA9AACAPgAAQD8AAIA/AACAPQAAgD4AAEA/AACAPwAAgD0AAIA+AABAPwAAgD8AAIA9AACAPgAAQD8AAIA/AACAPQAAgD4AAEA/AACAPwAAgD0AAIA+AABAPwAAgD8AAIA9AACAPgAAQD8AAIA/AACAPQAAgD4AAEA/AACAPwAAgD0AAIA+AABAPwAAgD8AAIA9AACAPgAAQD8AAIA/AACAPQAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPQAAwD4AAEA/AACAPwAAgD0AAMA+AABAPwAAgD8AAIA9AADAPgAAQD8AAIA/AACAPQAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 256,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 6.98 and ours at 7.44; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 242,
+      "times": {
+        "case": "texture-view-casts-2d-as-2d-array",
+        "calls": 16,
+        "in_calls": 35468123,
+        "on_cpu": 1205748,
+        "blocked": 34269375,
+        "elsewhere": 7723583,
+        "spend": 43151706,
+        "spend_least": 42560706,
+        "spend_most": 47435876,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 5833,
+            "on_cpu": 6000,
+            "blocked": 0,
+            "wall_least": 5375,
+            "wall_most": 6458,
+            "wall_total": 18000,
+            "on_cpu_total": 18250,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 30542,
+            "on_cpu": 30750,
+            "blocked": 0,
+            "wall_least": 28625,
+            "wall_most": 38000,
+            "wall_total": 137875,
+            "on_cpu_total": 138209,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 25344334,
+            "on_cpu": 641833,
+            "blocked": 24750625,
+            "wall_least": 25026083,
+            "wall_most": 29363583,
+            "wall_total": 25344334,
+            "on_cpu_total": 641833,
+            "blocked_total": 24750625
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 333,
+            "on_cpu": 500,
+            "blocked": 0,
+            "wall_least": 250,
+            "wall_most": 375,
+            "wall_total": 1333,
+            "on_cpu_total": 1708,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 4,
+            "most_calls": 4,
+            "wall": 473292,
+            "on_cpu": 49125,
+            "blocked": 411167,
+            "wall_least": 448459,
+            "wall_most": 801917,
+            "wall_total": 9743042,
+            "on_cpu_total": 354541,
+            "blocked_total": 9343167
+          },
+          {
+            "call": "texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 35792,
+            "on_cpu": 35958,
+            "blocked": 0,
+            "wall_least": 34958,
+            "wall_most": 44916,
+            "wall_total": 35792,
+            "on_cpu_total": 35958,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 4125,
+            "on_cpu": 4208,
+            "blocked": 0,
+            "wall_least": 3625,
+            "wall_most": 4667,
+            "wall_total": 4125,
+            "on_cpu_total": 4208,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 500,
+            "on_cpu": 584,
+            "blocked": 0,
+            "wall_least": 417,
+            "wall_most": 625,
+            "wall_total": 500,
+            "on_cpu_total": 584,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 2458,
+            "on_cpu": 2625,
+            "blocked": 0,
+            "wall_least": 2208,
+            "wall_most": 2709,
+            "wall_total": 5333,
+            "on_cpu_total": 5625,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 6.98 and ours at 7.44; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 239,
+      "times": {
+        "case": "texture-view-casts-2d-as-2d-array",
+        "calls": 16,
+        "in_calls": 4140874,
+        "on_cpu": 905835,
+        "blocked": 3232126,
+        "elsewhere": 1202625,
+        "spend": 5343499,
+        "spend_least": 4335875,
+        "spend_most": 5541335,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 3833,
+            "on_cpu": 3959,
+            "blocked": 0,
+            "wall_least": 1958,
+            "wall_most": 4792,
+            "wall_total": 8083,
+            "on_cpu_total": 8376,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 11625,
+            "on_cpu": 11833,
+            "blocked": 0,
+            "wall_least": 10792,
+            "wall_most": 12250,
+            "wall_total": 59167,
+            "on_cpu_total": 59583,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 196917,
+            "on_cpu": 197458,
+            "blocked": 0,
+            "wall_least": 182250,
+            "wall_most": 204167,
+            "wall_total": 196917,
+            "on_cpu_total": 197458,
+            "blocked_total": 0
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 292,
+            "on_cpu": 458,
+            "blocked": 0,
+            "wall_least": 208,
+            "wall_most": 333,
+            "wall_total": 707,
+            "on_cpu_total": 1001,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 4,
+            "most_calls": 4,
+            "wall": 650333,
+            "on_cpu": 123375,
+            "blocked": 540584,
+            "wall_least": 300083,
+            "wall_most": 737541,
+            "wall_total": 3813250,
+            "on_cpu_total": 581124,
+            "blocked_total": 3232126
+          },
+          {
+            "call": "texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 52500,
+            "on_cpu": 52750,
+            "blocked": 0,
+            "wall_least": 46125,
+            "wall_most": 66417,
+            "wall_total": 52500,
+            "on_cpu_total": 52750,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 3291,
+            "on_cpu": 3416,
+            "blocked": 0,
+            "wall_least": 2625,
+            "wall_most": 3833,
+            "wall_total": 3291,
+            "on_cpu_total": 3416,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 333,
+            "on_cpu": 458,
+            "blocked": 0,
+            "wall_least": 250,
+            "wall_most": 417,
+            "wall_total": 333,
+            "on_cpu_total": 458,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 959,
+            "on_cpu": 1125,
+            "blocked": 0,
+            "wall_least": 792,
+            "wall_most": 1167,
+            "wall_total": 2084,
+            "on_cpu_total": 2375,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}
