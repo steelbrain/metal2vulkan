@@ -1213,7 +1213,7 @@ const-value	metal2vulkan-rt::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attac
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
-const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME]
+const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME]
 const-value	metal2vulkan-rt::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-rt::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-rt::floor::VERSION	vk::API_VERSION_1_3
@@ -1444,6 +1444,8 @@ enum	metal2vulkan-rt::Stage	#[cfg_attr(feature = "serde", derive(serde::Serializ
 enum	metal2vulkan-rt::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
 enum	metal2vulkan-rt::StorageMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum StorageMode
 enum	metal2vulkan-rt::StoreAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StoreAction
+enum	metal2vulkan-rt::SurfaceCopy	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum SurfaceCopy
+enum	metal2vulkan-rt::SurfaceForm	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum SurfaceForm
 enum	metal2vulkan-rt::TextureViewKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureViewKind
 enum	metal2vulkan-rt::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
 enum	metal2vulkan-rt::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
@@ -2344,6 +2346,7 @@ field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.stage_entries	pub stage_entries: u64
 field	metal2vulkan-rt::Gauges.stage_entry_bytes	pub stage_entry_bytes: u64
 field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
+field	metal2vulkan-rt::Gauges.surface_imports	pub surface_imports: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::Gauges.textures_copied_over	pub textures_copied_over: u64
 field	metal2vulkan-rt::Gauges.threads	pub threads: [u64; THREADS]
@@ -2411,6 +2414,8 @@ field	metal2vulkan-rt::Metrics.stamps_not_available	pub stamps_not_available: u6
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-rt::Metrics.submissions_during_frees	pub submissions_during_frees: u64
 field	metal2vulkan-rt::Metrics.submit_infos	pub submit_infos: u64
+field	metal2vulkan-rt::Metrics.surfaces_copied	pub surfaces_copied: u64
+field	metal2vulkan-rt::Metrics.surfaces_in_place	pub surfaces_in_place: u64
 field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64
 field	metal2vulkan-rt::Metrics.takes_from_free_ranges	pub takes_from_free_ranges: u64
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64
@@ -2422,6 +2427,11 @@ field	metal2vulkan-rt::PixelFormatInfo.cast_class	pub cast_class: u64
 field	metal2vulkan-rt::PixelFormatInfo.flags	pub flags: u64
 field	metal2vulkan-rt::PixelFormatInfo.name	pub name: &'static str
 field	metal2vulkan-rt::PixelFormatInfo.words	pub words: [u64; 4]
+field	metal2vulkan-rt::PlaneLayout.offset	pub offset: u64
+field	metal2vulkan-rt::PlaneLayout.row_pitch	pub row_pitch: u64
+field	metal2vulkan-rt::PlaneSpec.descriptor	pub descriptor: TextureDescriptor
+field	metal2vulkan-rt::PlaneSpec.index	pub index: Option<u32>
+field	metal2vulkan-rt::PlaneSpec.rows_below	pub rows_below: u32
 field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device
 field	metal2vulkan-rt::RawDevice.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
@@ -2503,6 +2513,13 @@ field	metal2vulkan-rt::StencilDescriptor.read_mask	pub read_mask: u32
 field	metal2vulkan-rt::StencilDescriptor.stencil_compare_function	pub stencil_compare_function: CompareFunction
 field	metal2vulkan-rt::StencilDescriptor.stencil_failure_operation	pub stencil_failure_operation: StencilOperation
 field	metal2vulkan-rt::StencilDescriptor.write_mask	pub write_mask: u32
+field	metal2vulkan-rt::SurfaceExport.export	pub export: Export
+field	metal2vulkan-rt::SurfaceExport.form	pub form: SurfaceForm
+field	metal2vulkan-rt::SurfaceExport.planes	pub planes: Vec<PlaneLayout>
+field	metal2vulkan-rt::SurfaceSpec.handle	pub handle: ExportHandle
+field	metal2vulkan-rt::SurfaceSpec.pitch_multiple	pub pitch_multiple: u64
+field	metal2vulkan-rt::SurfaceSpec.planes	pub planes: &'a [PlaneSpec]
+field	metal2vulkan-rt::SurfaceSpec.start_multiple	pub start_multiple: u64
 field	metal2vulkan-rt::TextureDescriptor.array_length	pub array_length: u32
 field	metal2vulkan-rt::TextureDescriptor.depth	pub depth: u32
 field	metal2vulkan-rt::TextureDescriptor.height	pub height: u32
@@ -9546,6 +9563,7 @@ method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture_to_buffer	pub fn c
 method	metal2vulkan-rt::BlitCommandEncoder::end_encoding	pub fn end_encoding(mut self)
 method	metal2vulkan-rt::BlitCommandEncoder::fill_buffer	pub fn fill_buffer(&mut self, buffer: &Buffer, range: Range<u64>, value: u8) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::generate_mipmaps	pub fn generate_mipmaps(&mut self, texture: &Texture) -> Result<(), Error>
+method	metal2vulkan-rt::BlitCommandEncoder::release_surface_to_external	pub fn release_surface_to_external(&mut self, surface: &Surface) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::release_to_external	pub fn release_to_external(&mut self, buffer: &Buffer) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::synchronize_resource	pub fn synchronize_resource(&mut self, resource: Resource<'_>) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
@@ -9638,6 +9656,7 @@ method	metal2vulkan-rt::Device::new_depth_stencil_state	pub fn new_depth_stencil
 method	metal2vulkan-rt::Device::new_drawable_texture	pub unsafe fn new_drawable_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, image: vk::Image, swapchain: &vk::SwapchainCreateInfoKHR<'_>) -> Result<Texture, Error>
 method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
 method	metal2vulkan-rt::Device::new_exported_block	pub fn new_exported_block(&self, handle: ExportHandle, len: u64) -> Result<(Block, Export), Error>
+method	metal2vulkan-rt::Device::new_exported_surface	pub fn new_exported_surface(&self, spec: &SurfaceSpec<'_>) -> Result<(Surface, SurfaceExport), Error>
 method	metal2vulkan-rt::Device::new_fence	pub fn new_fence(&self) -> Fence
 method	metal2vulkan-rt::Device::new_heap_buffer	pub fn new_heap_buffer(&self, heap: HeapRange, offset: u64, length: u64) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Device::new_heap_texture	pub fn new_heap_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, heap: HeapRange, offset: u64) -> Result<Texture, Error>
@@ -9758,6 +9777,9 @@ method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&sel
 method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
 method	metal2vulkan-rt::SharedEvent::signaled_value	pub fn signaled_value(&self) -> u64
 method	metal2vulkan-rt::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> Result<bool, Error>
+method	metal2vulkan-rt::Surface::external_writes_done	pub fn external_writes_done(&self) -> Result<(), Error>
+method	metal2vulkan-rt::Surface::handle	pub fn handle(&self) -> ExportHandle
+method	metal2vulkan-rt::Surface::planes	pub fn planes(&self) -> &[Texture]
 method	metal2vulkan-rt::Texture::descriptor	pub fn descriptor(&self) -> &TextureDescriptor
 method	metal2vulkan-rt::Texture::drawable_acquired	pub unsafe fn drawable_acquired(&self) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u32, slice: u32) -> Result<(), Error>
@@ -11831,6 +11853,8 @@ struct	metal2vulkan-rt::Library	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exh
 struct	metal2vulkan-rt::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Metrics
 struct	metal2vulkan-rt::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
 struct	metal2vulkan-rt::PixelFormatInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PixelFormatInfo
+struct	metal2vulkan-rt::PlaneLayout	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct PlaneLayout
+struct	metal2vulkan-rt::PlaneSpec	#[derive(Clone, Copy, Debug)] pub struct PlaneSpec
 struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
 struct	metal2vulkan-rt::Region	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Region
 struct	metal2vulkan-rt::RenderCommandEncoder	pub struct RenderCommandEncoder
@@ -11848,6 +11872,9 @@ struct	metal2vulkan-rt::ScissorRect	#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct	metal2vulkan-rt::SharedEvent	#[derive(Clone)] pub struct SharedEvent
 struct	metal2vulkan-rt::SizeAndAlign	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct SizeAndAlign
 struct	metal2vulkan-rt::StencilDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StencilDescriptor
+struct	metal2vulkan-rt::Surface	pub struct Surface
+struct	metal2vulkan-rt::SurfaceExport	#[derive(Debug)] #[non_exhaustive] pub struct SurfaceExport
+struct	metal2vulkan-rt::SurfaceSpec	#[derive(Clone, Copy, Debug)] pub struct SurfaceSpec<'a>
 struct	metal2vulkan-rt::Texture	#[derive(Clone)] pub struct Texture
 struct	metal2vulkan-rt::TextureDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TextureDescriptor
 struct	metal2vulkan-rt::TextureLevelInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TextureLevelInfo
@@ -12424,6 +12451,7 @@ trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsag
 trait-impl	metal2vulkan-rt::SamplerDescriptor impl Default	impl Default for SamplerDescriptor
 trait-impl	metal2vulkan-rt::SamplerState impl crate::kept::Handle	impl crate::kept::Handle for SamplerState
 trait-impl	metal2vulkan-rt::StencilDescriptor impl Default	impl Default for StencilDescriptor
+trait-impl	metal2vulkan-rt::Surface impl std::fmt::Debug	impl std::fmt::Debug for Surface
 trait-impl	metal2vulkan-rt::Texture impl crate::kept::Handle	impl crate::kept::Handle for Texture
 trait-impl	metal2vulkan-rt::TextureSwizzleChannels impl Default	impl Default for TextureSwizzleChannels
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
@@ -13797,6 +13825,7 @@ variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_
 variant	metal2vulkan-rt::Gap::RenderPass	RenderPass { kind: RenderPassKind }
 variant	metal2vulkan-rt::Gap::RenderPipeline	RenderPipeline { kind: RenderPipelineKind }
 variant	metal2vulkan-rt::Gap::StorageElement	StorageElement { slot: Option<u32>, pixel_format: PixelFormat }
+variant	metal2vulkan-rt::Gap::SurfaceUsage	SurfaceUsage { pixel_format: PixelFormat, missing: u32 }
 variant	metal2vulkan-rt::Gap::SwizzledReadWrite	SwizzledReadWrite { slot: u32 }
 variant	metal2vulkan-rt::Gap::TextureBuffer	TextureBuffer
 variant	metal2vulkan-rt::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }
@@ -13966,6 +13995,7 @@ variant	metal2vulkan-rt::Refusal::PatchDraw	PatchDraw
 variant	metal2vulkan-rt::Refusal::SamplerArgumentIndex	SamplerArgumentIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::SamplerIds	SamplerIds { numbered: usize, given: usize }
 variant	metal2vulkan-rt::Refusal::StencilAttachment	StencilAttachment
+variant	metal2vulkan-rt::Refusal::SurfacePlanes	SurfacePlanes { planes: usize, pitch_multiple: u64, start_multiple: u64 }
 variant	metal2vulkan-rt::Refusal::TessellationFactorOffset	TessellationFactorOffset { offset: u64 }
 variant	metal2vulkan-rt::Refusal::TextureArgumentIndex	TextureArgumentIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::TextureArrayLength	TextureArrayLength { array_length: u32 }
@@ -14028,8 +14058,17 @@ variant	metal2vulkan-rt::StoreAction::MultisampleResolve	MultisampleResolve
 variant	metal2vulkan-rt::StoreAction::Store	Store
 variant	metal2vulkan-rt::StoreAction::StoreAndMultisampleResolve	StoreAndMultisampleResolve
 variant	metal2vulkan-rt::StoreAction::Unknown	Unknown
+variant	metal2vulkan-rt::SurfaceCopy::Dedicated	Dedicated { plane: usize }
+variant	metal2vulkan-rt::SurfaceCopy::MemoryType	MemoryType
+variant	metal2vulkan-rt::SurfaceCopy::NoModifier	NoModifier
+variant	metal2vulkan-rt::SurfaceCopy::Pitch	Pitch { plane: usize }
+variant	metal2vulkan-rt::SurfaceCopy::Start	Start { plane: usize }
+variant	metal2vulkan-rt::SurfaceCopy::Tiling	Tiling { plane: usize }
+variant	metal2vulkan-rt::SurfaceForm::Copy	Copy(SurfaceCopy)
+variant	metal2vulkan-rt::SurfaceForm::InPlace	InPlace
 variant	metal2vulkan-rt::TextureViewKind::PixelFormat	PixelFormat
 variant	metal2vulkan-rt::TextureViewKind::Slices	Slices
+variant	metal2vulkan-rt::TextureViewKind::SurfacePixelFormat	SurfacePixelFormat
 variant	metal2vulkan-rt::TextureViewKind::TextureType	TextureType
 variant	metal2vulkan-rt::VisibilityResultMode::Boolean	Boolean
 variant	metal2vulkan-rt::VisibilityResultMode::Counting	Counting

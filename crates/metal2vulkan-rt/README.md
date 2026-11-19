@@ -457,8 +457,77 @@ write needs no acquire: after a release, Vulkan lets the releasing queue use the
 without one, its contents written anew (section 7.7.6). Where the other API writes the block in
 between, `external_writes_done` comes first, as above.
 
+### Exported surfaces
+
+Metal has no counterpart: this is the consumer's own path for sharing a picture's planes with
+another API, a video decoder that writes decoded pictures or an encoder that reads rendered ones.
+`Device::new_exported_surface(&SurfaceSpec { handle, pitch_multiple, start_multiple, planes })`
+makes a `Surface`, whose `planes()` are textures as each `PlaneSpec`'s descriptor makes them, and
+a `SurfaceExport`: the memory's `Export` (handle, size, memory type), each plane's `PlaneLayout`
+(offset and row pitch) and the `SurfaceForm` it took. A plane is what `Buffer::new_texture`
+takes: 2D, of one level, sample and slice, of a color format of one texel an element; the call
+refuses the rest as that call does. A spec of no plane, more than four, or a multiple of 0 is
+`Refusal::SurfacePlanes`.
+
+The layout is one rule in both forms. The planes share one pitch, a multiple of `pitch_multiple`
+and of every plane's texel. Plane 0 is at offset 0; each next plane starts at the first multiple
+of `start_multiple` and of its texel at or past the previous plane's start plus its rows and its
+`rows_below` at the pitch. A start multiple of 1 with no rows below puts each plane directly below
+the one before, at the same pitch: an NVENC input (NV12 or P010) asks `pitch_multiple: 4,
+start_multiple: 1` and `rows_below: 0`. A VA-API import asks a pitch multiple of 256. The layout
+is linear: a dma-buf's import names `DRM_FORMAT_MOD_LINEAR`.
+
+**In place**, each plane's texture is a linear image in the shared memory, which the other API's
+writes reach with no copy. What a consumer passes to get it, by handle:
+
+- `ExportHandle::DmaBuf`: a device with `VK_EXT_image_drm_format_modifier` (an optional extension
+  device creation enables where listed) whose `DRM_FORMAT_MOD_LINEAR` entry for each plane's
+  format offers sampling, rendering and both copies, exportable and importable as a dma-buf. The
+  pitch is the widest of the planes' pitches the driver chooses for an image of the implicit list,
+  rounded up to the multiples; each plane's image states its start and that pitch, and the driver
+  must take both. Each plane's image lies on its own dedicated import of the surface's dma-buf,
+  bound at its first byte, sized to the larger of its requirement and its stated offset plus its
+  subresource; the allocation the dma-buf came from is freed once the imports and the consumer's
+  handle exist, so a surface is two allocations, counted in `Gauges::surface_imports`.
+- `ExportHandle::OpaqueFd` and `ExportHandle::OpaqueWin32`: each plane's format's `LINEAR` tiling
+  offers sampling, rendering and both copies, exportable and importable as the handle, not only
+  in an allocation of its own. The pitch is the driver's own for each plane's `LINEAR` image: the
+  planes' pitches must be equal and a multiple of `pitch_multiple` and of the texels, and each
+  start a multiple of its image's alignment, past the plane before's requirement. The images are
+  bound in one exportable allocation that holds no buffer, counted in `Gauges::exports`.
+
+Storage joins an image's usage where its tiling offers it; a usage a plane's texture asks that its
+tiling lacks is `Gap::SurfaceUsage`. A plane's image lists, for views of another format, the
+formats of the texture's own list that its tiling samples, and none where the device refuses that
+list; a view of another format it does not list is `Gap::TextureView` of
+`TextureViewKind::SurfacePixelFormat`. The images move to the general layout in a submission the
+call waits for before the handle leaves, and stay in it through every copy.
+
+**The copy form** is taken where any of that fails, and the answer's `SurfaceForm::Copy` names
+why (`SurfaceCopy`): `NoModifier`, `Tiling`, `Dedicated`, `Pitch`, `Start` or `MemoryType`. The
+surface is then an exported block (as above) laid by the same rule at the tightest pitch the
+multiples allow, and each plane's texture is a texture over a buffer in it, an image of its own
+that the submissions copy the bytes into and back (`Metrics::over_copies`). A start or pitch the
+driver cannot take falls to the copy form with no error: the answer's `form` is the only sign.
+`Metrics::surfaces_in_place` and `Metrics::surfaces_copied` count each form made.
+
+One contract for both forms, the exported block's above. Once the other API's work that wrote the
+surface has completed, the consumer calls `Surface::external_writes_done()` before it commits the
+command buffers that use what was written: in place, each plane's image's acquire from the other
+API's queue family, the general layout kept, one barrier in the upload; in the copy form the
+block's acquire. Where the other API is to read what the runtime's commands wrote, the consumer
+calls `BlitCommandEncoder::release_surface_to_external(&surface)` after the last command that
+writes the planes: in place, each plane's image's release, one barrier; in the copy form the
+block's release, the planes' images copied back first. Both count in `Metrics::external_acquires`
+and `Metrics::external_releases`. From a release until the consumer's next write into the surface
+through the runtime, the consumer encodes no read of its planes.
+
 ### Known gaps of memory blocks
 
+- A dma-buf surface takes the copy form on a device without `VK_EXT_image_drm_format_modifier`,
+  or whose `DRM_FORMAT_MOD_LINEAR` entry lacks a plane's format or one of its four usages: the
+  device offers no in-place form for it. The Radeon RX 550 (Polaris 12) is the measured example:
+  its driver lists no modifier extension, and its plain `LINEAR` images refuse the dma-buf handle.
 - A shader uses a buffer's `gpuAddress` directly, unchecked: a stale one, of a released buffer, can
   still fault the device.
 - An app buffer too large for the consumer's map budget is copied, on drivers whose dma-buf query
