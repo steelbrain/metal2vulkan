@@ -153,8 +153,9 @@ pub struct BytesPlace {
 }
 
 /// No Metal counterpart: a heap's memory, `len` bytes at `offset` in a block the consumer holds,
-/// taken at the heap's creation; [`Device::new_heap_texture`] places textures in it (in a Private
-/// block) and [`Device::new_heap_buffer`] buffers. The heap is the one at `offset` in `block`:
+/// taken at the heap's creation; [`Device::new_heap_texture`] and
+/// [`Device::new_heap_texture_for_views`] place textures in it (in a Private block) and
+/// [`Device::new_heap_buffer`] buffers. The heap is the one at `offset` in `block`:
 /// every resource placed in it takes one id in the compute encoders' hazard sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HeapRange {
@@ -1023,17 +1024,48 @@ impl Device {
         heap: HeapRange,
         offset: u64,
     ) -> Result<Texture, Error> {
+        let source = self.heap_source(descriptor, heap, offset)?;
+        self.texture(descriptor, Reach::Index(index), source)
+    }
+
+    /// `MTLHeap`'s `newTextureWithDescriptor:offset:`, for a texture reached through its views
+    /// alone: a texture as [`Device::new_texture_for_views`] makes it, its image bound at
+    /// `offset` in `heap` as [`Device::new_heap_texture`] binds one, by the same rule. Nothing is
+    /// allocated, and the bytes are those the heap's memory holds there; its uses, and its
+    /// views', take the heap's id in the compute encoders' hazard sets, and the texture holds the
+    /// block. Where Metal's heap texture has a `gpuResourceID` of its own, this one has none, as
+    /// [`Device::new_texture_for_views`] says: shaders reach it through its views
+    /// ([`Texture::new_texture_view`]) alone.
+    ///
+    /// Err: as [`Device::new_texture_for_views`]; [`Error::NoSuchBlock`], [`Gap::HeapTexture`]
+    /// and [`Refusal::HeapTexturePlace`] as [`Device::new_heap_texture`].
+    pub fn new_heap_texture_for_views(
+        &self,
+        descriptor: &TextureDescriptor,
+        heap: HeapRange,
+        offset: u64,
+    ) -> Result<Texture, Error> {
+        let source = self.heap_source(descriptor, heap, offset)?;
+        self.texture(descriptor, Reach::Views, source)
+    }
+
+    /// The source of a texture placed at `offset` in `heap`: the heap's block, which the consumer
+    /// holds and which is a Private block of the pool's memory.
+    ///
+    /// Err: [`Error::NoSuchBlock`]; [`Gap::HeapTexture`] for a Shared or exported block.
+    fn heap_source(
+        &self,
+        descriptor: &TextureDescriptor,
+        heap: HeapRange,
+        offset: u64,
+    ) -> Result<Source<'static>, Error> {
         let block = self.block(heap.block)?;
         if block.memory.class != MemoryClass::Private || block.memory.own.is_some() {
             return Err(Error::Unsupported(Gap::HeapTexture {
                 pixel_format: descriptor.pixel_format,
             }));
         }
-        self.texture(
-            descriptor,
-            Reach::Index(index),
-            Source::Heap(block, heap, offset),
-        )
+        Ok(Source::Heap(block, heap, offset))
     }
 
     /// `newTextureWithDescriptor:` with `MTLStorageModeManaged`, at `index`: as

@@ -5,7 +5,9 @@
 //! heap's end, one off the image's alignment, a heap range past its block and a heap in a Shared
 //! block are refused; and every gauge reads zero after teardown. A compute encoder's `use_heap`
 //! holds the heap's block for its command buffer once, past the consumer's release, until the
-//! command buffer retires, and a released block's number names nothing. On no device: a heap
+//! command buffer retires, and a released block's number names nothing. A texture for views
+//! placed in a heap takes no allocation, and its view writes and reads the heap's bytes. On no
+//! device: a heap
 //! buffer's size and alignment are Metal's, its length at a multiple of 256.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -161,6 +163,117 @@ mod on_device {
                 heap.len
             );
             drop((textures, alias));
+            for block in [block, shared] {
+                device
+                    .release_block(block)
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    /// A texture for views placed in a heap range of a Private block: its make allocates nothing
+    /// (no texture's allocation of its own, no texture block, no block), a view of it reads what
+    /// the texture's writes left and the texture what the view's writes left, and the heap rule's
+    /// refusals are the indexed texture's: a placement off the image's alignment, and a heap in a
+    /// Shared block.
+    #[test]
+    fn every_device_places_a_texture_for_views_in_a_heap() {
+        each_device("heap_views", |name, _, device| {
+            let core = device.core();
+            let counters = device.counters();
+            let block = (device.take_block(MemoryClass::Private, MemoryClass::Private.block_len()))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let heap = HeapRange {
+                block: block.id,
+                offset: MIB,
+                len: 4 * MIB,
+            };
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, SIDE, SIDE);
+            d.usage = TextureUsage::RENDER_TARGET;
+            d.storage_mode = StorageMode::Shared;
+            let fit = (device.heap_texture_size_and_align(&d))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let offset = fit.size.next_multiple_of(fit.align);
+            let before = (counters.metrics(), counters.gauges().blocks);
+            let texture = (device.new_heap_texture_for_views(&d, heap, offset))
+                .unwrap_or_else(|error| panic!("{name}: a texture for views in a heap: {error}"));
+            let after = (counters.metrics(), counters.gauges().blocks);
+            assert_eq!(
+                (
+                    after.0.texture_allocations,
+                    after.0.texture_block_allocations,
+                    after.1,
+                    core.places.blocks(),
+                ),
+                (
+                    before.0.texture_allocations,
+                    before.0.texture_block_allocations,
+                    before.1,
+                    0
+                ),
+                "{name}: the make allocates nothing"
+            );
+            assert_eq!(texture.gpu_resource_id().index, 0, "{name}: no index");
+
+            // Through a view and back.
+            let view = (texture.new_texture_view(
+                PixelFormat::RGBA8Unorm,
+                TextureType::Type2D,
+                0..1,
+                0..1,
+                None,
+            ))
+            .unwrap_or_else(|error| panic!("{name}: a view: {error}"));
+            let whole = Region {
+                origin: [0; 3],
+                size: [SIDE, SIDE, 1],
+            };
+            let len = (SIDE * SIDE * 4) as usize;
+            let row = u64::from(SIDE * 4);
+            let written: Vec<u8> = (0..len).map(|at| (at % 251) as u8).collect();
+            (view.replace_region(whole, 0, 0, crate::HostBytes::from(&written[..]), row, 0))
+                .unwrap_or_else(|error| panic!("{name}: a write through the view: {error}"));
+            let mut read = vec![0; len];
+            (texture.get_bytes(&mut read, row, len as u64, whole, 0, 0))
+                .unwrap_or_else(|error| panic!("{name}: a read of the texture: {error}"));
+            assert!(
+                read == written,
+                "{name}: the texture reads the view's write"
+            );
+            let again: Vec<u8> = written.iter().map(|byte| byte ^ 0xa5).collect();
+            (texture.replace_region(whole, 0, 0, crate::HostBytes::from(&again[..]), row, 0))
+                .unwrap_or_else(|error| panic!("{name}: a write of the texture: {error}"));
+            (view.get_bytes(&mut read, row, len as u64, whole, 0, 0))
+                .unwrap_or_else(|error| panic!("{name}: a read through the view: {error}"));
+            assert!(read == again, "{name}: the view reads the texture's write");
+
+            // The heap rule's refusals.
+            if fit.align > 1 {
+                match device.new_heap_texture_for_views(&d, heap, fit.align / 2) {
+                    Err(Error::Refused(Refusal::HeapTexturePlace { .. })) => {}
+                    Err(error) => panic!("{name}: off the alignment: {error}"),
+                    Ok(_) => panic!("{name}: off the alignment: made"),
+                }
+            }
+            let shared = (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let in_shared = HeapRange {
+                block: shared.id,
+                ..heap
+            };
+            match device.new_heap_texture_for_views(&d, in_shared, 0) {
+                Err(Error::Unsupported(Gap::HeapTexture { .. })) => {}
+                Err(error) => panic!("{name}: a Shared heap: {error}"),
+                Ok(_) => panic!("{name}: a Shared heap's texture was made"),
+            }
+            println!(
+                "heap views: {name}: a texture for views at {offset} in a heap of {} bytes \
+                 ({fit:?}): texture allocations {:?}, texture block allocations {:?} at the make; \
+                 written and read through a view",
+                heap.len, after.0.texture_allocations, after.0.texture_block_allocations
+            );
+            drop((view, texture));
             for block in [block, shared] {
                 device
                     .release_block(block)

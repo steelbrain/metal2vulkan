@@ -970,6 +970,12 @@ made, with no lock, and never rewritten for layouts.
   every texture an index, and this one has none, so its `gpu_resource_id` answers index 0 and a
   slot that binds it reads Metal's nil texture. `new_texture` still refuses a texture shaders
   reach made without an index (`Refusal::TextureIndex`).
+  `Device::new_heap_texture_for_views(descriptor, heap, offset)` is the same texture placed in a
+  heap, as `newTextureWithDescriptor:offset:` places one: its image is bound at `offset` in the
+  heap by `new_heap_texture`'s rule, with no allocation and no texture block, the bytes those the
+  heap's memory holds, and its views take the heap's id in the hazard sets. It differs from
+  Metal's heap texture as `new_texture_for_views` differs from Metal's texture: no index of its
+  own.
 - A texture or view whose own pixel format is block-compressed (BC1 to BC7, and the ASTC, ETC2
   and EAC formats where the device makes them) holds its blocks in an image of that format, and a
   read, sample or gather of its texels is the device's decode of them (an sRGB form's code through

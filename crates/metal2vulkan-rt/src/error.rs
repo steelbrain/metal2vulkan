@@ -637,10 +637,12 @@ pub enum Refusal {
         len: u64,
     },
     /// A heap texture whose image does not lie in its heap
-    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture)): past the heap's end at
-    /// its offset, at an offset in the block that is not a multiple of the image's alignment, or
-    /// in a heap range that leaves its block. The size and alignment are the device's image's,
-    /// as [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align)
+    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture),
+    /// [`Device::new_heap_texture_for_views`](crate::Device::new_heap_texture_for_views)): past
+    /// the heap's end at its offset, at an offset in the block that is not a multiple of the
+    /// image's alignment, or in a heap range that leaves its block. The size and alignment are the
+    /// device's image's, as
+    /// [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align)
     /// answers them, which may exceed what another device answered for the same descriptor.
     ///
     /// Basis: ours (an image bound past its heap's range would take memory the heap does not
@@ -1020,7 +1022,8 @@ pub enum Gap {
         pixel_format: PixelFormat,
     },
     /// A heap texture the runtime does not place
-    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture) and
+    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture),
+    /// [`Device::new_heap_texture_for_views`](crate::Device::new_heap_texture_for_views) and
     /// [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align)): in a
     /// Shared block, or an exported one, whose memory is dedicated to its buffer
     /// (`VUID-vkBindImageMemory-memory-10926`), or one whose image the device requires an
