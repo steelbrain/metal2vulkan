@@ -4,6 +4,7 @@
 use crate::device::{Core, Device};
 use ash::vk;
 use metal2vulkan::metal::state::{depth_stencil_state, DepthStencilDescriptor, StencilOpState};
+use metal2vulkan::pipeline::PrecisionNote;
 use std::sync::Arc;
 
 /// `MTLDepthStencilState`.
@@ -24,8 +25,13 @@ struct Inner {
 /// A depth/stencil descriptor's tests as Vulkan's dynamic state takes them.
 #[derive(Clone, Copy)]
 pub(crate) struct Tests {
-    /// Whether the depth test compares or writes (`depth_stencil_state`).
-    pub(crate) depth: bool,
+    /// Whether the depth test runs: it compares by other than `Always` or writes
+    /// (`depth_stencil_state`).
+    pub(crate) depth_test: bool,
+    /// Whether a fragment that passes writes its depth.
+    pub(crate) depth_write: bool,
+    /// The depth compare operation.
+    pub(crate) depth_compare: vk::CompareOp,
     /// Whether the stencil test can fail or change the stencil.
     pub(crate) stencil: bool,
     /// The front face's and the back face's stencil operations, compare operation and masks.
@@ -56,7 +62,9 @@ impl Tests {
             write_mask: s.write_mask,
         };
         Tests {
-            depth: state.depth_test_enable || state.depth_write_enable,
+            depth_test: state.depth_test_enable,
+            depth_write: state.depth_write_enable,
+            depth_compare: vk::CompareOp::from_raw(state.depth_compare_op.as_raw()),
             stencil: state.stencil_test_enable,
             faces: [face(&state.front), face(&state.back)],
         }
@@ -83,6 +91,21 @@ impl DepthStencilState {
     /// The descriptor it was made with.
     pub fn descriptor(&self) -> &DepthStencilDescriptor {
         &self.inner.descriptor
+    }
+
+    /// No Metal counterpart: the static note of a draw under this state, where it tests or writes
+    /// depth ([`PrecisionNote::DepthDenormals`]: a denormal depth is the device's); `None` where it
+    /// does neither.
+    ///
+    /// A negative or NaN depth, which Metal's test compares by its magnitude, takes no note: the
+    /// runtime enables no `VK_EXT_depth_range_unrestricted` and refuses a clear depth outside
+    /// `[0, 1]` (`RenderPassKind::ClearDepth`), a viewport's depth range past it
+    /// (`DrawKind::Viewport`) and a 32-bit float depth upload (`Gap::FloatDepthUpload`), so a depth
+    /// attachment holds such a value only where Vulkan leaves a depth past the viewport's range
+    /// undefined.
+    pub fn precision_note(&self) -> Option<PrecisionNote> {
+        let tests = self.inner.tests;
+        (tests.depth_test || tests.depth_write).then_some(PrecisionNote::DepthDenormals)
     }
 
     /// Its tests.

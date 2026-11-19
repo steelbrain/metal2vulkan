@@ -357,6 +357,10 @@ pub struct RtSide<'a> {
     /// The render pipeline states a pass the case encoded set, whose precision notes
     /// [`Side::announced`] answers too.
     drawn: BTreeSet<usize>,
+    /// The static notes of what a pass the case encoded set beside its pipeline states: a depth
+    /// bias other than 0 (`RenderCommandEncoder::DEPTH_BIAS_NOTE`) and each depth-stencil state's
+    /// (`DepthStencilState::precision_note`), which [`Side::announced`] answers too.
+    encoder_notes: BTreeSet<rt::PrecisionNote>,
 }
 
 impl<'a> RtSide<'a> {
@@ -376,6 +380,7 @@ impl<'a> RtSide<'a> {
             heaps: Vec::new(),
             dispatched: BTreeSet::new(),
             drawn: BTreeSet::new(),
+            encoder_notes: BTreeSet::new(),
         }
     }
 
@@ -921,11 +926,13 @@ impl Side for RtSide<'_> {
         let drawn = (self.drawn.iter())
             .filter_map(|&at| self.render_pipelines.get(at))
             .flat_map(rt::RenderPipelineState::precision_notes);
-        let codes: BTreeSet<&'static str> = (dispatched.chain(drawn))
+        let encoder = self.encoder_notes.iter().copied();
+        let codes: BTreeSet<&'static str> = (dispatched.chain(drawn).chain(encoder))
             .map(|note| metal2vulkan_runtime::Degradation::from_precision_note(note).code())
             .collect();
         self.dispatched.clear();
         self.drawn.clear();
+        self.encoder_notes.clear();
         codes.into_iter().map(str::to_owned).collect()
     }
 

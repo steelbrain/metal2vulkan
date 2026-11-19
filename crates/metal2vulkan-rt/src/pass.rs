@@ -4,11 +4,14 @@
 //!
 //! Each attachment is one level and slice of its texture, viewed through an image view of that
 //! level and layer with the identity swizzle, which the texture keeps. Its load actions are
-//! Vulkan's of the same name: `Load`, `Clear` and `DontCare`. Both store actions store: a pass may
-//! end its rendering before the encoder ends and begin it again, loading what it stored (a memory
-//! barrier after a draw that wrote memory, or a copy a draw needs first), so a `DontCare` store
-//! keeps the texels too, one of the outcomes Metal allows. The render area is the smallest
-//! attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are set.
+//! Vulkan's of the same name: `Load`, `Clear` and `DontCare`. Every store action the runtime builds
+//! stores: a pass may end its rendering before the encoder ends and begin it again, loading what it
+//! stored (a memory barrier after a draw that wrote memory, or a copy a draw needs first), so a
+//! `DontCare` store keeps the texels too, one of the outcomes Metal allows. An `Unknown` one, which
+//! the encoder sets later, stores too, as Vulkan fixes the store as the rendering begins: on a
+//! tile-based device that stores a target Metal would have discarded. The render area is the
+//! smallest attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are
+//! set.
 
 use crate::device::Core;
 use crate::error::{Error, Gap, Refusal, RenderPassKind};
@@ -51,10 +54,14 @@ pub enum StoreAction {
     MultisampleResolve,
     /// `MTLStoreActionStoreAndMultisampleResolve`: refused, as `MultisampleResolve`.
     StoreAndMultisampleResolve,
-    /// `MTLStoreActionUnknown`, left to the encoder to decide before it ends: refused,
-    /// [`Gap::RenderPass`] of [`RenderPassKind::StoreAction`].
+    /// `MTLStoreActionUnknown`, left to the encoder to decide before it ends
+    /// ([`RenderCommandEncoder::set_color_store_action`](crate::RenderCommandEncoder::set_color_store_action)
+    /// and its depth and stencil siblings): `VK_ATTACHMENT_STORE_OP_STORE`, as Vulkan fixes the
+    /// store as the rendering begins. A `DontCare` set later keeps the texels, as `DontCare` does;
+    /// on a tile-based device this stores a target Metal would have discarded.
     Unknown,
-    /// `MTLStoreActionCustomSampleDepthStore`: refused, as `Unknown`.
+    /// `MTLStoreActionCustomSampleDepthStore`: refused, [`Gap::RenderPass`] of
+    /// [`RenderPassKind::StoreAction`].
     CustomSampleDepthStore,
 }
 
@@ -125,8 +132,9 @@ pub struct RenderPassColorAttachmentDescriptor {
 
 /// `MTLRenderPassDepthAttachmentDescriptor`.
 ///
-/// Loaded, cleared and stored as a color attachment is; a draw neither tests nor writes it yet
-/// ([`DrawKind::DepthTest`](crate::DrawKind::DepthTest)). With a stencil attachment beside it,
+/// Loaded, cleared and stored as a color attachment is, an optimal image in its real layout, of
+/// the Vulkan format the translator's format table chooses by the device's format query; draws
+/// test and write it as their depth-stencil state says. With a stencil attachment beside it,
 /// both are one texture's same level and slice, a format of depth and stencil, as Vulkan's
 /// rendering takes them; two others are refused, [`Gap::RenderPass`] of
 /// [`RenderPassKind::DepthStencilViews`]. A `Clear` load's depth lies in `[0, 1]`; another is
@@ -507,7 +515,8 @@ impl Pass {
 }
 
 /// The Vulkan load and store operations of Metal's `load` and `store` actions: the load one to
-/// one, and `STORE` for both store actions ([`StoreAction::DontCare`]).
+/// one, and `STORE` for `Store`, `DontCare` ([`StoreAction::DontCare`]) and `Unknown`
+/// ([`StoreAction::Unknown`]).
 ///
 /// Err: [`Gap::RenderPass`] of [`RenderPassKind::Resolve`] or [`RenderPassKind::StoreAction`].
 pub(crate) fn ops(
@@ -521,13 +530,13 @@ pub(crate) fn ops(
     };
     let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
     let store = match store {
-        StoreAction::DontCare | StoreAction::Store => vk::AttachmentStoreOp::STORE,
+        StoreAction::DontCare | StoreAction::Store | StoreAction::Unknown => {
+            vk::AttachmentStoreOp::STORE
+        }
         StoreAction::MultisampleResolve | StoreAction::StoreAndMultisampleResolve => {
             return gap(RenderPassKind::Resolve)
         }
-        StoreAction::Unknown | StoreAction::CustomSampleDepthStore => {
-            return gap(RenderPassKind::StoreAction)
-        }
+        StoreAction::CustomSampleDepthStore => return gap(RenderPassKind::StoreAction),
     };
     Ok((load, store))
 }

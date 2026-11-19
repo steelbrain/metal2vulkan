@@ -243,12 +243,15 @@ macro_rules! degradations {
 
             /// The kind announcing `note`. [`PrecisionNote::SnormMinimumKept`], which only a
             /// profile of `Device::from_queries` records, announces this runtime's kind for the
-            /// same codes, [`Degradation::SnormMinimumKept`].
+            /// same codes, [`Degradation::SnormMinimumKept`]; [`PrecisionNote::DepthDenormals`],
+            /// which `metal2vulkan-rt`'s depth-stencil state carries, announces
+            /// [`Degradation::DepthDenormals`].
             pub const fn from_precision_note(note: PrecisionNote) -> Degradation {
                 match note {
                     $(PrecisionNote::$note => Degradation::$note,)*
                     PrecisionNote::CappedLodBias => Degradation::CappedLodBias,
                     PrecisionNote::SnormMinimumKept => Degradation::SnormMinimumKept,
+                    PrecisionNote::DepthDenormals => Degradation::DepthDenormals,
                     PrecisionNote::DeviceReconvergence => {
                         Degradation::ImplementationDefinedReconvergence
                     }
@@ -2945,6 +2948,10 @@ degradations! {
         /// device's, where Metal reads `0x7FC00000`. Not bounded: a NaN in a sum makes the sum a
         /// NaN.
         NativeFloat8 = "native-float8";
+        /// A draw of triangles under a depth bias on `metal2vulkan-rt`, whose render encoder
+        /// carries the note: the biased depth is the device's. This runtime announces its own
+        /// depth bias kinds instead.
+        DeviceDepthBias = "device-depth-bias";
     }
 }
 

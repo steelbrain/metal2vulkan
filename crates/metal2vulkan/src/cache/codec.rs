@@ -1534,6 +1534,8 @@ codec_enum! {
         CappedLodBias,
         DeviceReconvergence,
         SnormMinimumKept,
+        DeviceDepthBias,
+        DepthDenormals,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

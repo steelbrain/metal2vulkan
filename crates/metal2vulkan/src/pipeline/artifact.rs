@@ -2430,6 +2430,32 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     SnormMinimumKept,
+    /// A draw of triangles under a depth bias (`setDepthBias:slopeScale:clamp:` with a bias or a
+    /// slope scale other than 0): the slope measure, and a fixed-point attachment's unit, are the
+    /// device's; Apple states neither. Vulkan biases by `m × slopeScale + r × depthBias` ("Depth
+    /// Bias"), where the maximum depth slope `m` is the device's (exact, or the larger of the two
+    /// derivatives' magnitudes), and the unit `r` is `2^(e - n)` of the primitive's largest depth
+    /// exponent for a float depth attachment and the device's for a fixed-point one (at most
+    /// `2 × 2^-n`); a biased depth past the viewport's depth range is undefined there ("Depth
+    /// Clamping and Range Adjustment"). Static per operation: no pipeline stage records it;
+    /// `metal2vulkan-rt`'s render encoder carries it (`RenderCommandEncoder::DEPTH_BIAS_NOTE`).
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    DeviceDepthBias,
+    /// A depth test or depth write of a 32-bit float depth (a depth-stencil state that compares by
+    /// other than `Always` or writes): a denormal depth is the device's. Every driver measured but
+    /// MoltenVK on an Apple M4 compares a denormal depth otherwise than Metal, as zero (a positive
+    /// one) or below zero (a negative one), where Metal compares a positive one above zero and a
+    /// negative one not below it; and RADV and ANV store a denormal a GPU write gives a depth image
+    /// as a zero, where Metal keeps it. Static per operation: no pipeline stage records it;
+    /// `metal2vulkan-rt`'s depth-stencil state carries it
+    /// (`DepthStencilState::precision_note`). `metal2vulkan-runtime` announces the same
+    /// difference as its `depth-denormals` kind, which this note announces too.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    DepthDenormals,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

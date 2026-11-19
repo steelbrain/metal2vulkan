@@ -671,7 +671,7 @@ mod on_device {
     /// neither test nor write it: a pass is one submission, three barriers (the attachment moves
     /// from its shader-read home and back) and one pass. A pipeline state's depth format is the
     /// pass's: a state without one, or one drawn in a pass without a depth attachment, is the
-    /// formats' gap, and a state that tests depth is the depth test's.
+    /// formats' gap.
     #[test]
     fn every_device_clears_loads_and_stores_a_depth_attachment_its_draws_do_not_test() {
         let Some(library) = examples() else {
@@ -748,11 +748,8 @@ mod on_device {
                 }
             }
 
-            // The pipeline state's depth format is the pass's, and a depth test is a gap.
+            // The pipeline state's depth format is the pass's.
             let plain = state(name, &device, &plain);
-            let mut less = DepthStencilDescriptor::default();
-            less.depth_compare_function = CompareFunction::Less;
-            let less = device.new_depth_stencil_state(&less);
             let gap = |kind| Err::<(), _>(Error::Unsupported(Gap::Draw { kind }));
             let same = |got: Result<(), Error>, want: Result<(), Error>, case: &str| {
                 assert_eq!(format!("{got:?}"), format!("{want:?}"), "{name}: {case}");
@@ -769,13 +766,6 @@ mod on_device {
                 gap(DrawKind::AttachmentFormats),
                 "a state without the pass's depth format",
             );
-            draw(encoder.set_render_pipeline_state(&depth_state));
-            draw(encoder.set_depth_stencil_state(Some(&less)));
-            same(
-                encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0),
-                gap(DrawKind::DepthTest),
-                "a depth test",
-            );
             encoder.end_encoding();
             let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -790,6 +780,244 @@ mod on_device {
             encoder.end_encoding();
             run(name, &command_buffer);
             println!("{name}: the depth attachment cleared, loaded and stored, untested");
+        });
+    }
+
+    /// A depth attachment its draws test, write and bias, through dynamic state alone: no
+    /// pipeline is made by a change of depth-stencil state or bias, and the pass is one
+    /// submission, the barriers of a shader-read depth texture's pass, and one pass. Cleared to
+    /// 0.5 with its store action left unknown and set by the encoder: a draw at depth 0.25 under
+    /// `Less` with writes passes and writes 0.25; one at 0.375 then fails; one at 0.25 under
+    /// `Greater`, without writes, passes only by its bias (a constant of 2^23, which Vulkan's unit
+    /// for a `float` depth of exponent -2 makes 0.25, or 0.125 where the device counts 24 mantissa
+    /// bits). The setters that take Metal's defaults as nothing refuse every other value.
+    #[test]
+    fn every_device_tests_writes_and_biases_a_depth_attachment() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let mut d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        d.depth_format = Some(PixelFormat::Depth32Float);
+        each_device("draw_depth_tests", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 4)
+                .expect("a grant");
+            let depth_state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let mut zd =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::Depth32Float, SIDE, SIDE);
+            zd.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            zd.storage_mode = StorageMode::Shared;
+            let depth = (device.new_texture(&zd, Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let tests = |compare, write| {
+                let mut t = DepthStencilDescriptor::default();
+                t.depth_compare_function = compare;
+                t.depth_write_enabled = write;
+                device.new_depth_stencil_state(&t)
+            };
+            let less = tests(CompareFunction::Less, true);
+            let greater = tests(CompareFunction::Greater, false);
+            let depth_denormals = Some(crate::PrecisionNote::DepthDenormals);
+            assert_eq!(less.precision_note(), depth_denormals, "{name}: Less");
+            assert_eq!(greater.precision_note(), depth_denormals, "{name}: Greater");
+            let none = device.new_depth_stencil_state(&DepthStencilDescriptor::default());
+            assert_eq!(none.precision_note(), None, "{name}: Metal's default");
+            // The fixture's depth is 0, so a draw's depth is the range's near end, and a bias
+            // keeps it inside the range, where Vulkan defines it.
+            let at = |z: f64| Viewport {
+                origin_x: 0.0,
+                origin_y: 0.0,
+                width: f64::from(SIDE),
+                height: f64::from(SIDE),
+                znear: z,
+                zfar: 1.0,
+            };
+            let queue = device.new_command_queue(4).expect("a queue");
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let same = |got: Result<(), Error>, want: Result<(), Error>, case: &str| {
+                assert_eq!(format!("{got:?}"), format!("{want:?}"), "{name}: {case}");
+            };
+            let gap = |kind| Err::<(), _>(Error::Unsupported(Gap::Draw { kind }));
+            let counters = device.counters();
+            settled(&device);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut p = pass(&color, None);
+            let z = &mut p.depth_attachment;
+            z.texture = Some(depth.clone());
+            z.load_action = crate::LoadAction::Clear;
+            z.store_action = crate::StoreAction::Unknown;
+            z.clear_depth = 0.5;
+            let mut encoder = (command_buffer.render_command_encoder(&p))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_render_pipeline_state(&depth_state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            // Blue at 0.25 passes `Less` against 0.5 and writes 0.25.
+            draw(encoder.set_depth_stencil_state(Some(&less)));
+            draw(encoder.set_viewport(at(0.25)));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            // White at 0.375 fails `Less` against 0.25.
+            draw(encoder.set_viewport(at(0.375)));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 6, 3, 1, 0));
+            // White at 0.25 passes `Greater` against 0.25 by its bias alone.
+            draw(encoder.set_depth_stencil_state(Some(&greater)));
+            draw(encoder.set_viewport(at(0.25)));
+            draw(encoder.set_depth_bias(8_388_608.0, 0.0, 0.0));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 6, 3, 1, 0));
+            same(
+                encoder.set_depth_bias(1.0, 0.0, 0.5),
+                gap(DrawKind::DepthBiasClamp),
+                "a depth bias clamp",
+            );
+            draw(encoder.set_triangle_fill_mode(crate::TriangleFillMode::Fill));
+            same(
+                encoder.set_triangle_fill_mode(crate::TriangleFillMode::Lines),
+                gap(DrawKind::FillMode),
+                "a fill mode of lines",
+            );
+            draw(encoder.set_depth_clip_mode(crate::DepthClipMode::Clip));
+            same(
+                encoder.set_depth_clip_mode(crate::DepthClipMode::Clamp),
+                gap(DrawKind::DepthClamp),
+                "the depth clip mode Clamp",
+            );
+            draw(encoder.set_viewports(&[at(0.25)]));
+            same(
+                encoder.set_viewports(&[at(0.25), at(0.5)]),
+                gap(DrawKind::Viewports),
+                "two viewports",
+            );
+            same(
+                encoder.set_scissor_rects(&[]),
+                gap(DrawKind::Viewports),
+                "no scissor rectangle",
+            );
+            same(
+                encoder.set_depth_store_action(crate::StoreAction::MultisampleResolve),
+                Err(Error::Unsupported(Gap::RenderPass {
+                    kind: crate::RenderPassKind::Resolve,
+                })),
+                "a resolving store action set later",
+            );
+            draw(encoder.set_depth_store_action(crate::StoreAction::Store));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - before.submissions,
+                    after.passes - before.passes,
+                    after.pipelines_created - before.pipelines_created,
+                    after.bytes_copied - before.bytes_copied,
+                ),
+                (1, 1, 0, 0),
+                "{name}: submissions, passes, pipelines made, bytes copied"
+            );
+            println!(
+                "{name}: {} barriers, {} pipelines made by three depth-stencil states and a bias",
+                after.barriers - before.barriers,
+                after.pipelines_created - before.pipelines_created
+            );
+            assert_eq!(read(&color, 4), texels(|_, _| WHITE), "{name}: the colour");
+            if depth.unit().is_some() {
+                let want = floats(&[0.25; (SIDE * SIDE) as usize]);
+                assert_eq!(read(&depth, 4), want, "{name}: the depth written");
+            } else {
+                println!("{name}: the depth's bytes are not copied on this device");
+            }
+            println!("{name}: the depth tested, written and biased");
+        });
+    }
+
+    /// The user-space instructions a draw retires on the encoding thread, under a depth test whose
+    /// state and bias change every draw beside the plain draw path (no depth attachment, Metal's
+    /// default depth-stencil state), printed per draw where the kernel offers the counter (Linux).
+    #[test]
+    fn every_device_counts_a_depth_tested_draw_s_instructions() {
+        use metal2vulkan_devtools::instructions::InstructionCounter;
+        const DRAWS: u32 = 512;
+        let Some(library) = examples() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let mut d = plain.clone();
+        d.depth_format = Some(PixelFormat::Depth32Float);
+        each_device("draw_depth_instructions", |name, _, device| {
+            let Ok(mut counter) = InstructionCounter::new() else {
+                println!("{name}: no instruction counter here");
+                return;
+            };
+            let plain_state = state(name, &device, &plain);
+            let depth_state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let depth = target(
+                &device,
+                PixelFormat::Depth32Float,
+                TextureUsage::RENDER_TARGET,
+            );
+            let tests = |compare, write| {
+                let mut t = DepthStencilDescriptor::default();
+                t.depth_compare_function = compare;
+                t.depth_write_enabled = write;
+                device.new_depth_stencil_state(&t)
+            };
+            let states = [
+                tests(CompareFunction::LessEqual, true),
+                tests(CompareFunction::Greater, false),
+            ];
+            let queue = device.new_command_queue(4).expect("a queue");
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let mut per_draw = Vec::new();
+            for tested in [false, true] {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut p = pass(&color, None);
+                if tested {
+                    p.depth_attachment.texture = Some(depth.clone());
+                }
+                let mut encoder = (command_buffer.render_command_encoder(&p))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                draw(encoder.set_render_pipeline_state(match tested {
+                    false => &plain_state,
+                    true => &depth_state,
+                }));
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                // One draw first, so the counted ones record what changed alone.
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                let ((), counted) = (counter.measure(|| {
+                    for at in 0..DRAWS {
+                        if tested {
+                            let state = &states[at as usize % 2];
+                            draw(encoder.set_depth_stencil_state(Some(state)));
+                            draw(encoder.set_depth_bias(at as f32, 0.0, 0.0));
+                        }
+                        draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                    }
+                }))
+                .expect("a count");
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                per_draw.push(counted / u64::from(DRAWS));
+            }
+            println!(
+                "{name}: user-space instructions a draw: {} plain, {} under a depth test whose \
+                 state and bias change every draw",
+                per_draw[0], per_draw[1]
+            );
         });
     }
 
@@ -1845,9 +2073,6 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 PixelFormat::RGBA8Unorm,
                 TextureUsage::RENDER_TARGET,
             );
-            let mut depth = DepthStencilDescriptor::default();
-            depth.depth_compare_function = CompareFunction::Less;
-            let depth = device.new_depth_stencil_state(&depth);
             let queue = device.new_command_queue(4).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
@@ -1874,15 +2099,6 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 gap(DrawKind::Points),
                 "points",
             );
-            encoder
-                .set_depth_stencil_state(Some(&depth))
-                .expect("a state");
-            same(
-                encoder.draw_primitives(triangle, 0, 3, 1, 0),
-                gap(DrawKind::DepthTest),
-                "a depth test",
-            );
-            encoder.set_depth_stencil_state(None).expect("no state");
             let viewport = Viewport {
                 origin_x: 0.0,
                 origin_y: 0.0,

@@ -1524,16 +1524,34 @@ or does not check is rebuilt from the generations' names, with young counted ful
   image view of that level and layer with the identity swizzle, made at the first pass that
   renders into it and freed with the texture (`Gauges::attachment_views`).
 - Load actions are one to one: `Load`, `Clear` and `DontCare` are Vulkan's load operations of
-  those names. Both store actions store: a pass may end its rendering before the encoder ends and
-  begin it again, loading what it stored (below), so a `DontCare` store keeps the texels, one of
-  the outcomes Metal allows. A clear color is a `float` in a
+  those names. `Store`, `DontCare` and `Unknown` store: a pass may end its rendering before the
+  encoder ends and begin it again, loading what it stored (below), so a `DontCare` store keeps the
+  texels, one of the outcomes Metal allows. Vulkan fixes the store as the rendering begins, so an
+  `Unknown` store action stores, and the encoder's `set_color_store_action`,
+  `set_depth_store_action` and `set_stencil_store_action` change nothing the device does: on a
+  tile-based device this stores a target Metal would have discarded. A resolving action set there
+  is refused (`Gap::RenderPass` of `Resolve`). A clear color is a `float` in a
   float, normalized or sRGB channel, which the device converts to the format by its own rules
   (Vulkan clamps a normalized value and asks for rounding to nearest; Metal rounds to nearest
   even); an integer channel's is truncated toward zero and saturated to the channel's width, NaN
   0, as Metal's. A rotated format's clear color, and `A8Unorm`'s held in `R8_UNORM`, go through
   the format's rotation. A clear stencil keeps its low 8 bits.
 - A depth attachment is loaded, cleared and stored as a color attachment is, its clear depth a
-  `float`. A draw neither tests nor writes it yet (`DrawKind::DepthTest`, below). Where a pass
+  `float`: an optimal image in its real layout, of the Vulkan format the translator's format table
+  chooses by the device's format query (`Depth32Float` is `D32_SFLOAT`, `Depth32Float_Stencil8`
+  `D32_SFLOAT_S8_UINT`). Draws test and write it as their depth-stencil state says, through
+  dynamic state: a pipeline bakes the depth format alone, so a change of depth-stencil state or
+  depth bias makes no pipeline. A state that tests or writes depth carries the static note
+  `PrecisionNote::DepthDenormals` (`DepthStencilState::precision_note`): every driver measured but
+  MoltenVK on an Apple M4 compares a denormal depth otherwise than Metal, and RADV and ANV store
+  one a GPU write gives as a zero. A negative or NaN depth, which Metal's test compares by its
+  magnitude, takes none: no clear, viewport or upload gives one, and Vulkan leaves a depth past
+  the viewport's range undefined. In a pass without a depth attachment Vulkan skips the depth
+  test, where Metal's documentation states no answer. `set_depth_bias` takes the bias and slope
+  scale as given; a draw of triangles is biased where either is not zero and a draw of lines
+  never, as Metal biases triangles alone, under the static note `PrecisionNote::DeviceDepthBias`
+  (`RenderCommandEncoder::DEPTH_BIAS_NOTE`): the slope measure, and a fixed-point attachment's
+  unit, are the device's; Apple states neither. Where a pass
   has both a depth and a stencil attachment they are one texture's same level and slice, a
   format of depth and stencil, rendered through one view: Vulkan's rendering takes one view for
   both (`VUID-VkRenderingInfo-pDepthAttachment-06085`). A pipeline state's depth and stencil
@@ -1566,7 +1584,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   buffers (`set_vertex_buffer`, `set_vertex_bytes` and their offsets, the fragment's alike),
   textures and sampler states, one viewport and scissor rectangle, the cull mode, the
   front-facing winding, a depth-stencil state (`Device::new_depth_stencil_state`), the stencil
-  references and the blend color, Metal's defaults where it set none. A vertex buffer slot serves
+  references, the depth bias and the blend color, Metal's defaults where it set none. A vertex buffer slot serves
   the vertex function's buffer argument of its index and the vertex descriptor's layout of its
   index alike, a `set_vertex_bytes` copy too, read through the parameter ring's buffer.
 - `draw_primitives` and `draw_indexed_primitives` are one `vkCmdDraw` or `vkCmdDrawIndexed` each.
@@ -1639,9 +1657,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of render encoders
 
-- Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points, a depth-stencil state that
-  tests or writes depth (a pass's depth attachment is loaded, cleared and stored, and no draw
-  tests or writes it yet), a viewport Vulkan's is not (a
+- Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points, a depth bias clamp other
+  than 0 (`DepthBiasClamp`, set by `set_depth_bias`), a triangle fill mode but `Fill`
+  (`FillMode`, `set_triangle_fill_mode`), the depth clip mode `Clamp` (`DepthClamp`,
+  `set_depth_clip_mode`), a count of viewports or scissor rectangles other than 1 (`Viewports`,
+  `set_viewports`, `set_scissor_rects`), each refused where it is set, the encoder's state
+  unchanged; the replay streams set Metal's defaults alone, which those setters take as nothing; a
+  viewport Vulkan's is not (a
   negative width, a depth range past `[0, 1]`, bounds past the device's viewport limits), a
   pipeline state whose formats are not the pass's attachments', a draw that binds a texture
   whose image the pass renders, where neither the feedback loop nor a copy reads it: on a device
@@ -1653,7 +1675,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   (`DividedBaseInstance`: Vulkan's divisor takes `firstInstance` 0 alone there,
   VUID-vkCmdDraw-pNext-09461); the same draw from base instance 0 runs. An indirect draw, whose
   base instance the CPU does not see, is not built. The replay streams draw lines and triangles
-  under depth-stencil states that test no depth; every attachment they read through a texture is
+  under depth biases with no clamp; every attachment they read through a texture is
   a shader-read colour render target of `Private` storage, read from the fragment function; and
   their stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0.
 - A draw that reaches an attachment of its own pass through an argument buffer's texture is not
@@ -1662,9 +1684,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   the level and layer it reads.
 - A vertex fetch outside its buffer returns what the device gives: the floor enables no buffer
   robustness, so there is no bounds guarantee beyond the device's.
-- Not built, and so not methods: indirect draws, several viewports or scissor rectangles, the
-  triangle fill mode, the depth clip mode, depth bias, visibility results, `useResource:`,
-  `useHeap:stages:`, the store action setters, tile functions and
+- Not built, and so not methods: indirect draws, visibility results, `useResource:`,
+  `useHeap:stages:`, the store action options setters, tile functions and
   `setVertexBuffer:offset:attributeStride:atIndex:`. Where a replay stream calls
   `useHeap:stages:` (`command-replay shapes` counts a stream's calls of each selector), it is
   built in the compute encoder's form, `use_heap`: the command buffer keeps the block and declares
@@ -1674,16 +1695,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   one view for both), a `Clear` load of a depth attachment whose clear depth is outside `[0, 1]`
   or NaN (`ClearDepth`: Vulkan clears no such depth without `VK_EXT_depth_range_unrestricted`,
   `VUID-VkClearDepthStencilValue-depth-00022`, which the floor does not require), an attachment
-  of more than one sample, a resolve, a 1D or 3D texture's attachment, the `Unknown` and
-  `CustomSampleDepthStore` store actions, a clear of a format only a shader clears (extended
+  of more than one sample, a resolve, a 1D or 3D texture's attachment, the
+  `CustomSampleDepthStore` store action, a clear of a format only a shader clears (extended
   range, bfloat, YCbCr), and a pass with no attachment. The descriptor has no field for a
   visibility result buffer, a rasterization rate map, tile sizes, imageblock and threadgroup
   memory, sample buffer attachments, layered rendering or store action options. The replay
   streams' passes render into one or two color attachments and a stencil attachment or a
   `Depth32Float` depth attachment, each a level of a 2D texture of one sample, with `Load`,
-  `Clear` and `DontCare` loads and `Store` and `DontCare` stores. Their depth attachments (478
-  passes of one stream, none beside a stencil attachment) clear to 1 or load, and store, under
-  Metal's default depth-stencil state.
+  `Clear` and `DontCare` loads and `Store`, `DontCare` and `Unknown` stores.
 - An attachment whose home layout is shader-read-only (a texture of shader-read and render-target
   usage) is moved to the attachment layout and back by every pass that renders into it. A pass
   that reads it through a texture moves the whole image to the feedback layout at its first

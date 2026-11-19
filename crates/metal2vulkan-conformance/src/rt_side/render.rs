@@ -9,8 +9,8 @@
 use super::{keep, waited_for, RtSide, WAIT};
 use crate::case::{Answer, Failure, Handle, PassOutcome};
 use crate::render::{
-    AttachmentPlace, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, StageFunction,
-    TargetSpec,
+    AttachmentPlace, RenderPass, RenderPipelineSpec, RenderStep, RenderWork, ScissorBox,
+    StageFunction, TargetSpec, ViewportRect,
 };
 use crate::transcript::{Negative, Value};
 use crate::work::Plane;
@@ -68,6 +68,28 @@ fn plain(
         return Err(Failure::unavailable("storeActionOptions"));
     }
     Ok(())
+}
+
+/// The runtime's viewport of the case's.
+fn viewport(rect: &ViewportRect) -> rt::Viewport {
+    rt::Viewport {
+        origin_x: rect.origin[0],
+        origin_y: rect.origin[1],
+        width: rect.size[0],
+        height: rect.size[1],
+        znear: rect.depth[0],
+        zfar: rect.depth[1],
+    }
+}
+
+/// The runtime's scissor rectangle of the case's.
+fn scissor(rect: &ScissorBox) -> rt::ScissorRect {
+    rt::ScissorRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
 }
 
 /// The step's variant, which names the Metal call a refusal is of.
@@ -286,6 +308,17 @@ impl RtSide<'_> {
                                 RenderStep::Pipeline(state) => Some(state.0 as usize),
                                 _ => None,
                             }));
+                        let notes = pass.steps.iter().filter_map(|step| match step {
+                            RenderStep::DepthBias(v) if v.bias != 0.0 || v.slope_scale != 0.0 => {
+                                Some(rt::RenderCommandEncoder::DEPTH_BIAS_NOTE)
+                            }
+                            RenderStep::DepthStencilState(state) => (self.depth_stencils)
+                                .get(state.0 as usize)
+                                .and_then(rt::DepthStencilState::precision_note),
+                            _ => None,
+                        });
+                        let notes: Vec<rt::PrecisionNote> = notes.collect();
+                        self.encoder_notes.extend(notes);
                     }
                     _ => {}
                 }
@@ -392,6 +425,11 @@ impl RtSide<'_> {
                 encoder.set_stencil_reference_value(*value);
                 Ok(())
             }
+            RenderStep::DepthBias(v) => {
+                (encoder.set_depth_bias(v.bias, v.slope_scale, v.clamp)).map_err(of_rt)
+            }
+            RenderStep::FillMode(mode) => encoder.set_triangle_fill_mode(*mode).map_err(of_rt),
+            RenderStep::DepthClip(mode) => encoder.set_depth_clip_mode(*mode).map_err(of_rt),
             RenderStep::StencilReferences { front, back } => {
                 encoder.set_stencil_front_back_reference_value(*front, *back);
                 Ok(())
@@ -462,24 +500,18 @@ impl RtSide<'_> {
                     (encoder.set_fragment_sampler_state(Some(sampler(*held)?), index))
                         .map_err(of_rt)
                 }),
-            RenderStep::Viewport(rect) => encoder
-                .set_viewport(rt::Viewport {
-                    origin_x: rect.origin[0],
-                    origin_y: rect.origin[1],
-                    width: rect.size[0],
-                    height: rect.size[1],
-                    znear: rect.depth[0],
-                    zfar: rect.depth[1],
-                })
-                .map_err(of_rt),
+            RenderStep::Viewport(rect) => encoder.set_viewport(viewport(rect)).map_err(of_rt),
+            RenderStep::Viewports(rects) => {
+                let viewports: Vec<rt::Viewport> = rects.iter().map(viewport).collect();
+                encoder.set_viewports(&viewports).map_err(of_rt)
+            }
             RenderStep::Scissor(rect) => {
-                encoder.set_scissor_rect(rt::ScissorRect {
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height,
-                });
+                encoder.set_scissor_rect(scissor(rect));
                 Ok(())
+            }
+            RenderStep::Scissors(rects) => {
+                let rects: Vec<rt::ScissorRect> = rects.iter().map(scissor).collect();
+                encoder.set_scissor_rects(&rects).map_err(of_rt)
             }
             RenderStep::Cull(mode) => {
                 encoder.set_cull_mode(*mode);

@@ -912,10 +912,10 @@ pub enum Gap {
     /// what `kind` names.
     ///
     /// Basis: ours (the replay streams' passes render into one to two color attachments and a
-    /// stencil or a `Depth32Float` depth attachment, each a level of a 2D texture of one sample,
-    /// with no resolve, no store action left unknown and a clear depth of 1; each other kind is
-    /// built when a replay stream makes one; `DepthStencilViews` and `ClearDepth` are what Vulkan's
-    /// rendering under the floor takes no form of).
+    /// stencil or a depth attachment, each a level of a 2D texture of one sample, with no resolve
+    /// and a clear depth of 1, none naming two textures for its depth and stencil; each other kind
+    /// is built when a replay stream makes one; `DepthStencilViews` and `ClearDepth` are what
+    /// Vulkan's rendering under the floor takes no form of).
     RenderPass {
         /// What the pass asks for.
         kind: RenderPassKind,
@@ -923,9 +923,9 @@ pub enum Gap {
     /// A draw or render encoder state the runtime does not build yet
     /// ([`RenderCommandEncoder`](crate::RenderCommandEncoder)): what `kind` names.
     ///
-    /// Basis: ours (the replay streams draw lines and triangles under depth-stencil states that
-    /// test no depth, through viewports Vulkan's are, with pipeline states of their pass's formats;
-    /// each other kind is built when a replay stream draws one), and device for
+    /// Basis: ours (the replay streams draw lines and triangles through one viewport Vulkan's is,
+    /// with pipeline states of their pass's formats, under depth biases with no clamp, filled and
+    /// clipped; each other kind is built when a replay stream draws one), and device for
     /// [`DrawKind::DividedBaseInstance`] (a device that does not report
     /// `supportsNonZeroFirstInstance`).
     Draw {
@@ -976,9 +976,16 @@ pub enum RenderPipelineKind {
 pub enum DrawKind {
     /// A draw of points (`MTLPrimitiveTypePoint`).
     Points,
-    /// A depth-stencil state that tests or writes depth: a pass's depth attachment is loaded,
-    /// cleared and stored, and no draw tests or writes it yet.
-    DepthTest,
+    /// A depth bias clamp other than 0 (`setDepthBias:slopeScale:clamp:`'s `clamp`), which no
+    /// replay stream sets.
+    DepthBiasClamp,
+    /// A triangle fill mode but `Fill` (`setTriangleFillMode:`), which no replay stream sets.
+    FillMode,
+    /// The depth clip mode `Clamp` (`setDepthClipMode:`), which no replay stream sets.
+    DepthClamp,
+    /// More than one viewport or scissor rectangle, or none (`setViewports:count:`,
+    /// `setScissorRects:count:`), which no replay stream sets.
+    Viewports,
     /// A viewport Vulkan's is not: a negative width (Metal mirrors the draw), a depth range past
     /// `[0, 1]`, or bounds past the device's viewport limits.
     Viewport,
@@ -1019,8 +1026,8 @@ pub enum RenderPassKind {
     /// An attachment of a texture type but a 2D texture, a 2D array, a cube or a cube array: a 1D
     /// texture's, or a 3D texture's depth plane.
     TextureType,
-    /// `MTLStoreActionUnknown`, which the encoder's `setColorStoreAction:atIndex:` family decides
-    /// later, or `MTLStoreActionCustomSampleDepthStore`.
+    /// `MTLStoreActionCustomSampleDepthStore`, set on the pass or by the encoder's
+    /// `setColorStoreAction:atIndex:` family.
     StoreAction,
     /// A `Clear` load action on an attachment whose format the runtime clears only through a
     /// shader: an extended-range, bfloat or YCbCr format.

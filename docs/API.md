@@ -4335,6 +4335,9 @@ bound.
   measured but MoltenVK on an Apple M4). Cost: a denormal depth may read, sample and copy out as a
   zero, or the depth test may compare it as zero (a positive one) or below zero (a negative one),
   where Metal keeps it and compares a positive one above zero and a negative one not below it.
+  On `metal2vulkan-rt` it is the static note `PrecisionNote::DepthDenormals` of every
+  depth-stencil state that tests or writes depth (`DepthStencilState::precision_note`), on every
+  device, with no driver fact.
 - `metal2vulkan-degrade-signed-depth-test` (precision). `SignedDepthTest`: A depth test that may
   compare a negative value or a NaN stored in the 32-bit float depth of a render target as it is, or
   a pass with depth writes that may store such a value with its sign, where Metal's test compares
@@ -5476,6 +5479,15 @@ bound.
   reads them, and records none. An `air.convert` from `f8e4m3fn` or `f8e5m2` and a
   simdgroup-matrix cell of those formats widen through the same type there and record none: their
   formats are OCP's own, and Metal on Apple M3 does not compile them.
+- `metal2vulkan-degrade-device-depth-bias` (precision). `PrecisionNote::DeviceDepthBias`: A draw
+  of triangles under a depth bias (`setDepthBias:slopeScale:clamp:` with a bias or a slope scale
+  other than 0) on `metal2vulkan-rt`, whose render encoder carries it as a static note
+  (`RenderCommandEncoder::DEPTH_BIAS_NOTE`): the biased depth is the device's. Vulkan biases by
+  `m × slopeScale + r × depthBias`, where the maximum depth slope `m` is the device's (exact, or
+  the larger of the two derivatives' magnitudes) and the unit `r` is `2^(e - n)` of the primitive's
+  largest depth exponent for a float depth attachment and the device's for a fixed-point one (at
+  most `2 × 2^-n`). Apple's documentation states neither the slope measure nor the unit. A draw of
+  lines is not biased, as Metal biases triangles alone.
 - `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
   Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,

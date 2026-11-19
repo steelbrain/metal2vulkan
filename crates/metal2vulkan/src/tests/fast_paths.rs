@@ -231,6 +231,8 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             UnorderedFetchWithinDraw,
             CappedLodBias,
             SnormMinimumKept,
+            DeviceDepthBias,
+            DepthDenormals,
         ],
     }
 }

@@ -80,9 +80,12 @@ pub use metal2vulkan::metal::{
     CompareFunction, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter,
     SamplerReductionMode,
 };
-/// `MTLPrimitiveType`, `MTLIndexType`, `MTLCullMode`, `MTLWinding` and `MTLStencilOperation`:
+/// `MTLPrimitiveType`, `MTLIndexType`, `MTLCullMode`, `MTLWinding`, `MTLStencilOperation`,
+/// `MTLTriangleFillMode` and `MTLDepthClipMode`:
 /// the translator's.
-pub use metal2vulkan::metal::{CullMode, IndexType, PrimitiveType, StencilOperation, Winding};
+pub use metal2vulkan::metal::{
+    CullMode, DepthClipMode, IndexType, PrimitiveType, StencilOperation, TriangleFillMode, Winding,
+};
 /// `MTLPixelFormat`, `MTLTextureType`, `MTLTextureUsage` and `MTLTextureSwizzleChannels` with its
 /// `MTLTextureSwizzle`: the translator's.
 pub use metal2vulkan::metal::{

@@ -61,6 +61,15 @@
 //! derivatives follow Metal's clip space, whose y points up; Metal's front-facing winding is then
 //! Vulkan's front face of the same name. Metal clips a draw to the pixels its viewport covers, so
 //! the scissor is Metal's rectangle cut to those pixels.
+//!
+//! The depth-stencil state's depth test, write and compare operation and the depth bias are
+//! dynamic state too, so a change of either makes no pipeline: a pipeline bakes the depth
+//! attachment's format alone. In a pass without a depth attachment Vulkan skips the depth test and
+//! writes nothing, where Metal's documentation states no answer. Metal biases triangles alone, so
+//! a draw of lines records the bias disabled; a draw of triangles records it enabled where the
+//! bias or the slope scale is not zero. The slope measure, and a fixed-point attachment's unit,
+//! are the device's ([`PrecisionNote::DeviceDepthBias`]); a state that tests or writes depth
+//! carries [`PrecisionNote::DepthDenormals`].
 
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
@@ -73,7 +82,7 @@ use crate::fence::Fence;
 use crate::hazard::Access;
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::over;
-use crate::pass::{layout_barrier, Pass, RenderPassDescriptor};
+use crate::pass::{layout_barrier, ops, LoadAction, Pass, RenderPassDescriptor, StoreAction};
 use crate::pipeline::{FieldValue, PUSH_STAGES};
 use crate::record::{memory_barrier, Reach};
 use crate::render::{Draws, RenderPipelineState, FRAGMENT, VERTEX};
@@ -84,7 +93,10 @@ use crate::texture::Texture;
 use ash::vk;
 use metal2vulkan::metal::format::integer_channels_word;
 use metal2vulkan::metal::state::{input_assembly, DepthStencilDescriptor};
-use metal2vulkan::metal::{CullMode, IndexType, PrimitiveType, Winding};
+use metal2vulkan::metal::{
+    CullMode, DepthClipMode, IndexType, PrimitiveType, TriangleFillMode, Winding,
+};
+use metal2vulkan::pipeline::PrecisionNote;
 use std::sync::Arc;
 
 /// `MTLViewport`: an origin and size in pixels, and a depth range.
@@ -132,8 +144,7 @@ pub struct IndexBuffer<'a> {
 
 /// The dynamic state a draw records before it: the viewport and scissor, the cull mode, the
 /// front face, the depth and stencil tests, the stencil references, the blend constants, the
-/// depth bias the encoder does not set, and the feedback loop's enable where the device reads
-/// attachments.
+/// depth bias, and the feedback loop's enable where the device reads attachments.
 const VIEWPORT: u32 = 1;
 const CULL: u32 = 2;
 const FRONT: u32 = 4;
@@ -363,13 +374,14 @@ enum Call<'a> {
 ///
 /// Built: a render pipeline state, the vertex and fragment functions' buffers, bytes, textures
 /// and sampler states, one viewport and scissor rectangle, the cull mode, the front-facing
-/// winding, a depth-stencil state that tests the stencil and neither tests nor writes depth (a
-/// pass's depth attachment is loaded, cleared and stored), the stencil references, the blend color,
-/// memory barriers, fences, and direct draws of lines and triangles, indexed or not. Not built,
-/// and so not methods: indirect draws, several viewports or scissor rectangles, the triangle fill
-/// mode, the depth clip mode, depth bias, visibility results, `useResource:`, the store action
-/// setters, tile functions and the `setVertexBuffer:offset:attributeStride:atIndex:` family. A
-/// draw of what the runtime does not build is [`Gap::Draw`], naming its [`DrawKind`].
+/// winding, a depth-stencil state's depth and stencil tests, the depth bias without a clamp, the
+/// stencil references, the blend color, the store actions an encoder sets for an attachment whose
+/// pass left them unknown, memory barriers, fences, and direct draws of lines and triangles,
+/// indexed or not. Not built, and so not methods: indirect draws, several viewports or scissor
+/// rectangles, the triangle fill mode, the depth clip mode, visibility results, `useResource:`,
+/// the store action options setters, tile functions and the
+/// `setVertexBuffer:offset:attributeStride:atIndex:` family. A draw of what the runtime does not
+/// build is [`Gap::Draw`], naming its [`DrawKind`].
 ///
 /// Owned: one thread encodes at a time. Dropping it ends it, as
 /// [`end_encoding`](Self::end_encoding) does.
@@ -400,6 +412,10 @@ pub struct RenderCommandEncoder {
     /// The front and back stencil references, saturated to 8 bits.
     stencil_reference: [u32; 2],
     blend_color: [f32; 4],
+    /// The depth bias's constant and slope scale, Metal's `depthBias` and `slopeScale`.
+    depth_bias: [f32; 2],
+    /// Whether the last draw recorded the depth bias enabled.
+    biased: bool,
     /// The dynamic state to record before the next draw.
     dirty: u32,
     /// The topology and primitive restart the last draw set.
@@ -477,6 +493,8 @@ impl CommandBuffer {
                     winding: Winding::Clockwise,
                     stencil_reference: [0; 2],
                     blend_color: [0.0; 4],
+                    depth_bias: [0.0; 2],
+                    biased: false,
                     dirty: ALL,
                     topology: None,
                     wrote: false,
@@ -933,6 +951,125 @@ impl RenderCommandEncoder {
         self.dirty |= BLEND;
     }
 
+    /// The static precision note of a draw of triangles under a depth bias
+    /// ([`set_depth_bias`](Self::set_depth_bias)).
+    pub const DEPTH_BIAS_NOTE: PrecisionNote = PrecisionNote::DeviceDepthBias;
+
+    /// `setDepthBias:slopeScale:clamp:`: the constant bias and the slope scale, as given. A draw of
+    /// triangles is biased where either is not zero, and a draw of lines never, as Metal biases
+    /// triangles alone. Metal's default is no bias. The slope measure, and a fixed-point
+    /// attachment's unit, are the device's; Apple states neither
+    /// ([`DEPTH_BIAS_NOTE`](Self::DEPTH_BIAS_NOTE)). A biased depth past the viewport's depth
+    /// range is undefined in Vulkan.
+    ///
+    /// Err: [`Gap::Draw`] of [`DrawKind::DepthBiasClamp`] for a clamp other than 0; the encoder's
+    /// bias is unchanged.
+    pub fn set_depth_bias(
+        &mut self,
+        depth_bias: f32,
+        slope_scale: f32,
+        clamp: f32,
+    ) -> Result<(), Error> {
+        if clamp != 0.0 {
+            return Err(Error::Unsupported(Gap::Draw {
+                kind: DrawKind::DepthBiasClamp,
+            }));
+        }
+        self.depth_bias = [depth_bias, slope_scale];
+        self.dirty |= BIAS;
+        Ok(())
+    }
+
+    /// `setTriangleFillMode:`: `Fill`, Metal's default, is every draw's; another mode is not
+    /// built.
+    ///
+    /// Err: [`Gap::Draw`] of [`DrawKind::FillMode`] for another mode.
+    pub fn set_triangle_fill_mode(&mut self, mode: TriangleFillMode) -> Result<(), Error> {
+        match mode {
+            TriangleFillMode::Fill => Ok(()),
+            _ => Err(Error::Unsupported(Gap::Draw {
+                kind: DrawKind::FillMode,
+            })),
+        }
+    }
+
+    /// `setDepthClipMode:`: `Clip`, Metal's default, is every draw's; `Clamp` is not built.
+    ///
+    /// Err: [`Gap::Draw`] of [`DrawKind::DepthClamp`] for `Clamp`.
+    pub fn set_depth_clip_mode(&mut self, mode: DepthClipMode) -> Result<(), Error> {
+        match mode {
+            DepthClipMode::Clip => Ok(()),
+            _ => Err(Error::Unsupported(Gap::Draw {
+                kind: DrawKind::DepthClamp,
+            })),
+        }
+    }
+
+    /// `setViewports:count:`: one viewport is [`set_viewport`](Self::set_viewport)'s; several are
+    /// not built.
+    ///
+    /// Err: as [`set_viewport`](Self::set_viewport); [`Gap::Draw`] of [`DrawKind::Viewports`] for
+    /// a count other than 1.
+    pub fn set_viewports(&mut self, viewports: &[Viewport]) -> Result<(), Error> {
+        match viewports {
+            [viewport] => self.set_viewport(*viewport),
+            _ => Err(Error::Unsupported(Gap::Draw {
+                kind: DrawKind::Viewports,
+            })),
+        }
+    }
+
+    /// `setScissorRects:count:`: one rectangle is [`set_scissor_rect`](Self::set_scissor_rect)'s;
+    /// several are not built.
+    ///
+    /// Err: [`Gap::Draw`] of [`DrawKind::Viewports`] for a count other than 1.
+    pub fn set_scissor_rects(&mut self, rects: &[ScissorRect]) -> Result<(), Error> {
+        match rects {
+            [rect] => {
+                self.set_scissor_rect(*rect);
+                Ok(())
+            }
+            _ => Err(Error::Unsupported(Gap::Draw {
+                kind: DrawKind::Viewports,
+            })),
+        }
+    }
+
+    /// `setColorStoreAction:atIndex:`: the store action of the colour attachment at `index`, which
+    /// its pass left `Unknown`. The pass stores every attachment
+    /// ([`StoreAction::Unknown`]), so a `Store` or a `DontCare` changes nothing the device does:
+    /// the texels are kept, one of the outcomes Metal allows a `DontCare`. An index with no
+    /// attachment is nothing to store.
+    ///
+    /// Err: [`Gap::RenderPass`] of [`RenderPassKind::Resolve`](crate::RenderPassKind::Resolve)
+    /// for an action that resolves, of
+    /// [`RenderPassKind::StoreAction`](crate::RenderPassKind::StoreAction) for
+    /// `CustomSampleDepthStore`.
+    pub fn set_color_store_action(
+        &mut self,
+        action: StoreAction,
+        index: usize,
+    ) -> Result<(), Error> {
+        let attached = self.pass.colors.get(index).is_some_and(Option::is_some);
+        later_store(action, attached)
+    }
+
+    /// `setDepthStoreAction:`: the store action of the depth attachment, as
+    /// [`set_color_store_action`](Self::set_color_store_action)'s.
+    ///
+    /// Err: as [`set_color_store_action`](Self::set_color_store_action).
+    pub fn set_depth_store_action(&mut self, action: StoreAction) -> Result<(), Error> {
+        later_store(action, self.pass.depth.is_some())
+    }
+
+    /// `setStencilStoreAction:`: the store action of the stencil attachment, as
+    /// [`set_color_store_action`](Self::set_color_store_action)'s.
+    ///
+    /// Err: as [`set_color_store_action`](Self::set_color_store_action).
+    pub fn set_stencil_store_action(&mut self, action: StoreAction) -> Result<(), Error> {
+        later_store(action, self.pass.stencil.is_some())
+    }
+
     /// `memoryBarrierWithScope:afterStages:beforeStages:` and
     /// `memoryBarrierWithResources:count:afterStages:beforeStages:`: after a draw of the encoder
     /// that wrote memory, the rendering ends, one global memory barrier is recorded, and the
@@ -1260,9 +1397,6 @@ impl RenderCommandEncoder {
         let topology = vk::PrimitiveTopology::from_raw(topology.as_raw());
         if topology == vk::PrimitiveTopology::POINT_LIST {
             return gap(DrawKind::Points);
-        }
-        if self.tests.depth {
-            return gap(DrawKind::DepthTest);
         }
         if self.tests.stencil && self.pass.stencil.is_none() {
             return Err(Error::Refused(Refusal::StencilAttachment));
@@ -1689,11 +1823,9 @@ impl RenderCommandEncoder {
                 device.cmd_set_front_face(command, face);
             }
             if dirty & TESTS != 0 {
-                // A pass's depth attachment is neither tested nor written: a state that tests or
-                // writes depth draws nothing (`DrawKind::DepthTest`).
-                device.cmd_set_depth_test_enable(command, false);
-                device.cmd_set_depth_write_enable(command, false);
-                device.cmd_set_depth_compare_op(command, vk::CompareOp::ALWAYS);
+                device.cmd_set_depth_test_enable(command, self.tests.depth_test);
+                device.cmd_set_depth_write_enable(command, self.tests.depth_write);
+                device.cmd_set_depth_compare_op(command, self.tests.depth_compare);
                 device.cmd_set_stencil_test_enable(command, self.tests.stencil);
                 for (face, f) in both.iter().zip(&self.tests.faces) {
                     device.cmd_set_stencil_op(
@@ -1716,9 +1848,19 @@ impl RenderCommandEncoder {
             if dirty & BLEND != 0 {
                 device.cmd_set_blend_constants(command, &self.blend_color);
             }
+            // Metal biases triangles alone, where the bias or the slope scale is not zero.
+            let [constant, slope] = self.depth_bias;
+            let lines = matches!(
+                topology,
+                vk::PrimitiveTopology::LINE_LIST | vk::PrimitiveTopology::LINE_STRIP
+            );
+            let biased = !lines && (constant != 0.0 || slope != 0.0);
             if dirty & BIAS != 0 {
-                device.cmd_set_depth_bias(command, 0.0, 0.0, 0.0);
-                device.cmd_set_depth_bias_enable(command, false);
+                device.cmd_set_depth_bias(command, constant, 0.0, slope);
+            }
+            if dirty & BIAS != 0 || biased != self.biased {
+                device.cmd_set_depth_bias_enable(command, biased);
+                self.biased = biased;
             }
             // Every pipeline takes the enable as dynamic state where the device reads attachments.
             if let (true, Some(feedback)) = (dirty & LOOP != 0, feedback) {
@@ -1954,6 +2096,18 @@ fn around(
     .into_iter()
     .flatten()
     .collect()
+}
+
+/// A store action an encoder sets for an attachment its pass left unknown, `attached` where the
+/// pass has that attachment: the pass stores it whatever the action, so only an action the
+/// rendering could not have begun with is refused.
+///
+/// Err: as [`ops`].
+fn later_store(action: StoreAction, attached: bool) -> Result<(), Error> {
+    match attached {
+        true => ops(LoadAction::Load, action).map(drop),
+        false => Ok(()),
+    }
 }
 
 /// The slot of buffer index `index`.

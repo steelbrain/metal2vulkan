@@ -43,6 +43,7 @@ assoc-const	metal2vulkan-air::ir::BinOp::ALL	pub const ALL: [BinOp; 18]
 assoc-const	metal2vulkan-air::ir::FloatPredicate::ALL	pub const ALL: [FloatPredicate; 16]
 assoc-const	metal2vulkan-air::ir::IntPredicate::ALL	pub const ALL: [IntPredicate; 10]
 assoc-const	metal2vulkan-air::metal::DataType::ALL	pub const ALL: [DataType; 17]
+assoc-const	metal2vulkan-rt::RenderCommandEncoder::DEPTH_BIAS_NOTE	pub const DEPTH_BIAS_NOTE: PrecisionNote
 assoc-const	metal2vulkan-rt::ResourceUsage::READ	pub const READ: ResourceUsage
 assoc-const	metal2vulkan-rt::ResourceUsage::SAMPLE	pub const SAMPLE: ResourceUsage
 assoc-const	metal2vulkan-rt::ResourceUsage::WRITE	pub const WRITE: ResourceUsage
@@ -571,6 +572,7 @@ assoc-const-value	metal2vulkan-air::ir::BinOp::ALL	[BinOp::Add, BinOp::Sub, BinO
 assoc-const-value	metal2vulkan-air::ir::FloatPredicate::ALL	[FloatPredicate::False, FloatPredicate::Oeq, FloatPredicate::Ogt, FloatPredicate::Oge, FloatPredicate::Olt, FloatPredicate::Ole, FloatPredicate::One, FloatPredicate::Ord, FloatPredicate::Uno, FloatPredicate::Ueq, FloatPredicate::Ugt, FloatPredicate::Uge, FloatPredicate::Ult, FloatPredicate::Ule, FloatPredicate::Une, FloatPredicate::True]
 assoc-const-value	metal2vulkan-air::ir::IntPredicate::ALL	[IntPredicate::Eq, IntPredicate::Ne, IntPredicate::Ugt, IntPredicate::Uge, IntPredicate::Ult, IntPredicate::Ule, IntPredicate::Sgt, IntPredicate::Sge, IntPredicate::Slt, IntPredicate::Sle]
 assoc-const-value	metal2vulkan-air::metal::DataType::ALL	[DataType::Float32, DataType::Float16, DataType::BFloat16, DataType::Int2, DataType::Int4, DataType::Int8, DataType::Int16, DataType::Int32, DataType::UInt2, DataType::UInt4, DataType::UInt8, DataType::UInt16, DataType::UInt32, DataType::Fp4E2M1, DataType::Fp8E4M3, DataType::Fp8E5M2, DataType::Fp8UE8M0]
+assoc-const-value	metal2vulkan-rt::RenderCommandEncoder::DEPTH_BIAS_NOTE	PrecisionNote::DeviceDepthBias
 assoc-const-value	metal2vulkan-rt::ResourceUsage::READ	ResourceUsage(1)
 assoc-const-value	metal2vulkan-rt::ResourceUsage::SAMPLE	ResourceUsage(4)
 assoc-const-value	metal2vulkan-rt::ResourceUsage::WRITE	ResourceUsage(2)
@@ -6224,6 +6226,7 @@ macro-decl	metal2vulkan-air::ir::TypeId	ir_id! TypeId
 macro-decl	metal2vulkan-air::metal::DataType	metal_enum! DataType
 macro-decl	metal2vulkan-rt::CompareFunction	metal_enum! CompareFunction
 macro-decl	metal2vulkan-rt::CullMode	metal_enum! CullMode
+macro-decl	metal2vulkan-rt::DepthClipMode	metal_enum! DepthClipMode
 macro-decl	metal2vulkan-rt::IndexType	metal_enum! IndexType
 macro-decl	metal2vulkan-rt::IndexType	vk_enum! IndexType
 macro-decl	metal2vulkan-rt::PixelFormat	metal_enum! PixelFormat
@@ -6239,6 +6242,7 @@ macro-decl	metal2vulkan-rt::StencilOperation	metal_enum! StencilOperation
 macro-decl	metal2vulkan-rt::TextureSwizzle	metal_enum! TextureSwizzle
 macro-decl	metal2vulkan-rt::TextureType	metal_enum! TextureType
 macro-decl	metal2vulkan-rt::TextureUsage	metal_flags! TextureUsage
+macro-decl	metal2vulkan-rt::TriangleFillMode	metal_enum! TriangleFillMode
 macro-decl	metal2vulkan-rt::Winding	metal_enum! Winding
 macro-decl	metal2vulkan-runtime::Degradation	degradations! Degradation
 macro-decl	metal2vulkan::metal::ArgumentBuffersTier	metal_enum! ArgumentBuffersTier
@@ -6473,6 +6477,10 @@ macro-member	metal2vulkan-rt::CullMode::CullMode	CullMode = "MTLCullMode"
 macro-member	metal2vulkan-rt::CullMode::Front	Front = 1, "MTLCullModeFront";
 macro-member	metal2vulkan-rt::CullMode::None	None = 0, "MTLCullModeNone";
 macro-member	metal2vulkan-rt::CullMode::aliases	aliases
+macro-member	metal2vulkan-rt::DepthClipMode::Clamp	Clamp = 1, "MTLDepthClipModeClamp";
+macro-member	metal2vulkan-rt::DepthClipMode::Clip	Clip = 0, "MTLDepthClipModeClip";
+macro-member	metal2vulkan-rt::DepthClipMode::DepthClipMode	DepthClipMode = "MTLDepthClipMode"
+macro-member	metal2vulkan-rt::DepthClipMode::aliases	aliases
 macro-member	metal2vulkan-rt::IndexType::IndexType	IndexType = "MTLIndexType"
 macro-member	metal2vulkan-rt::IndexType::IndexType	IndexType(i32) = "VkIndexType"
 macro-member	metal2vulkan-rt::IndexType::NONE_KHR	NONE_KHR = 1000165000, "VK_INDEX_TYPE_NONE_KHR";
@@ -6873,6 +6881,11 @@ macro-member	metal2vulkan-rt::TextureUsage::UNKNOWN	UNKNOWN = 0x0, "MTLTextureUs
 macro-member	metal2vulkan-rt::TextureUsage::VIDEO	VIDEO = 0x8000, "MTLTextureUsageVideo";
 macro-member	metal2vulkan-rt::TextureUsage::aliases	aliases
 macro-member	metal2vulkan-rt::TextureUsage::dropped	dropped
+macro-member	metal2vulkan-rt::TriangleFillMode::Fill	Fill = 0, "MTLTriangleFillModeFill";
+macro-member	metal2vulkan-rt::TriangleFillMode::Lines	Lines = 1, "MTLTriangleFillModeLines";
+macro-member	metal2vulkan-rt::TriangleFillMode::Points	Points = 2, "MTLTriangleFillModePoints";
+macro-member	metal2vulkan-rt::TriangleFillMode::TriangleFillMode	TriangleFillMode = "MTLTriangleFillMode"
+macro-member	metal2vulkan-rt::TriangleFillMode::aliases	aliases
 macro-member	metal2vulkan-rt::Winding::Clockwise	Clockwise = 0, "MTLWindingClockwise";
 macro-member	metal2vulkan-rt::Winding::CounterClockwise	CounterClockwise = 1, "MTLWindingCounterClockwise";
 macro-member	metal2vulkan-rt::Winding::Winding	Winding = "MTLWinding"
@@ -6912,6 +6925,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceArithmetic	DeviceArithmeti
 macro-member	metal2vulkan-runtime::Degradation::DeviceBooleanVisibility	DeviceBooleanVisibility = "device-boolean-visibility", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceColorConversion	DeviceColorConversion = "device-color-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DeviceDenormals	DeviceDenormals = "device-denormals";
+macro-member	metal2vulkan-runtime::Degradation::DeviceDepthBias	DeviceDepthBias = "device-depth-bias";
 macro-member	metal2vulkan-runtime::Degradation::DeviceFilteredMipmaps	DeviceFilteredMipmaps = "device-filtered-mipmaps", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolation	DeviceInterpolation = "device-interpolation";
 macro-member	metal2vulkan-runtime::Degradation::DeviceInterpolationOffset	DeviceInterpolationOffset = "device-interpolation-offset";
@@ -9059,7 +9073,7 @@ macro-template	metal2vulkan-rt::vk_bit!	( $(#[$meta:meta])* $name:ident($raw:ty)
 macro-template	metal2vulkan-rt::vk_enum!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [$name] = &[$($name::$konst),*]; const NAMES: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub fn name(self) -> Option<&'static str> { Self::NAMES.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn is_known(self) -> bool { self.name().is_some() } pub fn from_name(name: &str) -> Option<$name> { Self::NAMES .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { match self.name() { Some(name) => f.write_str(name), None => write!(f, "{}({})", $vk, self.0), } } } };
 macro-template	metal2vulkan-rt::vk_flags!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn empty() -> $name { $name(0) } pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub const fn is_empty(self) -> bool { self.0 == 0 } pub const fn contains(self, other: $name) -> bool { self.0 & other.0 == other.0 } pub const fn intersects(self, other: $name) -> bool { self.0 & other.0 != 0 } pub const fn union(self, other: $name) -> $name { $name(self.0 | other.0) } pub const fn intersection(self, other: $name) -> $name { $name(self.0 & other.0) } pub const fn difference(self, other: $name) -> $name { $name(self.0 & !other.0) } pub const fn known_bits() -> $name { let mut bits: $raw = 0; let mut i = 0; while i < Self::KNOWN.len() { let v = Self::KNOWN[i].0 .0; if v.count_ones() == 1 { bits |= v; } i += 1; } $name(bits) } pub fn name(self) -> Option<&'static str> { Self::KNOWN.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn from_name(name: &str) -> Option<$name> { Self::KNOWN .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::ops::BitOr for $name { type Output = $name; fn bitor(self, rhs: $name) -> $name { self.union(rhs) } } impl ::std::ops::BitOrAssign for $name { fn bitor_assign(&mut self, rhs: $name) { *self = self.union(rhs); } } impl ::std::ops::BitAnd for $name { type Output = $name; fn bitand(self, rhs: $name) -> $name { self.intersection(rhs) } } impl ::std::ops::BitAndAssign for $name { fn bitand_assign(&mut self, rhs: $name) { *self = self.intersection(rhs); } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { if let Some(name) = self.name() { return f.write_str(name); } let mut rest = self.0; let mut first = true; for (v, n) in Self::KNOWN { if v.0.count_ones() == 1 && rest & v.0 != 0 { if !first { f.write_str(" | ")?; } f.write_str(n)?; rest &= !v.0; first = false; } } if rest != 0 || first { if !first { f.write_str(" | ")?; } write!(f, "{:#x}", rest)?; } Ok(()) } } };
 macro-template	metal2vulkan-runtime::commands!	( v1_0 { $($v0:ident $f0:ident $n0:literal ($($a0:ident: $t0:ty),*) $(-> $r0:ty)?;)* } v1_3 { $($v3:ident $f3:ident $n3:literal ($($a3:ident: $t3:ty),*) $(-> $r3:ty)?;)* } extension { $($ve:ident $fe:ident $ne:literal ($($ae:ident: $te:ty),*) $(-> $re:ty)?;)* } ) => { #[derive(Clone, Copy, PartialEq, Eq, Debug)] pub(crate) enum Command { $($v0,)* $($v3,)* $($ve,)* } impl Command { pub(crate) const ALL: &'static [Command] = &[ $(Command::$v0,)* $(Command::$v3,)* $(Command::$ve,)* ]; pub(crate) const COUNT: usize = Command::ALL.len(); pub(crate) fn name(self) -> &'static CStr { match self { $(Command::$v0 => $n0,)* $(Command::$v3 => $n3,)* $(Command::$ve => $ne,)* } } } #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct CommandsRecorded { $( #[doc = concat!("The calls of `", stringify!($v0), "`.")] pub $f0: u64, )* $( #[doc = concat!("The calls of `", stringify!($v3), "`.")] pub $f3: u64, )* $( #[doc = concat!("The calls of `", stringify!($ve), "`.")] pub $fe: u64, )* } impl CommandsRecorded { fn read(shards: &[Shard; SHARDS + 1]) -> CommandsRecorded { let sum = |command: Command| { let counts = shards.iter().map(|shard| &shard.0[command as usize]); counts.map(|count| count.load(Ordering::Relaxed)).sum() }; CommandsRecorded { $($f0: sum(Command::$v0),)* $($f3: sum(Command::$v3),)* $($fe: sum(Command::$ve),)* } } } struct Real { $($f0: [AtomicPtr<c_void>; SLOTS],)* $($f3: [AtomicPtr<c_void>; SLOTS],)* $($fe: [AtomicPtr<c_void>; SLOTS],)* } static REAL: Real = Real { $($f0: [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS],)* $($f3: [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS],)* $($fe: [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS],)* }; commands!(@thunks $($v0 $f0 $n0 ($($a0: $t0),*) $(-> $r0)?;)*); commands!(@thunks $($v3 $f3 $n3 ($($a3: $t3),*) $(-> $r3)?;)*); commands!(@thunks $($ve $fe $ne ($($ae: $te),*) $(-> $re)?;)*); pub(super) fn thunk<const S: usize>(command: Command) -> *const c_void { match command { $(Command::$v0 => $f0::<S> as *const c_void,)* $(Command::$v3 => $f3::<S> as *const c_void,)* $(Command::$ve => $fe::<S> as *const c_void,)* } } pub(super) fn store(index: usize, command: Command, real: *const c_void) { let real = real.cast_mut(); match command { $(Command::$v0 => REAL.$f0[index].store(real, Ordering::Release),)* $(Command::$v3 => REAL.$f3[index].store(real, Ordering::Release),)* $(Command::$ve => REAL.$fe[index].store(real, Ordering::Release),)* } } pub(super) fn real(index: usize, command: Command) -> *const c_void { let real = match command { $(Command::$v0 => REAL.$f0[index].load(Ordering::Acquire),)* $(Command::$v3 => REAL.$f3[index].load(Ordering::Acquire),)* $(Command::$ve => REAL.$fe[index].load(Ordering::Acquire),)* }; real.cast_const() } pub(super) fn clear(index: usize) { $(REAL.$f0[index].store(std::ptr::null_mut(), Ordering::Release);)* $(REAL.$f3[index].store(std::ptr::null_mut(), Ordering::Release);)* $(REAL.$fe[index].store(std::ptr::null_mut(), Ordering::Release);)* } pub(super) fn route_tables<const S: usize>( v1_0: &mut ash::DeviceFnV1_0, v1_3: &mut ash::DeviceFnV1_3, ) { $( store(S, Command::$v0, v1_0.$f0 as *const c_void); v1_0.$f0 = $f0::<S>; )* $( store(S, Command::$v3, v1_3.$f3 as *const c_void); v1_3.$f3 = $f3::<S>; )* } }; (@thunks $($v:ident $f:ident $n:literal ($($a:ident: $t:ty),*) $(-> $r:ty)?;)*) => { $( unsafe extern "system" fn $f<const S: usize>( command_buffer: vk::CommandBuffer, $($a: $t,)* ) $(-> $r)? { let at = held(); crate::shards::add(at, &COUNTS[S][at].0[Command::$v as usize], 1); let real = REAL.$f[S].load(Ordering::Acquire); if real.is_null() { missing($n); } unsafe { let real = std::mem::transmute::< *mut c_void, unsafe extern "system" fn(vk::CommandBuffer, $($t,)*) $(-> $r)?, >(real); real(command_buffer, $($a,)*) } } )* };
-macro-template	metal2vulkan-runtime::degradations!	( runtime { $( $(#[doc = $doc:literal])* $kind:ident = $code:literal, $category:ident, $cost:literal; )* } notes { $( $(#[doc = $note_doc:literal])* $note:ident = $note_code:literal; )* } ) => { #[non_exhaustive] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Degradation { $($(#[doc = $doc])* $kind,)* $( #[doc = concat!( "A pipeline stage records [`PrecisionNote::", stringify!($note), "`]." )] $(#[doc = $note_doc])* $note, )* } impl Degradation { pub const ALL: &'static [Degradation] = &[$(Degradation::$kind,)* $(Degradation::$note,)*]; pub const fn code(self) -> &'static str { match self { $(Degradation::$kind => concat!("metal2vulkan-degrade-", $code),)* $(Degradation::$note => concat!("metal2vulkan-degrade-", $note_code),)* } } pub const fn category(self) -> DegradationCategory { match self { $(Degradation::$kind => DegradationCategory::$category,)* $(Degradation::$note => DegradationCategory::Precision,)* } } pub const fn cost(self) -> &'static str { match self { $(Degradation::$kind => $cost,)* $(Degradation::$note => NOTE_COST,)* } } pub const fn precision_note(self) -> Option<PrecisionNote> { match self { $(Degradation::$kind => None,)* $(Degradation::$note => Some(PrecisionNote::$note),)* } } pub const fn from_precision_note(note: PrecisionNote) -> Degradation { match note { $(PrecisionNote::$note => Degradation::$note,)* PrecisionNote::CappedLodBias => Degradation::CappedLodBias, PrecisionNote::SnormMinimumKept => Degradation::SnormMinimumKept, PrecisionNote::DeviceReconvergence => { Degradation::ImplementationDefinedReconvergence } } } } };
+macro-template	metal2vulkan-runtime::degradations!	( runtime { $( $(#[doc = $doc:literal])* $kind:ident = $code:literal, $category:ident, $cost:literal; )* } notes { $( $(#[doc = $note_doc:literal])* $note:ident = $note_code:literal; )* } ) => { #[non_exhaustive] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Degradation { $($(#[doc = $doc])* $kind,)* $( #[doc = concat!( "A pipeline stage records [`PrecisionNote::", stringify!($note), "`]." )] $(#[doc = $note_doc])* $note, )* } impl Degradation { pub const ALL: &'static [Degradation] = &[$(Degradation::$kind,)* $(Degradation::$note,)*]; pub const fn code(self) -> &'static str { match self { $(Degradation::$kind => concat!("metal2vulkan-degrade-", $code),)* $(Degradation::$note => concat!("metal2vulkan-degrade-", $note_code),)* } } pub const fn category(self) -> DegradationCategory { match self { $(Degradation::$kind => DegradationCategory::$category,)* $(Degradation::$note => DegradationCategory::Precision,)* } } pub const fn cost(self) -> &'static str { match self { $(Degradation::$kind => $cost,)* $(Degradation::$note => NOTE_COST,)* } } pub const fn precision_note(self) -> Option<PrecisionNote> { match self { $(Degradation::$kind => None,)* $(Degradation::$note => Some(PrecisionNote::$note),)* } } pub const fn from_precision_note(note: PrecisionNote) -> Degradation { match note { $(PrecisionNote::$note => Degradation::$note,)* PrecisionNote::CappedLodBias => Degradation::CappedLodBias, PrecisionNote::SnormMinimumKept => Degradation::SnormMinimumKept, PrecisionNote::DepthDenormals => Degradation::DepthDenormals, PrecisionNote::DeviceReconvergence => { Degradation::ImplementationDefinedReconvergence } } } } };
 macro-template	metal2vulkan-runtime::exposures!	($($exposure:expr => [$($feature:ident),* $(,)?];)*) => { impl VkFeature { pub const ALL: &'static [VkFeature] = &[$($(VkFeature::$feature),*),*]; pub fn exposure(self) -> Exposure { match self { $($(VkFeature::$feature)|* => $exposure,)* } } } };
 macro-template	metal2vulkan-runtime::flag_set!	( $(#[$doc:meta])* $name:ident { $($(#[$fdoc:meta])* $flag:ident = $bit:expr),* $(,)? } $(#[$all:meta])* ALL ) => { $(#[$doc])* #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct $name(u8); impl $name { pub const NONE: $name = $name(0); $($(#[$fdoc])* pub const $flag: $name = $name($bit);)* $(#[$all])* pub const ALL: &'static [($name, &'static str)] = &[$(($name::$flag, stringify!($flag))),*]; pub const fn union(self, other: $name) -> $name { $name(self.0 | other.0) } pub const fn contains(self, other: $name) -> bool { self.0 & other.0 == other.0 } #[cfg(test)] pub const fn bits(self) -> u8 { self.0 } } };
 macro-template	metal2vulkan-runtime::id_type!	($(#[$doc:meta])* $name:ident) => { $(#[$doc])* #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct $name(pub u32); impl $name { pub const fn new(index: u32) -> $name { $name(index) } pub const fn index(self) -> usize { self.0 as usize } } };
@@ -9512,6 +9526,7 @@ method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_n
 method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
 method	metal2vulkan-rt::DepthStencilState::descriptor	pub fn descriptor(&self) -> &DepthStencilDescriptor
+method	metal2vulkan-rt::DepthStencilState::precision_note	pub fn precision_note(&self) -> Option<PrecisionNote>
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
 method	metal2vulkan-rt::Device::extensions	pub fn extensions(&self) -> &[CString]
 method	metal2vulkan-rt::Device::features	pub fn features(&self) -> &[ConsumerFeature]
@@ -9578,8 +9593,12 @@ method	metal2vulkan-rt::RenderCommandEncoder::draw_primitives	pub fn draw_primit
 method	metal2vulkan-rt::RenderCommandEncoder::end_encoding	pub fn end_encoding(mut self)
 method	metal2vulkan-rt::RenderCommandEncoder::memory_barrier	pub fn memory_barrier(&mut self) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_blend_color	pub fn set_blend_color(&mut self, red: f32, green: f32, blue: f32, alpha: f32)
+method	metal2vulkan-rt::RenderCommandEncoder::set_color_store_action	pub fn set_color_store_action(&mut self, action: StoreAction, index: usize) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_cull_mode	pub fn set_cull_mode(&mut self, mode: CullMode)
+method	metal2vulkan-rt::RenderCommandEncoder::set_depth_bias	pub fn set_depth_bias(&mut self, depth_bias: f32, slope_scale: f32, clamp: f32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_depth_clip_mode	pub fn set_depth_clip_mode(&mut self, mode: DepthClipMode) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_depth_stencil_state	pub fn set_depth_stencil_state(&mut self, state: Option<&DepthStencilState>) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_depth_store_action	pub fn set_depth_store_action(&mut self, action: StoreAction) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_buffer	pub fn set_fragment_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_buffer_offset	pub fn set_fragment_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_bytes	pub fn set_fragment_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error>
@@ -9588,14 +9607,18 @@ method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_texture	pub fn set_fr
 method	metal2vulkan-rt::RenderCommandEncoder::set_front_facing_winding	pub fn set_front_facing_winding(&mut self, winding: Winding)
 method	metal2vulkan-rt::RenderCommandEncoder::set_render_pipeline_state	pub fn set_render_pipeline_state(&mut self, state: &RenderPipelineState) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_scissor_rect	pub fn set_scissor_rect(&mut self, rect: ScissorRect)
+method	metal2vulkan-rt::RenderCommandEncoder::set_scissor_rects	pub fn set_scissor_rects(&mut self, rects: &[ScissorRect]) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_stencil_front_back_reference_value	pub fn set_stencil_front_back_reference_value(&mut self, front: u32, back: u32)
 method	metal2vulkan-rt::RenderCommandEncoder::set_stencil_reference_value	pub fn set_stencil_reference_value(&mut self, value: u32)
+method	metal2vulkan-rt::RenderCommandEncoder::set_stencil_store_action	pub fn set_stencil_store_action(&mut self, action: StoreAction) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_triangle_fill_mode	pub fn set_triangle_fill_mode(&mut self, mode: TriangleFillMode) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_buffer	pub fn set_vertex_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_buffer_offset	pub fn set_vertex_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_bytes	pub fn set_vertex_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_sampler_state	pub fn set_vertex_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_texture	pub fn set_vertex_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_viewport	pub fn set_viewport(&mut self, viewport: Viewport) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_viewports	pub fn set_viewports(&mut self, viewports: &[Viewport]) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::wait_for_fence	pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-rt::RenderPipelineDescriptor::fragment_writes_depth_unattached	pub fn fragment_writes_depth_unattached(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
@@ -13597,10 +13620,13 @@ variant	metal2vulkan-rt::DispatchType::Concurrent	Concurrent
 variant	metal2vulkan-rt::DispatchType::Serial	Serial
 variant	metal2vulkan-rt::DrawKind::AttachmentFormats	AttachmentFormats
 variant	metal2vulkan-rt::DrawKind::AttachmentRead	AttachmentRead
-variant	metal2vulkan-rt::DrawKind::DepthTest	DepthTest
+variant	metal2vulkan-rt::DrawKind::DepthBiasClamp	DepthBiasClamp
+variant	metal2vulkan-rt::DrawKind::DepthClamp	DepthClamp
 variant	metal2vulkan-rt::DrawKind::DividedBaseInstance	DividedBaseInstance
+variant	metal2vulkan-rt::DrawKind::FillMode	FillMode
 variant	metal2vulkan-rt::DrawKind::Points	Points
 variant	metal2vulkan-rt::DrawKind::Viewport	Viewport
+variant	metal2vulkan-rt::DrawKind::Viewports	Viewports
 variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)
 variant	metal2vulkan-rt::Error::Limit	Limit(Limit)
 variant	metal2vulkan-rt::Error::Loader	Loader(ash::LoadingError)
@@ -13662,11 +13688,13 @@ variant	metal2vulkan-rt::PrecisionNote::ColorAttachmentGroups	ColorAttachmentGro
 variant	metal2vulkan-rt::PrecisionNote::ComputedSampleDepth	ComputedSampleDepth
 variant	metal2vulkan-rt::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
 variant	metal2vulkan-rt::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint
+variant	metal2vulkan-rt::PrecisionNote::DepthDenormals	DepthDenormals
 variant	metal2vulkan-rt::PrecisionNote::DeviceAlphaCoverage	DeviceAlphaCoverage
 variant	metal2vulkan-rt::PrecisionNote::DeviceAnisotropicFilter	DeviceAnisotropicFilter
 variant	metal2vulkan-rt::PrecisionNote::DeviceArithmetic	DeviceArithmetic
 variant	metal2vulkan-rt::PrecisionNote::DeviceColorConversion	DeviceColorConversion
 variant	metal2vulkan-rt::PrecisionNote::DeviceDenormals	DeviceDenormals
+variant	metal2vulkan-rt::PrecisionNote::DeviceDepthBias	DeviceDepthBias
 variant	metal2vulkan-rt::PrecisionNote::DeviceInterpolation	DeviceInterpolation
 variant	metal2vulkan-rt::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
 variant	metal2vulkan-rt::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
@@ -16597,11 +16625,13 @@ variant	metal2vulkan::pipeline::PrecisionNote::ColorAttachmentGroups	ColorAttach
 variant	metal2vulkan::pipeline::PrecisionNote::ComputedSampleDepth	ComputedSampleDepth
 variant	metal2vulkan::pipeline::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
 variant	metal2vulkan::pipeline::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint
+variant	metal2vulkan::pipeline::PrecisionNote::DepthDenormals	DepthDenormals
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceAlphaCoverage	DeviceAlphaCoverage
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceAnisotropicFilter	DeviceAnisotropicFilter
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceArithmetic	DeviceArithmetic
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceColorConversion	DeviceColorConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceDenormals	DeviceDenormals
+variant	metal2vulkan::pipeline::PrecisionNote::DeviceDepthBias	DeviceDepthBias
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolation	DeviceInterpolation
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding

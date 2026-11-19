@@ -343,7 +343,9 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::NativeFloat8
         | N::CappedLodBias
         | N::DeviceReconvergence
-        | N::SnormMinimumKept => Allowance::Unbounded,
+        | N::SnormMinimumKept
+        | N::DeviceDepthBias
+        | N::DepthDenormals => Allowance::Unbounded,
     }
 }
 

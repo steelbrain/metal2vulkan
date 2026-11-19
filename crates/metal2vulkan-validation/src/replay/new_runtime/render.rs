@@ -603,6 +603,35 @@ impl NewRuntime {
             "memoryBarrierWithScope:afterStages:beforeStages:" => {
                 self.render(id).encoder.memory_barrier()
             }
+            "setDepthBias:slopeScale:clamp:" => {
+                let float = |at: usize| match arg(call, at)?.as_f64() {
+                    Some(value) => Ok(value as f32),
+                    None => Err(refuse(call, format!("argument {at} is no float"))),
+                };
+                let [bias, slope, clamp] = [float(0)?, float(1)?, float(2)?];
+                self.render(id).encoder.set_depth_bias(bias, slope, clamp)
+            }
+            "setColorStoreAction:atIndex:" => {
+                let (action, at) = (store_action(call, uint(call, 0)?)?, uint(call, 1)?);
+                let at = usize::try_from(at).map_err(|_| refuse(call, "an index past usize"))?;
+                self.render(id).encoder.set_color_store_action(action, at)
+            }
+            "setDepthStoreAction:" => {
+                let action = store_action(call, uint(call, 0)?)?;
+                self.render(id).encoder.set_depth_store_action(action)
+            }
+            "setStencilStoreAction:" => {
+                let action = store_action(call, uint(call, 0)?)?;
+                self.render(id).encoder.set_stencil_store_action(action)
+            }
+            "setTriangleFillMode:" => {
+                let mode = metal(call, uint(call, 0)?)?;
+                self.render(id).encoder.set_triangle_fill_mode(mode)
+            }
+            "setDepthClipMode:" => {
+                let mode = metal(call, uint(call, 0)?)?;
+                self.render(id).encoder.set_depth_clip_mode(mode)
+            }
             _ => return Err(refuse(call, "not played on a render encoder")),
         };
         match result {

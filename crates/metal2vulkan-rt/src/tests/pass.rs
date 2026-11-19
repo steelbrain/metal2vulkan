@@ -25,8 +25,8 @@ use crate::{ClearColor, LoadAction, PixelFormat, StoreAction};
 use ash::vk;
 use metal2vulkan::metal::format::FormatEmulation;
 
-/// Each load action is Vulkan's of the same name, and the two plain store actions store; the
-/// others are gaps.
+/// Each load action is Vulkan's of the same name, and the plain and unknown store actions store;
+/// the others are gaps.
 #[test]
 fn load_actions_are_one_to_one_and_plain_store_actions_store() {
     let pairs = [
@@ -38,6 +38,7 @@ fn load_actions_are_one_to_one_and_plain_store_actions_store() {
         for (store, store_op) in [
             (StoreAction::DontCare, vk::AttachmentStoreOp::STORE),
             (StoreAction::Store, vk::AttachmentStoreOp::STORE),
+            (StoreAction::Unknown, vk::AttachmentStoreOp::STORE),
         ] {
             assert!(
                 ops(load, store).ok() == Some((op, store_op)),
@@ -51,7 +52,6 @@ fn load_actions_are_one_to_one_and_plain_store_actions_store() {
             StoreAction::StoreAndMultisampleResolve,
             RenderPassKind::Resolve,
         ),
-        (StoreAction::Unknown, RenderPassKind::StoreAction),
         (
             StoreAction::CustomSampleDepthStore,
             RenderPassKind::StoreAction,
@@ -521,7 +521,7 @@ mod on_device {
                 d
             };
             let mut store = color(&colors, 0);
-            store.color_attachments[0].store_action = StoreAction::Unknown;
+            store.color_attachments[0].store_action = StoreAction::CustomSampleDepthStore;
             let mut depth_of_color = color(&colors, 0);
             depth_of_color.depth_attachment.texture = Some(colors.clone());
             let mut two_views = color(&colors, 0);
