@@ -1,10 +1,15 @@
 //! Presenting: a drawable's texture over a swapchain's image, the consumer's acquire of it, the
 //! command buffer that presents it, and the swapchain's end.
 //!
-//! No test has a window or a surface, so an image made as a swapchain makes its images stands in
-//! for one: a 2D `B8G8R8A8_UNORM` image of one level and layer, optimal, of the usage a consumer's
-//! swapchain asks (colour attachment, transfer source and destination, sampled), in the undefined
-//! layout, with memory the test allocates and frees. A submission of the test's own on the
+//! No test has a window. Where the instance offers `VK_EXT_headless_surface` (a surface with no
+//! window system) and the device presents to it, one test presents through a real swapchain of
+//! such a surface with `vkQueuePresentKHR`, under the layer, which holds each present's wait to a
+//! signal already submitted and its image to the present layout; each test run prints which
+//! surface it had (`M2V-SURFACE`). The other tests run on every device, as a present cannot be
+//! read back: an image made as a swapchain makes its images stands in for one, a 2D
+//! `B8G8R8A8_UNORM` image of one level and layer, optimal, of the usage a consumer's swapchain
+//! asks (colour attachment, transfer source and destination, sampled), in the undefined layout,
+//! with memory the test allocates and frees. A submission of the test's own on the
 //! presenting queue stands in for the present: it waits on the command buffer's semaphore, as a
 //! present does, copies the image out of the present layout, and leaves it in that layout, as the
 //! presentation engine leaves an image it showed. The layer holds its wait to the rule a present's
@@ -24,6 +29,10 @@
 //!   runtime recorded. A presenting command buffer is one submission. The swapchain goes as the
 //!   guide says: its command buffers complete, its texture dropped, then the image destroyed,
 //!   before the texture's views go.
+//! - Where the device presents to a headless surface: frames into a real swapchain's images,
+//!   until each is acquired twice, each image's drawable acquired after a fenced acquire and
+//!   presented with `vkQueuePresentKHR`, from the test's thread or the scheduled handler; the
+//!   swapchain destroyed as the guide says, and a second made on the surface.
 //! - One command buffer presents two drawables, each signalling a semaphore of its own; the same
 //!   semaphore for both, and the same drawable twice, are refused.
 //! - What a drawable's texture is not is refused: another descriptor, format or usage than the
@@ -35,11 +44,13 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::blit::on_device::settled;
-    use crate::tests::command::on_device::{each_device, finished, within, Arena, PATIENCE};
+    use crate::tests::command::on_device::{
+        each_device, finished, on_each_device, within, Arena, PATIENCE,
+    };
     use crate::{
         Buffer, ClearColor, CommandBuffer, CommandBufferStatus, Device, Error, IndexClass,
-        LoadAction, PixelFormat, Refusal, RenderPassDescriptor, StorageMode, StoreAction, Texture,
-        TextureDescriptor, TextureType, TextureUsage,
+        Instance, LoadAction, PixelFormat, Refusal, RenderPassDescriptor, StorageMode, StoreAction,
+        Texture, TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::prelude::VkResult;
     use ash::vk;
@@ -478,6 +489,367 @@ mod on_device {
             // SAFETY: every submission that signalled or waited on it has completed.
             unsafe { device.raw().device.destroy_semaphore(ready, None) };
             println!("{name}: three frames presented from each drawable, one from a handler");
+        });
+    }
+
+    /// A surface with no window system (`VK_EXT_headless_surface`), with the instance's surface
+    /// calls and the device's swapchain calls.
+    struct Headless {
+        surface: vk::SurfaceKHR,
+        surfaces: ash::khr::surface::Instance,
+        swapchains: ash::khr::swapchain::Device,
+    }
+
+    /// A swapchain of a [`Headless`] surface, its create info, the pixel format its texture
+    /// takes, and its images.
+    struct Swapchain {
+        swapchain: vk::SwapchainKHR,
+        info: vk::SwapchainCreateInfoKHR<'static>,
+        pixel_format: PixelFormat,
+        images: Vec<vk::Image>,
+    }
+
+    impl Headless {
+        /// Where `instance` enabled `VK_EXT_headless_surface` and the device's queue family
+        /// presents to such a surface, one; else none.
+        fn new(instance: &Instance, device: &Device) -> Option<Headless> {
+            let enabled = (instance.extensions().iter())
+                .any(|name| name.as_c_str() == ash::ext::headless_surface::NAME);
+            if !enabled {
+                return None;
+            }
+            let (entry, raw_instance) = instance.raw();
+            let raw = device.raw();
+            let headless = ash::ext::headless_surface::Instance::new(entry, raw_instance);
+            let surfaces = ash::khr::surface::Instance::new(entry, raw_instance);
+            let info = vk::HeadlessSurfaceCreateInfoEXT::default();
+            // SAFETY: the instance enabled the extension; the surface is destroyed by `destroy`,
+            // or below, before the instance goes.
+            let surface = unsafe { headless.create_headless_surface(&info, None) }
+                .expect("a headless surface");
+            // SAFETY: the physical device, its queue family and the surface are live.
+            let presents = unsafe {
+                surfaces.get_physical_device_surface_support(
+                    raw.physical_device,
+                    raw.queue_family_index,
+                    surface,
+                )
+            };
+            if presents != Ok(true) {
+                // SAFETY: nothing made from the surface.
+                unsafe { surfaces.destroy_surface(surface, None) };
+                return None;
+            }
+            let swapchains = ash::khr::swapchain::Device::new(raw_instance, raw.device);
+            Some(Headless {
+                surface,
+                surfaces,
+                swapchains,
+            })
+        }
+
+        /// A FIFO swapchain of the surface's least image count, of `usage`, of `B8G8R8A8_UNORM`
+        /// images where the surface offers them, else `R8G8B8A8_UNORM`, of the stand-in's extent
+        /// within the surface's bounds.
+        fn swapchain(&self, device: &Device, usage: vk::ImageUsageFlags) -> Swapchain {
+            let physical = device.raw().physical_device;
+            // SAFETY: the physical device and the surface are live.
+            let (caps, formats, modes) = unsafe {
+                let surfaces = &self.surfaces;
+                (
+                    surfaces.get_physical_device_surface_capabilities(physical, self.surface),
+                    surfaces.get_physical_device_surface_formats(physical, self.surface),
+                    surfaces.get_physical_device_surface_present_modes(physical, self.surface),
+                )
+            };
+            let (caps, formats, modes) = (
+                caps.expect("the surface's capabilities"),
+                formats.expect("the surface's formats"),
+                modes.expect("the surface's present modes"),
+            );
+            assert!(
+                modes.contains(&vk::PresentModeKHR::FIFO),
+                "FIFO is every surface's"
+            );
+            assert!(
+                caps.supported_usage_flags.contains(usage),
+                "the surface's images take {usage:?}: {:?}",
+                caps.supported_usage_flags
+            );
+            let (format, pixel_format) = [
+                (vk::Format::B8G8R8A8_UNORM, PixelFormat::BGRA8Unorm),
+                (vk::Format::R8G8B8A8_UNORM, PixelFormat::RGBA8Unorm),
+            ]
+            .into_iter()
+            .find_map(|(format, pixel_format)| {
+                let offered = formats.iter().find(|offered| offered.format == format);
+                offered.map(|offered| (*offered, pixel_format))
+            })
+            .expect("an 8-bit UNORM format of the surface's");
+            let extent = match caps.current_extent.width {
+                u32::MAX => vk::Extent2D {
+                    width: EXTENT[0]
+                        .clamp(caps.min_image_extent.width, caps.max_image_extent.width),
+                    height: (EXTENT[1])
+                        .clamp(caps.min_image_extent.height, caps.max_image_extent.height),
+                },
+                _ => caps.current_extent,
+            };
+            let alpha = caps.supported_composite_alpha;
+            let alpha = match alpha.contains(vk::CompositeAlphaFlagsKHR::OPAQUE) {
+                true => vk::CompositeAlphaFlagsKHR::OPAQUE,
+                false => vk::CompositeAlphaFlagsKHR::from_raw(
+                    alpha.as_raw() & alpha.as_raw().wrapping_neg(),
+                ),
+            };
+            let info = vk::SwapchainCreateInfoKHR::default()
+                .surface(self.surface)
+                .min_image_count(caps.min_image_count)
+                .image_format(format.format)
+                .image_color_space(format.color_space)
+                .image_extent(extent)
+                .image_array_layers(1)
+                .image_usage(usage)
+                .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .pre_transform(caps.current_transform)
+                .composite_alpha(alpha)
+                .present_mode(vk::PresentModeKHR::FIFO)
+                .clipped(true);
+            // SAFETY: a valid create info on the live device, of a surface no other swapchain
+            // has; destroyed before the surface.
+            let swapchain = unsafe { self.swapchains.create_swapchain(&info, None) }
+                .expect("a swapchain of the headless surface");
+            // SAFETY: the swapchain is live.
+            let images = unsafe { self.swapchains.get_swapchain_images(swapchain) }
+                .expect("the swapchain's images");
+            Swapchain {
+                swapchain,
+                info,
+                pixel_format,
+                images,
+            }
+        }
+
+        /// The surface goes, once its swapchains have.
+        ///
+        /// # Safety
+        ///
+        /// Every swapchain of the surface is destroyed.
+        unsafe fn destroy(self) {
+            // SAFETY: the caller's contract.
+            unsafe { self.surfaces.destroy_surface(self.surface, None) };
+        }
+    }
+
+    /// The consumer's present of `swapchain`'s image `index`, waiting on `ready`, on the
+    /// presenting queue: whether the swapchain is suboptimal, or the error.
+    fn present(
+        device: &Device,
+        swapchains: &ash::khr::swapchain::Device,
+        swapchain: vk::SwapchainKHR,
+        index: u32,
+        ready: vk::Semaphore,
+    ) -> VkResult<bool> {
+        let waits = [ready];
+        let swapchain = [swapchain];
+        let indices = [index];
+        let info = vk::PresentInfoKHR::default()
+            .wait_semaphores(&waits)
+            .swapchains(&swapchain)
+            .image_indices(&indices);
+        // SAFETY: the queue is held for the call; the image is acquired, and the command buffer
+        // that presents it is scheduled, so the wait is on a submitted signal.
+        device.with_present_queue(|queue| unsafe { swapchains.queue_present(queue, &info) })
+    }
+
+    /// Where the instance offers a headless surface and the device presents to it, a real
+    /// swapchain on it, for a render-target drawable and then a shader-read one at indices: frames
+    /// that each acquire an image with a fence, acquire its drawable, render into it (a clear the
+    /// first time an image is acquired, a load after), present the drawable, and present the
+    /// image with `vkQueuePresentKHR` waiting on the command buffer's semaphore, two of every
+    /// three from the test's thread once `wait_until_scheduled` returns, beside a scheduled
+    /// handler that sleeps, and every third from the command buffer's own scheduled handler,
+    /// until each image is acquired twice. The layer checks each present's wait (on a submitted
+    /// signal) and its image's layout. Then the swapchain goes as the guide says: the command
+    /// buffers completed, the presents waited for, the textures dropped, the swapchain destroyed
+    /// before their views go, and a second swapchain is made on the surface. Elsewhere it says
+    /// so, and the stand-in tests stand for it.
+    #[test]
+    fn every_device_presents_a_headless_swapchain() {
+        let instance = crate::tests::validation::instance(&[ash::ext::headless_surface::NAME]);
+        on_each_device("present_headless", &instance, |name, instance, device| {
+            let Some(headless) = Headless::new(instance, &device) else {
+                println!(
+                    "M2V-SURFACE {name}: none (stand-in image; the driver offers no headless \
+                     surface)"
+                );
+                return;
+            };
+            println!("M2V-SURFACE {name}: VK_EXT_headless_surface");
+            let counters = device.counters();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let raw = device.raw();
+            // SAFETY: a valid create info on the live device; destroyed below, once waited for.
+            let fence = unsafe {
+                raw.device
+                    .create_fence(&vk::FenceCreateInfo::default(), None)
+            }
+            .expect("a fence");
+            let read_render = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            let colour = vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST;
+            let clears = [
+                ClearColor::new(0.2, 0.6, 0.0, 1.0),
+                ClearColor::new(1.0, 0.0, 0.4, 1.0),
+            ];
+            for (usage, image_usage, indexed) in [
+                (TextureUsage::RENDER_TARGET, colour, false),
+                (read_render, colour | vk::ImageUsageFlags::SAMPLED, true),
+            ] {
+                let chain = headless.swapchain(&device, image_usage);
+                let count = chain.images.len() as u32;
+                if indexed {
+                    device
+                        .grant_indices(IndexClass::Texture, 4096, count)
+                        .expect("a grant");
+                }
+                let textures = counters.gauges().textures;
+                let mut d = descriptor(usage);
+                d.pixel_format = chain.pixel_format;
+                d.width = chain.info.image_extent.width;
+                d.height = chain.info.image_extent.height;
+                let drawables: Vec<Texture> = (chain.images.iter().zip(0..))
+                    .map(|(&image, at)| {
+                        let index = indexed.then_some(4096 + at);
+                        // SAFETY: the image is one of the swapchain's, made with `chain.info` on
+                        // the device, not acquired; the swapchain goes as the guide says, below.
+                        unsafe { device.new_drawable_texture(&d, index, image, &chain.info) }
+                            .unwrap_or_else(|error| panic!("{name}: a drawable's texture: {error}"))
+                    })
+                    .collect();
+                let readies: Vec<vk::Semaphore> =
+                    drawables.iter().map(|_| semaphore(&device)).collect();
+                let mut acquires = vec![0u32; drawables.len()];
+                let mut frame = 0;
+                while acquires.iter().any(|&times| times < 2) {
+                    assert!(frame < 8 * count, "{name}: every image acquired twice");
+                    // SAFETY: the swapchain and the fence are live, the fence unsignalled; the
+                    // wait has a bound.
+                    let index = unsafe {
+                        let acquired = headless.swapchains.acquire_next_image(
+                            chain.swapchain,
+                            PATIENCE.as_nanos() as u64,
+                            vk::Semaphore::null(),
+                            fence,
+                        );
+                        let (index, _) = acquired.expect("an acquire");
+                        let waited = raw.device.wait_for_fences(&[fence], true, u64::MAX);
+                        waited.expect("the acquire's fence");
+                        raw.device.reset_fences(&[fence]).expect("a reset");
+                        index
+                    };
+                    let at = index as usize;
+                    let (drawable, ready) = (&drawables[at], readies[at]);
+                    // SAFETY: the image is acquired, and its fence waited for.
+                    unsafe { drawable.drawable_acquired() }
+                        .unwrap_or_else(|error| panic!("{name}: an acquire: {error}"));
+                    let clear = (acquires[at] == 0).then_some(clears[at % 2]);
+                    acquires[at] += 1;
+                    let from = match frame % 3 {
+                        1 => Presenter::Handler,
+                        _ => Presenter::Thread,
+                    };
+                    frame += 1;
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    pass(&command_buffer, drawable, clear);
+                    type Presented = Arc<Mutex<Option<(CommandBufferStatus, VkResult<bool>)>>>;
+                    let presented: Presented = Arc::new(Mutex::new(None));
+                    let handler = {
+                        let presented = Arc::clone(&presented);
+                        let device = device.clone();
+                        let swapchains = headless.swapchains.clone();
+                        let swapchain = chain.swapchain;
+                        move |command_buffer: &CommandBuffer| {
+                            let result = match from {
+                                Presenter::Thread => {
+                                    thread::sleep(Duration::from_millis(100));
+                                    Ok(false)
+                                }
+                                Presenter::Handler => {
+                                    present(&device, &swapchains, swapchain, index, ready)
+                                }
+                            };
+                            let mut presented =
+                                presented.lock().unwrap_or_else(PoisonError::into_inner);
+                            *presented = Some((command_buffer.status(), result));
+                        }
+                    };
+                    command_buffer
+                        .add_scheduled_handler(handler)
+                        .expect("a scheduled handler");
+                    // SAFETY: the image's semaphore is unsignalled with no signal or wait
+                    // pending: its last present waited on it before the image was acquired again.
+                    unsafe { command_buffer.present_drawable(drawable, ready) }
+                        .unwrap_or_else(|error| panic!("{name}: a present: {error}"));
+                    command_buffer.commit().expect("a commit");
+                    if let Presenter::Thread = from {
+                        command_buffer
+                            .wait_until_scheduled()
+                            .expect("a wait outside a handler");
+                        assert_ne!(
+                            command_buffer.status(),
+                            CommandBufferStatus::Error,
+                            "{name}: the presenting command buffer is scheduled"
+                        );
+                        let shown =
+                            present(&device, &headless.swapchains, chain.swapchain, index, ready);
+                        assert!(
+                            shown.is_ok(),
+                            "{name}: a present from the thread: {shown:?}"
+                        );
+                    }
+                    finished(name, &command_buffer);
+                    assert_eq!(command_buffer.error(), None, "{name}");
+                    let presented = presented
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take();
+                    assert!(
+                        matches!(presented, Some((CommandBufferStatus::Scheduled, Ok(_)))),
+                        "{name} {from:?}: the scheduled handler ran, the command buffer \
+                         scheduled: {presented:?}"
+                    );
+                }
+                // The swapchain's end, as the guide orders it: every command buffer that used its
+                // images has completed (each frame's, waited for), the presents are waited for,
+                // the textures are dropped, and the swapchain goes while their views may live on.
+                // SAFETY: the queue is held for the call; the runtime's work on it is complete.
+                device
+                    .with_present_queue(|queue| unsafe { raw.device.queue_wait_idle(queue) })
+                    .expect("the presents complete");
+                drop(drawables);
+                // SAFETY: every use of the swapchain's images has completed, and nothing uses
+                // them again.
+                unsafe { headless.swapchains.destroy_swapchain(chain.swapchain, None) };
+                within("the drawables' views to go", || {
+                    counters.gauges().textures == textures
+                });
+                for ready in readies {
+                    // SAFETY: every submission and present that signalled or waited on it has
+                    // completed.
+                    unsafe { raw.device.destroy_semaphore(ready, None) };
+                }
+                println!(
+                    "{name}: {frame} frames presented through a headless swapchain of {count} \
+                     images, {usage:?}"
+                );
+            }
+            // SAFETY: the fence's last acquire is waited for; the surface's swapchains are gone.
+            unsafe {
+                raw.device.destroy_fence(fence, None);
+                headless.destroy();
+            }
         });
     }
 
