@@ -196,6 +196,7 @@ pub mod texture_fills;
 pub mod texture_view_casts;
 pub mod texture_views;
 pub mod textures;
+pub mod threadgroup_start;
 pub mod tile_pipeline_descriptors;
 pub mod tile_pipeline_reflection;
 pub mod tile_threadgroups;
@@ -627,6 +628,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     cases.push(Box::new(buffer_bind_off_alignment::BufferBindOffAlignment));
+    cases.push(Box::new(threadgroup_start::ThreadgroupStart));
     cases
 }
 

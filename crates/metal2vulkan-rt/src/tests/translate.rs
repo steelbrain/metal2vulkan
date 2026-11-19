@@ -15,6 +15,9 @@
 //! allocate the buffer. A kernel that reads the stage-in region stores the region each dispatch
 //! was encoded under, and is refused where the encoder set none. A read of a texture the kernel's function constants removed takes zero,
 //! and a read through a buffer argument bound to nothing reads the nil buffer's zeros.
+//! Threadgroup memory, a declared array's and a threadgroup argument's, reads zero until the
+//! program writes it, in a dispatch's later threadgroups, in a second dispatch and on the
+//! emulated-SIMD-group module alike.
 //!
 //! `llvm-as` assembles the kernels; without it a test skips visibly.
 
@@ -2829,6 +2832,82 @@ declare i32 @air.get_height_texture_2d(ptr addrspace(1), i32)
                 );
             }
             println!("{name}: index 5 and index 0x10005 both read texture 5");
+        });
+    }
+
+    /// `tgz_reads`: every thread reads its words of a declared threadgroup array and of a
+    /// `[[threadgroup(0)]]` region before any thread of its threadgroup stores a nonzero pattern
+    /// there, then reads its neighbour's words back (`metal2vulkan_devtools::threadgroup_start`).
+    /// Two dispatches of 2048 threadgroups each, in threadgroups of 256 threads, of 250 and of 30,
+    /// the last two not whole SIMD groups. Every device reads zero before the stores, in later
+    /// threadgroups of a dispatch and in the second dispatch alike, as Metal does (the
+    /// translator's null initializers on `Device::from_queries`' profile), and every pattern back;
+    /// a size that is not whole groups of what the plain module runs runs the emulated-SIMD-group
+    /// module.
+    #[test]
+    fn every_device_reads_zero_from_threadgroup_memory_until_the_program_writes_it() {
+        use metal2vulkan_devtools::threadgroup_start::{
+            answer, DISPATCHES, FIXTURE, GROUPS, REGION_BYTES, SIZES,
+        };
+
+        let Some(descriptor) = descriptor(FIXTURE) else {
+            return;
+        };
+        each_device("compute_threadgroup_start", |name, _, device| {
+            let state = state(name, &device, &descriptor);
+            let multiples = state.inner.compiled.whole.interface.multiples.clone();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut ran = Vec::new();
+            for size in SIZES {
+                let mut buffers = Buffers::new(&device, 1 << 12);
+                let outs: Vec<Buffer> = (0..DISPATCHES).map(|_| buffers.buffer(16)).collect();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder
+                    .set_threadgroup_memory_length(REGION_BYTES, 0)
+                    .expect("a length");
+                for out in &outs {
+                    encoder.set_buffer(Some(out), 0, 0).expect("a buffer");
+                    encoder
+                        .dispatch_threadgroups([GROUPS, 1, 1], [size, 1, 1])
+                        .unwrap_or_else(|error| panic!("{name}: threadgroups of {size}: {error}"));
+                }
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let want = answer(GROUPS, size);
+                for (dispatch, out) in outs.iter().enumerate() {
+                    assert_eq!(
+                        words(out, 0, 4),
+                        want,
+                        "{name}: dispatch {dispatch} of threadgroups of {size} (words: decl read \
+                         nonzero, arg read nonzero, the patterns' sum, the SIMD groups' shape)"
+                    );
+                }
+                let emulated = multiples.iter().any(|&multiple| size % multiple != 0);
+                if emulated {
+                    assert!(
+                        emulated_made(&state),
+                        "{name}: threadgroups of {size}, not whole groups of {multiples:?}, ran \
+                         the emulated module"
+                    );
+                }
+                ran.push(format!(
+                    "{size} {}",
+                    if emulated { "emulated" } else { "plain" }
+                ));
+            }
+            println!(
+                "{name}: threadgroup memory read zero before the program's stores in two \
+                 dispatches of {GROUPS} threadgroups of {}; pinned at {:?}, whole groups of \
+                 {multiples:?}",
+                ran.join(", "),
+                state.inner.compiled.whole.interface.required_subgroup_size,
+            );
         });
     }
 }
