@@ -598,6 +598,38 @@ impl RtSide<'_> {
                     0,
                 )
                 .map_err(of_rt),
+            RenderStep::TessellationFactorBuffer {
+                buffer: held,
+                offset,
+                instance_stride,
+            } => {
+                let held = held.map(buffer).transpose()?;
+                (encoder.set_tessellation_factor_buffer(held, *offset, *instance_stride))
+                    .map_err(of_rt)
+            }
+            RenderStep::DrawPatches {
+                control_points,
+                first,
+                count,
+                patch_indices,
+                patch_index_offset,
+                instances,
+                base_instance,
+            } => {
+                let indices = match patch_indices {
+                    Some(held) => Some((buffer(*held)?, *patch_index_offset)),
+                    None => None,
+                };
+                (encoder.draw_patches(
+                    *control_points,
+                    *first,
+                    *count,
+                    indices,
+                    *instances,
+                    *base_instance,
+                ))
+                .map_err(of_rt)
+            }
             other => Err(Failure::unavailable(&step_name(other))),
         }
     }
