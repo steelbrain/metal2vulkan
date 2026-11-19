@@ -45,6 +45,7 @@ pub(crate) mod on_device {
             constexprs: Vec::new(),
             reads_unbound: false,
             writes_unbound: false,
+            unbound_storage: false,
             has_effects: true,
             push_len,
             block_len: 0,

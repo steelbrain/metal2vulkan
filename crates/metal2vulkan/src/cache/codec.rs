@@ -1144,8 +1144,9 @@ codec_struct! {
         needs_handle_translation, io, tessellation, writes_memory, mesh_records, mesh_corners,
         emulated_payload,
         payload, reaches_command_buffers, command_writes, writes_textures,
-        reads_unbound_resources, writes_unbound_resources, numbered_samplers, own_pixel_textures,
-        snapshot_textures, snapshot_refusals, level_reads, private_bytes, sampler_arrays,
+        reads_unbound_resources, writes_unbound_resources, unbound_storage_textures,
+        numbered_samplers, own_pixel_textures, snapshot_textures, snapshot_refusals, level_reads,
+        private_bytes, sampler_arrays,
     }
     SamplerArray { slot, samplers }
     LevelReads { slot, any, named, lowest_read, sampled }
@@ -1407,8 +1408,8 @@ codec_struct! {
     PipelineInterface {
         slots, threadgroup, needs_pointer_translation, needs_handle_translation, push,
         reaches_command_buffers, command_writes, texture_writing_stages,
-        reads_unbound_resources, writes_unbound_resources, writes_memory, numbered_samplers,
-        stage_in,
+        reads_unbound_resources, writes_unbound_resources, unbound_storage_textures, writes_memory,
+        numbered_samplers, stage_in,
     }
     PipelineLayout { sets, push_constants, push_descriptor_eligible }
     DescriptorSetLayout { set, bindings, flags }

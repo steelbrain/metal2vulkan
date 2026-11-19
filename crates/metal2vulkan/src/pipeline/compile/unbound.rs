@@ -1,6 +1,6 @@
 //! What a function reads and writes through anything but its bound slots, decided from the
-//! specialized entry's AIR and its memory plan: `StageInterface::reads_unbound_resources` and
-//! `StageInterface::writes_unbound_resources`.
+//! specialized entry's AIR and its memory plan: `StageInterface::reads_unbound_resources`,
+//! `StageInterface::writes_unbound_resources` and `StageInterface::unbound_storage_textures`.
 //!
 //! A bound slot is what the encoder sets: a buffer, texture or sampler argument, an element of a
 //! buffer-table argument, and the words of an argument buffer bound at a buffer index. An access
@@ -19,10 +19,16 @@
 //! Some operations are both, whatever their operands: an indirect command buffer's operations
 //! (its records are only reached through an argument buffer), ray tracing, and a call the
 //! entry cannot see into (a visible function's, an unknown intrinsic).
+//!
+//! Of the texture operations through such a texture, those that reach it through its storage
+//! image are storage accesses: a write, an atomic, and a read of an `access::write` or
+//! `access::read_write` texture (the access the operation carries). An intersection and a call
+//! the entry cannot see into are storage accesses too; an indirect command buffer's operations
+//! and the other ray tracing operations touch no texture.
 
 use crate::air;
 use crate::air::intrinsics::{
-    AccessKind, AirIntrinsic, AtomicOp, LlvmIntrinsic, SimdMatrix, TexOp,
+    Access, AccessKind, AirIntrinsic, AtomicOp, LlvmIntrinsic, SimdMatrix, TexOp,
 };
 use crate::air::ir::{AddrSpace, Callee, InstKind, Type, Value};
 use crate::memory::plan::MemoryPlan;
@@ -33,12 +39,15 @@ use crate::memory::provenance::{HandleClass, Repr, Root};
 pub(super) struct Unbound {
     pub(super) reads: bool,
     pub(super) writes: bool,
+    /// Some access through such a texture reaches it through its storage image.
+    pub(super) storage_textures: bool,
 }
 
 impl Unbound {
-    const BOTH: Unbound = Unbound {
+    const ALL: Unbound = Unbound {
         reads: true,
         writes: true,
+        storage_textures: true,
     };
 
     fn add(&mut self, reads: bool, writes: bool) {
@@ -123,10 +132,13 @@ pub(super) fn unbound(e: &air::Entry, memory: &MemoryPlan) -> Unbound {
                                 | TexOp::BlockRead => (true, false),
                             };
                             out.add(handle && reads, handle && writes);
+                            let storage =
+                                matches!(t.access, Some(Access::Write | Access::ReadWrite));
+                            out.storage_textures |= handle && (writes || (reads && storage));
                         }
                         AirIntrinsic::IndirectCommand(_)
-                        | AirIntrinsic::AccelerationStructure(_)
-                        | AirIntrinsic::Intersect(_) => out = Unbound::BOTH,
+                        | AirIntrinsic::AccelerationStructure(_) => out.add(true, true),
+                        AirIntrinsic::Intersect(_) => out = Unbound::ALL,
                         // An asynchronous copy writes one side and reads the other; any other
                         // intrinsic given such a pointer may only read through it.
                         AirIntrinsic::AsyncCopy(_) => out.add(buffers, buffers),
@@ -145,12 +157,12 @@ pub(super) fn unbound(e: &air::Entry, memory: &MemoryPlan) -> Unbound {
                     Callee::Direct(_)
                     | Callee::Indirect { .. }
                     | Callee::UnknownIntrinsic(_)
-                    | Callee::Unbound { .. } => out = Unbound::BOTH,
+                    | Callee::Unbound { .. } => out = Unbound::ALL,
                 }
             }
             _ => {}
         }
-        if out == Unbound::BOTH {
+        if out == Unbound::ALL {
             break;
         }
     }

@@ -1088,15 +1088,19 @@ pub enum Gap {
     /// format (an 8-bit sRGB format, `RGB9E5Float` or `BGR10A2Unorm` where the device lacks its
     /// storage), or holds through a view of another (an `A8Unorm` held in red, an extended-range
     /// format). Metal writes and reads such a texture; the runtime would drop the writes and read
-    /// zeros. Found at the bind, so a texture an argument buffer reaches by its resource ID is
-    /// not: its writes are dropped, a known gap.
+    /// zeros. With no slot: a dispatch whose kernel may reach a texture through its storage image
+    /// beyond its slots (an argument buffer's `access::write` or `access::read_write` texture, a
+    /// resource ID), in an encoder where `use_resource` declared a write of such a texture.
+    /// A texture reached by its resource ID with no such declaration is not found: Metal
+    /// documents no write to it (`useHeap:` declares its heap's resources read only), and its
+    /// writes are dropped.
     ///
     /// Basis: ours (the storage element through a view of the nearest format whose storage Vulkan
     /// requires of every device, with the translator's conversion, is the form to build).
     StorageElement {
-        /// The function's texture slot.
-        slot: u32,
-        /// The bound texture's pixel format.
+        /// The function's texture slot; `None` for a texture `use_resource` declared written.
+        slot: Option<u32>,
+        /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
     /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a kind Metal makes and
@@ -1920,10 +1924,22 @@ impl fmt::Display for Gap {
                 f,
                 "a read_write texture slot {slot} bound to a swizzled texture is not built"
             ),
-            Gap::StorageElement { slot, pixel_format } => write!(
+            Gap::StorageElement {
+                slot: Some(slot),
+                pixel_format,
+            } => write!(
                 f,
                 "texture slot {slot}, which a function writes or reads as storage, bound to a \
                  {pixel_format:?} texture with no storage element on this device is not built"
+            ),
+            Gap::StorageElement {
+                slot: None,
+                pixel_format,
+            } => write!(
+                f,
+                "a kernel that may write or read as storage a texture beyond its slots, where \
+                 useResource declared a write of a {pixel_format:?} texture with no storage \
+                 element on this device, is not built"
             ),
             Gap::RenderPipeline { kind } => {
                 write!(f, "a render pipeline state with {kind:?} is not built")

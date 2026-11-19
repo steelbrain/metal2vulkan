@@ -21,6 +21,7 @@ use crate::sampler::SamplerState;
 use crate::texture::{Region, Texture};
 use ash::vk;
 use metal2vulkan::metal::format::integer_channels_word;
+use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
     grid_tile, nonuniform_region_bytes, region_bytes, DEEP_THREADGROUP, GRID_TILE_THREADS,
 };
@@ -192,6 +193,9 @@ pub struct ComputeCommandEncoder {
     declared: Vec<([u32; 2], Access)>,
     /// A `use_resource` declaration writes a Shared buffer.
     declared_shared_write: bool,
+    /// The pixel format of the first texture a `use_resource` declaration writes that has no
+    /// storage element ([`Texture::unstored`]).
+    declared_unstored_write: Option<PixelFormat>,
     /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state and the
     /// threadgroup memory lengths are unchanged.
     last: Option<Last>,
@@ -413,6 +417,7 @@ impl CommandBuffer {
             lengths: Vec::new(),
             declared: Vec::new(),
             declared_shared_write: false,
+            declared_unstored_write: None,
             last: None,
             parameters: Parameters::default(),
             wrote: false,
@@ -657,6 +662,13 @@ impl ComputeCommandEncoder {
     /// later dispatch's accesses. The command buffer keeps the buffer or the texture until it
     /// retires.
     ///
+    /// A usage that writes a texture, or a view of one, made for shader writes with no storage
+    /// element makes every later dispatch of the encoder whose kernel may reach a texture through
+    /// its storage image beyond its bound slots (an argument buffer's `access::write` or
+    /// `access::read_write` texture, a resource ID) [`Gap::StorageElement`], with no slot: Metal
+    /// writes such a texture there, and the runtime would drop the writes. A kernel with no such
+    /// access dispatches. [`use_heap`](Self::use_heap) declares no write and finds nothing.
+    ///
     /// Err: [`Refusal::OtherDevice`] for another device's resource.
     pub fn use_resource(
         &mut self,
@@ -664,13 +676,13 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let (id, shared) = match resource {
+        let (id, shared, unstored) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 building.keep(buffer);
-                ([buffer.id(), buffer.tracked_id()], buffer.is_shared())
+                ([buffer.id(), buffer.tracked_id()], buffer.is_shared(), None)
             }
             Resource::Texture(texture) => {
                 if !texture.is_of(building.device.core()) {
@@ -682,6 +694,7 @@ impl ComputeCommandEncoder {
                 (
                     [texture.hazard_id(), texture.tracked_id()],
                     texture.host_reads(),
+                    texture.unstored(),
                 )
             }
         };
@@ -689,6 +702,9 @@ impl ComputeCommandEncoder {
             return Ok(());
         };
         self.declared_shared_write |= access.writes() && shared;
+        if access.writes() && self.declared_unstored_write.is_none() {
+            self.declared_unstored_write = unstored;
+        }
         self.changed();
         match self
             .declared
@@ -909,10 +925,20 @@ impl ComputeCommandEncoder {
                 };
                 if let Some(pixel_format) = unstored {
                     return Err(Error::Unsupported(Gap::StorageElement {
-                        slot,
+                        slot: Some(slot),
                         pixel_format,
                     }));
                 }
+            }
+            // A texture declared written with no storage element, which the kernel may reach
+            // through its storage image beyond its slots.
+            if let (true, Some(pixel_format)) =
+                (interface.unbound_storage, self.declared_unstored_write)
+            {
+                return Err(Error::Unsupported(Gap::StorageElement {
+                    slot: None,
+                    pixel_format,
+                }));
             }
             self.facts.aligned = true;
         }

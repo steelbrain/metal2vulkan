@@ -420,6 +420,10 @@ pub(crate) struct Interface {
     pub(crate) reads_unbound: bool,
     /// Whether the kernel writes through an address that is not one of its bound slots.
     pub(crate) writes_unbound: bool,
+    /// Whether the kernel may reach a texture through its storage image through an address that
+    /// is not one of its bound slots (`PipelineInterface::unbound_storage_textures`): an
+    /// argument buffer's `access::write` or `access::read_write` texture, a resource ID.
+    pub(crate) unbound_storage: bool,
     /// Whether the kernel writes memory another invocation or a later command can read
     /// (`PipelineInterface::writes_memory`): a dispatch of a kernel without it records nothing.
     pub(crate) has_effects: bool,
@@ -1164,6 +1168,7 @@ fn interface(
         constexprs,
         reads_unbound: translated.reads_unbound_resources,
         writes_unbound: translated.writes_unbound_resources,
+        unbound_storage: translated.unbound_storage_textures,
         has_effects: translated.writes_memory,
         push_len,
         block_len,

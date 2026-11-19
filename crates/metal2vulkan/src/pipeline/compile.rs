@@ -3819,6 +3819,7 @@ fn stage_interface(
         writes_textures,
         reads_unbound_resources: unbound.reads,
         writes_unbound_resources: unbound.writes,
+        unbound_storage_textures: unbound.storage_textures,
         numbered_samplers,
         own_pixel_textures,
         snapshot_textures: snapshots.slots,

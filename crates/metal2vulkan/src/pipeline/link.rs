@@ -1757,6 +1757,7 @@ fn pipeline_interface(ifaces: &[&StageInterface]) -> PipelineInterface {
         }
         out.reads_unbound_resources |= i.reads_unbound_resources;
         out.writes_unbound_resources |= i.writes_unbound_resources;
+        out.unbound_storage_textures |= i.unbound_storage_textures;
         out.writes_memory |= i.writes_memory;
         out.numbered_samplers
             .push((i.stage, i.numbered_samplers.clone()));

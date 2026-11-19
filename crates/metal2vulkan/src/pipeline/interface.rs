@@ -55,6 +55,11 @@ pub struct PipelineInterface {
     /// pipeline.
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_unbound_resources: bool,
+    /// Some stage's function may reach a texture through its storage image through something
+    /// other than its bound slots (`StageInterface::unbound_storage_textures`); `false` is proven
+    /// of every function of the pipeline.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unbound_storage_textures: bool,
     /// Some stage's function writes memory another invocation or a later command can read
     /// (`StageInterface::writes_memory`): a store to a buffer or through a device address, a
     /// texture write, or an atomic update, in the entry or any function it calls. `false` is proven
@@ -434,6 +439,13 @@ pub struct StageInterface {
     /// atomic, a texture write or atomic, or a copy into one. `false` is proven.
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_unbound_resources: bool,
+    /// The function may reach a texture through its storage image through something other than
+    /// its bound slots, as [`reads_unbound_resources`](Self::reads_unbound_resources) states for
+    /// reads (an argument buffer's texture, a resource ID): a texture write or atomic, or a read
+    /// of a texture the operation declares `access::write` or `access::read_write`. An
+    /// intersection and a call the entry cannot see into count too. `false` is proven.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub unbound_storage_textures: bool,
     /// The samplers a pipeline state of the function numbers for it, of the entry its function
     /// constants specialized, in Metal's order ([`NumberedSampler`]): the runtime gives each a
     /// sampler resource ID as Metal's pipeline creation does.

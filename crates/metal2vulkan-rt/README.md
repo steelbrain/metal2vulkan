@@ -820,8 +820,13 @@ made, with no lock, and never rewritten for layouts.
   device lacks their storage), or holds through a view of another (an `A8Unorm` held in red, the
   extended-range formats), has no storage element. A draw or dispatch whose function writes such
   a texture bound to a slot, or reads it there through its storage image (`access::read_write`),
-  is `Gap::StorageElement`. One an argument buffer reaches by its resource ID is not seen at the
-  bind: its writes are dropped and its storage reads answer zeros.
+  is `Gap::StorageElement`. So is, with no slot, a dispatch whose kernel may reach a texture
+  through its storage image beyond its slots (an argument buffer's `access::write` or
+  `access::read_write` texture, a resource ID) after `use_resource` declared a write of such a
+  texture in its encoder. A draw's twin waits for the render encoder's `useResource:`, which is
+  not built. A write through a resource ID with no such declaration is outside documented Metal
+  (`useHeap:` declares its heap's resources read only) and is dropped, and a storage read there
+  answers zeros.
 - `replace_region` takes no bytes into a 32-bit float depth (`Gap::FloatDepthUpload`): Metal
   keeps any `float` there, Vulkan copies no depth outside `[0, 1]` into a depth aspect without
   `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor

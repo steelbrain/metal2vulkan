@@ -3391,22 +3391,38 @@ fn the_interface_states_whether_the_function_writes_textures() {
 /// `a3_rog_buffer_rmw`). Through an argument buffer's texture: a read (`argument_buffer_read`)
 /// and a write (`argument_buffer_array_write`), the argument buffer's own words being a bound
 /// slot. Through an address the function loads from a buffer: loads and stores
-/// (`ob2_loaded_pointer`) and an atomic, which reads and writes (`rd_tally_fragment`). A
-/// standalone kernel's pipeline states its function's.
+/// (`ob2_loaded_pointer`) and an atomic, which reads and writes (`rd_tally_fragment`). Of these,
+/// the argument buffer's textures reached through their storage images: the write, and a read
+/// of an `access::read_write` texture (`abt_frag_storage`); a sample of one is not
+/// (`abt_frag_sample`). A standalone kernel's pipeline states its function's.
 #[test]
 fn the_interface_states_what_the_function_reaches_beyond_its_bound_slots() {
     let p =
         crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
-    for (stem, entry, reads, writes) in [
-        ("handles", "select_read", false, false),
-        ("handles", "select_null_write", false, false),
-        ("handles", "array_read", false, false),
-        ("resident_draws", "rd_touch", false, false),
-        ("a3_rog_buffer_rmw", "a3_rog_buffer_rmw", false, false),
-        ("handles", "argument_buffer_read", true, false),
-        ("handles", "argument_buffer_array_write", false, true),
-        ("ob2_loaded_pointer", "ob2_loaded_pointer", true, true),
-        ("resident_draws", "rd_tally_fragment", true, true),
+    for (stem, entry, reads, writes, storage) in [
+        ("handles", "select_read", false, false, false),
+        ("handles", "select_null_write", false, false, false),
+        ("handles", "array_read", false, false, false),
+        ("resident_draws", "rd_touch", false, false, false),
+        (
+            "a3_rog_buffer_rmw",
+            "a3_rog_buffer_rmw",
+            false,
+            false,
+            false,
+        ),
+        ("handles", "argument_buffer_read", true, false, false),
+        ("handles", "argument_buffer_array_write", false, true, true),
+        ("abt_descriptor_sets", "abt_frag_storage", true, false, true),
+        ("abt_descriptor_sets", "abt_frag_sample", true, false, false),
+        (
+            "ob2_loaded_pointer",
+            "ob2_loaded_pointer",
+            true,
+            true,
+            false,
+        ),
+        ("resident_draws", "rd_tally_fragment", true, true, false),
     ] {
         let Some(bc) = fixture(stem) else {
             return;
@@ -3416,8 +3432,9 @@ fn the_interface_states_what_the_function_reaches_beyond_its_bound_slots() {
         let facts = (
             a.interface.reads_unbound_resources,
             a.interface.writes_unbound_resources,
+            a.interface.unbound_storage_textures,
         );
-        assert_eq!(facts, (reads, writes), "{entry}");
+        assert_eq!(facts, (reads, writes, storage), "{entry}");
         if a.interface.stage == crate::pipeline::sym::Stage::Kernel {
             let linked = crate::pipeline::link::link(
                 &[&*a],
@@ -3428,8 +3445,9 @@ fn the_interface_states_what_the_function_reaches_beyond_its_bound_slots() {
             let linked_facts = (
                 linked.interface.reads_unbound_resources,
                 linked.interface.writes_unbound_resources,
+                linked.interface.unbound_storage_textures,
             );
-            assert_eq!(linked_facts, (reads, writes), "{entry}: pipeline");
+            assert_eq!(linked_facts, (reads, writes, storage), "{entry}: pipeline");
         }
     }
 }

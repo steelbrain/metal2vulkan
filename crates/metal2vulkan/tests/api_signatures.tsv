@@ -5797,6 +5797,7 @@ field	metal2vulkan::pipeline::PipelineInterface.slots	pub slots: BTreeMap<SlotRe
 field	metal2vulkan::pipeline::PipelineInterface.stage_in	pub stage_in: Vec<crate::pipeline::stage_io::StageInFetch>
 field	metal2vulkan::pipeline::PipelineInterface.texture_writing_stages	pub texture_writing_stages: Vec<Stage>
 field	metal2vulkan::pipeline::PipelineInterface.threadgroup	pub threadgroup: Vec<ThreadgroupArgument>
+field	metal2vulkan::pipeline::PipelineInterface.unbound_storage_textures	pub unbound_storage_textures: bool
 field	metal2vulkan::pipeline::PipelineInterface.writes_memory	pub writes_memory: bool
 field	metal2vulkan::pipeline::PipelineInterface.writes_unbound_resources	pub writes_unbound_resources: bool
 field	metal2vulkan::pipeline::PipelineLayout.push_constants	pub push_constants: Vec<PushConstantRange>
@@ -13784,7 +13785,7 @@ variant	metal2vulkan-rt::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_
 variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
 variant	metal2vulkan-rt::Gap::RenderPass	RenderPass { kind: RenderPassKind }
 variant	metal2vulkan-rt::Gap::RenderPipeline	RenderPipeline { kind: RenderPipelineKind }
-variant	metal2vulkan-rt::Gap::StorageElement	StorageElement { slot: u32, pixel_format: PixelFormat }
+variant	metal2vulkan-rt::Gap::StorageElement	StorageElement { slot: Option<u32>, pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::SwizzledReadWrite	SwizzledReadWrite { slot: u32 }
 variant	metal2vulkan-rt::Gap::TextureBuffer	TextureBuffer
 variant	metal2vulkan-rt::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }

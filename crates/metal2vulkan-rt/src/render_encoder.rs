@@ -287,7 +287,7 @@ impl Facts {
             };
             if let Some(pixel_format) = unstored {
                 return Err(Error::Unsupported(Gap::StorageElement {
-                    slot,
+                    slot: Some(slot),
                     pixel_format,
                 }));
             }
