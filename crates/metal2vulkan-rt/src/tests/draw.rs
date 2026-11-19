@@ -829,7 +829,8 @@ pub(crate) mod on_device {
             let counters = device.counters();
             // The first command buffer's submission records two barriers more than the second's:
             // its upload's, which moves the two new images from undefined to their home layouts
-            // in one and ends in the other.
+            // in one and ends in the other, and one more where it clears a new image (one whose
+            // memory does not read the driver's zeros) between its move and its home.
             for (load, first, color_of, barriers) in [
                 (crate::LoadAction::Clear, 3, BLUE, 5),
                 (crate::LoadAction::Load, 6, WHITE, 3),
@@ -846,6 +847,7 @@ pub(crate) mod on_device {
                 encoder.end_encoding();
                 run(name, &command_buffer);
                 let after = counters.metrics();
+                let cleared = after.texture_clears > before.texture_clears;
                 assert_eq!(
                     (
                         after.submissions - before.submissions,
@@ -853,7 +855,7 @@ pub(crate) mod on_device {
                         after.passes - before.passes,
                         after.bytes_copied - before.bytes_copied,
                     ),
-                    (1, barriers, 1, 0),
+                    (1, barriers + u64::from(cleared), 1, 0),
                     "{name}: {load:?}: submissions, barriers (the first command buffer's upload \
                      moves the new images from undefined to home and ends), passes, bytes copied"
                 );
