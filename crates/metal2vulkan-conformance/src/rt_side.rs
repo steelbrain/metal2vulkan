@@ -1695,9 +1695,9 @@ impl Side for RtSide<'_> {
         };
         // The handles in turn, as a consumer takes the route its device lays in place: the first
         // surface made in place is kept, and where none is, the first made at all, in the copy
-        // form. A handle the platform or the device does not export is passed over. Measured on
-        // the RTX 3090 (53555): its dma-buf surfaces of two planes took the copy form, the known
-        // gap rt's README states, where the opaque fd's are in place.
+        // form. A handle the platform or the device does not export is passed over. Measured: the
+        // RX 550's dma-buf surfaces took the copy form and its opaque fd's were in place (53627),
+        // and the RTX 3090's two-plane surfaces took the copy form under both (53626).
         let mut answer = make(rt::ExportHandle::DmaBuf);
         for handle in [rt::ExportHandle::OpaqueFd, rt::ExportHandle::OpaqueWin32] {
             if in_place(&answer) || (answer.is_err() && !unexported(&answer)) {
