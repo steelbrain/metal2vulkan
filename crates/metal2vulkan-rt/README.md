@@ -444,6 +444,13 @@ consumer's.
   order. The free, on the block-maker thread, waits for it too before the buffer goes, then frees
   each import, and `release` runs after the last. Each dma-buf's import is one allocation, counted
   in `Gauges::imports` and `Gauges::blocks`. The fds are taken as `import_dma_buf` takes its one.
+  While it lives, each import adds to every submission's host time what one `import_dma_buf`
+  block adds: on the Radeon 780M (RADV, Mesa 26.2.6, without the validation layer) an empty
+  submission took 7.09 µs with no import, 22.18 µs beside one block over 40 dma-bufs (0.377 µs a
+  dma-buf) and 22.12 µs beside 40 blocks of one (0.376 µs an import); on the RX 550, 0.353 and
+  0.354 µs; on lavapipe none measured. That cost is the driver's: the runtime's own part is the
+  next submission's one wait for each bind, and one atomic read a submission on a device that
+  offers the call, with blocks live or not.
 
 Each call returns the block and the index of the memory type it imported into, and refuses before
 any allocation is attempted.
