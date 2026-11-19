@@ -21,6 +21,7 @@ use crate::work::{Clear, Done, Plane, Rect, Resource, Step, TextureKind, Texture
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 use metal2vulkan_rt as rt;
+use std::collections::BTreeSet;
 
 /// A typed error of the runtime as the failure it records.
 fn of_rt(error: rt::Error) -> Failure {
@@ -120,6 +121,16 @@ enum Made {
     /// The resource a [`Step::Release`] dropped, an explicit state so that a step naming it is
     /// refused as one naming a resource never made is, and a [`Step::Make`] fills the slot again.
     Released,
+}
+
+impl Made {
+    /// A texture's static note (`Texture::precision_note`); no other resource carries one.
+    fn precision_note(&self) -> Option<rt::PrecisionNote> {
+        match self {
+            Made::Texture(texture) => texture.precision_note(),
+            _ => None,
+        }
+    }
 }
 
 /// A read-back the device runs before its bytes are answered.
@@ -354,6 +365,8 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
 struct Run<'a> {
     on: &'a RtDevice,
     queue: &'a rt::CommandQueue,
+    /// The static notes of the textures the program made.
+    notes: &'a mut BTreeSet<rt::PrecisionNote>,
     made: Vec<Made>,
     /// The program's declarations, which a [`Step::Make`] reads to make a released resource again.
     resources: &'a [Resource],
@@ -366,15 +379,24 @@ struct Run<'a> {
     statuses: Vec<String>,
 }
 
-/// Run `work` on `on`'s device through `queue`, answering what it read.
-pub(super) fn run(on: &RtDevice, queue: &rt::CommandQueue, work: &Work) -> Answer<Done> {
+/// Run `work` on `on`'s device through `queue`, answering what it read, with the static note of
+/// each texture it makes (`Texture::precision_note`) in `notes`.
+pub(super) fn run(
+    on: &RtDevice,
+    queue: &rt::CommandQueue,
+    work: &Work,
+    notes: &mut BTreeSet<rt::PrecisionNote>,
+) -> Answer<Done> {
     let mut made: Vec<Made> = Vec::with_capacity(work.resources.len());
     for (at, resource) in work.resources.iter().enumerate() {
-        made.push(make(on, &made, resource).map_err(|failure| failure.at_resource(at))?);
+        let one = make(on, &made, resource).map_err(|failure| failure.at_resource(at))?;
+        notes.extend(one.precision_note());
+        made.push(one);
     }
     let mut state = Run {
         on,
         queue,
+        notes,
         made,
         resources: &work.resources,
         kernels: work.kernels,
@@ -787,6 +809,7 @@ impl Run<'_> {
         let declared = (self.resources.get(at))
             .ok_or_else(|| Failure::named("NoSuchResource", format!("resource {at}")))?;
         let one = make(self.on, &self.made, declared)?;
+        self.notes.extend(one.precision_note());
         self.made[at] = one;
         Ok(())
     }

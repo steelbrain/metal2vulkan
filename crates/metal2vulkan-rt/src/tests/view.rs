@@ -13,7 +13,9 @@
 //! comes back to zero with the device, the views' image views among them. A view of a Managed
 //! texture writes the texture's own named bytes. A command buffer keeps a view it uses after its
 //! parent, as Metal's retains every object its encoders use: released while the command buffer
-//! is pending, the view keeps its image views and its element of set 1 until it retires.
+//! is pending, the view keeps its image views and its element of set 1 until it retires. A texture
+//! or view of a block-compressed pixel format carries the static note of its decode
+//! (`PrecisionNote::CompressedTexelDecode`), one of another format none.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -24,9 +26,9 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, shared_event, within};
     use crate::{
         Buffer, BufferLayout, BytesPlace, CommandQueue, Device, Error, Gap, IndexClass,
-        MemoryClass, PixelFormat, Refusal, Region, StorageMode, Texture, TextureDescriptor,
-        TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
-        TextureViewKind,
+        MemoryClass, PixelFormat, PrecisionNote, Refusal, Region, StorageMode, Texture,
+        TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType,
+        TextureUsage, TextureViewKind,
     };
     use metal2vulkan::metal::resource_word::TextureWord;
 
@@ -363,6 +365,57 @@ mod on_device {
             assert_eq!(fnv(&read(&of_view)), 0x5d01_ec06_0898_5ec5);
             drop((views, of_view, formats, cube, apple, written));
             within("the textures freed", || counters.gauges().textures == 0);
+        });
+    }
+
+    /// A texture of a block-compressed pixel format answers the static note of its decode, and so
+    /// does its view in its sRGB sibling, decided by the format alone; an uncompressed texture and
+    /// its view answer none. Each compressed format counts where the device makes it, and each
+    /// device makes at least one.
+    #[test]
+    fn every_device_notes_the_decode_of_a_block_compressed_texture_and_its_views() {
+        each_device("compressed_decode_note", |name, _, device| {
+            let note = Some(PrecisionNote::CompressedTexelDecode);
+            let made = |pixel_format| {
+                let mut d = TextureDescriptor::new(TextureType::Type2D, pixel_format, 8, 8);
+                d.usage = TextureUsage::SHADER_READ;
+                device.new_texture(&d, None)
+            };
+            let view = |texture: &Texture, pixel_format| {
+                (texture.new_texture_view(pixel_format, TextureType::Type2D, 0..1, 0..1, None))
+                    .unwrap_or_else(|error| panic!("{name}: a {pixel_format:?} view: {error}"))
+            };
+            let compressed = [
+                (PixelFormat::BC1RGBA, PixelFormat::BC1RGBASRGB),
+                (PixelFormat::BC7RGBAUnorm, PixelFormat::BC7RGBAUnormSRGB),
+                (PixelFormat::ETC2RGB8, PixelFormat::ETC2RGB8SRGB),
+                (PixelFormat::ASTC4x4LDR, PixelFormat::ASTC4x4SRGB),
+            ];
+            let mut noted = Vec::new();
+            for (pixel_format, srgb) in compressed {
+                let texture = match made(pixel_format) {
+                    Ok(texture) => texture,
+                    Err(Error::Unsupported(Gap::TextureFormat { .. })) => continue,
+                    Err(error) => panic!("{name}: a {pixel_format:?} texture: {error}"),
+                };
+                assert_eq!(texture.precision_note(), note, "{name}: {pixel_format:?}");
+                assert_eq!(
+                    view(&texture, srgb).precision_note(),
+                    note,
+                    "{name}: {srgb:?}"
+                );
+                noted.push(pixel_format);
+            }
+            assert!(
+                !noted.is_empty(),
+                "{name}: no block-compressed texture made"
+            );
+            eprintln!("{name}: the decode note on {noted:?} and their sRGB views");
+            let plain = (made(PixelFormat::RGBA8Unorm))
+                .unwrap_or_else(|error| panic!("{name}: an RGBA8Unorm texture: {error}"));
+            assert_eq!(plain.precision_note(), None, "{name}: RGBA8Unorm");
+            let plain_view = view(&plain, PixelFormat::RGBA8UnormSRGB);
+            assert_eq!(plain_view.precision_note(), None, "{name}: RGBA8UnormSRGB");
         });
     }
 

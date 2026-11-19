@@ -536,8 +536,8 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1201 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 12 |
-| tolerances in all | 13 |
+| modules that loosen a measured value | 13 |
+| tolerances in all | 14 |
 | modules declaring a notice (loosening no value) | 136 |
 | loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
@@ -581,7 +581,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `command_buffer_facts` | 1 | 1 | every field | 29 |
 | `command_queues` | 1 | 1 | every field | 5 |
 | `compressed_blits` | 4 | 4 | every field | 49 |
-| `compressed_decode` | 10 | 10 | every field | 43 |
+| `compressed_decode` | 10 | 10 | 1 tolerance(s): `Degradation` | 43 |
 | `compressed_moves` | 14 | 14 | every field | 41 |
 | `compressed_views` | 14 | 14 | every field | 48 |
 | `compute_encoder_commands` | 8 | 8 | every field | 66 |

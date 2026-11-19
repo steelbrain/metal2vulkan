@@ -47,6 +47,7 @@ use metal2vulkan::metal::resource_word::TextureWord;
 use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
 };
+use metal2vulkan::pipeline::PrecisionNote;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -3567,6 +3568,16 @@ impl Texture {
     /// `textureType`, `pixelFormat`, `width` and the rest, as made.
     pub fn descriptor(&self) -> &TextureDescriptor {
         &self.inner.descriptor
+    }
+
+    /// No Metal counterpart: the static note of a read, sample or gather of its texels, where its
+    /// own pixel format is block-compressed ([`PrecisionNote::CompressedTexelDecode`]: a texel is
+    /// the device's decode of its blocks, where Metal interpolates with 6-bit weights); `None` for
+    /// any other format. Decided by the pixel format alone, on every device: a view answers by
+    /// its own format, and its blocks' bytes, copies and sizes are Metal's either way.
+    pub fn precision_note(&self) -> Option<PrecisionNote> {
+        let compressed = formats::block_extent(self.inner.descriptor.pixel_format).is_some();
+        compressed.then_some(PrecisionNote::CompressedTexelDecode)
     }
 
     /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:`: the bytes of

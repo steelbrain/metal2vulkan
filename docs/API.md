@@ -4006,16 +4006,23 @@ bound.
   where Metal's sees the nil buffer's offset as its address; neither holds a buffer, so only the
   address's value differs.
 - `metal2vulkan-degrade-compressed-texel-decode` (precision). `CompressedTexelDecode`: A texture of
-  a BC format (`BC1_RGBA` to `BC7_RGBAUnorm_sRGB`) made on a device whose driver is not measured to
+  a block-compressed format, where the runtime makes it. On `metal2vulkan-runtime`, a texture of a
+  BC format (`BC1_RGBA` to `BC7_RGBAUnorm_sRGB`) made on a device whose driver is not measured to
   decode its texels as Metal does (BC1 to BC3 `DriverFact::ColorBlockDecodeIsMetals`: MoltenVK on
   Apple's GPUs, RADV on the 780M and the RX 7900 XTX; BC4 and BC5
   `DriverFact::ChannelBlockDecodeIsMetals`: MoltenVK on Apple's GPUs; BC6H
   `DriverFact::Bc6hBlockDecodeIsMetals` and BC7 `DriverFact::Bc7BlockDecodeIsMetals`: MoltenVK on
   Apple's GPUs, NVIDIA's on the RTX 3090 and RTX 5080 Laptop GPU, RADV on the 780M, ANV on the Iris
-  Xe of Raptor Lake-P, and lavapipe's BC6H). The texture's image is its own BC image, which the
-  device samples through its own decode: no BC texture keeps a decoded twin. The bounds are the
+  Xe of Raptor Lake-P, and lavapipe's BC6H). On `metal2vulkan-rt` it is the static note
+  `PrecisionNote::CompressedTexelDecode` of every texture or view whose own pixel format is
+  block-compressed (BC1 to BC7, and the ASTC, ETC2 and EAC formats where the device makes them;
+  `Texture::precision_note`), on every device, with no driver fact. The texture's image is its
+  own image of that format, which the device samples through its own decode: no BC texture keeps a
+  decoded twin. The bounds are the
   largest differences from Metal's texels measured on random blocks of every format; a driver not
-  named is unmeasured, and validation derives no tolerance from them.
+  named is unmeasured. Validation derives no tolerance from them; the conformance suite's BC1 to
+  BC5 decode cases hold each texel to its family's largest bound on any driver (an sRGB form's to
+  the sRGB decode's largest step over 4/255), justified by the notice alone.
   Cost: a read, sample or gather of its texels answers the device's decode of its blocks (an sRGB
   form's code through the device's sRGB decode), where Metal interpolates with 6-bit weights: a BC1
   to BC3 channel up to 4/255 off Metal's on NVIDIA (615.71.09, the RTX 3090 and RTX 5080 Laptop

@@ -140,7 +140,7 @@ impl RtSide<'_> {
             let buffer = self.held(over.buffer)?;
             let texture = (buffer.new_texture(&descriptor, index, over.offset, over.bytes_per_row))
                 .map_err(of_rt)?;
-            return Ok(keep(&mut self.textures, texture));
+            return Ok(self.keep_texture(texture));
         }
         descriptor.storage_mode = match spec.shared {
             true => rt::StorageMode::Shared,
@@ -163,7 +163,7 @@ impl RtSide<'_> {
         let index = (spec.shader_read || spec.shader_write)
             .then(|| self.on.next_index(rt::IndexClass::Texture));
         let texture = (self.on.device.new_texture(&descriptor, index)).map_err(of_rt)?;
-        Ok(keep(&mut self.textures, texture))
+        Ok(self.keep_texture(texture))
     }
 
     /// `newRenderPipelineStateWithDescriptor:error:` of the descriptor the old runtime's side

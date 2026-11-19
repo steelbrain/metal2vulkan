@@ -509,8 +509,7 @@ pub fn set_past_layout_notice() -> crate::allowance::Allowance {
 ///   the device's own depth conversion and depth test (`unorm-depth-rounding`, `depth-denormals`,
 ///   `signed-depth-test`);
 /// - **texel, vertex and colour conversions**: `device-texel-conversion`,
-///   `half-texel-conversion`, `srgb-texel-decode`, the device's decode of a BC texture's blocks
-///   (`compressed-texel-decode`), the device's fixed-function conversion of a
+///   `half-texel-conversion`, `srgb-texel-decode`, the device's fixed-function conversion of a
 ///   normalized vertex attribute (`device-vertex-conversion`), `device-color-conversion`;
 /// - **sampling and filtering**: `device-sampling`, `device-sample-level`, the device's filter of a
 ///   generated mipmap chain (`device-filtered-mipmaps`), and Metal's own sampler filtering a
@@ -537,7 +536,10 @@ pub fn set_past_layout_notice() -> crate::allowance::Allowance {
 /// `restricted-depth-range`), of an emulation's own precision (`decoded-texel-precision`,
 /// `grad-from-bias`, `pixel-sampler-scaling`, `bicubic-filter-arithmetic`), of a Metal form not
 /// measured or not built (`blended-write-rounding`, `unmeasured-resolve`, `device-interpolation`,
-/// `reduction-order`), and every performance or validity notice.
+/// `reduction-order`), a native answer whose catalogue entry states the bound the cases that
+/// read it hold it to (the device's decode of a block-compressed texture's blocks,
+/// `compressed-texel-decode`, which only a case that makes such a texture can announce), and every
+/// performance or validity notice.
 ///
 /// **It declares the notice, and nothing about a value.** Each entry loosens the notices site
 /// alone, exactly as a case's own [`notice_allowance`] does, so every value of every case still
@@ -570,7 +572,6 @@ pub const NATIVE_NOTES: &[metal2vulkan_runtime::Degradation] = {
         D::DeviceTexelConversion,
         D::HalfTexelConversion,
         D::SrgbTexelDecode,
-        D::CompressedTexelDecode,
         D::DeviceVertexConversion,
         D::DeviceColorConversion,
         D::DeviceSampling,

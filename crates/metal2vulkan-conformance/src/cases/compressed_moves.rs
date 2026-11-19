@@ -842,12 +842,13 @@ pub fn out_tight(
 }
 
 /// The notices a BC case may name as justifying its notices site: the `Shared` buffer each row
-/// reads its answer back through, which a device without unified memory announces.
+/// reads its answer back through, which a device without unified memory announces, and the
+/// device's decode of the texture's blocks.
 ///
 /// A BC texture keeps no decoded twin on any venue: the device holds every BC format in its own
-/// compressed form and decodes it itself, and where its driver is not measured to decode a format
-/// as Metal does the runtime announces `compressed-texel-decode`, one of the device's native
-/// answers the suite declares for every case ([`crate::replay::NATIVE_NOTES`]). Every block still
+/// compressed form and decodes it itself, which the runtime announces as
+/// `compressed-texel-decode` where it makes it (the old runtime where the driver is not measured
+/// to decode a format as Metal does, `metal2vulkan-rt` for every such texture). Every block still
 /// compares exactly: the only site these loosen is the set of notices, which Metal holds empty.
 ///
 /// What is **not** here: `staged-texture-copy`. Our `replaceRegion:` into a compressed texture does
@@ -867,9 +868,10 @@ pub fn block_allowances() -> Vec<Allowance> {
     // field and nothing else (replay-nvidia.log). On MoltenVK, where
     // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
     // recording of this suite declares it.
-    vec![crate::replay::notice_allowance(
-        Degradation::SharedInSystemMemory.code(),
-    )]
+    vec![
+        crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
+        crate::replay::notice_allowance(Degradation::CompressedTexelDecode.code()),
+    ]
 }
 
 /// The case for one format.

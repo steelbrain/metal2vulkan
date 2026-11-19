@@ -245,8 +245,10 @@ macro_rules! degradations {
             /// profile of `Device::from_queries` records, announces this runtime's kind for the
             /// same codes, [`Degradation::SnormMinimumKept`]; [`PrecisionNote::DepthDenormals`],
             /// which `metal2vulkan-rt`'s depth-stencil state carries, announces
-            /// [`Degradation::DepthDenormals`]; and [`PrecisionNote::DeviceFilteredMipmaps`], which
-            /// its blit encoder carries, [`Degradation::DeviceFilteredMipmaps`].
+            /// [`Degradation::DepthDenormals`]; [`PrecisionNote::DeviceFilteredMipmaps`], which its
+            /// blit encoder carries, [`Degradation::DeviceFilteredMipmaps`]; and
+            /// [`PrecisionNote::CompressedTexelDecode`], which its block-compressed textures carry,
+            /// [`Degradation::CompressedTexelDecode`].
             pub const fn from_precision_note(note: PrecisionNote) -> Degradation {
                 match note {
                     $(PrecisionNote::$note => Degradation::$note,)*
@@ -254,6 +256,7 @@ macro_rules! degradations {
                     PrecisionNote::SnormMinimumKept => Degradation::SnormMinimumKept,
                     PrecisionNote::DepthDenormals => Degradation::DepthDenormals,
                     PrecisionNote::DeviceFilteredMipmaps => Degradation::DeviceFilteredMipmaps,
+                    PrecisionNote::CompressedTexelDecode => Degradation::CompressedTexelDecode,
                     PrecisionNote::DeviceReconvergence => {
                         Degradation::ImplementationDefinedReconvergence
                     }

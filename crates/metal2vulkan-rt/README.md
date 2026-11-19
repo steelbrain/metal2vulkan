@@ -687,6 +687,14 @@ made, with no lock, and never rewritten for layouts.
   every texture an index, and this one has none, so its `gpu_resource_id` answers index 0 and a
   slot that binds it reads Metal's nil texture. `new_texture` still refuses a texture shaders
   reach made without an index (`Refusal::TextureIndex`).
+- A texture or view whose own pixel format is block-compressed (BC1 to BC7, and the ASTC, ETC2
+  and EAC formats where the device makes them) holds its blocks in an image of that format, and a
+  read, sample or gather of its texels is the device's decode of them (an sRGB form's code through
+  the device's sRGB decode), where Metal interpolates a block's endpoints with 6-bit weights: the
+  static note `PrecisionNote::CompressedTexelDecode` (`Texture::precision_note`), decided by the
+  pixel format alone on every device. Its blocks' bytes, copies and sizes are Metal's. The
+  largest differences measured are in docs/API.md's catalogue
+  (`metal2vulkan-degrade-compressed-texel-decode`).
 - `Device::pixel_format_info(raw)` is `MTLPixelFormatGetInfoForDevice` (Apple SPI): Metal's
   description of a raw pixel format value, its name, Apple's flags word, cast class and four
   words (a block's bytes and extent for a format of blocks), as an Apple M3 Max answers it under

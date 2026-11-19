@@ -447,10 +447,17 @@ impl Case for ReadWriteDescriptors {
         // The tables name block-compressed formats, which a device with no Vulkan format for one
         // makes through a decoded twin carried beside the blocks, and the runtime says so: a
         // performance notice at the notices site alone, every answer of the tables still
-        // compared. Measured firing on llvmpipe (LLVM 21.1.8).
-        vec![crate::replay::notice_allowance(
-            metal2vulkan_runtime::Degradation::CarriedDecodedTwin.code(),
-        )]
+        // compared. Measured firing on llvmpipe (LLVM 21.1.8). A texture of such a format the
+        // device holds itself announces the device's decode of its blocks
+        // (`compressed-texel-decode`), at the notices site alone too: the tables read no texel.
+        vec![
+            crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::CarriedDecodedTwin.code(),
+            ),
+            crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::CompressedTexelDecode.code(),
+            ),
+        ]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

@@ -410,9 +410,8 @@ impl Case for CompressedViews {
     fn allowances(&self) -> Vec<Allowance> {
         // The same notices the first lane's cases name, for the same reason and from the same
         // measurement: one mechanism, not two. A view of a BC texture reads the device's decode
-        // of its blocks, which the runtime announces as `compressed-texel-decode` where the
-        // driver is not measured to make Metal's: one of the suite's native notes
-        // ([`crate::replay::NATIVE_NOTES`]), declared for every case.
+        // of its blocks, which the runtime announces as `compressed-texel-decode` where it makes
+        // it.
         crate::cases::compressed_moves::block_allowances()
     }
 

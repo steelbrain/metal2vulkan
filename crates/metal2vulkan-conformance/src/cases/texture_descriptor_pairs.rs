@@ -593,6 +593,11 @@ impl Case for DescriptorPairs {
             named.push(crate::replay::notice_allowance(
                 metal2vulkan_runtime::Degradation::CarriedDecodedTwin.code(),
             ));
+            // A compressed texture the device holds itself announces the device's decode of its
+            // blocks (`compressed-texel-decode`), which the row never reads either.
+            named.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::CompressedTexelDecode.code(),
+            ));
         }
         if self.name == STORAGE {
             // The storage table names `Shared` among the modes it crosses, so this row alone

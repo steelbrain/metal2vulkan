@@ -497,10 +497,15 @@ impl Case for AstcTextures {
         // 14 HDR rows, which that card makes through the same carrier and twin since the HDR
         // decode, have not run there since: their declaration counts as unchecked until a run on
         // a device without unified memory announces it.
+        // Where the device holds the format's block itself, `metal2vulkan-rt` keeps the blocks in
+        // an image of it and reads the device's decode of them, the static note it announces as
+        // `compressed-texel-decode` for every block-compressed texture it makes. A declaration
+        // and not a tolerance: no ASTC bound is stated, so every texel still compares exactly.
         let mut all = vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(Degradation::CarriedDecodedTwin.code()),
             crate::replay::notice_allowance(Degradation::CpuBlockDecode.code()),
+            crate::replay::notice_allowance(Degradation::CompressedTexelDecode.code()),
         ];
         // An sRGB form's twin holds Metal's own 8-bit codes, which its slots decode through Metal's
         // table, so its texels compare exactly and it names nothing further. A linear format's

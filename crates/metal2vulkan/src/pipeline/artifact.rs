@@ -2488,6 +2488,19 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DeviceFilteredMipmaps,
+    /// A texture, or a view, whose own pixel format is block-compressed (BC1 to BC7, and the ASTC,
+    /// ETC2 and EAC formats where the device makes them): a read, sample or gather of its texels
+    /// answers the device's decode of its blocks (an sRGB form's code through the device's sRGB
+    /// decode), where Metal interpolates a block's endpoints with 6-bit weights. Its blocks'
+    /// bytes, copies and sizes are Metal's. Static per texture, decided by its pixel format alone
+    /// on every device: no pipeline stage records it; `metal2vulkan-rt`'s texture carries it
+    /// (`Texture::precision_note`). `metal2vulkan-runtime` announces the same difference as its
+    /// `compressed-texel-decode` kind, for a BC texture on a driver not measured to decode its
+    /// format as Metal does, which this note announces too.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    CompressedTexelDecode,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

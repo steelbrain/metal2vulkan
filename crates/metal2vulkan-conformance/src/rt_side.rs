@@ -18,9 +18,10 @@
 //!
 //! The runtime announces no degrade notice: where a kernel's answers may differ from Metal's, its
 //! state carries static precision notes ([`metal2vulkan_rt::ComputePipelineState::precision_notes`],
-//! [`metal2vulkan_rt::RenderPipelineState::precision_notes`]). This side announces the notes of
-//! each state its case dispatched or drew with, by the codes the suite's allowances name
-//! (`metal2vulkan-degrade-<kind>`).
+//! [`metal2vulkan_rt::RenderPipelineState::precision_notes`]), and so does a texture of a
+//! block-compressed format ([`metal2vulkan_rt::Texture::precision_note`]). This side announces the
+//! notes of each state its case dispatched or drew with, and of each texture it made, by the codes
+//! the suite's allowances name (`metal2vulkan-degrade-<kind>`).
 
 use crate::case::{
     Answer, Bindings, Failure, Handle, SamplerSpec, ShaderSource, Side, StageInRegion, StageInput,
@@ -363,7 +364,8 @@ pub struct RtSide<'a> {
     drawn: BTreeSet<usize>,
     /// The static notes of what a pass the case encoded set beside its pipeline states: a depth
     /// bias other than 0 (`RenderCommandEncoder::DEPTH_BIAS_NOTE`) and each depth-stencil state's
-    /// (`DepthStencilState::precision_note`), which [`Side::announced`] answers too.
+    /// (`DepthStencilState::precision_note`); and of each texture the case made
+    /// (`Texture::precision_note`), which [`Side::announced`] answers too.
     encoder_notes: BTreeSet<rt::PrecisionNote>,
 }
 
@@ -396,6 +398,13 @@ impl<'a> RtSide<'a> {
             self.queue = Some(queue);
         }
         Ok(self.queue.as_ref().expect("made above"))
+    }
+
+    /// Keep `texture` as the case's, with the static note it carries (`Texture::precision_note`:
+    /// the device's decode of a block-compressed format), which [`Side::announced`] answers.
+    fn keep_texture(&mut self, texture: rt::Texture) -> Handle {
+        self.encoder_notes.extend(texture.precision_note());
+        keep(&mut self.textures, texture)
     }
 
     fn held(&self, handle: Handle) -> Answer<&rt::Buffer> {
@@ -624,7 +633,7 @@ impl Side for RtSide<'_> {
             size: [size[0], size[1], 1],
         };
         (texture.replace_region(region, 0, 0, bytes, row_pitch.into(), 0)).map_err(of_rt)?;
-        Ok(keep(&mut self.textures, texture))
+        Ok(self.keep_texture(texture))
     }
 
     fn read_texture(&mut self, texture: Handle, size: [u32; 2], row_pitch: u32) -> Answer<Vec<u8>> {
@@ -678,7 +687,7 @@ impl Side for RtSide<'_> {
         let texture = (self.on.device.new_texture(&descriptor, index))
             .map_err(|error| Failure::of_rt(&error))?;
         let facts = texture_facts(&texture);
-        keep(&mut self.textures, texture);
+        self.keep_texture(texture);
         Ok(Some(facts))
     }
 
@@ -697,7 +706,7 @@ impl Side for RtSide<'_> {
         let made = buffer.new_texture(&descriptor, index, request.offset, request.bytes_per_row);
         let texture = made.map_err(|error| Failure::of_rt(&error))?;
         let facts = texture_facts(&texture);
-        keep(&mut self.textures, texture);
+        self.keep_texture(texture);
         Ok(facts)
     }
 
@@ -731,9 +740,10 @@ impl Side for RtSide<'_> {
     fn makes_texture(&mut self, query: &crate::texture_query::HeapTextureQuery) -> Answer<bool> {
         let descriptor = queried(query);
         let index = self.on.texture_index(descriptor.usage);
-        (self.on.device.new_texture(&descriptor, index))
-            .map(|_| true)
-            .map_err(|error| Failure::of_rt(&error))
+        let texture = (self.on.device.new_texture(&descriptor, index))
+            .map_err(|error| Failure::of_rt(&error))?;
+        self.encoder_notes.extend(texture.precision_note());
+        Ok(true)
     }
 
     /// `newHeapWithDescriptor:` as the runtime's consumer makes a heap: a block of the heap's size
@@ -921,7 +931,7 @@ impl Side for RtSide<'_> {
             ),
         }
         .map_err(|error| Failure::of_rt(&error))?;
-        Ok(keep(&mut self.textures, view))
+        Ok(self.keep_texture(view))
     }
 
     /// The view's shape and swizzle, read of its descriptor; its parent's facts are the
@@ -1060,7 +1070,7 @@ impl Side for RtSide<'_> {
             (texture.replace_region(region, 0, 0, bytes, spec.row_pitch.into(), 0))
                 .map_err(of_rt)?;
         }
-        Ok(keep(&mut self.textures, texture))
+        Ok(self.keep_texture(texture))
     }
 
     /// The call the request names: the device's `newTextureWithDescriptor:`, the buffer's
@@ -1139,14 +1149,17 @@ impl Side for RtSide<'_> {
             ))
             .map_err(of_rt)?;
         }
-        Ok(keep(&mut self.textures, texture))
+        Ok(self.keep_texture(texture))
     }
 
     /// The program on the runtime, as the old runtime's side runs it (`rt_side::work`); a
-    /// program that generates mipmaps announces the blit encoder's static note of them.
+    /// program that generates mipmaps announces the blit encoder's static note of them, and one
+    /// that makes a texture its static note.
     fn work(&mut self, work: &crate::work::Work) -> Answer<crate::work::Done> {
         let on = self.on;
-        let done = work::run(on, self.queue()?, work)?;
+        self.queue()?;
+        let queue = self.queue.as_ref().expect("made above");
+        let done = work::run(on, queue, work, &mut self.encoder_notes)?;
         let mipmaps =
             |step: &crate::work::Step| matches!(step, crate::work::Step::GenerateMipmaps { .. });
         if work.steps.iter().any(mipmaps) {

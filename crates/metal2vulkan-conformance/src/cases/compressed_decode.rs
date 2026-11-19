@@ -25,17 +25,18 @@
 //! lane uses, kept.
 //!
 //! **The device's decode is the answer.** A BC texture keeps no decoded twin: every device samples
-//! its own BC image through its own decode, and one whose driver is not measured to decode a
-//! format as Metal does announces `compressed-texel-decode`, one of the device's native answers the
-//! suite declares for every case ([`crate::replay::NATIVE_NOTES`]). Like every native note it
-//! loosens no value, so where such a device's texels differ from Metal's the site is a
-//! `known-gaps.tsv` row of that venue naming the note and whether its stated bound covers the
-//! difference. On MoltenVK, whose driver has both facts, every texel compares exactly.
+//! its own BC image through its own decode, announced `compressed-texel-decode` where the runtime
+//! makes it (the old runtime on a driver not measured to decode the format as Metal does;
+//! `metal2vulkan-rt` for every block-compressed texture, its static note). Each round's texels are
+//! loosened by the largest difference that notice's catalogue entry (docs/API.md) states for the
+//! format's family on any driver, justified by the notice alone ([`CompressedDecode::decode_bound`]):
+//! a texel past it is the notice's claim failing, a divergence. On MoltenVK, whose driver has both
+//! facts, the old runtime announces nothing and every texel compares exactly.
 //!
 //! Nothing here can fault a GPU: one compute pass a round, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
 
-use crate::allowance::Allowance;
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -44,6 +45,7 @@ use crate::transcript::{
     Aspect, ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value,
 };
 use metal2vulkan::metal::PixelFormat;
+use metal2vulkan_runtime::Degradation;
 
 /// The fixture whose kernel reads a texture's texels as floats.
 const FIXTURE: &str = "format_scout";
@@ -230,6 +232,26 @@ impl CompressedDecode {
         TextureRequest::read_2d(self.format().format, SIDE, SIDE).loaded(uploads)
     }
 
+    /// The largest difference from Metal's texel that `compressed-texel-decode`'s catalogue entry
+    /// (docs/API.md) states for the format's family, the largest of the drivers it names: a BC1
+    /// or BC2 channel 4/255 and BC3's 6/255 (its alpha), a BC4 or BC5 channel 7.4/255 and a signed
+    /// one 0.065, all on NVIDIA. An sRGB form's colour is the device's sRGB decode of a code within
+    /// 4/255 of Metal's, so its bound is that decode's largest step over 4/255, at the top of the
+    /// curve, which also covers its alpha.
+    fn decode_bound(&self) -> f64 {
+        let format = self.format();
+        if model::srgb(format.format) {
+            let decode = |value: f64| ((value + 0.055) / 1.055).powf(2.4);
+            return decode(1.0) - decode(1.0 - 4.0 / 255.0);
+        }
+        match format.kind {
+            Kind::Bc1 | Kind::Bc2 => 4.0 / 255.0,
+            Kind::Bc3 => 6.0 / 255.0,
+            Kind::Channels { signed: false, .. } => 7.4 / 255.0,
+            Kind::Channels { signed: true, .. } => 0.065,
+        }
+    }
+
     /// The bytes a row of blocks takes: four blocks of a 16-texel row.
     fn row_pitch(&self) -> u32 {
         4 * self.format().kind.block_bytes() as u32
@@ -270,13 +292,14 @@ impl Case for CompressedDecode {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A driver not measured to decode this format as Metal does reads the device's decode of
-        // the texture's own BC image, announced `compressed-texel-decode`, and a texel's `float`
-        // value is the device's conversion of its decoded codes, announced
-        // `device-texel-conversion`: both native notes the suite declares for every case. They
-        // loosen no texel, and a texel they move is a `known-gaps.tsv` row of the venue. On a
-        // device whose sampler is Metal's neither fires, and every texel compares exactly there
-        // too.
+        // The device's decode of the texture's own blocks, announced `compressed-texel-decode`
+        // where the runtime makes it, declared at the notices site, moves a texel by up to the
+        // largest difference its catalogue entry states for the format's family: each round's
+        // texels are loosened by that number and no further, justified by the notice, so a run
+        // past it is the notice's claim failing. A texel's `float` value is
+        // also the device's conversion of its decoded codes (`device-texel-conversion`), which
+        // loosens nothing. Where neither runtime announces the decode, every texel compares
+        // exactly.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -288,7 +311,18 @@ impl Case for CompressedDecode {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        let mut all = vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(Degradation::CompressedTexelDecode.code()),
+        ];
+        for round in 0..ROUNDS {
+            all.push(Allowance::new(
+                format!("case/round/{round}/texels"),
+                Loosening::Absolute(self.decode_bound()),
+                Justification::notice(Degradation::CompressedTexelDecode),
+            ));
+        }
+        all
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
