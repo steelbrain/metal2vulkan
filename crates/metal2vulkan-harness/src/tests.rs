@@ -641,7 +641,8 @@ fn a_faulty_description_is_refused_naming_its_line() {
         ),
         (
             "texture-view 1 7 0 1",
-            "the view: a Type3D texture of 1 slices: the harness makes 2D textures and 2D arrays",
+            "the view: a Type3D texture of 1 slices and 1 samples: the harness makes 2D textures \
+             and 2D arrays of one sample, and 2D multisample textures of more",
         ),
         (
             "texture-view 1 2",

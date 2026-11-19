@@ -87,19 +87,12 @@ mod on_device {
     fn read_at(texture: &Texture, side: u32, unit: usize, level: u32, slice: u32) -> Vec<u8> {
         let row = side as usize * unit;
         let mut bytes = vec![0xee; row * side as usize];
+        let len = bytes.len() as u64;
         let region = Region {
             origin: [0; 3],
             size: [side, side, 1],
         };
-        (texture.get_bytes(
-            &mut bytes,
-            row as u64,
-            bytes.len() as u64,
-            region,
-            level,
-            slice,
-        ))
-        .expect("get_bytes");
+        (texture.get_bytes(&mut bytes, row as u64, len, region, level, slice)).expect("get_bytes");
         bytes
     }
 
