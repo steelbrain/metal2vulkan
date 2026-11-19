@@ -117,7 +117,8 @@ pub(super) fn texture(call: &Call, f: &Fields, d: &mut TextureDescriptor) -> Res
 
 /// `newBufferWithDescriptor:`: the buffer's length and options. Its host memory reaches it nil: a
 /// copied buffer's `contents` the player writes once the buffer is made, a no-copy buffer's bytes
-/// arrive as `m2v.write`, and the pinned address is the host's, which the player relocates. A
+/// arrive as `m2v.write`, and the pinned address is the recorded one the call answers, where the
+/// backend makes the buffer (`address_placement`). A
 /// no-copy buffer is played as a buffer of its length, so one of the read-only option
 /// (`ResourceOptions::PRIVATE_BIT`) is made without it: its GPU writes, which Metal drops, are
 /// kept.

@@ -4,14 +4,14 @@ use super::args::{
     arg, data, failed, index, list, metal, narrow, origin, range, refuse, size, uint, variant,
     Fields,
 };
-use super::{Object, OldRuntime};
+use super::{own_buffer, Object, OldRuntime};
 use crate::replay::player::{piece, placed_runs, upload, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
 use metal2vulkan::metal::{BarrierScope, DispatchType, IndexType, RenderStages, ResourceUsage};
 use metal2vulkan_runtime::{
-    BlitCommandEncoder, BlitOption, Buffer, ComputeCommandEncoder, DrawPrimitiveType,
-    RenderCommandEncoder, ResourceOptions, ResourceRef, ScissorRect, StoreAction, Texture,
+    BlitCommandEncoder, BlitOption, Buffer, BufferContents, ComputeCommandEncoder,
+    DrawPrimitiveType, RenderCommandEncoder, ResourceRef, ScissorRect, StoreAction, Texture,
     Viewport,
 };
 use std::ops::Range;
@@ -350,15 +350,14 @@ impl OldRuntime {
                     unreachable!("an upload's selector");
                 };
                 let to = self.buffer(call, 0)?;
-                let shared = ResourceOptions::shared();
                 for (at, entry) in upload.pieces {
                     let bytes = piece(&call.args, entry);
                     if bytes.is_empty() {
                         continue;
                     }
-                    let from = self.device.new_buffer_with_bytes(bytes, shared);
-                    let from = from.map_err(failed(call))?;
                     let length = bytes.len() as u64;
+                    let from = own_buffer(&self.device, length, BufferContents::Copy(bytes));
+                    let from = from.map_err(failed(call))?;
                     let copied = self
                         .blit(id)
                         .copy_from_buffer_to_buffer(&from, 0, &to, at, length);
@@ -401,7 +400,7 @@ impl OldRuntime {
         match &self.host {
             Some(host) if host.length() >= length => Ok(host.clone()),
             _ => {
-                let made = self.device.new_buffer(length, ResourceOptions::shared());
+                let made = own_buffer(&self.device, length, BufferContents::Zero);
                 let host = made.map_err(failed(call))?;
                 self.host = Some(host.clone());
                 Ok(host)

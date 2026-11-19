@@ -3,8 +3,13 @@
 //! printed as `REPLAY <test> <line>`.
 //!
 //! - A kernel follows a device pointer that a write put in a block at a recorded address: the
-//!   player relocates it to the runtime's, and the kernel's output is the case's Metal output.
-//!   Two plays on two devices report the same.
+//!   backend makes the block and every buffer of a recorded range at its recorded address, so
+//!   the word plays as written, and the kernel's output is the case's Metal output. Two plays on
+//!   two devices report the same.
+//! - A data word whose value lies in a live recorded range plays as written, and the report says
+//!   every object with a recorded range was made at it.
+//! - A recorded address the runtime refuses (it meets another pin's span) stops the play, naming
+//!   the object, with no other placement tried.
 //! - A command buffer waiting on an event the CPU signals later does not stop another queue's.
 //! - Textures made from descriptor records read back as written.
 //! - A render pass its setter records describe clears a drawable the stream never saw made.
@@ -28,7 +33,7 @@
 use super::host_memory::on_device_with;
 use super::{at_plan, public_case};
 use crate::replay::{
-    OldRuntime, Player, Report, StreamReader, StreamWriter, Value, WAIT_COMPLETED,
+    OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value, WAIT_COMPLETED,
 };
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
@@ -210,11 +215,12 @@ fn pointer_chain(w: &mut StreamWriter<File>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The kernel reads the node through the relocated pointer: its output is the case's Metal
-/// output, one word was relocated, the write's 32 bytes counted; the same stream on a second
-/// device reports the same counts of the stream's and the same checks.
+/// The kernel reads the node through the pointer as written, the block and its buffers and the
+/// output at their recorded addresses: its output is the case's Metal output, the address map
+/// found the one word in a live range and moved it nowhere, the write's 32 bytes counted; the
+/// same stream on a second device reports the same counts of the stream's and the same checks.
 #[test]
-fn a_pointer_written_at_a_recorded_address_is_relocated() {
+fn a_pointer_written_at_a_recorded_address_reaches_its_node() {
     let dir = ScratchDir::new("replay-pointer-chain").unwrap();
     let path = written(&dir, pointer_chain);
     let mut reports = Vec::new();
@@ -229,6 +235,11 @@ fn a_pointer_written_at_a_recorded_address_is_relocated() {
     assert_eq!(report.total.stream["relocated_words"], 1);
     assert_eq!(report.total.stream["misaligned_address_words"], 0);
     assert_eq!(report.total.stream["written_bytes"], 32);
+    assert_eq!(
+        report.pinned,
+        Some(4),
+        "the block, its two buffers and the output"
+    );
     assert_eq!(report.completed.len(), 1);
     assert!(
         report.total.executed["dispatches"] >= 1,
@@ -237,6 +248,90 @@ fn a_pointer_written_at_a_recorded_address_is_relocated() {
     );
     let fixed = reports.iter().map(fixed_by_stream).collect::<Vec<_>>();
     assert_eq!(fixed[0], fixed[1], "two plays on two devices");
+}
+
+/// A descriptor buffer pinned at `address`, `length` bytes, made as the stream records it: the
+/// pin in its descriptor and the range it answered.
+fn pinned_buffer(
+    w: &mut StreamWriter<File>,
+    id: u64,
+    address: u64,
+    length: u64,
+) -> std::io::Result<()> {
+    let descriptor = Value::Map(vec![
+        ("length".into(), Value::Uint(length)),
+        ("options".into(), Value::List(Vec::new())),
+        ("pinnedGpuAddress".into(), Value::Address(address)),
+        ("noCopy".into(), Value::Bool(false)),
+    ]);
+    let made = addressed(address, length);
+    w.call("newBufferWithDescriptor:", 1, id, &[descriptor], &made)
+}
+
+/// Two pinned buffers: a write into the first holds two words, one an address 0x20 into the
+/// second and one two 32-bit indices whose pair lies in the first's own range (as pixel data
+/// can). Both play as written, and the report counts both objects pinned.
+#[test]
+fn a_data_word_in_a_live_range_plays_as_written() {
+    let dir = ScratchDir::new("replay-pinned-words").unwrap();
+    let (first, second) = (BLOCK, BLOCK + (1 << 20));
+    let mut bytes = (second + 0x20).to_le_bytes().to_vec();
+    bytes.extend_from_slice(&(first + 0x10).to_le_bytes());
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        pinned_buffer(w, 2, first, 0x100)?;
+        pinned_buffer(w, 3, second, 0x100)?;
+        let pairs = [Value::Uint(0), Value::Bytes(bytes.clone())];
+        w.call("m2v.write", 2, 0, &pairs, &[])?;
+        let mut whole = bytes.clone();
+        whole.resize(0x100, 0);
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(2)],
+            &[("sha256", sha(&whole))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("pinned-words", device, &path);
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(
+            Some(report.checks[0].sha256),
+            report.checks[0].recorded,
+            "the words as written"
+        );
+        assert_eq!(report.total.stream["relocated_words"], 2);
+        assert_eq!(report.pinned, Some(2));
+        let line = "pinned 2 of 2: every object with a recorded range at its recorded address; \
+                    the address map moves no word";
+        assert!(report.lines().contains(&line.to_string()), "{report:?}");
+    });
+}
+
+/// A buffer pinned 32 KiB into another's span (a 32-KiB buffer's span holds its two pages and a
+/// guard page, rounded up to 64 KiB) is refused by the runtime: the play stops at it, naming it
+/// and its recorded address, and makes it nowhere else.
+#[test]
+fn a_recorded_address_the_runtime_refuses_stops_the_play() {
+    let dir = ScratchDir::new("replay-pinned-conflict").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        pinned_buffer(w, 2, BLOCK, 32 << 10)?;
+        pinned_buffer(w, 3, BLOCK + (32 << 10), 0x100)
+    });
+    on_device_with(at_plan, |device| {
+        let mut backend = OldRuntime::new(device.clone(), crate::gpu::TEST_DEVICE);
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let (report, ended) = Player::new(&mut backend).play(&mut reader);
+        let stopped = matches!(
+            ended,
+            Err(PlayError::Unpinned { object: 3, recorded, made: None, .. })
+                if recorded == BLOCK + (32 << 10)
+        );
+        assert!(stopped, "{ended:?}");
+        assert_eq!(report.pinned, Some(1));
+    });
 }
 
 /// Queue 2's command buffer waits for event 4 at 1, which the CPU sets only after queue 3's

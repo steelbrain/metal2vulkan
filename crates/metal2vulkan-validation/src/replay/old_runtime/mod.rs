@@ -16,11 +16,12 @@ use crate::gpu::DeviceType;
 use args::{arg, data, failed, metal, options, range, refuse, region, uint, Fields};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
-    BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoder,
-    ComputePipelineState, DepthStencilState, Device, Error, Event, EventRef, Fence, Function, Heap,
-    HeapDescriptor, HeapType, IdPlacement, Library, Origin, PipelineOptions, RenderCommandEncoder,
-    RenderPassDescriptor, RenderPipelineState, ResourceId, ResourceIdKind, ResourceOptions,
-    SamplerState, SharedEvent, Size, StorageMode, Texture, TextureDescriptor, TextureLevelQuery,
+    AddressPlacement, BlitCommandEncoder, BlitOption, Buffer, BufferContents, BufferDescriptor,
+    CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputePipelineState, DepthStencilState,
+    Device, Error, Event, EventRef, Fence, Function, GpuAddress, Heap, HeapDescriptor, HeapType,
+    IdPlacement, Library, Origin, PipelineOptions, RenderCommandEncoder, RenderPassDescriptor,
+    RenderPipelineState, ResourceId, ResourceIdKind, ResourceOptions, SamplerState, SharedEvent,
+    Size, StorageMode, Texture, TextureDescriptor, TextureLevelQuery,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -97,6 +98,60 @@ fn addressed(buffer: Buffer) -> (Object, Made) {
         address: Some(buffer.gpu_address().0),
     };
     (Object::Buffer(buffer), made)
+}
+
+/// Where making `call` puts its object in the runtime's address space (`docs/REPLAY-STREAM.md`,
+/// section 5): at its recorded address, the `gpuAddress` it answered, where the stream recorded a
+/// range for it; otherwise outside the space, where no recorded address lies (`address.rs` of the
+/// runtime: `[2^47, 2^48)`, which a pin never reaches).
+fn address_placement(call: &Call) -> Result<AddressPlacement, PlayError> {
+    match call.answer("gpuAddress") {
+        None => Ok(AddressPlacement::Outside),
+        Some(answer) => match answer.as_address() {
+            Some(address) => Ok(AddressPlacement::At(GpuAddress(address))),
+            None => Err(refuse(call, format!("gpuAddress {answer} is no address"))),
+        },
+    }
+}
+
+/// The error of making `call`'s object at `placement`: a refused recorded address stops the play
+/// naming the object (`PlayError::Unpinned`), with no other placement tried.
+fn unplaced(call: &Call, placement: AddressPlacement) -> impl Fn(Error) -> PlayError + '_ {
+    move |error| match placement {
+        AddressPlacement::At(GpuAddress(recorded)) => PlayError::Unpinned {
+            object: call.result,
+            recorded,
+            made: None,
+            why: error.to_string(),
+        },
+        _ => failed(call)(error),
+    }
+}
+
+/// The buffer `call` makes, `length` bytes of `options` holding `contents`, at its
+/// `address_placement`.
+fn placed(
+    device: &Device,
+    call: &Call,
+    length: u64,
+    options: ResourceOptions,
+    contents: BufferContents<'_>,
+) -> Result<(Object, Made), PlayError> {
+    let at = address_placement(call)?;
+    let descriptor = BufferDescriptor::new(length, options, contents).with_placement(at);
+    let buffer = device.new_buffer_with_descriptor(descriptor);
+    Ok(addressed(buffer.map_err(unplaced(call, at))?))
+}
+
+/// A buffer of the player's own (a staging copy, a read-back), `length` bytes of `contents`:
+/// outside the space, so that no recorded address can meet it.
+pub(super) fn own_buffer(
+    device: &Device,
+    length: u64,
+    contents: BufferContents<'_>,
+) -> Result<Buffer, Error> {
+    let descriptor = BufferDescriptor::new(length, ResourceOptions::shared(), contents);
+    device.new_buffer_with_descriptor(descriptor.with_placement(AddressPlacement::Outside))
 }
 
 /// The placement of a resource index, `[index, forced]`: Metal places the object at the index
@@ -277,14 +332,12 @@ impl OldRuntime {
             }
             "newBufferWithLength:options:" => {
                 let options = options(call, uint(call, 1)?)?;
-                let buffer = device.new_buffer(uint(call, 0)?, options);
-                addressed(buffer.map_err(failed(call))?)
+                placed(device, call, uint(call, 0)?, options, BufferContents::Zero)?
             }
             "newBufferWithBytesNoCopy:length:options:deallocator:" => {
                 // Played as a buffer of its length: without the read-only option (`buffer`).
                 let options = options(call, uint(call, 2)? & !ResourceOptions::PRIVATE_BIT)?;
-                let buffer = device.new_buffer(uint(call, 1)?, options);
-                addressed(buffer.map_err(failed(call))?)
+                placed(device, call, uint(call, 1)?, options, BufferContents::Zero)?
             }
             "newBufferWithBytes:length:options:" => {
                 let bytes = data(call, 0)?;
@@ -294,19 +347,20 @@ impl OldRuntime {
                     .and_then(|length| bytes.get(..length))
                     .ok_or_else(|| refuse(call, "fewer bytes than its length"))?;
                 let options = options(call, uint(call, 2)?)?;
-                let buffer = device.new_buffer_with_bytes(bytes, options);
-                addressed(buffer.map_err(failed(call))?)
+                placed(device, call, length, options, BufferContents::Copy(bytes))?
             }
             "newBufferWithDescriptor:" => {
                 let (length, options) = descriptors::buffer(call)?;
-                addressed(device.new_buffer(length, options).map_err(failed(call))?)
+                placed(device, call, length, options, BufferContents::Zero)?
             }
             "m2v.newBlockWithLength:storageMode:" => {
                 let length = uint(call, 0)?;
                 let mode = StorageMode::from_raw(uint(call, 1)?).map_err(failed(call))?;
                 let options = options(call, mode.raw() << 4)?;
+                let at = address_placement(call)?;
                 let descriptor = HeapDescriptor::new(HeapType::Placement, length, options);
-                let heap = device.new_heap(&descriptor).map_err(failed(call))?;
+                let descriptor = descriptor.with_placement(at);
+                let heap = device.new_heap(&descriptor).map_err(unplaced(call, at))?;
                 let whole = match mode {
                     StorageMode::Shared | StorageMode::Managed => Some(
                         (heap.new_buffer_at_offset(length, options, 0)).map_err(failed(call))?,
@@ -319,8 +373,9 @@ impl OldRuntime {
                 (Object::Block(heap, whole), made)
             }
             "newHeapWithDescriptor:" => {
-                let descriptor = descriptors::heap(call)?;
-                let heap = device.new_heap(&descriptor).map_err(failed(call))?;
+                let at = address_placement(call)?;
+                let descriptor = descriptors::heap(call)?.with_placement(at);
+                let heap = device.new_heap(&descriptor).map_err(unplaced(call, at))?;
                 let made = Made {
                     address: Some(heap.gpu_address().0),
                 };
@@ -646,8 +701,7 @@ impl OldRuntime {
                 queue
             }
         };
-        let shared = ResourceOptions::shared();
-        let into = (self.device.new_buffer(length.max(1), shared)).map_err(broke)?;
+        let into = own_buffer(&self.device, length.max(1), BufferContents::Zero).map_err(broke)?;
         let command_buffer = queue.command_buffer().map_err(broke)?;
         let mut blit = command_buffer.blit_command_encoder().map_err(broke)?;
         copy(&mut blit, &into).map_err(broke)?;
@@ -1018,6 +1072,12 @@ impl Backend for OldRuntime {
     }
 
     fn snapshots(&self) -> bool {
+        true
+    }
+
+    /// The old runtime takes a caller's address (`AddressPlacement::At`): every object with a
+    /// recorded range is made at it (`address_placement`), every other one outside the space.
+    fn places_at_recorded(&self) -> bool {
         true
     }
 

@@ -155,6 +155,16 @@ pub trait Backend {
     /// at indices of its own choosing places it at that ID's. One that places them as the
     /// recording's runtime did ignores it.
     fn recorded_id(&mut self, _object: u64, _id: u64) {}
+
+    /// Whether the backend makes every object with a recorded range at its recorded address (the
+    /// `gpuAddress` it answered) and every other object outside the addresses a recording holds.
+    /// The address map then moves no word: each range's new address is its recorded one, so every
+    /// word and address argument plays as recorded, and the map's counts are the stream's as on
+    /// any backend. A made object at another address stops the play ([`PlayError::Unpinned`]).
+    /// Otherwise the map relocates (`docs/REPLAY-STREAM.md`, section 5).
+    fn places_at_recorded(&self) -> bool {
+        false
+    }
 }
 
 /// Why a play stopped.
@@ -173,6 +183,15 @@ pub enum PlayError {
     },
     /// The stream contradicts itself (an object it never made, a wait nothing can meet).
     Invalid(String),
+    /// Object `object` has a recorded range at `recorded`, and the backend, which makes such
+    /// objects at their recorded addresses (`Backend::places_at_recorded`), could not: its runtime
+    /// refused the address (`why`), or made it at `made`. No other placement is tried.
+    Unpinned {
+        object: u64,
+        recorded: u64,
+        made: Option<u64>,
+        why: String,
+    },
 }
 
 impl fmt::Display for PlayError {
@@ -182,6 +201,18 @@ impl fmt::Display for PlayError {
             PlayError::Refused { selector, why } => write!(f, "refused {selector}: {why}"),
             PlayError::Runtime { selector, error } => write!(f, "{selector}: {error}"),
             PlayError::Invalid(why) => write!(f, "invalid stream: {why}"),
+            PlayError::Unpinned {
+                object,
+                recorded,
+                made,
+                why,
+            } => {
+                write!(f, "#{object} not at its recorded address {recorded:#x}: ")?;
+                match made {
+                    Some(made) => write!(f, "made at {made:#x}"),
+                    None => write!(f, "{why}"),
+                }
+            }
         }
     }
 }
@@ -270,6 +301,10 @@ pub struct Report {
     /// The live recorded ranges a newer one met in part, which the address map ended
     /// (`AddressMap::insert`).
     pub parted: u64,
+    /// On a backend that makes objects at their recorded addresses
+    /// (`Backend::places_at_recorded`), the objects with a recorded range it made there, every
+    /// one of them (another stops the play); `None` on a backend the address map relocates for.
+    pub pinned: Option<u64>,
     /// The placement heaps the player laid out again for the runtime's sizes and alignments
     /// (`relay`).
     pub relaid: Relaid,
@@ -650,6 +685,12 @@ impl Report {
         }
         if self.parted > 0 {
             lines.push(format!("parted {}", self.parted));
+        }
+        if let Some(pinned) = self.pinned {
+            lines.push(format!(
+                "pinned {pinned} of {pinned}: every object with a recorded range at its recorded \
+                 address; the address map moves no word"
+            ));
         }
         let relaid = self.relaid;
         if relaid.heaps > 0 {
@@ -1039,6 +1080,10 @@ impl<'b, B: Backend> Player<'b, B> {
     pub fn new(backend: &'b mut B) -> Self {
         let baseline = backend.counters();
         let fixed = FIXED.into_iter().map(|key| (key, 0)).collect();
+        let report = Report {
+            pinned: backend.places_at_recorded().then_some(0),
+            ..Report::default()
+        };
         Player {
             backend,
             addresses: AddressMap::default(),
@@ -1066,7 +1111,7 @@ impl<'b, B: Backend> Player<'b, B> {
             times: Times::default(),
             intervals: Vec::new(),
             resources: HashSet::new(),
-            report: Report::default(),
+            report,
             last_frame: None,
             frame_out: None,
             texwrites: TexWrites::default(),
@@ -1584,10 +1629,24 @@ impl<'b, B: Backend> Player<'b, B> {
                     "#{object}: gpuAddress takes an address and gpuLength a uint, both or neither"
                 )));
             };
-            let base = made.address.ok_or_else(|| PlayError::Runtime {
-                selector: resolved.selector.to_string(),
-                error: format!("#{object} has a recorded range and no address in the runtime"),
-            })?;
+            let base = match &mut self.report.pinned {
+                Some(pinned) if made.address == Some(address) => {
+                    *pinned += 1;
+                    address
+                }
+                Some(_) => {
+                    return Err(PlayError::Unpinned {
+                        object,
+                        recorded: address,
+                        made: made.address,
+                        why: "made at another address".to_owned(),
+                    })
+                }
+                None => made.address.ok_or_else(|| PlayError::Runtime {
+                    selector: resolved.selector.to_string(),
+                    error: format!("#{object} has a recorded range and no address in the runtime"),
+                })?,
+            };
             let ended = self.addresses.insert(object, address, length, base);
             self.report.parted += ended.map_err(PlayError::Invalid)?;
         }

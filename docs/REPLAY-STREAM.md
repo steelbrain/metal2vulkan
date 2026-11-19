@@ -179,16 +179,28 @@ and the (name id, value) answer pairs.
   program put a newer object in memory an older one still held, as a guest's own allocator in a
   block may) ends the older range, whose inner ranges stay: a word there is the newer object's.
   The player's report counts the ranges it ended (`parted`).
-- **Relocation.** The player makes each object where its runtime has room. In the bytes it puts
-  into an object that answered a `gpuAddress` (`m2v.write`, a copied buffer's `contents` and the
+- **Recorded addresses on the old runtime.** The old runtime's player makes every object that
+  answered a `gpuAddress` at that address (`AddressPlacement::At`): a buffer, a block or a heap
+  at its own answer, the descriptor's `pinnedGpuAddress` aside; a buffer in a heap lands at the
+  heap's address plus its offset. Every other object, and the player's own buffers (its staging,
+  readback and host copies), goes outside the space a pin can take (`AddressPlacement::Outside`,
+  `[2^47, 2^48)`; a pin's span ends at or below 2^47). A recorded address the runtime refuses (its
+  span meets a live pin's, its first page starts no 32-KiB granule, or it leaves the space), or an
+  object the runtime made at another address than it recorded, stops the play, naming the object
+  and its recorded address (`PlayError::Unpinned`); no other placement is tried. Each range's
+  address in the play is then its recorded one, so relocation (below) moves no word: every word,
+  data or address, and every address argument plays as recorded, and the map's counts stay the
+  stream's. The report says how many objects it pinned (section 10).
+- **Relocation.** On the new runtime the player makes each object where the runtime has room. In
+  the bytes it puts into an object that answered a `gpuAddress` (`m2v.write`, a copied buffer's `contents` and the
   copies from the guest's RAM), in the data of every `set*Bytes:length:atIndex:` and in every address value, each 8-byte word at an
   offset that is a multiple of 8 from the target's start, whose value lies in a live range, becomes
   the player's address of that range's object plus the word's offset into the range. The innermost
   range wins: a buffer in a block moves with its own new address. Words outside every live range
   stay as they are. Bytes put into an object with no address, the data of `replaceRegion:...`,
-  library bytes and function constants are never rewritten. The player counts the words it
-  rewrote; a data word that is no address but lies in a live range is rewritten too, and the count
-  shows it.
+  library bytes and function constants are never rewritten. The player counts the words that lie
+  in a live range, on either runtime; on the new runtime a data word that is no address but lies
+  in a live range is rewritten too, and the count shows it.
 - **Resource IDs.** A descriptor's resource index places its object at that ID, as Metal places it
   whether or not the index is forced: a texture descriptor's and a render pipeline's
   `resourceIndex` (`[index, forced]`), a sampler's (an index), and a view's `resourceIndex:`
@@ -684,7 +696,8 @@ stream may differ from what the program did` first where the stream's header lac
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
 `device NAME runtime old|rt snapshots yes|no`, then
 `relocation relocated_words=N misaligned_address_words=N address_arguments=N unrelocated_writes=N
-differing_ids=N` (the play's address words relocated and those left at 4 past a multiple of 8,
+differing_ids=N` (the play's words in a live range, which the new runtime relocates, and those
+left at 4 past a multiple of 8,
 the address arguments beside which a data word that only looks like an address stands out, the
 writes and uploads into objects with no recorded range, which nothing relocates, and the objects
 whose ID differs from the recording's, those of the compute pipeline states' typed gap and of
@@ -724,6 +737,8 @@ recording's high word, which is the recording runtime's own; `private ID DISPATC
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
 `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),
+`pinned N of N: every object with a recorded range at its recorded address; the address map moves
+no word` on the old runtime (`N` the objects made at their recorded addresses, section 5),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
 offsets it moved in them and the bytes it added to their sizes), `texture_writes ...` (the
 CPU's writes into Managed textures, below), `total COUNTS` (its `calls` the
