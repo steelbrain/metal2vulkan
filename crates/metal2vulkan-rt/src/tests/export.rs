@@ -395,7 +395,8 @@ mod on_device {
             };
             match device.new_heap_texture(&d, None, heap, 0) {
                 Err(Error::Unsupported(Gap::HeapTexture { .. })) => {}
-                other => panic!("{name}: a heap texture in an export: {other:?}"),
+                Err(error) => panic!("{name}: a heap texture in an export: {error}"),
+                Ok(_) => panic!("{name}: a heap texture made in an export"),
             }
             let pitch = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
                 .unwrap_or_else(|error| panic!("{name}: {error}"))

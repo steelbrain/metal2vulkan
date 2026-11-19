@@ -3556,7 +3556,7 @@ impl Texture {
             region,
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
-            imported: device_copy.is_none() && block.memory.imported,
+            imported: device_copy.is_none() && block.memory.own == Some(memory::Own::Import),
         };
         Some((&named.buffer, copy))
     }
