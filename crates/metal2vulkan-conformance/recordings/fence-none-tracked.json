@@ -1,0 +1,139 @@
+{
+  "format": 1,
+  "case": "fence-none-tracked",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 5,
+      "outcomes": [
+        {
+          "runs": 5,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "shape",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "e33bf5381f86d89c6a7ddcb2602f8c1a6551250605935409129ebab46034b26e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer-bytes-and-written-byte",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0b05a72b3f11e6c4b8210f3317e4e55dca521804b84be42f52b5dd9a14f94168"
+                        }
+                      }
+                    },
+                    {
+                      "name": "long-job-and-bound",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "20a3d0ebb6bd065160beb9d1b5c34d6eeae4d4bab6047e4ce0aadae2a9e3b503"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "order",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "y/words-written",
+                      "observed": {
+                        "value": {
+                          "uint": 1024
+                        }
+                      }
+                    },
+                    {
+                      "name": "updater/status-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiter/status-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": {
+        "stopped": {
+          "call": "fence_order",
+          "message": "M2V-TIMES Tracked { busy: 0 } y 1024 updater 0.000..0.007 waiter 0.048..0.052 busy []"
+        }
+      }
+    }
+  ]
+}

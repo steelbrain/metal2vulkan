@@ -50,12 +50,12 @@
                       }
                     },
                     {
-                      "name": "long-job-busy-and-bound",
+                      "name": "long-job-and-bound",
                       "observed": {
                         "value": "absent",
                         "digest": {
                           "kind": "sha256",
-                          "hex": "7ede4c30dcc8992c255ec4829fe0b2084d452bef7b2f169b1a32af2976e4af7b"
+                          "hex": "20a3d0ebb6bd065160beb9d1b5c34d6eeae4d4bab6047e4ce0aadae2a9e3b503"
                         }
                       }
                     }
@@ -128,7 +128,12 @@
           }
         }
       ],
-      "validated": "ran"
+      "validated": {
+        "stopped": {
+          "call": "fence_order",
+          "message": "M2V-TIMES Ordered y 1024 updater 0.000..5.360 waiter 5.360..5.365 busy []"
+        }
+      }
     }
   ]
 }
