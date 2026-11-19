@@ -9816,6 +9816,7 @@ method	metal2vulkan-rt::Surface::buffer	pub fn buffer(&self) -> Result<Buffer, E
 method	metal2vulkan-rt::Surface::external_writes_done	pub fn external_writes_done(&self) -> Result<(), Error>
 method	metal2vulkan-rt::Surface::handle	pub fn handle(&self) -> Option<ExportHandle>
 method	metal2vulkan-rt::Surface::planes	pub fn planes(&self) -> &[Texture]
+method	metal2vulkan-rt::Surface::wait_until_ready	pub fn wait_until_ready(&self) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::descriptor	pub fn descriptor(&self) -> &TextureDescriptor
 method	metal2vulkan-rt::Texture::drawable_acquired	pub unsafe fn drawable_acquired(&self) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u32, slice: u32) -> Result<(), Error>

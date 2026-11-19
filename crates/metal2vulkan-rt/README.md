@@ -618,13 +618,21 @@ through its views alone, each with an index of its own, as `Device::new_texture_
 a texture: the textures a consumer makes over a plane are its views. A plane's image lists, for views of another format, the
 formats of the texture's own list that its tiling samples, and none where the device refuses that
 list; a view of another format it does not list is `Gap::TextureView` of
-`TextureViewKind::SurfacePixelFormat`. The images move to the general layout in a submission the
-call waits for before the handle leaves, and stay in it through every copy. That wait is counted
-in `Metrics::surface_waits`, with its time in `surface_wait_nanos`, the longest in
+`TextureViewKind::SurfacePixelFormat`. The make submits nothing and waits for nothing: the
+images move out of the undefined layout into the general one in the runtime's next submission,
+and stay in it through every copy.
+
+**The ready point.** That move may discard what the memory holds, so the other API writes an
+in-place surface's memory only once it has completed: before the other API's first write, the
+consumer calls `Surface::wait_until_ready()` on its own thread, which returns once the move's
+submission has completed and has that submission go at once where it is not yet made. The
+runtime's own commands need no wait: the move goes ahead of every command buffer committed after
+the make. In the copy form the call returns at once. Each call in place is counted in
+`Metrics::surface_waits`, with its time in `surface_wait_nanos`, the longest in
 `surface_wait_max_nanos`, and in `surface_wait_submissions` the runtime's submissions it waited
 for: those not yet complete as it began, the one that moves the planes among them unless it
-completed first (where another thread's submission took the moves). A wait far longer than those
-submissions' GPU times waited behind work the runtime did not submit.
+completed first (a submission made after the make, for any command buffer, takes the moves). A
+wait far longer than those submissions' GPU times waited behind work the runtime did not submit.
 
 **The copy form** is taken where any of that fails, and the answer's `SurfaceForm::Copy` names
 why (`SurfaceCopy`): `NoModifier`, `Tiling`, `Dedicated`, `Pitch`, `Start` or `MemoryType`. The
@@ -634,13 +642,14 @@ that the submissions copy the bytes into and back (`Metrics::over_copies`). A st
 driver cannot take falls to the copy form with no error: the answer's `form` is the only sign.
 `Metrics::surfaces_in_place` and `Metrics::surfaces_copied` count each form made.
 
-One contract for both forms, the exported block's above. Once the other API's work that wrote the
-surface has completed, the consumer calls `Surface::external_writes_done()` before it commits the
-command buffers that use what was written: in place, each plane's image's acquire from the other
-API's queue family, the general layout kept, one barrier in the upload; in the copy form the
-block's acquire. Where the other API is to read what the runtime's commands wrote, the consumer
-calls `BlitCommandEncoder::release_surface_to_external(&surface)` after the last command that
-writes the planes: in place, each plane's image's release, one barrier; in the copy form the
+One contract for both forms, the exported block's above, after the ready point. Once the other
+API's work that wrote the surface has completed, the consumer calls
+`Surface::external_writes_done()` before it commits the command buffers that use what was
+written: in place, each plane's image's acquire from the other API's queue family, the general
+layout kept, one barrier in the upload; in the copy form the block's acquire. Where the other
+API is to read what the runtime's commands wrote, the consumer calls
+`BlitCommandEncoder::release_surface_to_external(&surface)` after the last command that writes
+the planes: in place, each plane's image's release, one barrier; in the copy form the
 block's release, the planes' images copied back first. Both count in `Metrics::external_acquires`
 and `Metrics::external_releases`. From a release until the consumer's next write into the surface
 through the runtime, the consumer encodes no read of its planes.

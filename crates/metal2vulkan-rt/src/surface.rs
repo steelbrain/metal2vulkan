@@ -32,6 +32,7 @@ use crate::submit::Held;
 use crate::texture::{Backing, SurfaceImage, Texture, TextureDescriptor, TextureObject};
 use crate::times::host_time;
 use ash::vk;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 /// The most planes a surface has: a DRM format's memory planes.
@@ -156,6 +157,10 @@ pub struct Surface {
     handle: Option<ExportHandle>,
     planes: Vec<Texture>,
     kind: Kind,
+    /// In place, where the planes' moves to the general layout complete
+    /// ([`Surface::wait_until_ready`]); `None` in the copy form, whose images the other API
+    /// never reaches, and for a Direct3D 11 import, whose images are general as imported.
+    ready: Option<Arc<AtomicU64>>,
 }
 
 /// The surface's form, and what its buffer is ([`Surface::buffer`]).
@@ -587,9 +592,10 @@ impl Device {
     ///
     /// **Form.** In place where the device's queries and the images made hold the layout exactly
     /// (the crate's guide says what each handle asks); else the copy form, whose reason the
-    /// answer names, laid alike at the tightest pitch the multiples allow. Decided at the make:
-    /// each plane's image in place moves to the general layout in a submission the call waits
-    /// for, before the handle leaves. Each form counts in
+    /// answer names, laid alike at the tightest pitch the multiples allow. Decided at the make.
+    /// The call makes no submission and waits for nothing: each plane's image in place moves to
+    /// the general layout in the runtime's next submission, and the other API's first write into
+    /// the memory waits for it ([`Surface::wait_until_ready`]). Each form counts in
     /// [`Metrics::surfaces_in_place`](crate::Metrics::surfaces_in_place) or
     /// [`Metrics::surfaces_copied`](crate::Metrics::surfaces_copied).
     ///
@@ -667,18 +673,9 @@ impl Device {
                 }
             }
         }
-        // The images move to the general layout before the handle leaves. The progress reached
-        // is read before the flush wakes the submit thread: a submission it then makes, the
-        // moves' among them, cannot have completed by the read, so it is counted.
-        let began = host_time();
-        // SAFETY: the progress semaphore is the device's, live while the core is.
-        let reached = unsafe { core.device.get_semaphore_counter_value(core.done.progress) }
-            .map_err(Error::vulkan("vkGetSemaphoreCounterValue"))?;
-        let value = core.work.flush();
-        core.done.wait(core, value)?;
-        let waited = host_time().saturating_sub(began);
-        core.counters
-            .surface_wait(waited, value.saturating_sub(reached));
+        // The images move to the general layout in the next submission, which the make does not
+        // wait for: the consumer waits for it on its own thread (`Surface::wait_until_ready`).
+        let ready = Some(core.work.ready_point());
         core.counters.count(Metric::SurfacesInPlace);
         let view = View {
             unit,
@@ -690,6 +687,7 @@ impl Device {
             handle: Some(handle),
             planes,
             kind: Kind::InPlace(view),
+            ready,
         };
         let export = SurfaceExport {
             export: made.export,
@@ -737,6 +735,7 @@ impl Device {
             handle: Some(spec.handle),
             planes,
             kind: Kind::Copy(block, buffer),
+            ready: None,
         };
         let export = SurfaceExport {
             export,
@@ -1190,6 +1189,7 @@ impl Surface {
             handle: None,
             planes,
             kind: Kind::Imported,
+            ready: None,
         }
     }
 
@@ -1328,6 +1328,49 @@ impl Surface {
         let buffer = self.device.buffer(block, 0, view.len, None, None, unit);
         *state = ViewState::Made(buffer.clone());
         Ok(buffer)
+    }
+
+    /// No Metal counterpart: waits until the surface's memory is the other API's to write, on
+    /// the calling thread, the consumer's own. Metal has no such wait: an IOSurface's planes are
+    /// ready as it is made.
+    ///
+    /// In place, each plane's image moves out of the undefined layout into the general one in
+    /// the runtime's first submission after the make, which
+    /// [`Device::new_exported_surface`] does not wait for; that move may discard what the memory
+    /// holds, so the other API's first write into the memory comes after it. The call returns
+    /// once that submission has completed, and has it go at once where it is not yet made. The
+    /// runtime's own commands need no such wait: the move goes ahead of every command buffer
+    /// committed after the make. In the copy form, whose planes' images the other API never
+    /// reaches, and for a Direct3D 11 import
+    /// ([`Device::import_d3d11_surface`](crate::Device::import_d3d11_surface)), whose images are
+    /// general as imported, the call returns at once. Each call in place counts in
+    /// [`Metrics::surface_waits`](crate::Metrics::surface_waits), with its time and the
+    /// submissions it waited for.
+    ///
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`];
+    /// [`Error::Vulkan`] where the device is lost first or the progress semaphore cannot be read.
+    pub fn wait_until_ready(&self) -> Result<(), Error> {
+        let Some(ready) = &self.ready else {
+            return Ok(());
+        };
+        crate::command::not_in_scheduled_handler()?;
+        let core = self.device.core();
+        if core.closed() {
+            return Err(Error::Quiesced);
+        }
+        // The progress reached is read before `ready_value` can wake the submit thread: a
+        // submission it then makes, the moves' among them, cannot have completed by the read, so
+        // it is counted.
+        let began = host_time();
+        // SAFETY: the progress semaphore is the device's, live while the core is.
+        let reached = unsafe { core.device.get_semaphore_counter_value(core.done.progress) }
+            .map_err(Error::vulkan("vkGetSemaphoreCounterValue"))?;
+        let value = core.work.ready_value(ready);
+        core.done.wait(core, value)?;
+        let waited = host_time().saturating_sub(began);
+        core.counters
+            .surface_wait(waited, value.saturating_sub(reached));
+        Ok(())
     }
 
     /// No Metal counterpart: the other API's writes into this surface are done, and the

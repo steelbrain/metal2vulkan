@@ -526,9 +526,21 @@ mod on_device {
                     let made = began.elapsed();
                     let form = export.form;
                     let after = counters.metrics();
-                    let waited = after.surface_waits - before.surface_waits;
-                    let wait_nanos = after.surface_wait_nanos - before.surface_wait_nanos;
-                    let behind = after.surface_wait_submissions - before.surface_wait_submissions;
+                    // The make submits nothing and waits for nothing.
+                    assert_eq!(
+                        (after.submissions, after.surface_waits),
+                        (before.submissions, before.surface_waits),
+                        "{label}: the make's submissions and waits"
+                    );
+                    // The other API's first write waits for the planes' moves.
+                    let began = Instant::now();
+                    (surface.wait_until_ready())
+                        .unwrap_or_else(|error| panic!("{label}: the ready wait: {error}"));
+                    let readied = began.elapsed();
+                    let ready = counters.metrics();
+                    let waited = ready.surface_waits - after.surface_waits;
+                    let wait_nanos = ready.surface_wait_nanos - after.surface_wait_nanos;
+                    let behind = ready.surface_wait_submissions - after.surface_wait_submissions;
                     match form {
                         SurfaceForm::InPlace => {
                             assert_eq!(
@@ -536,18 +548,22 @@ mod on_device {
                                 before.surfaces_in_place + 1,
                                 "{label}"
                             );
-                            // The make waits once, for at least the submission of the moves:
-                            // nothing else submits here, so the moves are still pending at the
-                            // make's flush, and their submission, made after the wait began, is
-                            // counted, however fast the device completes it.
-                            assert_eq!(waited, 1, "{label}: the make's wait counted");
+                            // The ready wait waits once, for the submission of the moves, which
+                            // it has go: nothing else submits here, so the moves are still
+                            // pending at its flush, and their submission, made after the wait
+                            // began, is counted, however fast the device completes it.
+                            assert_eq!(waited, 1, "{label}: the ready wait counted");
                             assert!(behind >= 1, "{label}: {behind} submissions waited for");
                             assert!(
-                                wait_nanos <= made.as_nanos() as u64,
-                                "{label}: the wait's {wait_nanos} ns within the make's {made:?}"
+                                ready.submissions > after.submissions,
+                                "{label}: the moves' submission made by the ready wait"
                             );
                             assert!(
-                                after.surface_wait_max_nanos >= wait_nanos,
+                                wait_nanos <= readied.as_nanos() as u64,
+                                "{label}: the wait's {wait_nanos} ns within the call's {readied:?}"
+                            );
+                            assert!(
+                                ready.surface_wait_max_nanos >= wait_nanos,
                                 "{label}: the longest wait"
                             );
                         }
@@ -560,7 +576,7 @@ mod on_device {
                             assert_eq!(
                                 (waited, wait_nanos, behind),
                                 (0, 0, 0),
-                                "{label}: the copy form's make waits for nothing"
+                                "{label}: the copy form's ready wait waits for nothing"
                             );
                         }
                     }
@@ -568,11 +584,12 @@ mod on_device {
                     let flags =
                         flag_names(kinds.memory_types_as_slice()[index as usize].property_flags);
                     println!(
-                        "surface: {label}: form {form:?}, pitch {}, plane 1 at {}, size {}, memory type {index} ({flags}), made in {:.3} ms, its wait {:.3} ms for {behind} submissions",
+                        "surface: {label}: form {form:?}, pitch {}, plane 1 at {}, size {}, memory type {index} ({flags}), made in {:.3} ms, ready {:.3} ms later, its wait {:.3} ms for {behind} submissions",
                         export.planes[0].row_pitch,
                         export.planes[1].offset,
                         export.export.size,
                         made.as_secs_f64() * 1e3,
+                        readied.as_secs_f64() * 1e3,
                         wait_nanos as f64 / 1e6
                     );
                     check_layout(&label, row, planes, &export);
@@ -1109,9 +1126,9 @@ mod on_device {
 
     /// A surface make behind a busy queue: for each row the device exports, fills of a 256 MiB
     /// Private buffer committed back to back until about 100 ms of the GPU's work is ahead, then
-    /// a 1080p NV12 surface made at once. Printed: the make's time, the surface waits it counted
-    /// with their time and the submissions they waited for, and when the last fill completed,
-    /// from the make's start.
+    /// a 1080p NV12 surface made at once, which waits for nothing, and its ready wait. Printed:
+    /// the make's time, when the surface was ready, the ready wait's time and the submissions it
+    /// waited for, and when the last fill completed, each from the make's start.
     #[test]
     fn every_device_times_a_surface_make_behind_a_busy_queue() {
         each_device("surface_busy", |name, _, device| {
@@ -1167,19 +1184,30 @@ mod on_device {
                     .unwrap_or_else(|error| panic!("{label}: {error}"));
                 let made = began.elapsed();
                 let after = counters.metrics();
+                assert_eq!(
+                    after.surface_waits, before.surface_waits,
+                    "{label}: the make waits for nothing"
+                );
+                (surface.wait_until_ready())
+                    .unwrap_or_else(|error| panic!("{label}: the ready wait: {error}"));
+                let readied = began.elapsed();
+                let ready = counters.metrics();
                 let last = fills.last().expect("a fill");
                 finished(&label, last);
                 let drained = began.elapsed();
                 println!(
                     "surface-busy: {label}: {count} fills ahead ({:.3} ms each alone), form {:?}: \
-                     the make {:.3} ms, {} surface waits of {:.3} ms for {} submissions; the last \
-                     fill done {:.3} ms after the make began",
+                     the make {:.3} ms, {} surface waits in it; ready {:.3} ms after the make \
+                     began, {} surface waits of {:.3} ms for {} submissions; the last fill done \
+                     {:.3} ms after the make began",
                     each.as_secs_f64() * 1e3,
                     export.form,
                     made.as_secs_f64() * 1e3,
                     after.surface_waits - before.surface_waits,
-                    (after.surface_wait_nanos - before.surface_wait_nanos) as f64 / 1e6,
-                    after.surface_wait_submissions - before.surface_wait_submissions,
+                    readied.as_secs_f64() * 1e3,
+                    ready.surface_waits - after.surface_waits,
+                    (ready.surface_wait_nanos - after.surface_wait_nanos) as f64 / 1e6,
+                    ready.surface_wait_submissions - after.surface_wait_submissions,
                     drained.as_secs_f64() * 1e3,
                 );
                 for command_buffer in &fills {

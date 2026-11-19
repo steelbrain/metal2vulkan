@@ -4423,11 +4423,11 @@ impl Device {
     }
 
     /// The texture of a surface plane's image, at `index` as for [`Device::new_texture`]: its
-    /// home layout general, from undefined in the next upload, which the surface's make submits
-    /// and waits for, or already general where the image is (a Direct3D 11 texture's). Its
-    /// format is the descriptor's, a view of the image's own where they differ. The texture holds
-    /// the image, which its drop frees with its memory. It takes `unit`'s id in the hazard sets,
-    /// the surface's ([`HeapId::unit`]).
+    /// home layout general, from undefined in the next upload, which goes ahead of every command
+    /// buffer committed after the make, or already general where the image is (a Direct3D 11
+    /// texture's). Its format is the descriptor's, a view of the image's own where they differ.
+    /// The texture holds the image, which its drop frees with its memory. It takes `unit`'s id in
+    /// the hazard sets, the surface's ([`HeapId::unit`]).
     ///
     /// Err: [`Refusal::TextureIndex`]; [`Gap::SurfaceUsage`] for a usage the texture's uses ask
     /// that the image lacks; [`Error::Vulkan`] where a view cannot be made; what the texture's
@@ -4517,8 +4517,8 @@ impl Device {
             Some(index) => {
                 let sampled = sampled.map(|view| (view, home));
                 // SAFETY: the texture's views are live; its image is in its home layout whenever
-                // work uses it: the waited upload of its make goes first, or it is general after
-                // the other API's access.
+                // work uses it: the upload that moves it goes ahead of that work, or it is general
+                // after the other API's access.
                 let owner = unsafe {
                     (core.arrays).place_texture(
                         &core.device,

@@ -156,6 +156,8 @@ pub(crate) struct WorkState {
     next_place: u64,
     /// The progress value of the last submission.
     progress: u64,
+    /// The progress value of the last submission that took an upload, 0 before the first.
+    uploaded: u64,
     /// Zero fills, copies and moves to a home layout recorded and not yet submitted.
     upload: Option<Upload>,
     /// Textures made since the last submission, not held: the next submission's upload moves
@@ -221,6 +223,9 @@ pub(crate) struct Upload {
     /// The staging region's spans its copies use, and their bytes.
     spans: Vec<u64>,
     span_bytes: u64,
+    /// Where a surface waits for the moves this upload records ([`Work::ready_point`]): set to
+    /// the progress value of the submission that takes it, 0 until then.
+    ready: Option<Arc<AtomicU64>>,
 }
 
 /// What an upload keeps until it retires.
@@ -263,6 +268,7 @@ impl Upload {
                 staging: 0,
                 spans: Vec::new(),
                 span_bytes: 0,
+                ready: None,
             }),
             Err(error) => {
                 core.recorders.give_back(core, recorder);
@@ -430,6 +436,7 @@ impl Work {
                 next_seq: 0,
                 next_place: 0,
                 progress: 0,
+                uploaded: 0,
                 upload: None,
                 homes: Vec::new(),
                 prune_at: HOMES_PRUNE,
@@ -924,6 +931,39 @@ impl Work {
         value
     }
 
+    /// The point at which every move to a home layout recorded so far has completed, with no
+    /// submission of its own: the pending upload's, whose submission sets it, or where none is
+    /// pending, the last submission that took one. [`ready_value`](Self::ready_value) reads it.
+    pub(crate) fn ready_point(&self) -> Arc<AtomicU64> {
+        let mut state = self.lock();
+        let uploaded = state.uploaded;
+        match &mut state.upload {
+            Some(upload) => Arc::clone(
+                upload
+                    .ready
+                    .get_or_insert_with(|| Arc::new(AtomicU64::new(0))),
+            ),
+            None => Arc::new(AtomicU64::new(uploaded)),
+        }
+    }
+
+    /// The progress value at which `point` ([`ready_point`](Self::ready_point)) is reached: the
+    /// value of the submission that took its upload, or where that upload is still pending, the
+    /// next submission's, which this call has go at once ([`flush`](Self::flush)).
+    pub(crate) fn ready_value(&self, point: &AtomicU64) -> u64 {
+        let mut state = self.lock();
+        // A submission takes the upload under this lock, setting the point as it does.
+        match point.load(Ordering::Relaxed) {
+            0 => {
+                let value = state.flush();
+                drop(state);
+                self.wake();
+                value
+            }
+            value => value,
+        }
+    }
+
     /// Ends `queue`'s command buffers not yet in a submission or a group with `NotRun`. A group
     /// it holds still goes: its command buffers are scheduled.
     pub(crate) fn abandon(&self, core: &Core, queue: &QueueInner) {
@@ -1029,6 +1069,10 @@ impl WorkState {
     fn take_upload(&mut self, core: &Core, released: &AtomicU64, value: u64) -> Option<Upload> {
         let mut upload = self.upload.take()?;
         released.store(0, Ordering::Relaxed);
+        self.uploaded = value;
+        if let Some(ready) = &upload.ready {
+            ready.store(value, Ordering::Relaxed);
+        }
         if let Some(region) = &mut self.region {
             for &number in &upload.spans {
                 region.ring.set(number, At::Submitted(value));

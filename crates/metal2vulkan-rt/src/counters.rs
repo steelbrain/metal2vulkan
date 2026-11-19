@@ -1295,9 +1295,9 @@ pub struct Metrics {
     /// [`SurfaceForm::Copy`](crate::SurfaceForm::Copy)).
     pub surfaces_copied: u64,
     /// Waits of surfaces made in place for the submission that moves their planes to the general
-    /// layout, on the making thread, before
-    /// [`Device::new_exported_surface`](crate::Device::new_exported_surface) returns: one per
-    /// surface made in place.
+    /// layout ([`Surface::wait_until_ready`](crate::Surface::wait_until_ready)), on the
+    /// consumer's thread: one per call. The make
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)) waits for none.
     pub surface_waits: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) the surface waits took, in total.
     pub surface_wait_nanos: u64,
@@ -1306,9 +1306,10 @@ pub struct Metrics {
     pub surface_wait_max_nanos: u64,
     /// The runtime's submissions the surface waits waited for, in total: at each wait's start,
     /// those of the device not yet complete, through the one that moves the planes, which is
-    /// among them unless it had completed before the wait began (where another thread's
-    /// submission took the moves first). Another API's work is not counted: a wait much longer
-    /// than these submissions' GPU times waited behind work the runtime did not submit.
+    /// among them unless it had completed before the wait began (a submission made after the
+    /// make, for any command buffer, takes the moves). Another API's work is not counted: a wait
+    /// much longer than these submissions' GPU times waited behind work the runtime did not
+    /// submit.
     pub surface_wait_submissions: u64,
     /// `vkQueueBindSparse` calls: one for each import over several dma-bufs
     /// (`Device::import_dma_bufs`, on Unix), binding its imports into its buffer. Each signals a
