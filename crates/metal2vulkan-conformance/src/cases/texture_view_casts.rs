@@ -8,14 +8,16 @@
 //! | `texture-view-casts-cube-as-2d-array-faces` | a cube | a 2D array of levels 1 and 2, faces 2 to 4 |
 //! | `texture-view-casts-cube-as-2d` | a cube | a 2D texture of level 1, face 4 |
 //! | `texture-view-casts-2d-as-2d-array` | a 2D texture | a 2D array of levels 1 and 2, its one slice |
+//! | `texture-view-casts-2d-array-as-cube` | a 2D array of eight slices | a cube of levels 1 and 2, slices 1 to 6 |
 //!
 //! These are the casts of Apple's table (`makeTextureView(pixelFormat:textureType:levels:slices:)`)
-//! that a cube or a 2D texture makes with nothing new at its make, which metal2vulkan-rt builds; a
-//! cube array, and a view as one, is a gap of its own there, and no replay stream makes one.
+//! that metal2vulkan-rt builds of another type than the parent's: those a cube or a 2D texture
+//! makes with nothing new at its make, and a square 2D array's cube of six slices, whose image rt
+//! makes cube-compatible; a cube array, and a view as one, is a gap of its own there.
 //!
 //! Every parent is `RGBA16Float`, 8 by 8 texels at level 0, of three levels, `Private`, of
 //! render-target and shader-read usage; a cube's slices are its faces, as Metal counts a view's
-//! `sliceRange`. Each case makes the parent and
+//! `sliceRange`, and a 2D array has [`ARRAY_SLICES`]. Each case makes the parent and
 //! the view, and records the view's `textureType`, `pixelFormat`, `mipmapLevelCount` and
 //! `arrayLength`. Then, twice:
 //!
@@ -61,6 +63,10 @@ const THREADS: u32 = 64;
 /// A sample's bytes: four `float`s.
 const SAMPLE: u32 = 16;
 
+/// A 2D array parent's slices: more than a cube's six, so a cube of six of them starts past its
+/// first and ends before its last.
+const ARRAY_SLICES: u32 = 8;
+
 /// One case: the parent's type and slices, and the view's type and ranges.
 #[derive(Clone, Copy, Debug)]
 struct Pair {
@@ -83,6 +89,7 @@ const fn pair(
 ) -> Pair {
     let parent_slices = match parent {
         TextureType::Cube => 6,
+        TextureType::Type2DArray => ARRAY_SLICES,
         _ => 1,
     };
     Pair {
@@ -97,7 +104,7 @@ const fn pair(
 
 /// The cases, as the module's table states them: each view's levels and slices as
 /// `(first, count)`.
-const PAIRS: [Pair; 4] = [
+const PAIRS: [Pair; 5] = [
     pair(
         "texture-view-casts-cube-as-2d-array-whole",
         Cube,
@@ -125,6 +132,13 @@ const PAIRS: [Pair; 4] = [
         Type2DArray,
         (1, 2),
         (0, 1),
+    ),
+    pair(
+        "texture-view-casts-2d-array-as-cube",
+        Type2DArray,
+        Cube,
+        (1, 2),
+        (1, 6),
     ),
 ];
 
@@ -211,14 +225,18 @@ impl Pair {
         }
     }
 
-    /// The parent's descriptor: `arrayLength` is 1, a cube's six faces not counted in it.
+    /// The parent's descriptor: `arrayLength` is a 2D array's slices, and 1 for a cube, whose six
+    /// faces it does not count.
     fn parent_request(&self) -> TextureRequest<'static> {
         TextureRequest {
             format: FORMAT.as_raw(),
             texture_type: self.parent,
             size: [SIDE, SIDE, 1],
             levels: LEVELS,
-            slices: 1,
+            slices: match self.parent {
+                Type2DArray => self.parent_slices,
+                _ => 1,
+            },
             usage: TextureUsage::RENDER_TARGET.union(TextureUsage::SHADER_READ),
             private: true,
             gpu_optimized: true,
@@ -597,7 +615,7 @@ mod tests {
     /// so a side that ignored the ranges reads otherwise; the streams' form, every level and all
     /// six faces of a cube as a 2D array, is one of them; and every cast metal2vulkan-rt builds of
     /// another type than the parent's but one slice of a 2D array as a 2D texture, which the
-    /// suite's other view families make, is a case.
+    /// suite's other view families make, is a case, a square 2D array's cube among them.
     #[test]
     fn the_table_holds_the_streams_form_and_every_cast_built() {
         assert!(PAIRS
@@ -607,7 +625,12 @@ mod tests {
             && pair.view == Type2DArray
             && pair.levels == (0, LEVELS)
             && pair.slices == (0, 6)));
-        for (parent, view) in [(Cube, Type2D), (Cube, Type2DArray), (Type2D, Type2DArray)] {
+        for (parent, view) in [
+            (Cube, Type2D),
+            (Cube, Type2DArray),
+            (Type2D, Type2DArray),
+            (Type2DArray, Cube),
+        ] {
             assert!(
                 PAIRS
                     .iter()
