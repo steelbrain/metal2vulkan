@@ -1823,10 +1823,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   sample count, none rounded, the depth ignored. A color format with no measured place in Metal's
   record is `Gap::ImageblockLength`. The M3 measurement the rule rests on is the conformance
   suite's recordings `pipeline-facts-render-plain`, `pipeline-facts-render-two-attachments`,
-  `pipeline-facts-render-multisampled`, `pipeline-facts-render-narrow-attachments` and
-  `pipeline-facts-render-depth-stencil` (an Apple M3 Max, macOS 27.0.1 build 26A434, three runs
-  each): `RGBA8Unorm` answers 4 and 128 at `[8, 4, 3]`; `RGBA8Unorm` then `RGBA16Float` 12 and
-  384; the same at four samples 12 and 1536; `R8Unorm` then `RG16Float` 6 and 192 (`RG16Float`
+  `pipeline-facts-render-multisampled`, `pipeline-facts-render-multisampled-direct`,
+  `pipeline-facts-render-narrow-attachments` and `pipeline-facts-render-depth-stencil` (an Apple
+  M3 Max, macOS 27.0.1 build 26A434, three runs each): `RGBA8Unorm` answers 4 and 128 at
+  `[8, 4, 3]`; `RGBA8Unorm` then `RGBA16Float` 12 and 384; the same at four samples 12 and 1536,
+  with indirect-command support or without; `R8Unorm` then `RG16Float` 6 and 192 (`RG16Float`
   at byte 2, its component's alignment, where packing tight would answer 5 and aligning to 4
   would answer 8); `RGBA8Unorm` then `RGBA16Float` with a `Depth32Float_Stencil8` depth and
   stencil attachment 12 and 384, as without it. `support_indirect_command_buffers` is false, as a
