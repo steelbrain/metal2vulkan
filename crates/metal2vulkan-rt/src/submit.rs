@@ -539,7 +539,7 @@ impl Work {
 
     /// Whether a commit holds its turn: it began its count of the wait for the work lock
     /// ([`turn`](Self::turn) is taken after it).
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn turn_taken(&self) -> bool {
         matches!(
             self.turn.try_lock(),
