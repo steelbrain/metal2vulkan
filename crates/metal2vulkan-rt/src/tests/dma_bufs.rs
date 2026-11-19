@@ -52,6 +52,7 @@ fn the_granule_is_the_sparse_alignment_where_the_sparse_buffer_takes_every_coher
 
 #[cfg(all(target_os = "linux", any(m2v_gpu, m2v_cpu_icd)))]
 mod on_device {
+    use crate::buffer::BufferObject;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::compute::on_device::{add, WORDS};
     use crate::tests::import::on_device::{memfd, releasing, udmabuf, wait_until};
