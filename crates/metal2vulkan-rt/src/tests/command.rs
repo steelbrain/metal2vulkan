@@ -2459,14 +2459,15 @@ pub(crate) mod on_device {
         }
     }
 
-    /// The last handle dropped in a completed handler while a scheduled handler holds the submit
-    /// thread: the drop returns at once, and the reaper, which tears down and which nothing
-    /// joins, joins every other thread before anything of the device goes. While the submit
-    /// thread is held, the device's four threads hold their slots of `Gauges::threads` (where the
-    /// OS gives ids), no allocation is unmapped and the blocks live; once it is let go, the reaper
-    /// unmaps each allocation and the device is destroyed, and every gauge reads zero, the
-    /// reaper's slot among them, which it gives up only once it has dropped the device: it
-    /// touches nothing of the device after that.
+    /// The last handle dropped in a scheduled handler, on the submit thread, while a completed
+    /// handler holds the completion thread: the drop returns at once, and the reaper, which tears
+    /// down and which nothing joins, joins every other thread before anything of the device goes.
+    /// While the completion thread is held, at least it and the reaper hold their slots of
+    /// `Gauges::threads` (where the OS gives ids), no allocation is unmapped and the blocks live;
+    /// once it is let go, the reaper unmaps each allocation and the device is destroyed, and every
+    /// gauge reads zero, the reaper's slot among them, which it gives up only once it has dropped
+    /// the device: it touches nothing of the device after that. Both command buffers have nothing
+    /// for the GPU, so each is scheduled and completes as the submit thread reaches it.
     #[test]
     fn every_device_torn_down_in_a_handler_joins_the_others_before_destroying_what_they_reach() {
         let instance = crate::tests::validation::instance(&[]);
@@ -2492,48 +2493,45 @@ pub(crate) mod on_device {
                 .take_block(MemoryClass::Shared, 1)
                 .expect("a Shared block");
             let queue = queue(&device);
-            let first = queue.command_buffer().expect("a command buffer");
-            let second = queue.command_buffer().expect("a command buffer");
+            let held = queue.command_buffer().expect("a command buffer");
+            let last = queue.command_buffer().expect("a command buffer");
             drop(queue);
             let (entered, inside) = mpsc::channel::<()>();
             let (release, gate) = mpsc::channel::<()>();
             let (dropped, gone) = mpsc::channel::<usize>();
-            second
-                .add_scheduled_handler(move |_| {
-                    let _ = entered.send(());
-                    let _ = gate.recv();
-                })
-                .expect("a handler");
-            first
-                .add_completed_handler(move |_| {
-                    // The submit thread is held before the last handle goes.
-                    let _ = inside.recv_timeout(PATIENCE);
-                    let handles = device.handles();
-                    drop(device);
-                    let _ = dropped.send(handles);
-                })
-                .expect("a handler");
-            first.commit().expect("a commit");
-            second.commit().expect("a commit");
-            let handles = (gone.recv_timeout(PATIENCE))
-                .expect("the handler's drop returns while the submit thread is held");
+            held.add_completed_handler(move |_| {
+                let _ = entered.send(());
+                let _ = gate.recv();
+            })
+            .expect("a handler");
+            last.add_scheduled_handler(move |_| {
+                let handles = device.handles();
+                drop(device);
+                let _ = dropped.send(handles);
+            })
+            .expect("a handler");
+            held.commit().expect("a commit");
+            last.commit().expect("a commit");
+            let handles = (gone.recv_timeout(PATIENCE)).expect("the handler's drop returns");
             assert_eq!(handles, 1, "{name}: the handler held the last handle");
-            assert_eq!(
-                alive(),
-                four.len(),
-                "{name}: every thread lives while the submit thread is held"
+            inside
+                .recv_timeout(PATIENCE)
+                .expect("the completed handler holds the completion thread");
+            assert!(
+                alive() >= four.len().min(2),
+                "{name}: the completion thread and the reaper live while the one is held"
             );
             assert!(
                 lock(&hook.unmapped).is_empty(),
-                "{name}: no allocation unmapped while the submit thread is held"
+                "{name}: no allocation unmapped while the completion thread is held"
             );
             assert!(
                 counters.gauges().blocks > 0,
-                "{name}: the blocks live while the submit thread is held"
+                "{name}: the blocks live while the completion thread is held"
             );
             release.send(()).expect("the handler waits");
-            finished(name, &first);
-            finished(name, &second);
+            finished(name, &held);
+            finished(name, &last);
             within("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop("handler_joins", counters.gauges());
             assert_eq!(alive(), 0, "{name}: every thread ended");
