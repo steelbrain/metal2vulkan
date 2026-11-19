@@ -54,6 +54,7 @@ mod stamps;
 mod state_answers;
 mod storage_element;
 mod submit_infos;
+mod surface;
 mod swizzle;
 mod texture;
 mod texture_accesses;
