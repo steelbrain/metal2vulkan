@@ -615,7 +615,14 @@ HARNESS_CEILINGS = {
     # Private block it already holds, and rt takes a new block. rt's own costs inside the row, its
     # first GPU zero fill's recording and the first GPU use of the new block, are open, and their
     # fixes lower the ceiling.
-    "8086:a7a0": {"create_private_16MiB/first_take": 1.88},
+    "8086:a7a0": {"create_private_16MiB/first_take": 1.88,
+                  # Ruled by the planner on 2026-11-19, a recorded gap (the rt README's Gen12 line on
+                  # the biased slot word): on the Iris Xe a change in the code before an otherwise
+                  # identical loop moves a kernel by -18% to +14% by a mechanism not shown, the
+                  # median of the 38 workloads +0.03% (the neutral arm, m3-max-51663). Medians in
+                  # round 951b93a645 (m3-max-51733): alu 1.139, long_4cb 1.141. A row back within
+                  # HARNESS_BUDGET leaves the list.
+                  "alu": 1.14, "long_4cb": 1.15},
     # Ruled by the planner on 2026-11-18, 1.40: NVIDIA's driver holds a submit for the whole of
     # another thread's vkAllocateMemory, and the first take, the first to take a new Private block,
     # sets the block-maker making the class's next 16 MiB allocation, which its own first
@@ -630,7 +637,16 @@ HARNESS_CEILINGS = {
                   # import of its own pages takes about 5.8 (m3-max-48212); only a driver-owned form
                   # at that cost reopens it. The 3090 takes the line from its own rows.
                   "create_64MiB/first_take": 2.30, "create_64MiB/device_first": 2.14},
-    "10de:2204": {"create_private_16MiB/first_take": 1.40},
+    "10de:2204": {"create_private_16MiB/first_take": 1.40,
+                  # Ruled by the planner on 2026-11-19, as the 2080's line: a known gap, the driver's
+                  # allocation of host-visible system memory against the old runtime's import of
+                  # its own pages; only a driver-owned form at that cost reopens it. One line serves
+                  # both 3090s at the higher card's medians in round 951b93a645: first_take 2.841
+                  # and device_first 1.943 on um870 (m3-max-51756), 2.359 and 1.673 on ms01
+                  # (m3-max-51747). The new runtime's own time is level on both (15.0 and 14.4 ms);
+                  # old's import differs by host (5.3 and 6.1 ms). Later takes run 4 to 6 times
+                  # faster than old's (next_take 0.16 and 0.25).
+                  "create_64MiB/first_take": 2.85, "create_64MiB/device_first": 1.95},
     # 8086:3e9b's zero_products has none: the row runs level with old, the new runtime about 1%
     # ahead (m3-max-47846). A grid-edge test that decodes and compares the position ahead of the
     # region's ragged branch once ran 5-6% faster on this card, by the driver compiler's accident
