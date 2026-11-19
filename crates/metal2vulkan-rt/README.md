@@ -1822,10 +1822,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `imageblockMemoryLengthForDimensions:`: that length times the width, the height and the raster
   sample count, none rounded, the depth ignored. A color format with no measured place in Metal's
   record is `Gap::ImageblockLength`. The M3 measurement the rule rests on is the conformance
-  suite's recordings `pipeline-facts-render-plain`, `pipeline-facts-render-two-attachments` and
-  `pipeline-facts-render-multisampled` (an Apple M3 Max, macOS 27.0.1 build 26A434, three runs
+  suite's recordings `pipeline-facts-render-plain`, `pipeline-facts-render-two-attachments`,
+  `pipeline-facts-render-multisampled`, `pipeline-facts-render-narrow-attachments` and
+  `pipeline-facts-render-depth-stencil` (an Apple M3 Max, macOS 27.0.1 build 26A434, three runs
   each): `RGBA8Unorm` answers 4 and 128 at `[8, 4, 3]`; `RGBA8Unorm` then `RGBA16Float` 12 and
-  384; the same at four samples 12 and 1536. `support_indirect_command_buffers` is false, as a
+  384; the same at four samples 12 and 1536; `R8Unorm` then `RG16Float` 6 and 192 (`RG16Float`
+  at byte 2, its component's alignment, where packing tight would answer 5 and aligning to 4
+  would answer 8); `RGBA8Unorm` then `RGBA16Float` with a `Depth32Float_Stencil8` depth and
+  stencil attachment 12 and 384, as without it. `support_indirect_command_buffers` is false, as a
   compute state's is: a descriptor that asks for indirect command buffers is refused at the
   making. The runtime makes no tile render state, so it has no tile getters
   (`maxTotalThreadsPerThreadgroup`, a tile threadgroup's, `threadgroupSizeMatchesTileSize`,

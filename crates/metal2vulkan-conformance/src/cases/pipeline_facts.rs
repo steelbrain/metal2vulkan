@@ -37,10 +37,11 @@
 //!   moves;
 //! - **a drawing state over `R8Unorm` then `RG16Float`**: the one set of formats whose sample
 //!   length tells three packing rules apart, 6 where each texel aligns to its component's size, 5
-//!   where the texels pack tight, 8 where every texel wider than a byte aligns to 4;
+//!   where the texels pack tight, 8 where every texel wider than a byte aligns to 4. The M3 Max
+//!   answers 6;
 //! - **the two-attachment pipeline with a `Depth32Float_Stencil8` depth and stencil
-//!   attachment**: depth and stencil take no room in the record, so the sample length is the two
-//!   colors' alone.
+//!   attachment**: the M3 Max answers 12, the two colors' length without them, so depth and
+//!   stencil take no room in the record.
 //!
 //! The last two ask for no label and no indirect-command support, so a side that makes no state
 //! for indirect commands still makes theirs and answers their lengths.
@@ -213,15 +214,16 @@ pub fn all() -> Vec<PipelineFactsCase> {
             ),
         },
         // `R8Unorm` then `RG16Float`: the packing rule's own question, whose three candidate
-        // rules answer 6, 5 and 8.
+        // rules answer 6, 5 and 8. The M3 Max answers 6, each texel at its component's alignment
+        // (`RG16Float` at byte 2), and 192 at `IMAGEBLOCK`.
         PipelineFactsCase {
             name: "pipeline-facts-render-narrow-attachments",
             fixture: RENDER_FIXTURE,
             entry: VERTEX,
             subject: Subject::Render(RenderPipelineSpec::new(VERTEX, TWO_TARGETS, NARROW_COLORS)),
         },
-        // The two-attachment pipeline with a depth and stencil attachment: those take no room in
-        // the record, so the sample length is the two colors' 12 as without them.
+        // The two-attachment pipeline with a depth and stencil attachment. The M3 Max answers 12
+        // and 384 at `IMAGEBLOCK`, as without them: depth and stencil take no room in the record.
         PipelineFactsCase {
             name: "pipeline-facts-render-depth-stencil",
             fixture: RENDER_FIXTURE,
