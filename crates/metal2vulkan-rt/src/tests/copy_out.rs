@@ -252,8 +252,15 @@ mod on_device {
             size: [w, w, 1],
         };
         for &(s, _) in &places {
-            (texture.replace_region(region, 0, s, &tight(s), bx * block, bx * block * bx))
-                .expect("replace_region");
+            (texture.replace_region(
+                region,
+                0,
+                s,
+                tight(s).as_slice().into(),
+                bx * block,
+                bx * block * bx,
+            ))
+            .expect("replace_region");
         }
         let queue = device.new_command_queue(4).expect("a queue");
         let command_buffer = queue.command_buffer().expect("a command buffer");
