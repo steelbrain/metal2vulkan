@@ -6,7 +6,11 @@
 //!   first process's making wrote, and the output is the same. The test prints both processes'
 //!   creation times. A driver whose pipeline cache data ends inside the header it states cannot
 //!   keep it: then, and only then, the second's makings start empty, and both processes must have
-//!   counted that reason (`driver_data_truncated`).
+//!   counted that reason (`driver_data_truncated`). The device's cache thread writes each entry
+//!   after the making hands it over, and writes the rest when the device's last handle goes,
+//!   which may be after the test's drop of the device, on another thread (a command buffer a
+//!   completed handler's thread lets go of last): each run waits until the entries it counted
+//!   are on disk, so the second process starts with all of them.
 //! - An entry under the right name that holds another translation (the function artifact of
 //!   another case) is refused and removed, the function is translated again, and the output is
 //!   the same.
@@ -94,8 +98,8 @@ fn driver_records(cache: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     found
 }
 
-/// Run `case` once on a new device whose shader cache is `cache`; the device is gone when this
-/// returns. Fails on any validation message.
+/// Run `case` once on a new device whose shader cache is `cache`; its entries are on disk when
+/// this returns. Fails on any validation message.
 fn cache_run(cache: &Path, case: &str) -> CacheRun {
     let messages = Messages::default();
     let run = {
@@ -114,8 +118,60 @@ fn cache_run(cache: &Path, case: &str) -> CacheRun {
             run,
         }
     };
+    entries_written(cache, &run.statistics);
     layer_reported_nothing_at_all(&messages);
     run
+}
+
+/// The files under `cache` whose bytes begin with `magic`.
+fn files_beginning(cache: &Path, magic: &[u8]) -> usize {
+    let Ok(entries) = std::fs::read_dir(cache) else {
+        return 0;
+    };
+    (entries.flatten())
+        .map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => files_beginning(&entry.path(), magic),
+            Ok(_) => {
+                let mut head = vec![0; magic.len()];
+                let read = std::fs::File::open(entry.path())
+                    .and_then(|mut file| std::io::Read::read_exact(&mut file, &mut head));
+                usize::from(read.is_ok() && head == magic)
+            }
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// Waits, at most a minute, until a run's entries are on disk: the translated functions it
+/// handed over (`writes`, counted before the file exists; the translator's artifacts,
+/// `M2VARTF\0`), and its makings' records where the driver's data is kept. Prints how many of
+/// each were on disk as the device's drop returned.
+fn entries_written(cache: &Path, run: &ShaderCacheStatistics) {
+    let start = Instant::now();
+    let mut first = None;
+    loop {
+        let functions = files_beginning(cache, b"M2VARTF\0") as u64;
+        let records = driver_records(cache).len() as u64;
+        let first = *first.get_or_insert((functions, records));
+        let kept = run.driver_data_truncated > 0 || records >= run.driver_saves;
+        if functions >= run.writes && kept {
+            println!(
+                "the run's entries on disk as its device's drop returned: {} of {} functions, \
+                 {} of {} records; all of them {:?} later",
+                first.0,
+                run.writes,
+                first.1,
+                run.driver_saves,
+                start.elapsed()
+            );
+            return;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "the run's entries on disk: {functions} functions, {records} records; {run:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// What the second process reported.
