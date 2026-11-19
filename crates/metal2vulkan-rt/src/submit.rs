@@ -40,7 +40,7 @@ use crate::buffer::{Buffer, DeviceCopy};
 use crate::capture::{self, Changes, Chunk, CopyIn, Modified, Named, CAPTURE_LEN};
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Pending, Segment};
 use crate::complete;
-use crate::counters::{Counters, Gauge, Metric};
+use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
@@ -180,8 +180,6 @@ pub(crate) struct WorkState {
     /// The staging calls asleep for a span of the region another call holds ([`Work::stage`]): a
     /// release signals [`Work::spans`] only while there are any, so with none it makes no call.
     span_sleepers: u32,
-    /// The device's counters: the groups and submissions one queue would not have made.
-    counters: Counters,
 }
 
 struct Fifo {
@@ -418,7 +416,7 @@ enum Step {
 }
 
 impl Work {
-    pub(crate) fn new(counters: Counters) -> Work {
+    pub(crate) fn new() -> Work {
         Work {
             state: Mutex::new(WorkState {
                 fifos: Vec::new(),
@@ -436,7 +434,6 @@ impl Work {
                 closed: false,
                 lost: false,
                 span_sleepers: 0,
-                counters,
             }),
             changed: Condvar::new(),
             turn: Mutex::new(()),
@@ -1475,8 +1472,6 @@ impl WorkState {
             return Step::Idle;
         };
         let stop = self.stop;
-        let others_hold = (self.fifos.iter().enumerate())
-            .any(|(other, fifo)| other != index && fifo.group.is_some());
         let fifo = &mut self.fifos[index];
         let Some(entry) = fifo.entries.front_mut() else {
             return Step::Idle;
@@ -1562,9 +1557,6 @@ impl WorkState {
             }
         }
         let place = entry.place;
-        if fifo.group.is_none() && others_hold {
-            self.counters.count(Metric::GroupsBesideAnotherQueue);
-        }
         let group = fifo.group.get_or_insert_with(|| Batch {
             first: place,
             segments: Vec::new(),
@@ -1694,33 +1686,11 @@ impl WorkState {
         device: &ash::Device,
         released: &AtomicU64,
     ) -> Option<(u64, Option<Upload>, Batch)> {
-        let across: usize = (self.fifos.iter()).map(|fifo| fifo.in_flight.len()).sum();
         let fifo = &mut self.fifos[index];
         let mut batch = fifo.group.take()?;
         // The bound again, with the expected run as it now stands: a completion since a join may
         // have raised it.
         batch.apart = apart(batch.starts.len() as u64, fifo.queue.expected_run());
-        let own = fifo.in_flight.len();
-        if own < IN_FLIGHT && across >= IN_FLIGHT {
-            self.counters.count(Metric::LoneSubmissionsAcrossQueues);
-        }
-        // The reasons `step` and `unheld` send a group for, but for a command buffer that cannot
-        // join it and a segment that leans on a copy (`Metrics::forced_flushes_across_queues`).
-        let leads = (fifo.entries.front())
-            .and_then(|entry| entry.pending.as_ref())
-            .and_then(|pending| pending.gpu.segments.get(pending.next))
-            .is_some_and(|segment| {
-                (segment.waits.iter()).any(|(event, value)| lock(&event.state).floor < *value)
-            });
-        let own_reason = self.stop
-            || own < IN_FLIGHT
-            || fifo.send_through >= batch.first
-            || batch.count >= GROUP
-            || (batch.segments.iter()).any(|segment| !segment.signals.is_empty())
-            || leads;
-        if !own_reason {
-            self.counters.count(Metric::ForcedFlushesAcrossQueues);
-        }
         self.progress += 1;
         let value = self.progress;
         fifo.in_flight.push_back(value);

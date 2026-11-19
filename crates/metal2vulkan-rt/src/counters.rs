@@ -57,12 +57,6 @@ pub(crate) enum Metric {
     StagingSleeps,
     /// [`Metrics::synchronizations`].
     Synchronizations,
-    /// [`Metrics::groups_beside_another_queue`].
-    GroupsBesideAnotherQueue,
-    /// [`Metrics::lone_submissions_across_queues`].
-    LoneSubmissionsAcrossQueues,
-    /// [`Metrics::forced_flushes_across_queues`].
-    ForcedFlushesAcrossQueues,
     /// [`Metrics::allocations_freed`].
     AllocationsFreed,
     /// [`Metrics::submissions_during_frees`].
@@ -108,9 +102,6 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::UploadWaits,
     Metric::StagingSleeps,
     Metric::Synchronizations,
-    Metric::GroupsBesideAnotherQueue,
-    Metric::LoneSubmissionsAcrossQueues,
-    Metric::ForcedFlushesAcrossQueues,
     Metric::AllocationsFreed,
     Metric::SubmissionsDuringFrees,
     Metric::CaptureWaits,
@@ -273,9 +264,6 @@ struct Atomics {
     synchronizations: AtomicU64,
     commit_lock_wait_nanos: AtomicU64,
     commit_lock_wait_max_nanos: AtomicU64,
-    groups_beside_another_queue: AtomicU64,
-    lone_submissions_across_queues: AtomicU64,
-    forced_flushes_across_queues: AtomicU64,
     over_copies: AtomicU64,
     over_copy_bytes: AtomicU64,
     over_copies_imported: AtomicU64,
@@ -400,9 +388,6 @@ impl Counters {
             Metric::UploadWaits => &a.upload_waits,
             Metric::StagingSleeps => &a.staging_sleeps,
             Metric::Synchronizations => &a.synchronizations,
-            Metric::GroupsBesideAnotherQueue => &a.groups_beside_another_queue,
-            Metric::LoneSubmissionsAcrossQueues => &a.lone_submissions_across_queues,
-            Metric::ForcedFlushesAcrossQueues => &a.forced_flushes_across_queues,
             Metric::AllocationsFreed => &a.allocations_freed,
             Metric::SubmissionsDuringFrees => &a.submissions_during_frees,
             Metric::CaptureWaits => &a.capture_waits,
@@ -764,9 +749,6 @@ impl Counters {
             synchronizations: a.synchronizations.load(Relaxed),
             commit_lock_wait_nanos: a.commit_lock_wait_nanos.load(Relaxed),
             commit_lock_wait_max_nanos: a.commit_lock_wait_max_nanos.load(Relaxed),
-            groups_beside_another_queue: a.groups_beside_another_queue.load(Relaxed),
-            lone_submissions_across_queues: a.lone_submissions_across_queues.load(Relaxed),
-            forced_flushes_across_queues: a.forced_flushes_across_queues.load(Relaxed),
             over_copies: a.over_copies.load(Relaxed),
             over_copy_bytes: a.over_copy_bytes.load(Relaxed),
             over_copies_imported: a.over_copies_imported.load(Relaxed),
@@ -1004,21 +986,6 @@ pub struct Metrics {
     /// The longest such wait, in nanoseconds; a maximum since the device was made, so the
     /// difference of two reads does not apply to it.
     pub commit_lock_wait_max_nanos: u64,
-    /// Groups opened while another queue held one. Each queue groups its own command buffers,
-    /// so these are the groups one queue of the same command buffers would not have opened.
-    pub groups_beside_another_queue: u64,
-    /// Submissions sent with fewer than three of their own queue's submissions in flight while the
-    /// device had three or more in flight across its queues: the ones one queue of the same
-    /// command buffers would have held in a group.
-    pub lone_submissions_across_queues: u64,
-    /// Groups sent with none of these reasons: full, ended by an event's signal or a semaphore
-    /// wait, below three submissions in flight, asked for by a host wait, by another queue's
-    /// command buffer that waits on a fence the group updates, or by the end. Its test omits three
-    /// reasons of the group's own queue's, which it counts, with one queue too: a command buffer
-    /// that cannot join the group (its queue's expected run not known, or the group at its bound
-    /// of summed expected runs or of joins while none of the queue's retires), and a segment that
-    /// leans on a copy for a buffer an earlier segment of the group wrote.
-    pub forced_flushes_across_queues: u64,
     /// Copies a draw that reads an attachment of its own pass through a texture makes into the
     /// image's shadow first, on a device without the attachment feedback loop, which Metal does
     /// not make: one for each area of a level, a range of its layers and a rectangle, at the

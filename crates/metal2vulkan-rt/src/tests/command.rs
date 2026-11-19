@@ -1485,61 +1485,6 @@ pub(crate) mod on_device {
         }
     }
 
-    /// What a second queue adds, counted: with the first queue's busy command buffers running
-    /// ([`IN_FLIGHT`] of them), the second queue's first as many commits go alone (that many lone
-    /// submissions across queues); once both queues have that many running, a commit on each is
-    /// held, the second opening
-    /// its group beside the first's (one group beside another queue). Both counted before any
-    /// busy one completes: a held group that goes as its own queue's work retires is lone too
-    /// where the other queue's is still in flight, which turns on when the completion thread
-    /// looks. No group goes for a reason that is not its own queue's.
-    #[test]
-    fn every_device_counts_what_a_second_queue_adds() {
-        each_device("command_cross_queue", |name, _, device| {
-            let mut arena = Arena::new(&device);
-            let buffer = arena.buffer();
-            let (first, second) = (queue(&device), queue(&device));
-            let before = device.counters().metrics();
-            let mut busy = Busy::new(&device);
-            for queue in [&first, &second] {
-                for _ in 0..IN_FLIGHT {
-                    busy.commit(name, queue);
-                }
-            }
-            let held = [
-                queue_fill(&first, &buffer, 1),
-                queue_fill(&second, &buffer, 2),
-            ];
-            for command_buffer in &held {
-                within(name, || {
-                    command_buffer.status() != CommandBufferStatus::Committed
-                });
-            }
-            // Read before any busy one can complete: no retirement sent anything counted in it.
-            let held_now = device.counters().metrics();
-            busy.open();
-            for command_buffer in busy.running().iter().chain(&held) {
-                finished(name, command_buffer);
-            }
-            let after = device.counters().metrics();
-            assert_eq!(
-                after.forced_flushes_across_queues - before.forced_flushes_across_queues,
-                0,
-                "{name}"
-            );
-            let counted = (
-                held_now.lone_submissions_across_queues - before.lone_submissions_across_queues,
-                held_now.groups_beside_another_queue - before.groups_beside_another_queue,
-            );
-            assert_eq!(
-                counted,
-                (AHEAD, 1),
-                "{name}: lone submissions, groups beside"
-            );
-            drop((busy, buffer, arena, first, second, device));
-        });
-    }
-
     /// A commit's wait for the submission lock is counted: one made while another thread holds
     /// the lock counts at least the time from its turn (taken after its count began) to the
     /// lock's release, here 20 ms or more. No clock of the test's bounds it from above.

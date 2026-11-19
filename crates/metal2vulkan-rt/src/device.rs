@@ -524,7 +524,7 @@ impl Device {
             })
             .fold(0, |bits, (index, _)| bits | 1 << index);
 
-        let work = Work::new(counters.clone());
+        let work = Work::new();
         let alignment = memory::buffer_alignment(&device);
         let pool = Pool::new(
             options.block_mappings,
