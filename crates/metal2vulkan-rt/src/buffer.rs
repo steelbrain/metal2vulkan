@@ -534,6 +534,11 @@ impl Buffer {
     pub(crate) fn device(&self) -> &Device {
         &self.device
     }
+
+    /// A handle of `inner`, a buffer of `device`.
+    pub(crate) fn of(inner: Arc<BufferInner>, device: Device) -> Buffer {
+        Buffer { inner, device }
+    }
 }
 
 /// What the runtime reads of a buffer, through the consumer's handle ([`Buffer`]) or through the

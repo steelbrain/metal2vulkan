@@ -806,6 +806,26 @@ impl CommandBuffer {
             Ok(())
         })
     }
+
+    /// For the device tests: keeps `textures` and `states` until the command buffer retires, as
+    /// an encoder that binds them does.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn keep_for_test(
+        &self,
+        textures: &[&Texture],
+        states: &[&SamplerState],
+    ) -> Result<(), Error> {
+        self.building(|building| {
+            for texture in textures {
+                building.keep_texture(texture);
+            }
+            for state in states {
+                // SAFETY: the borrow is let go at once, unused.
+                let _ = unsafe { building.lend_sampler(state) };
+            }
+            Ok(())
+        })
+    }
 }
 
 impl Building {

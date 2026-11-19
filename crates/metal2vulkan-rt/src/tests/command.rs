@@ -1,7 +1,7 @@
 //! Command queues, command buffers and events, under a device cfg on every device of the cfg's
 //! kind: states, handlers and refusals; holds per segment; the host floor; host values racing GPU
-//! signals; listeners; abandon; quiesce, also in an `exit()` handler; teardown from a handler and
-//! with work held; refusals of what has started; a loss; a released block kept until its last
+//! signals; listeners; abandon; quiesce and its second call; teardown from a handler, waited for,
+//! and with work held, which holds no handle of the device; refusals of what has started; a loss; a released block kept until its last
 //! command buffer retires; a block whose last handle drops freed once its last command buffer
 //! retires; a block's clones, one dropped giving nothing back, and a handle outliving its
 //! device; the thread gauge holding the device's four threads as it is made; and a command
@@ -84,14 +84,17 @@ pub(crate) mod on_device {
         Error, Fence, Gauges, Instance, MemoryClass, Refusal, SharedEvent,
     };
     use ash::vk;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
-    use std::sync::{Arc, Mutex, OnceLock};
-    use std::thread::{self, JoinHandle};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
     use std::time::{Duration, Instant};
 
     /// How long a test waits for what must happen.
     pub(crate) const PATIENCE: Duration = Duration::from_secs(60);
+
+    /// Under this, a call given [`PATIENCE`] answered at once: it waited for nothing.
+    const AT_ONCE: Duration = Duration::from_secs(5);
 
     pub(crate) fn within(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + PATIENCE;
@@ -2260,7 +2263,8 @@ pub(crate) mod on_device {
     /// Quiesce, from a thread other than the one that made the device, with handles alive: held
     /// work ends NotRun with its handlers run, every allocation mapped is unmapped once on that
     /// thread, calls that need a thread are refused, memory stays mapped, and a second call
-    /// answers at once. The last drop then frees everything without the hook.
+    /// answers at once with the first call's answer. The last drop, on the test's thread, then
+    /// frees everything without the hook: every gauge reads zero as it returns.
     #[test]
     fn every_device_quiesces_with_handles_alive() {
         let instance = crate::tests::validation::instance(&[]);
@@ -2295,10 +2299,11 @@ pub(crate) mod on_device {
                     .expect("the quiescing thread")
             });
             assert!(quiesced, "{name}: idle within the timeout");
-            // With no time to wait, the first call's answer: given at once.
+            let began = Instant::now();
+            assert!(device.quiesce(PATIENCE), "{name}: the first call's answer");
             assert!(
-                device.quiesce(Duration::ZERO),
-                "{name}: the first call's answer, at once"
+                began.elapsed() < AT_ONCE,
+                "{name}: a second call answers at once"
             );
             assert_eq!(held.error(), Some(CommandBufferError::NotRun), "{name}");
             held.wait_until_completed()
@@ -2331,7 +2336,11 @@ pub(crate) mod on_device {
             assert!(matches!(e.notify_listener(1, |_| {}), Err(Error::Quiesced)));
 
             drop((a, arena, f, e, queue, held, open, device));
-            within("the teardown", || counters.gauges() == Gauges::default());
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: every gauge zero as the drop returns"
+            );
             print_gauges_at_drop("quiesce", counters.gauges());
             assert_eq!(
                 lock(&hook.unmapped).len(),
@@ -2342,9 +2351,10 @@ pub(crate) mod on_device {
     }
 
     /// The last handle dropped in a completed handler: the reaper runs the teardown once the
-    /// handler returns, so the block still held is unmapped there, and every gauge reads zero once
-    /// the device is destroyed. The handler's handle is the last: `commit` gave the command
-    /// buffer's up before the command buffer could complete.
+    /// handler returns, so the block still held is unmapped there, and the instance's wait for its
+    /// devices answers true once the device is destroyed, every gauge reading zero as it returns.
+    /// The handler's handle is the last: `commit` gave the command buffer's up before the command
+    /// buffer could complete.
     #[test]
     fn every_device_tears_down_from_a_completed_handler() {
         let instance = crate::tests::validation::instance(&[]);
@@ -2379,7 +2389,15 @@ pub(crate) mod on_device {
                 1,
                 "{name}: the handler held the last handle"
             );
-            within("the teardown", || counters.gauges() == Gauges::default());
+            assert!(
+                instance.wait_until_devices_torn_down(PATIENCE),
+                "{name}: torn down on the reaper"
+            );
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: every gauge zero as the wait returns"
+            );
             print_gauges_at_drop("handler_teardown", counters.gauges());
             let (unmapped, mapped) = hook.unmaps(Some("m2v-reaper"));
             assert_eq!(
@@ -2396,8 +2414,9 @@ pub(crate) mod on_device {
     }
 
     /// The last handle dropped in a scheduled handler, on the submit thread: the reaper runs the
-    /// teardown once the handler returns, the command buffer still completes, and every gauge
-    /// reads zero once the device is destroyed.
+    /// teardown once the handler returns, the command buffer still completes, and the instance's
+    /// wait for its devices answers true once the device is destroyed, every gauge reading zero as
+    /// it returns.
     #[test]
     fn every_device_tears_down_from_a_scheduled_handler() {
         let instance = crate::tests::validation::instance(&[]);
@@ -2433,7 +2452,15 @@ pub(crate) mod on_device {
                 "{name}: the handler held the last handle"
             );
             assert_eq!(command_buffer.error(), None, "{name}: it ran");
-            within("the teardown", || counters.gauges() == Gauges::default());
+            assert!(
+                instance.wait_until_devices_torn_down(PATIENCE),
+                "{name}: torn down on the reaper"
+            );
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: every gauge zero as the wait returns"
+            );
             print_gauges_at_drop("scheduled_teardown", counters.gauges());
             let (unmapped, mapped) = hook.unmaps(Some("m2v-reaper"));
             assert_eq!(
@@ -2577,8 +2604,8 @@ pub(crate) mod on_device {
     /// with a runtime thread still running. With the completion thread held in a completed
     /// handler (the command buffer retired, so its work holds no device handle and the test's are
     /// the last), a quiesce with no time to wait answers false at once and leaves that thread
-    /// running, its slot of `Gauges::threads` held (its thread id, where the OS gives one). The
-    /// device's last handle, dropped on another thread, has not returned half a second later, the
+    /// running, its slot of `Gauges::threads` held (its thread id, where the OS gives one), and a
+    /// second call answers false at once. The device's last handle, dropped on another thread, has not returned half a second later, the
     /// blocks live, and the thread holds its slot; once the handler lets it go, the drop returns,
     /// every gauge reads zero and no thread of the device's holds a slot. Under the validation
     /// layer, as every device test.
@@ -2615,6 +2642,12 @@ pub(crate) mod on_device {
                 !device.quiesce(Duration::ZERO),
                 "{name}: no time to wait, an answer at once"
             );
+            let began = Instant::now();
+            assert!(!device.quiesce(PATIENCE), "{name}: the first call's answer");
+            assert!(
+                began.elapsed() < AT_ONCE,
+                "{name}: a second call answers at once"
+            );
             assert!(
                 alive() >= four.len().min(1),
                 "{name}: the held thread is left running"
@@ -2641,6 +2674,154 @@ pub(crate) mod on_device {
             within("the teardown", || counters.gauges() == Gauges::default());
             assert_eq!(alive(), 0, "{name}: every thread ended");
         });
+    }
+
+    /// A second quiesce while the first still runs answers false at once; once the first has
+    /// answered true, a later call answers true at once; and the last handle, dropped on the test's
+    /// thread after that answer, tears the device down in that drop: every gauge reads zero as it
+    /// returns. The first waits for the completion thread, which a completed handler holds.
+    #[test]
+    fn every_device_answers_a_second_quiesce_at_once() {
+        each_device("second_quiesce", |name, _, device| {
+            let counters = device.counters();
+            let mut arena = Arena::new(&device);
+            let a = arena.buffer();
+            let queue = queue(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill(&command_buffer, &a, 6);
+            let (release, gate) = mpsc::channel::<()>();
+            let (entered, inside) = mpsc::channel::<()>();
+            command_buffer
+                .add_completed_handler(move |_| {
+                    let _ = entered.send(());
+                    let _ = gate.recv();
+                })
+                .expect("a handler");
+            command_buffer.commit().expect("a commit");
+            inside
+                .recv_timeout(PATIENCE)
+                .expect("the handler holds the completion thread");
+            let first = thread::scope(|scope| {
+                let first = scope.spawn(|| device.quiesce(PATIENCE));
+                within("the first quiesce to start", || device.core().closed());
+                let began = Instant::now();
+                assert!(
+                    !device.quiesce(PATIENCE),
+                    "{name}: false while the first runs"
+                );
+                assert!(began.elapsed() < AT_ONCE, "{name}: at once");
+                release.send(()).expect("the handler waits");
+                first.join().expect("the quiescing thread")
+            });
+            assert!(first, "{name}: idle once the handler returned");
+            let began = Instant::now();
+            assert!(device.quiesce(PATIENCE), "{name}: the first call's answer");
+            assert!(began.elapsed() < AT_ONCE, "{name}: at once");
+            finished(name, &command_buffer);
+            assert_eq!(word(&a), 6, "{name}");
+            drop((a, arena, queue, command_buffer, device));
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: every gauge zero as the drop returns"
+            );
+        });
+    }
+
+    /// Nothing the runtime keeps for itself counts as a handle of the device: a command buffer
+    /// held by an event wait keeps a buffer, a texture and a sampler state, and once the test
+    /// drops its handles of them, of the queue and of the command buffer, the device's handles are
+    /// the test's two (the device and the event). The test's last drop, the command buffer then
+    /// free to run, tears the device down in that drop, with no wait: every gauge reads zero as it
+    /// returns.
+    #[test]
+    fn every_device_counts_nothing_a_command_buffer_keeps_as_a_handle() {
+        use crate::{PixelFormat, SamplerDescriptor, TextureDescriptor, TextureType};
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default()).expect("a device");
+            let counters = device.counters();
+            let event = shared_event(&device);
+            let mut arena = Arena::new(&device);
+            let a = arena.buffer();
+            let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+            let texture = device.new_texture(&d, None).expect("a texture");
+            let state =
+                (device.new_sampler_state(&SamplerDescriptor::new(), 0)).expect("a sampler state");
+            let queue = queue(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            (command_buffer.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            fill(&command_buffer, &a, 1);
+            (command_buffer.keep_for_test(&[&texture], &[&state])).expect("kept");
+            command_buffer.commit().expect("a commit");
+            drop((a, arena, texture, state, queue, command_buffer));
+            assert_eq!(
+                device.handles(),
+                2,
+                "{name}: the test's device and event, and nothing the command buffer keeps"
+            );
+            event.set_signaled_value(1);
+            drop((event, device));
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: every gauge zero as the drop returns"
+            );
+        }
+    }
+
+    /// The last handle dropped in a listener: in the listener, the instance's wait for its
+    /// devices answers false at once; while the listener holds the handle, it answers false once
+    /// its timeout passes, and `Gauges::handles_out` reads 1; once the listener drops the handle,
+    /// the reaper tears the device down, the wait answers true, and every gauge reads zero as it
+    /// returns.
+    #[test]
+    fn every_device_torn_down_from_a_listener_is_waited_for() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default()).expect("a device");
+            let counters = device.counters();
+            let event = shared_event(&device);
+            let (release, gate) = mpsc::channel::<()>();
+            let (answered, answer) = mpsc::channel::<(bool, Duration)>();
+            let waiting = Instance::clone(&instance);
+            let held = device.clone();
+            event
+                .notify_listener(1, move |_| {
+                    let began = Instant::now();
+                    let own = waiting.wait_until_devices_torn_down(PATIENCE);
+                    let _ = answered.send((own, began.elapsed()));
+                    let _ = gate.recv();
+                    drop(held);
+                })
+                .expect("a listener");
+            event.set_signaled_value(1);
+            let (own, took) = (answer.recv_timeout(PATIENCE)).expect("the listener's answer");
+            assert!(
+                !own && took < AT_ONCE,
+                "{name}: false at once in the listener"
+            );
+            drop((event, device));
+            assert!(
+                !instance.wait_until_devices_torn_down(Duration::from_millis(100)),
+                "{name}: false while the listener holds a handle"
+            );
+            assert_eq!(counters.gauges().handles_out, 1, "{name}: a handle is out");
+            release.send(()).expect("the listener waits");
+            assert!(
+                instance.wait_until_devices_torn_down(PATIENCE),
+                "{name}: torn down on the reaper"
+            );
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: every gauge zero as the wait returns"
+            );
+        }
     }
 
     /// In a scheduled handler, on the submit thread: the command buffer reads Scheduled with its
@@ -3118,162 +3299,20 @@ pub(crate) mod on_device {
         });
     }
 
-    /// The child's device, its reader thread and whether it reads, for the exit handler.
-    static EXIT_DEVICE: OnceLock<Device> = OnceLock::new();
-    static READER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
-    static READING: AtomicBool = AtomicBool::new(true);
-
-    unsafe extern "C" {
-        fn atexit(handler: extern "C" fn()) -> std::ffi::c_int;
-        fn exit(code: std::ffi::c_int) -> !;
-    }
-
-    /// The consumer's exit handler: it parks its own reader, then quiesces twice.
-    extern "C" fn quiesce_at_exit() {
-        READING.store(false, Ordering::Release);
-        if let Some(reader) = lock(&READER).take() {
-            let _ = reader.join();
-        }
-        if let Some(device) = EXIT_DEVICE.get() {
-            let first = device.quiesce(Duration::from_secs(10));
-            let second = device.quiesce(Duration::from_secs(10));
-            println!("M2V exit: quiesced {first} {second}");
-        }
-    }
-
-    fn register_exit_handler() {
-        // SAFETY: the handler is a plain function that lives as long as the process.
-        assert_eq!(unsafe { atexit(quiesce_at_exit) }, 0, "atexit");
-    }
-
-    /// The child of `every_device_quiesces_in_an_exit_handler`, run in a process of its own:
-    /// without its variable, it does nothing.
-    #[test]
-    fn exit_child() {
-        let Ok(mode) = std::env::var("M2V_EXIT_CHILD") else {
-            return;
-        };
-        if mode == "before-instance" {
-            register_exit_handler();
-        }
-        let instance = crate::tests::validation::instance(&[]);
-        let (_, physical) = devices_of_the_cfgs_kind(&instance)
-            .into_iter()
-            .next()
-            .expect("a device of this cfg's kind");
-        let device = Device::new(&physical, DeviceOptions::default()).expect("a device");
-        if mode == "after-device" {
-            register_exit_handler();
-        }
-        // Blocks stay taken; a reader thread reads one; the block-maker keeps released ones; a
-        // command buffer is held.
-        let block = device
-            .take_block(MemoryClass::Shared, MemoryClass::Shared.block_len())
-            .expect("a Shared block");
-        let released: Vec<_> = (0..3)
-            .map(|_| {
-                (device.take_block(MemoryClass::Shared, MemoryClass::Shared.block_len()))
-                    .expect("a block")
-            })
-            .collect();
-        let address = block.contents.expect("contents").as_ptr() as usize;
-        *lock(&READER) = Some(thread::spawn(move || {
-            while READING.load(Ordering::Acquire) {
-                for offset in (0..MemoryClass::Shared.block_len() as usize).step_by(4096) {
-                    // SAFETY: the block stays taken and mapped until the process ends.
-                    unsafe { ((address + offset) as *const u8).read_volatile() };
-                }
-            }
-        }));
-        let event = device.new_shared_event().expect("an event");
-        let queue = device.new_command_queue(64).expect("a queue");
-        let held = queue.command_buffer().expect("a command buffer");
-        held.encode_wait_for_event(event.as_event(), 1)
-            .expect("a wait");
-        held.commit().expect("a commit");
-        for block in released {
-            device.release_block(block).expect("a release");
-        }
-        // The block a reader thread reads stays taken until the process ends.
-        std::mem::forget((event, queue, held, block));
-        assert!(EXIT_DEVICE.set(device).is_ok());
-        // `exit()` from a thread other than the one that made the device, with nothing released.
-        let exiting = thread::spawn(|| {
-            // SAFETY: the C library's exit, which runs the handlers registered with `atexit`.
-            unsafe { exit(0) }
-        });
-        let _ = exiting.join();
-    }
-
-    /// In a process of its own, a consumer's `atexit` handler quiesces a live device with blocks
-    /// taken, a reader thread on one, the block-maker busy and a command buffer held, then the
-    /// process exits through `exit()` with no release: exit code 0 and nothing in the child's
-    /// validation log (its instance never drops, so its own guard never reads it). The handler is
-    /// registered after `Device::new` (`M2V_EXIT_MODES` adds `before-instance`), once per mode
-    /// (`M2V_EXIT_RUNS` runs each more often).
-    #[test]
-    fn every_device_quiesces_in_an_exit_handler() {
-        let modes = std::env::var("M2V_EXIT_MODES").unwrap_or_else(|_| "after-device".into());
-        let runs: u32 = std::env::var("M2V_EXIT_RUNS")
-            .ok()
-            .and_then(|runs| runs.parse().ok())
-            .unwrap_or(1);
-        let executable = std::env::current_exe().expect("the test executable");
-        let mut failed = Vec::new();
-        for mode in modes.split_whitespace() {
-            let mut held = 0;
-            for run in 0..runs {
-                let child = std::process::Command::new(&executable)
-                    .args([
-                        "--exact",
-                        "tests::command::on_device::exit_child",
-                        "--nocapture",
-                        "--test-threads=1",
-                    ])
-                    .env("M2V_EXIT_CHILD", mode)
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
-                    .spawn()
-                    .expect("the child");
-                let log = crate::tests::validation::log_of(child.id());
-                let output = child.wait_with_output().expect("the child's output");
-                let validation = std::fs::read_to_string(&log).unwrap_or_default();
-                let _ = std::fs::remove_file(&log);
-                let text = format!(
-                    "{}{}{validation}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                let clean = output.status.success()
-                    && text.contains("M2V exit: quiesced true true")
-                    && validation.trim().is_empty();
-                if clean {
-                    held += 1;
-                } else {
-                    println!("M2V exit {mode} run {run}: {:?}\n{text}", output.status);
-                }
-            }
-            println!("M2V exit {mode}: {held} of {runs} runs clean");
-            if held != runs {
-                failed.push(mode.to_string());
-            }
-        }
-        assert!(
-            failed.is_empty(),
-            "exit modes with a failed run: {failed:?}"
-        );
-    }
-
     /// The variable that makes [`teardown_child`] a consumer of the shape it names.
     const TEARDOWN_CHILD: &str = "M2V_TEARDOWN_CHILD";
 
     /// The child of `every_device_ends_its_teardown_before_the_process_exits`, run in a process of
     /// its own: a consumer that makes a device, drops every handle it holds, and returns from
     /// `main`, which exits the process. In the shape `listener`, a shared event's listener holds a
-    /// handle of the device, and the host value that runs it is set before the consumer's drops;
-    /// in the shape `kept`, a committed command buffer keeps a buffer of the device. It reports
-    /// whether any gauge was still above zero as it returned. Without its variable, it does
-    /// nothing.
+    /// handle of the device, and the host value that runs it is set before the consumer's drops:
+    /// where the listener's drop is the last, the reaper tears the device down, and the consumer
+    /// waits for that ([`Instance::wait_until_devices_torn_down`]) before it drops the instance.
+    /// In the shape `kept`, a committed command buffer keeps a buffer of the device, and the
+    /// consumer calls nothing: what the command buffer keeps holds no handle of the device, so the
+    /// consumer's drop is the last and tears the device down in that drop. It reports whether the
+    /// wait answered false or any gauge was still above zero as it returned. Without its variable,
+    /// it does nothing.
     #[test]
     fn teardown_child() {
         let Ok(shape) = std::env::var(TEARDOWN_CHILD) else {
@@ -3302,14 +3341,16 @@ pub(crate) mod on_device {
             }
             _ => panic!("{shape}: no such shape"),
         }
-        drop((device, physical, instance));
-        let live = counters.gauges() != Gauges::default();
+        drop((device, physical));
+        let torn = shape != "listener" || instance.wait_until_devices_torn_down(PATIENCE);
+        drop(instance);
+        let live = !torn || counters.gauges() != Gauges::default();
         println!("M2V teardown child: live at return {live}");
     }
 
     /// In processes of their own, eight at a time, a consumer makes a device, drops every handle
-    /// it holds and returns from `main` ([`teardown_child`], each shape): each exits 0, with every
-    /// gauge at zero as it returned. `M2V_TEARDOWN_RUNS` runs each shape that many times (16 by
+    /// it holds and returns from `main` ([`teardown_child`], each shape): each exits 0, its wait,
+    /// where it waits, answering true, and with every gauge at zero as it returned. `M2V_TEARDOWN_RUNS` runs each shape that many times (16 by
     /// default).
     #[test]
     fn every_device_ends_its_teardown_before_the_process_exits() {

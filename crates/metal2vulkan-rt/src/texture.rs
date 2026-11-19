@@ -2837,6 +2837,15 @@ impl TextureInner {
 }
 
 impl Texture {
+    /// A Managed texture's named bytes ([`Device::new_managed_texture`]), as a handle of the
+    /// buffer, and their places, one for each level and, within it, each slice. `None` for any
+    /// other texture.
+    pub(crate) fn named_bytes(&self) -> Option<(Buffer, &[BytesPlace])> {
+        let named = (self.inner.named.as_ref()).filter(|named| named.form == Form::Managed)?;
+        let bytes = Buffer::of(Arc::clone(&named.buffer), self.device.clone());
+        Some((bytes, &named.places))
+    }
+
     /// `newTextureViewWithPixelFormat:textureType:levels:slices:`: a texture over `levels` and
     /// `slices` of this one's image, of `texture_type`, at `index`, with elements of set 1 of its
     /// own and no copy; `newTextureViewWithPixelFormat:` is the call with the texture's own type,
@@ -3712,13 +3721,6 @@ pub(crate) trait TextureObject {
     /// The unit its copies move; `None` where no copy is built.
     fn unit(&self) -> Option<CopyUnit> {
         self.object().unit
-    }
-
-    /// A Managed texture's named bytes ([`Device::new_managed_texture`]): the buffer and its
-    /// places, one for each level and, within it, each slice. `None` for any other texture.
-    fn named_bytes(&self) -> Option<(&Arc<BufferInner>, &[BytesPlace])> {
-        let named = (self.object().named.as_ref()).filter(|named| named.form == Form::Managed)?;
-        Some((&named.buffer, &named.places))
     }
 
     /// The layout a copy names the texture's image in, for its role's transfer `layout`

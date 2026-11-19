@@ -775,7 +775,7 @@ impl BlitCommandEncoder {
             let size = [d.width, d.height, d.depth].map(|extent| (extent >> level).max(1));
             copies.extend(buffer_copy(&side, at, size, lies, false)?);
         }
-        self.record_buffer_copies(texture, bytes, &copies, false)
+        self.record_buffer_copies(texture, &bytes, &copies, false)
     }
 
     /// A Managed buffer's synchronize: its device copy into the consumer's bytes, where it has
