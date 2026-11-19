@@ -242,7 +242,8 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(failing, {
             "c": ["time loop/gpu: 1.50x its base, against a median of 1.00x over 4 GPUs"],
             "d": [f"time {alu}: 1.50x its base, against a median of 1.00x over 4 GPUs, and 1.50x against 1.00x "
-                  "in the first pass: both passes agree"]})
+                  "in the first pass: both passes agree; its lowest of 2 processes, 150.0 us, over the base's lowest "
+                  "of 1, 100.0 us, is 1.50x (samples 150.0, 150.0 us): high in every process"]})
         self.assertEqual(parked, {"d": [
             f"time {bandwidth}: 1.50x its base, against a median of 1.00x over 4 GPUs when timed once more, but "
             "not in the first pass: the passes disagree, so it fails nothing",
@@ -251,6 +252,41 @@ class RuleTests(unittest.TestCase):
         # Without a second pass, every outlier fails, as one pass did before.
         self.assertEqual(sorted(results.time_outliers(times, bases)[0]["d"]),
                          [f"time {key}: 1.50x its base, against a median of 1.00x over 4 GPUs" for key in (alu, bandwidth)])
+
+    def test_a_harness_row_out_in_both_passes_is_judged_by_its_lowest_level(self):
+        # The RTX 3090 at homelab-um870-1, round 6b535f55c9: about 37 or about 80 us a process, two
+        # passes both high, the alone runs low.
+        row = "sampling_deep_4x16x252"
+        key = f"{results.HARNESS_NEW}{row}"
+        alone = [f"{results.HARNESS_ALONE}{row}/{pair}/{runtime}" for pair in (1, 2) for runtime in ("old", "new")]
+        bases = {leg: {key: 38.8} for leg in "abcd"}
+        times = {leg: {key: 38.8} for leg in "abcd"}
+        times["d"][key] = 81.4
+        first = results.outliers_to_retime(results.outlier_keys(times, bases))
+        self.assertEqual(results.alone_rows(first["d"]), [row])
+        # The alone runs' keys judge nothing on their own, whatever their spread across GPUs.
+        times = {leg: {**values, **{name: 9.0 for name in alone}} for leg, values in times.items()}
+        times["d"].update({key: 81.2, alone[1]: 37.9, alone[3]: 80.6})
+        failing, parked = results.time_outliers(times, bases, first)
+        self.assertEqual(failing, {})
+        self.assertEqual(parked, {"d": [
+            f"time {key}: 2.09x its base, against a median of 1.00x over 4 GPUs, and 2.10x against 1.00x in the "
+            "first pass: both passes agree; its lowest of 4 processes, 37.9 us, over the base's lowest of 1, 38.8 us, "
+            "is 0.98x (samples 81.4, 81.2, 37.9, 80.6 us): levels, no verdict"]})
+        # High in every process, the alone runs included: it fails as before.
+        times["d"].update({alone[1]: 79.9})
+        failing, parked = results.time_outliers(times, bases, first)
+        self.assertEqual(parked, {})
+        self.assertEqual(failing, {"d": [
+            f"time {key}: 2.09x its base, against a median of 1.00x over 4 GPUs, and 2.10x against 1.00x in the "
+            "first pass: both passes agree; its lowest of 4 processes, 79.9 us, over the base's lowest of 1, 38.8 us, "
+            "is 2.06x (samples 81.4, 81.2, 79.9, 80.6 us): high in every process"]})
+        # The base's own alone runs count among its levels: a base that was high in its pass and low
+        # alone compares low with low.
+        bases["d"].update({alone[1]: 10.0})
+        self.assertEqual(results.time_outliers(times, bases, first)[0]["d"][0].split("; ")[1],
+                         "its lowest of 4 processes, 79.9 us, over the base's lowest of 2, 10.0 us, is 7.99x "
+                         "(samples 81.4, 81.2, 79.9, 80.6 us): high in every process")
 
     def test_the_old_path_moving_fails_unless_a_commit_since_the_bless_is_its_fix(self):
         # The golden test's two panics, as its captured output prints them.

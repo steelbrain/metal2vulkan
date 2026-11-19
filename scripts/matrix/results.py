@@ -314,9 +314,10 @@ def outlier_keys(times, bases):
     """The cross-GPU outliers of TIMES against BASES, {leg: {key: microseconds}} of the GPU legs
     now and at their bases: for each key that at least TIME_MIN_GPUS legs timed at both, a leg
     whose slowdown (now over base) is more than TIME_OUTLIER times the legs' median slowdown.
-    Returns {leg: {key: (slowdown, median, legs)}}, PARKED_RECORDS keys among them."""
+    Returns {leg: {key: (slowdown, median, legs)}}, PARKED_RECORDS keys among them. A row's alone
+    runs (HARNESS_ALONE) are samples of its level, judged with its own key, never on their own."""
     out = {}
-    keys = {key for values in times.values() for key in values}
+    keys = {key for values in times.values() for key in values if not key.startswith(HARNESS_ALONE)}
     for key in sorted(keys):
         ratios = {leg: values[key] / bases[leg][key]
                   for leg, values in times.items()
@@ -338,13 +339,51 @@ def outliers_to_retime(found):
     return {leg: keys for leg, keys in found.items() if any(key.startswith(HARNESS_NEW) for key in keys)}
 
 
+#: A host can give each process a level of its own: on the RTX 3090 at homelab-um870-1,
+#: sampling_deep_4x16x252 took about 37 or about 80 us of wall a run, one level a process, at equal
+#: GPU time and CPU instructions, and the old runtime drew the levels as well (rounds b0c08e51b5,
+#: 7cda47f536 and 6b535f55c9; m3-max-51629: 39 processes over 13 commits at 36.8 to 40.0 us). Two
+#: passes, two processes, both landed high in 6b535f55c9. So a harness row's outlier in both passes
+#: is judged by its lowest level: the second pass re-times each such row of the leg (alone_rows)
+#: alone in RETIME_PAIRS pairs of processes, old then new, then new then old, each with a fresh
+#: driver cache and store, its times kept as `harness-alone/<row>/<pair>/<runtime>` (ALONE_KEEP);
+#: time_outliers compares the lowest of the new runtime's samples (both passes and the alone runs)
+#: with the lowest the base recorded of the row (levels). A real regression raises the low level and
+#: still fails; a row high in every process fails; a row the lowest brings back is named with every
+#: sample, as levels with no verdict, so a high level grown more frequent is still seen.
+HARNESS_ALONE = "harness-alone/"
+#: The sed program (`sed -n`) each alone run's output goes through: the row's time alone, the shell
+#: giving `$timed`, `$row` and `$pair`.
+ALONE_KEEP = r"s#^M2V-MATRIX time harness-$timed/$row #M2V-MATRIX time harness-alone/$row/$pair/$timed #p"
+
+
+def alone_rows(keys):
+    """The rows a leg's second pass re-times alone (HARNESS_ALONE) for KEYS, its first pass's
+    outliers (outliers_to_retime's {key: (slowdown, median, legs)}): its harness rows' on the new
+    runtime (HARNESS_NEW), the furthest out first, at most RETIME_ROWS."""
+    rows = sorted(((ratio / median, key[len(HARNESS_NEW):]) for key, (ratio, median, _) in keys.items()
+                   if key.startswith(HARNESS_NEW)), reverse=True)
+    return [row for _, row in rows[:RETIME_ROWS]]
+
+
+def levels(values, key):
+    """The samples of KEY, a harness row's time on the new runtime (HARNESS_NEW), in VALUES, a leg's
+    times: its own, then its alone runs' on the new runtime (HARNESS_ALONE), each one recorded."""
+    row = key[len(HARNESS_NEW):]
+    alone = (values.get(f"{HARNESS_ALONE}{row}/{pair}/new") for pair in range(1, RETIME_PAIRS + 1))
+    return [value for value in (values.get(key), *alone) if value]
+
+
 def time_outliers(times, bases, first=None):
     """Timing fails only as a cross-GPU outlier (outlier_keys). Returns ({leg: [problems]}, {leg:
     [parked]}): an outlier of a PARKED_RECORDS key is parked, not a problem. FIRST: the legs whose
     harness was timed once more for a harness row's outlier (outliers_to_retime), each with its
     first pass's outliers; TIMES then hold their second pass, and an outlier of theirs is a
     problem only where their first pass had it too, the two passes agreeing; one the second pass
-    alone has is parked."""
+    alone has is parked. A harness row's outlier in both passes is then judged by its lowest level
+    (HARNESS_ALONE): a problem where the lowest of its samples over the lowest its base recorded is
+    still past TIME_OUTLIER times the median, else parked with every sample, as levels with no
+    verdict."""
     out, parked = {}, {}
     first = first or {}
     now = outlier_keys(times, bases)
@@ -357,8 +396,20 @@ def time_outliers(times, bases, first=None):
                 out.setdefault(leg, []).append(line)
             elif key in first[leg]:
                 was = first[leg][key]
-                out.setdefault(leg, []).append(f"{line}, and {was[0]:.2f}x against {was[1]:.2f}x in the "
-                                               "first pass: both passes agree")
+                agree = f"{line}, and {was[0]:.2f}x against {was[1]:.2f}x in the first pass: both passes agree"
+                if not key.startswith(HARNESS_NEW):
+                    out.setdefault(leg, []).append(agree)
+                    continue
+                samples = [was[0] * bases[leg][key], *levels(times[leg], key)]
+                based = levels(bases[leg], key)
+                low = min(samples) / min(based)
+                shown = (f"; its lowest of {len(samples)} processes, {min(samples):.1f} us, over the base's lowest "
+                         f"of {len(based)}, {min(based):.1f} us, is {low:.2f}x (samples "
+                         f"{', '.join(f'{sample:.1f}' for sample in samples)} us)")
+                if low > TIME_OUTLIER * median:
+                    out.setdefault(leg, []).append(f"{agree}{shown}: high in every process")
+                else:
+                    parked.setdefault(leg, []).append(f"{agree}{shown}: levels, no verdict")
             else:
                 parked.setdefault(leg, []).append(f"{line} when timed once more, but not in the first pass: "
                                                   "the passes disagree, so it fails nothing")

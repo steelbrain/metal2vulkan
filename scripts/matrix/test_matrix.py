@@ -156,6 +156,7 @@ for runtime in ${runtimes//,/ }; do
     create_*) echo "M2V-MATRIX time harness-$runtime/create_state/first 1000.000" ;;
     '') echo "M2V-MATRIX time harness-$runtime/alu 10.000"
         echo "M2V-MATRIX time harness-$runtime/authored/first_use_wait_total 5.000" ;;
+    *) echo "M2V-MATRIX time harness-$runtime/$only 20.000" ;;
   esac
 done
 """
@@ -275,6 +276,29 @@ class HarnessRunTests(unittest.TestCase):
                          [f"{matrix.results.HARNESS_FIRST}create_state/first/{n}/{runtime}"
                           for n in range(2, 6) for runtime in ("new", "old")])
         self.assertEqual(suites[matrix.HARNESS_SUITE]["duplicated"], set())
+
+    def test_a_cross_gpu_outlier_s_rows_are_timed_alone_in_fresh_processes_in_its_second_pass(self):
+        with tempfile.TemporaryDirectory() as work:
+            fake, log = Path(work) / "harness", Path(work) / "log"
+            fake.write_text(FAKE_HARNESS)
+            fake.chmod(0o755)
+            script = matrix.harness_runs(f'"{work}"', f'"{fake}"', "a")
+            run = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                 env={"PATH": "/usr/bin:/bin", "LOG": str(log), "TMPDIR": work, "M2V_ALONE": "alu"})
+            self.assertEqual(run.returncode, 0, run.stderr)
+            calls = log.read_text().splitlines()
+        # After the first pass's runs, the row alone, in pairs, old then new, then new then old.
+        self.assertEqual(calls[-4:], ["old alu", "new alu", "new alu", "old alu"])
+        times = matrix.results.parse_job("M2V-LEG a begin\n" + run.stdout)["a"]["suites"][matrix.HARNESS_SUITE]["records"]["time"]
+        self.assertEqual(sorted(key for key in times if key.startswith(matrix.results.HARNESS_ALONE)),
+                         [f"{matrix.results.HARNESS_ALONE}alu/{pair}/{runtime}" for pair in (1, 2) for runtime in ("new", "old")])
+        # A leg's alone rows reach its job's shell; a first pass names none.
+        leg = matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")
+        self.assertIn("leg 1002:15bf radeon '' ''", matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40,
+                                                                     "harness", False))
+        leg.alone = ["alu", "create_64MiB/device_first"]
+        self.assertIn("leg 1002:15bf radeon '' 'alu create_64MiB/device_first'",
+                      matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40, "harness", False))
 
 
 class JudgingRuleTests(unittest.TestCase):

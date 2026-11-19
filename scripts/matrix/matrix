@@ -193,6 +193,8 @@ class Leg:
         self.jobs, self.parsed = [], dict(device={}, suites={})
         # Each harness timing's old-runtime spread (results.base_spread), in order (Run.timed_again).
         self.timings = []
+        # The rows its harness's second pass re-times alone for a cross-GPU outlier (results.alone_rows).
+        self.alone = []
         self.started = self.ended = None
 
 
@@ -313,7 +315,8 @@ def gpu_script(short, setup, legs, mirror, rev, suite, last, layer=None, cpu=Non
     LAYER carries, layer_lines) or `harness` (the timed workloads, both runtimes in one process,
     harness_runs, on a node whose CPU model is CPU, without it). The node's LAST job removes the tree and its carry's mirror there
     (no other job reads it; potluck never prunes one), and any left by a job that never ran."""
-    runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(results.card_of(leg.id) + "!" if leg.select else "")])
+    runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(results.card_of(leg.id) + "!" if leg.select else ""),
+                               shlex.quote(" ".join(leg.alone))])
                      for leg in legs)
     if suite == "rt":
         file, body = ARCHIVE, f"""{layer_lines(layer, 'linux', '$1')}
@@ -334,6 +337,7 @@ leg() {{
   (
     export VK_DRIVER_FILES="/usr/share/vulkan/icd.d/$2_icd.json"
     if [ -n "$3" ]; then export MESA_VK_DEVICE_SELECT="$3"; fi
+    export M2V_ALONE="$4"
     {DEVICE_LINES.format(leg="$1")}
     {body}
   )
@@ -374,7 +378,10 @@ def harness_runs(manifest_dir, command, leg, windows=False, cpu=None):
     pairs, old then new, then new then old, their times and GPU times kept (results.RETIME_KEEP)
     for results.harness_budget, but for those a node whose CPU model is CPU judges by their counts
     (results.retime_skip); a frames workload's latency from idle row (results.FROM_IDLE)
-    by its workload's runs. A row whose size follows the device is sized by the first
+    by its workload's runs. In a cross-GPU outlier's second pass, the rows M2V_ALONE names
+    (results.alone_rows) are each run alone in results.RETIME_PAIRS pairs the same way, every
+    process on a fresh empty driver cache and store, their times kept (results.ALONE_KEEP) for
+    results.time_outliers, which judges such a row by its lowest level. A row whose size follows the device is sized by the first
     runtime's pass, which the process gives the other, and every later run, warm and re-timed ones
     included, is given that size (`--size`), so each runtime times the same work. The process has
     a fresh empty store for its pipelines (`--store`, each runtime's apart in it), so its first
@@ -438,6 +445,18 @@ def harness_runs(manifest_dir, command, leg, windows=False, cpu=None):
         case $pair in 2) order="new old" ;; *) order="old new" ;; esac
         for timed in $order; do
           CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "${{row%{results.FROM_IDLE}}}" 2>&1 | sed -n "{results.RETIME_KEEP}"
+        done
+      done
+    done
+    for row in ${{M2V_ALONE:-}}; do
+      workload=${{row%%/*}}
+      for pair in $(seq {results.RETIME_PAIRS}); do
+        case $pair in 2) order="new old" ;; *) order="old new" ;; esac
+        for timed in $order; do
+          rm -rf "$cache" "$store"
+          cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
+          export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
+{point}          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "${{workload%{results.FROM_IDLE}}}" --store {store} 2>&1 | sed -n "{results.ALONE_KEEP}"
         done
       done
     done
@@ -518,6 +537,7 @@ cargo nextest run -p metal2vulkan-rt --all-features {NEXTEST_OUT} 2>&1 | awk "$K
 rc=${{PIPESTATUS[0]}}"""
     else:
         body = f"""(
+export M2V_ALONE={shlex.quote(" ".join(leg.alone))}
 {harness_runs('"$PWD/crates/metal2vulkan-harness"', "target/gpucfg/release/harness", leg.id, windows=True)}
 )
 rc=$?"""
@@ -1011,13 +1031,16 @@ def run_cmd(sha, only, dry):
         run.go()
         entries = {leg.id: leg_entry(run, leg) for leg in legs}
         # A harness row's cross-GPU outlier in one pass fails nothing yet: once every leg is in,
-        # the legs that have one are timed once more, and an outlier fails a leg only where both
-        # passes agree (results.time_outliers).
+        # the legs that have one are timed once more, each such row also alone in fresh processes
+        # (results.alone_rows), and an outlier fails a leg only where both passes agree and its
+        # lowest level is still out (results.time_outliers).
         found = results.outlier_keys(*cross_gpu(sha, doc, entries))
         first = results.outliers_to_retime({leg_id: keys for leg_id, keys in found.items() if leg_id in entries})
         if first:
             log(f"cross-GPU outliers in one pass on {', '.join(sorted(first))}: timed once more")
             again = [leg for leg in legs if leg.id in first]
+            for leg in again:
+                leg.alone = results.alone_rows(first[leg.id])
             run.retime(again)
             entries.update({leg.id: leg_entry(run, leg) for leg in again})
     finally:
