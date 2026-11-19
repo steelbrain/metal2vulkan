@@ -23,12 +23,24 @@ metal2vulkan-rt = { path = "../metal2vulkan-rt" }
 metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
 ash = { workspace = true, features = ["loaded"] }
 base64 = "0.22"
-# The two CPU clocks the cost table reads: the calling thread's and the whole process's
-# (`src/clocks.rs`). `std` exposes neither.
-libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+# The two CPU clocks the cost table reads, the calling thread's and the whole process's, and the
+# load average (`src/clocks.rs`), and the host pages of a no-copy buffer (`src/host_pages.rs`), on
+# unix. `std` exposes none of them.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# The same on Windows: `GetThreadTimes`, `GetProcessTimes`, and `VirtualAlloc` with `VirtualFree`.
+# Windows keeps no load average.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The command-buffer handler blocks the event cases add: `addScheduledHandler:` and

@@ -28,6 +28,13 @@
 //! machinery's cost on the host it runs on and prints it beside the table
 //! ([`crate::times::instrument_nanos`]). It is never subtracted from a figure: a measured overhead
 //! a reader can see is honest, and an estimate quietly removed from every row is not.
+//!
+//! # On Windows
+//!
+//! The two CPU clocks are `GetThreadTimes` and `GetProcessTimes`, kernel and user time summed,
+//! which Windows counts in 100 ns units; their step there was not measured, and the table above is
+//! the M3's. Windows keeps no load average, so [`host_load`] answers `None` there and a timing
+//! report says the host answers none.
 
 /// The calling thread's CPU time, user and system, in nanoseconds, or `None` where the host does
 /// not answer the clock.
@@ -36,7 +43,26 @@
 /// difference between a call's elapsed time and this is the time the caller was not computing: it
 /// was waiting.
 pub fn thread_cpu_nanos() -> Option<u64> {
-    read(libc::CLOCK_THREAD_CPUTIME_ID)
+    #[cfg(unix)]
+    {
+        read(libc::CLOCK_THREAD_CPUTIME_ID)
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+        let mut times = Times::default();
+        // SAFETY: the pseudo-handle of the calling thread, and four valid `FILETIME`s to fill.
+        let answered = unsafe {
+            GetThreadTimes(
+                GetCurrentThread(),
+                &mut times.created,
+                &mut times.exited,
+                &mut times.kernel,
+                &mut times.user,
+            )
+        };
+        times.on_cpu(answered != 0)
+    }
 }
 
 /// The whole process's CPU time, every thread of it, in nanoseconds, or `None` where the host does
@@ -50,11 +76,31 @@ pub fn thread_cpu_nanos() -> Option<u64> {
 /// on the Metal leg it covers Metal's own. That is the honest denominator: the suite compares two
 /// whole stacks and has no way to cut one into layers ([`crate::times`]).
 pub fn process_cpu_nanos() -> Option<u64> {
-    read(libc::CLOCK_PROCESS_CPUTIME_ID)
+    #[cfg(unix)]
+    {
+        read(libc::CLOCK_PROCESS_CPUTIME_ID)
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        let mut times = Times::default();
+        // SAFETY: the pseudo-handle of this process, and four valid `FILETIME`s to fill.
+        let answered = unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut times.created,
+                &mut times.exited,
+                &mut times.kernel,
+                &mut times.user,
+            )
+        };
+        times.on_cpu(answered != 0)
+    }
 }
 
 /// One POSIX clock, in nanoseconds. `None` where the call failed, which is how a host that does
 /// not answer a clock reaches the report as a missing attribution rather than as a zero.
+#[cfg(unix)]
 fn read(clock: libc::clockid_t) -> Option<u64> {
     let mut when = libc::timespec {
         tv_sec: 0,
@@ -71,7 +117,35 @@ fn read(clock: libc::clockid_t) -> Option<u64> {
     seconds.checked_mul(1_000_000_000)?.checked_add(nanos)
 }
 
-/// The host's one-minute load average, or `None` where the host does not answer it.
+/// The four times `GetThreadTimes` and `GetProcessTimes` fill.
+#[cfg(windows)]
+#[derive(Default)]
+struct Times {
+    created: windows_sys::Win32::Foundation::FILETIME,
+    exited: windows_sys::Win32::Foundation::FILETIME,
+    kernel: windows_sys::Win32::Foundation::FILETIME,
+    user: windows_sys::Win32::Foundation::FILETIME,
+}
+
+#[cfg(windows)]
+impl Times {
+    /// The kernel and user times the call filled, in nanoseconds: each is counted in 100 ns
+    /// units. `None` where the call did not answer, as a POSIX clock's -1 is.
+    fn on_cpu(&self, answered: bool) -> Option<u64> {
+        if !answered {
+            return None;
+        }
+        let units = |time: &windows_sys::Win32::Foundation::FILETIME| {
+            (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
+        };
+        units(&self.kernel)
+            .checked_add(units(&self.user))?
+            .checked_mul(100)
+    }
+}
+
+/// The host's one-minute load average, or `None` where the host does not answer it: Windows keeps
+/// none.
 ///
 /// **Why a timing report reads this.** The two legs are not loaded alike: ours spends its cost on
 /// the calling thread's CPU where Metal's largest calls sit blocked on the GPU, so host load does
@@ -81,6 +155,19 @@ fn read(clock: libc::clockid_t) -> Option<u64> {
 /// to 13.3 ms (1.6x), and `replace_region`, which is four fifths blocked rather than CPU, moved
 /// the *other* way, 60.9x to 12.1x. A ratio read on a busy host is not a ratio of the two stacks.
 pub fn host_load() -> Option<f64> {
+    #[cfg(unix)]
+    {
+        load_average()
+    }
+    #[cfg(windows)]
+    {
+        None
+    }
+}
+
+/// The one-minute entry of `getloadavg`, or `None` where the host keeps no load average.
+#[cfg(unix)]
+fn load_average() -> Option<f64> {
     let mut averages = [0.0f64; 3];
     // SAFETY: `getloadavg` writes at most the number of entries it is given into the pointer it
     // is given, and reads nothing else. It answers -1 where the host keeps no load average, and
@@ -90,4 +177,37 @@ pub fn host_load() -> Option<f64> {
         return None;
     }
     Some(averages[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{process_cpu_nanos, thread_cpu_nanos};
+    use std::time::{Duration, Instant};
+
+    /// **Both CPU clocks answer on the host the suite runs on, and both move while its thread
+    /// computes.** A host form whose call fails answers `None` for every case, and one that reads
+    /// the wrong thing answers a constant; either would leave the cost table's attribution empty or
+    /// flat on that host with nothing else saying so.
+    #[test]
+    fn the_cpu_clocks_answer_and_move_while_the_thread_computes() {
+        let thread = thread_cpu_nanos().expect("this host answers the thread's CPU clock");
+        let process = process_cpu_nanos().expect("this host answers the process's CPU clock");
+        let started = Instant::now();
+        let mut spun = 0_u64;
+        loop {
+            spun = std::hint::black_box(spun.wrapping_add(1));
+            if spun.is_multiple_of(4096) {
+                let moved = thread_cpu_nanos().is_some_and(|now| now > thread)
+                    && process_cpu_nanos().is_some_and(|now| now > process);
+                if moved {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "after 5 s of computing, the thread's CPU clock has not moved past \
+                     {thread} ns or the process's past {process} ns"
+                );
+            }
+        }
+    }
 }
