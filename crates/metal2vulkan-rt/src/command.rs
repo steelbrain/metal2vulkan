@@ -720,7 +720,8 @@ impl CommandBuffer {
         }
     }
 
-    /// Its queue.
+    /// For the device tests: its queue.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn queue(&self) -> &Arc<QueueInner> {
         &self.inner.queue
     }
