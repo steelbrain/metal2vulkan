@@ -22,6 +22,10 @@
 //   enqueue              on queue A, `x` is enqueued and not committed, then `u`; `x` (no work) is
 //                        committed 2 s after `w`'s commit.
 //
+// A second argument, `untracked`, makes X and Y with MTLResourceHazardTrackingModeUntracked, so
+// only the fence orders `w` after `u` (Metal tracks a tracked buffer's writes across command
+// buffers).
+//
 // Each run reports whether `w` completed within the 2 s before the release, after how long, the
 // statuses of `u` and `w` then, and how many words of Y held 0x5a5a5a5a when `w` completed; then,
 // after the release, both statuses and errors and whether `w`'s GPU start came before `u`'s GPU
@@ -31,6 +35,7 @@
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation \
 //       -o cross_queue_fence_held_update cross_queue_fence_held_update.m
 //   ./cross_queue_fence_held_update shared-event
+//   ./cross_queue_fence_held_update control untracked
 //
 // Measuring runs keep `MTL_DEBUG_LAYER` OUT of the environment.
 
@@ -71,9 +76,13 @@ static void dispatch(id<MTLComputeCommandEncoder> e, id<MTLComputePipelineState>
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        if (argc != 2) {
-            fprintf(stderr, "usage: %s CASE\n", argv[0]);
+        if (argc != 2 && !(argc == 3 && strcmp(argv[2], "untracked") == 0)) {
+            fprintf(stderr, "usage: %s CASE [untracked]\n", argv[0]);
             return 2;
+        }
+        MTLResourceOptions options = MTLResourceStorageModeShared;
+        if (argc == 3) {
+            options |= MTLResourceHazardTrackingModeUntracked;
         }
         const char *kase = argv[1];
         const char *cases[] = {"control", "control-nofence", "shared-event", "event",
@@ -117,8 +126,9 @@ int main(int argc, char **argv) {
             printf("pipeline: %s\n", error.localizedDescription.UTF8String);
             return 1;
         }
-        printf("device %s, %s, case %s, MTL_DEBUG_LAYER %s\n", device.name.UTF8String,
+        printf("device %s, %s, case %s, buffers %s, MTL_DEBUG_LAYER %s\n", device.name.UTF8String,
                NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String, kase,
+               argc == 3 ? "untracked" : "tracked",
                getenv("MTL_DEBUG_LAYER") ? getenv("MTL_DEBUG_LAYER") : "unset");
         BOOL fenced = which != 1;
         BOOL held = which >= 2;
@@ -126,8 +136,8 @@ int main(int argc, char **argv) {
             id<MTLCommandQueue> qa = [device newCommandQueue];
             id<MTLCommandQueue> qb = [device newCommandQueue];
             id<MTLCommandQueue> qc = [device newCommandQueue];
-            id<MTLBuffer> x = [device newBufferWithLength:WORDS * 4 options:MTLResourceStorageModeShared];
-            id<MTLBuffer> y = [device newBufferWithLength:WORDS * 4 options:MTLResourceStorageModeShared];
+            id<MTLBuffer> x = [device newBufferWithLength:WORDS * 4 options:options];
+            id<MTLBuffer> y = [device newBufferWithLength:WORDS * 4 options:options];
             memset(x.contents, 0, WORDS * 4);
             memset(y.contents, 0, WORDS * 4);
             id<MTLFence> fence = [device newFence];
