@@ -128,7 +128,8 @@ pub(crate) fn canonical(mut desc: SamplerDesc) -> SamplerDesc {
 #[derive(Clone)]
 pub struct SamplerState {
     inner: Arc<SamplerInner>,
-    device: Device,
+    /// The handle's count of the device, which only its drop reads.
+    _device: Device,
 }
 
 /// The state itself: what a handle and a command buffer that uses it hold.
@@ -389,7 +390,7 @@ impl Device {
                 word: SamplerWord::of(descriptor).0,
                 uses,
             }),
-            device: self.clone(),
+            _device: self.clone(),
         })
     }
 }

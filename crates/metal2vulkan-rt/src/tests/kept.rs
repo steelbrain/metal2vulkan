@@ -10,7 +10,8 @@ use std::sync::Arc;
 #[derive(Clone)]
 struct Probe {
     inner: Arc<u32>,
-    device: Arc<()>,
+    /// Its count of the device, which only its drop reads.
+    _device: Arc<()>,
 }
 
 impl Handle for Probe {
@@ -29,7 +30,7 @@ impl Handle for Probe {
 fn probe(value: u32, device: &Arc<()>) -> Probe {
     Probe {
         inner: Arc::new(value),
-        device: Arc::clone(device),
+        _device: Arc::clone(device),
     }
 }
 
