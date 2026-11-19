@@ -608,6 +608,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
     either stage, or whose index buffer is one (`skipped_draws`);
   - render commands the runtime answers with a typed gap, a draw it does not build among them
     (`skipped_render_commands`, and a line for each gap with its first frame and call);
+  - render encoders' sampler binds of LOD clamps the runtime answers with its typed gap (clamps
+    whose samples read otherwise than the sampler's own: `skipped_clamped_samplers`), the draws
+    while the slot holds one skipped with them; a bind it takes plays with its clamps;
   - blit commands that name a skipped object (`skipped_blits`), and by kind:
     `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), mipmaps (`skipped_mipmaps`), and
     the pieces of a copy from the guest's RAM that are not whole 4-byte words at a 4-byte offset,

@@ -12,6 +12,9 @@
 //! - A compute encoder's `setStageInRegion:` plays: the runtime takes it.
 //! - The host's library from source is made of its display library where the backend has it, a
 //!   function of it with it; without it both are skipped.
+//! - A sampler bound with LOD clamps whose samples read as its own plays with them (its own
+//!   clamps, and (0, 1000) over its (0, FLT_MAX)); one bound with clamps that read otherwise is
+//!   the runtime's typed gap, skipped and counted, and the draw after it is skipped.
 //! - A Managed buffer of a stream recorded with two copies keeps both on any device (the player's
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
@@ -209,6 +212,12 @@ fn library(dir: &ScratchDir, functions: &[(&'static str, u8, usize)]) -> Vec<u8>
 /// A stream of a draw into a pass, its target copied to a buffer that the stream checks green
 /// (`green`); with `points`, a draw of points (call 19) after the draw.
 fn draw_into_a_pass(dir: &ScratchDir, green: &[u8], points: bool) -> PathBuf {
+    draw_with_clamps(dir, green, points, None)
+}
+
+/// [`draw_into_a_pass`]'s stream; where `clamp` is given, a sampler state of the default
+/// descriptor (#15) bound at fragment slot 0 with LOD clamps 0 and `clamp` before the draw.
+fn draw_with_clamps(dir: &ScratchDir, green: &[u8], points: bool, clamp: Option<f32>) -> PathBuf {
     written(dir, |w| {
         let library = w.blob(&render_library(dir))?;
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
@@ -278,6 +287,23 @@ fn draw_into_a_pass(dir: &ScratchDir, green: &[u8], points: bool) -> PathBuf {
         for (buffer, index) in [(8, 0), (9, 1)] {
             let args = [Value::Object(buffer), Value::Uint(0), Value::Uint(index)];
             w.call("setVertexBuffer:offset:atIndex:", 13, 0, &args, &[])?;
+        }
+        if let Some(clamp) = clamp {
+            w.call(
+                "newSamplerStateWithDescriptor:",
+                1,
+                15,
+                &[sampler(None)],
+                &[],
+            )?;
+            let args = [
+                Value::List(vec![Value::Object(15)]),
+                Value::List(vec![Value::F32(0.0)]),
+                Value::List(vec![Value::F32(clamp)]),
+                uints(&[("location", 0), ("length", 1)]),
+            ];
+            let bind = "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:";
+            w.call(bind, 13, 0, &args, &[])?;
         }
         // MTLPrimitiveTypeTriangle, from vertex 0, three vertices.
         let draw = [Value::Uint(3), Value::Uint(0), Value::Uint(3)];
@@ -374,6 +400,28 @@ fn the_host_s_library_from_source_is_made_of_its_display_library() {
     assert_eq!(played(Some(render_library(&dir))), (0, 0));
     // Without it, the library is skipped, and so is the call on it that makes the function.
     assert_eq!(played(None), (1, 1));
+}
+
+#[test]
+fn a_sampler_bound_with_lod_clamps_plays_where_the_runtime_takes_them() {
+    let dir = ScratchDir::new("rt-replay-clamps").unwrap();
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    // The sampler's own clamps, and (0, 1000), which reads as its own (0, FLT_MAX): both bind.
+    for (test, clamp) in [("clamps-own", f32::MAX), ("clamps-1000", 1000.0)] {
+        let (report, _) = play(test, &draw_with_clamps(&dir, &green, false, Some(clamp)));
+        assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+        let executed = &report.total.executed;
+        assert_eq!(executed["skipped_clamped_samplers"], 0, "{executed:?}");
+        assert_eq!(executed["skipped_draws"], 0, "{executed:?}");
+    }
+    // (0, 2) reads otherwise: the runtime's gap, the bind and the draw skipped.
+    let (report, _) = play(
+        "clamps-2",
+        &draw_with_clamps(&dir, &green, false, Some(2.0)),
+    );
+    let executed = &report.total.executed;
+    assert_eq!(executed["skipped_clamped_samplers"], 1, "{executed:?}");
+    assert_eq!(executed["skipped_draws"], 1, "{executed:?}");
 }
 
 #[test]

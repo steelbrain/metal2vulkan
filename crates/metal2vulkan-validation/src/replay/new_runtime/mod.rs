@@ -65,6 +65,9 @@ struct Skips {
     /// does not build yet.
     texture_syncs: u64,
     mipmaps: u64,
+    /// Sampler binds of LOD clamps the runtime answers with `Gap::LodClamps`: clamps whose samples
+    /// read otherwise than the sampler's own.
+    clamped_samplers: u64,
     /// Every other call on a skipped object or naming one, a skipped encoder's among them.
     calls: u64,
     /// The skipped objects whose `gpuResourceID` the player asked: nothing in the play reads
@@ -123,6 +126,7 @@ impl Skips {
             guest_ram_writes,
             texture_syncs,
             mipmaps,
+            clamped_samplers,
             calls,
             resource_ids,
         } = self;
@@ -135,6 +139,7 @@ impl Skips {
             guest_ram_writes,
             texture_syncs,
             mipmaps,
+            clamped_samplers,
             calls,
             resource_ids,
         ];
@@ -2185,6 +2190,7 @@ impl Backend for NewRuntime {
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
             ("skipped_texture_syncs", self.skips.texture_syncs),
             ("skipped_mipmaps", self.skips.mipmaps),
+            ("skipped_clamped_samplers", self.skips.clamped_samplers),
             ("substituted_surface_textures", self.substitutes.surfaces),
             ("substituted_tiled_textures", self.substitutes.tiled),
             ("substituted_gap_textures", self.substitutes.gaps),

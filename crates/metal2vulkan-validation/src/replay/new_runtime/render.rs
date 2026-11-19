@@ -23,11 +23,13 @@ use std::collections::HashSet;
 /// Where a binding is: the stage (fragment or not) and whether it is a texture.
 type Slot = (bool, bool, u32);
 
-/// A render encoder, its stages' buffer and texture slots that hold a skipped object, and whether
-/// its pipeline state is a skipped one.
+/// A render encoder, its stages' buffer and texture slots that hold a skipped object, its stages'
+/// sampler slots whose bind it skipped (`clamped`), and whether its pipeline state is a skipped
+/// one.
 pub(super) struct Render {
     encoder: rt::RenderCommandEncoder,
     skipped: HashSet<Slot>,
+    skipped_samplers: HashSet<(bool, u32)>,
     skipped_pipeline: bool,
 }
 
@@ -186,6 +188,7 @@ impl NewRuntime {
             Ok(encoder) => unaddressed(Object::Render(Box::new(Render {
                 encoder,
                 skipped: HashSet::new(),
+                skipped_samplers: HashSet::new(),
                 skipped_pipeline: false,
             }))),
             Err(rt::Error::Unsupported(_)) => self.skip_encoder(),
@@ -465,24 +468,41 @@ impl NewRuntime {
             "setVertexSamplerState:atIndex:" | "setFragmentSamplerState:atIndex:" => {
                 let sampler = self.sampler(call, arg(call, 0)?)?;
                 let at = index(call, 1)?;
-                let encoder = &mut self.render(id).encoder;
-                match fragment {
-                    false => encoder.set_vertex_sampler_state(sampler.as_ref(), at),
-                    true => encoder.set_fragment_sampler_state(sampler.as_ref(), at),
-                }
+                self.bind_sampler(id, fragment, at, sampler, None)
             }
             "setVertexSamplerStates:withRange:" | "setFragmentSamplerStates:withRange:" => {
                 let samplers = list(call, 0)?.iter();
                 let samplers = samplers.map(|value| self.sampler(call, value));
                 let samplers = samplers.collect::<Result<Vec<_>, _>>()?;
                 let at = first(call, 1, samplers.len())?;
-                let encoder = &mut self.render(id).encoder;
                 let mut result = Ok(());
-                for (slot, sampler) in (at..).zip(&samplers) {
-                    result = result.and(match fragment {
-                        false => encoder.set_vertex_sampler_state(sampler.as_ref(), slot),
-                        true => encoder.set_fragment_sampler_state(sampler.as_ref(), slot),
-                    });
+                for (slot, sampler) in (at..).zip(samplers) {
+                    result = result.and(self.bind_sampler(id, fragment, slot, sampler, None));
+                }
+                result
+            }
+            "setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:"
+            | "setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:" => {
+                let sampler = self.sampler(call, arg(call, 0)?)?;
+                let clamps = [clamp(call, arg(call, 1)?)?, clamp(call, arg(call, 2)?)?];
+                let at = index(call, 3)?;
+                self.bind_sampler(id, fragment, at, sampler, Some(clamps))
+            }
+            "setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:"
+            | "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:" => {
+                let samplers = list(call, 0)?.iter();
+                let samplers = samplers.map(|value| self.sampler(call, value));
+                let samplers = samplers.collect::<Result<Vec<_>, _>>()?;
+                let (mins, maxes) = (list(call, 1)?, list(call, 2)?);
+                if mins.len() != samplers.len() || maxes.len() != samplers.len() {
+                    return Err(refuse(call, "clamps of another count than the samplers"));
+                }
+                let at = first(call, 3, samplers.len())?;
+                let mut result = Ok(());
+                for (k, (slot, sampler)) in (at..).zip(samplers).enumerate() {
+                    let clamps = [clamp(call, &mins[k])?, clamp(call, &maxes[k])?];
+                    result =
+                        result.and(self.bind_sampler(id, fragment, slot, sampler, Some(clamps)));
                 }
                 result
             }
@@ -672,11 +692,51 @@ impl NewRuntime {
     /// buffer or texture is a skipped object.
     fn draw_skipped(&mut self, id: u64) -> bool {
         let render = self.render(id);
-        let skipped = render.skipped_pipeline || !render.skipped.is_empty();
+        let skipped = render.skipped_pipeline
+            || !render.skipped.is_empty()
+            || !render.skipped_samplers.is_empty();
         if skipped {
             self.skips.draws += 1;
         }
         skipped
+    }
+
+    /// Binds `sampler` at `slot` of the stage `fragment` names, with the LOD clamps `clamps` where
+    /// the call states them. A bind the runtime answers with [`rt::Gap::LodClamps`] (clamps whose
+    /// samples read otherwise than the sampler's own) binds nothing: it is skipped and counted
+    /// (`clamped_samplers`), and draws are skipped while the slot holds it.
+    fn bind_sampler(
+        &mut self,
+        id: u64,
+        fragment: bool,
+        slot: u32,
+        sampler: Option<rt::SamplerState>,
+        clamps: Option<[f32; 2]>,
+    ) -> Result<(), rt::Error> {
+        let encoder = &mut self.render(id).encoder;
+        let sampler = sampler.as_ref();
+        let bound = match (clamps, fragment) {
+            (None, false) => encoder.set_vertex_sampler_state(sampler, slot),
+            (None, true) => encoder.set_fragment_sampler_state(sampler, slot),
+            (Some([min, max]), false) => {
+                encoder.set_vertex_sampler_state_with_lod_clamps(sampler, min, max, slot)
+            }
+            (Some([min, max]), true) => {
+                encoder.set_fragment_sampler_state_with_lod_clamps(sampler, min, max, slot)
+            }
+        };
+        match bound {
+            Err(rt::Error::Unsupported(rt::Gap::LodClamps)) => {
+                self.skips.clamped_samplers += 1;
+                self.render(id).skipped_samplers.insert((fragment, slot));
+                Ok(())
+            }
+            Ok(()) => {
+                self.render(id).skipped_samplers.remove(&(fragment, slot));
+                Ok(())
+            }
+            failed => failed,
+        }
     }
 
     /// The sampler state `value` names, or none where it is nil.
@@ -690,4 +750,12 @@ impl NewRuntime {
             other => Err(refuse(call, format!("{other} is no sampler state"))),
         }
     }
+}
+
+/// A LOD clamp argument, a number.
+fn clamp(call: &Call, value: &Value) -> Result<f32, PlayError> {
+    let clamp = value
+        .as_f64()
+        .ok_or_else(|| refuse(call, format!("{value} is no clamp")))?;
+    Ok(clamp as f32)
 }
