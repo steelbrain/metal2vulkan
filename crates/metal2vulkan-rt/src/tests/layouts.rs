@@ -671,8 +671,12 @@ mod on_device {
             let before = (counted(), barriers(handle));
             let d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
-            let new = || (device.new_texture(&d, None)).unwrap_or_else(|e| panic!("{name}: {e}"));
-            let (a, b) = (new(), new());
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
+            let new = |index| {
+                (device.new_texture(&d, Some(index))).unwrap_or_else(|e| panic!("{name}: {e}"))
+            };
+            let (a, b) = (new(first), new(first + 1));
             let size = [WIDTH, HEIGHT, 1];
             let whole = Region {
                 origin: [0; 3],
