@@ -61,7 +61,12 @@ pub enum CommandBufferStatus {
     /// `vkQueueSubmit2`, or in a group its queue holds while three of its submissions run, which
     /// goes with no other call. A command buffer that presents a drawable
     /// ([`CommandBuffer::present_drawable`]) is never held: it is scheduled once its submission
-    /// has passed `vkQueueSubmit2`.
+    /// has passed `vkQueueSubmit2`. One that waits for a [`SharedEvent`](crate::SharedEvent)'s
+    /// value not yet reached when its last segment joins a submission is scheduled once the value
+    /// is, as the completion thread sees the signal or the host's set, and always before it
+    /// completes. Apple defines the status as "All dependencies have been resolved and the command
+    /// buffer has been scheduled for execution"; Metal applies that to a shared event's wait only
+    /// ([`Device::new_shared_event`](crate::Device::new_shared_event)).
     Scheduled,
     /// `MTLCommandBufferStatusCompleted`.
     Completed,
@@ -277,6 +282,9 @@ pub(crate) struct Pending {
     pub(crate) handlers: Handlers,
     /// It took a pair of timestamp queries.
     pub(crate) timed: bool,
+    /// Its waits for a shared event's value not reached when its last segment joined a
+    /// submission: it is scheduled once they are (`crate::complete`), not as it joins.
+    pub(crate) held: Vec<(Arc<EventInner>, u64)>,
 }
 
 impl Pending {
@@ -479,7 +487,10 @@ impl CommandBuffer {
     /// before its submission goes to the driver, or for one that ends without running once it
     /// ends, before it retires. For one that presents a drawable
     /// ([`present_drawable`](Self::present_drawable)) it runs once its submission has passed
-    /// `vkQueueSubmit2`, and is not yet in flight for the completion thread. In the handler the command buffer's status is
+    /// `vkQueueSubmit2`, and is not yet in flight for the completion thread. For one that waits
+    /// for a shared event's value not yet reached as it is submitted
+    /// ([`CommandBufferStatus::Scheduled`]) it runs on the completion thread once the value is,
+    /// before the command buffer's completed handlers. In the handler the command buffer's status is
     /// [`CommandBufferStatus::Scheduled`] and its kernel times are set, and it runs before the
     /// command buffer's completed handlers. Its queue's later submissions wait while it runs, and
     /// it may run while another command buffer's completed handler runs on the completion thread.
@@ -605,6 +616,7 @@ impl CommandBuffer {
             gpu,
             handlers,
             timed: stamps.is_some(),
+            held: Vec::new(),
         };
         state.status = CommandBufferStatus::Committed;
         self.inner.changed.notify_all();
@@ -1359,7 +1371,9 @@ pub(crate) fn not_in_scheduled_handler() -> Result<(), Error> {
 
 /// On the submit thread, with no lock of the runtime's held: runs the scheduled handlers of a
 /// command buffer scheduled, before its submission goes to the driver (after, for one that
-/// presents a drawable) and before it is handed on to the completion thread.
+/// presents a drawable) and before it is handed on to the completion thread. On the completion
+/// thread for one held at `Committed` for a shared event's value (`Pending::held`), before it
+/// retires.
 pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
     /// Clears the mark as the handlers end, a panic among them too.
     struct Running;

@@ -1,8 +1,9 @@
 //! The completion thread: it retires command buffers and uploads as the GPU completes them, runs
-//! their completed handlers, follows the event signals it submitted and runs listeners, and ends the work in
-//! flight at a loss.
+//! their completed handlers, follows the event signals it submitted and runs listeners, schedules
+//! the command buffers held at `Committed` for a shared event's value once it is reached, and ends
+//! the work in flight at a loss.
 
-use crate::command::{self, CbInner, CommandBufferError, Gpu, Handlers, Pending};
+use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Handlers, Pending};
 use crate::counters::Metric;
 use crate::device::{lock, Core};
 use crate::error::Error;
@@ -38,8 +39,11 @@ struct DoneState {
     ended: Vec<Retiree>,
     /// Events with submitted signals the completion thread has not yet seen.
     watched: Vec<Arc<EventInner>>,
-    /// Events whose listeners a host value may reach.
+    /// Events whose listeners, or whose held command buffers' waits, a host value may reach.
     fire: Vec<Arc<EventInner>>,
+    /// Submitted command buffers held at `Committed` for a shared event's value
+    /// (`Pending::held`), each scheduled once its waits are reached, or as it retires.
+    held: Vec<Held>,
     waiting: Waiting,
     /// The wake semaphore's last value.
     woken: u64,
@@ -62,6 +66,35 @@ enum Waiting {
 struct Retiree {
     value: u64,
     item: Item,
+}
+
+/// A command buffer held at `Committed` for a shared event's value: its waits and its scheduled
+/// handlers.
+struct Held {
+    cb: Arc<CbInner>,
+    waits: Vec<(Arc<EventInner>, u64)>,
+    scheduled: Vec<Handler>,
+}
+
+impl Held {
+    /// Whether the value the host sees reaches each of its waits.
+    fn reached(&self) -> bool {
+        (self.waits.iter()).all(|(event, value)| event.reached(*value))
+    }
+}
+
+/// Takes out of `held` the command buffers to schedule now: those whose waits are reached, and
+/// those that retire in `retire`, which are scheduled, where they ran, before they complete. Each
+/// event's count of held waits falls with them.
+fn due(held: &mut Vec<Held>, retire: &[Retiree]) -> Vec<Held> {
+    let due: Vec<Held> = (held.extract_if(.., |entry| {
+        entry.reached() || retire.iter().any(|retiree| retiree.is(&entry.cb))
+    }))
+    .collect();
+    for (event, _) in due.iter().flat_map(|entry| &entry.waits) {
+        lock(&event.state).holds -= 1;
+    }
+    due
 }
 
 enum Item {
@@ -130,6 +163,7 @@ impl Done {
                 ended: Vec::new(),
                 watched: Vec::new(),
                 fire: Vec::new(),
+                held: Vec::new(),
                 waiting: Waiting::Not,
                 woken: 0,
                 stop: false,
@@ -195,7 +229,7 @@ impl Done {
         watch: Vec<Arc<EventInner>>,
     ) {
         let mut state = self.lock();
-        let flight_only = watch.is_empty();
+        let mut flight_only = watch.is_empty();
         if let Some(upload) = upload {
             state.flight.push_back(Retiree {
                 value,
@@ -204,7 +238,24 @@ impl Done {
         }
         for (cb, pending, error) in finished {
             let written = pending.stamps_written();
-            let Pending { gpu, handlers, .. } = pending;
+            let Pending {
+                gpu,
+                mut handlers,
+                held,
+                ..
+            } = pending;
+            // Held at `Committed`: the thread looks at its waits from its next round.
+            if !held.is_empty() {
+                for (event, _) in &held {
+                    lock(&event.state).holds += 1;
+                }
+                state.held.push(Held {
+                    cb: Arc::clone(&cb),
+                    waits: held,
+                    scheduled: std::mem::take(&mut handlers.scheduled),
+                });
+                flight_only = false;
+            }
             state.flight.push_back(Retiree {
                 value,
                 item: Item::Command {
@@ -256,7 +307,8 @@ impl Done {
         self.wake(&mut state, &core.device, false);
     }
 
-    /// A host value of `event` may reach some of its listeners.
+    /// A host value of `event` may reach some of its listeners, or the waits of command buffers
+    /// held for it.
     pub(crate) fn fire(&self, core: &Core, event: Arc<EventInner>) {
         let mut state = self.lock();
         state.fire.push(event);
@@ -310,6 +362,24 @@ impl Retiree {
                 written: 2,
                 ..
             } => cb.stamps(core),
+            _ => None,
+        }
+    }
+
+    /// Whether it is `cb`.
+    fn is(&self, cb: &Arc<CbInner>) -> bool {
+        matches!(&self.item, Item::Command { cb: own, .. } if Arc::ptr_eq(own, cb))
+    }
+
+    /// Where it is `cb` and ends with an error: its handlers, which its scheduled handlers join.
+    fn failed(&mut self, cb: &Arc<CbInner>) -> Option<&mut Handlers> {
+        match &mut self.item {
+            Item::Command {
+                cb: own,
+                handlers,
+                error: Some(_),
+                ..
+            } if Arc::ptr_eq(own, cb) => Some(handlers),
             _ => None,
         }
     }
@@ -453,7 +523,8 @@ pub(crate) fn run(core: Arc<Core>) {
         for event in &fired {
             event.observe(None, &mut fire);
         }
-        if newly_lost || !retire.is_empty() || !fire.is_empty() {
+        let due = due(&mut state.held, &retire);
+        if newly_lost || !retire.is_empty() || !fire.is_empty() || !due.is_empty() {
             state.waiting = Waiting::Not;
             drop(state);
             if newly_lost {
@@ -462,6 +533,20 @@ pub(crate) fn run(core: Arc<Core>) {
             if !retire.is_empty() {
                 // A batch kept while submissions were in flight may go.
                 core.work.completed();
+            }
+            // Each held command buffer whose waits are reached, or that retires now, is scheduled
+            // before any retires, so before it completes. One that retires with an error is not:
+            // its scheduled handlers run as it retires, as a failed submission's do.
+            for Held { cb, scheduled, .. } in due {
+                match retire.iter_mut().find_map(|retiree| retiree.failed(&cb)) {
+                    Some(handlers) => handlers.scheduled = scheduled,
+                    None => {
+                        cb.scheduled(times::host_time());
+                        if !scheduled.is_empty() {
+                            command::run_scheduled(cb, scheduled);
+                        }
+                    }
+                }
             }
             // Handlers and listeners run with no lock held.
             // Each completed command buffer's timestamps are placed on the host clock by the

@@ -853,14 +853,22 @@ made, with no lock, and never rewritten for layouts.
   command buffer makes before its wait. Other queues go on. `Scheduled` means the last segment is in
   a submission: passed to `vkQueueSubmit2`, or in a group held; a command buffer that presents a
   drawable is never held, and is scheduled once its submission has passed `vkQueueSubmit2` (see
-  "Presenting"). A command buffer whose segments hold no commands, no event wait and no event
-  signal takes no submission: the submit thread schedules it as it reaches it, and it completes
+  "Presenting"). One that waits for a shared event's value not yet reached when its last segment
+  joins a submission stays `Committed` until the value is: the completion thread schedules it, and
+  runs its scheduled handlers, once it sees the signal land or the host set the value, and before
+  it completes where its own completion comes first. Apple defines `Scheduled` as "All dependencies
+  have been resolved and the command buffer has been scheduled for execution", and Metal applies
+  it so to shared-event waits only: recorded on the M3 Max, a command buffer behind a signal still
+  running reads `Committed` with no handler where it waits for an `MTLSharedEvent`, and `Scheduled`
+  with its scheduled handler run where it waits for an `MTLEvent`, as here. A command buffer whose
+  segments hold no commands, no event wait and no event signal takes no submission: the submit thread schedules it as it reaches it, and it completes
   with its queue's command buffer before it, in flight, or at once where that one has completed. Where that one is in a group held, it joins the group, which
   goes at once, so its completion waits only on submitted work.
 - A command buffer's scheduled handlers run on the submit thread, once it is scheduled and before
   its submission goes to the driver (one that presents a drawable: after, before the completion
-  thread learns of it; one that ends without a submission: once it ends, before it retires), with
-  no lock of the runtime's held. In the handler its status is `Scheduled` and its kernel times are
+  thread learns of it; one that ends without a submission: once it ends, before it retires; one
+  held for a shared event's value: on the completion thread, once it is reached), with no lock of
+  the runtime's held. In the handler its status is `Scheduled` and its kernel times are
   set, and it runs before the command buffer's completed handlers. The queue's
   later submissions wait while it runs, and it may run while another command buffer's completed
   handler runs on the completion thread. A scheduled handler may read the command buffer's status

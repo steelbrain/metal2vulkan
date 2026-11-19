@@ -36,7 +36,7 @@
 
 use crate::buffer::{Buffer, DeviceCopy};
 use crate::capture::{self, Changes, Chunk, CopyIn, Modified, Named, CAPTURE_LEN};
-use crate::command::{self, CbInner, CommandBufferError, Handler, Pending, Segment};
+use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Pending, Segment};
 use crate::complete;
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
@@ -1446,7 +1446,9 @@ impl WorkState {
     /// ended command buffer behind its queue's work. A command buffer whose last segment joins a
     /// group is scheduled at `now`, its scheduled handlers going to `joined`, but one that
     /// presents a drawable, which `submit` schedules once its submission has passed
-    /// `vkQueueSubmit2`; one ended with nothing held goes to `ended`.
+    /// `vkQueueSubmit2`, and one that waits for a shared event's value not yet reached, which the
+    /// completion thread schedules once it is ([`held`]); one ended with nothing held goes to
+    /// `ended`.
     fn step(&mut self, now: u64, joined: &mut Vec<Joined>, ended: &mut Vec<Ended>) -> Step {
         let Some(index) = self.next_ready() else {
             return Step::Idle;
@@ -1623,7 +1625,8 @@ impl WorkState {
         else {
             return Step::Staged;
         };
-        if !pending.gpu.presents() {
+        pending.held = held(&pending.gpu);
+        if !pending.gpu.presents() && pending.held.is_empty() {
             cb.scheduled(now);
             let scheduled = std::mem::take(&mut pending.handlers.scheduled);
             if !scheduled.is_empty() {
@@ -1761,6 +1764,20 @@ impl Fifo {
             }
         }
     }
+}
+
+/// The waits of `gpu`'s segments for a shared event's value the host does not yet see reached,
+/// as its last segment joins a submission: its command buffer stays `Committed` until the
+/// completion thread sees each reached (`Pending::held`). Metal holds a command buffer that waits
+/// for an `MTLSharedEvent`'s value at `Committed`, with no scheduled handler run, while the
+/// signal it waits for runs, and schedules one that waits for an `MTLEvent`'s, so a plain event's
+/// wait holds nothing here.
+fn held(gpu: &Gpu) -> Vec<(Arc<EventInner>, u64)> {
+    (gpu.segments.iter())
+        .flat_map(|segment| &segment.waits)
+        .filter(|(event, value)| event.shared && !event.reached(*value))
+        .map(|(event, value)| (Arc::clone(event), *value))
+        .collect()
 }
 
 /// Whether every wait of `segment` is met by the host's value or by a submitted signal.
@@ -2127,10 +2144,11 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         // signals the consumer's semaphores has passed `vkQueueSubmit2`: a present made from here,
         // its own scheduled handlers' included, waits on a submitted signal. They run before the
         // completion thread learns of it below, so before its completed handlers. One whose
-        // submission failed is not scheduled; its scheduled handlers run as it retires.
+        // submission failed is not scheduled; its scheduled handlers run as it retires. One held
+        // for a shared event's value is scheduled by the completion thread ([`held`]).
         let now = times::host_time();
         for (cb, pending, error) in &mut finished {
-            if error.is_none() && pending.gpu.presents() {
+            if error.is_none() && pending.gpu.presents() && pending.held.is_empty() {
                 cb.scheduled(now);
                 let scheduled = std::mem::take(&mut pending.handlers.scheduled);
                 if !scheduled.is_empty() {
