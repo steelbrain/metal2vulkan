@@ -621,7 +621,7 @@ impl Work {
                 chunk.spans.push(number);
                 let copy = vk::BufferCopy {
                     src_offset: offset,
-                    dst_offset: modified.copy.offset() + at,
+                    dst_offset: modified.copy.range(at).1,
                     size: len,
                 };
                 chunk.copy(ring, index, copy);
@@ -1063,16 +1063,18 @@ impl Work {
             None,
             [Held::Block(Arc::clone(block))],
             |device, command| {
+                let (buffer, base) = block.memory.range(0);
                 // SAFETY: the upload's command buffer is recording, under the lock; the block's
-                // buffer has every usage, and `offset..end` lies in it.
+                // allocation's buffer has every usage, and `offset..end` of the block lies in it
+                // from `base`.
                 unsafe {
                     fill::record(
                         device,
                         command,
                         core.filler.zeros(),
-                        block.memory.buffer,
-                        offset,
-                        end,
+                        buffer,
+                        base + offset,
+                        base + end,
                     )
                 }
             },

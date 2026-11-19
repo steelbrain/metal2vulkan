@@ -620,10 +620,11 @@ impl BlitCommandEncoder {
     fn read_back(&mut self, buffer: &Buffer) -> Result<(), Error> {
         let (core, building) = self.parts();
         if let (block, Some(copy)) = buffer.held() {
-            let (from, to) = (copy.buffer(), block.memory.buffer);
+            let ((from, src_offset), (to, dst_offset)) =
+                (copy.range(0), block.memory.range(buffer.offset()));
             let region = vk::BufferCopy {
-                src_offset: copy.offset(),
-                dst_offset: buffer.offset(),
+                src_offset,
+                dst_offset,
                 size: buffer.length(),
             };
             building.keep(buffer);

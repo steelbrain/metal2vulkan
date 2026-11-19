@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 /// device is torn down when the last handle is dropped: the submit thread submits what is ready
 /// and ends what it holds with [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun);
 /// the completion thread retires the rest as the GPU completes it; the threads are joined; then
-/// every block is freed, after [`BlockMappings::unmap`] for each the consumer was handed, and the
+/// every allocation is freed, after [`BlockMappings::unmap`] for each the consumer mapped, and the
 /// `VkDevice` is destroyed; every gauge reads zero only then. Where the last handle drops in a
 /// handler or a listener, the reaper runs the teardown once the handler returns, and the consumer
 /// waits for the gauges to read zero before it drops its instance or exits. No thread of the
@@ -258,8 +258,9 @@ pub(crate) struct Queues {
 #[non_exhaustive]
 #[derive(Clone, Default)]
 pub struct DeviceOptions {
-    /// The consumer's hook before the runtime frees a block it handed out. `None` where the
-    /// consumer keeps no mapping of its own, so a block is freed at once.
+    /// The consumer's hooks around each allocation of the pool: its map before any of its blocks
+    /// goes out, and its unmap before the allocation is freed. `None` where the consumer keeps no
+    /// mapping of its own.
     pub block_mappings: Option<Arc<dyn BlockMappings>>,
     /// Device extensions the consumer uses beyond the floor's, each enabled where the device
     /// offers it and the features the consumer needs ([`Device::extensions`]).
@@ -489,7 +490,13 @@ impl Device {
             .fold(0, |bits, (index, _)| bits | 1 << index);
 
         let work = Work::new(counters.clone());
-        let pool = Pool::new(options.block_mappings, counters.clone(), granularity);
+        let alignment = memory::buffer_alignment(&device);
+        let pool = Pool::new(
+            options.block_mappings,
+            counters.clone(),
+            granularity,
+            alignment,
+        );
         let core = Arc::new(Core {
             instance,
             physical: raw,
@@ -618,26 +625,26 @@ impl Device {
     /// No Metal counterpart: takes a block of `class` memory of `len` bytes rounded up to 64 KiB
     /// (to the device's `bufferImageGranularity` where that is larger), for the consumer to place
     /// buffers in: a handle ([`Block`]) whose last drop gives it back. A block is a range of one
-    /// of the device's allocations, with a `VkBuffer` of its own.
+    /// of the device's allocations, whose one `VkBuffer` spans it
+    /// ([`BlockInfo::allocation`](crate::BlockInfo::allocation),
+    /// [`BlockInfo::offset`](crate::BlockInfo::offset)).
     ///
-    /// It is, in order: a block of that length given back earlier and kept, with its number,
-    /// address and mapping ([`Metrics::blocks_reused`](crate::Metrics::blocks_reused)); a free
-    /// range of the class's allocations, the first that fits; else the start of an allocation
-    /// made in this call, of [`MemoryClass::block_len`] (16 MiB) or the block's length where that
-    /// is longer, whose rest later blocks share. The block-maker thread makes a class's next
-    /// allocation of 16 MiB off every caller's path while the class's free bytes are fewer than 8
-    /// MiB, so a take that leaves more free sets nothing off beside the consumer's next calls.
-    /// Where a take finds no free range and the class keeps blocks of other lengths, the
-    /// block-maker thread then gives their bytes back to their allocations, after
-    /// [`BlockMappings::unmap`]; the take waits for that only where its own allocation fails, and
-    /// then takes a range of those bytes where one fits.
+    /// It is a free range of the class's allocations: the first that fits whose bytes are all
+    /// zeroed, else the first that fits, in the order the allocations were made, with no Vulkan
+    /// call. An allocation longer than [`MemoryClass::block_len`] (16 MiB), a long one, which a
+    /// longer take made for itself, serves only takes of its own length. Where no free range fits,
+    /// it is the start of an allocation made in this call, of 16 MiB or the block's length where
+    /// that is longer, whose rest later blocks share, which [`BlockMappings::map`] maps before the
+    /// call returns. The block-maker thread makes a class's next allocation of 16 MiB off every
+    /// caller's path while the class's free bytes are fewer than 8 MiB, so a take that leaves more
+    /// free sets nothing off beside the consumer's next calls.
     ///
     /// A block's bytes are undefined, new or taken again, past its zero mark
     /// ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)): how many of its first bytes the runtime
     /// zeroed itself, on the block-maker thread, and nothing held since. The block-maker thread
-    /// zeroes each Shared allocation it makes ahead of need before any take lands in it, and each
-    /// Shared block given back and kept, in steps of 256 KiB from its first byte; a take waits at
-    /// most for the step that runs, never for the rest. A Private block's mark is 0
+    /// zeroes each Shared allocation it makes ahead of need before any take lands in it, and the
+    /// free Shared bytes blocks gave back, in steps of 256 KiB; a take that no other free range
+    /// fits waits at most for the step that runs, never for the rest. A Private block's mark is 0
     /// ([`Device::zero_block_range`] zeroes a range of one ahead of the next commit). Bytes past
     /// the mark are the consumer's to zero where Metal owes zeros. A buffer reads zero where
     /// [`Device::new_buffer`] zeroes its range, as `newBufferWithLength:options:` does in Metal;
@@ -646,8 +653,9 @@ impl Device {
     /// Err: [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's largest allocation or
     /// buffer; [`Limit::BlockIds`](crate::Limit::BlockIds);
     /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) where the block takes an
-    /// allocation past the device's count; [`Error::Vulkan`] where the device is out of memory or
-    /// lost; [`Error::Quiesced`].
+    /// allocation past the device's count; [`Limit::AllocationNotMapped`](crate::Limit::AllocationNotMapped)
+    /// where the consumer did not map the allocation the take made; [`Error::Vulkan`] where the
+    /// device is out of memory or lost; [`Error::Quiesced`].
     pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<Block, Error> {
         let core = &self.shared.core;
         if core.closed() {
@@ -655,7 +663,6 @@ impl Device {
         }
         let memory = core.take_memory(class, len)?;
         let info = memory.info();
-        core.pool.hand(memory.id);
         let block = memory::Block::new(memory, Arc::clone(core));
         Ok(Block::claim(core, info, block))
     }
@@ -671,14 +678,14 @@ impl Device {
     /// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun), and ends; the
     /// block-maker thread ends; the GPU completes everything submitted; the completion thread
     /// retires it, runs the completed handlers, and ends; then [`BlockMappings::unmap`] runs on
-    /// this thread for every block still handed out. After it, no runtime thread touches a block,
+    /// this thread for every allocation still mapped. After it, no runtime thread touches a block,
     /// unless the call answered false. A thread past the timeout ends alone: the completion
     /// thread once the GPU completed what was submitted and it retired that, running its
     /// completed handlers, so what the work held, the device among it, goes once the device's
     /// last handle has dropped.
     ///
-    /// It frees nothing: every block's memory and mapping stays valid until the process ends, or
-    /// until the device's last handle drops, which then frees it without the hook. Later calls
+    /// It frees nothing: every allocation's memory and mapping stays valid until the process ends,
+    /// or until the device's last handle drops, which then frees it without the hook. Later calls
     /// that need a runtime thread return [`Error::Quiesced`]: taking a block, a command buffer,
     /// an enqueue or commit, a zeroed Private buffer, and a listener.
     ///
@@ -702,14 +709,15 @@ impl Device {
     /// handle, made explicit ([`Block`]).
     ///
     /// It takes effect once no [`Buffer`](crate::Buffer) of the block remains and every command
-    /// buffer that used it has retired. The block-maker thread then keeps it, with the same
-    /// number, address, mapping and bytes, for a later [`take_block`](Device::take_block) of its
-    /// length. An allocation none of whose blocks is held is idle, and one that holds a block is
-    /// in use. The block-maker thread frees each allocation that has been idle for 250 ms, the
-    /// idle age, after [`BlockMappings::unmap`] of each block kept in it, one at a time and
-    /// whatever the device's queues are doing; a take that lands in an idle allocation before
-    /// then ends its idle time. Each class keeps a reserve made ahead of need that it does not
-    /// free: the idle allocations its free bytes need to stay at 8 MiB or more.
+    /// buffer that used it has retired. Its bytes are then a free range of its allocation, which
+    /// stays mapped, for a later [`take_block`](Device::take_block) to land in. An allocation none
+    /// of whose blocks is held is idle, and one that holds a block is in use. The block-maker
+    /// thread frees each allocation that has been idle for 250 ms, the idle age, after
+    /// [`BlockMappings::unmap`] of it, one at a time and whatever the device's queues are doing; a
+    /// take that lands in an idle allocation before then ends its idle time. Each class keeps a
+    /// reserve that it does not free: the newest idle 16 MiB allocation with free bytes while the
+    /// class's free bytes need it to stay at 8 MiB or more. A long allocation, which a take longer
+    /// than 16 MiB made for itself, is never the reserve.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's block, whose handle is dropped all the
     /// same.
@@ -846,7 +854,7 @@ impl Shared {
 }
 
 /// Stops the runtime's threads and its GPU work, and runs the consumer's unmap hook for every
-/// block still handed out, on this thread: for [`Device::quiesce`] (`quiesce`, with its deadline)
+/// allocation still mapped, on this thread: for [`Device::quiesce`] (`quiesce`, with its deadline)
 /// and for teardown. Only the first call stops anything; a later one answers at once. True once
 /// the GPU went idle and every thread ended by `deadline`.
 fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: bool) -> bool {
@@ -1191,8 +1199,8 @@ impl Drop for Shared {
         let teardown = move |core: &Arc<Core>| {
             halt(core, threads, None, false);
             // The blocks the consumer still holds handles of go back to the pool once the threads
-            // have stopped and the consumer's unmap hook has returned for each (`halt`), for the
-            // core to free; a handle dropped later finds its claim empty. No buffer of them is
+            // have stopped and the consumer's unmap hook has returned for each allocation
+            // (`halt`), for the core to free; a handle dropped later finds its claim empty. No buffer of them is
             // left: each holds a handle of the device.
             let claims: Vec<Weak<Claim>> = lock(&core.claims).drain().map(|(_, c)| c).collect();
             let blocks: Vec<Arc<memory::Block>> = (claims.iter())
@@ -1245,8 +1253,7 @@ impl Drop for Core {
             // SAFETY: every upload that copied through it retired, and no call reads it.
             unsafe { region.free(self) };
         }
-        let placed = self.places.remaining();
-        memory::free_all(self, placed);
+        memory::free_all(self);
         self.stamps.destroy(&self.device, &self.counters);
         // SAFETY: the device is idle; nothing reads the ring.
         let ring_blocks = unsafe { self.ring.destroy(&self.device) };

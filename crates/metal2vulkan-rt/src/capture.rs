@@ -280,7 +280,8 @@ impl Chunk {
                     .iter()
                     .map(|&(_, _, region)| region)
                     .collect();
-                device.cmd_copy_buffer(command, source, named[index].copy.buffer(), &regions);
+                let (into, _) = named[index].copy.range(0);
+                device.cmd_copy_buffer(command, source, into, &regions);
                 at += run;
             }
             match into_copies.is_empty() {
@@ -363,26 +364,27 @@ pub(crate) fn overflow(
 ) -> Result<u64, Error> {
     let total: u64 = pieces.iter().map(|&(_, start, end)| end - start).sum();
     let mut left = total;
-    // The block being filled: its buffer, mapping and length, and how much of it is filled.
-    let mut block: Option<(vk::Buffer, Mapping, u64, u64)> = None;
+    // The block being filled: its allocation's buffer and its offset there, its mapping and
+    // length, and how much of it is filled.
+    let mut block: Option<(vk::Buffer, u64, Mapping, u64, u64)> = None;
     for &(index, start, end) in pieces {
         let modified = &named[index];
         let mut at = start;
         while at < end {
-            let (buffer, mapping, block_len, filled) = match block.take() {
-                Some(open) if open.3 < open.2 => open,
+            let (buffer, base, mapping, block_len, filled) = match block.take() {
+                Some(open) if open.4 < open.3 => open,
                 _ => {
                     let memory = core.take_memory(MemoryClass::Shared, left.min(OVERFLOW_BLOCK))?;
                     let Some(mapping) = memory.mapping else {
                         unreachable!("a Shared block is mapped");
                     };
-                    let (buffer, block_len) = (memory.buffer, memory.len);
+                    let ((buffer, base), block_len) = (memory.range(0), memory.len);
                     core.counters.rise_by(Gauge::CaptureBytes, block_len);
                     chunk.staging.push(Overflowed {
                         block: Block::new(memory, Arc::clone(core)),
                         counters: core.counters.clone(),
                     });
-                    (buffer, mapping, block_len, 0)
+                    (buffer, base, mapping, block_len, 0)
                 }
             };
             let len = (end - at).min(block_len - filled);
@@ -402,14 +404,14 @@ pub(crate) fn overflow(
                 buffer,
                 index,
                 vk::BufferCopy {
-                    src_offset: filled,
-                    dst_offset: modified.copy.offset() + at,
+                    src_offset: base + filled,
+                    dst_offset: modified.copy.range(at).1,
                     size: len,
                 },
             );
             at += len;
             left -= len;
-            block = Some((buffer, mapping, block_len, filled + len));
+            block = Some((buffer, base, mapping, block_len, filled + len));
         }
     }
     core.counters.count(Metric::CaptureOverflows);

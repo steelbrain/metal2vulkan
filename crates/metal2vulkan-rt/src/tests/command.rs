@@ -29,9 +29,9 @@ pub(crate) mod on_device {
     use crate::submit::IN_FLIGHT;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        host_time, Block, BlockId, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
-        CommandBufferStatus, CommandQueue, Device, DeviceOptions, DispatchType, Error, Fence,
-        Gauges, Instance, MemoryClass, Refusal, SharedEvent,
+        host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
+        CommandBufferError, CommandBufferStatus, CommandQueue, Device, DeviceOptions, DispatchType,
+        Error, Fence, Gauges, Instance, MemoryClass, Refusal, SharedEvent,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1825,19 +1825,48 @@ pub(crate) mod on_device {
         });
     }
 
-    /// The consumer's hook as these tests see it: each block unmapped, and the thread it ran on.
+    /// The consumer's hooks as these tests see them: each allocation mapped, and each unmapped
+    /// with the thread its unmap ran on.
     #[derive(Default)]
-    struct Hook(Mutex<Vec<(BlockId, Option<String>)>>);
+    struct Hook {
+        mapped: Mutex<Vec<AllocationId>>,
+        unmapped: Mutex<Vec<(AllocationId, Option<String>)>>,
+    }
 
     impl BlockMappings for Hook {
-        fn unmap(&self, block: BlockId) {
+        fn map(&self, allocation: &AllocationInfo) -> bool {
+            lock(&self.mapped).push(allocation.id);
+            true
+        }
+
+        fn unmap(&self, allocation: AllocationId) {
             let thread = thread::current().name().map(str::to_string);
-            lock(&self.0).push((block, thread));
+            lock(&self.unmapped).push((allocation, thread));
+        }
+    }
+
+    impl Hook {
+        /// The unmaps, sorted, and what they are where each allocation mapped was unmapped once,
+        /// on `thread`.
+        fn unmaps(
+            &self,
+            thread: Option<&str>,
+        ) -> (
+            Vec<(AllocationId, Option<String>)>,
+            Vec<(AllocationId, Option<String>)>,
+        ) {
+            let mut unmapped = lock(&self.unmapped).clone();
+            unmapped.sort();
+            let mut mapped: Vec<_> = (lock(&self.mapped).iter())
+                .map(|&allocation| (allocation, thread.map(str::to_string)))
+                .collect();
+            mapped.sort();
+            (unmapped, mapped)
         }
     }
 
     /// Quiesce, from a thread other than the one that made the device, with handles alive: held
-    /// work ends NotRun with its handlers run, every handed block is unmapped once on that
+    /// work ends NotRun with its handlers run, every allocation mapped is unmapped once on that
     /// thread, calls that need a thread are refused, memory stays mapped, and a second call
     /// answers at once. The last drop then frees everything without the hook.
     #[test]
@@ -1883,14 +1912,18 @@ pub(crate) mod on_device {
             held.wait_until_completed()
                 .expect("a wait outside a scheduled handler");
 
-            let mut unmapped = lock(&hook.0).clone();
-            unmapped.sort();
-            let mut handed = vec![(arena.block.id, None), (private.id, None)];
-            handed.sort();
+            let (unmapped, mapped) = hook.unmaps(None);
             assert_eq!(
-                unmapped, handed,
-                "{name}: each handed block once, on the quiescing thread"
+                unmapped, mapped,
+                "{name}: each allocation mapped once, on the quiescing thread"
             );
+            for block in [arena.block.allocation, private.allocation] {
+                assert!(
+                    unmapped.iter().any(|(allocation, _)| *allocation == block),
+                    "{name}: {block:?}, a block's allocation"
+                );
+            }
+            let count = unmapped.len();
             assert_eq!(word(&a), 7, "{name}: memory stays mapped");
             assert!(matches!(queue.command_buffer(), Err(Error::Quiesced)));
             assert!(matches!(
@@ -1908,7 +1941,11 @@ pub(crate) mod on_device {
             drop((a, arena, f, e, queue, held, open, device));
             within("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop("quiesce", counters.gauges());
-            assert_eq!(lock(&hook.0).len(), 2, "{name}: no unmap after quiesce");
+            assert_eq!(
+                lock(&hook.unmapped).len(),
+                count,
+                "{name}: no unmap after quiesce"
+            );
         }
     }
 
@@ -1952,10 +1989,16 @@ pub(crate) mod on_device {
             );
             within("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop("handler_teardown", counters.gauges());
+            let (unmapped, mapped) = hook.unmaps(Some("m2v-reaper"));
             assert_eq!(
-                *lock(&hook.0),
-                [(block.id, Some("m2v-reaper".to_string()))],
-                "{name}: unmapped once, by the reaper"
+                unmapped, mapped,
+                "{name}: each allocation mapped once, by the reaper"
+            );
+            assert!(
+                unmapped
+                    .iter()
+                    .any(|(allocation, _)| *allocation == block.allocation),
+                "{name}: the block's allocation"
             );
         }
     }
@@ -2000,10 +2043,16 @@ pub(crate) mod on_device {
             assert_eq!(command_buffer.error(), None, "{name}: it ran");
             within("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop("scheduled_teardown", counters.gauges());
+            let (unmapped, mapped) = hook.unmaps(Some("m2v-reaper"));
             assert_eq!(
-                *lock(&hook.0),
-                [(block.id, Some("m2v-reaper".to_string()))],
-                "{name}: unmapped once, by the reaper"
+                unmapped, mapped,
+                "{name}: each allocation mapped once, by the reaper"
+            );
+            assert!(
+                unmapped
+                    .iter()
+                    .any(|(allocation, _)| *allocation == block.allocation),
+                "{name}: the block's allocation"
             );
         }
     }

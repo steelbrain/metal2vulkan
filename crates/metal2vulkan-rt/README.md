@@ -83,7 +83,8 @@ it, is dropped; a committed command buffer and the blocks the consumer holds do 
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
 `CommandBufferError::NotRun`; the completion thread retires the rest as the GPU completes it and
 runs the handlers; the threads are joined and the GPU goes idle; `BlockMappings::unmap` runs for
-each block the consumer was handed. Teardown runs on the thread that drops the last handle, or,
+each of the pool's allocations the consumer mapped. Teardown runs on the thread that drops the
+last handle, or,
 where that is a handler (scheduled or completed) or a listener, on the reaper once the handler
 returns. A call that holds a
 handle of its own gives it up before another thread can drop the last: `commit` gives up the
@@ -121,21 +122,27 @@ in its memory.
   mapping) or `MemoryClass::Shared` (host-visible, host-coherent and host-cached, mapped for the
   block's life) memory, as a `Block`: rt's own handle, with no Metal counterpart, which derefs to
   the block's `BlockInfo` (its number, class, length, device address and, for Shared, its host
-  address). One `VkBuffer` spans each block, with every buffer usage and a device address.
-  Nothing in a block is exportable.
-- A block is a range of one of the device's allocations of its class, with a `VkBuffer` of its
-  own bound there: the length asked rounded up to 64 KiB (to `bufferImageGranularity` where that is
-  larger), at an offset that is a multiple of that length rounded up to a power of two, up to 2
-  MiB. A take is, in order: a kept block of its length (below), a free range of the class's
-  allocations, the first that fits, else the start of an allocation made in the call, of
-  `MemoryClass::block_len` (16 MiB of either class) or the block's length where that is longer, up
-  to the device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them). Its
-  rest serves later takes.
+  address, and the allocation it is a range of with its offset there). One `VkBuffer` spans each
+  of the pool's allocations, with every buffer usage and a device address; a block is a range of
+  it. Nothing in a block is exportable.
+- A block is a range of one of the device's allocations of its class: the length asked rounded up
+  to 64 KiB (to `bufferImageGranularity` where that is larger), at an offset that is a multiple of
+  that length rounded up to a power of two, up to 2 MiB. A take is the first free range of the
+  class's allocations that fits it whose bytes are all zeroed, else the first that fits, in the
+  order the allocations were made: under the pool's lock, with no Vulkan call and no call to the
+  consumer's hook (`Metrics::takes_from_free_ranges`). A long allocation, which a take longer than
+  16 MiB made for itself, serves only later takes of exactly its length:
+  `Metrics::shared_long_reuses` and `private_long_reuses` count them, and
+  `Gauges::shared_long_reused_bytes` and `private_long_reused_bytes` the bytes of long allocations
+  that hold such a block. Where no free range fits, a take is the start of an allocation made in
+  the call, of `MemoryClass::block_len` (16 MiB of either class) or the block's length where that
+  is longer, up to the device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen`
+  past them). Its rest serves later takes.
 - `Device::new` makes one allocation of each class before it returns. After that the block-maker
   thread makes a class's next allocation of 16 MiB, off every caller's path, while the class's free
   bytes are fewer than 8 MiB, and at no other time: a take that leaves more free sets nothing off
-  beside the consumer's next calls. A take larger than what the pool has kept allocates on the
-  calling thread; the pool keeps 8 MiB ahead per class. A driver may hold the device's other calls for the whole of an
+  beside the consumer's next calls. A take that no free range fits allocates on the calling
+  thread; the pool keeps 8 MiB ahead per class. A driver may hold the device's other calls for the whole of an
   allocation, longer for more bytes: on an RTX 3090 (NVIDIA's Linux driver) a pipeline state's
   creation beside a Shared allocation's making took 6 to 8 ms at 16 MiB and 40 to 45 ms at 256
   MiB; on an RTX 2080 a compute pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared
@@ -163,16 +170,18 @@ in its memory.
   new or taken again. Bytes outside the mark are the consumer's to zero where Metal owes zeros. The
   runtime zeroes from a block's first byte only, on the block-maker thread, off the consumer's
   threads: each Shared allocation it makes ahead of need, whole, before any take lands in it
-  (each device's first one in its making), and each Shared block given back and kept, in steps of
-  256 KiB while it waits for a take of its length. A take waits at most for the step that runs and
-  answers the bytes zeroed so far, so a mark is any length up to the block's. The thread starts no
-  step while a zeroed buffer's memset runs on the consumer's thread (below), so the two do not
-  share the memory bus (`Metrics::zero_steps_held` counts the steps held back). Nothing else counts:
+  (each device's first one in its making), and the free Shared bytes blocks gave back, in steps of
+  256 KiB from the front of each allocation's first free bytes not zeroed, the allocations in the
+  order they were made. A take lands where its whole length is zeroed if any free range of that
+  length is; a take that no free range fits waits at most for the step that runs, and answers the
+  bytes zeroed there, so a mark is any length up to the block's. The thread starts no step while a
+  zeroed buffer's memset runs on the consumer's thread (below), so the two do not share the memory
+  bus (`Metrics::zero_steps_held` counts the steps held back). Nothing else counts:
   not the driver, the memory type or a new allocation. A Private block's mark is 0, as is a block
   of an allocation a take makes itself. The consumer writes the bytes inside the mark only
   through a buffer it places over them, which lowers the mark to the buffer's offset; a zeroed
   buffer (below) zeroes only its bytes past the mark. `Metrics::allocations_zeroed`,
-  `allocation_zeroing_nanos`, `kept_bytes_zeroed` and `kept_zeroing_nanos` count the zeroing,
+  `allocation_zeroing_nanos`, `free_bytes_zeroed` and `free_zeroing_nanos` count the zeroing,
   `zeroed_bytes_taken` the marks the takes answered, and `zeroed_bytes_freed` the bytes zeroed
   for a take that never came, freed with their idle allocation. A buffer reads zero where
   `Device::new_buffer` zeroes its range (below), as Metal zeroes a buffer from
@@ -189,24 +198,19 @@ in its memory.
   the consumer zeroes through the mapping (`Refusal::ZeroRangeShared`), are refused.
 - Dropping a block's last handle gives the block back; `Device::release_block` consumes a handle,
   that drop made explicit. Clones of a handle share one claim, so dropping one of two gives nothing
-  back. It takes effect once no buffer, command buffer or upload using the block remains. The
-  block-maker thread then keeps it, with the same number, address and mapping, for a later take
-  of its length (`Metrics::blocks_reused`): a Private block with its bytes, a Shared one with
-  its bytes zeroed from the front as far as the thread got (its zero mark). A take that no free
-  range fits while the
-  class keeps blocks of other lengths makes its allocation at once, and the block-maker thread then
-  gives those blocks' bytes back to their allocations, after `BlockMappings::unmap` of each; only
-  where the take's allocation fails does it wait for those bytes and take a range of them. An
-  allocation that holds no block anyone holds is idle. Its idle time starts when its last block
+  back. It takes effect once no buffer, command buffer or upload using the block remains: its
+  bytes are then a free range of its allocation at once, as written. A later take that lands
+  there has a new number, and its zero mark is what the block-maker thread zeroed of them since.
+  An allocation that holds no block anyone holds is idle. Its idle time starts when its last block
   comes back, and only a take that lands in it again ends it. The idle age is 250 ms, on every
   device: the block-maker thread frees each allocation idle that long, one at a time, after
-  `BlockMappings::unmap` of each block kept in it, whatever the device's queues are doing, so a
-  program that keeps committing gives back what it stopped using within 250 ms plus the frees
-  ahead of it. It frees between the allocations it makes, never beside one. Each class keeps a
-  reserve that the idle rule does not free: the newest idle 16 MiB allocations with free bytes,
-  taken until the class's free bytes reach 8 MiB. An allocation that holds kept blocks counts
-  only its bytes outside them, so the reserve may hold several 16 MiB allocations. A long
-  allocation, which a take longer than 16 MiB made for itself, is never the reserve.
+  `BlockMappings::unmap` of it, whatever the device's queues are doing, so a program that keeps
+  committing gives back what it stopped using within 250 ms plus the frees ahead of it. It frees
+  between the allocations it makes, never beside one. Each class keeps a reserve that the idle
+  rule does not free: the newest idle 16 MiB allocation with free bytes while the class's free
+  bytes need it to stay at 8 MiB or more. An idle allocation's bytes are all free, so the reserve
+  is one 16 MiB allocation of each class at most. A long allocation, which a take longer than
+  16 MiB made for itself, is never the reserve.
   `Metrics::allocations_freed`
   counts the frees and `Metrics::idle_frees_by_age` their idle times; `Metrics::idle_reuses_by_age`
   counts idle allocations taken again, by how long they were idle. `Gauges::shared_idle_bytes` and
@@ -216,8 +220,8 @@ in its memory.
   count the reserve's bytes. Once the last handle is gone the block's
   number names nothing
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's
-  teardown frees every block still claimed, after the consumer's `BlockMappings::unmap` returned
-  for it; a handle dropped after that does nothing.
+  teardown frees every allocation, blocks still claimed included, each after the consumer's
+  `BlockMappings::unmap` of it returned; a handle dropped after that does nothing.
 - `Device::new_buffer(block, offset, length, zero_from)` makes a `Buffer`: a view of the range,
   with no Vulkan object of its own. Its `gpu_address` is the block's address plus the offset, and
   its `contents` the block's mapping plus the offset, or `None` in a Private block. `zero_from`
@@ -229,7 +233,8 @@ in its memory.
   Private one by a GPU fill of exactly the range, recorded into the upload, which goes ahead of
   every command buffer committed after the call and ends with a barrier that orders the fill
   before every later command (a copy into the buffer among them), and holds the block until it
-  completes. `Metrics::bytes_zeroed` counts the bytes. A length of 0, a length
+  completes. `Metrics::bytes_zeroed` counts the bytes, and `Metrics::zeroed_bytes_used` the bytes of
+  a Shared range that the block's zero mark covered. A length of 0, a length
   past `MAX_BUFFER_LENGTH` (2 GiB) and a range past the block are refused, as Metal answers nil for
   each.
 - A shader reaches a buffer argument's bytes by 32-bit offsets from its bind address, which the
@@ -288,17 +293,32 @@ known gaps below).
 
 ### The consumer's mappings
 
-A consumer that maps blocks itself, into a guest for instance, passes `DeviceOptions::block_mappings`.
-Before the runtime frees a block it handed out, it calls `BlockMappings::unmap(block)`, which
-returns once every mapping the consumer made of it is gone and none of its threads touches the
-block. The memory stays mapped and valid until then. A Shared block given back and kept has not
-had its hook run, and the block-maker thread zeroes its bytes from the front while the consumer's
-mappings of it may still stand: from its give-back to its next take, its bytes are the
-runtime's. It runs once per block: on the block-maker
-thread; in `Device::quiesce`, on the calling thread, for every block still handed out; or at
-teardown, on the thread that tears down, after the runtime's other threads are joined. It never calls
-into the runtime. Blocks the consumer never took are freed without it, and so is every block freed
-after a quiesce.
+A consumer that maps the pool's memory itself, into a guest for instance, passes
+`DeviceOptions::block_mappings`. Its hooks run per allocation, not per block:
+
+- `BlockMappings::map(allocation)` runs once for every allocation of the pool, before any block of
+  it goes out, with the allocation's number, class, length, device address and host mapping. It
+  runs where the allocation is made: in `Device::new` for each class's first, on the block-maker
+  thread for one made ahead of need (`Metrics::allocations_mapped`), and inside the take, on the
+  consumer's thread, for a take that no free range fits (`Metrics::allocations_mapped_on_takes`).
+  It answers false where the consumer has no place for the allocation: the runtime frees it and
+  hands out none of its blocks, and a take that made it returns `Limit::AllocationNotMapped`
+  (`Metrics::allocation_map_refusals`).
+- `BlockMappings::unmap(allocation)` runs once for every allocation `map` accepted, before the
+  allocation is freed, and returns once every mapping the consumer made of it is gone and none of
+  its threads touches it. The memory stays mapped and valid until then. It runs on the block-maker
+  thread before an idle allocation's free; in `Device::quiesce`, on the calling thread, for every
+  allocation still mapped; or at teardown, on the thread that tears down, after the runtime's other
+  threads are joined.
+- Neither runs under the pool's lock, calls into the runtime or drops a runtime handle. Imported
+  blocks are not the pool's, and neither runs for them. An allocation made after a quiesce is
+  neither mapped nor unmapped.
+
+The pool's allocations are in the guest's range whole, their free ranges and the runtime's own
+staging blocks included; the consumer hands the guest blocks only. A block given back stays mapped
+with its allocation, and the block-maker thread zeroes free Shared bytes while the consumer's
+mappings of them stand: from a block's give-back to the next take that lands on its bytes, they are
+the runtime's. A guest kernel that writes a free range damages only its own later buffers.
 
 ### Known gaps of memory blocks
 
@@ -808,7 +828,7 @@ made, with no lock, and never rewritten for layouts.
 bounded by the timeout, it stops the submit thread (ready work is submitted, held work ends
 `NotRun`) and the block-maker, waits for the GPU to complete what was submitted, lets the
 completion thread retire it and end, and then runs `BlockMappings::unmap` on the calling thread for
-every block still handed out. It frees nothing: every block's memory and mapping stays valid until
+every allocation still mapped. It frees nothing: every block's memory and mapping stays valid until
 the process ends. After it, no runtime thread touches a block; later calls that need a thread
 return `Error::Quiesced`. It answers true once the GPU went idle and every thread ended in time,
 and false at once in a handler or a listener, whose thread cannot wait for itself. A second call

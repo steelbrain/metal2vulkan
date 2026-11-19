@@ -2242,12 +2242,19 @@ field	metal2vulkan-air::tensor_ops::RunForm.left	pub left: OperandForm
 field	metal2vulkan-air::tensor_ops::RunForm.right	pub right: OperandForm
 field	metal2vulkan-air::tensor_ops::RunForm.single_thread	pub single_thread: bool
 field	metal2vulkan-air::tensor_ops::RunForm.v2	pub v2: bool
+field	metal2vulkan-rt::AllocationInfo.class	pub class: MemoryClass
+field	metal2vulkan-rt::AllocationInfo.contents	pub contents: Option<NonNull<u8>>
+field	metal2vulkan-rt::AllocationInfo.gpu_address	pub gpu_address: u64
+field	metal2vulkan-rt::AllocationInfo.id	pub id: AllocationId
+field	metal2vulkan-rt::AllocationInfo.len	pub len: u64
+field	metal2vulkan-rt::BlockInfo.allocation	pub allocation: AllocationId
 field	metal2vulkan-rt::BlockInfo.class	pub class: MemoryClass
 field	metal2vulkan-rt::BlockInfo.contents	pub contents: Option<NonNull<u8>>
 field	metal2vulkan-rt::BlockInfo.device_local	pub device_local: bool
 field	metal2vulkan-rt::BlockInfo.gpu_address	pub gpu_address: u64
 field	metal2vulkan-rt::BlockInfo.id	pub id: BlockId
 field	metal2vulkan-rt::BlockInfo.len	pub len: u64
+field	metal2vulkan-rt::BlockInfo.offset	pub offset: u64
 field	metal2vulkan-rt::BlockInfo.zeroed	pub zeroed: u64
 field	metal2vulkan-rt::BufferLayout.bytes_per_image	pub bytes_per_image: u64
 field	metal2vulkan-rt::BufferLayout.bytes_per_row	pub bytes_per_row: u64
@@ -2308,6 +2315,7 @@ field	metal2vulkan-rt::Gauges.pipeline_cache_bytes	pub pipeline_cache_bytes: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
 field	metal2vulkan-rt::Gauges.private_idle_age_nanos	pub private_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
+field	metal2vulkan-rt::Gauges.private_long_reused_bytes	pub private_long_reused_bytes: u64
 field	metal2vulkan-rt::Gauges.private_reserve_bytes	pub private_reserve_bytes: u64
 field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
@@ -2315,6 +2323,7 @@ field	metal2vulkan-rt::Gauges.shadow_bytes	pub shadow_bytes: u64
 field	metal2vulkan-rt::Gauges.shadows	pub shadows: u64
 field	metal2vulkan-rt::Gauges.shared_idle_age_nanos	pub shared_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
+field	metal2vulkan-rt::Gauges.shared_long_reused_bytes	pub shared_long_reused_bytes: u64
 field	metal2vulkan-rt::Gauges.shared_reserve_bytes	pub shared_reserve_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.stage_entries	pub stage_entries: u64
@@ -2332,8 +2341,11 @@ field	metal2vulkan-rt::IndexBuffer.offset	pub offset: u64
 field	metal2vulkan-rt::IndexGrant.class	pub class: IndexClass
 field	metal2vulkan-rt::IndexGrant.count	pub count: u32
 field	metal2vulkan-rt::IndexGrant.first	pub first: u32
+field	metal2vulkan-rt::Metrics.allocation_map_refusals	pub allocation_map_refusals: u64
 field	metal2vulkan-rt::Metrics.allocation_zeroing_nanos	pub allocation_zeroing_nanos: u64
 field	metal2vulkan-rt::Metrics.allocations_freed	pub allocations_freed: u64
+field	metal2vulkan-rt::Metrics.allocations_mapped	pub allocations_mapped: u64
+field	metal2vulkan-rt::Metrics.allocations_mapped_on_takes	pub allocations_mapped_on_takes: u64
 field	metal2vulkan-rt::Metrics.allocations_zeroed	pub allocations_zeroed: u64
 field	metal2vulkan-rt::Metrics.attachment_read_copies	pub attachment_read_copies: u64
 field	metal2vulkan-rt::Metrics.attachment_read_copy_bytes	pub attachment_read_copy_bytes: u64
@@ -2342,7 +2354,6 @@ field	metal2vulkan-rt::Metrics.block_bytes_made	pub block_bytes_made: u64
 field	metal2vulkan-rt::Metrics.block_zero_fill_bytes	pub block_zero_fill_bytes: u64
 field	metal2vulkan-rt::Metrics.block_zero_fills	pub block_zero_fills: u64
 field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
-field	metal2vulkan-rt::Metrics.blocks_reused	pub blocks_reused: u64
 field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
 field	metal2vulkan-rt::Metrics.bytes_zeroed	pub bytes_zeroed: u64
 field	metal2vulkan-rt::Metrics.cache_bytes_written	pub cache_bytes_written: u64
@@ -2364,27 +2375,30 @@ field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_n
 field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.forced_flushes_across_queues	pub forced_flushes_across_queues: u64
+field	metal2vulkan-rt::Metrics.free_bytes_zeroed	pub free_bytes_zeroed: u64
+field	metal2vulkan-rt::Metrics.free_zeroing_nanos	pub free_zeroing_nanos: u64
 field	metal2vulkan-rt::Metrics.groups_beside_another_queue	pub groups_beside_another_queue: u64
 field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
-field	metal2vulkan-rt::Metrics.kept_bytes_zeroed	pub kept_bytes_zeroed: u64
-field	metal2vulkan-rt::Metrics.kept_zeroing_nanos	pub kept_zeroing_nanos: u64
 field	metal2vulkan-rt::Metrics.lone_submissions_across_queues	pub lone_submissions_across_queues: u64
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
 field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64
 field	metal2vulkan-rt::Metrics.over_copies	pub over_copies: u64
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
+field	metal2vulkan-rt::Metrics.private_long_reuses	pub private_long_reuses: u64
 field	metal2vulkan-rt::Metrics.pushes	pub pushes: u64
 field	metal2vulkan-rt::Metrics.pushes_held	pub pushes_held: u64
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.sampler_element_writes	pub sampler_element_writes: u64
+field	metal2vulkan-rt::Metrics.shared_long_reuses	pub shared_long_reuses: u64
 field	metal2vulkan-rt::Metrics.staging_sleeps	pub staging_sleeps: u64
 field	metal2vulkan-rt::Metrics.stamps_not_available	pub stamps_not_available: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-rt::Metrics.submissions_during_frees	pub submissions_during_frees: u64
 field	metal2vulkan-rt::Metrics.submit_infos	pub submit_infos: u64
 field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64
+field	metal2vulkan-rt::Metrics.takes_from_free_ranges	pub takes_from_free_ranges: u64
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64
 field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-rt::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
@@ -2393,6 +2407,7 @@ field	metal2vulkan-rt::Metrics.waits_behind_counter	pub waits_behind_counter: u6
 field	metal2vulkan-rt::Metrics.zero_steps_held	pub zero_steps_held: u64
 field	metal2vulkan-rt::Metrics.zeroed_bytes_freed	pub zeroed_bytes_freed: u64
 field	metal2vulkan-rt::Metrics.zeroed_bytes_taken	pub zeroed_bytes_taken: u64
+field	metal2vulkan-rt::Metrics.zeroed_bytes_used	pub zeroed_bytes_used: u64
 field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device
 field	metal2vulkan-rt::RawDevice.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
@@ -9468,6 +9483,7 @@ method	metal2vulkan-air::tensor_ops::OperandForm::is_cooperative	pub const fn is
 method	metal2vulkan-air::tensor_ops::OperandIndex::from_raw	pub fn from_raw(raw: u64) -> Option<OperandIndex>
 method	metal2vulkan-air::tensor_ops::RunForm::arity	pub fn arity(&self) -> usize
 method	metal2vulkan-air::tensor_ops::RunForm::operand_args	pub fn operand_args(&self) -> [usize; 3]
+method	metal2vulkan-rt::AllocationId::get	pub fn get(self) -> u32
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_buffer	pub fn copy_from_buffer(&mut self, source: &Buffer, layout: BufferLayout, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_buffer_to_buffer	pub fn copy_from_buffer_to_buffer(&mut self, source: &Buffer, source_offset: u64, destination: &Buffer, destination_offset: u64, size: u64) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture	pub fn copy_from_texture(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
@@ -11686,6 +11702,8 @@ struct	metal2vulkan-air::ir::ValueId	#[derive(Clone, Copy, Debug, PartialEq, Eq,
 struct	metal2vulkan-air::ir::ValueIndex	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct ValueIndex
 struct	metal2vulkan-air::tensor_ops::Descriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Descriptor
 struct	metal2vulkan-air::tensor_ops::RunForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct RunForm
+struct	metal2vulkan-rt::AllocationId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub struct AllocationId(u32)
+struct	metal2vulkan-rt::AllocationInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct AllocationInfo
 struct	metal2vulkan-rt::BlitCommandEncoder	pub struct BlitCommandEncoder
 struct	metal2vulkan-rt::Block	#[derive(Clone)] pub struct Block
 struct	metal2vulkan-rt::BlockId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub struct BlockId(u32)
@@ -12281,6 +12299,8 @@ trait-impl	metal2vulkan-air::ir::BlockId impl NodeId	impl NodeId for BlockId
 trait-impl	metal2vulkan-air::ir::Body impl Graph	impl Graph for Body
 trait-impl	metal2vulkan-air::ir::DataLayout impl Default	impl Default for DataLayout
 trait-impl	metal2vulkan-air::tensor_ops::Descriptor impl fmt::Display	impl fmt::Display for Descriptor
+trait-impl	metal2vulkan-rt::AllocationInfo impl fe impl Send	unsafe impl Send for AllocationInfo
+trait-impl	metal2vulkan-rt::AllocationInfo impl fe impl Sync	unsafe impl Sync for AllocationInfo
 trait-impl	metal2vulkan-rt::BlitCommandEncoder impl Drop	impl Drop for BlitCommandEncoder
 trait-impl	metal2vulkan-rt::Block impl Deref	impl Deref for Block
 trait-impl	metal2vulkan-rt::Block impl Drop	impl Drop for Block
@@ -12517,7 +12537,8 @@ trait-item	metal2vulkan-air::graph::NodeId::from_node_index	fn from_node_index(i
 trait-item	metal2vulkan-air::graph::NodeId::node_index	fn node_index(self) -> u32
 trait-item	metal2vulkan-air::ir::Idx::from_index	fn from_index(index: usize) -> Option<Self>
 trait-item	metal2vulkan-air::ir::Idx::index	fn index(self) -> usize
-trait-item	metal2vulkan-rt::BlockMappings::unmap	fn unmap(&self, block: BlockId)
+trait-item	metal2vulkan-rt::BlockMappings::map	fn map(&self, allocation: &AllocationInfo) -> bool
+trait-item	metal2vulkan-rt::BlockMappings::unmap	fn unmap(&self, allocation: AllocationId)
 trait-item	metal2vulkan-runtime::DirtyPages::Watch	type Watch: Send + Sync
 trait-item	metal2vulkan-runtime::DirtyPages::changed	fn changed(&self, since: DirtyStamp, out: &mut Vec<Range<u64>>)
 trait-item	metal2vulkan-runtime::DirtyPages::changed_except	fn changed_except(&self, since: DirtyStamp, writer: NonZeroU64, out: &mut Vec<Range<u64>>)
@@ -13678,6 +13699,7 @@ variant	metal2vulkan-rt::Gap::TextureOverBuffer	TextureOverBuffer { pixel_format
 variant	metal2vulkan-rt::Gap::TextureView	TextureView { kind: TextureViewKind }
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
 variant	metal2vulkan-rt::IndexClass::Texture	Texture
+variant	metal2vulkan-rt::Limit::AllocationNotMapped	AllocationNotMapped { class: MemoryClass, len: u64 }
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }

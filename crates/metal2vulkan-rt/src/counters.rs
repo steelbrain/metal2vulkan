@@ -35,8 +35,6 @@ pub(crate) enum Metric {
     PipelinesCreated,
     /// [`Metrics::blocks_made`].
     BlocksMade,
-    /// [`Metrics::blocks_reused`].
-    BlocksReused,
     /// [`Metrics::dispatches_without_effects`].
     DispatchesWithoutEffects,
     /// [`Metrics::translations`].
@@ -97,7 +95,6 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::Barriers,
     Metric::PipelinesCreated,
     Metric::BlocksMade,
-    Metric::BlocksReused,
     Metric::DispatchesWithoutEffects,
     Metric::Translations,
     Metric::TranslationsLoaded,
@@ -231,12 +228,14 @@ struct Atomics {
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
     bytes_zeroed: AtomicU64,
+    zeroed_bytes_used: AtomicU64,
     allocations_zeroed: AtomicU64,
     allocation_zeroing_nanos: AtomicU64,
-    kept_bytes_zeroed: AtomicU64,
-    kept_zeroing_nanos: AtomicU64,
+    free_bytes_zeroed: AtomicU64,
     zero_steps_held: AtomicU64,
+    free_zeroing_nanos: AtomicU64,
     zeroed_bytes_taken: AtomicU64,
+    takes_from_free_ranges: AtomicU64,
     zeroed_bytes_freed: AtomicU64,
     block_zero_fills: AtomicU64,
     block_zero_fill_bytes: AtomicU64,
@@ -252,7 +251,11 @@ struct Atomics {
     consumer_allocation_max_nanos: AtomicU64,
     maker_allocation_nanos: AtomicU64,
     dispatches_without_effects: AtomicU64,
-    blocks_reused: AtomicU64,
+    shared_long_reuses: AtomicU64,
+    private_long_reuses: AtomicU64,
+    allocations_mapped: AtomicU64,
+    allocations_mapped_on_takes: AtomicU64,
+    allocation_map_refusals: AtomicU64,
     translations: AtomicU64,
     translations_loaded: AtomicU64,
     creations_before_seed: AtomicU64,
@@ -312,6 +315,11 @@ struct Atomics {
     shared_reserve_bytes: AtomicU64,
     /// As [`shared_reserve_bytes`](Self::shared_reserve_bytes), of Private allocations.
     private_reserve_bytes: AtomicU64,
+    /// The bytes of the Shared long allocations a later take holds
+    /// ([`Gauges::shared_long_reused_bytes`]).
+    shared_long_reused_bytes: AtomicU64,
+    /// As [`shared_long_reused_bytes`](Self::shared_long_reused_bytes), of Private allocations.
+    private_long_reused_bytes: AtomicU64,
     capture_bytes: AtomicU64,
     staging_bytes: AtomicU64,
     stage_entries: AtomicU64,
@@ -362,7 +370,6 @@ impl Counters {
             Metric::Barriers => &a.barriers,
             Metric::PipelinesCreated => &a.pipelines_created,
             Metric::BlocksMade => &a.blocks_made,
-            Metric::BlocksReused => &a.blocks_reused,
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
@@ -454,6 +461,18 @@ impl Counters {
         atomic.store(bytes, Relaxed);
     }
 
+    /// The bytes of a class's long allocations (Shared where `shared`) that hold a block of a take
+    /// after the one each was made for ([`Gauges::shared_long_reused_bytes`]).
+    pub(crate) fn long_reused_bytes(&self, shared: bool, bytes: u64) {
+        let a = &self.atomics;
+        let atomic = if shared {
+            &a.shared_long_reused_bytes
+        } else {
+            &a.private_long_reused_bytes
+        };
+        atomic.store(bytes, Relaxed);
+    }
+
     /// A `vkAllocateMemory` that took `nanos` nanoseconds, on the block-maker thread where
     /// `maker`, else on a thread of the consumer's ([`Metrics::consumer_allocation_nanos`]).
     pub(crate) fn allocation_time(&self, nanos: u64, maker: bool) {
@@ -487,6 +506,12 @@ impl Counters {
         self.atomics.bytes_zeroed.fetch_add(bytes, Relaxed);
     }
 
+    /// `bytes` of a new Shared buffer owed zeros that its block's zero mark covered, so its
+    /// memset skipped them ([`Metrics::zeroed_bytes_used`]).
+    pub(crate) fn zeroed_used(&self, bytes: u64) {
+        self.atomics.zeroed_bytes_used.fetch_add(bytes, Relaxed);
+    }
+
     /// A Shared allocation zeroed ahead of need, in `nanos` ([`Metrics::allocations_zeroed`]).
     pub(crate) fn zeroed_ahead(&self, nanos: u64) {
         let a = &self.atomics;
@@ -499,16 +524,48 @@ impl Counters {
         self.atomics.zero_steps_held.fetch_add(1, Relaxed);
     }
 
-    /// A step of a kept block zeroed, `bytes` in `nanos` ([`Metrics::kept_bytes_zeroed`]).
-    pub(crate) fn zeroed_kept(&self, bytes: u64, nanos: u64) {
+    /// A step of free bytes zeroed, `bytes` in `nanos` ([`Metrics::free_bytes_zeroed`]).
+    pub(crate) fn zeroed_free(&self, bytes: u64, nanos: u64) {
         let a = &self.atomics;
-        a.kept_bytes_zeroed.fetch_add(bytes, Relaxed);
-        a.kept_zeroing_nanos.fetch_add(nanos, Relaxed);
+        a.free_bytes_zeroed.fetch_add(bytes, Relaxed);
+        a.free_zeroing_nanos.fetch_add(nanos, Relaxed);
     }
 
-    /// A take whose zero mark is `bytes` ([`Metrics::zeroed_bytes_taken`]).
-    pub(crate) fn zeroed_taken(&self, bytes: u64) {
-        self.atomics.zeroed_bytes_taken.fetch_add(bytes, Relaxed);
+    /// A take carved from a long allocation made for another take, of a Shared one where `shared`
+    /// ([`Metrics::shared_long_reuses`]).
+    pub(crate) fn long_reuse(&self, shared: bool) {
+        let a = &self.atomics;
+        let atomic = if shared {
+            &a.shared_long_reuses
+        } else {
+            &a.private_long_reuses
+        };
+        atomic.fetch_add(1, Relaxed);
+    }
+
+    /// An allocation the consumer's hook mapped, inside a take where `on_take`
+    /// ([`Metrics::allocations_mapped`]).
+    pub(crate) fn mapped(&self, on_take: bool) {
+        let a = &self.atomics;
+        let atomic = if on_take {
+            &a.allocations_mapped_on_takes
+        } else {
+            &a.allocations_mapped
+        };
+        atomic.fetch_add(1, Relaxed);
+    }
+
+    /// An allocation the consumer's hook did not map ([`Metrics::allocation_map_refusals`]).
+    pub(crate) fn map_refused(&self) {
+        self.atomics.allocation_map_refusals.fetch_add(1, Relaxed);
+    }
+
+    /// A take carved from a free range, whose zero mark is `bytes`
+    /// ([`Metrics::takes_from_free_ranges`], [`Metrics::zeroed_bytes_taken`]).
+    pub(crate) fn carved(&self, bytes: u64) {
+        let a = &self.atomics;
+        a.takes_from_free_ranges.fetch_add(1, Relaxed);
+        a.zeroed_bytes_taken.fetch_add(bytes, Relaxed);
     }
 
     /// `bytes` zeroed and then freed before a take ([`Metrics::zeroed_bytes_freed`]).
@@ -652,12 +709,14 @@ impl Counters {
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
             bytes_zeroed: a.bytes_zeroed.load(Relaxed),
+            zeroed_bytes_used: a.zeroed_bytes_used.load(Relaxed),
             allocations_zeroed: a.allocations_zeroed.load(Relaxed),
             allocation_zeroing_nanos: a.allocation_zeroing_nanos.load(Relaxed),
-            kept_bytes_zeroed: a.kept_bytes_zeroed.load(Relaxed),
-            kept_zeroing_nanos: a.kept_zeroing_nanos.load(Relaxed),
+            free_bytes_zeroed: a.free_bytes_zeroed.load(Relaxed),
+            free_zeroing_nanos: a.free_zeroing_nanos.load(Relaxed),
             zero_steps_held: a.zero_steps_held.load(Relaxed),
             zeroed_bytes_taken: a.zeroed_bytes_taken.load(Relaxed),
+            takes_from_free_ranges: a.takes_from_free_ranges.load(Relaxed),
             zeroed_bytes_freed: a.zeroed_bytes_freed.load(Relaxed),
             block_zero_fills: a.block_zero_fills.load(Relaxed),
             block_zero_fill_bytes: a.block_zero_fill_bytes.load(Relaxed),
@@ -671,7 +730,11 @@ impl Counters {
             consumer_allocation_nanos: a.consumer_allocation_nanos.load(Relaxed),
             consumer_allocation_max_nanos: a.consumer_allocation_max_nanos.load(Relaxed),
             maker_allocation_nanos: a.maker_allocation_nanos.load(Relaxed),
-            blocks_reused: a.blocks_reused.load(Relaxed),
+            shared_long_reuses: a.shared_long_reuses.load(Relaxed),
+            private_long_reuses: a.private_long_reuses.load(Relaxed),
+            allocations_mapped: a.allocations_mapped.load(Relaxed),
+            allocations_mapped_on_takes: a.allocations_mapped_on_takes.load(Relaxed),
+            allocation_map_refusals: a.allocation_map_refusals.load(Relaxed),
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
@@ -753,6 +816,8 @@ impl Counters {
             private_idle_age_nanos: age(&a.private_idle_since),
             shared_reserve_bytes: a.shared_reserve_bytes.load(Relaxed),
             private_reserve_bytes: a.private_reserve_bytes.load(Relaxed),
+            shared_long_reused_bytes: a.shared_long_reused_bytes.load(Relaxed),
+            private_long_reused_bytes: a.private_long_reused_bytes.load(Relaxed),
             capture_bytes: a.capture_bytes.load(Relaxed),
             staging_bytes: a.staging_bytes.load(Relaxed),
             stage_entries: a.stage_entries.load(Relaxed),
@@ -802,6 +867,12 @@ pub struct Metrics {
     ///
     /// [`BlockInfo::zeroed`]: crate::BlockInfo::zeroed
     pub bytes_zeroed: u64,
+    /// The bytes of new Shared buffers owed zeros that their blocks' zero marks covered
+    /// ([`BlockInfo::zeroed`]), so the buffers' memsets skipped them: the runtime's zeroing that
+    /// a buffer used, against [`bytes_zeroed`](Self::bytes_zeroed), the consumer's thread's.
+    ///
+    /// [`BlockInfo::zeroed`]: crate::BlockInfo::zeroed
+    pub zeroed_bytes_used: u64,
     /// Shared allocations the runtime zeroed whole ahead of need, before any take landed in them:
     /// the block-maker thread's and each device's first. A zero mark ([`BlockInfo::zeroed`]) of a
     /// block in one counts those bytes.
@@ -810,19 +881,24 @@ pub struct Metrics {
     pub allocations_zeroed: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) that zeroing took, in total.
     pub allocation_zeroing_nanos: u64,
-    /// Bytes of Shared blocks given back and kept that the block-maker thread zeroed, in steps of
-    /// 256 KiB from each one's first byte.
-    pub kept_bytes_zeroed: u64,
+    /// Free Shared bytes, given back by blocks, that the block-maker thread zeroed, in steps of
+    /// 256 KiB from the front of each allocation's first free bytes not zeroed.
+    pub free_bytes_zeroed: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) those steps took, in total.
-    pub kept_zeroing_nanos: u64,
+    pub free_zeroing_nanos: u64,
     /// Times the block-maker thread held a zero step back because a memset of Shared bytes ran
     /// on the consumer's thread ([`Device::new_buffer`](crate::Device::new_buffer)'s zeroing): it
     /// starts the step once the memset ends, so the two do not share the memory bus.
     pub zero_steps_held: u64,
     /// The zero marks of every take, summed: the bytes the takes found zeroed.
     pub zeroed_bytes_taken: u64,
+    /// Takes carved from a free range of an allocation already made: under the pool's lock, with
+    /// no Vulkan call and no call to the consumer's hook. A take that no free range fits makes an
+    /// allocation instead ([`consumer_allocations`](Self::consumer_allocations),
+    /// [`allocations_mapped_on_takes`](Self::allocations_mapped_on_takes)).
+    pub takes_from_free_ranges: u64,
     /// Bytes the runtime zeroed that an idle allocation's free gave back before any take found
-    /// them: its clean bytes and its kept blocks' zeroed ones.
+    /// them: its clean bytes.
     pub zeroed_bytes_freed: u64,
     /// Zero fills the consumer asked of Private blocks
     /// ([`Device::zero_block_range`](crate::Device::zero_block_range)).
@@ -862,9 +938,21 @@ pub struct Metrics {
     /// took, in total: the block-maker thread's, off the consumer's threads, and each class's
     /// first allocation in the device's making.
     pub maker_allocation_nanos: u64,
-    /// Blocks taken again: a take of the length of a block given back and kept, which took that
-    /// block with its number, address and mapping, and no new range or allocation.
-    pub blocks_reused: u64,
+    /// Shared takes carved from a long allocation, one a take longer than the 16 MiB unit made for
+    /// itself, after that take: a take of the same length, which a long allocation alone serves.
+    pub shared_long_reuses: u64,
+    /// As [`shared_long_reuses`](Self::shared_long_reuses), of Private takes.
+    pub private_long_reuses: u64,
+    /// Allocations of the pool the consumer's
+    /// [`BlockMappings::map`](crate::BlockMappings::map) mapped ahead of need: on the block-maker
+    /// thread, and each class's first in the device's making, off every take's path.
+    pub allocations_mapped: u64,
+    /// Allocations of the pool the consumer's hook mapped inside a take, on the consumer's thread:
+    /// a take that no free range fits.
+    pub allocations_mapped_on_takes: u64,
+    /// Allocations the consumer's hook did not map, which the runtime freed with none of their
+    /// blocks handed out.
+    pub allocation_map_refusals: u64,
     /// Dispatches of a kernel that writes no memory (`PipelineInterface::writes_memory`),
     /// direct and indirect: each was checked as Metal checks it, and nothing was recorded, bound
     /// or read for it, as it has no effect a program can observe.
@@ -1128,6 +1216,12 @@ pub struct Gauges {
     pub shared_reserve_bytes: u64,
     /// As [`shared_reserve_bytes`](Self::shared_reserve_bytes), of Private allocations.
     pub private_reserve_bytes: u64,
+    /// Bytes of the Shared long allocations, each one a take longer than the 16 MiB unit made for
+    /// itself, that a later take of its length holds: the whole allocation, until its block comes
+    /// back.
+    pub shared_long_reused_bytes: u64,
+    /// As [`shared_long_reused_bytes`](Self::shared_long_reused_bytes), of Private allocations.
+    pub private_long_reused_bytes: u64,
     /// Bytes of staging for Managed buffers' captures: the capture ring, once a commit made it, and
     /// the staging blocks of overflows that command buffers not yet retired hold.
     pub capture_bytes: u64,

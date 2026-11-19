@@ -2,7 +2,7 @@
 
 use crate::arrays::IndexClass;
 use crate::floor::BelowFloor;
-use crate::memory::BlockId;
+use crate::memory::{BlockId, MemoryClass};
 use ash::vk;
 use metal2vulkan::metal::PixelFormat;
 use std::{fmt, io};
@@ -1182,6 +1182,17 @@ pub enum Limit {
         /// The most allocations the device holds at once.
         max: u32,
     },
+    /// A take that no free range fits made an allocation that the consumer's
+    /// [`BlockMappings::map`](crate::BlockMappings::map) did not map: the runtime freed it, and
+    /// hands out none of its blocks. Metal has no counterpart: its memory has no second mapping.
+    ///
+    /// Basis: ours (the consumer's hook gave the allocation no place in its own address range).
+    AllocationNotMapped {
+        /// The class of the allocation.
+        class: MemoryClass,
+        /// The length of the block the take asked for.
+        len: u64,
+    },
     /// A multisample texture of a sample count the device does not make for its format, type and
     /// usage.
     ///
@@ -1627,6 +1638,10 @@ impl fmt::Display for Limit {
             Limit::MemoryAllocations { max } => {
                 write!(f, "the device holds {max} memory allocations already")
             }
+            Limit::AllocationNotMapped { class, len } => write!(
+                f,
+                "the consumer did not map the {class:?} allocation made for a block of {len} bytes"
+            ),
             Limit::TextureSamples {
                 sample_count,
                 counts,

@@ -1,10 +1,10 @@
 //! Memory: the blocks the consumer takes and releases, each a range of one of the device's
-//! allocations; the pool that hands them out, keeps them, and frees idle allocations; the
-//! allocations its own thread makes ahead of need, while a class's free bytes run low; and how
-//! memory is made and freed. A block's bytes are undefined but for its zero mark
+//! allocations; the pool that hands them out from the allocations' free ranges and frees idle
+//! allocations; the allocations its own thread makes ahead of need, while a class's free bytes run
+//! low; and how memory is made and freed. A block's bytes are undefined but for its zero mark
 //! ([`BlockInfo::zeroed`]): the block-maker thread zeroes each Shared allocation it makes ahead of
-//! need, and each Shared block given back and kept, from its first byte in steps, and a take
-//! answers how many of the block's first bytes it zeroed. A buffer reads zero where
+//! need, and the free bytes blocks gave back, in steps, and a take answers how many of the
+//! block's first bytes it zeroed. A buffer reads zero where
 //! [`Device::new_buffer`](crate::Device::new_buffer) zeroes its range.
 
 use crate::counters::{Counters, Gauge, Metric};
@@ -13,14 +13,14 @@ use crate::error::{Error, Limit};
 use crate::floor;
 use crate::places::Ranges;
 use ash::vk;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 /// The length of each allocation the block-maker thread makes, and of an allocation a take makes
-/// where no free range fits it, unless the take is longer: 16 MiB of either class.
+/// where no free range fits it, unless the take is longer: 16 MiB of either class, the unit.
 ///
 /// A driver may hold the device's other calls (pipeline creation, submissions, other allocations)
 /// for the whole of an allocation's `vkAllocateMemory`, and the hold grows with the bytes: on an
@@ -28,8 +28,8 @@ use std::time::Duration;
 /// Private. The call alone, on an otherwise idle device, takes 2.9 to 4 ms for 16 MiB of Shared
 /// memory on an RTX 2080 or 3090 and 0.55 ms of Private, against 0.3 ms or less for either on
 /// RADV, Mesa's Intel driver and Intel's Windows driver for the UHD Graphics 630. So allocations
-/// are short, and a take longer than one pays its own length once: the allocation it makes serves
-/// later takes as free ranges.
+/// are short, and a take longer than one pays its own length once: the allocation it makes, a
+/// long allocation, serves later takes of that length.
 const ALLOCATION_LEN: u64 = 16 << 20;
 
 /// The block-maker thread makes an allocation of a class while the class's free bytes, the free
@@ -48,17 +48,17 @@ const GRANULE: u64 = 64 << 10;
 /// block's first byte is placed at one from the allocation's.
 const BASE_ALIGN: u64 = 2 << 20;
 
-/// The bytes of a kept Shared block the block-maker thread zeroes in one step. A take of the
-/// block waits for the step that runs, at most this many bytes, and finds the bytes zeroed so far
-/// ([`BlockInfo::zeroed`]).
+/// The free Shared bytes the block-maker thread zeroes in one step. A take that no other free
+/// range fits waits for the step that runs, at most this many bytes, and finds the bytes zeroed
+/// so far ([`BlockInfo::zeroed`]).
 pub(crate) const ZERO_STEP: u64 = 256 << 10;
 
 /// The idle age, in nanoseconds of [`host_time`](crate::host_time): 250 ms, one value for every
 /// device. An allocation is idle once it holds no live block: its idle time starts when its last
 /// live block comes back, and only a take that lands in it again ends it. Commits and submissions
 /// play no part, so a program that keeps committing gives back what it stopped using. The
-/// block-maker thread frees an allocation idle this long, after the hook of each block kept in
-/// it, one at a time and between the allocations it makes, so a free never runs beside its own
+/// block-maker thread frees an allocation idle this long, after the consumer's unmap of it, one at
+/// a time and between the allocations it makes, so a free never runs beside its own
 /// `vkAllocateMemory`; a class's reserve ([`MAKE_BELOW`]) is not freed. A driver may hold a
 /// submission made during a free for the rest of it (on the NVIDIA cards measured in
 /// Thunderbolt enclosures, freeing host-visible memory takes about 1.1 ms per MiB):
@@ -93,7 +93,8 @@ impl MemoryClass {
     /// A [`Device::take_block`](crate::Device::take_block) is a range of one of the class's
     /// allocations, the first with room; the block-maker thread makes another while the class's
     /// free bytes are fewer than half this. A take that no free range fits makes an allocation of
-    /// this length, or of its own where it is longer, which later takes share.
+    /// this length, which later takes share, or of its own where it is longer, which only later
+    /// takes of that length share.
     pub const fn block_len(self) -> u64 {
         ALLOCATION_LEN
     }
@@ -115,11 +116,23 @@ impl MemoryClass {
 }
 
 /// No Metal counterpart: a block's number. Numbers start at 1 and are never reused during the
-/// device's life; a block released and taken again at its length keeps its number.
+/// device's life: each take is a new number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BlockId(u32);
 
 impl BlockId {
+    /// The number.
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+/// No Metal counterpart: an allocation's number, the `VkDeviceMemory` blocks are ranges of.
+/// Numbers start at 1 and are never reused during the device's life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AllocationId(u32);
+
+impl AllocationId {
     /// The number.
     pub fn get(self) -> u32 {
         self.0
@@ -131,8 +144,8 @@ impl BlockId {
 ///
 /// Plain data, which the block's handle ([`Block`](crate::Block)) derefs to: the block lives
 /// until its last handle and its last buffer, command buffer or upload are gone, or until the
-/// device is torn down. One `VkBuffer` spans it, with every buffer usage and a device
-/// address. Nothing in it is exportable.
+/// device is torn down. It is a range of one allocation, whose one `VkBuffer`, with every buffer
+/// usage and a device address, spans it. Nothing in it is exportable.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct BlockInfo {
@@ -143,7 +156,13 @@ pub struct BlockInfo {
     /// The length asked for, rounded up to 64 KiB (to the device's `bufferImageGranularity`
     /// where that is larger).
     pub len: u64,
-    /// `gpuAddress` of the block's first byte: its `VkBuffer`'s device address.
+    /// The allocation it is a range of, which [`BlockMappings::map`] was told of before this
+    /// block went out.
+    pub allocation: AllocationId,
+    /// The offset of its first byte in that allocation.
+    pub offset: u64,
+    /// `gpuAddress` of the block's first byte: its allocation's device address plus
+    /// [`offset`](Self::offset).
     pub gpu_address: u64,
     /// `contents` of the block's first byte: the host mapping of a Shared block, `None` for a
     /// Private one.
@@ -155,12 +174,13 @@ pub struct BlockInfo {
     pub device_local: bool,
     /// The zero mark: how many of the block's first bytes the runtime itself zeroed and nothing
     /// held since, as [`Device::take_block`](crate::Device::take_block) found them. They read
-    /// zero. The runtime zeroes from a block's first byte only, on the block-maker thread: a
-    /// Shared allocation it makes ahead of need, whole, before any take lands in it, and a
-    /// Shared block given back and kept, in steps of 256 KiB while it waits for a take of its
-    /// length. A take between two steps finds the bytes zeroed so far, so the mark is any length
-    /// up to [`len`](Self::len). Nothing else counts: not the driver, the memory type or a new
-    /// allocation. 0 for a Private block and for a block of an allocation a take made itself.
+    /// zero. The runtime zeroes Shared memory on the block-maker thread alone: an allocation it
+    /// makes ahead of need, whole, before any take lands in it, and the free bytes blocks gave
+    /// back, in steps of 256 KiB from the front of each allocation's first free bytes not zeroed.
+    /// A take lands where its whole length is zeroed if any free range of that length is, so the
+    /// mark is any length up to [`len`](Self::len). Nothing else counts: not the driver, the
+    /// memory type or a new allocation. 0 for a Private block and for a block of an allocation a
+    /// take made itself.
     ///
     /// Bytes past the mark are the consumer's to zero where Metal owes zeros. The mark is the
     /// take's: the consumer writes the bytes inside it only through a buffer it places over them
@@ -175,46 +195,87 @@ unsafe impl Send for BlockInfo {}
 // SAFETY: as above.
 unsafe impl Sync for BlockInfo {}
 
-/// No Metal counterpart: the consumer's hook before the runtime frees memory it handed out, or
-/// hands it out again in another block.
-///
-/// The runtime calls [`unmap`](BlockMappings::unmap) once for every block
-/// [`Device::take_block`](crate::Device::take_block) returned, before the block's bytes are freed
-/// or become part of another block: when the pool gives a kept block's bytes back to its
-/// allocation for a take of another length, when it frees an idle allocation, when a block given
-/// back was in a spilled allocation, and at teardown for every block still alive. A block
-/// released and taken again at its length keeps its number, address and mapping, and its hook has
-/// not run. Blocks the consumer never took are freed without it.
-pub trait BlockMappings: Send + Sync {
-    /// Returns only once every mapping of `block` the consumer made is gone and none of its
-    /// threads touches the block's memory. The memory stays mapped and valid until it returns.
-    ///
-    /// It runs once per block: on the block-maker thread; in
-    /// [`Device::quiesce`](crate::Device::quiesce), on the thread that calls it, for every block
-    /// still handed out; or at teardown, on the thread that ends it, once the runtime's other
-    /// threads are joined. It makes no call into the runtime and drops no runtime handle.
-    fn unmap(&self, block: BlockId);
+/// No Metal counterpart: an allocation of the pool, as [`BlockMappings::map`] is told of it.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug)]
+pub struct AllocationInfo {
+    /// The allocation's number, which the blocks of it carry
+    /// ([`BlockInfo::allocation`](crate::BlockInfo::allocation)).
+    pub id: AllocationId,
+    /// The storage mode of its blocks.
+    pub class: MemoryClass,
+    /// Its length: 16 MiB ([`MemoryClass::block_len`]), or a take's own length where that is
+    /// longer.
+    pub len: u64,
+    /// The device address of its first byte.
+    pub gpu_address: u64,
+    /// The host mapping of its first byte, which lives as long as the allocation, for a Shared
+    /// allocation; `None` for a Private one, which has no host mapping.
+    pub contents: Option<NonNull<u8>>,
 }
 
-/// A block: a range of an allocation, the `VkBuffer` bound to it alone, and its mapping.
+// SAFETY: plain data, as `BlockInfo`.
+unsafe impl Send for AllocationInfo {}
+// SAFETY: as above.
+unsafe impl Sync for AllocationInfo {}
+
+/// No Metal counterpart: the consumer's hooks around each allocation of the pool, for a consumer
+/// that maps the allocations into a guest's address range itself.
+///
+/// The runtime calls [`map`](BlockMappings::map) once for every allocation of the pool it makes,
+/// before any block of it goes out, and [`unmap`](BlockMappings::unmap) once for every allocation
+/// `map` accepted, before the allocation is freed. The guest's range holds whole allocations,
+/// their free ranges and the runtime's own staging blocks included; the consumer hands the guest
+/// blocks alone. A block given back stays mapped with its allocation: a guest kernel that writes
+/// a free range damages only its own later blocks' bytes. Imported blocks are not the pool's, and
+/// neither hook runs for them.
+pub trait BlockMappings: Send + Sync {
+    /// The allocation `allocation` describes was made. True once the consumer has mapped it; false
+    /// where it has no place for it (no guest address): the runtime then frees the allocation and
+    /// hands out none of its blocks, and a take that made it returns
+    /// [`Limit::AllocationNotMapped`](crate::Limit::AllocationNotMapped), counted in
+    /// [`Metrics::allocation_map_refusals`](crate::Metrics::allocation_map_refusals).
+    ///
+    /// It runs where the allocation is made: on the block-maker thread for the allocations made
+    /// ahead of need, on the thread in [`Device::new`](crate::Device::new) for each class's first,
+    /// and inside [`Device::take_block`](crate::Device::take_block), on the consumer's thread, for
+    /// a take that no free range fits. Never under the pool's lock. It makes no call into the
+    /// runtime and drops no runtime handle.
+    fn map(&self, allocation: &AllocationInfo) -> bool;
+
+    /// Returns only once every mapping of `allocation` the consumer made is gone and none of its
+    /// threads touches the allocation's memory. The memory stays mapped and valid until it
+    /// returns, and is freed after.
+    ///
+    /// It runs once per allocation `map` accepted: on the block-maker thread before an idle
+    /// allocation's free; in [`Device::quiesce`](crate::Device::quiesce), on the thread that calls
+    /// it, for every allocation still mapped; or at teardown, on the thread that ends it, once the
+    /// runtime's other threads are joined. Never under the pool's lock. It makes no call into the
+    /// runtime and drops no runtime handle.
+    fn unmap(&self, allocation: AllocationId);
+}
+
+/// A block: a range of an allocation, its allocation's `VkBuffer`, and its mapping.
 #[derive(Clone, Copy)]
 pub(crate) struct Memory {
     pub(crate) id: BlockId,
     pub(crate) class: MemoryClass,
     pub(crate) len: u64,
     /// Its allocation, and its first byte's offset there.
+    allocation: AllocationId,
     memory: vk::DeviceMemory,
     base: u64,
-    pub(crate) buffer: vk::Buffer,
+    /// The allocation's `VkBuffer`, which spans the allocation ([`range`](Self::range)).
+    buffer: vk::Buffer,
+    /// The device address of the block's first byte.
     pub(crate) address: u64,
     pub(crate) mapping: Option<Mapping>,
     /// Its memory type is device-local.
     device_local: bool,
     /// A Private block in another memory type than the Private one, which was out of memory.
     spilled: bool,
-    /// How many of its first bytes the runtime zeroed and nothing held since: at a take, the
-    /// take's mark ([`BlockInfo::zeroed`]); kept, the bytes the block-maker thread zeroed so far.
-    /// 0 once it is given back, as the consumer may have written any byte of it.
+    /// How many of its first bytes the runtime zeroed and nothing held since, at the take
+    /// ([`BlockInfo::zeroed`]).
     zeroed: u64,
 }
 
@@ -230,6 +291,13 @@ impl Memory {
         self.base
     }
 
+    /// The `VkBuffer` that commands reach the block's byte `offset` through, and that byte's offset
+    /// in it: the allocation's buffer, which spans the allocation, at the block's base plus
+    /// `offset`.
+    pub(crate) fn range(&self, offset: u64) -> (vk::Buffer, u64) {
+        (self.buffer, self.base + offset)
+    }
+
     /// Whether it is a Private block in another memory type than the Private one.
     pub(crate) fn spilled(&self) -> bool {
         self.spilled
@@ -240,6 +308,8 @@ impl Memory {
             id: self.id,
             class: self.class,
             len: self.len,
+            allocation: self.allocation,
+            offset: self.base,
             gpu_address: self.address,
             contents: self.mapping.map(Mapping::get),
             device_local: self.device_local,
@@ -255,7 +325,7 @@ pub(crate) struct Mapping(NonNull<u8>);
 
 // SAFETY: an address. The runtime writes through it only while it owns the bytes: `new_buffer`
 // zeroing the range of the buffer it makes, and the block-maker thread zeroing an allocation
-// before it joins the pool or a kept block that no take hands out meanwhile.
+// before it joins the pool or free bytes that no take hands out meanwhile.
 unsafe impl Send for Mapping {}
 // SAFETY: as above.
 unsafe impl Sync for Mapping {}
@@ -312,18 +382,23 @@ impl Drop for Block {
     }
 }
 
-/// One `VkDeviceMemory` of a class and the ranges of it no block holds.
+/// One `VkDeviceMemory` of a class, the `VkBuffer` that spans it, and the ranges of it no block
+/// holds.
 struct Allocation {
+    id: AllocationId,
     memory: vk::DeviceMemory,
+    buffer: vk::Buffer,
+    /// The device address of its first byte.
+    address: u64,
     len: u64,
     mapping: Option<Mapping>,
     device_local: bool,
     spilled: bool,
-    /// Bytes no block holds, handed out or kept.
+    /// Bytes no block holds.
     free: Ranges,
     /// Free bytes the runtime zeroed that no block held since: all of a Shared allocation made
-    /// ahead of need, less each block carved from it, and the zeroed bytes of a kept block given
-    /// back to it.
+    /// ahead of need, less each block carved from it, and the free bytes the block-maker thread
+    /// zeroed since.
     clean: Ranges,
     /// Its blocks handed out and not yet given back to the pool.
     live: usize,
@@ -334,22 +409,40 @@ struct Allocation {
     /// the class's free bytes, and the idle rule frees it next, so the next allocation tries
     /// device-local memory again.
     retiring: bool,
+    /// A long allocation, longer than [`ALLOCATION_LEN`], that holds a block of a take after the
+    /// one it was made for, until it is idle again
+    /// ([`Gauges::shared_long_reused_bytes`](crate::Gauges::shared_long_reused_bytes)).
+    reused: bool,
 }
 
-/// The pool: every allocation of each class, and the blocks given back and kept for a take of
-/// their length.
+impl Allocation {
+    /// Whether it is a unit allocation, of [`ALLOCATION_LEN`], which any take that fits shares,
+    /// where a long one, made for a take longer than the unit, serves only a take of its own
+    /// length.
+    fn unit(&self) -> bool {
+        self.len <= ALLOCATION_LEN
+    }
+
+    /// Whether a take of `len` bytes may land in it: a unit allocation for any take, a long one
+    /// for a take of exactly its length.
+    fn serves(&self, len: u64) -> bool {
+        !self.retiring && (self.unit() || self.len == len)
+    }
+}
+
+/// The pool: every allocation of each class, and the ranges of each that no block holds.
 ///
-/// The block-maker thread ([`run`]) makes an allocation of a class while the class's free bytes
-/// are fewer than [`MAKE_BELOW`]; a take never waits for it. A take that no free range fits, and
-/// that no kept block of its length serves, makes an allocation itself, and where the class keeps
-/// blocks of other lengths, asks the block-maker thread to give their bytes back to their
-/// allocations, after the consumer's hook on that thread. Only where its allocation fails does it
-/// wait, for those bytes, and look for a free range once more. It waits only while the block-maker
-/// thread works for it, by one predicate both read: [`State::needs_maker`].
+/// A take is the first free range of the class's allocations that fits it whose bytes are all
+/// zeroed, else the first that fits, in the order the allocations were made; a long allocation
+/// serves only takes of its own length. Where none fits, the take makes an allocation itself, of
+/// [`ALLOCATION_LEN`] or of its own length where that is longer. A block given back is a free
+/// range of its allocation at once. The block-maker thread ([`run`]) makes an allocation of a
+/// class while the class's free bytes are fewer than [`MAKE_BELOW`], and zeroes the free Shared
+/// bytes blocks gave back; a take waits for it only for a zero step whose bytes it needs.
 ///
-/// The idle rule never frees a unit allocation, one of [`ALLOCATION_LEN`], that the class's free
-/// bytes need to stay at or above [`MAKE_BELOW`], so it does not free what the block-maker thread
-/// would make again. An allocation a longer take made for itself is never kept so.
+/// The idle rule never frees a unit allocation that the class's free bytes need to stay at or
+/// above [`MAKE_BELOW`], so it does not free what the block-maker thread would make again. A long
+/// allocation is never kept so.
 ///
 /// The idle rule runs on the block-maker thread as a block is taken or given back, and again when
 /// the oldest idle allocation reaches [`IDLE_AGE_NANOS`]: it frees each idle allocation of that
@@ -360,11 +453,14 @@ pub(crate) struct Pool {
     /// on it.
     changed: Condvar,
     mappings: Option<Arc<dyn BlockMappings>>,
-    /// The device's counters: the idle bytes, the allocations made and the blocks taken again.
+    /// The device's counters: the idle bytes, the allocations made and the long reuses.
     counters: Counters,
     /// A block's length and its first byte's offset are multiples of this: [`GRANULE`], or the
     /// device's `bufferImageGranularity` where that is larger.
     granule: u64,
+    /// The alignment of a buffer of the pool's usage, which Vulkan holds the same for every such
+    /// buffer.
+    alignment: u64,
     /// Whether the block-maker thread is in an idle allocation's `vkFreeMemory`.
     freeing: AtomicBool,
     /// The consumer's memsets of Shared bytes that run ([`Pool::fill`]): the block-maker thread
@@ -396,38 +492,43 @@ enum Rule {
     Free(vk::DeviceMemory),
 }
 
+/// The step of free Shared bytes the block-maker thread zeroes off the lock: `len` bytes from
+/// `start` of the allocation `memory`, out of its free ranges until the step ends.
+#[derive(Clone, Copy)]
+struct Zeroing {
+    memory: vk::DeviceMemory,
+    start: u64,
+    len: u64,
+}
+
 struct State {
     /// Per class, its allocations in the order they were made.
     allocations: [Vec<Allocation>; 2],
-    /// Per class, blocks given back, the oldest first, with their number, buffer, address and
-    /// mapping, for a take of their length. Their bytes stay out of their allocation's free
-    /// ranges until the block-maker thread gives them back there, after the consumer's hook.
-    kept: [Vec<Memory>; 2],
-    /// Per class, a take asked the block-maker thread for the class's kept blocks' bytes.
-    unkeep: [bool; 2],
-    /// Blocks given back, for the block-maker thread, in the order they came back.
-    returned: VecDeque<Memory>,
     /// Per class, the block-maker thread could not make the last allocation it tried. It tries
     /// again after the class's next take or give-back.
     failed: [bool; 2],
     stop: bool,
     next_id: u32,
-    /// The blocks `take_block` returned whose hook has not run: running it removes one.
-    handed: HashSet<BlockId>,
-    /// The hook has run for every block handed out ([`Pool::unmap_all`]); it never runs again.
+    next_allocation: u32,
+    /// The allocations [`BlockMappings::map`] accepted whose unmap has not run.
+    mapped: HashSet<AllocationId>,
+    /// The unmap hook has run for every allocation mapped ([`Pool::unmap_all`]); no hook runs
+    /// again.
     unmapped: bool,
     /// Per class, the idle allocations' bytes the class's gauge shows.
     idle_bytes: [u64; 2],
-    /// The kept Shared block whose bytes the block-maker thread is zeroing a step of, off the
-    /// lock: no take hands it out until the step ends.
-    zeroing: Option<BlockId>,
-    /// Takes waiting for a step to end, for the block it zeroes: the block-maker thread starts no
-    /// step while one waits, so a take waits for one step at most.
+    /// The step the block-maker thread is zeroing, off the lock.
+    zeroing: Option<Zeroing>,
+    /// Takes waiting for that step to end: the block-maker thread starts no step while one waits,
+    /// so a take waits for one step at most.
     zero_waits: usize,
     /// For the device tests: how many more steps the block-maker thread may zero, any number for
     /// `None`.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     zero_budget: Option<u64>,
+    /// For the device tests: the blocks given back.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    returned: HashSet<BlockId>,
 }
 
 /// A consumer memset of Shared bytes that runs ([`Pool::fill`]).
@@ -453,10 +554,14 @@ thread_local! {
     static ON_MAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// What a block's `VkBuffer` is bound to: a range of an allocation.
+/// What a block is: a range of an allocation.
 #[derive(Clone, Copy)]
 struct Carve {
+    allocation: AllocationId,
     memory: vk::DeviceMemory,
+    buffer: vk::Buffer,
+    /// The device address of the range's first byte.
+    address: u64,
     base: u64,
     mapping: Option<Mapping>,
     device_local: bool,
@@ -465,34 +570,57 @@ struct Carve {
     zeroed: u64,
 }
 
+impl Carve {
+    /// Block `id` of `class` and `len` bytes, the range.
+    fn block(self, id: BlockId, class: MemoryClass, len: u64) -> Memory {
+        Memory {
+            id,
+            class,
+            len,
+            allocation: self.allocation,
+            memory: self.memory,
+            base: self.base,
+            buffer: self.buffer,
+            address: self.address,
+            mapping: self.mapping,
+            device_local: self.device_local,
+            spilled: self.spilled,
+            zeroed: self.zeroed,
+        }
+    }
+}
+
 impl Pool {
-    /// The pool of a device whose `bufferImageGranularity` is `granularity`.
+    /// The pool of a device whose `bufferImageGranularity` is `granularity`, and whose buffers of
+    /// the pool's usage have the alignment `alignment`.
     pub(crate) fn new(
         mappings: Option<Arc<dyn BlockMappings>>,
         counters: Counters,
         granularity: u64,
+        alignment: u64,
     ) -> Pool {
         Pool {
             state: Mutex::new(State {
                 allocations: [Vec::new(), Vec::new()],
-                kept: [Vec::new(), Vec::new()],
-                unkeep: [false, false],
-                returned: VecDeque::new(),
                 failed: [false, false],
                 stop: false,
                 next_id: 1,
-                handed: HashSet::new(),
+                next_allocation: 1,
+                mapped: HashSet::new(),
                 unmapped: false,
                 idle_bytes: [0, 0],
                 zeroing: None,
                 zero_waits: 0,
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 zero_budget: None,
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                returned: HashSet::new(),
             }),
             changed: Condvar::new(),
             mappings,
             counters,
             granule: GRANULE.max(granularity.next_power_of_two()),
+            alignment,
             freeing: AtomicBool::new(false),
             fills: AtomicUsize::new(0),
             fill_held: AtomicBool::new(false),
@@ -552,24 +680,28 @@ impl Pool {
             .count()
     }
 
-    /// For the device tests: the class's blocks given back and kept.
+    /// For the device tests: the class's allocations, as each one's number, length, live blocks
+    /// and free bytes, in the order they were made.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn kept(&self, class: MemoryClass) -> usize {
-        self.lock().kept[class.index()].len()
-    }
-
-    /// For the device tests: the class's kept blocks, as each one's number and how many of its
-    /// first bytes the block-maker thread zeroed so far.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn kept_zeroed(&self, class: MemoryClass) -> Vec<(BlockId, u64)> {
+    pub(crate) fn allocations(&self, class: MemoryClass) -> Vec<(AllocationId, u64, usize, u64)> {
         let state = self.lock();
-        (state.kept[class.index()].iter())
-            .map(|memory| (memory.id, memory.zeroed))
+        (state.allocations[class.index()].iter())
+            .map(|a| (a.id, a.len, a.live, a.free.bytes()))
             .collect()
     }
 
-    /// For the device tests: the block-maker thread zeroes at most `steps` more steps of kept
-    /// blocks, or any number for `None`, once the step that runs has ended.
+    /// For the device tests: the free bytes of `allocation` that are zeroed, where it is in the
+    /// pool.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn clean(&self, allocation: AllocationId) -> Option<u64> {
+        let state = self.lock();
+        (state.allocations.iter().flatten())
+            .find(|a| a.id == allocation)
+            .map(|a| a.clean.bytes())
+    }
+
+    /// For the device tests: the block-maker thread zeroes at most `steps` more steps of free
+    /// bytes, or any number for `None`, once the step that runs has ended.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn zero_steps(&self, steps: Option<u64>) {
         let mut state = self.lock();
@@ -594,45 +726,35 @@ impl Pool {
         lock(&self.frees).clone()
     }
 
-    /// The length and alignment of a block for a take of `len` bytes: its buffer's size rounded
-    /// up to the granule, at a multiple of that rounded up to a power of two (at most
-    /// [`BASE_ALIGN`]), of its buffer's alignment and of the granule.
-    ///
-    /// Err: [`Limit::BlockLen`] past `max`, the device's longest allocation and buffer.
-    fn shape(&self, core: &Core, len: u64, max: u64) -> Result<(u64, u64), Error> {
-        let asked = round(len, self.granule, max)?;
-        let info = vk::BufferCreateInfo::default()
-            .size(asked)
-            .usage(floor::BUFFER_USAGE)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let of = vk::DeviceBufferMemoryRequirements::default().create_info(&info);
-        let mut needs = vk::MemoryRequirements2::default();
-        // SAFETY: the device is live, and the create info valid: `asked` is at most its
-        // `maxBufferSize`.
-        unsafe {
-            core.device
-                .get_device_buffer_memory_requirements(&of, &mut needs)
-        };
-        let requirements = needs.memory_requirements;
-        let len = round(requirements.size.max(asked), self.granule, max)?;
-        Ok((len, base_align(len, requirements.alignment, self.granule)))
+    /// For the device tests: whether the pool has the block back.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn holds(&self, block: BlockId) -> bool {
+        self.lock().returned.contains(&block)
     }
 
-    /// Takes a block of `class` of at least `len` bytes for `core`: a kept block of its length, or
-    /// one given back that the block-maker thread would keep and has not kept yet, with its
-    /// number, buffer, address and mapping; else a free range, the first that fits in the
-    /// order the allocations were made, with a new number and buffer; else a range of an
-    /// allocation made here, of [`ALLOCATION_LEN`] or the block's length where that is longer.
-    /// Where the class keeps blocks of other lengths, that take also asks the block-maker thread to
-    /// give their bytes back; and where its allocation fails, it waits for them, and takes a free
-    /// range of them where one fits. A block's bytes are undefined past its zero mark: a kept
-    /// block's bytes the block-maker thread zeroed so far (a take of one it is zeroing a step of
-    /// waits for that step), a free range's first bytes that are clean, none of one given back
-    /// and not yet kept.
+    /// The length and alignment of a block for a take of `len` bytes: `len` rounded up to the
+    /// granule, at a multiple of that rounded up to a power of two (at most [`BASE_ALIGN`]), of
+    /// the alignment of the pool's buffers and of the granule. No Vulkan call.
+    ///
+    /// Err: [`Limit::BlockLen`] past `max`, the device's longest allocation and buffer.
+    fn shape(&self, len: u64, max: u64) -> Result<(u64, u64), Error> {
+        let len = round(len, self.granule, max)?;
+        Ok((len, base_align(len, self.alignment, self.granule)))
+    }
+
+    /// Takes a block of `class` of at least `len` bytes for `core`: the first free range that
+    /// fits whose bytes are all zeroed, else the first that fits, in the order the allocations
+    /// were made, a long allocation only for a take of its own length; with no Vulkan call. Where
+    /// none fits and the block-maker thread is zeroing a step of the class's free bytes, it waits
+    /// for that step and looks again. Else a range of an allocation made here, of
+    /// [`ALLOCATION_LEN`] or the block's length where that is longer, which the consumer's
+    /// [`BlockMappings::map`] maps first. A block's bytes are undefined past its zero mark: the
+    /// first bytes of its range that are clean.
     ///
     /// Err: [`Limit::BlockLen`] past the device's longest allocation or buffer;
-    /// [`Limit::BlockIds`]; what [`make_allocation`] and binding the block's buffer return;
-    /// [`Error::Quiesced`] once the pool is stopped.
+    /// [`Limit::BlockIds`]; what [`make_allocation`] returns; [`Limit::AllocationNotMapped`]
+    /// where the consumer did not map the allocation the take made; [`Error::Quiesced`] once the
+    /// pool is stopped.
     pub(crate) fn take(
         &self,
         core: &Core,
@@ -640,121 +762,53 @@ impl Pool {
         len: u64,
         max: u64,
     ) -> Result<Memory, Error> {
-        let (len, align) = self.shape(core, len, max)?;
+        let (len, align) = self.shape(len, max)?;
         let index = class.index();
         let mut state = self.lock();
         // A take is a pool event: the block-maker thread tries a failed allocation again.
         state.failed[index] = false;
-        // Why this take's allocation failed, once it has waited for the kept blocks' bytes.
-        let mut failure = None;
-        let made = loop {
+        let id = number(&mut state)?;
+        loop {
             if state.stop {
                 return Err(Error::Quiesced);
             }
-            if let Some(at) = state.kept[index].iter().rposition(|kept| kept.len == len) {
-                let id = state.kept[index][at].id;
-                if state.zeroing == Some(id) {
-                    // The block-maker thread zeroes a step of it: the take waits for that step,
-                    // and the thread starts no other while it waits.
-                    state.zero_waits += 1;
-                    while state.zeroing == Some(id) {
-                        state = self.wait(state);
-                    }
-                    state.zero_waits -= 1;
-                    continue;
-                }
-                let memory = state.kept[index].remove(at);
-                self.counters.zeroed_taken(memory.zeroed);
-                self.counters.count(Metric::BlocksReused);
-                self.hold(&mut state, &memory);
-                self.settle(&mut state, class);
-                self.changed.notify_all();
-                return Ok(memory);
-            }
-            // A block given back that the block-maker thread has not kept yet, which it would
-            // keep: taken as it is, its allocation in use throughout. The thread can be inside a
-            // driver's allocation or free for milliseconds, and a take that allocated beside the
-            // block would leave its allocation idle, to be freed.
-            let returned = (state.returned.iter())
-                .rposition(|memory| memory.class == class && memory.len == len && !memory.spilled);
-            if let Some(memory) = returned.and_then(|at| state.returned.remove(at)) {
-                self.counters.count(Metric::BlocksReused);
-                return Ok(memory);
-            }
-            if let Some((carve, idle_since)) = state.fit(class, len, align) {
+            if let Some((carve, idle_since, long)) = state.fit(class, len, align) {
                 if let Some(since) = idle_since {
                     (self.counters).reused_idle(crate::host_time().saturating_sub(since));
                 }
-                let id = number(&mut state)?;
-                drop(state);
-                break self.bind_range(core, class, len, carve, id);
-            }
-            if let Some(error) = failure {
-                return Err(error);
-            }
-            let asked = !state.kept[index].is_empty();
-            if asked {
-                // The block-maker thread gives the kept blocks' bytes back, after the hook; this
-                // take does not wait for it.
-                state.unkeep[index] = true;
-                self.changed.notify_all();
-            }
-            let id = number(&mut state)?;
-            drop(state);
-            match self.own(core, class, len, align, id) {
-                Ok(memory) => break Ok(memory),
-                Err(error) => {
-                    state = self.lock();
-                    if !asked && !state.needs_maker(class) {
-                        return Err(error);
-                    }
-                    while state.needs_maker(class) && !state.stop {
-                        state = self.wait(state);
-                    }
-                    failure = Some(error);
+                if long {
+                    (self.counters).long_reuse(class == MemoryClass::Shared);
                 }
+                let memory = carve.block(id, class, len);
+                self.counters.carved(memory.zeroed);
+                self.settle(&mut state, class);
+                // The block-maker thread runs the idle rule on this take, and makes an allocation
+                // where the class's free bytes ran low.
+                self.changed.notify_all();
+                return Ok(memory);
             }
-        };
-        let memory = made?;
-        self.counters.zeroed_taken(memory.zeroed);
+            if class != MemoryClass::Shared || state.zeroing.is_none() {
+                break;
+            }
+            // The block-maker thread zeroes a step of free bytes off the lock: the take waits for
+            // that step, and the thread starts no other while it waits.
+            state.zero_waits += 1;
+            while state.zeroing.is_some() {
+                state = self.wait(state);
+            }
+            state.zero_waits -= 1;
+        }
+        drop(state);
+        let memory = self.own(core, class, len, align, id)?;
         let mut state = self.lock();
         self.settle(&mut state, class);
-        // The block-maker thread runs the idle rule on this take, and makes an allocation where
-        // the class's free bytes ran low.
         self.changed.notify_all();
         Ok(memory)
     }
 
-    /// Makes block `id` of `len` bytes at `carve`, a range reserved for it; where that fails, the
-    /// range goes back.
-    fn bind_range(
-        &self,
-        core: &Core,
-        class: MemoryClass,
-        len: u64,
-        carve: Carve,
-        id: BlockId,
-    ) -> Result<Memory, Error> {
-        let bound = bind(core, class, len, carve, id);
-        if bound.is_err() {
-            let mut state = self.lock();
-            if let Some(allocation) = state.find(class, carve.memory) {
-                allocation.free.give(carve.base, len);
-                if carve.zeroed > 0 {
-                    allocation.clean.give(carve.base, carve.zeroed);
-                }
-                allocation.live -= 1;
-                if allocation.live == 0 {
-                    allocation.idle_since = crate::host_time();
-                }
-            }
-            self.settle(&mut state, class);
-        }
-        bound
-    }
-
     /// Makes block `id` of `len` bytes at a multiple of `align` at the start of an allocation of
-    /// its own, of [`ALLOCATION_LEN`] or `len` where that is longer, whose rest later takes share.
+    /// its own, of [`ALLOCATION_LEN`] or `len` where that is longer, whose rest later takes share;
+    /// the consumer maps the allocation first.
     fn own(
         &self,
         core: &Core,
@@ -764,35 +818,72 @@ impl Pool {
         id: BlockId,
     ) -> Result<Memory, Error> {
         let mut allocation = make_allocation(core, class, len.max(ALLOCATION_LEN))?;
+        if !self.map(&allocation, class, true) {
+            free_allocation(core, allocation);
+            return Err(Error::Limit(Limit::AllocationNotMapped { class, len }));
+        }
         let base = allocation.free.take(len, align).unwrap_or(0);
-        let carve = allocation.carve(base, len);
-        match bind(core, class, len, carve, id) {
-            Ok(memory) => {
-                allocation.live = 1;
-                self.lock().allocations[class.index()].push(allocation);
-                Ok(memory)
-            }
-            Err(error) => {
-                free_allocation(core, allocation);
-                Err(error)
-            }
+        let memory = allocation.carve(base, len).block(id, class, len);
+        allocation.live = 1;
+        self.lock().allocations[class.index()].push(allocation);
+        Ok(memory)
+    }
+
+    /// The consumer's [`BlockMappings::map`] of `allocation`, made on a take's thread where
+    /// `on_take`, off the pool's lock: true where it mapped the allocation or has no hook. An
+    /// allocation mapped while a quiesce ran the unmaps has its own unmap at once.
+    fn map(&self, allocation: &Allocation, class: MemoryClass, on_take: bool) -> bool {
+        let Some(mappings) = &self.mappings else {
+            return true;
+        };
+        if self.lock().unmapped {
+            return true;
+        }
+        let info = allocation.info(class);
+        if !mappings.map(&info) {
+            self.counters.map_refused();
+            return false;
+        }
+        self.counters.mapped(on_take);
+        let mut state = self.lock();
+        if state.unmapped {
+            drop(state);
+            mappings.unmap(info.id);
+        } else {
+            state.mapped.insert(info.id);
+        }
+        true
+    }
+
+    /// Runs the consumer's unmap of `allocation` where it was mapped and its unmap has not run,
+    /// off the pool's lock.
+    fn unmap(&self, allocation: AllocationId) {
+        let mapped = self.lock().mapped.remove(&allocation);
+        if let Some(mappings) = self.mappings.as_ref().filter(|_| mapped) {
+            mappings.unmap(allocation);
         }
     }
 
-    /// Counts a kept block taken again as live in its allocation, and a take of an idle
-    /// allocation as a reuse after its idle time.
-    fn hold(&self, state: &mut State, memory: &Memory) {
-        if let Some(allocation) = state.find(memory.class, memory.memory) {
-            if allocation.live == 0 {
-                let idle = crate::host_time().saturating_sub(allocation.idle_since);
-                self.counters.reused_idle(idle);
+    /// In [`Device::quiesce`](crate::Device::quiesce) and at teardown, once the runtime's other
+    /// threads are stopped: calls the unmap hook for every allocation mapped whose unmap has not
+    /// run, on this thread. No hook runs again: an allocation freed later is freed without it.
+    pub(crate) fn unmap_all(&self) {
+        let mut mapped: Vec<AllocationId> = {
+            let mut state = self.lock();
+            state.unmapped = true;
+            state.mapped.drain().collect()
+        };
+        mapped.sort_unstable();
+        if let Some(mappings) = &self.mappings {
+            for allocation in mapped {
+                mappings.unmap(allocation);
             }
-            allocation.live += 1;
         }
     }
 
     /// Sets the class's idle gauges: its idle allocations' bytes, when the oldest idle one the
-    /// idle rule weighs became idle, and its reserve's bytes.
+    /// idle rule weighs became idle, its reserve's bytes, and the bytes of its long allocations
+    /// that hold a block of a later take.
     fn settle(&self, state: &mut State, class: MemoryClass) {
         let index = class.index();
         let idle: u64 = (state.allocations[index].iter())
@@ -808,8 +899,14 @@ impl Pool {
         state.idle_bytes[index] = idle;
         let (weighed, reserve) = state.aging(class);
         let oldest = weighed.first().map_or(0, |&(since, _)| since);
-        (self.counters).idle_since(class == MemoryClass::Shared, oldest);
-        (self.counters).reserve_bytes(class == MemoryClass::Shared, reserve);
+        let shared = class == MemoryClass::Shared;
+        (self.counters).idle_since(shared, oldest);
+        (self.counters).reserve_bytes(shared, reserve);
+        let reused: u64 = (state.allocations[index].iter())
+            .filter(|allocation| allocation.reused)
+            .map(|allocation| allocation.len)
+            .sum();
+        (self.counters).long_reused_bytes(shared, reused);
     }
 
     /// The idle rule for `class` at `now` ([`host_time`](crate::host_time)): its next allocation
@@ -829,46 +926,25 @@ impl Pool {
         }
     }
 
-    /// Records a block as handed to the consumer, so that its hook runs before its bytes are
-    /// freed or handed out in another block.
-    pub(crate) fn hand(&self, block: BlockId) {
+    /// Takes back a block taken with [`take`](Self::take): its bytes are a free range of its
+    /// allocation at once, not zeroed, as the consumer may have written any of them.
+    pub(crate) fn give_back(&self, memory: Memory) {
+        let class = memory.class;
         let mut state = self.lock();
-        if !state.unmapped {
-            state.handed.insert(block);
-        }
-    }
-
-    /// Runs the consumer's hook for `block` where it was handed out and its hook has not run.
-    fn unmap(&self, block: BlockId) {
-        let handed = self.lock().handed.remove(&block);
-        if let Some(mappings) = self.mappings.as_ref().filter(|_| handed) {
-            mappings.unmap(block);
-        }
-    }
-
-    /// In [`Device::quiesce`](crate::Device::quiesce) and at teardown, once the runtime's other
-    /// threads are stopped: calls the hook for every block handed out whose hook has not run, on
-    /// this thread. No block's hook runs again: a block freed later is freed without it.
-    pub(crate) fn unmap_all(&self) {
-        let mut handed: Vec<BlockId> = {
-            let mut state = self.lock();
-            state.unmapped = true;
-            state.handed.drain().collect()
-        };
-        handed.sort_unstable();
-        if let Some(mappings) = &self.mappings {
-            for block in handed {
-                mappings.unmap(block);
+        state.failed[class.index()] = false;
+        if let Some(allocation) = state.find(class, memory.memory) {
+            allocation.free.give(memory.base, memory.len);
+            allocation.live -= 1;
+            if allocation.live == 0 {
+                // Its idle time starts now, however long ago the block was released.
+                allocation.idle_since = crate::host_time();
+                allocation.retiring = allocation.spilled;
+                allocation.reused = false;
             }
         }
-    }
-
-    /// Takes back a block taken with [`take`](Self::take), for the block-maker thread to keep, or
-    /// give back to its allocation.
-    pub(crate) fn give_back(&self, mut memory: Memory) {
-        // The consumer may have written any byte of it.
-        memory.zeroed = 0;
-        self.lock().returned.push_back(memory);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        state.returned.insert(memory.id);
+        self.settle(&mut state, class);
         self.changed.notify_all();
     }
 
@@ -886,25 +962,9 @@ impl Pool {
         self.lock().stop = true;
         self.changed.notify_all();
     }
-
-    /// For the device tests: whether the pool has the block back, kept or still to be kept.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn holds(&self, block: BlockId) -> bool {
-        let state = self.lock();
-        (state.kept.iter().flatten())
-            .chain(&state.returned)
-            .any(|memory| memory.id == block)
-    }
 }
 
 impl State {
-    /// Whether the block-maker thread works for a take of `class`: a take asked for the class's
-    /// kept blocks' bytes, which the thread has not yet given back to their allocations.
-    /// [`Pool::take`] waits only while this holds, and [`run`] works while it holds for any class.
-    fn needs_maker(&self, class: MemoryClass) -> bool {
-        self.unkeep[class.index()]
-    }
-
     /// The bytes of the free ranges of the class's allocations, but those retiring.
     fn free(&self, class: MemoryClass) -> u64 {
         (self.allocations[class.index()].iter())
@@ -918,28 +978,44 @@ impl State {
         (self.allocations[class.index()].iter_mut()).find(|allocation| allocation.memory == memory)
     }
 
-    /// Reserves `len` bytes at a multiple of `align` in the first allocation of `class` with such
-    /// a free range, counting a block live there; none in a retiring one. With the range, when
-    /// the allocation became idle where it was.
-    fn fit(&mut self, class: MemoryClass, len: u64, align: u64) -> Option<(Carve, Option<u64>)> {
-        (self.allocations[class.index()].iter_mut()).find_map(|allocation| {
-            if allocation.retiring {
-                return None;
-            }
-            let base = allocation.free.take(len, align)?;
-            let idle_since = (allocation.live == 0).then_some(allocation.idle_since);
-            allocation.live += 1;
-            Some((allocation.carve(base, len), idle_since))
-        })
+    /// Reserves `len` bytes at a multiple of `align` in the class's allocations that serve a take
+    /// of `len` ([`Allocation::serves`]), counting a block live there: the first such range whose
+    /// bytes are all clean, else the first that is free, in the order the allocations were made.
+    /// With the range, when the allocation became idle where it was, and whether it is a long
+    /// allocation.
+    fn fit(
+        &mut self,
+        class: MemoryClass,
+        len: u64,
+        align: u64,
+    ) -> Option<(Carve, Option<u64>, bool)> {
+        let allocations = &mut self.allocations[class.index()];
+        // Clean bytes are free bytes: a range of them is free whole.
+        let clean = (allocations.iter().enumerate())
+            .filter(|(_, allocation)| allocation.serves(len))
+            .find_map(|(at, allocation)| Some((at, allocation.clean.find(len, align)?)));
+        let (at, base) = clean.or_else(|| {
+            (allocations.iter().enumerate())
+                .filter(|(_, allocation)| allocation.serves(len))
+                .find_map(|(at, allocation)| Some((at, allocation.free.find(len, align)?)))
+        })?;
+        let allocation = &mut allocations[at];
+        allocation.free.cut(base, len);
+        let idle_since = (allocation.live == 0).then_some(allocation.idle_since);
+        allocation.live += 1;
+        let long = !allocation.unit();
+        if long {
+            allocation.reused = true;
+        }
+        Some((allocation.carve(base, len), idle_since, long))
     }
 
     /// The class's idle allocations the idle rule weighs, as when each became idle and its memory,
     /// the oldest first, and the bytes of its reserve. The newest idle unit allocations, of
     /// [`ALLOCATION_LEN`], with free bytes that the class's free bytes need to reach [`MAKE_BELOW`]
-    /// are its reserve, made ahead of need: the rule neither weighs nor frees them. An allocation
-    /// a take longer than the unit made for itself is never the reserve, even once its block's
-    /// bytes are free ranges: the rule frees it at its idle age, so it is not held for the
-    /// device's life.
+    /// are its reserve, made ahead of need: the rule neither weighs nor frees them. A long
+    /// allocation, which a take longer than the unit made for itself, is never the reserve: the
+    /// rule frees it at its idle age, so it is not held for the device's life.
     fn aging(&self, class: MemoryClass) -> (Vec<(u64, vk::DeviceMemory)>, u64) {
         let allocations = &self.allocations[class.index()];
         let mut free: u64 = (allocations.iter())
@@ -975,10 +1051,10 @@ impl State {
         (weighed, reserved)
     }
 
-    /// The next step of zeroing the kept Shared blocks: the newest kept block not zeroed to its
-    /// end, where its next step starts in its mapping and how many bytes it zeroes. None while a
-    /// take waits for a step.
-    fn zero_step(&self) -> Option<(BlockId, Mapping, u64)> {
+    /// The next step of zeroing the free Shared bytes: the first free bytes not zeroed, in the
+    /// order the allocations were made, none in a retiring one; at most [`ZERO_STEP`] of them.
+    /// None while a take waits for a step.
+    fn zero_step(&self) -> Option<(Zeroing, Mapping)> {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         if self.zero_budget == Some(0) {
             return None;
@@ -986,42 +1062,43 @@ impl State {
         if self.zero_waits > 0 {
             return None;
         }
-        let kept = &self.kept[MemoryClass::Shared.index()];
-        let memory = (kept.iter().rev())
-            .find(|memory| memory.zeroed < memory.len && memory.mapping.is_some())?;
-        let mapping = memory.mapping?;
-        let len = (memory.len - memory.zeroed).min(ZERO_STEP);
-        // SAFETY: `zeroed` is less than the block's length, which its mapping spans.
-        let at = Mapping(unsafe { mapping.at(memory.zeroed) });
-        Some((memory.id, at, len))
+        let allocations = &self.allocations[MemoryClass::Shared.index()];
+        allocations.iter().find_map(|allocation| {
+            let mapping = allocation.mapping.filter(|_| !allocation.retiring)?;
+            let (start, end) = allocation.free.first_outside(&allocation.clean)?;
+            let len = (end - start).min(ZERO_STEP);
+            // SAFETY: `start` is inside the allocation, which the mapping spans.
+            let at = Mapping(unsafe { mapping.at(start) });
+            let step = Zeroing {
+                memory: allocation.memory,
+                start,
+                len,
+            };
+            Some((step, at))
+        })
     }
 
-    /// Takes the allocation of `class` whose memory is `memory` out of the pool, with its kept
-    /// blocks, for the caller to free once they are retired.
-    fn take_out(
-        &mut self,
-        class: MemoryClass,
-        memory: vk::DeviceMemory,
-    ) -> Option<(Allocation, Vec<Memory>)> {
+    /// Takes the allocation of `class` whose memory is `memory` out of the pool, for the caller to
+    /// free.
+    fn take_out(&mut self, class: MemoryClass, memory: vk::DeviceMemory) -> Option<Allocation> {
         let index = class.index();
         let at =
             (self.allocations[index].iter()).position(|allocation| allocation.memory == memory)?;
-        let allocation = self.allocations[index].remove(at);
-        let (kept, stay): (Vec<Memory>, Vec<Memory>) =
-            (self.kept[index].drain(..)).partition(|kept| kept.memory == memory);
-        self.kept[index] = stay;
-        Some((allocation, kept))
+        Some(self.allocations[index].remove(at))
     }
 }
 
 impl Allocation {
-    /// What a block's buffer of `len` bytes at `base`, a range taken from the free bytes, binds
-    /// to: the range's zeroed first bytes leave the clean ones, now the block's.
+    /// What a block of `len` bytes at `base`, a range taken from the free bytes, is: the range's
+    /// zeroed first bytes leave the clean ones, now the block's.
     fn carve(&mut self, base: u64, len: u64) -> Carve {
         let zeroed = self.clean.run_at(base, len);
         self.clean.cut(base, len);
         Carve {
+            allocation: self.id,
             memory: self.memory,
+            buffer: self.buffer,
+            address: self.address + base,
             base,
             // SAFETY: `base` is inside the allocation, which the mapping spans.
             mapping: self
@@ -1045,6 +1122,17 @@ impl Allocation {
         unsafe { mapping.get().as_ptr().write_bytes(0, self.len as usize) };
         counters.zeroed_ahead(crate::host_time().saturating_sub(start));
         self.clean = Ranges::new(self.len);
+    }
+
+    /// The allocation as the consumer's hooks are told of it.
+    fn info(&self, class: MemoryClass) -> AllocationInfo {
+        AllocationInfo {
+            id: self.id,
+            class,
+            len: self.len,
+            gpu_address: self.address,
+            contents: self.mapping.map(Mapping::get),
+        }
     }
 }
 
@@ -1077,23 +1165,45 @@ fn number(state: &mut State) -> Result<BlockId, Error> {
     Ok(BlockId(id))
 }
 
+/// The alignment of a buffer of the pool's usage on `device`, the same for every such buffer.
+pub(crate) fn buffer_alignment(device: &ash::Device) -> u64 {
+    let buffer = vk::BufferCreateInfo::default()
+        .size(GRANULE)
+        .usage(floor::BUFFER_USAGE)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let of = vk::DeviceBufferMemoryRequirements::default().create_info(&buffer);
+    let mut needs = vk::MemoryRequirements2::default();
+    // SAFETY: the device is live, and the create info valid.
+    unsafe { device.get_device_buffer_memory_requirements(&of, &mut needs) };
+    needs.memory_requirements.alignment
+}
+
+/// Makes an allocation ahead of need of `class`, zeroing a Shared one whole, and has the consumer
+/// map it: the allocation, or `None` where it was not made or not mapped.
+fn ahead(core: &Core, class: MemoryClass) -> Option<Allocation> {
+    let mut allocation = make_allocation(core, class, ALLOCATION_LEN).ok()?;
+    allocation.zero_ahead(&core.counters);
+    if !core.pool.map(&allocation, class, false) {
+        free_allocation(core, allocation);
+        return None;
+    }
+    Some(allocation)
+}
+
 /// In the device's making, before the block-maker thread starts: makes each class's first
-/// allocation, zeroing the Shared one, so the consumer's first blocks of each class are ranges of
-/// it as the device is ready, and nothing is allocated beside the consumer's first calls. Where
-/// one cannot be made, the block-maker thread tries again after the class's next take or
-/// give-back.
+/// allocation, zeroing the Shared one, and has the consumer map each, so the consumer's first
+/// blocks of each class are ranges of it as the device is ready, and nothing is allocated beside
+/// the consumer's first calls. Where one is not made, the block-maker thread tries again after
+/// the class's next take or give-back.
 pub(crate) fn stock(core: &Core) {
     // Made ahead of need, as the block-maker thread's are: counted with them.
     ON_MAKER.set(true);
     for class in MemoryClass::ALL {
-        let made = make_allocation(core, class, ALLOCATION_LEN).map(|mut allocation| {
-            allocation.zero_ahead(&core.counters);
-            allocation
-        });
+        let made = ahead(core, class);
         let mut state = core.pool.lock();
         match made {
-            Ok(allocation) => state.allocations[class.index()].push(allocation),
-            Err(_) => state.failed[class.index()] = true,
+            Some(allocation) => state.allocations[class.index()].push(allocation),
+            None => state.failed[class.index()] = true,
         }
         core.pool.settle(&mut state, class);
     }
@@ -1101,15 +1211,13 @@ pub(crate) fn stock(core: &Core) {
 }
 
 /// The block-maker thread, until the device's teardown stops it. Off every caller's path, in
-/// order: it gives a class's kept blocks' bytes back to their allocations where a take asked,
-/// after the consumer's hook; it keeps each block given back for a take of its length (or gives
-/// its bytes back, after the hook, where its allocation spilled); it makes an allocation of a
-/// class whose free bytes are fewer than [`MAKE_BELOW`], zeroing a Shared one whole before it
-/// joins the pool; it frees each allocation idle for [`IDLE_AGE_NANOS`], after the hook of each
-/// kept block in it, one at a time; and last it zeroes the kept Shared blocks, the newest first,
-/// [`ZERO_STEP`] bytes at a time from each one's first byte, taking up its other work again
-/// between two steps. It sleeps until the next change, or until the oldest idle allocation
-/// reaches the idle age.
+/// order: it makes an allocation of a class whose free bytes are fewer than [`MAKE_BELOW`],
+/// zeroing a Shared one whole and having the consumer map it before it joins the pool; it frees
+/// each allocation idle for [`IDLE_AGE_NANOS`], after the consumer's unmap of it, one at a time;
+/// and last it zeroes the free Shared bytes blocks gave back, the first of the allocations in the
+/// order they were made, [`ZERO_STEP`] bytes at a time, taking up its other work again between
+/// two steps. It sleeps until the next change, or until the oldest idle allocation reaches the
+/// idle age.
 pub(crate) fn run(core: Arc<Core>) {
     ON_MAKER.set(true);
     let pool = &core.pool;
@@ -1118,72 +1226,16 @@ pub(crate) fn run(core: Arc<Core>) {
         if state.stop {
             return;
         }
-        if let Some(class) = MemoryClass::ALL
-            .into_iter()
-            .find(|c| state.unkeep[c.index()])
-        {
-            let kept: Vec<Memory> = state.kept[class.index()].split_off(0);
-            drop(state);
-            for memory in &kept {
-                retire(&core, memory);
-            }
-            state = pool.lock();
-            for memory in &kept {
-                if let Some(allocation) = state.find(class, memory.memory) {
-                    allocation.free.give(memory.base, memory.len);
-                    if memory.zeroed > 0 {
-                        allocation.clean.give(memory.base, memory.zeroed);
-                    }
-                }
-            }
-            state.unkeep[class.index()] = false;
-            pool.changed.notify_all();
-            continue;
-        }
-        if let Some(memory) = state.returned.pop_front() {
-            // A block of a spilled allocation is not kept: its bytes go back to its allocation,
-            // and a spilled allocation that empties is the idle rule's next to free, so the next
-            // tries device-local memory again. A kept block stays under the lock from the queue to
-            // the kept blocks, so a take finds it in one or the other.
-            let kept = !memory.spilled;
-            if !kept {
-                drop(state);
-                retire(&core, &memory);
-                state = pool.lock();
-            }
-            let class = memory.class;
-            state.failed[class.index()] = false;
-            if let Some(allocation) = state.find(class, memory.memory) {
-                allocation.live -= 1;
-                if !kept {
-                    allocation.free.give(memory.base, memory.len);
-                }
-                if allocation.live == 0 {
-                    // Its idle time starts now, however long ago the block was released.
-                    allocation.idle_since = crate::host_time();
-                    allocation.retiring = allocation.spilled;
-                }
-            }
-            if kept {
-                state.kept[class.index()].push(memory);
-            }
-            pool.settle(&mut state, class);
-            pool.changed.notify_all();
-            continue;
-        }
         let wanted = (MemoryClass::ALL.into_iter())
             .find(|&class| !state.failed[class.index()] && state.free(class) < MAKE_BELOW);
         if let Some(class) = wanted {
             drop(state);
-            let made = make_allocation(&core, class, ALLOCATION_LEN).map(|mut allocation| {
-                allocation.zero_ahead(&core.counters);
-                allocation
-            });
+            let made = ahead(&core, class);
             state = pool.lock();
             match made {
                 // Idle from now: the reserve, which the idle rule does not weigh.
-                Ok(allocation) => state.allocations[class.index()].push(allocation),
-                Err(_) => state.failed[class.index()] = true,
+                Some(allocation) => state.allocations[class.index()].push(allocation),
+                None => state.failed[class.index()] = true,
             }
             pool.settle(&mut state, class);
             pool.changed.notify_all();
@@ -1205,36 +1257,40 @@ pub(crate) fn run(core: Arc<Core>) {
             };
             wake = Some(wake.map_or(due, |wake| wake.min(due)));
         }
-        if let Some((allocation, kept)) = gone {
+        if let Some(allocation) = gone {
             pool.changed.notify_all();
             drop(state);
-            free_idle(&core, allocation, &kept);
+            free_idle(&core, allocation);
             state = pool.lock();
             continue;
         }
-        // Last, the kept Shared blocks' bytes, the newest block first, a step at a time from its
-        // first byte, off the lock; none while a take waits for a step, and none while a consumer
+        // Last, the free Shared bytes not zeroed, a step at a time, off the lock and out of the
+        // free ranges meanwhile; none while a take waits for a step, and none while a consumer
         // memset runs ([`Pool::fill`]): the step waits for the memset's end.
-        let step = state.zero_step();
-        pool.fill_held.store(step.is_some(), SeqCst);
-        let held = step.is_some() && pool.fills.load(SeqCst) > 0;
+        let next = state.zero_step();
+        pool.fill_held.store(next.is_some(), SeqCst);
+        let held = next.is_some() && pool.fills.load(SeqCst) > 0;
         if held {
             core.counters.zero_step_held();
         }
-        if let Some((id, at, len)) = step.filter(|_| !held) {
+        if let Some((step, at)) = next.filter(|_| !held) {
             pool.fill_held.store(false, Relaxed);
-            state.zeroing = Some(id);
+            if let Some(allocation) = state.find(MemoryClass::Shared, step.memory) {
+                allocation.free.cut(step.start, step.len);
+            }
+            state.zeroing = Some(step);
             drop(state);
             let start = crate::host_time();
-            // SAFETY: `at` is `len` bytes inside a kept block's mapping, which lives while the
-            // block is kept: no take hands it out, and nothing frees it, while `zeroing` names it.
-            unsafe { at.get().as_ptr().write_bytes(0, len as usize) };
+            // SAFETY: `at` is `step.len` bytes inside a Shared allocation's mapping, which lives
+            // while the allocation is in the pool: only this thread frees it, and no take hands
+            // the bytes out while they are out of the free ranges.
+            unsafe { at.get().as_ptr().write_bytes(0, step.len as usize) };
             core.counters
-                .zeroed_kept(len, crate::host_time().saturating_sub(start));
+                .zeroed_free(step.len, crate::host_time().saturating_sub(start));
             state = pool.lock();
-            let mut kept = state.kept[MemoryClass::Shared.index()].iter_mut();
-            if let Some(memory) = kept.find(|memory| memory.id == id) {
-                memory.zeroed += len;
+            if let Some(allocation) = state.find(MemoryClass::Shared, step.memory) {
+                allocation.free.give(step.start, step.len);
+                allocation.clean.give(step.start, step.len);
             }
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             if let Some(steps) = state.zero_budget.as_mut() {
@@ -1322,59 +1378,78 @@ pub(crate) unsafe fn allocate(
     })
 }
 
-/// A `VkBuffer` of `len` bytes with every buffer usage.
-fn new_buffer(device: &ash::Device, len: u64) -> Result<vk::Buffer, Error> {
-    let info = vk::BufferCreateInfo::default()
-        .size(len)
-        .usage(floor::BUFFER_USAGE)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    // SAFETY: the device is live; `len` is at most the device's `maxBufferSize`.
-    unsafe { device.create_buffer(&info, None) }.map_err(Error::vulkan("vkCreateBuffer"))
-}
-
-/// Makes an allocation of `len` bytes of `class` with device addresses, mapped whole if
+/// Makes an allocation of `len` bytes of `class` with device addresses, its number, the
+/// `VkBuffer` with every buffer usage that spans it and that buffer's address, mapped whole if
 /// Shared, its free ranges all of it. Its bytes are undefined: nothing writes them, and a Shared
 /// allocation's pages become resident as they are first written.
 fn make_allocation(core: &Core, class: MemoryClass, len: u64) -> Result<Allocation, Error> {
     let device = &core.device;
-    let buffer = vk::BufferCreateInfo::default()
+    let id = {
+        let mut state = core.pool.lock();
+        let id = state.next_allocation;
+        state.next_allocation = id.checked_add(1).ok_or(Error::Limit(Limit::BlockIds))?;
+        AllocationId(id)
+    };
+    let info = vk::BufferCreateInfo::default()
         .size(len)
         .usage(floor::BUFFER_USAGE)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    let of = vk::DeviceBufferMemoryRequirements::default().create_info(&buffer);
-    let mut needs = vk::MemoryRequirements2::default();
     // SAFETY: the device is live, and the create info valid: `len` is at most its
     // `maxBufferSize`.
-    unsafe { device.get_device_buffer_memory_requirements(&of, &mut needs) };
-    let requirements = needs.memory_requirements;
+    let buffer =
+        unsafe { device.create_buffer(&info, None) }.map_err(Error::vulkan("vkCreateBuffer"))?;
+    // SAFETY: the buffer is the device's.
+    let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
     let mut flags =
         vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-    let info = vk::MemoryAllocateInfo::default()
+    let allocate_info = vk::MemoryAllocateInfo::default()
         .allocation_size(requirements.size.max(len))
         .memory_type_index(core.memory_type(class))
         .push_next(&mut flags);
     let bits = requirements.memory_type_bits;
     // SAFETY: the floor chose the memory type for buffers of this usage on this device, and
     // `bufferDeviceAddress` is enabled; a spill takes a type the buffer's requirements allow.
-    let (memory, spilled) = unsafe { allocate_spilling(core, class, bits, &info) }?;
-    core.counters.count(Metric::BlocksMade);
-    core.counters.allocated(len);
-    if spilled {
-        core.counters.rise_by(Gauge::SpilledBytes, len);
-    }
-    let device_local = !spilled && core.device_local & (1 << core.memory_type(class)) != 0;
+    let (memory, spilled) = match unsafe { allocate_spilling(core, class, bits, &allocate_info) } {
+        Ok(made) => made,
+        Err(error) => {
+            // SAFETY: the buffer is unused.
+            unsafe { device.destroy_buffer(buffer, None) };
+            return Err(error);
+        }
+    };
     let mut allocation = Allocation {
+        id,
         memory,
+        buffer,
+        address: 0,
         len,
         mapping: None,
-        device_local,
+        device_local: !spilled && core.device_local & (1 << core.memory_type(class)) != 0,
         spilled,
         free: Ranges::new(len),
         clean: Ranges::empty(),
         live: 0,
         idle_since: crate::host_time(),
         retiring: false,
+        reused: false,
     };
+    core.counters.count(Metric::BlocksMade);
+    core.counters.allocated(len);
+    if spilled {
+        core.counters.rise_by(Gauge::SpilledBytes, len);
+    }
+    // SAFETY: the memory is of a type the buffer's requirements allow, at least their size, and
+    // nothing else is bound to the buffer.
+    if let Err(result) = unsafe { device.bind_buffer_memory(buffer, memory, 0) } {
+        free_allocation(core, allocation);
+        return Err(Error::Vulkan {
+            call: "vkBindBufferMemory",
+            result,
+        });
+    }
+    let of = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+    // SAFETY: the buffer has device-address usage and is bound.
+    allocation.address = unsafe { device.get_buffer_device_address(&of) };
     if class == MemoryClass::Shared {
         // SAFETY: the memory type is host-visible, and the memory is not mapped.
         let mapped = unsafe {
@@ -1399,64 +1474,13 @@ fn make_allocation(core: &Core, class: MemoryClass, len: u64) -> Result<Allocati
     Ok(allocation)
 }
 
-/// Makes block `id` of `class`: a buffer of `len` bytes bound at `carve`'s range, its address and
-/// its mapping.
-fn bind(
-    core: &Core,
-    class: MemoryClass,
-    len: u64,
-    carve: Carve,
-    id: BlockId,
-) -> Result<Memory, Error> {
-    let device = &core.device;
-    let buffer = new_buffer(device, len)?;
-    // SAFETY: the range is `len` bytes of an allocation of a type the buffer's requirements allow,
-    // at a multiple of their alignment ([`Pool::shape`]), and no other buffer is bound there.
-    if let Err(result) = unsafe { device.bind_buffer_memory(buffer, carve.memory, carve.base) } {
-        // SAFETY: `buffer` is unused.
-        unsafe { device.destroy_buffer(buffer, None) };
-        return Err(Error::Vulkan {
-            call: "vkBindBufferMemory",
-            result,
-        });
-    }
-    let info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
-    // SAFETY: the buffer has device-address usage and is bound.
-    let address = unsafe { device.get_buffer_device_address(&info) };
-    Ok(Memory {
-        id,
-        class,
-        len,
-        memory: carve.memory,
-        base: carve.base,
-        buffer,
-        address,
-        mapping: carve.mapping,
-        device_local: carve.device_local,
-        spilled: carve.spilled,
-        zeroed: carve.zeroed,
-    })
-}
-
-/// Ends a block: the consumer's hook where it was handed out and its hook has not run, then its
-/// buffer. Its bytes stay in its allocation.
-fn retire(core: &Core, memory: &Memory) {
-    core.pool.unmap(memory.id);
-    // SAFETY: no GPU work that uses the block is pending: a command buffer or upload that uses it
-    // holds it until it retires. The consumer's mappings are gone.
-    unsafe { core.device.destroy_buffer(memory.buffer, None) };
-}
-
-/// On the block-maker thread: frees an allocation the idle rule took out, after the hook of each
-/// block kept in it, and counts its idle time. The submissions made during its `vkFreeMemory` are
+/// On the block-maker thread: frees an allocation the idle rule took out, after the consumer's
+/// unmap of it, and counts its idle time. The submissions made during its `vkFreeMemory` are
 /// counted.
-fn free_idle(core: &Core, allocation: Allocation, kept: &[Memory]) {
-    for memory in kept {
-        retire(core, memory);
-    }
+fn free_idle(core: &Core, allocation: Allocation) {
+    core.pool.unmap(allocation.id);
     // The bytes zeroed for a take that never came.
-    let kept_zeroed: u64 = kept.iter().map(|memory| memory.zeroed).sum();
-    (core.counters).zeroed_freed(allocation.clean.bytes() + kept_zeroed);
+    (core.counters).zeroed_freed(allocation.clean.bytes());
     let pool = &core.pool;
     let since = allocation.idle_since;
     let began = crate::host_time();
@@ -1473,44 +1497,45 @@ fn free_idle(core: &Core, allocation: Allocation, kept: &[Memory]) {
     lock(&pool.frees).push((since, began, crate::host_time()));
 }
 
-/// Frees an allocation, whose blocks are all retired. Freeing the memory also unmaps it.
+/// Frees an allocation and its buffer, whose blocks are all given back or gone with the device,
+/// and whose unmap has run. Freeing the memory also unmaps the runtime's own mapping of it.
 fn free_allocation(core: &Core, allocation: Allocation) {
-    // SAFETY: no buffer is bound to it any more, and no GPU work uses it.
-    unsafe { core.device.free_memory(allocation.memory, None) };
+    // SAFETY: no GPU work uses the buffer or the memory: a command buffer or upload that uses a
+    // block holds it until it retires.
+    unsafe {
+        core.device.destroy_buffer(allocation.buffer, None);
+        core.device.free_memory(allocation.memory, None);
+    }
     core.counters.fall(Gauge::Blocks);
     if allocation.spilled {
         core.counters.fall_by(Gauge::SpilledBytes, allocation.len);
     }
 }
 
-/// At teardown, after the block-maker thread is joined and every resource is freed: retires
-/// `blocks`, the blocks the runtime's own places still hold, and the blocks the pool has back,
-/// then frees every allocation.
-pub(crate) fn free_all(core: &mut Core, blocks: Vec<Memory>) {
-    let mut retired: Vec<Memory> = blocks;
+/// At teardown, after the block-maker thread is joined and every resource is freed: frees every
+/// allocation, each after the consumer's unmap of it where it is mapped.
+pub(crate) fn free_all(core: &mut Core) {
     let mut allocations = Vec::new();
     let mut idle = [0; 2];
     {
         let state = (core.pool.state.get_mut()).unwrap_or_else(PoisonError::into_inner);
         for class in MemoryClass::ALL {
             let index = class.index();
-            retired.append(&mut state.kept[index]);
             allocations.append(&mut state.allocations[index]);
             idle[index] = state.idle_bytes[index];
             state.idle_bytes[index] = 0;
         }
-        retired.extend(state.returned.drain(..));
     }
     for class in MemoryClass::ALL {
+        let shared = class == MemoryClass::Shared;
         core.counters
             .fall_by(class.idle_gauge(), idle[class.index()]);
-        (core.counters).idle_since(class == MemoryClass::Shared, 0);
-        (core.counters).reserve_bytes(class == MemoryClass::Shared, 0);
-    }
-    for memory in &retired {
-        retire(core, memory);
+        (core.counters).idle_since(shared, 0);
+        (core.counters).reserve_bytes(shared, 0);
+        (core.counters).long_reused_bytes(shared, 0);
     }
     for allocation in allocations {
+        core.pool.unmap(allocation.id);
         free_allocation(core, allocation);
     }
 }

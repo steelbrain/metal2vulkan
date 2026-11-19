@@ -186,16 +186,13 @@ mod on_device {
             });
             assert_eq!(counters.gauges().blocks, base + 2, "{name}: two blocks");
 
-            // Released: one block back to the pool, which keeps it; one kept for textures.
+            // Released: one block back to the pool, a free range of its allocation at once; one
+            // kept for textures.
             drop(textures);
             wait_until("the textures freed", || {
                 counters.gauges().textures == 0 && core.places.blocks() == 1
             });
-            wait_until("the block back in the pool", || {
-                core.pool.kept(MemoryClass::Private) == 1
-            });
-            assert_eq!(counters.gauges().blocks, base + 2, "{name}: after release");
-            // Its allocation, idle, is freed at its idle age.
+            // One idle allocation more than the class's reserve, freed at its idle age.
             wait_until("the released block's allocation freed", || {
                 counters.gauges().blocks == base + 1
             });

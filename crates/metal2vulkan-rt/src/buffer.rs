@@ -58,9 +58,10 @@ pub(crate) struct DeviceCopy {
 }
 
 impl DeviceCopy {
-    /// The copy block's buffer.
-    pub(crate) fn buffer(&self) -> vk::Buffer {
-        self.block.memory.buffer
+    /// The `VkBuffer` commands reach the copy's byte `offset` through, and that byte's offset in
+    /// it ([`Memory::range`]).
+    pub(crate) fn range(&self, offset: u64) -> (vk::Buffer, u64) {
+        self.block.memory.range(self.offset + offset)
     }
 
     /// The copy block's memory.
@@ -68,7 +69,7 @@ impl DeviceCopy {
         &self.block.memory
     }
 
-    /// The copy's offset in [`buffer`](Self::buffer).
+    /// The copy's offset in its block.
     pub(crate) fn offset(&self) -> u64 {
         self.offset
     }
@@ -158,6 +159,7 @@ impl Device {
                     };
                     drop(fill);
                     self.core().counters.zeroed(length - start);
+                    self.core().counters.zeroed_used(start - from);
                 }
                 None => {
                     (self.core().work).zero(self.core(), &block, offset + from, end)?;
@@ -262,8 +264,8 @@ impl Device {
         });
         let copied = copied.min(length);
         if copied < length {
-            let start = copy.offset() + copied;
-            let end = copy.offset() + length;
+            let (copy_buffer, start) = copy.range(copied);
+            let end = start + (length - copied);
             core.work.upload(
                 core,
                 None,
@@ -276,7 +278,7 @@ impl Device {
                         device,
                         command,
                         core.filler.zeros(),
-                        copy.buffer(),
+                        copy_buffer,
                         start,
                         end,
                     )
@@ -499,8 +501,8 @@ impl Buffer {
     /// The `VkBuffer` shaders reach the buffer through and the buffer's offset in it.
     pub(crate) fn device_range(&self) -> (vk::Buffer, u64) {
         match &self.inner.copy {
-            Some(copy) => (copy.buffer(), copy.offset()),
-            None => (self.inner.block.memory.buffer, self.inner.offset),
+            Some(copy) => copy.range(0),
+            None => self.inner.block.memory.range(self.inner.offset),
         }
     }
 

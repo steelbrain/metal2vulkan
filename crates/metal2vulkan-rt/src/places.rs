@@ -7,16 +7,18 @@
 //! the class's block length ([`MemoryClass::block_len`]), or of the place's own length where that
 //! is longer. A place is free again once its resource is freed, after every command buffer and
 //! upload that used it retired. One empty block of the block length is kept for the next place;
-//! another block that empties goes back to the pool, which keeps it for a take of its length.
+//! another block that empties goes back to the pool, whose free ranges its bytes join.
 //! Nothing zeroes a texture's bytes, as Metal leaves a new texture's contents undefined.
 //!
-//! An image in a texture block is optimal. The block's own `VkBuffer`, which spans it, aliases the
-//! images (Vulkan's memory aliasing), and nothing records through it.
+//! An image in a texture block is optimal. The `VkBuffer` of the block's allocation, which spans
+//! it, aliases the images (Vulkan's memory aliasing), and nothing records through it in a texture
+//! block. Writes through it in other blocks touch no page of a texture block's: blocks start and
+//! end on the pool's granule, at least the device's `bufferImageGranularity`.
 
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::memory::{BlockId, Memory, MemoryClass};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 /// The length of the blocks a set takes for places no longer than it.
 const BLOCK_LEN: u64 = MemoryClass::Private.block_len();
@@ -115,15 +117,6 @@ impl Places {
     pub(crate) fn blocks(&self) -> usize {
         lock(&self.blocks).len()
     }
-
-    /// At teardown, once every resource placed is freed: the blocks, for the core to free.
-    pub(crate) fn remaining(&mut self) -> Vec<Memory> {
-        let blocks = self
-            .blocks
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
-        blocks.drain(..).map(|block| block.memory).collect()
-    }
 }
 
 /// A block's free ranges, `start..end` by offset, no two adjacent.
@@ -178,15 +171,50 @@ impl Ranges {
         self.take_from(len, align, 0)
     }
 
+    /// The first offset that lies `base` bytes past a multiple of `align`, a power of two, less
+    /// `base`, with `len` bytes, more than 0, free from it, and the index of the range it lies in.
+    fn first_fit(&self, len: u64, align: u64, base: u64) -> Option<(usize, u64)> {
+        (self.free.iter().enumerate()).find_map(|(index, &(start, end))| {
+            let at = start.checked_add(base)?.checked_next_multiple_of(align)? - base;
+            (at.checked_add(len)? <= end).then_some((index, at))
+        })
+    }
+
+    /// The first offset that is a multiple of `align`, a power of two, with `len` bytes, more than
+    /// 0, free from it, which stay free; `None` where there is none.
+    pub(crate) fn find(&self, len: u64, align: u64) -> Option<u64> {
+        self.first_fit(len, align, 0).map(|(_, at)| at)
+    }
+
+    /// The first run of these bytes that `other` does not hold, as `start..end`.
+    pub(crate) fn first_outside(&self, other: &Ranges) -> Option<(u64, u64)> {
+        for &(start, end) in &self.free {
+            let mut at = start;
+            for &(from, to) in &other.free {
+                if to <= at || from >= end {
+                    continue;
+                }
+                if from > at {
+                    return Some((at, from));
+                }
+                at = to;
+                if at >= end {
+                    break;
+                }
+            }
+            if at < end {
+                return Some((at, end));
+            }
+        }
+        None
+    }
+
     /// Takes `len` bytes, more than 0, at the first offset that lies `base` bytes past a multiple
     /// of `align`, a power of two, less `base`, with the bytes free from it: the first offset
     /// aligned where the ranges start `base` bytes into something larger. `None` where there is
     /// none.
     pub(crate) fn take_from(&mut self, len: u64, align: u64, base: u64) -> Option<u64> {
-        let (index, at) = (self.free.iter().enumerate()).find_map(|(index, &(start, end))| {
-            let at = start.checked_add(base)?.checked_next_multiple_of(align)? - base;
-            (at.checked_add(len)? <= end).then_some((index, at))
-        })?;
+        let (index, at) = self.first_fit(len, align, base)?;
         let (start, end) = self.free[index];
         let stop = at + len;
         match (start < at, stop < end) {
