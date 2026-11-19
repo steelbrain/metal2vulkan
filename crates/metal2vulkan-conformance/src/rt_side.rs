@@ -659,7 +659,7 @@ impl Side for RtSide<'_> {
     }
 
     /// `newTextureWithDescriptor:` of the query, kept, and what it answers of itself
-    /// ([`texture_facts`]).
+    /// (`texture_facts`).
     fn queried_texture_facts(
         &mut self,
         query: &crate::texture_query::HeapTextureQuery,
@@ -675,7 +675,7 @@ impl Side for RtSide<'_> {
 
     /// `newTextureWithDescriptor:offset:bytesPerRow:` on a buffer of the request's length and
     /// storage, in blocks of its own, and what the texture answers of itself
-    /// ([`texture_facts`]). The texture is kept; it holds the buffer, and the buffer its blocks'
+    /// (`texture_facts`). The texture is kept; it holds the buffer, and the buffer its blocks'
     /// memory, as the runtime's `Buffer::new_texture` says.
     fn buffer_texture(
         &mut self,
@@ -791,7 +791,7 @@ impl Side for RtSide<'_> {
     }
 
     /// The consumer's own: a compute pipeline's bindings are its reflection's
-    /// ([`reflection_is_the_consumers`]).
+    /// (`reflection_is_the_consumers`).
     fn compute_pipeline_bindings(
         &mut self,
         _library: Handle,
@@ -800,7 +800,7 @@ impl Side for RtSide<'_> {
         Err(reflection_is_the_consumers("compute_pipeline_bindings", 0))
     }
 
-    /// The consumer's own ([`reflection_is_the_consumers`]).
+    /// The consumer's own (`reflection_is_the_consumers`).
     fn compute_pipeline_under_options(
         &mut self,
         _library: Handle,
@@ -813,7 +813,7 @@ impl Side for RtSide<'_> {
         ))
     }
 
-    /// The consumer's own ([`reflection_is_the_consumers`]).
+    /// The consumer's own (`reflection_is_the_consumers`).
     fn render_pipeline_under_options(
         &mut self,
         _library: Handle,
@@ -828,7 +828,7 @@ impl Side for RtSide<'_> {
         ))
     }
 
-    /// The consumer's own ([`reflection_is_the_consumers`]).
+    /// The consumer's own (`reflection_is_the_consumers`).
     fn compute_pipeline_reflection_under(
         &mut self,
         _library: Handle,
@@ -842,7 +842,7 @@ impl Side for RtSide<'_> {
     }
 
     /// The consumer's own for a compute pipeline's two creation paths, which compare the
-    /// reflection each delivers under its options ([`reflection_is_the_consumers`]); a render,
+    /// reflection each delivers under its options (`reflection_is_the_consumers`); a render,
     /// tile or mesh pipeline's are unavailable.
     fn pipeline_both_paths(
         &mut self,
