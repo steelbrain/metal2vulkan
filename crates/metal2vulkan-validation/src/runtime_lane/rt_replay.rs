@@ -2236,11 +2236,12 @@ fn the_address_census_is_the_same_on_both_runtimes() {
     assert_eq!(old.pinned, Some(2), "the block and its buffer");
 }
 
-/// A copy back to the guest's RAM plays as the runtime's buffer copies into a sink of the play's
-/// own, each run widened to the whole words it touches within the buffer: nothing is skipped, the
-/// bytes it copied are counted, and the buffer keeps its bytes.
+/// A copy back to the guest's RAM plays in the host's one-copy form: one buffer copy of the whole
+/// words its runs span within the buffer into a scratch of the play's own, after its command
+/// buffer, which a wait for that command buffer waits for; then the CPU copies each run out of the
+/// scratch. Nothing is skipped, the copy and the runs are counted, and the buffer keeps its bytes.
 #[test]
-fn a_copy_back_to_the_guest_s_ram_plays_as_buffer_copies() {
+fn a_copy_back_to_the_guest_s_ram_plays_as_one_copy_then_a_cpu_copy_a_run() {
     let dir = ScratchDir::new("rt-replay-copy-back").unwrap();
     let bytes = vec![0x5a_u8; 100];
     let path = written(&dir, |w| {
@@ -2265,10 +2266,81 @@ fn a_copy_back_to_the_guest_s_ram_plays_as_buffer_copies() {
         let sum = Value::List(vec![Value::Bytes(Sha256::digest(&bytes).to_vec())]);
         w.call("m2v.check", 0, 0, &[Value::Object(3)], &[("sha256", sum)])
     });
-    let (report, _) = play("copy-back", &path);
+    let (report, lines) = play("copy-back", &path);
     assert_eq!(report.first_skip, None);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
-    // 1..17 is the words 0..20, and 90..100 the words 88..100.
-    let copied = report.total.executed["copied_back_guest_ram_bytes"];
-    assert_eq!(copied, 20 + 12);
+    let executed = &report.total.executed;
+    // 1..17 is the words 0..20, and 90..100 the words 88..100: one copy of 0..100.
+    assert_eq!(executed["guest_ram_downloads"], 1);
+    assert_eq!(executed["guest_ram_download_bytes"], 100);
+    assert_eq!(executed["guest_ram_runs_out"], 2);
+    assert_eq!(executed["guest_ram_run_bytes_out"], 16 + 10);
+    let line =
+        "guest RAM: copy-back played in the one-copy form: 1 copies back (100 bytes), 2 runs \
+                (26 bytes)";
+    assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
+}
+
+/// A copy from the guest's RAM plays in the host's one-copy form: its pieces gathered by the CPU
+/// into a scratch of the play's own and one buffer copy into the buffer, before its command
+/// buffer. Into Shared #3, the gap between the pieces and a piece's edges up to whole words keep
+/// the buffer's bytes, as its mapping holds them, in one copy. Into Private #4, which has no
+/// mapping, a piece that is not whole words is skipped and counted, and the pieces go as one copy
+/// for each run of touching words, so no gap is written.
+#[test]
+fn a_copy_from_the_guest_s_ram_plays_as_a_cpu_gather_then_one_copy() {
+    let dir = ScratchDir::new("rt-replay-copy-in").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // #3 Shared, #4 Private (MTLResourceStorageModePrivate, 2 << 4), 32 bytes each.
+        let made = "newBufferWithLength:options:";
+        w.call(made, 1, 3, &[Value::Uint(32), Value::Uint(0)], &[])?;
+        w.call(made, 1, 4, &[Value::Uint(32), Value::Uint(32)], &[])?;
+        let write = [Value::Uint(0), Value::Bytes(vec![0x11; 32])];
+        w.call("m2v.write", 3, 0, &write, &[])?;
+        w.call("commandBuffer", 2, 10, &[], &[])?;
+        w.call("blitCommandEncoder", 10, 11, &[], &[])?;
+        let range = uints(&[("location", 0), ("length", 32)]);
+        let fill = [Value::Object(4), range, Value::Uint(0x5a)];
+        w.call("fillBuffer:range:value:", 11, 0, &fill, &[])?;
+        w.call("endEncoding", 11, 0, &[], &[])?;
+        w.call("commit", 10, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 10, 0, &[], &[])?;
+        w.call("commandBuffer", 2, 20, &[], &[])?;
+        w.call("blitCommandEncoder", 20, 21, &[], &[])?;
+        let piece = |at: u64, byte: u8, len: usize| {
+            Value::List(vec![Value::Uint(at), Value::Bytes(vec![byte; len])])
+        };
+        let into = |buffer: u64, pieces: Vec<Value>| [Value::Object(buffer), Value::List(pieces)];
+        let shared = into(3, vec![piece(4, 0xa0, 4), piece(13, 0xb0, 6)]);
+        w.call("m2v.copyFromGuestRam", 21, 0, &shared, &[])?;
+        let private = into(
+            4,
+            vec![piece(0, 0xc0, 4), piece(16, 0xd0, 8), piece(9, 0xe0, 2)],
+        );
+        w.call("m2v.copyFromGuestRam", 21, 0, &private, &[])?;
+        w.call("endEncoding", 21, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 20, 0, &[], &[])
+    });
+    let (report, lines, read) = play_then("copy-in", &path, |backend| {
+        [backend.read(3), backend.read(4)]
+    });
+    let [shared, private] = read.map(|bytes| bytes.unwrap_or_else(|e| panic!("{e}: {lines:?}")));
+    let mut want = vec![0x11; 32];
+    want[4..8].fill(0xa0);
+    want[13..19].fill(0xb0);
+    assert_eq!(shared, want);
+    let mut want = vec![0x5a; 32];
+    want[0..4].fill(0xc0);
+    want[16..24].fill(0xd0);
+    assert_eq!(private, want);
+    let executed = &report.total.executed;
+    assert_eq!(executed["skipped_guest_ram_writes"], 1);
+    assert_eq!(executed["guest_ram_fills"], 2);
+    assert_eq!(executed["guest_ram_pieces_in"], 2 + 2);
+    // #3: one copy of the words 4..20; #4: 0..4 and 16..24.
+    assert_eq!(executed["guest_ram_fill_copies"], 1 + 2);
+    assert_eq!(executed["guest_ram_fill_bytes"], 16 + 4 + 8);
 }

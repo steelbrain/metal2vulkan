@@ -718,15 +718,26 @@ counted from 0), completes the work committed so far, reports as at the stream's
     mapping (`skipped_guest_ram_writes`). `optimizeContentsForGPUAccess:`, a layout hint, plays
     as nothing, and `generateMipmapsForTexture:` as the runtime's `generate_mipmaps`.
 
-  A buffer-to-buffer copy plays as the runtime's (`copy_from_buffer_to_buffer`). A copy from the
-  guest's RAM, the recording's plumbing, plays as its pieces' bytes in a Shared staging place of
-  the backend's own, then a buffer copy into the target in the same blit encoder, so the GPU's
-  order holds; a piece's edge bytes up to whole words come from the target's mapping where it has
-  one. The staging place is given back at the command buffer's commit and free once it completes
-  (`staged_guest_ram_bytes`). A copy back to the guest's RAM, the recording host's own work, plays
-  as buffer copies of its runs, each widened to the whole words it touches within the buffer, into
-  a Shared place of the backend's own that nothing reads, in the same blit encoder, given back the
-  same way (`copied_back_guest_ram_bytes`).
+  A buffer-to-buffer copy plays as the runtime's (`copy_from_buffer_to_buffer`). The copies
+  between the guest's RAM and a buffer play in the host's form on the new runtime, the one-copy
+  form: one buffer copy a call, in a command buffer of the backend's own on the queue of the
+  call's command buffer, through a Shared scratch of the backend's own; the report's `guest RAM`
+  line says so. A copy from the guest's RAM gathers its pieces on the CPU into the scratch, laid
+  out as the target's bytes they span, and copies them into the target in a command buffer
+  committed just before the call's: the bytes of those words no piece carries (a piece's edges up
+  to whole words, the gaps between pieces) come from the target's mapping where it has one, and
+  into a target with none the copy is one for each run of touching words, so no gap is written
+  (`guest_ram_fills`, `guest_ram_pieces_in`, `guest_ram_fill_copies`, `guest_ram_fill_bytes`). A
+  copy back to the guest's RAM, the recording host's own work, first copies a surface's texels
+  into the bytes in the call's blit encoder (below), then copies the whole words its runs span
+  within the buffer into the scratch in a command buffer committed just after the call's; a wait
+  for the call's command buffer waits for that copy too, as the guest sees its RAM written when
+  its command buffer completes, and the CPU then copies each run out of the scratch into memory
+  of the backend's own that nothing reads (`guest_ram_downloads`, `guest_ram_download_bytes`,
+  `guest_ram_runs_out`, `guest_ram_run_bytes_out`). Those command buffers are the backend's
+  stand-in for the host's work, apart from the stream's: their GPU time is
+  `guest_ram_gpu_nanos`, counted in the frame whose end first sees each complete, and in no
+  frame's `gpu_busy`. A command buffer released uncommitted makes none of its copies.
 
   Textures over a buffer play as the runtime's (`Buffer::new_texture`) and texture views as its
   views (`Texture::new_texture_view`). Where the runtime cannot make a texture the program made,

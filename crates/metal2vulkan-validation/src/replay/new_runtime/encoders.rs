@@ -10,7 +10,6 @@ use crate::replay::stream::Call;
 use crate::replay::value::Value;
 use metal2vulkan_rt as rt;
 use std::collections::HashSet;
-use std::ops::Range;
 
 /// A compute encoder, its buffer and texture slots that hold a skipped object, and whether its
 /// pipeline state is a skipped one.
@@ -174,17 +173,16 @@ impl NewRuntime {
             "commit" => {
                 self.surface_fill_owed(call)?;
                 self.copy_named(call)?;
+                self.guest_ram_fill(call)?;
                 let queue = self.queue_for(call)?;
                 self.commit(&queue, command_buffer, call.receiver)
                     .map_err(failed(call))?;
+                self.guest_ram_download(call)?;
                 // Its first use committed, a no-copy Managed buffer's GPU copy changes only by
                 // `didModifyRange:` from here.
                 self.fresh.retain(|_, user| *user != Some(call.receiver));
                 self.unwritten.committed(call.receiver);
                 self.surfaces.committed(call.receiver);
-                for place in self.staging.remove(&call.receiver).unwrap_or_default() {
-                    self.places.give(place, self.commits, Vec::new());
-                }
                 self.indices.committed(call.receiver, self.commits);
                 if self.users.remove(&call.receiver).is_some() {
                     self.places.ended(call.receiver, self.commits);
@@ -417,147 +415,6 @@ impl NewRuntime {
             let buffer = device.new_buffer(place.block, place.range.start, length, Some(0));
             Ok((buffer.map_err(failed(call))?, place))
         })
-    }
-
-    /// A copy back to the guest's RAM, the recording host's own work: each run of the buffer copied
-    /// by the blit encoder, in its order, into a Shared place of the play's own that nothing reads
-    /// (the guest's later reads of that RAM carry their own bytes). A buffer copy takes whole
-    /// 4-byte words at 4-byte offsets, so each run is widened to the words it touches, within the
-    /// buffer. The place is given back at the command buffer's commit, as a copy from the guest's
-    /// RAM gives back its staging.
-    fn copy_back(&mut self, call: &Call) -> Result<(), PlayError> {
-        let id = call.receiver;
-        let object = Self::id(call, 0)?;
-        let from = self.buffer_of(call, object)?;
-        let runs = crate::replay::player::placed_runs(arg(call, 1)?);
-        let runs = runs.ok_or_else(|| refuse(call, "argument 1 is no list of placed runs"))?;
-        let words = from.length() / 4 * 4;
-        let mut spans = Vec::new();
-        let mut len = 0;
-        for (at, length) in runs {
-            let end = at.checked_add(length);
-            let end = end.ok_or_else(|| refuse(call, "a run past 2^64 bytes"))?;
-            if end > from.length() {
-                return Err(refuse(call, "a run past its buffer"));
-            }
-            let (start, stop) = (at & !3, end.next_multiple_of(4).min(words));
-            if start < stop {
-                spans.push((start, stop - start, len));
-                len += stop - start;
-            }
-        }
-        if len == 0 {
-            return Ok(());
-        }
-        // A surface's texels into those bytes first (`surfaces`).
-        let read: Vec<Range<u64>> = (spans.iter())
-            .map(|&(start, size, _)| start..start + size)
-            .collect();
-        self.surface_copying_out(call, id, (object, &from), &read)?;
-        let completed = self.completed();
-        // The player's own sink: no recorded slack.
-        let place = (self
-            .places
-            .take(rt::MemoryClass::Shared, len, granule(None), completed))
-        .map_err(failed(call))?;
-        let sink = self
-            .device
-            .new_buffer(place.block, place.range.start, len, None);
-        let sink = sink.map_err(failed(call))?;
-        for &(start, size, into) in &spans {
-            let copied = self
-                .blit(id)
-                .copy_from_buffer_to_buffer(&from, start, &sink, into, size);
-            copied.map_err(failed(call))?;
-        }
-        self.copied_back_bytes += len;
-        match self.owners.get(&id).copied() {
-            Some(command_buffer) => self.staging.entry(command_buffer).or_default().push(place),
-            None => self.places.give(place, self.commits, Vec::new()),
-        }
-        Ok(())
-    }
-
-    /// A copy from the guest's RAM into a buffer, the recording's own plumbing: each piece's bytes
-    /// in a Shared staging place of the play's own, then copied into the buffer by the blit
-    /// encoder, so the GPU's order holds. A buffer copy takes whole 4-byte words at 4-byte
-    /// offsets: a piece's edge bytes past its own come from the buffer's mapping where it has one,
-    /// as they stand; a piece with such edges into a buffer with none is skipped and counted. The
-    /// staging place is given back at the command buffer's commit, free once it completes.
-    fn guest_ram_copy(&mut self, call: &Call) -> Result<(), PlayError> {
-        let id = call.receiver;
-        let upload = crate::replay::player::upload(call)?;
-        let upload = upload.ok_or_else(|| refuse(call, "no guest-RAM copy"))?;
-        let target = self.buffer_of(call, upload.target)?;
-        let mapped = target.contents();
-        // Each piece's whole-word span in the target and its offset in the staging place.
-        let mut spans = Vec::new();
-        let mut len = 0;
-        for &(at, entry) in &upload.pieces {
-            let bytes = crate::replay::player::piece(&call.args, entry);
-            let end = at + bytes.len() as u64;
-            let (start, stop) = (at & !3, end.next_multiple_of(4));
-            if stop > target.length() {
-                return Err(refuse(call, "a piece past its buffer"));
-            }
-            if (start, stop) != (at, end) && mapped.is_none() {
-                self.skips.guest_ram_writes += 1;
-                continue;
-            }
-            spans.push((at, entry, start..stop, len));
-            len += stop - start;
-        }
-        if len == 0 {
-            return Ok(());
-        }
-        let completed = self.completed();
-        // The player's own staging: no recorded slack.
-        let place = (self
-            .places
-            .take(rt::MemoryClass::Shared, len, granule(None), completed))
-        .map_err(failed(call))?;
-        let staging = self
-            .device
-            .new_buffer(place.block, place.range.start, len, None);
-        let staging = staging.map_err(failed(call))?;
-        for (at, entry, span, from) in &spans {
-            let bytes = crate::replay::player::piece(&call.args, *entry);
-            match (
-                mapped,
-                span.start == *at && span.end == at + bytes.len() as u64,
-            ) {
-                (Some(mapped), false) => {
-                    let mut words = vec![0; (span.end - span.start) as usize];
-                    // SAFETY: the span lies in the target's mapped bytes (checked above).
-                    let edges = unsafe {
-                        std::slice::from_raw_parts(
-                            mapped.as_ptr().add(span.start as usize),
-                            words.len(),
-                        )
-                    };
-                    words.copy_from_slice(edges);
-                    words[(at - span.start) as usize..][..bytes.len()].copy_from_slice(bytes);
-                    super::write_into(&staging, *from, &words)?;
-                }
-                _ => super::write_into(&staging, *from, bytes)?,
-            }
-        }
-        for (_, _, span, from) in &spans {
-            let size = span.end - span.start;
-            let copied = self
-                .blit(id)
-                .copy_from_buffer_to_buffer(&staging, *from, &target, span.start, size);
-            copied.map_err(failed(call))?;
-        }
-        // A surface's texels under those bytes (`surfaces`).
-        let written: Vec<Range<u64>> = spans.iter().map(|(_, _, span, _)| span.clone()).collect();
-        self.surface_copied_in(call, id, (upload.target, &target), &written)?;
-        self.staged_bytes += len;
-        match self.owners.get(&id).copied() {
-            Some(command_buffer) => self.staging.entry(command_buffer).or_default().push(place),
-            None => self.places.give(place, self.commits, Vec::new()),
-        }
-        Ok(())
     }
 
     pub(super) fn blit(&mut self, id: u64) -> &mut rt::BlitCommandEncoder {

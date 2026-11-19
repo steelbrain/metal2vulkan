@@ -11,6 +11,7 @@
 
 mod aside;
 mod encoders;
+mod guest_ram;
 mod imports;
 pub(super) mod indices;
 pub(super) mod places;
@@ -343,9 +344,9 @@ pub struct NewRuntime {
     identity: bool,
     /// The Shared buffers a dispatch read before anything recorded reached their bytes.
     unwritten: unwritten::Unwritten,
-    /// The staging places of each command buffer not yet committed, which hold the bytes of its
-    /// guest-RAM copies: given back at its commit, free once it completes.
-    staging: HashMap<u64, Vec<Place>>,
+    /// The host's copies between buffers and the guest's RAM, in the host's one-copy form
+    /// (`guest_ram`).
+    guest_ram: guest_ram::GuestRam,
     /// The buffers in a place of the play's own that an encoder of each command buffer not yet
     /// committed named: a release of a buffer waits for those command buffers (`Places::give`).
     /// The textures and sampler states they name go to `Indices::named`.
@@ -361,10 +362,6 @@ pub struct NewRuntime {
     device_copies: HashMap<u64, Place>,
     /// The queue each command buffer was made on.
     queue_of: HashMap<u64, u64>,
-    /// The bytes those copies staged.
-    staged_bytes: u64,
-    /// The bytes the host's copies back to the guest's RAM copied into the play's own sinks.
-    copied_back_bytes: u64,
     /// The queue of the play's own that reads a Private buffer back (`private_bytes`), made at
     /// the first such read.
     reads: Option<rt::CommandQueue>,
@@ -749,14 +746,12 @@ impl NewRuntime {
             from_first_use: HashSet::new(),
             identity: false,
             unwritten: unwritten::Unwritten::default(),
-            staging: HashMap::new(),
+            guest_ram: guest_ram::GuestRam::default(),
             users: HashMap::new(),
             seconds: second::Seconds::default(),
             asides: aside::Asides::default(),
             device_copies: HashMap::new(),
             queue_of: HashMap::new(),
-            staged_bytes: 0,
-            copied_back_bytes: 0,
             reads: None,
             unanswered_pipeline_ids: 0,
             block_bytes: [0; 2],
@@ -2133,12 +2128,10 @@ impl Backend for NewRuntime {
                     self.device.release_block(block).map_err(failed(call))?;
                     self.block_bytes[class_index(class)] -= range.len;
                 }
-                // A command buffer released uncommitted runs nothing: neither its staging nor its
-                // uses of buffers released before it.
+                // A command buffer released uncommitted runs nothing: neither its guest-RAM
+                // copies nor its uses of buffers released before it.
                 Some(Object::CommandBuffer(_)) => {
-                    for place in self.staging.remove(&call.receiver).unwrap_or_default() {
-                        self.places.give(place, self.commits, Vec::new());
-                    }
+                    self.guest_ram_released(call.receiver);
                     self.indices.ended(call.receiver);
                     if self.users.remove(&call.receiver).is_some() {
                         self.places.ended(call.receiver, self.commits);
@@ -2376,29 +2369,40 @@ impl Backend for NewRuntime {
     }
 
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError> {
-        match self.objects.get(&command_buffer) {
-            Some(Object::CommandBuffer(waited)) => {
-                // One not in flight has retired already.
-                let flight = (self.in_flight.iter()).find(|flight| flight.id == command_buffer);
-                // The hang record names the command buffer and its queue by their stream IDs.
-                if let Some(flight) = flight {
-                    let operation = format!(
-                        "the replay's wait for command buffer #{command_buffer} of queue #{}",
-                        flight.queue_id
-                    );
-                    flight.wait(self.backend, &operation);
-                }
-                match waited.error() {
-                    None => Ok(()),
-                    Some(error) => Err(PlayError::Runtime {
-                        selector: "commit".into(),
-                        error: format!("{error:?}"),
-                    }),
-                }
-            }
-            _ => Err(PlayError::Invalid(format!(
+        let Some(Object::CommandBuffer(waited)) = self.objects.get(&command_buffer) else {
+            return Err(PlayError::Invalid(format!(
                 "#{command_buffer} is no command buffer"
-            ))),
+            )));
+        };
+        // One not in flight has retired already.
+        let flight = (self.in_flight.iter()).find(|flight| flight.id == command_buffer);
+        // The hang record names the command buffer and its queue by their stream IDs.
+        if let Some(flight) = flight {
+            let operation = format!(
+                "the replay's wait for command buffer #{command_buffer} of queue #{}",
+                flight.queue_id
+            );
+            flight.wait(self.backend, &operation);
+        }
+        // Its copies back to the guest's RAM, which the guest sees done when it completes.
+        for commit in self.guest_ram.downloads_of(command_buffer) {
+            let flight = (self.in_flight.iter()).find(|flight| flight.commit == commit);
+            if let Some(flight) = flight {
+                let operation = format!(
+                    "the replay's wait for a copy back to the guest's RAM after command buffer \
+                     #{command_buffer}"
+                );
+                flight.wait(self.backend, &operation);
+            }
+        }
+        let error = waited.error().map(|error| format!("{error:?}"));
+        self.guest_ram_downloaded(command_buffer);
+        match error {
+            None => Ok(()),
+            Some(error) => Err(PlayError::Runtime {
+                selector: "commit".into(),
+                error,
+            }),
         }
     }
 
@@ -2570,8 +2574,6 @@ impl Backend for NewRuntime {
             ("skipped_draws", self.skips.draws),
             ("skipped_render_commands", self.skips.render_command_count()),
             ("skipped_blits", self.skips.blits),
-            ("staged_guest_ram_bytes", self.staged_bytes),
-            ("copied_back_guest_ram_bytes", self.copied_back_bytes),
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
             ("skipped_texture_syncs", self.skips.texture_syncs),
             ("skipped_clamped_samplers", self.skips.clamped_samplers),
@@ -2584,6 +2586,7 @@ impl Backend for NewRuntime {
         ]);
         self.surfaces.timed();
         counters.extend(self.surfaces.counted());
+        counters.extend(self.guest_ram.counted());
         counters
     }
 
@@ -2688,6 +2691,7 @@ impl Backend for NewRuntime {
             lines.push(self.seconds.line());
         }
         lines.extend(self.no_copies.lines());
+        lines.push(self.guest_ram.line());
         let [in_place, copied] = self.textures_over;
         lines.push(format!(
             "textures over buffers {}: {in_place} in place, {copied} in an image of their own, \
