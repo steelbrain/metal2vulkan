@@ -1,0 +1,243 @@
+{
+  "format": 1,
+  "case": "surface-textures-x420-chroma-rg16-nvidia",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "surface:ostype",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "94b036c8fc01fee6c3ecb9b1666ea90a144f0aed7a7330fe2af5f67be7dc6f2c"
+                        }
+                      }
+                    },
+                    {
+                      "name": "surface:layout",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "33188515cf39acfa72b69a4251cc95797a7380cb60eb45c5e92ca9ca61c1a85e"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:texels",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "95f0f03f2306a46d0c6c9d064405ab32df0e6cc94ac41dcc5ce4757a26d39bfd"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "replace-region",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "get-bytes",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "texels",
+                  "observed": {
+                    "value": {
+                      "bytes": "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"
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "texture": {
+                            "level": 0,
+                            "slice": 0,
+                            "aspect": "color",
+                            "sample": 0,
+                            "origin": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "size": [
+                              32,
+                              16,
+                              1
+                            ]
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 128,
+                        "row_pitch": 128,
+                        "rows": 16,
+                        "image_pitch": 2048,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "blit",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "read-buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "copied",
+                  "observed": {
+                    "value": {
+                      "bytes": "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"
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "texture": {
+                            "level": 0,
+                            "slice": 0,
+                            "aspect": "color",
+                            "sample": 0,
+                            "origin": [
+                              0,
+                              0,
+                              0
+                            ],
+                            "size": [
+                              32,
+                              16,
+                              1
+                            ]
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 128,
+                        "row_pitch": 128,
+                        "rows": 16,
+                        "image_pitch": 2048,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}
