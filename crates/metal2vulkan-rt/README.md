@@ -804,7 +804,8 @@ made, with no lock, and never rewritten for layouts.
   `Device::texture_level_info(query)` is `MTLGetTextureLevelInfoForDeviceWithOptions`: Metal's
   layout of one level of a texture, its 13 words, computed from that description. Both answer the
   same on every device and ask Vulkan nothing: a format described there may be one this device
-  makes no texture of (`Gap::TextureFormat`), and the flags are Apple's GPU's.
+  makes no texture of (`Gap::TextureFormat`), and the flags are Apple's GPU's and promise nothing
+  about this device (a write to a texture with no storage element here is `Gap::StorageElement`).
 - A texture holds the device. Once its last handle and the last command buffer that used it are
   gone, its elements read null and its index is free at once; the reaper frees its image once the
   last upload that moves or copies it has retired, and a view's image views once the view is

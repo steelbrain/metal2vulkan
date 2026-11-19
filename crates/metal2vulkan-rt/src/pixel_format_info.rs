@@ -91,9 +91,11 @@ impl Device {
     /// answers [`PixelFormatInfo::INVALID`]. The description, its flags included, is an Apple
     /// GPU's, not this device's: a format this device lacks is still described here, and is
     /// refused where a texture of it is made, with its typed gap ([`Device::new_texture`]'s
-    /// [`Gap::TextureFormat`](crate::Gap::TextureFormat)). An Apple M4 also describes the values
-    /// from 630 to 645, which this answers [`PixelFormatInfo::INVALID`] (the README's known gaps
-    /// of textures). No Vulkan call is made.
+    /// [`Gap::TextureFormat`](crate::Gap::TextureFormat)). Its flags promise nothing about this
+    /// device: a write to a texture of the format that has no storage element here is
+    /// [`Gap::StorageElement`](crate::Gap::StorageElement), whatever the M3's flags say. An Apple
+    /// M4 also describes the values from 630 to 645, which this answers
+    /// [`PixelFormatInfo::INVALID`] (the README's known gaps of textures). No Vulkan call is made.
     ///
     /// ```
     /// use metal2vulkan_rt::{Device, PixelFormatInfo};
