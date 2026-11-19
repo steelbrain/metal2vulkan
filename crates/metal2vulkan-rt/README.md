@@ -813,6 +813,12 @@ that touch blocks first.
   run in flight) is equal. A recorded replay stream on the same card plays 1.5 times as fast as on
   the old runtime; it was recorded before the recorder's completion fix, so that figure compares
   the two runtimes on the same stream and no more.
+- A command buffer whose timestamps are not available when its submission signals reports no GPU
+  times: its `gpu_start_time` and `gpu_end_time` are 0, and `Metrics::stamps_not_available`
+  counts it, where Metal reports the times of every command buffer that completes. A signal says
+  nothing about a query's availability: Vulkan defines a dependency on the timestamp writes only
+  for a read with `VK_QUERY_RESULT_WAIT_BIT`, and the completion thread reads without it, so it
+  never waits on a query.
 - GPU start and end times are the device's timestamps. On Mesa's Apple-GPU driver a timestamp
   reads the end of the Metal encoder that holds it: the driver writes it with Metal's relaxed
   timestamp granularity into the compute encoder open there, which holds the compute and blit
