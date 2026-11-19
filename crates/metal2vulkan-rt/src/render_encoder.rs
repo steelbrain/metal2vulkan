@@ -91,6 +91,7 @@ use crate::sampler::SamplerState;
 use crate::shadow::{self, Area, Held};
 use crate::texture::Texture;
 use ash::vk;
+use metal2vulkan::bind::alpha_test_code;
 use metal2vulkan::metal::format::integer_channels_word;
 use metal2vulkan::metal::state::{input_assembly, DepthStencilDescriptor};
 use metal2vulkan::metal::{
@@ -459,6 +460,9 @@ pub struct RenderCommandEncoder {
     /// The front and back stencil references, saturated to 8 bits.
     stencil_reference: [u32; 2],
     blend_color: [f32; 4],
+    /// The alpha test reference's 8-bit unorm code (`metal2vulkan::bind::alpha_test_code`),
+    /// Metal's 1 until set.
+    alpha_test: u32,
     /// The depth bias's constant and slope scale, Metal's `depthBias` and `slopeScale`.
     depth_bias: [f32; 2],
     /// Whether the last draw recorded the depth bias enabled.
@@ -542,6 +546,7 @@ impl CommandBuffer {
                     winding: Winding::Clockwise,
                     stencil_reference: [0; 2],
                     blend_color: [0.0; 4],
+                    alpha_test: alpha_test_code(1.0),
                     depth_bias: [0.0; 2],
                     biased: false,
                     recorded: None,
@@ -1049,6 +1054,22 @@ impl RenderCommandEncoder {
     pub fn set_blend_color(&mut self, red: f32, green: f32, blue: f32, alpha: f32) {
         self.blend_color = [red, green, blue, alpha];
         self.dirty |= BLEND;
+    }
+
+    /// `setAlphaTestReferenceValue:` (Apple SPI, of OpenGL on Metal): the reference a state with
+    /// the private alpha test (`PrivateRenderState::alpha_test_enabled` with a compare function
+    /// other than `Never` or `Always`) compares each fragment's color 0 alpha with, both as
+    /// Metal's 8-bit unorm codes (`metal2vulkan::bind::alpha_test_code`: a NaN taken as 0, the
+    /// value clamped to `[0, 1]`, the exact product with 255 rounded to nearest). It holds for the
+    /// encoder's later draws; each encoder starts at Metal's 1, and a reference set in an earlier
+    /// encoder is not kept (probes on an Apple M3 Max, macOS 27.0.1). Every value is accepted, as
+    /// on Metal. A draw of a state the test reads it in pushes its code; any other reads none.
+    pub fn set_alpha_test_reference_value(&mut self, value: f32) {
+        let code = alpha_test_code(value);
+        if code != self.alpha_test {
+            self.alpha_test = code;
+            self.push_filled = false;
+        }
     }
 
     /// The static precision note of a draw of triangles under a depth bias
@@ -1737,7 +1758,7 @@ impl RenderCommandEncoder {
                 });
                 fill_push(
                     &mut self.push,
-                    (&self.tables, self.facts.nil, factors),
+                    (&self.tables, self.facts.nil, factors, self.alpha_test),
                     &self.moved,
                     &self.shadow_slots,
                     state,
@@ -2273,7 +2294,7 @@ fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, b
 
 fn fill_push(
     push: &mut Vec<u8>,
-    (tables, nil, factors): (&[Tables; 2], u64, u64),
+    (tables, nil, factors, alpha_test): (&[Tables; 2], u64, u64, u32),
     moved: &[Moved],
     shadow_slots: &[(usize, u32)],
     state: &RenderPipelineState,
@@ -2321,6 +2342,9 @@ fn fill_push(
             FieldValue::Word(word) => push[at..at + 4].copy_from_slice(&word.to_le_bytes()),
             FieldValue::TessellationFactors => {
                 push[at..at + 8].copy_from_slice(&factors.to_le_bytes());
+            }
+            FieldValue::AlphaTestReference => {
+                push[at..at + 4].copy_from_slice(&alpha_test.to_le_bytes());
             }
             // A render content has no dispatch or stage-in region (`render::draws`).
             FieldValue::DispatchRegion | FieldValue::StageInRegion => {}

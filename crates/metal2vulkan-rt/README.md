@@ -1990,6 +1990,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   references, the depth bias and the blend color, Metal's defaults where it set none. A vertex buffer slot serves
   the vertex function's buffer argument of its index and the vertex descriptor's layout of its
   index alike, a `set_vertex_bytes` copy too, read through the parameter ring's buffer.
+- An encoder also holds the alpha test reference of OpenGL on Metal
+  (`set_alpha_test_reference_value`, Apple's `setAlphaTestReferenceValue:` SPI): 1 until the
+  encoder sets it, a reference set in an earlier encoder not kept, as an Apple M3 Max under macOS
+  27.0.1 keeps it. A state with the private alpha test (`PrivateRenderState::alpha_test_enabled`,
+  a compare function other than `Never` or `Always`) reads it at each draw, pushed as Metal's
+  8-bit unorm code (`metal2vulkan::bind::alpha_test_code`), and its fragment function compares its
+  color 0's alpha's code with it; a fragment that fails writes nothing.
 - `draw_primitives` and `draw_indexed_primitives` are one `vkCmdDraw` or `vkCmdDrawIndexed` each.
   A draw pushes its functions' fields in the one push range (the addresses of their buffer slots
   plus offsets, the resource IDs of their textures and sampler states, the state's constexpr

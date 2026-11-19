@@ -2804,11 +2804,13 @@ fn shadow_stencil_words(t: &ShadowTemplate, state: &BindState) -> Result<FieldBy
 /// The `PushField::ShaderTestsState` words of a draw under encoder state `state`: the depth compare
 /// function, write enable and clip mode, and viewport 0's depth range.
 /// The 8-bit unorm code Metal's private alpha test compares the reference `reference` as
-/// (`PushField::AlphaTestReference`, probes on an Apple M3 Max): NaN is 0, the value is clamped
-/// to `[0, 1]`, and the code is the exact product with 255 rounded to nearest, as the fragment
-/// function converts its alpha (`lower::arith::color_write::unorm8_code`). The product of an
-/// `f32` and 255 is exact as an `f64`, and its only tie, at 0.5, rounds to 128 either way.
-pub(crate) fn alpha_test_code(reference: f32) -> u32 {
+/// (`setAlphaTestReferenceValue:`, Apple SPI; `PushField::AlphaTestReference`, probes on an Apple
+/// M3 Max): NaN is 0, the value is clamped to `[0, 1]`, and the code is the exact product with
+/// 255 rounded to nearest, as the fragment function converts its alpha
+/// (`lower::arith::color_write::unorm8_code`). The product of an `f32` and 255 is exact as an
+/// `f64`, and its only tie, at 0.5, rounds to 128 either way. A runtime fills the push field with
+/// it.
+pub fn alpha_test_code(reference: f32) -> u32 {
     let clamped = match reference.is_nan() {
         true => 0.0,
         false => f64::from(reference.clamp(0.0, 1.0)),

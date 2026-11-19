@@ -583,6 +583,10 @@ pub(crate) enum FieldValue {
     /// (`setTessellationFactorBuffer:offset:instanceStride:`), which a post-tessellation vertex
     /// function's control stage reads each patch's factors from.
     TessellationFactors,
+    /// A `u32`: the render encoder's alpha test reference (`setAlphaTestReferenceValue:`) as the
+    /// 8-bit unorm code a fragment function under the private alpha test compares its color 0's
+    /// alpha with (`metal2vulkan::bind::alpha_test_code`), Metal's 1 until the encoder sets it.
+    AlphaTestReference,
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the

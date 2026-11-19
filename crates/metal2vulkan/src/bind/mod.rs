@@ -233,8 +233,8 @@ pub use extended_canonical::{
 };
 pub use extended_shadow::{extended_shadow_module, ExtendedShadowModule};
 pub use graphics::{
-    DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups, MeshRecordsRegion, SlotRebinds,
-    TessellationDispatch, TessellationRecords,
+    alpha_test_code, DrawCall, DrawCommands, IndexOverrun, MeshDispatch, MeshGroups,
+    MeshRecordsRegion, SlotRebinds, TessellationDispatch, TessellationRecords,
 };
 pub use heap::{
     handle_entry, handle_entry_flags, heap_classes, heap_element, heap_raw_form, HeapElement,

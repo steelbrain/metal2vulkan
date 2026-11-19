@@ -159,7 +159,14 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   consumer pushes for it (`PushField::ConstexprSampler`), where the consumer places the device
   sampler `CombinedSampler::constexpr_sampler` describes, normalized: the shader scales a pixel
   sampler's coordinate. An integer write to a storage slot without a format saturates to the channel
-  widths the consumer pushes (`PushField::TextureIntegerChannels`). Every precision note is
+  widths the consumer pushes (`PushField::TextureIntegerChannels`). A fragment function under the
+  pipeline's private alpha test (`PrivateRenderState::alpha_test_enabled`, a compare function other
+  than `Never` or `Always`) compares its color 0's alpha with the code the consumer pushes
+  (`PushField::AlphaTestReference`): `bind::alpha_test_code` of the encoder's
+  `setAlphaTestReferenceValue:`, 1 until the encoder sets it. It is Metal's 8-bit unorm code of the
+  reference (a NaN taken as 0, clamped to `[0, 1]`, the exact product with 255 rounded to
+  nearest), the form the function converts its alpha to, so a consumer that pushes it compares as
+  Metal does. Every precision note is
   static there: no constant or binder decides one. So far they lower a kernel that reaches memory
   through its buffer slots and reads, writes, sizes or tests for nil its texture slots and its
   argument buffers' textures, and samples its texture slots through its runtime sampler slots

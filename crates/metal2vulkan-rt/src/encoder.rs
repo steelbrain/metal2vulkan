@@ -1328,8 +1328,10 @@ impl Parameters {
                         bytes[at..at + 32].copy_from_slice(stage_in);
                     }
                 }
-                // A compute content has neither (`pipeline::interface`).
-                FieldValue::Word(_) | FieldValue::TessellationFactors => {}
+                // A compute content has none of these (`pipeline::interface`).
+                FieldValue::Word(_)
+                | FieldValue::TessellationFactors
+                | FieldValue::AlphaTestReference => {}
             }
         }
         self.block_address = (interface.block_len > 0).then_some(interface.block_address);

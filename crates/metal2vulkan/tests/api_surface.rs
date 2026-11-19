@@ -496,6 +496,7 @@ surface! {
         enum IndirectArgs N;
         enum DrawCall N;
         struct DrawCommands N;
+        fn alpha_test_code;
         enum IndexOverrun N;
         struct MeshDispatch N;
         enum MeshGroups N;

@@ -463,6 +463,9 @@ fn draws(
                     }
                 }
                 PushField::TessellationFactorAddress => FieldValue::TessellationFactors,
+                // The encoder's reference, which a fragment function under the private alpha test
+                // compares its color 0's alpha with.
+                PushField::AlphaTestReference => FieldValue::AlphaTestReference,
                 _ => return Err(draw_input()),
             };
             fields.push((offset, at, value));

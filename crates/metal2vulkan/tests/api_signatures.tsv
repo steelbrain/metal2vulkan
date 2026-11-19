@@ -6103,6 +6103,7 @@ fn	metal2vulkan-runtime::process_exiting	pub fn process_exiting() -> bool
 fn	metal2vulkan-runtime::program_instance_made	pub fn program_instance_made()
 fn	metal2vulkan-runtime::sampler_border_color	pub fn sampler_border_color(raw: u64) -> SamplerBorderColor
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
+fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) -> u32
 fn	metal2vulkan::bind::astc_decode_module	pub fn astc_decode_module(device: &Device, decode: AstcDecode, texels: AstcTexels) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::check_draw_modules	pub fn check_draw_modules(device: &Device) -> Result<CheckDrawModules, Error>
 fn	metal2vulkan::bind::chroma_convert_module	pub fn chroma_convert_module(device: &Device, decode: ChromaDecode) -> Result<ChromaConvertModule, Error>
@@ -9687,6 +9688,7 @@ method	metal2vulkan-rt::RenderCommandEncoder::draw_patches	pub fn draw_patches(&
 method	metal2vulkan-rt::RenderCommandEncoder::draw_primitives	pub fn draw_primitives(&mut self, primitive_type: PrimitiveType, vertex_start: u32, vertex_count: u32, instance_count: u32, base_instance: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::end_encoding	pub fn end_encoding(mut self)
 method	metal2vulkan-rt::RenderCommandEncoder::memory_barrier	pub fn memory_barrier(&mut self) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_alpha_test_reference_value	pub fn set_alpha_test_reference_value(&mut self, value: f32)
 method	metal2vulkan-rt::RenderCommandEncoder::set_blend_color	pub fn set_blend_color(&mut self, red: f32, green: f32, blue: f32, alpha: f32)
 method	metal2vulkan-rt::RenderCommandEncoder::set_color_store_action	pub fn set_color_store_action(&mut self, action: StoreAction, index: usize) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_cull_mode	pub fn set_cull_mode(&mut self, mode: CullMode)

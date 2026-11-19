@@ -1,3 +1,4 @@
+mod alpha_test;
 mod arrays;
 mod blit;
 mod cache;
