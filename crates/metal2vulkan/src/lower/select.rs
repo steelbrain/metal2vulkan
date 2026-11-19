@@ -1924,11 +1924,13 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// descriptor and no state of a bound texture or sampler but its resource ID's
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). The values it reads of the encoder are
 /// pushed: the dispatch's region, a storage texture's integer channel widths, the compute
-/// encoder's stage-in region (`PushField::StageInRegion`), and the stride of a vertex layout whose
+/// encoder's stage-in region (`PushField::StageInRegion`), the stride of a vertex layout whose
 /// attributes the function pulls (`PushField::VertexBufferStride`): a post-tessellation function's
 /// control points and patches, and a plain vertex function's layouts that a pulled-vertex-buffer
-/// variant or the de-indexed and private list forms pull. Its fields past the push window are a
-/// parameter block, whose address the window holds.
+/// variant or the de-indexed and private list forms pull; and the render encoder's alpha test
+/// reference code a fragment function under the private alpha test compares with
+/// (`PushField::AlphaTestReference`). Its fields past the push window are a parameter block, whose
+/// address the window holds.
 fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
     let fields = plan.push.fields.iter().all(|f| match (f.field, f.loc) {
         (PushField::ArgumentTableAddress, loc) => matches!(loc, PushLoc::Push { .. }),
@@ -1940,6 +1942,7 @@ fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
                 | PushField::ConstexprSampler(_)
                 | PushField::StageInRegion
                 | PushField::VertexBufferStride(_)
+                | PushField::AlphaTestReference
         ),
     });
     let addressed = plan
