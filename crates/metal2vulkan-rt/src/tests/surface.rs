@@ -522,9 +522,10 @@ mod on_device {
                         }
                     }
                     let index = export.export.memory_type;
-                    let flags = kinds.memory_types_as_slice()[index as usize].property_flags;
+                    let flags =
+                        flag_names(kinds.memory_types_as_slice()[index as usize].property_flags);
                     println!(
-                        "surface: {label}: form {form:?}, pitch {}, plane 1 at {}, size {}, memory type {index} ({flags:?}), made in {:.3} ms",
+                        "surface: {label}: form {form:?}, pitch {}, plane 1 at {}, size {}, memory type {index} ({flags}), made in {:.3} ms",
                         export.planes[0].row_pitch,
                         export.planes[1].offset,
                         export.export.size,
@@ -722,6 +723,31 @@ mod on_device {
         match plane.format {
             PixelFormat::RG8Unorm | PixelFormat::RG16Unorm => 2,
             _ => 1,
+        }
+    }
+
+    /// A memory type's flags by name, and the bits of any other.
+    fn flag_names(flags: vk::MemoryPropertyFlags) -> String {
+        use vk::MemoryPropertyFlags as M;
+        let named = [
+            (M::DEVICE_LOCAL, "DEVICE_LOCAL"),
+            (M::HOST_VISIBLE, "HOST_VISIBLE"),
+            (M::HOST_COHERENT, "HOST_COHERENT"),
+            (M::HOST_CACHED, "HOST_CACHED"),
+            (M::LAZILY_ALLOCATED, "LAZILY_ALLOCATED"),
+            (M::PROTECTED, "PROTECTED"),
+        ];
+        let mut names: Vec<String> = (named.iter())
+            .filter(|(flag, _)| flags.contains(*flag))
+            .map(|(_, name)| (*name).to_owned())
+            .collect();
+        let rest = (named.iter()).fold(flags.as_raw(), |rest, (flag, _)| rest & !flag.as_raw());
+        if rest != 0 {
+            names.push(format!("{rest:#x}"));
+        }
+        match names.is_empty() {
+            true => "none".to_owned(),
+            false => names.join(" | "),
         }
     }
 }
