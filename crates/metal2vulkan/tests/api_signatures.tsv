@@ -13613,6 +13613,7 @@ variant	metal2vulkan-rt::Error::Translation	Translation(metal2vulkan::error::Err
 variant	metal2vulkan-rt::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
 variant	metal2vulkan-rt::Gap::BufferCopyAlignment	BufferCopyAlignment { pixel_format: PixelFormat, offset: u64, bytes_per_row: u64, bytes_per_image: u64 }
+variant	metal2vulkan-rt::Gap::CubeArrayTexture	CubeArrayTexture
 variant	metal2vulkan-rt::Gap::CubicSampler	CubicSampler
 variant	metal2vulkan-rt::Gap::Draw	Draw { kind: DrawKind }
 variant	metal2vulkan-rt::Gap::FenceOtherQueue	FenceOtherQueue

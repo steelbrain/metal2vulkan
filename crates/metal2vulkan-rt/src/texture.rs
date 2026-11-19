@@ -63,7 +63,8 @@ pub enum StorageMode {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextureDescriptor {
-    /// `textureType`. `TextureBuffer` is refused, [`Gap::TextureBuffer`].
+    /// `textureType`. `TextureBuffer` is refused, [`Gap::TextureBuffer`], and `CubeArray`,
+    /// [`Gap::CubeArrayTexture`].
     pub texture_type: TextureType,
     /// `pixelFormat`.
     pub pixel_format: PixelFormat,
@@ -598,7 +599,8 @@ impl Device {
     /// [`Refusal::TextureLevelCount`], [`Refusal::TextureSampleCount`],
     /// [`Refusal::TextureSwizzleWithWrites`]); [`Refusal::TextureIndex`];
     /// [`Refusal::IndicesNotGranted`] for an index not granted; [`Limit::TextureSize`] and [`Limit::TextureSamples`] past the device's;
-    /// [`Gap::TextureFormat`], [`Gap::TextureBuffer`] and [`Gap::MemorylessTexture`];
+    /// [`Gap::TextureFormat`], [`Gap::TextureBuffer`], [`Gap::CubeArrayTexture`] and
+    /// [`Gap::MemorylessTexture`];
     /// [`Limit::MemoryAllocations`] where its memory would take the device past its count;
     /// [`Error::Vulkan`] where the image or its memory cannot be made; [`Error::Quiesced`].
     pub fn new_texture(
@@ -774,6 +776,9 @@ impl Device {
         let shape = shape(&d)?;
         if d.storage_mode == StorageMode::Memoryless {
             return Err(Error::Unsupported(Gap::MemorylessTexture));
+        }
+        if d.texture_type == TextureType::CubeArray {
+            return Err(Error::Unsupported(Gap::CubeArrayTexture));
         }
         let usage = match d.usage.is_empty() {
             true => {

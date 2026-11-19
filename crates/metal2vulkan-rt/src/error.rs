@@ -766,6 +766,11 @@ pub enum Gap {
     ///
     /// Basis: ours (no texel-buffer array; no replay stream uses one).
     TextureBuffer,
+    /// A cube array texture (`MTLTextureTypeCubeArray`), and so a view of one: its image view
+    /// needs Vulkan's `imageCubeArray`, which the floor does not require.
+    ///
+    /// Basis: ours (no replay stream makes a cube array texture or view; built when one does).
+    CubeArrayTexture,
     /// A texture of a pixel format the runtime makes no image of on this device for the
     /// descriptor's usage: the device's format query lacks the format or one of the usages, or
     /// the format's texels need a conversion in the shader that the translator's identity domains
@@ -1468,6 +1473,7 @@ impl fmt::Display for Gap {
                 "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which this kernel's variant does not run"
             ),
             Gap::MemorylessTexture => f.write_str("Memoryless textures are not built"),
+            Gap::CubeArrayTexture => f.write_str("cube array textures are not built"),
             Gap::CubicSampler => f.write_str("cubic sampler filters are not built"),
             Gap::TextureBuffer => f.write_str("texture buffers are not built"),
             Gap::TextureFormat { pixel_format } => write!(

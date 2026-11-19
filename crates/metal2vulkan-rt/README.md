@@ -424,8 +424,10 @@ made, with no lock, and never rewritten for layouts.
   sample counts it is `Limit::TextureSize` or `Limit::TextureSamples`.
 - Refused as Metal refuses each descriptor (`Refusal::TextureZeroExtent`,
   `TextureExtentForType`, `TextureCubeNotSquare`, `TextureArrayLength`, `TextureLevelCount`,
-  `TextureSampleCount`, `TextureSwizzleWithWrites`). Texture buffers (`Gap::TextureBuffer`) and
-  Memoryless storage (`Gap::MemorylessTexture`) are not built.
+  `TextureSampleCount`, `TextureSwizzleWithWrites`). Texture buffers (`Gap::TextureBuffer`),
+  cube array textures (`Gap::CubeArrayTexture`: their view needs Vulkan's `imageCubeArray`, which
+  the floor does not require, and no replay stream makes one) and Memoryless storage
+  (`Gap::MemorylessTexture`) are not built.
 - `Texture::gpu_resource_id` is its index (0 without one) and the translator's `TextureWord` of
   its format and swizzle (`docs/RESOURCE-ID.md`), so the guest computes the ID itself.
 - `Texture::replace_region` and `Texture::get_bytes` take a Shared or Managed texture

@@ -39,7 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 58 | 58 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 21 | 21 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -57,7 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 27 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 6 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 20 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 21 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -699,6 +699,7 @@ Columns:
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 1: `crates/metal2vulkan-rt/src/texture.rs (prepare)` | `-` |
 | `TextureBuffer` | A texture buffer (`MTLTextureTypeTextureBuffer`) | every device (a public call's own check of its arguments) | `ours`: no texel-buffer array; no replay stream uses one | 2: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)` | `-` |
+| `CubeArrayTexture` | A cube array texture (`MTLTextureTypeCubeArray`), and so a view of one | every device (a public call's own check of its arguments) | `ours`: no replay stream makes a cube array texture or view; built when one does | 1: `crates/metal2vulkan-rt/src/texture.rs (prepare)` | `-` |
 | `TextureFormat` | A texture of a pixel format the runtime makes no image of on this device for the descriptor's usage | every device (a public call's own check of its arguments) | `ours`: the device's format query, or the identity domains' shaders read every texture through its view alone | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
 | `CubicSampler` | A sampler state whose minification or magnification filter is cubic (`Device::new_sampler_state`) | every device (a public call's own check of its arguments) | `ours`: the translator's identity domains do not filter bicubically, and Vulkan's cubic filter is not Metal's | 1: `crates/metal2vulkan-rt/src/sampler.rs (new_sampler_state)` | `-` |
 | `TextureBytes` | `Texture::replace_region`, `Texture::get_bytes` or a blit copy between a buffer and a texture (`BlitCommandEncoder::copy_from_buffer`) of a... | every device (a public call's own check of its arguments) | `ours`: no copy between such an image and bytes is built | 3: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-rt/src/texture.rs (check_places)` (+1) | `-` |
@@ -1277,6 +1278,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Gap::MemorylessTexture`: `crates/metal2vulkan-rt/src/texture.rs (prepare)`
 - `rt:Gap::TextureBuffer`: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)`
+- `rt:Gap::CubeArrayTexture`: `crates/metal2vulkan-rt/src/texture.rs (prepare)`
 - `rt:Gap::TextureFormat`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Gap::CubicSampler`: `crates/metal2vulkan-rt/src/sampler.rs (new_sampler_state)`
 - `rt:Gap::TextureBytes`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-rt/src/texture.rs (check_places)`; `crates/metal2vulkan-rt/src/texture.rs (copy)`

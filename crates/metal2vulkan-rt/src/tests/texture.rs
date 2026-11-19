@@ -442,6 +442,17 @@ mod on_device {
                 Err(error) => panic!("{name}: BC1: {error}"),
             }
 
+            // A cube array texture is not built: its view would need `imageCubeArray`.
+            let mut cubes = descriptor(TextureType::CubeArray, PixelFormat::RGBA8Unorm, [4, 4, 1]);
+            cubes.array_length = 2;
+            assert!(
+                matches!(
+                    device.new_texture(&cubes, Some(4103)),
+                    Err(Error::Unsupported(Gap::CubeArrayTexture))
+                ),
+                "{name}: a cube array texture"
+            );
+
             // A Private texture's bytes are the GPU's alone.
             let mut d = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [4, 4, 1]);
             d.storage_mode = StorageMode::Private;
