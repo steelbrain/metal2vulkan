@@ -11,13 +11,15 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 /// a placement `MTLHeap`'s buffers sit in its memory
 /// ([`Device::take_block`](crate::Device::take_block)), or as a no-copy buffer's bytes are the
 /// memory it was made over ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
-/// [`Device::import_host_memory`](crate::Device::import_host_memory)). It derefs to the block's
-/// [`BlockInfo`], plain data.
+/// [`Device::import_host_memory`](crate::Device::import_host_memory)), or as another API reaches
+/// it by a handle ([`Device::new_exported_block`](crate::Device::new_exported_block)). It derefs
+/// to the block's [`BlockInfo`], plain data.
 ///
 /// Clones share one claim. Dropping the last handle gives the block back, as
 /// [`Device::release_block`](crate::Device::release_block) does: the block's memory lives until
 /// the last handle and the last buffer, command buffer or upload using it are gone, and is then
-/// a free range of its allocation; an imported block's memory is freed, and then its release runs.
+/// a free range of its allocation; an imported block's memory is freed, and then its release runs;
+/// an exported block's memory is freed.
 /// While a handle lives, the block's number names it to
 /// [`Device::new_buffer`](crate::Device::new_buffer) and the other calls that take one; once the
 /// last is gone, they answer [`Error::NoSuchBlock`](crate::Error::NoSuchBlock). The device's

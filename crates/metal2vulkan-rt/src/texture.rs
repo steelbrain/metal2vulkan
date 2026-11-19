@@ -811,7 +811,8 @@ impl Device {
     /// after another wrote is undefined, as in Metal. The texture holds the block.
     ///
     /// Err: as [`Device::new_texture`]; [`Error::NoSuchBlock`] for a block the consumer does not
-    /// hold; [`Gap::HeapTexture`] for a Shared block, or as
+    /// hold; [`Gap::HeapTexture`] for a Shared block or an exported one
+    /// ([`Device::new_exported_block`](crate::Device::new_exported_block)), or as
     /// [`Device::heap_texture_size_and_align`]; [`Refusal::HeapTexturePlace`] for a heap range
     /// that leaves its block, or an image that does not fit in the heap at `offset` or is not
     /// aligned there as the device requires.
@@ -823,7 +824,7 @@ impl Device {
         offset: u64,
     ) -> Result<Texture, Error> {
         let block = self.block(heap.block)?;
-        if block.memory.class != MemoryClass::Private {
+        if block.memory.class != MemoryClass::Private || block.memory.own.is_some() {
             return Err(Error::Unsupported(Gap::HeapTexture {
                 pixel_format: descriptor.pixel_format,
             }));
@@ -1410,14 +1411,15 @@ fn check_over(
     let (block, copy) = buffer.held();
     // Over an imported block, the copy: an image bound there would be made for the import's
     // handle, so in the undefined layout (VUID-VkImageCreateInfo-pNext-01443), and the runtime
-    // makes no image in imported memory.
-    let imported = copy.is_none() && block.memory.imported;
+    // makes no image in imported memory. Over an exported block, the copy too: its memory is
+    // dedicated to its buffer, and no image is bound in it (VUID-vkBindImageMemory-memory-10926).
+    let own = copy.is_none() && block.memory.own.is_some();
     let spilled = copy.is_none() && block.memory.spilled();
     let extent = linear_extent(core, shape, plan)
         .is_some_and(|max| d.width <= max.width && d.height <= max.height);
     let (linear, optimal) = core.format_features(plan.format);
     let features = linear.contains(optimal & kept_features(plan.usage));
-    Ok(!imported && !spilled && extent && features)
+    Ok(!own && !spilled && extent && features)
 }
 
 /// The format features an image of `usage` is used by, which a linear image is to keep where the

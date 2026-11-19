@@ -22,6 +22,7 @@ mod device;
 mod encoder;
 mod error;
 mod event;
+mod export;
 mod extension;
 mod fence;
 mod fill;
@@ -66,6 +67,7 @@ pub use error::{
     DrawKind, Error, Gap, Limit, Refusal, RenderPassKind, RenderPipelineKind, TextureViewKind,
 };
 pub use event::{Event, SharedEvent};
+pub use export::{Export, ExportHandle};
 pub use extension::{ConsumerFeature, DeviceExtension};
 pub use fence::Fence;
 pub use import::ImportHandle;

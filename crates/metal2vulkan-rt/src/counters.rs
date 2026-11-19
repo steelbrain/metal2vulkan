@@ -209,6 +209,8 @@ pub(crate) enum Gauge {
     TimestampPools,
     /// [`Gauges::imports`].
     Imports,
+    /// [`Gauges::exports`].
+    Exports,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -332,6 +334,7 @@ struct Atomics {
     textures_copied_over: AtomicU64,
     timestamp_pools: AtomicU64,
     imports: AtomicU64,
+    exports: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -686,6 +689,7 @@ impl Counters {
             Gauge::TexturesCopiedOver => &a.textures_copied_over,
             Gauge::TimestampPools => &a.timestamp_pools,
             Gauge::Imports => &a.imports,
+            Gauge::Exports => &a.exports,
         }
     }
 
@@ -815,6 +819,7 @@ impl Counters {
             textures_copied_over: a.textures_copied_over.load(Relaxed),
             timestamp_pools: a.timestamp_pools.load(Relaxed),
             imports: a.imports.load(Relaxed),
+            exports: a.exports.load(Relaxed),
         }
     }
 }
@@ -1234,4 +1239,7 @@ pub struct Gauges {
     /// [`Device::import_host_memory`](crate::Device::import_host_memory)) whose memory is not yet
     /// freed: each is also one of [`blocks`](Self::blocks).
     pub imports: u64,
+    /// Exported blocks ([`Device::new_exported_block`](crate::Device::new_exported_block)) whose
+    /// memory is not yet freed: each is also one of [`blocks`](Self::blocks).
+    pub exports: u64,
 }

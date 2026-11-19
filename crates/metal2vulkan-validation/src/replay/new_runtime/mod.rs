@@ -635,6 +635,7 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
         ("descriptor_slots", gauges.descriptor_slots),
         ("blocks", gauges.blocks),
         ("imports", gauges.imports),
+        ("exports", gauges.exports),
         ("events", gauges.events),
         ("device_samplers", gauges.device_samplers),
         ("spilled_bytes", gauges.spilled_bytes),
@@ -2450,6 +2451,7 @@ impl Backend for NewRuntime {
         Counters::from([
             ("blocks", gauges.blocks),
             ("imports", gauges.imports),
+            ("exports", gauges.exports),
             ("buffers", gauges.buffers),
             ("textures", gauges.textures),
             ("textures_copied_over", gauges.textures_copied_over),

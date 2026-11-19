@@ -1,6 +1,7 @@
 //! The error every fallible call returns: one typed variant per case, never text to parse.
 
 use crate::arrays::IndexClass;
+use crate::export::ExportHandle;
 use crate::floor::BelowFloor;
 use crate::import::ImportHandle;
 use crate::memory::{BlockId, MemoryClass};
@@ -972,9 +973,11 @@ pub enum Gap {
     /// A heap texture the runtime does not place
     /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture) and
     /// [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align)): in a
-    /// Shared block, or one whose image the device requires an allocation of its own for, or
-    /// that does not take the Private memory type. No recorded stream makes a Shared heap, and
-    /// every optimal image measured on the lab's devices takes the Private type.
+    /// Shared block, or an exported one, whose memory is dedicated to its buffer
+    /// (`VUID-vkBindImageMemory-memory-10926`), or one whose image the device requires an
+    /// allocation of its own for, or that does not take the Private memory type. No recorded
+    /// stream makes a Shared heap, and every optimal image measured on the lab's devices takes
+    /// the Private type.
     ///
     /// Basis: ours (heap textures are built for Private heaps of placeable images).
     HeapTexture {
@@ -1381,6 +1384,33 @@ pub enum Limit {
         len: u64,
         /// The multiple the device takes.
         alignment: u64,
+    },
+    /// An export of a handle the device does not give
+    /// ([`Device::new_exported_block`](crate::Device::new_exported_block)): it does not list the
+    /// handle's extensions (`VK_KHR_external_memory_fd` for an opaque fd, and with it
+    /// `VK_EXT_external_memory_dma_buf` for a dma-buf; `VK_KHR_external_memory_win32` for a
+    /// Windows handle), or its buffers do not export the handle
+    /// (`vkGetPhysicalDeviceExternalBufferProperties`). Metal has no counterpart.
+    ///
+    /// Basis: device (the device's extensions and its external buffer properties).
+    NoExport {
+        /// The handle asked for.
+        handle: ExportHandle,
+    },
+    /// An export of a handle the device gives, but not in the one form an export takes
+    /// ([`Device::new_exported_block`](crate::Device::new_exported_block)): a dma-buf on a device
+    /// without `VK_EXT_queue_family_foreign`, whose ownership transfers with another driver have
+    /// no queue family to name (`VUID-VkBufferMemoryBarrier2-srcQueueFamilyIndex-09099`), or a
+    /// buffer exporting the handle whose memory requirements do not list the device's Private
+    /// memory type, the one type an export is made in. Metal has no counterpart.
+    ///
+    /// Basis: device (its extensions and the buffer's memory requirements).
+    ExportType {
+        /// The handle asked for.
+        handle: ExportHandle,
+        /// The types the buffer's memory requirements list, one bit each; `None` for a dma-buf
+        /// on a device without the foreign queue family, refused before a buffer is made.
+        listed: Option<u32>,
     },
     /// A multisample texture of a sample count the device does not make for its format, type and
     /// usage.
@@ -1899,6 +1929,21 @@ impl fmt::Display for Limit {
             } => write!(
                 f,
                 "an import of {len} bytes of {handle:?} at no multiple of {alignment} bytes"
+            ),
+            Limit::NoExport { handle } => write!(f, "the device exports no {handle:?}"),
+            Limit::ExportType {
+                handle,
+                listed: None,
+            } => write!(
+                f,
+                "the device has no foreign queue family for a {handle:?}'s ownership transfers"
+            ),
+            Limit::ExportType {
+                handle,
+                listed: Some(listed),
+            } => write!(
+                f,
+                "a buffer exporting {handle:?} lists types {listed:#x}, not the Private type"
             ),
             Limit::TextureSamples {
                 sample_count,

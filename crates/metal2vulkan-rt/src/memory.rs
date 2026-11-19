@@ -144,13 +144,14 @@ impl AllocationId {
 /// buffers in ([`Device::new_buffer`](crate::Device::new_buffer)); for an imported block
 /// ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
 /// [`Device::import_host_memory`](crate::Device::import_host_memory)), the memory of a no-copy
-/// buffer (`newBufferWithBytesNoCopy:length:options:deallocator:`).
+/// buffer (`newBufferWithBytesNoCopy:length:options:deallocator:`); for an exported block
+/// ([`Device::new_exported_block`](crate::Device::new_exported_block)), none.
 ///
 /// Plain data, which the block's handle ([`Block`](crate::Block)) derefs to: the block lives
 /// until its last handle and its last buffer, command buffer or upload are gone, or until the
 /// device is torn down. It is a range of one allocation, whose one `VkBuffer`, with every buffer
-/// usage and a device address, spans it; an imported block is the whole of an allocation of its
-/// own. Nothing in it is exportable.
+/// usage and a device address, spans it; an imported or exported block is the whole of an
+/// allocation of its own. Only an exported block is exportable.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct BlockInfo {
@@ -162,7 +163,7 @@ pub struct BlockInfo {
     /// where that is larger); an imported block's, the length imported.
     pub len: u64,
     /// The allocation it is a range of, which [`BlockMappings::map`] was told of before this
-    /// block went out; an imported block's own, of which no hook is told.
+    /// block went out; an imported or exported block's own, of which no hook is told.
     pub allocation: AllocationId,
     /// The offset of its first byte in that allocation.
     pub offset: u64,
@@ -219,8 +220,8 @@ unsafe impl Sync for AllocationInfo {}
 /// `map` accepted, before the allocation is freed. The guest's range holds whole allocations,
 /// their free ranges and the runtime's own staging blocks included; the consumer hands the guest
 /// blocks alone. A block given back stays mapped with its allocation: a guest kernel that writes
-/// a free range damages only its own later blocks' bytes. Imported blocks are not the pool's, and
-/// neither hook runs for them.
+/// a free range damages only its own later blocks' bytes. Imported and exported blocks are not
+/// the pool's, and neither hook runs for them.
 pub trait BlockMappings: Send + Sync {
     /// The allocation `allocation` describes was made. True once the consumer has mapped it; false
     /// where it has no place for it (no guest address): the runtime then frees the allocation and
@@ -266,9 +267,18 @@ pub(crate) struct Memory {
     device_local: bool,
     /// A Private block in another memory type than the Private one, which was out of memory.
     spilled: bool,
-    /// An import's block ([`import`]): an allocation of its own, which no pool holds and which
-    /// is freed once the block is given back.
-    pub(crate) imported: bool,
+    /// An import's block ([`import`]) or an export's ([`export`]): an allocation of its own,
+    /// which no pool holds and which is freed once the block is given back.
+    pub(crate) own: Option<Own>,
+}
+
+/// What a block that is an allocation of its own is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Own {
+    /// An import of memory the consumer brought ([`import`]).
+    Import,
+    /// A dedicated allocation the consumer shares by a handle ([`export`]).
+    Export,
 }
 
 impl Memory {
@@ -377,11 +387,11 @@ impl Block {
 
 impl Drop for Block {
     fn drop(&mut self) {
-        if self.memory.imported {
+        if self.memory.own.is_some() {
             let release = (self.release.get_mut())
                 .unwrap_or_else(PoisonError::into_inner)
                 .take();
-            self.core.pool.give_back_import(self.memory, release);
+            self.core.pool.give_back_own(self.memory, release);
         } else {
             self.core.pool.give_back(self.memory);
         }
@@ -490,8 +500,9 @@ enum Rule {
 struct State {
     /// Per class, its allocations in the order they were made.
     allocations: [Vec<Allocation>; 2],
-    /// Imported blocks given back, with their releases, for the block-maker thread to free.
-    imports: VecDeque<(Memory, Option<Release>)>,
+    /// Imported and exported blocks given back, with the imports' releases, for the block-maker
+    /// thread to free.
+    owned: VecDeque<(Memory, Option<Release>)>,
     /// Per class, the block-maker thread could not make the last allocation it tried. It tries
     /// again after the class's next take or give-back.
     failed: [bool; 2],
@@ -546,7 +557,7 @@ impl Carve {
             mapping: self.mapping,
             device_local: self.device_local,
             spilled: self.spilled,
-            imported: false,
+            own: None,
         }
     }
 }
@@ -563,7 +574,7 @@ impl Pool {
         Pool {
             state: Mutex::new(State {
                 allocations: [Vec::new(), Vec::new()],
-                imports: VecDeque::new(),
+                owned: VecDeque::new(),
                 failed: [false, false],
                 stop: false,
                 next_id: 1,
@@ -866,15 +877,16 @@ impl Pool {
         self.changed.notify_all();
     }
 
-    /// Takes back an imported block, for the block-maker thread to free, and then to run its
-    /// release.
-    pub(crate) fn give_back_import(&self, memory: Memory, release: Option<Release>) {
-        self.lock().imports.push_back((memory, release));
+    /// Takes back an imported or exported block, for the block-maker thread to free, and then to
+    /// run an import's release.
+    pub(crate) fn give_back_own(&self, memory: Memory, release: Option<Release>) {
+        self.lock().owned.push_back((memory, release));
         self.changed.notify_all();
     }
 
-    /// An import's numbers: its block's, and its allocation's. Err: [`Limit::BlockIds`].
-    pub(crate) fn import_numbers(&self) -> Result<(BlockId, AllocationId), Error> {
+    /// An import's or an export's numbers: its block's, and its allocation's. Err:
+    /// [`Limit::BlockIds`].
+    pub(crate) fn own_numbers(&self) -> Result<(BlockId, AllocationId), Error> {
         let mut state = self.lock();
         Ok((number(&mut state)?, allocation_number(&mut state)?))
     }
@@ -1086,7 +1098,8 @@ pub(crate) fn stock(core: &Core) {
 }
 
 /// The block-maker thread, until the device's teardown stops it. Off every caller's path, in
-/// order: it frees each imported block given back, then runs its release; it makes an allocation
+/// order: it frees each imported or exported block given back, then runs an import's release; it
+/// makes an allocation
 /// of a class whose free bytes are fewer than [`MAKE_BELOW`], having the consumer map it before it
 /// joins the pool; and it frees each allocation idle for [`IDLE_AGE_NANOS`], after the consumer's
 /// unmap of it, one at a time. It sleeps until the next change, or until the oldest idle
@@ -1099,9 +1112,9 @@ pub(crate) fn run(core: Arc<Core>) {
         if state.stop {
             return;
         }
-        if let Some((memory, release)) = state.imports.pop_front() {
+        if let Some((memory, release)) = state.owned.pop_front() {
             drop(state);
-            free_import(&core, &memory, release);
+            free_own(&core, &memory, release);
             state = pool.lock();
             continue;
         }
@@ -1410,7 +1423,7 @@ pub(crate) unsafe fn import(
             result,
         }));
     }
-    let (id, allocation) = core.pool.import_numbers().map_err(undo)?;
+    let (id, allocation) = core.pool.own_numbers().map_err(undo)?;
     let address = vk::BufferDeviceAddressInfo::default().buffer(buffer);
     // SAFETY: the buffer has device-address usage and is bound.
     let address = unsafe { device.get_buffer_device_address(&address) };
@@ -1427,14 +1440,119 @@ pub(crate) unsafe fn import(
         mapping,
         device_local: core.device_local & (1 << info.memory_type_index) != 0,
         spilled: false,
-        imported: true,
+        own: Some(Own::Import),
     })
 }
 
-/// Frees an imported block given back: its buffer, then its memory, then runs its release, as
-/// the bytes are the consumer's alone again. The submissions made during the `vkFreeMemory` are
-/// counted.
-fn free_import(core: &Core, memory: &Memory, release: Option<Release>) {
+/// Makes an export's block: a buffer of `len` bytes rounded up to 64 KiB, as a take's are, that
+/// exports `handle`, its dedicated allocation in the Private memory type, exportable as `handle`
+/// (counted against the device's allocations, [`allocate`]), bound at its first byte, the
+/// buffer's address, and its numbers: the block's, and its allocation's, which no hook is told
+/// of. Private; never zeroed, never mapped. With it, the allocation's size, which an import of
+/// the handle names.
+///
+/// Err: [`Limit::BlockLen`] past the device's longest allocation or buffer; [`Limit::ExportType`]
+/// where the buffer's memory requirements do not list the Private type;
+/// [`Limit::MemoryAllocations`]; [`Limit::BlockIds`]; [`Error::Vulkan`] where the buffer, the
+/// allocation or its binding fails.
+///
+/// # Safety
+///
+/// The device's buffers export `handle` with the floor's usage, its extensions enabled
+/// ([`crate::export`]).
+pub(crate) unsafe fn export(
+    core: &Core,
+    len: u64,
+    handle: crate::ExportHandle,
+) -> Result<(Memory, u64), Error> {
+    let device = &core.device;
+    let handle_type = handle.vk();
+    let len = round(len, GRANULE, core.max_block_len)?;
+    let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle_type);
+    let info = vk::BufferCreateInfo::default()
+        .size(len)
+        .usage(floor::BUFFER_USAGE)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .push_next(&mut external);
+    // SAFETY: `len` is at most `maxBufferSize` (`round`), and the buffers export `handle` (the
+    // caller's).
+    let buffer =
+        unsafe { device.create_buffer(&info, None) }.map_err(Error::vulkan("vkCreateBuffer"))?;
+    let destroy = || {
+        // SAFETY: nothing uses the buffer.
+        unsafe { device.destroy_buffer(buffer, None) }
+    };
+    // SAFETY: the buffer is live.
+    let needs = unsafe { device.get_buffer_memory_requirements(buffer) };
+    let index = core.memory_type(MemoryClass::Private);
+    if needs.memory_type_bits & (1 << index) == 0 {
+        destroy();
+        return Err(Error::Limit(Limit::ExportType {
+            handle,
+            listed: Some(needs.memory_type_bits),
+        }));
+    }
+    let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(handle_type);
+    let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().buffer(buffer);
+    let mut flags =
+        vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+    let info = vk::MemoryAllocateInfo::default()
+        .allocation_size(needs.size)
+        .memory_type_index(index)
+        .push_next(&mut export)
+        .push_next(&mut dedicated)
+        .push_next(&mut flags);
+    // SAFETY: a dedicated allocation of the buffer's size in a type it lists, exportable as a
+    // handle its buffers export.
+    let memory = match unsafe { allocate(device, &core.counters, core.max_allocations, &info) } {
+        Ok(memory) => memory,
+        Err(error) => {
+            destroy();
+            return Err(error);
+        }
+    };
+    let undo = |error: Error| {
+        // SAFETY: nothing uses the buffer or the memory.
+        unsafe {
+            device.destroy_buffer(buffer, None);
+            device.free_memory(memory, None);
+        }
+        core.counters.fall(Gauge::Blocks);
+        error
+    };
+    // SAFETY: the memory is the buffer's dedicated allocation, of its size and a type it lists.
+    if let Err(result) = unsafe { device.bind_buffer_memory(buffer, memory, 0) } {
+        return Err(undo(Error::Vulkan {
+            call: "vkBindBufferMemory",
+            result,
+        }));
+    }
+    let (id, allocation) = core.pool.own_numbers().map_err(undo)?;
+    let address = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+    // SAFETY: the buffer has device-address usage and is bound.
+    let address = unsafe { device.get_buffer_device_address(&address) };
+    core.counters.rise(Gauge::Exports);
+    let memory = Memory {
+        id,
+        class: MemoryClass::Private,
+        len,
+        allocation,
+        memory,
+        base: 0,
+        buffer,
+        address,
+        mapping: None,
+        device_local: core.device_local & (1 << index) != 0,
+        spilled: false,
+        own: Some(Own::Export),
+    };
+    Ok((memory, needs.size))
+}
+
+/// Frees an imported or exported block given back: its buffer, then its memory, then runs an
+/// import's release, as the bytes are the consumer's alone again. The submissions made during
+/// the `vkFreeMemory` are counted.
+fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
     // SAFETY: no GPU work that uses the block is pending (a command buffer or upload that uses it
     // holds it until it retires), and no buffer of it is left.
     unsafe { core.device.destroy_buffer(memory.buffer, None) };
@@ -1443,7 +1561,10 @@ fn free_import(core: &Core, memory: &Memory, release: Option<Release>) {
     unsafe { core.device.free_memory(memory.memory, None) };
     core.pool.freeing.store(false, Relaxed);
     core.counters.fall(Gauge::Blocks);
-    core.counters.fall(Gauge::Imports);
+    core.counters.fall(match memory.own {
+        Some(Own::Export) => Gauge::Exports,
+        _ => Gauge::Imports,
+    });
     if let Some(release) = release {
         release();
     }
@@ -1487,17 +1608,18 @@ fn free_allocation(core: &Core, allocation: Allocation) {
 }
 
 /// At teardown, after the block-maker thread is joined and every resource is freed: frees the
-/// imported blocks given back and runs their releases, then every allocation, each after the
+/// imported and exported blocks given back and runs the imports' releases, then every
+/// allocation, each after the
 /// consumer's unmap of it where it is mapped.
 pub(crate) fn free_all(core: &mut Core) {
     let mut allocations = Vec::new();
     let mut idle = [0; 2];
-    let imports: Vec<(Memory, Option<Release>)> = {
+    let owned: Vec<(Memory, Option<Release>)> = {
         let state = (core.pool.state.get_mut()).unwrap_or_else(PoisonError::into_inner);
-        state.imports.drain(..).collect()
+        state.owned.drain(..).collect()
     };
-    for (memory, release) in imports {
-        free_import(core, &memory, release);
+    for (memory, release) in owned {
+        free_own(core, &memory, release);
     }
     {
         let state = (core.pool.state.get_mut()).unwrap_or_else(PoisonError::into_inner);

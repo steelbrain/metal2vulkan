@@ -1,0 +1,271 @@
+//! Exports: a block of device memory the consumer shares with another API through a handle
+//! ([`Device::new_exported_block`]), such as a video decoder that writes decoded frames into it.
+//! Metal has no counterpart, as it has none of presenting: the consumer's own path.
+//!
+//! The form is one: an allocation of its own, dedicated to its one buffer
+//! (`VkMemoryDedicatedAllocateInfo`), never a place in a pooled block. Vulkan lets a driver
+//! require a dedicated allocation for an export (`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`),
+//! so this is the form every driver takes, and what exportable memory costs a submission falls on
+//! these allocations alone. A handle type is offered where the device lists its extensions and its
+//! buffers export it (`vkGetPhysicalDeviceExternalBufferProperties`), and refused elsewhere.
+
+use crate::block::Block;
+use crate::device::Device;
+use crate::error::{Error, Limit};
+use crate::floor;
+use crate::memory;
+use ash::vk;
+use std::ffi::CStr;
+use std::sync::Arc;
+
+/// No Metal counterpart: the handle an export gives ([`Device::new_exported_block`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExportHandle {
+    /// An opaque fd (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT`), on a Unix host: another
+    /// API of the same device and driver imports it, the NVIDIA decoder's route among them.
+    OpaqueFd,
+    /// A Linux dma-buf fd (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT`), on a Unix host:
+    /// another driver imports it, VA-API's decoders among them.
+    DmaBuf,
+    /// An NT handle (`VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT`), on a Windows host.
+    OpaqueWin32,
+}
+
+impl ExportHandle {
+    pub(crate) const ALL: [ExportHandle; 3] = [
+        ExportHandle::OpaqueFd,
+        ExportHandle::DmaBuf,
+        ExportHandle::OpaqueWin32,
+    ];
+
+    pub(crate) fn vk(self) -> vk::ExternalMemoryHandleTypeFlags {
+        match self {
+            ExportHandle::OpaqueFd => vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+            ExportHandle::DmaBuf => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+            ExportHandle::OpaqueWin32 => vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32,
+        }
+    }
+
+    /// The device extensions that give it.
+    fn extensions(self) -> &'static [&'static CStr] {
+        match self {
+            ExportHandle::OpaqueFd => &[ash::khr::external_memory_fd::NAME],
+            ExportHandle::DmaBuf => &[
+                ash::khr::external_memory_fd::NAME,
+                ash::ext::external_memory_dma_buf::NAME,
+            ],
+            ExportHandle::OpaqueWin32 => &[ash::khr::external_memory_win32::NAME],
+        }
+    }
+
+    /// Whether the other side of its handle is another driver, whose ownership transfers name
+    /// the foreign queue family (`VK_QUEUE_FAMILY_FOREIGN_EXT`): a dma-buf's. An opaque handle is
+    /// imported by the same device and driver, which `VK_QUEUE_FAMILY_EXTERNAL` names.
+    pub(crate) fn foreign(self) -> bool {
+        self == ExportHandle::DmaBuf
+    }
+}
+
+/// No Metal counterpart: an exported block's memory as another API imports it
+/// ([`Device::new_exported_block`]).
+#[non_exhaustive]
+#[derive(Debug)]
+pub struct Export {
+    /// A new handle of the memory, the consumer's own to close: an fd on a Unix host.
+    #[cfg(unix)]
+    pub handle: std::os::fd::OwnedFd,
+    /// A new handle of the memory, the consumer's own to close: an NT handle on a Windows host.
+    #[cfg(windows)]
+    pub handle: std::os::windows::io::OwnedHandle,
+    /// The allocation's size, at least the block's length, which an import of the handle names
+    /// (`VkMemoryAllocateInfo::allocationSize`).
+    pub size: u64,
+    /// The index of the memory type it is in, the device's Private type, which a Vulkan import of
+    /// an opaque handle names again.
+    pub memory_type: u32,
+}
+
+/// What the device exports, read once as it is made.
+pub(crate) struct Exports {
+    /// Whether the device exports each handle, by its place in [`ExportHandle::ALL`].
+    offered: [bool; 3],
+    /// Whether `VK_EXT_queue_family_foreign` is enabled, which a dma-buf's export needs.
+    foreign: bool,
+    /// `VK_KHR_external_memory_fd`, where it is enabled.
+    #[cfg(unix)]
+    fd: Option<ash::khr::external_memory_fd::Device>,
+    /// `VK_KHR_external_memory_win32`, where it is enabled.
+    #[cfg(windows)]
+    win32: Option<ash::khr::external_memory_win32::Device>,
+}
+
+impl Exports {
+    /// What `device`, made from `physical` with `extensions` enabled, exports: each handle this
+    /// host has whose extensions are enabled and that the device's buffers of the floor's usage
+    /// export.
+    ///
+    /// # Safety
+    ///
+    /// `physical` is `instance`'s, of Vulkan 1.3, and `device` was made from it.
+    pub(crate) unsafe fn new(
+        instance: &ash::Instance,
+        physical: vk::PhysicalDevice,
+        device: &ash::Device,
+        extensions: &[&CStr],
+    ) -> Exports {
+        let enabled = |name: &CStr| extensions.contains(&name);
+        let exportable = |handle: ExportHandle| {
+            let info = vk::PhysicalDeviceExternalBufferInfo::default()
+                .usage(floor::BUFFER_USAGE)
+                .handle_type(handle.vk());
+            let mut properties = vk::ExternalBufferProperties::default();
+            // SAFETY: the caller's.
+            unsafe {
+                instance.get_physical_device_external_buffer_properties(
+                    physical,
+                    &info,
+                    &mut properties,
+                )
+            };
+            (properties.external_memory_properties)
+                .external_memory_features
+                .contains(vk::ExternalMemoryFeatureFlags::EXPORTABLE)
+        };
+        let host = |handle: ExportHandle| match handle {
+            ExportHandle::OpaqueFd | ExportHandle::DmaBuf => cfg!(unix),
+            ExportHandle::OpaqueWin32 => cfg!(windows),
+        };
+        let offered = ExportHandle::ALL.map(|handle| {
+            host(handle)
+                && handle.extensions().iter().all(|&name| enabled(name))
+                && exportable(handle)
+        });
+        Exports {
+            offered,
+            foreign: enabled(ash::ext::queue_family_foreign::NAME),
+            #[cfg(unix)]
+            fd: enabled(ash::khr::external_memory_fd::NAME)
+                .then(|| ash::khr::external_memory_fd::Device::new(instance, device)),
+            #[cfg(windows)]
+            win32: enabled(ash::khr::external_memory_win32::NAME)
+                .then(|| ash::khr::external_memory_win32::Device::new(instance, device)),
+        }
+    }
+
+    /// Whether the device exports `handle`.
+    pub(crate) fn offers(&self, handle: ExportHandle) -> bool {
+        let at = ExportHandle::ALL.iter().position(|&h| h == handle);
+        at.is_some_and(|at| self.offered[at])
+    }
+}
+
+impl Device {
+    /// No Metal counterpart: a block of Private memory of `len` bytes rounded up to 64 KiB, as a
+    /// take's are ([`Device::take_block`]), for the consumer to place buffers in, whose memory it
+    /// shares with another API through `handle`'s kind of handle: a video decoder that writes
+    /// frames into it, for one. The block is one allocation of its own, dedicated to the one
+    /// buffer that spans it, never a place in a pooled block, and exportable as `handle` alone.
+    /// Its bytes are undefined, as a taken block's are.
+    ///
+    /// It is offered where the device lists the handle's extensions (`VK_KHR_external_memory_fd`
+    /// for an opaque fd; with it `VK_EXT_external_memory_dma_buf` for a dma-buf;
+    /// `VK_KHR_external_memory_win32` for an NT handle), which device creation enables where
+    /// listed, and its buffers export the handle (`vkGetPhysicalDeviceExternalBufferProperties`).
+    /// A dma-buf also needs `VK_EXT_queue_family_foreign`: the other side of a dma-buf is another
+    /// driver, which an ownership transfer names as the foreign queue family
+    /// (`VUID-VkBufferMemoryBarrier2-srcQueueFamilyIndex-09099`). The memory is in the device's
+    /// Private type.
+    ///
+    /// With the block comes the [`Export`]: a new handle of the memory (`vkGetMemoryFdKHR`,
+    /// `vkGetMemoryWin32HandleKHR`), the consumer's to close, and what an import of it names: the
+    /// allocation's size and its memory type. The block lives until its last handle and its last
+    /// buffer, command buffer or upload are gone; the block-maker thread then frees its memory.
+    /// What another API reads or writes through an import of it after that is undefined, as
+    /// Vulkan leaves it; an import may outlive the block unused. Each export is one
+    /// `VkDeviceMemory` allocation and counts against the device's `maxMemoryAllocationCount`;
+    /// [`Gauges::exports`](crate::Gauges::exports) counts those live.
+    ///
+    /// No image is made in its memory, which is dedicated to its buffer
+    /// (`VUID-vkBindImageMemory-memory-10926`): a texture over a buffer in it is copied, as over
+    /// an imported block ([`Buffer::new_texture`](crate::Buffer::new_texture)), and it is no
+    /// heap's memory ([`Device::new_heap_texture`]).
+    ///
+    /// Err: [`Limit::NoExport`] where the device does not export the handle;
+    /// [`Limit::ExportType`] for a dma-buf on a device without the foreign queue family, or where
+    /// the buffer's memory requirements do not list the Private type;
+    /// [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's longest allocation or
+    /// buffer; [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations);
+    /// [`Limit::BlockIds`](crate::Limit::BlockIds); [`Error::Vulkan`] where the buffer, the
+    /// allocation, its binding or the handle fails; [`Error::Quiesced`].
+    pub fn new_exported_block(
+        &self,
+        handle: ExportHandle,
+        len: u64,
+    ) -> Result<(Block, Export), Error> {
+        let core = self.core();
+        if core.closed() {
+            return Err(Error::Quiesced);
+        }
+        if !core.exports.offers(handle) {
+            return Err(Error::Limit(Limit::NoExport { handle }));
+        }
+        if handle.foreign() && !core.exports.foreign {
+            return Err(Error::Limit(Limit::ExportType {
+                handle,
+                listed: None,
+            }));
+        }
+        // SAFETY: the device's buffers export `handle`, its extensions enabled.
+        let (memory, size) = unsafe { memory::export(core, len, handle) }?;
+        let info = memory.info();
+        let raw = memory.device_memory();
+        let block = Block::claim(core, info, memory::Block::new(memory, Arc::clone(core)));
+        // A failure here gives the block back with its memory as `block` drops.
+        let handle = core.exports.handle(raw, handle)?;
+        let export = Export {
+            handle,
+            size,
+            memory_type: core.memory_type(crate::MemoryClass::Private),
+        };
+        Ok((block, export))
+    }
+}
+
+impl Exports {
+    /// A new fd of `memory`, exported as `handle`.
+    #[cfg(unix)]
+    fn handle(
+        &self,
+        memory: vk::DeviceMemory,
+        handle: ExportHandle,
+    ) -> Result<std::os::fd::OwnedFd, Error> {
+        use std::os::fd::FromRawFd;
+        let fds = (self.fd.as_ref()).ok_or(Error::Limit(Limit::NoExport { handle }))?;
+        let info = vk::MemoryGetFdInfoKHR::default()
+            .memory(memory)
+            .handle_type(handle.vk());
+        // SAFETY: the extension is enabled; the memory is live and exportable as `handle`.
+        let fd = unsafe { fds.get_memory_fd(&info) }.map_err(Error::vulkan("vkGetMemoryFdKHR"))?;
+        // SAFETY: the call made the fd, which no one else owns.
+        Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+    }
+
+    /// A new NT handle of `memory`, exported as `handle`.
+    #[cfg(windows)]
+    fn handle(
+        &self,
+        memory: vk::DeviceMemory,
+        handle: ExportHandle,
+    ) -> Result<std::os::windows::io::OwnedHandle, Error> {
+        use std::os::windows::io::{FromRawHandle, OwnedHandle, RawHandle};
+        let handles = (self.win32.as_ref()).ok_or(Error::Limit(Limit::NoExport { handle }))?;
+        let info = vk::MemoryGetWin32HandleInfoKHR::default()
+            .memory(memory)
+            .handle_type(handle.vk());
+        // SAFETY: the extension is enabled; the memory is live and exportable as `handle`.
+        let raw = unsafe { handles.get_memory_win32_handle(&info) }
+            .map_err(Error::vulkan("vkGetMemoryWin32HandleKHR"))?;
+        // SAFETY: the call made the handle, which no one else owns.
+        Ok(unsafe { OwnedHandle::from_raw_handle(raw as RawHandle) })
+    }
+}

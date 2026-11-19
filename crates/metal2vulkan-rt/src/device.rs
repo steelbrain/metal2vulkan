@@ -7,6 +7,7 @@ use crate::cache::{self, Caches};
 use crate::complete::{self, Done};
 use crate::counters::{Counters, Gauge};
 use crate::error::{Error, Refusal};
+use crate::export::Exports;
 use crate::extension::{self, ConsumerFeature, DeviceExtension};
 use crate::fill::Filler;
 use crate::floor;
@@ -202,6 +203,8 @@ pub(crate) struct Core {
     pub(crate) pool: Pool,
     /// What the device imports ([`Device::import_dma_buf`], [`Device::import_host_memory`]).
     pub(crate) imports: Imports,
+    /// What the device exports ([`Device::new_exported_block`]).
+    pub(crate) exports: Exports,
     /// The blocks the consumer holds handles of, by number ([`Block`]): each claim goes once its
     /// last handle drops, or at teardown.
     pub(crate) claims: Mutex<HashMap<BlockId, Weak<Claim>>>,
@@ -491,6 +494,8 @@ impl Device {
                 &capabilities.memory,
             )
         };
+        // SAFETY: as above.
+        let exports = unsafe { Exports::new(vk_instance, raw, &device, &capabilities.extensions) };
         let feedback = (capabilities.feedback_loop).then(|| {
             ash::ext::attachment_feedback_loop_dynamic_state::Device::new(vk_instance, &device)
         });
@@ -553,6 +558,7 @@ impl Device {
             hold_completions: std::sync::RwLock::new(()),
             pool,
             imports,
+            exports,
             claims: Mutex::new(HashMap::new()),
             places: Places::new(),
             filler,

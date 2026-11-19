@@ -38,7 +38,7 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 69 | 69 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 26 | 26 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -56,7 +56,7 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 19 | 16 | 0 | 0 | 34 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 9 | 4 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 11 | 4 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 26 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -702,6 +702,8 @@ Columns:
 | `NoImport` | An import of a handle the device does not take (`Device::import_dma_buf`, `Device::import_host_memory`) | at the device's limit | `device`: the device's extensions and its external buffer properties | 2: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`, `crates/metal2vulkan-rt/src/import.rs (import_host_memory)` | `-` |
 | `ImportType` | An import whose handle's memory type query offers no type the import takes, so nothing is imported | at the device's limit | `device`: the handle's memory type query and the buffer's memory requirements | 2: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`, `crates/metal2vulkan-rt/src/import.rs (import_host_memory)` | `-` |
 | `ImportAlignment` | An import of no bytes, or one whose address or length is not a multiple of `alignment` | at the device's limit | `device`: `minImportedHostPointerAlignment` and the buffer's memory requirements | 3: `crates/metal2vulkan-rt/src/import.rs (check_len)`, `crates/metal2vulkan-rt/src/import.rs (check_size)` (+1) | `-` |
+| `NoExport` | An export of a handle the device does not give (`Device::new_exported_block`) | at the device's limit | `device`: the device's extensions and its external buffer properties | 3: `crates/metal2vulkan-rt/src/export.rs (handle, 2 sites)`, `crates/metal2vulkan-rt/src/export.rs (new_exported_block)` | `-` |
+| `ExportType` | An export of a handle the device gives, but not in the one form an export takes (`Device::new_exported_block`) | at the device's limit | `device`: its extensions and the buffer's memory requirements | 2: `crates/metal2vulkan-rt/src/export.rs (new_exported_block)`, `crates/metal2vulkan-rt/src/memory.rs (export)` | `-` |
 | `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
@@ -1306,6 +1308,8 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::NoImport`: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
 - `rt:Limit::ImportType`: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
 - `rt:Limit::ImportAlignment`: `crates/metal2vulkan-rt/src/import.rs (check_len)`; `crates/metal2vulkan-rt/src/import.rs (check_size)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
+- `rt:Limit::NoExport`: `crates/metal2vulkan-rt/src/export.rs (handle, 2 sites)`; `crates/metal2vulkan-rt/src/export.rs (new_exported_block)`
+- `rt:Limit::ExportType`: `crates/metal2vulkan-rt/src/export.rs (new_exported_block)`; `crates/metal2vulkan-rt/src/memory.rs (export)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`; `crates/metal2vulkan-rt/src/pipeline.rs (of)`

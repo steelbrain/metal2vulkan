@@ -364,6 +364,40 @@ buffer: an image of its own, which the device copies the buffer's bytes into bef
 submissions that use it and back after a command writes it (`Metrics::over_copies`); the buffer
 stays the import itself.
 
+### Exported blocks
+
+Metal has no counterpart, as it has none of presenting: this is the consumer's own path for
+sharing memory with another API, a video decoder that writes decoded frames into it for one.
+`Device::new_exported_block(handle, len)` makes a Private block of `len` bytes rounded up to 64
+KiB and returns it with an `Export`: a new handle of its memory, the consumer's to close, the
+allocation's size and its memory type index, which an import of the handle names.
+
+- `ExportHandle::OpaqueFd` (unix): an opaque fd, which another API of the same device and driver
+  imports (`VK_KHR_external_memory_fd`).
+- `ExportHandle::DmaBuf` (unix): a dma-buf, which another driver imports
+  (`VK_EXT_external_memory_dma_buf`). It also needs `VK_EXT_queue_family_foreign`, the queue
+  family that ownership transfers with another driver name; a device without it refuses with
+  `Limit::ExportType`.
+- `ExportHandle::OpaqueWin32` (Windows): an NT handle (`VK_KHR_external_memory_win32`).
+
+The block is one form on every device: an allocation of its own in the device's Private memory
+type, dedicated to the one buffer that spans it (`VkMemoryDedicatedAllocateInfo`), never a range
+of a pooled allocation. Vulkan lets a driver require a dedicated allocation for an export
+(`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`), so this is the form every driver takes, and
+what exportable memory costs each submission falls on these allocations alone. A handle is
+offered where the device lists its extensions, which device creation enables where listed, and its
+buffers export it (`vkGetPhysicalDeviceExternalBufferProperties`); elsewhere the call refuses with
+`Limit::NoExport`, before anything is allocated.
+
+Each export is one `VkDeviceMemory` allocation and counts against the device's allocations;
+`Gauges::exports` counts those live. The block lives until its last handle and its last buffer,
+command buffer or upload are gone; then the block-maker thread frees its memory. An import of the
+handle may outlive the block, unused. Neither `BlockMappings` hook runs for an exported block, and
+its bytes are undefined until written, as a taken block's are. No image is made in its memory,
+which is dedicated to its buffer (`VUID-vkBindImageMemory-memory-10926`): a texture over a buffer
+in it is the counted copy, as over an imported block, and a heap texture in it is
+`Gap::HeapTexture`.
+
 ### Known gaps of memory blocks
 
 - A shader uses a buffer's `gpuAddress` directly, unchecked: a stale one, of a released buffer, can
@@ -383,10 +417,10 @@ stays the import itself.
   arguments) or of the index size (indexed draws), which documented Metal does not allow, its
   pointer being page-aligned. The consumer places every other buffer at an aligned byte. Such a
   buffer is still made and its other uses run; only the dispatch or draw is refused.
-- A texture over a buffer in an imported block is the counted copy of a texture over a buffer on
-  every device (`Metrics::over_copies`): its bytes are copied into an image of its own before the
-  submissions that use it, and back after a command writes it. The runtime makes no image in
-  imported memory.
+- A texture over a buffer in an imported or exported block is the counted copy of a texture over a
+  buffer on every device (`Metrics::over_copies`): its bytes are copied into an image of its own
+  before the submissions that use it, and back after a command writes it. The runtime makes no
+  image in imported memory, nor in an exported block's, which is dedicated to its buffer.
 - On the NVIDIA cards we measured in Thunderbolt enclosures, freeing host-visible memory takes
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one idle allocation at a time,
@@ -2183,8 +2217,10 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_vertex_attribute_divisor` | device, where listed | a vertex layout stepped per instance at a rate above 1, through the step-rate feature below |
 | `VK_EXT_vertex_attribute_divisor` | device, where listed | the same, on a device that lists only this extension, which the KHR was promoted from with the same feature and pipeline structures |
 | `VK_EXT_external_memory_host` | device, where listed | importing host memory by its address (`Device::import_host_memory`) |
-| `VK_KHR_external_memory_fd` | device, where listed | importing a dma-buf by its fd, with the extension below |
-| `VK_EXT_external_memory_dma_buf` | device, where listed | importing a dma-buf (`Device::import_dma_buf`) |
+| `VK_KHR_external_memory_fd` | device, where listed | importing a dma-buf by its fd, with the extension below, and exporting a block as an opaque fd or, with it, a dma-buf (`Device::new_exported_block`) |
+| `VK_EXT_external_memory_dma_buf` | device, where listed | importing a dma-buf (`Device::import_dma_buf`), and exporting a block as one |
+| `VK_KHR_external_memory_win32` | device, where listed | exporting a block as an NT handle (`Device::new_exported_block`) |
+| `VK_EXT_queue_family_foreign` | device, where listed | the foreign queue family that a dma-buf export's ownership transfers name |
 
 ### Features
 
