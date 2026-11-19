@@ -1343,14 +1343,15 @@ fn the_copy_moves_every_byte_in_whole_threadgroups() {
     assert_eq!(copy_dispatches(4112), [(0, 1, 256), (4096, 1, 1)]);
 }
 
-/// The fixture's two cells kernels on lavapipe's `Device::from_queries` profile under the identity
-/// domains (the new runtime's): both observe their threadgroup partition with partial threadgroups
-/// through the lockstep order's barriers, which stand past the bounds test, so they are SIMD-group
-/// barriers and run where each SIMD group lies within one row
-/// (`CompiledFunction::runs_lockstep_barriers_in_rows`), as in the row-indexed kernels the fixture
-/// stands for. The one-row variant (`LoweringInputs::one_row`) of `row_cells`, whose `int` cell
-/// arithmetic compiles to `nsw` steps, does not observe it, so a runtime may run its grids in
-/// tiles; that of `row_cells_uint`, the control, whose `uint` steps carry no flags, still does.
+/// The fixture's two cells kernels on lavapipe's `Device::from_queries` profile. Under the
+/// resident-table domains (the old runtime's) both observe their threadgroup partition with
+/// partial threadgroups through the lockstep order's barriers, which stand past the bounds test,
+/// so they are SIMD-group barriers, as in the row-indexed kernels the fixture stands for. The
+/// one-row variant (`LoweringInputs::one_row`) of `row_cells`, whose `int` cell arithmetic
+/// compiles to `nsw` steps, does not observe it, so a runtime may run its grids in tiles; that of
+/// `row_cells_uint`, the control, whose `uint` steps carry no flags, still does. Under the
+/// identity domains (the new runtime's), whose kernels take no lockstep order, neither observes
+/// it, plain or with partial threadgroups.
 #[test]
 fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
     use metal2vulkan::device::{
@@ -1367,10 +1368,11 @@ fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
     };
     let json = include_str!("../../metal2vulkan-validation/profiles/lavapipe.json");
     let description = DeviceDescription::from_khronos_json(json, None).unwrap();
+    let resident = Device::from_queries(description.clone(), DevicePolicy::default()).unwrap();
     let mut policy = DevicePolicy::default();
     policy.pointer_domain = PointerDomain::Identity;
     policy.handle_domain = HandleDomain::Identity;
-    let device = Device::from_queries(description, policy).unwrap();
+    let identity = Device::from_queries(description, policy).unwrap();
     let library = Library::from_air(&air).unwrap();
     let budget = metal2vulkan::Budget::standard();
     let mut partial = LoweringInputs::new();
@@ -1379,19 +1381,32 @@ fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
     rows.one_row = true;
     for (name, apart) in [("row_cells", true), ("row_cells_uint", false)] {
         let function = FunctionDescriptor::new(library.function(name).unwrap());
-        let entries = StageEntries::new();
-        let observes = |inputs: &LoweringInputs| {
+        let observes = |device: &Device, inputs: &LoweringInputs| {
+            let entries = StageEntries::new();
             (device.kernel_observes_partition(&function, inputs, &budget, &entries))
                 .unwrap_or_else(|why| panic!("{name}: {why}"))
         };
-        let plain = (device.compile_function(&function, &LoweringInputs::new(), &budget))
+        let plain = (resident.compile_function(&function, &LoweringInputs::new(), &budget))
             .unwrap_or_else(|why| panic!("{name}: {why}"));
         assert!(
             plain.observes_partition_through_simdgroups_alone(),
             "{name}"
         );
-        assert!(plain.runs_lockstep_barriers_in_rows(), "{name}");
-        assert!(observes(&partial), "{name}: the partial variant");
-        assert_eq!(observes(&rows), !apart, "{name}: the one-row variant");
+        assert!(observes(&resident, &partial), "{name}: the partial variant");
+        assert_eq!(
+            observes(&resident, &rows),
+            !apart,
+            "{name}: the one-row variant"
+        );
+        let own = (identity.compile_function(&function, &LoweringInputs::new(), &budget))
+            .unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert!(
+            !own.observes_threadgroup_partition(),
+            "{name}: under the identity domains"
+        );
+        assert!(
+            !observes(&identity, &partial),
+            "{name}: the partial variant under the identity domains"
+        );
     }
 }

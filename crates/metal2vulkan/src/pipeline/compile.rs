@@ -2395,7 +2395,8 @@ pub(crate) fn kernel_inputs_read(
 /// compile decides it (`KernelFacts::partition_oblivious`, which
 /// `CompiledFunction::observes_threadgroup_partition` answers): of the entry the compile selects
 /// from, specialized (the entry `entries` holds, or one made there now) and ordered for the
-/// device of `p` (`lower::simd::lockstep::order`, whose barriers observe it), lowering nothing.
+/// device of `p` where its profile takes the order (`lower::simd::lockstep::order`, whose barriers
+/// observe it), lowering nothing.
 /// Any other stage observes it.
 pub(crate) fn kernel_observes_partition(
     fd: &FunctionDescriptor,
@@ -2956,8 +2957,9 @@ fn decoded_module(r: &Request<'_>, m: &mut Meter) -> Result<air::Decoded, Error>
 }
 
 /// [`specialize_one`], then the order Apple's simdgroup lockstep gives threadgroup accesses made
-/// explicit for `p`: the entry selection reads, whose instruction indices a refusal's location
-/// names. [`plan_one`] and `DeviceProfile::specialized_entry` both build it
+/// explicit for `p` where its profile takes one ([`OrderKey::of`]; under the identity domains the
+/// specialized entry alone): the entry selection reads, whose instruction indices a refusal's
+/// location names. [`plan_one`] and `DeviceProfile::specialized_entry` both build it
 /// here, so a tool that resolves a refusal's location reads the compile's own entry.
 ///
 /// A request that shares the creation's entries orders the entry there once for the creation
@@ -2967,10 +2969,18 @@ fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Sp
     let key = OrderKey::of(p, r.inputs.one_row());
     if let Shared::Entry(entries, fd) = r.shared {
         let open_cl = (r.inputs.open_cl_mode(), r.inputs.open_cl_lines());
-        let kept = entries.ordered(fd, r.inputs.call_stack_depth(), open_cl, key, m)?;
+        let depth = r.inputs.call_stack_depth();
+        let kept = match key {
+            Some(key) => entries.ordered(fd, depth, open_cl, key, m)?,
+            None => entries.specialized(fd, depth, open_cl, m)?,
+        };
         return Ok(Specialized::clone(&kept));
     }
-    order_specialized(specialize_one(r, m)?, key, m)
+    let specialized = specialize_one(r, m)?;
+    match key {
+        Some(key) => order_specialized(specialized, key, m),
+        None => Ok(specialized),
+    }
 }
 
 /// The specialized entry `specialized` ordered for `key` ([`lockstep::order`]), its work weighing
@@ -3073,7 +3083,6 @@ impl Analyzed {
             partition_oblivious: observed == Partition::Oblivious,
             partition_simdgroups: observed == Partition::Simdgroups,
             image_only: self.image_only,
-            lockstep_in_rows: spec.lockstep.barriers.len() > spec.lockstep.across_rows.len(),
         };
         Ok((plan, kernel))
     }

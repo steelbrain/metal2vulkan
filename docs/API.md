@@ -462,7 +462,8 @@ measured takes the route each deviation's docs name for it: the device's own ans
 precision note, or, where the answer decides a capability, its emulation or a refusal.
 
 Metal semantics the translation keeps on every device, beyond Vulkan's: Metal's 32-lane
-simdgroups (including lockstep races on threadgroup memory within a barrier interval). `fneg` and
+simdgroups (and, under the resident-table domains alone, the order Apple's lockstep gives a
+simdgroup's threadgroup and device accesses within a barrier interval). `fneg` and
 `fabs` are the device's `OpFNegate` and `FAbs`, so a NaN's payload and a denormal are the
 device's (`native-nan-encoding`, `device-denormals`). A NaN's bits, the
 operand `fmin`, `fmax`, `min3`, `max3`, `clamp` and `saturate` pick beside a NaN or between two
@@ -1941,14 +1942,8 @@ the grid, whose invocations past it return before the body as a tile's do; an in
 region states no grid and is unflagged, and all of its invocations run.
 `Device::kernel_observes_partition(&kernel, &inputs, &budget, &entries)` answers, before any
 lowering, what `CompiledFunction::observes_threadgroup_partition` answers for the compile under the
-same inputs (from the specialized entry `entries` holds, ordered for the device), so a runtime
-lowers only the variant a creation needs.
-`CompiledFunction::runs_lockstep_barriers_in_rows` (`KernelFacts::lockstep_in_rows`) states
-whether a kernel's lockstep order inserted a barrier that runs in a threadgroup whose simdgroups
-each lie within one row: any but those that order only pairs meeting where a simdgroup spans two
-rows, which the module runs only where its local size lets a simdgroup span them, a test of
-specialization constants the driver folds. Only where it holds can the kernel's one-row variant
-(`LoweringInputs::one_row`) run fewer barriers than its own module at such a size.
+same inputs (from the specialized entry `entries` holds, ordered for the device where its
+profile takes the lockstep order), so a runtime lowers only the variant a creation needs.
 `CompiledFunction::is_image_only` (`KernelFacts::image_only`) states, from the AIR alone, a kernel
 that samples, gathers or reads a texture and loads, stores and updates atomically nothing through
 a `device` pointer (`constant` loads and texture writes allowed), which a runtime may run in
@@ -6548,6 +6543,10 @@ each item named states the rule in full.
 - **A recursive call past the call stack yields zero**: the stack holds what Metal's byte model
   holds for the pipeline's `max_call_stack_depth`; a call that finds it full returns zero, where
   Metal's answer is corrupt.
+- **The threads of a SIMD-group run in no order between barriers** under the identity domains (the
+  new runtime), where an Apple GPU runs them in lockstep: the Metal Shading Language orders their
+  memory accesses only through barriers and atomics, and calls two of them that conflict between
+  barriers a data race.
 - **A simdgroup barrier in divergent code waits for its tangle**, as SPIR-V defines it. The Metal
   Shading Language requires every thread of the SIMD-group to execute a `simdgroup_barrier` that
   any of them executes in a conditional or a loop iteration, so Metal defines no answer there.

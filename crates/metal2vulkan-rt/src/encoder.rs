@@ -244,8 +244,6 @@ pub(crate) enum Module {
     Tiles,
     /// An observing kernel's partial-threadgroups variant.
     Partial,
-    /// An observing kernel's one-row module (`Compiled::rows`), run in tiles at `MultiRegion` 1.
-    Rows,
     /// The emulated-SIMD-group variant.
     Emulated,
 }
@@ -278,24 +276,20 @@ pub(crate) struct Choice {
 }
 
 /// How a state of `form` runs a dispatch of threadgroup size `size`, direct over `direct` or
-/// indirect, the same on every device; `rows`: the state has an observing kernel's one-row module
-/// (`Compiled::rows`):
+/// indirect, the same on every device:
 /// - indirect: the whole module at its own size;
 /// - an image-only kernel ([`Form::Square`]): the whole module at `MultiRegion` 0 in workgroups
 ///   of [`SQUARE`] over a grid one deep, and of its [`image_tile`] over a deeper one, the region
 ///   carrying them, flagged where they do not divide the grid;
 /// - a tiling kernel ([`Form::Tiled`]): its tiles, workgroups of `GRID_TILE_THREADS`, each one
 ///   `grid_tile` tile of the grid, which its region carries;
-/// - an observing kernel ([`Form::Sized`]) with its one-row module, over a grid whose
-///   threadgroups keep each SIMD group in one row ([`keeps_rows`]): that module's tiles, as a
-///   tiling kernel's;
-/// - any other observing kernel's: its own size, a ragged grid on its partial-threadgroups
-///   variant.
+/// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
+///   partial-threadgroups variant.
 ///
 /// A size deeper than `DEEP_THREADGROUP` runs as one row of its threads
 /// ([`Constant::Deep`](crate::pipeline::Constant::Deep)), so every workgroup is within the
 /// floor's `maxComputeWorkGroupSize`.
-pub(crate) fn choose(form: &Form, rows: bool, direct: Option<Direct>, size: [u32; 3]) -> Choice {
+pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3]) -> Choice {
     let Some(direct) = direct else {
         return Choice {
             module: Module::Whole,
@@ -320,20 +314,18 @@ pub(crate) fn choose(form: &Form, rows: bool, direct: Option<Direct>, size: [u32
         nominal: shape,
         direct: over(shape),
     };
-    let tiles = |module: Module| {
-        let tile = grid_tile(threads);
-        Choice {
-            module,
-            local: [GRID_TILE_THREADS, 1, 1],
-            nominal: tile,
-            direct: over(tile),
-        }
-    };
     match form {
         Form::Square if threads[2] == 1 => whole(SQUARE),
         Form::Square => whole(image_tile(threads, size)),
-        Form::Tiled => tiles(Module::Tiles),
-        Form::Sized { .. } if rows && keeps_rows(threads, size) => tiles(Module::Rows),
+        Form::Tiled => {
+            let tile = grid_tile(threads);
+            Choice {
+                module: Module::Tiles,
+                local: [GRID_TILE_THREADS, 1, 1],
+                nominal: tile,
+                direct: over(tile),
+            }
+        }
         Form::Sized { .. } => Choice {
             module: match ragged {
                 false => Module::Whole,
@@ -344,32 +336,6 @@ pub(crate) fn choose(form: &Form, rows: bool, direct: Option<Direct>, size: [u32
             direct: Some((threads, groups, ragged)),
         },
     }
-}
-
-/// Metal's SIMD-group width, its `threadExecutionWidth` (`ComputePipeline::metal_info`): a SIMD
-/// group is 32 consecutive linear threads of its threadgroup from a multiple of 32, as the
-/// translator's one-row rule takes it (`LoweringInputs::one_row`).
-const SIMD_GROUP: u32 = 32;
-
-/// Whether every SIMD group of a direct dispatch of threadgroup size `size` over a grid of
-/// `threads` lies within one row of its threadgroup, where two of its threads' positions differ
-/// only in `x`: no threadgroup has more than one row, or every threadgroup's rows are whole SIMD
-/// groups. A grid that is not a whole number of threadgroups along an axis has threadgroups of
-/// the remainder along it at its edge, so each extent a threadgroup takes counts.
-pub(crate) fn keeps_rows(threads: [u32; 3], size: [u32; 3]) -> bool {
-    // The extents threadgroups take along `axis`: the size, where the grid holds one whole, and
-    // the remainder at the grid's edge.
-    let extents = |axis: usize| {
-        let (n, side) = (threads[axis], size[axis].max(1));
-        [
-            (n >= side).then_some(side),
-            Some(n % side).filter(|&rest| rest != 0),
-        ]
-        .into_iter()
-        .flatten()
-    };
-    let one_row = (1..3).all(|axis| extents(axis).all(|extent| extent == 1));
-    one_row || extents(0).all(|extent| extent.is_multiple_of(SIMD_GROUP))
 }
 
 /// The tile an image-only kernel's grid of `threads`, more than one deep, runs in at threadgroup
@@ -988,12 +954,11 @@ impl ComputeCommandEncoder {
             local,
             nominal,
             direct,
-        } = choose(&inner.form, inner.rows.is_some(), direct, size);
-        let kernel = match (module, &inner.rows) {
-            (Module::Partial, _) => inner.later_kernel(Which::Partial, || {
+        } = choose(&inner.form, direct, size);
+        let kernel = match module {
+            Module::Partial => inner.later_kernel(Which::Partial, || {
                 partial_threadgroups(direct.map_or([0; 3], |(threads, ..)| threads))
             })?,
-            (Module::Rows, Some(rows)) => rows,
             _ => &inner.whole,
         };
         // A threadgroup that is not whole groups of a module that runs only whole ones runs the
@@ -1042,14 +1007,7 @@ impl ComputeCommandEncoder {
                         max: limits.max_shared_memory,
                     }));
                 }
-                kernel.pipeline(
-                    core,
-                    (
-                        local,
-                        lengths,
-                        matches!(module, Module::Tiles | Module::Rows),
-                    ),
-                )?
+                kernel.pipeline(core, (local, lengths, module == Module::Tiles))?
             }
         };
         self.last = Some(Last {

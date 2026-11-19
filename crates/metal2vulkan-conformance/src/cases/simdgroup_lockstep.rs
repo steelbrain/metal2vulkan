@@ -16,6 +16,12 @@
 //! and an Apple M4. Record mode now runs the kernels on the oracle, so the recording holds Metal's
 //! own words and the simulation is checked against them.
 //!
+//! The new runtime gives the threads of a SIMD-group no order between barriers: the Metal Shading
+//! Language calls these kernels' accesses a data race, and docs/API.md's accepted differences say
+//! so (`the-threads-of-a-simd-group-run-in-no-order-between-barriers`). So the output words go
+//! unchecked, named and counted, with that entry as the justification; the counts half the
+//! divergent loop leaves alone still compares exactly.
+//!
 //! Each case records all 512 bytes of its output buffer under a layout of two rows of 64 words:
 //! for `until` the second row is each thread's iteration count, and for `divergent_loop` the kernel
 //! writes nothing there, so the row is the `0xee` the buffer was made with and the case also
@@ -147,18 +153,23 @@ impl Case for Lockstep {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Two declarations and no tolerance, each loosening the notices site alone, so every word
-        // this case reads still compares exactly. The buffer each dispatch writes its per-lane
-        // record into is `Shared`, which is what [`crate::replay::shared_memory_notice`] is for.
-        // And both kernels hold simdgroup-scoped accesses inside divergent loops, so on a device
-        // whose answer lacks maximal reconvergence (`shaderMaximalReconvergence`, the SIMD groups'
-        // query form) the stage carries its static note, `DeviceReconvergence`, which the sides
-        // announce as `implementation-defined-reconvergence`. The device's answer decides it: a
-        // device with maximal reconvergence announces nothing, and this declaration then holds
-        // nowhere. Measured on the UHD 630 under Intel's Windows driver, which lacks it, through
-        // the rt side: the words matched Metal's, and the undeclared notice was the case's one
-        // divergence.
+        // The output words are lockstep's alone, which the new runtime does not give (the module
+        // documentation). And two declarations, each loosening the notices site alone. The buffer
+        // each dispatch writes its per-lane record into is `Shared`, which is what
+        // [`crate::replay::shared_memory_notice`] is for. And both kernels hold simdgroup-scoped
+        // accesses inside divergent loops, so on a device whose answer lacks maximal reconvergence
+        // (`shaderMaximalReconvergence`, the SIMD groups' query form) the stage carries its static
+        // note, `DeviceReconvergence`, which the sides announce as
+        // `implementation-defined-reconvergence`. The device's answer decides it: a device with
+        // maximal reconvergence announces nothing, and this declaration then holds nowhere.
         vec![
+            Allowance::new(
+                "case/output",
+                crate::allowance::Loosening::Unchecked,
+                crate::allowance::Justification::AcceptedDifference(
+                    "the-threads-of-a-simd-group-run-in-no-order-between-barriers".to_owned(),
+                ),
+            ),
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
                 metal2vulkan_runtime::Degradation::ImplementationDefinedReconvergence.code(),

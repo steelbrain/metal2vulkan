@@ -1,6 +1,12 @@
 //! Lockstep made explicit (device memory too): barriers that order the threadgroup-memory and
 //! device-memory accesses a kernel leaves to the lockstep of Apple's simdgroups.
 //!
+//! **Where it runs.** Under the resident-table domains, the old runtime's, until the cutover
+//! deletes it. Under the identity domains (`lower::access::identity`, the new runtime's) no kernel
+//! is ordered ([`OrderKey::of`] is `None`): documented Metal orders the threads of a simdgroup
+//! only through barriers and atomics, and calls their conflicting accesses between barriers a data
+//! race (docs/API.md, accepted differences).
+//!
 //! **What Metal guarantees.** The Metal Shading Language specification (4.1, §4.4.1, §5.2.3.6,
 //! §6.10) defines a simdgroup as threads that execute concurrently, and orders threadgroup
 //! memory between threads only through `threadgroup_barrier` and `simdgroup_barrier` with
@@ -635,7 +641,8 @@ struct Decision {
 /// device's profile, whether it runs a simdgroup in lockstep and whether a subgroup barrier where
 /// the simdgroup's threads diverge orders the threads that run it together; and whether the
 /// kernel is its one-row variant (`LoweringInputs::one_row`). Two asks with equal keys order an
-/// entry the same way, so an ordered entry is kept under its key.
+/// entry the same way, so an ordered entry is kept under its key. A profile of the identity
+/// domains has none: its kernels take no order (the module documentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderKey {
     device: bool,
@@ -644,8 +651,12 @@ pub struct OrderKey {
 }
 
 impl OrderKey {
-    /// The key of a device of profile `p`, for the one-row variant where `one_row`.
-    pub fn of(p: &DeviceProfile, one_row: bool) -> OrderKey {
+    /// The key of a device of profile `p`, for the one-row variant where `one_row`; `None` under
+    /// the identity domains (`lower::access::identity`), whose kernels take no order.
+    pub fn of(p: &DeviceProfile, one_row: bool) -> Option<OrderKey> {
+        if crate::lower::access::identity(p) {
+            return None;
+        }
         let device = p
             .fields()
             .enabled
@@ -660,11 +671,11 @@ impl OrderKey {
                 tier(&SimdClass::CrossLane(OpBits::BASIC), Stage::Kernel, model),
                 Ok(Tier::Direct | Tier::Cluster32)
             );
-        OrderKey {
+        Some(OrderKey {
             device,
             tangle,
             one_row,
-        }
+        })
     }
 }
 

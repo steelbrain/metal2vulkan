@@ -2998,28 +2998,19 @@ define void @{name}(ptr addrspace(1) %src, ptr addrspace(1) %dst, ptr addrspace(
     )
 }
 
-/// On lavapipe's `Device::from_queries` profile under the identity domains (the new runtime's),
-/// whose 8-lane subgroups hold no 32-lane tier, the lockstep order gives the stores of every
-/// [`row_store_kernel`] barriers and states no `RowLockstep`, each kernel with its stores in its
-/// entry block and past a bounds test. The one-row variant (`LoweringInputs::one_row`) clears
-/// every pair of the cells kernel there too: no lockstep barrier, no simd class, `OneRow` stated;
-/// with partial threadgroups it does not observe its threadgroup partition, which the variant
-/// without `one_row` does, and its pipeline runs its grid in tiles (`GridTiles`, which the identity
-/// domains state). The neighbours kernel's variant keeps its barriers, as its pair meets within
-/// one row, and so does the wrapping cells kernel's, whose unflagged index the order does not
-/// prove apart in rows. Every plain module runs a barrier where each simdgroup lies within one row
-/// (`CompiledFunction::runs_lockstep_barriers_in_rows`) but the unguarded cells kernel's: its
-/// barriers stand where the whole threadgroup runs and order only pairs that meet across rows, so
-/// its module runs them only where a simdgroup spans two rows, and its one-row variant clears
-/// nothing more at such a size. Past the bounds test they are simdgroup barriers, which run there.
+/// On lavapipe's `Device::from_queries` profile the lockstep order gives the stores of every
+/// [`row_store_kernel`] barriers under the default domains, and none under the identity domains
+/// (the new runtime's), whose kernels take no order: there each kernel's module has no lockstep
+/// barrier, states no `RowLockstep` and takes no simd class, it does not observe its threadgroup
+/// partition with partial threadgroups, and that variant's pipeline runs its grid in tiles
+/// (`GridTiles`).
 #[test]
-fn a_one_row_variant_clears_the_pairs_apart_in_rows_without_a_32_lane_tier() {
+fn the_identity_domains_order_no_lockstep_pair() {
     let desc = crate::pipeline::testing::description("lavapipe").unwrap_or_else(|e| panic!("{e}"));
+    let resident = Device::from_queries(desc.clone(), DevicePolicy::default())
+        .unwrap_or_else(|e| panic!("{e}"));
     let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
-    let p = dev.profile();
     let budget = Budget::standard();
-    let mut one_row = LoweringInputs::new();
-    one_row.one_row = true;
     let lockstep = |plan: &Plan| {
         (plan.census().keys())
             .filter(|name| name.starts_with("barrier.lockstep"))
@@ -3036,45 +3027,28 @@ fn a_one_row_variant_clears_the_pairs_apart_in_rows_without_a_32_lane_tier() {
         let Some(bc) = assemble_text(name, &row_store_kernel(name, stores, guarded)) else {
             return;
         };
-        let (plain, _) = typed_module(&bc, name, p).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert!(lockstep(&plain) > 0, "{name}: {:?}", plain.census());
+        let (ordered, _) =
+            typed_module(&bc, name, resident.profile()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(lockstep(&ordered) > 0, "{name}: {:?}", ordered.census());
+        let (plain, _) =
+            typed_module(&bc, name, dev.profile()).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(lockstep(&plain), 0, "{name}: {:?}", plain.census());
         assert!(!plain.facts.contains(&RuntimeFact::RowLockstep), "{name}");
+        assert_eq!(plain.simd, (SimdClass::None, Tier::NoSubgroup), "{name}");
         let f = Library::from_air(&bc)
             .ok()
             .and_then(|lib| lib.function(name).ok())
             .map(FunctionDescriptor::new)
             .expect("kernel");
-        let own = dev
-            .compile_function(&f, &LoweringInputs::new(), &budget)
-            .unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert_eq!(
-            own.runs_lockstep_barriers_in_rows(),
-            guarded || stores != RowStores::Cells,
-            "{name}: {:?}",
-            plain.census()
-        );
-        let (row, _) =
-            typed_module_with(&bc, name, p, &one_row).unwrap_or_else(|e| panic!("{name}: {e}"));
-        assert!(row.facts.contains(&RuntimeFact::OneRow), "{name}");
-        if stores != RowStores::Cells {
-            assert!(lockstep(&row) > 0, "{name}: {:?}", row.census());
-            continue;
-        }
-        assert_eq!(lockstep(&row), 0, "{name}: {:?}", row.census());
-        assert_eq!(row.simd, (SimdClass::None, Tier::NoSubgroup), "{name}");
         let entries = crate::pipeline::StageEntries::new();
         let mut partial = LoweringInputs::new();
         partial.partial_threadgroups = true;
-        let mut rows = partial.clone();
-        rows.one_row = true;
-        let observes = |inputs: &LoweringInputs| {
-            dev.kernel_observes_partition(&f, inputs, &budget, &entries)
-                .unwrap_or_else(|e| panic!("{name}: {e}"))
-        };
-        assert!(observes(&partial), "{name}: the partial variant");
-        assert!(!observes(&rows), "{name}: the one-row partial variant");
+        let observes = dev
+            .kernel_observes_partition(&f, &partial, &budget, &entries)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(!observes, "{name}: the partial variant");
         let compiled = dev
-            .compile_function(&f, &rows, &budget)
+            .compile_function(&f, &partial, &budget)
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(!compiled.observes_threadgroup_partition(), "{name}");
         let pipeline = dev

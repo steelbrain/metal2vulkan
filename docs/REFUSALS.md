@@ -713,7 +713,7 @@ Columns:
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
 | `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 2: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`, `crates/metal2vulkan-rt/src/render.rs (refuse)` | `-` |
-| `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 2: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`, `crates/metal2vulkan-rt/src/pipeline.rs (of)` | `-` |
+| `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 1: `crates/metal2vulkan-rt/src/pipeline.rs (gap)` | `-` |
 | `ImageblockLength` | An imageblock length Metal answers that no case measures | every device (a public call's own check of its arguments) | `ours`: the length is not measured against Metal's | 2: `crates/metal2vulkan-rt/src/pipeline.rs (imageblock_memory_length_for_dimensions)`, `crates/metal2vulkan-rt/src/render.rs (imageblock_sample_length)` | `-` |
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
@@ -1317,7 +1317,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::ExportType`: `crates/metal2vulkan-rt/src/export.rs (new_exported_block)`; `crates/metal2vulkan-rt/src/memory.rs (export)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
-- `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`; `crates/metal2vulkan-rt/src/pipeline.rs (of)`
+- `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
 - `rt:Gap::ImageblockLength`: `crates/metal2vulkan-rt/src/pipeline.rs (imageblock_memory_length_for_dimensions)`; `crates/metal2vulkan-rt/src/render.rs (imageblock_sample_length)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
