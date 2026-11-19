@@ -46,7 +46,8 @@ use super::host_memory::on_device_with;
 use super::rt_replay::library_of;
 use super::{at_plan, public_case};
 use crate::replay::{
-    OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value, WAIT_COMPLETED,
+    Backend, OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value,
+    WAIT_COMPLETED,
 };
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
@@ -1706,14 +1707,20 @@ fn a_one_copy_stream_s_managed_buffer_plays_as_shared() {
         )
     });
     on_device_with(at_plan, |device| {
-        let report = play("one-copy", device, &path);
+        let mut backend = OldRuntime::new(device.clone(), crate::gpu::TEST_DEVICE);
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let (report, ended) = Player::new(&mut backend).play(&mut reader);
+        let lines = backend.lines();
+        for line in report.lines().iter().chain(&lines) {
+            eprintln!("REPLAY one-copy {} {line}", device.name());
+        }
+        ended.unwrap();
         assert_eq!(report.checks.len(), 1);
         assert_eq!(
             Some(report.checks[0].sha256),
             report.checks[0].recorded,
             "the blit read the CPU's write"
         );
-        let lines = report.lines();
         let managed = "managed one copy (the stream's device identity): 1 Managed buffers and \
                        blocks played as Shared";
         assert!(lines.iter().any(|l| l == managed), "{lines:?}");
