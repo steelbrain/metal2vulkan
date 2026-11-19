@@ -867,7 +867,9 @@ records as text, and
   4), which another API decodes pictures into, plays instead as the product makes it: one surface
   of the runtime's (`Device::new_exported_surface`) for the buffer, made at its first texture from
   what that texture reads of the surface (its pixel format, width and height), and every texture
-  over a plane a view of that plane's texture at the texture's own index. A picture landed
+  over a plane a view of that plane's texture at the texture's own index. Once made, the surface
+  is waited for at its ready point (`Surface::wait_until_ready`), as the consumer waits before
+  the other API's first write into it. A picture landed
   (`m2v.externalWriteDone`) is the surface's acquire (`Surface::external_writes_done`). The stream
   holds no bytes of the pictures (the buffer is Private and another API wrote it), so the play
   writes none, and no shape, fill or refill stands in for such a buffer. `--video-handle` picks
@@ -886,7 +888,8 @@ records as text, and
   the buffers played as any surface's pages; the executed counters `video_surfaces_in_place`,
   `video_surfaces_copied`, `video_surface_textures`, `video_surface_acquires`,
   `video_pictures_before_surface` and `video_buffers_otherwise` give them by frame, beside the
-  runtime's own `surfaces_in_place` and `surfaces_copied`, and the gauges add `surface_imports`.
+  runtime's own `surfaces_in_place`, `surfaces_copied` and `surface_waits` (the ready waits of
+  surfaces made in place), and the gauges add `surface_imports`.
   The old runtime's backend plays such a buffer as any surface's pages: a buffer of its length
   (section 4), the textures over its planes the old runtime's textures over the buffer, which read
   it in place, and `m2v.externalWriteDone` as nothing.

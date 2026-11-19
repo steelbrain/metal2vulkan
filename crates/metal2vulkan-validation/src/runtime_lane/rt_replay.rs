@@ -2416,3 +2416,69 @@ fn a_two_copy_stream_s_managed_buffers_start_from_the_bytes_they_were_made_with(
     // A device with unified memory adds that it played the two copies as its one.
     assert!(lines.iter().any(|l| l.starts_with(managed)), "{lines:?}");
 }
+
+/// A buffer made as a video surface's pages plays through the surface call: one surface for its
+/// two textures over its planes, each picture landed the surface's acquire, and a surface made in
+/// place waited for once at its ready point, as the consumer waits before the other API's first
+/// write into it. A dma-buf is a Unix host's handle.
+#[cfg(unix)]
+#[test]
+fn a_video_surface_is_waited_for_at_its_ready_point_once() {
+    let dir = ScratchDir::new("rt-replay-video").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        // Private pages of a 64 by 64 two-plane 4:2:0 picture.
+        let pages = [Value::Uint(6144), Value::Uint(32), Value::Nil];
+        let made = "m2v.newDmaBufBufferOfLengthPaddingUnobserved";
+        w.call(made, 1, 2, &pages, &[])?;
+        let facts = Value::Map(vec![
+            (
+                "pixelFormat".into(),
+                Value::Uint(u64::from(u32::from_be_bytes(*b"420v"))),
+            ),
+            ("planeCount".into(), Value::Uint(2)),
+            ("width".into(), Value::Uint(64)),
+            ("height".into(), Value::Uint(64)),
+            ("chromaOffset".into(), Value::Uint(4096)),
+            ("chromaBytesPerRow".into(), Value::Uint(64)),
+            ("ycbcrMatrix".into(), Value::Nil),
+        ]);
+        let plane = |at: u64, offset: u64| {
+            Value::Map(vec![
+                ("plane".into(), Value::Uint(at)),
+                ("offset".into(), Value::Uint(offset)),
+                ("bytesPerRow".into(), Value::Uint(64)),
+                ("planar".into(), Value::Bool(true)),
+                ("facts".into(), facts.clone()),
+            ])
+        };
+        // Private, shader read and write.
+        let texture = |format, side| {
+            uints(&[
+                ("textureType", 2),
+                ("pixelFormat", format),
+                ("width", side),
+                ("height", side),
+                ("usage", 3),
+                ("storageMode", 2),
+            ])
+        };
+        let surface = "newTextureWithDescriptor:iosurface:plane:";
+        w.call(surface, 2, 3, &[texture(10, 64), plane(0, 0)], &[])?;
+        w.call(surface, 2, 4, &[texture(30, 32), plane(1, 4096)], &[])?;
+        for _ in 0..2 {
+            w.call("m2v.externalWriteDone", 2, 0, &[], &[])?;
+            w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        }
+        Ok(())
+    });
+    let (report, lines) = play("video-ready", &path);
+    let executed = &report.total.executed;
+    let in_place = executed["video_surfaces_in_place"];
+    assert_eq!(in_place + executed["video_surfaces_copied"], 1, "{lines:?}");
+    assert_eq!(executed["video_surface_textures"], 2, "{executed:?}");
+    assert_eq!(executed["video_surface_acquires"], 2, "{executed:?}");
+    // A wait counts only in place; the copy form's returns at once.
+    assert_eq!(executed["surface_waits"], in_place, "{executed:?}");
+    eprintln!("REPLAY video-ready in place {in_place}");
+}

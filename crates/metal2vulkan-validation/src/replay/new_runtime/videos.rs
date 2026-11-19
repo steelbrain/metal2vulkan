@@ -3,7 +3,10 @@
 //! exported surface of the runtime's (`rt::Device::new_exported_surface`) for the buffer, made at
 //! its first texture from what the texture reads of the surface (its pixel format, width and
 //! height), and every texture over a plane a view of that plane's texture at the texture's own
-//! index. A picture landed (`m2v.externalWriteDone`) is the surface's acquire
+//! index. The surface is waited for at its ready point (`rt::Surface::wait_until_ready`) once it is
+//! made, as the consumer waits before the other API's first write into it, so a picture lands
+//! only after its planes' images left the undefined layout. A picture landed
+//! (`m2v.externalWriteDone`) is the surface's acquire
 //! (`rt::Surface::external_writes_done`). The stream holds no bytes of the pictures (the buffer is
 //! Private, and another API wrote it), so the play writes none: what the textures read is the
 //! surface's memory as it is, as the recorded buffer's was. The buffer stays, and the textures
@@ -282,6 +285,9 @@ impl NewRuntime {
             made => made,
         };
         let (surface, export) = made.map_err(failed(call))?;
+        // The consumer's ready point: the other API writes the surface only once its planes'
+        // images moved out of the undefined layout, a move that may discard the memory's bytes.
+        surface.wait_until_ready().map_err(failed(call))?;
         match export.form {
             rt::SurfaceForm::InPlace => self.videos.counts.in_place += 1,
             rt::SurfaceForm::Copy(why) => {

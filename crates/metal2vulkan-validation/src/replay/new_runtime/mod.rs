@@ -2651,6 +2651,7 @@ impl Backend for NewRuntime {
             ("sparse_binds", metrics.sparse_binds),
             ("surfaces_in_place", metrics.surfaces_in_place),
             ("surfaces_copied", metrics.surfaces_copied),
+            ("surface_waits", metrics.surface_waits),
             ("skipped_encoders", self.skips.encoders),
             ("skipped_objects", self.skips.objects),
             ("skipped_render_states", self.skips.render_state_count()),
