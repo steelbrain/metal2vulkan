@@ -574,8 +574,11 @@ fn a_snorm_attachment_notes_the_minimum_code_metal_s_pass_rewrites() {
 
 /// A pipeline that draws single-sampled into an `RGB9E5Float` attachment records
 /// `PrecisionNote::SharedExponentKept` on its fragment stage alone through `Device::from_queries`;
-/// through `Device::new`, whose note `metal2vulkan-runtime` announces at the draw, at four samples,
-/// and into another float or a signed normalized attachment, no stage records it.
+/// through `Device::new`, whose note `metal2vulkan-runtime` announces at the draw, and into another
+/// float or a signed normalized attachment, no stage records it, nor at four samples where the
+/// profile builds that pipeline: lavapipe renders the format through an `R32_UINT` word view and
+/// refuses four samples for want of a 4-sample integer color count, so MoltenVK's profile is the
+/// one that holds the sample-count gate here.
 #[test]
 fn a_shared_exponent_attachment_notes_the_words_metal_s_pass_normalizes() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -595,6 +598,7 @@ fn a_shared_exponent_attachment_notes_the_words_metal_s_pass_normalizes() {
                     .contains(&PrecisionNote::SharedExponentKept)
         })
     };
+    let mut multisampled = 0;
     for stem in STEMS {
         let new = device(stem);
         let desc = crate::pipeline::testing::description(stem).expect("description");
@@ -608,8 +612,18 @@ fn a_shared_exponent_attachment_notes_the_words_metal_s_pass_normalizes() {
             !noted(&p, ShaderStage::FRAGMENT),
             "{what} through Device::new"
         );
-        let p = compile(&queries, &with(PixelFormat::RGB9E5Float, 4), &what);
-        assert!(!noted(&p, ShaderStage::FRAGMENT), "{what} at four samples");
+        match queries
+            .compile_render_pipeline(&with(PixelFormat::RGB9E5Float, 4), &Budget::standard())
+        {
+            Ok(p) => {
+                assert!(!noted(&p, ShaderStage::FRAGMENT), "{what} at four samples");
+                multisampled += 1;
+            }
+            Err(e) => assert!(
+                e.to_string().contains("RasterSampleCount"),
+                "{what} at four samples: {e}"
+            ),
+        }
         for pf in [
             PixelFormat::RG11B10Float,
             PixelFormat::RGBA16Float,
@@ -619,6 +633,10 @@ fn a_shared_exponent_attachment_notes_the_words_metal_s_pass_normalizes() {
             assert!(!noted(&p, ShaderStage::FRAGMENT), "{stem} {pf:?}");
         }
     }
+    assert!(
+        multisampled > 0,
+        "no profile built the four-sample pipeline"
+    );
 }
 
 /// The private logic operation: every normalized, sRGB and integer attachment is unblended, and
