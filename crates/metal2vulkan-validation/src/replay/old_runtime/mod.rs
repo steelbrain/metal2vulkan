@@ -80,6 +80,9 @@ pub struct OldRuntime {
     /// Whether the stream's header marks its announced bytes recorded, and the buffers'
     /// `synchronizeResource:` left out of their CPU copies for it.
     marked: bool,
+    /// The host's display library (`with_display_library`), which a library from source of no
+    /// arguments is made of.
+    display: Option<Vec<u8>>,
     read_backs_left_out: u64,
 }
 
@@ -122,7 +125,17 @@ impl OldRuntime {
             unpiped: HashSet::new(),
             marked: false,
             read_backs_left_out: 0,
+            display: None,
         }
+    }
+
+    /// The backend given the host's display library, a metallib (the stream's
+    /// `NAME.display.metallib`): the library from source the host makes of its own display
+    /// shaders, a `newLibraryWithSource:options:error:` of no arguments, is made of it. Without
+    /// it, that library is skipped and counted as any library from source.
+    pub fn with_display_library(mut self, metallib: Vec<u8>) -> Self {
+        self.display = Some(metallib);
+        self
     }
 
     /// Whether `id` is an object the play skipped.
@@ -317,6 +330,13 @@ impl OldRuntime {
                 let library = device.new_library_with_data(data(call, 0)?);
                 unaddressed(Object::Library(library.map_err(failed(call))?))
             }
+            "newLibraryWithSource:options:error:" => match &self.display {
+                Some(metallib) if call.args.is_empty() => {
+                    let library = device.new_library_with_data(metallib);
+                    unaddressed(Object::Library(library.map_err(failed(call))?))
+                }
+                _ => return Err(refuse(call, "a library from source")),
+            },
             "newComputePipelineStateWithFunction:error:" => {
                 let function = self.function_of(call, Self::id(call, 0)?)?;
                 let state = device
@@ -700,9 +720,12 @@ impl Backend for OldRuntime {
             )
         );
         let names_skipped = call.args.iter().any(|value| self.holds_skipped(value));
-        // No device here compiles Metal source: such a library is skipped, and what is made of a
-        // skipped object with it.
-        if &*call.selector == "newLibraryWithSource:options:error:"
+        // No device here compiles Metal source: such a library is skipped, but for the host's
+        // display library where the backend has it, and what is made of a skipped object with it.
+        let display = &*call.selector == "newLibraryWithSource:options:error:"
+            && call.args.is_empty()
+            && self.display.is_some();
+        if (&*call.selector == "newLibraryWithSource:options:error:" && !display)
             || (call.result != 0 && !encodes && names_skipped)
         {
             self.skips.objects += 1;

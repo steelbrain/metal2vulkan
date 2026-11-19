@@ -9,6 +9,8 @@
 //!   report says the play is no verdict past it: its gap, frame and call.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
+//! - The host's library from source is made of its display library where the backend has it, a
+//!   function of it with it; without it both are skipped.
 //! - A Managed buffer of a stream recorded with two copies keeps both on any device (the player's
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
@@ -341,6 +343,33 @@ fn a_draw_the_runtime_does_not_build_is_skipped_and_ends_the_verdict() {
     assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 19"));
     let line = "skipped render commands Draw { kind: Points } 1, the first at frame 0, call 19";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
+#[test]
+fn the_host_s_library_from_source_is_made_of_its_display_library() {
+    let dir = ScratchDir::new("rt-replay-display").unwrap();
+    // The host's library from source (#2, no arguments), and a function of it.
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newLibraryWithSource:options:error:", 1, 2, &[], &[])?;
+        let vertex = [Value::Str("colored_vertex".into())];
+        w.call("newFunctionWithName:", 2, 3, &vertex, &[])
+    });
+    let played = |display: Option<Vec<u8>>| {
+        let cache = ScratchCache::new().unwrap();
+        let backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+        let mut backend = match display {
+            Some(metallib) => backend.with_display_library(metallib),
+            None => backend,
+        };
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let (report, ended) = Player::new(&mut backend).play(&mut reader);
+        ended.unwrap();
+        report.total.executed["skipped_objects"]
+    };
+    assert_eq!(played(Some(render_library(&dir))), 0);
+    // Without it, the library and the function made of it are skipped.
+    assert_eq!(played(None), 2);
 }
 
 #[test]

@@ -19,7 +19,10 @@ pub use player::{
     Backend, Check, Counters, Counts, End, IdDiffers, Made, PlayError, Player, PrivateBytes,
     Relaid, Report, TextureWrites,
 };
-pub use range::{recording_range, sidecar, RangeRow, RangeSource, RecordingRange, RECORDED_RANGES};
+pub use range::{
+    display_library, recording_range, sidecar, RangeRow, RangeSource, RecordingRange,
+    RECORDED_RANGES,
+};
 pub use stream::{
     segments, Call, StreamError, StreamReader, StreamWriter, FLAG_ANNOUNCED_BYTES_RECORDED,
     FLAG_COMPLETION_BYTES_RECORDED,

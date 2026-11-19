@@ -1,5 +1,6 @@
 //! The player's report names the recording range a play uses, where it came from, and whether the
-//! play ends there (`docs/REPLAY-STREAM.md`, sections 1 and 10).
+//! play ends there, and whether the stream has the host's display library beside it
+//! (`docs/REPLAY-STREAM.md`, sections 1 and 10).
 
 use metal2vulkan_validation::replay::{
     StreamWriter, FLAG_ANNOUNCED_BYTES_RECORDED, FLAG_COMPLETION_BYTES_RECORDED,
@@ -43,7 +44,7 @@ fn a_report_names_the_recording_range_the_play_used() {
         let (code, text) = report(dir.path(), &first, run, extra);
         assert_eq!(code, Some(2), "{text}");
         let lines = text.lines().map(str::to_owned).collect::<Vec<_>>();
-        assert!(lines[1].starts_with("error device-type: "), "{text}");
+        assert!(lines[2].starts_with("error device-type: "), "{text}");
         lines[0].clone()
     };
     assert_eq!(
@@ -63,4 +64,30 @@ fn a_report_names_the_recording_range_the_play_used() {
     let (code, text) = report(dir.path(), &first, "bad", &[]);
     assert_eq!(code, Some(2), "{text}");
     assert!(text.starts_with("error range: "), "{text}");
+}
+
+/// The line after the range says whether the stream has the host's display library beside it,
+/// `NAME.display.metallib`, and its length.
+#[test]
+fn a_report_names_the_display_library_beside_the_stream() {
+    let dir = ScratchDir::new("replay-display-report").unwrap();
+    let first = dir.path().join("s.0000.m2vr");
+    let flags = FLAG_ANNOUNCED_BYTES_RECORDED | FLAG_COMPLETION_BYTES_RECORDED;
+    let mut writer = StreamWriter::with_flags(File::create(&first).unwrap(), flags).unwrap();
+    writer.call("commit", 1, 0, &[], &[]).unwrap();
+    writer.finish().unwrap();
+    let line = |run: &str| {
+        let (code, text) = report(dir.path(), &first, run, &[]);
+        assert_eq!(code, Some(2), "{text}");
+        text.lines().nth(1).unwrap_or_default().to_owned()
+    };
+    assert_eq!(
+        line("none"),
+        "display library none: the host's library from source is skipped"
+    );
+    std::fs::write(dir.path().join("s.display.metallib"), b"MTLB!").unwrap();
+    assert_eq!(
+        line("beside"),
+        "display library the stream's sidecar, 5 bytes"
+    );
 }

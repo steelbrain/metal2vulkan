@@ -46,9 +46,9 @@ use metal2vulkan_runtime::{DeviceOptions, ShaderCacheOptions};
 use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
-    recording_range, segments, Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player,
-    RangeSource, RecordingRange, StreamError, StreamReader, Value, FLAG_COMPLETION_BYTES_RECORDED,
-    RECORDED_RANGES,
+    display_library, recording_range, segments, Backend, ManagedCopies, NewRuntime, OldRuntime,
+    PlayError, Player, RangeSource, RecordingRange, StreamError, StreamReader, Value,
+    FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -265,6 +265,28 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         }
     };
     report.line(&range_line(range, source, past));
+    // The host's display library, which its library from source of no arguments is made of.
+    let display = display_library(&PathBuf::from(&options["stream"]));
+    let display = match std::fs::read(&display) {
+        Ok(metallib) => {
+            report.line(&format!(
+                "display library the stream's sidecar, {} bytes",
+                metallib.len()
+            ));
+            Some(metallib)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            report.line("display library none: the host's library from source is skipped");
+            None
+        }
+        Err(error) => {
+            report.line(&format!(
+                "error display library: {}: {error}",
+                display.display()
+            ));
+            return 2;
+        }
+    };
     let device_type = match DeviceType::parse(&options["device-type"]) {
         Ok(device_type) => device_type,
         Err(why) => {
@@ -324,14 +346,21 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             };
             report.line(&format!("device {} runtime old {mode}", device.name()));
             let mut backend = OldRuntime::new(device, device_type);
+            if let Some(metallib) = display {
+                backend = backend.with_display_library(metallib);
+            }
             run(&mut backend, &mut reader, &mut report, snapshots, until)
         }
         Some("rt") => {
             let mut backend = match open_rt(device_type, cache) {
                 Ok((backend, name)) => {
                     report.line(&format!("device {name} runtime rt {mode}"));
-                    match managed {
+                    let backend = match managed {
                         Some(copies) => backend.with_managed(copies),
+                        None => backend,
+                    };
+                    match display {
+                        Some(metallib) => backend.with_display_library(metallib),
                         None => backend,
                     }
                 }

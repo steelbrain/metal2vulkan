@@ -41,6 +41,12 @@ hold guest data and is never committed. Tests write their own streams.
   `NAME.range` beside a stream of one file `NAME.m2vr`) states how far the recording is sound: one
   line, `last-frame F` (through frame `F`'s present, frames counted from 0) or `whole`. A player
   ends its play there by default (section 10).
+- **The display library sidecar.** `NAME.display.metallib` beside the first segment, as
+  `NAME.range`, is the metallib of the host's own display shaders, which the host makes as a
+  library from source: the stream's `newLibraryWithSource:options:error:` of the device with no
+  arguments. A program's own libraries reach the stream as data (`newLibraryWithData:error:`,
+  section 9), never as source. A player makes that library of the sidecar, as of data; a stream
+  without one leaves it skipped and counted, with the host's draws that use it.
 
 | kind | record | payload |
 |---|---|---|
@@ -456,6 +462,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   ends there or `--past-range yes` takes it past; a play that ends at the range says
   `until-frame F` as `--until-frame` does. A sidecar that reads as neither `last-frame F` nor
   `whole` is an error.
+- **The display library.** The report's line after `range` is `display library the stream's
+  sidecar, N bytes` where the stream has `NAME.display.metallib` (section 1), and the host's
+  library from source is made of it on either runtime; else `display library none: the host's
+  library from source is skipped`.
 - **Streams recorded before the completion fix.** Where the stream's header lacks bit 1 (section
   6), the report's first line is, by itself, `recorded before the recorder's completion fix: the
   stream may differ from what the program did`, so no table taken from the report loses it.

@@ -79,11 +79,22 @@ pub const RECORDED_RANGES: &[RangeRow] = &[
 /// The sidecar of the stream whose first segment is `first`: `STEM.range` beside it, where the
 /// segment is `STEM.0000.m2vr` (or `STEM.m2vr`, a stream of one segment).
 pub fn sidecar(first: &Path) -> PathBuf {
+    beside(first, "range")
+}
+
+/// The host's display library of the stream whose first segment is `first`:
+/// `STEM.display.metallib` beside it, as [`sidecar`].
+pub fn display_library(first: &Path) -> PathBuf {
+    beside(first, "display.metallib")
+}
+
+/// `STEM.EXTENSION` beside the first segment `first` (`STEM.0000.m2vr`, or `STEM.m2vr`).
+fn beside(first: &Path, extension: &str) -> PathBuf {
     let name = first.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let stem = (name.strip_suffix(".0000.m2vr"))
         .or_else(|| name.strip_suffix(".m2vr"))
         .unwrap_or(name);
-    first.with_file_name(format!("{stem}.range"))
+    first.with_file_name(format!("{stem}.{extension}"))
 }
 
 /// The recording range of the stream whose first segment is `first`, and where it came from: its

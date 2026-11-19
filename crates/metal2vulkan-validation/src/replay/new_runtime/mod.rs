@@ -295,6 +295,9 @@ pub struct NewRuntime {
     /// How the recording's device kept Managed buffers; `None` where the player was not told,
     /// and a Managed buffer is refused.
     managed: Option<ManagedCopies>,
+    /// The host's display library (`with_display_library`), which a library from source of no
+    /// arguments is made of.
+    display: Option<Vec<u8>>,
     /// The Managed buffers made.
     managed_buffers: u64,
     /// The no-copy Managed buffers of a two-copy stream whose first use has not been committed,
@@ -584,6 +587,7 @@ impl NewRuntime {
             substitutes: Substitutes::default(),
             owners: HashMap::new(),
             managed: None,
+            display: None,
             managed_buffers: 0,
             fresh: HashMap::new(),
             from_first_use: HashSet::new(),
@@ -607,6 +611,15 @@ impl NewRuntime {
     /// The backend told how the stream's recording device kept Managed buffers.
     pub fn with_managed(mut self, copies: ManagedCopies) -> Self {
         self.managed = Some(copies);
+        self
+    }
+
+    /// The backend given the host's display library, a metallib (the stream's
+    /// `NAME.display.metallib`): the library from source the host makes of its own display
+    /// shaders, a `newLibraryWithSource:options:error:` of no arguments, is made of it. Without
+    /// it, that library is skipped and counted as any library from source.
+    pub fn with_display_library(mut self, metallib: Vec<u8>) -> Self {
+        self.display = Some(metallib);
         self
     }
 
@@ -1347,7 +1360,13 @@ impl NewRuntime {
                 unaddressed(Object::Pass(Box::default()))
             }
             // Libraries from source: no device here compiles Metal source.
-            "newLibraryWithSource:options:error:" => self.skip_object(),
+            "newLibraryWithSource:options:error:" => match &self.display {
+                Some(metallib) if call.args.is_empty() => {
+                    let library = rt::Library::from_metallib(metallib);
+                    unaddressed(Object::Library(library.map_err(translated(call))?))
+                }
+                _ => self.skip_object(),
+            },
             "newFence" => unaddressed(Object::Fence(self.device.new_fence())),
             "newSamplerStateWithDescriptor:" => {
                 let (mut descriptor, f) = translator::sampler(call)?;
