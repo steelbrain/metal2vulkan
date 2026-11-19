@@ -343,7 +343,7 @@ the runtime's. A guest kernel that writes a free range damages only its own late
   of the copy and the commit's wake) was about 0.2 ms. In one consumer's replay stream on that
   card, 258 ring-fulls took 7.3 s of a 98 s play. Over the internal link of an RTX 5080 Laptop GPU
   the same kind of copy, 64 MiB from Shared memory into a device copy, took 3.9 to 4.5 ms on the GPU
-  (15 to 17 GB/s, rt at e57ebfc095), about an eighth of the time.
+  (15 to 17 GB/s, rt at 5ad1438f7b), about an eighth of the time.
 - NVIDIA's Linux driver allocates host-visible memory at about 0.14 ms per MiB on an RTX 3090 and
   0.2 ms per MiB on an RTX 2080, in every form we tried (plain, with a device address, dedicated,
   cached or not), against about 0.03 ms per MiB for device-local memory on the 3090. A take longer
