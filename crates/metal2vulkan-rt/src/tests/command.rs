@@ -1006,6 +1006,64 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A command buffer's GPU times are never later than the completion the runtime saw, by
+    /// however much a calibration's host time trails its GPU tick, and stay apart by their
+    /// timestamps' own span: here each calibration read a second late, whose placed times would
+    /// fall after the completed handler ran.
+    #[test]
+    fn every_device_places_gpu_times_by_the_completion_seen_and_keeps_their_span() {
+        each_device("command_times_late", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let core = device.core();
+            core.calibration_lateness
+                .store(1_000_000_000, Ordering::Relaxed);
+            // The first completion calibrates again, a period after the device's own reading.
+            thread::sleep(Duration::from_nanos(
+                crate::times::CALIBRATION_PERIOD * 3 / 2,
+            ));
+            lock(&core.tick_spans).clear();
+            // Each command buffer's GPU start and end, and the host time its completed handler
+            // read.
+            type Ends = Arc<Mutex<Vec<(u64, u64, u64)>>>;
+            let ends: Ends = Arc::default();
+            let mut committed = Vec::new();
+            let mut before = Vec::new();
+            for index in 0..8 {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                fill(&command_buffer, &buffer, index);
+                let ends = Arc::clone(&ends);
+                command_buffer
+                    .add_completed_handler(move |cb| {
+                        let at = host_time();
+                        lock(&ends).push((cb.gpu_start_time(), cb.gpu_end_time(), at))
+                    })
+                    .expect("a completed handler");
+                before.push(host_time());
+                command_buffer.commit().expect("a commit");
+                committed.push(command_buffer);
+            }
+            for command_buffer in &committed {
+                finished(name, command_buffer);
+            }
+            let ends = lock(&ends).clone();
+            let spans = lock(&core.tick_spans).clone();
+            assert_eq!(
+                (ends.len(), spans.len()),
+                (8, 8),
+                "{name}: every one placed"
+            );
+            for (((start, end, handled), span), before) in ends.iter().zip(&spans).zip(&before) {
+                assert!(
+                    before <= start && start <= end && end <= handled,
+                    "{name}: {before} {start} {end} {handled}"
+                );
+                assert_eq!(end - start, *span, "{name}: the span of {start} {end}");
+            }
+        });
+    }
+
     /// The GPU's clock is calibrated against the host's as the device starts, then at a
     /// completion once 100 ms have passed since the last calibration, never for each command
     /// buffer: none while the device idles, and for a burst of 32 command buffers one at its first

@@ -745,19 +745,21 @@ impl CommandBuffer {
     /// seconds: the timestamp written where its first commands began, placed on the host clock by
     /// the device's last calibration of its clock against the host's
     /// (`vkGetCalibratedTimestampsEXT`, read as the device starts and again at a completion once
-    /// 100 ms have passed since the last). 0 until it completes, and for one that ended with an
-    /// error. One whose segments hold no commands, no event wait and no event signal writes no
-    /// timestamp: its start and end are one time, the latest GPU end of its queue's command
-    /// buffers before it, or its kernel end where that is later, as Metal reports for a command
-    /// buffer that does no work.
+    /// 100 ms have passed since the last), and never later than the completion the runtime
+    /// observed. 0 until it completes, and for one that ended with an error. One whose segments
+    /// hold no commands, no event wait and no event signal writes no timestamp: its start and end
+    /// are one time, the latest GPU end of its queue's command buffers before it, or its kernel
+    /// end where that is later, as Metal reports for a command buffer that does no work.
     pub fn gpu_start_time(&self) -> u64 {
         self.state().times.gpu_start
     }
 
     /// `GPUEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives seconds:
-    /// the timestamp written where its last segment ended, placed on the host clock as
-    /// [`gpu_start_time`](Self::gpu_start_time) is. 0 until it completes, and for one that ended
-    /// with an error; its start time for one that writes no timestamp.
+    /// the timestamp written where its last segment ended, placed on the host clock through the
+    /// device's calibrated timestamps as [`gpu_start_time`](Self::gpu_start_time) is, and never
+    /// later than the completion the runtime observed; their difference is the two timestamps'
+    /// own span. 0 until it completes, and for one that ended with an error; its start time for
+    /// one that writes no timestamp.
     pub fn gpu_end_time(&self) -> u64 {
         self.state().times.gpu_end
     }

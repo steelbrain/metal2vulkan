@@ -183,6 +183,14 @@ pub(crate) struct Core {
     /// of device memory, before the driver is called.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fail_private: std::sync::atomic::AtomicU32,
+    /// For the device tests: nanoseconds added to the host time of each calibration read, as a
+    /// calibration whose host clock is read that long after its GPU tick.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) calibration_lateness: std::sync::atomic::AtomicU64,
+    /// For the device tests: the span of each command buffer's two timestamps the completion
+    /// thread placed, in the order it placed them ([`Ticks::span`](crate::times::Ticks::span)).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) tick_spans: Mutex<Vec<u64>>,
     /// For the device tests: where set, the making of a staging or capture ring meets the test at
     /// the barrier twice before it allocates, once parked and once released.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -535,6 +543,10 @@ impl Device {
             granularity,
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             fail_private: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            calibration_lateness: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            tick_spans: Mutex::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             park_region: Mutex::new(None),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

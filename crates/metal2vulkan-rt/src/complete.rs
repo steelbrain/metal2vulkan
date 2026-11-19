@@ -372,6 +372,9 @@ pub(crate) fn run(core: Arc<Core>) {
         let fired = std::mem::take(&mut state.fire);
         let mut fire: Vec<(Listener, u64)> = Vec::new();
         let mut newly_lost = false;
+        // The host time the thread saw this round's completions, which no GPU time of theirs
+        // passes (`Calibration::place`).
+        let mut seen_at = None;
         if state.lost {
             // The signals pending never come: the host waits for them end first.
             for event in state.watched.drain(..) {
@@ -414,6 +417,7 @@ pub(crate) fn run(core: Arc<Core>) {
                 };
                 match seen {
                     Ok(Seen::Reached(reached)) => {
+                        seen_at = Some(times::host_time());
                         behind = None;
                         // Before the submit thread's mark is read (`Work::completed`).
                         done.completed.fetch_max(reached, Ordering::SeqCst);
@@ -461,7 +465,9 @@ pub(crate) fn run(core: Arc<Core>) {
             }
             // Handlers and listeners run with no lock held.
             // Each completed command buffer's timestamps are placed on the host clock by the
-            // last calibration, read again first where the period has passed since it.
+            // last calibration, read again first where the period has passed since it, and moved
+            // earlier where it would place an end after the host time the thread saw it complete.
+            let seen = seen_at.unwrap_or_else(times::host_time);
             let stamps: Vec<Option<(u64, u64)>> =
                 retire.iter().map(|retiree| retiree.stamps(&core)).collect();
             if stamps.iter().any(Option::is_some)
@@ -472,9 +478,13 @@ pub(crate) fn run(core: Arc<Core>) {
                 calibration = Calibration::read(&core).or(calibration);
             }
             for (retiree, stamps) in retire.into_iter().zip(stamps) {
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                if let Some((start, end)) = stamps {
+                    lock(&core.tick_spans).push(core.ticks.span(start, end));
+                }
                 let times = stamps
-                    .zip(calibration)
-                    .map(|((start, end), calibration)| calibration.place(&core.ticks, start, end));
+                    .zip(calibration.as_mut())
+                    .map(|(stamps, calibration)| calibration.place(&core.ticks, stamps, seen));
                 retiree.retire(&core, times);
             }
             for (listener, value) in fire {

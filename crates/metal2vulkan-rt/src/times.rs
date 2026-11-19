@@ -7,8 +7,9 @@
 //! The GPU times are the two timestamps placed on the host clock by the device's last calibration
 //! (`VK_EXT_calibrated_timestamps`, one reading of the GPU's clock and the host's together): one
 //! as the device starts, then one at a completion once [`CALIBRATION_PERIOD`] has passed since
-//! the last. The kernel times are the host time at commit and when the submit call that passed the
-//! last segment returned.
+//! the last, the calibration moved earlier where it would place a command buffer's end after the
+//! host time the completion thread saw it complete. The kernel times are the host time at commit
+//! and when the submit call that passed the last segment returned.
 
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
@@ -132,6 +133,11 @@ impl Ticks {
         }
     }
 
+    /// Whole nanoseconds from timestamp `start` to `end`, 0 where `end` is the earlier.
+    pub(crate) fn span(&self, start: u64, end: u64) -> u64 {
+        self.nanos(start, end) as u64
+    }
+
     /// Nanoseconds from timestamp `from` to `to`, negative where `to` is the earlier, within the
     /// valid bits: exact across the counter's wrap for two timestamps less than half its range
     /// apart.
@@ -164,9 +170,15 @@ impl Calibration {
         let (values, _) = unsafe { core.calibrated.get_calibrated_timestamps(&infos) }.ok()?;
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         core.counters.calibrated();
+        let host = host_nanos(values[1])?;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let host = host
+            + core
+                .calibration_lateness
+                .load(std::sync::atomic::Ordering::Relaxed);
         Some(Calibration {
             tick: values[0],
-            host: host_nanos(values[1])?,
+            host,
         })
     }
 
@@ -175,11 +187,26 @@ impl Calibration {
         self.host
     }
 
-    /// The host times of a command buffer's two timestamps. A float-to-integer cast saturates at
-    /// 0.
-    pub(crate) fn place(&self, ticks: &Ticks, start: u64, end: u64) -> (u64, u64) {
-        let at = |tick: u64| (self.host as f64 + ticks.nanos(self.tick, tick)) as u64;
-        (at(start), at(end))
+    /// The host times of a command buffer's two timestamps, apart by the ticks' own span
+    /// ([`Ticks::span`]). Where its end would fall after `seen`, the host time the completion
+    /// thread saw it complete, the calibration's host time moves earlier by that excess first,
+    /// for this placement and every later one, so the two move together and later command
+    /// buffers keep their order against this one. A calibration's host time is late where the
+    /// driver reads it after the GPU's tick (Mesa's drivers read the domains in turn, in the
+    /// order asked, the GPU's first), and each completion bounds it from above, so the move only
+    /// takes it toward the moment of the tick. A float-to-integer cast saturates at 0.
+    pub(crate) fn place(
+        &mut self,
+        ticks: &Ticks,
+        (start, end): (u64, u64),
+        seen: u64,
+    ) -> (u64, u64) {
+        let span = ticks.span(start, end);
+        let start = (self.host as f64 + ticks.nanos(self.tick, start)) as u64;
+        let excess = (start + span).saturating_sub(seen);
+        self.host = self.host.saturating_sub(excess);
+        let start = start.saturating_sub(excess);
+        (start, start + span)
     }
 }
 

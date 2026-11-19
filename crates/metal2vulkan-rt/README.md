@@ -884,12 +884,19 @@ made, with no lock, and never rewritten for layouts.
   ends, read once it completes with no wait, and placed on the host clock by the device's last
   calibration: one `vkGetCalibratedTimestampsEXT` call reading the GPU's clock and the host's
   together, made as the device starts and again at a completion once 100 ms have passed since
-  the last, never for each command buffer. A command buffer that took no submission writes no
+  the last, never for each command buffer. Neither is ever later than the host time the
+  completion thread observed the command buffer complete: where the calibration would place the
+  end after it, the calibration's host time moves earlier by the excess, for that command buffer
+  and every later one, so the two times move together, `gpu_end_time - gpu_start_time` stays the
+  two timestamps' own span, and later command buffers keep their order. Mesa's drivers read the
+  two clocks in turn, in the order asked, the GPU's first, so a calibration's host time trails
+  its GPU tick by the time between the reads, and each completion bounds it from above. A command
+  buffer that took no submission writes no
   query: its `gpu_start_time` and `gpu_end_time` are one time, never 0: the latest `gpu_end_time`
   of its queue's command buffers before it, or its `kernel_end_time` where that is later, the shape Metal
   reports for a command buffer that does no work. A command buffer's GPU times so fall between
-  `host_time()` before its commit and after its completion, within the calibration's deviation
-  and the clocks' drift over 100 ms. The two queries are a pair from the device's timestamp
+  `host_time()` before its commit, within the calibration's deviation and the clocks' drift over
+  100 ms, and `host_time()` in its completed handlers. The two queries are a pair from the device's timestamp
   pools, which a command buffer takes as it records its first commands and gives back as they are
   read at its completion, or as it is dropped uncommitted. A pool holds 4,096 queries, the pairs
   of 2,048 command buffers; the device makes one only once every pair of its pools is taken, and
