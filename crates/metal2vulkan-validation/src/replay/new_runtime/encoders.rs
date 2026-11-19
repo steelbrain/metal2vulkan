@@ -375,11 +375,6 @@ impl NewRuntime {
                     Ok(())
                 }
             },
-            "setStageInRegion:" => {
-                let region = region(call, arg(call, 0)?)?;
-                self.compute(id).encoder.set_stage_in_region(region);
-                Ok(())
-            }
             _ => return Err(refuse(call, "not played on a compute encoder")),
         };
         result.map_err(failed(call))
