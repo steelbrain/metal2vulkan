@@ -375,14 +375,20 @@ mod on_device {
     #[test]
     fn every_device_notes_the_decode_of_a_block_compressed_texture_and_its_views() {
         each_device("compressed_decode_note", |name, _, device| {
+            let _grant = (device.grant_indices(IndexClass::Texture, 4096, 32)).expect("a grant");
+            let next = std::cell::Cell::new(4096);
+            let index = || {
+                next.set(next.get() + 1);
+                Some(next.get() - 1)
+            };
             let note = Some(PrecisionNote::CompressedTexelDecode);
             let made = |pixel_format| {
                 let mut d = TextureDescriptor::new(TextureType::Type2D, pixel_format, 8, 8);
                 d.usage = TextureUsage::SHADER_READ;
-                device.new_texture(&d, None)
+                device.new_texture(&d, index())
             };
             let view = |texture: &Texture, pixel_format| {
-                (texture.new_texture_view(pixel_format, TextureType::Type2D, 0..1, 0..1, None))
+                (texture.new_texture_view(pixel_format, TextureType::Type2D, 0..1, 0..1, index()))
                     .unwrap_or_else(|error| panic!("{name}: a {pixel_format:?} view: {error}"))
             };
             let compressed = [
