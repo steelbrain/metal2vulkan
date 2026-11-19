@@ -64,10 +64,11 @@
 //!    would fetch at the stream position, where the function reads the vertex its index names. The
 //!    layouts they pull are not a pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
 //!
-//! Under the identity domains (`Device::from_queries`' profile) items 2 to 6 pull nothing: the
-//! pulled fetch reads through a descriptor, which those domains hold none of. Item 2's cases are
-//! `metal::vertex::attribute_fetch`'s refusals, and an attribute items 3 to 6 would pull is refused
-//! as `Feature::VertexInputLayout`, with the limit it passes where it passes one.
+//! Under the identity domains (`Device::from_queries`' profile) items 2 to 6 pull nothing: item 2's
+//! cases are `metal::vertex::attribute_fetch`'s refusals, and an attribute items 3 to 6 would pull
+//! is refused as `Feature::VertexInputLayout`, with the limit it passes where it passes one. What
+//! items 7 and 8 pull is read through the source buffer's device address, as every slot is read
+//! there, at the layout's pushed stride (`PushField::VertexBufferStride`).
 //!
 //! A fixed-function entry keeps nothing of the format (`VertexFetch::FixedFunction`): no
 //! instruction of the module names it, so every format the device fetches in fixed function

@@ -1405,13 +1405,14 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     }
     // Source buffers no accessed slot shares: read-only `Whole` storage slots of their own, whose
     // range is never provably within `maxStorageBufferRange`; a replay variant's are read through
-    // their root entries, as its other slots are.
+    // their root entries, as its other slots are, and under the identity domains each is its device
+    // address, as every slot is there.
     let mut own: Vec<(SlotRef, SlotLowering)> = Vec::new();
     for &s in &sources {
         if shared_slot(s).is_some() {
             continue;
         }
-        if replay {
+        if replay || identity(p) {
             own.push((s, psb_lowering(Window::Whole)?));
             continue;
         }
