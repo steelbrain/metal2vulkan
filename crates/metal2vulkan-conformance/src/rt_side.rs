@@ -1646,8 +1646,10 @@ impl Side for RtSide<'_> {
 
     /// An IOSurface as the runtime's consumer makes one: an exported surface of the case's planes
     /// (`Device::new_exported_surface`), each a texture of its format and extent that shaders
-    /// read, in the first of a dma-buf, an opaque fd and an NT handle the device exports, laid by
-    /// the runtime's rule at VA-API's 256-byte multiples. The case's texture is its plane's,
+    /// read, by the case's route ([`SurfaceRoute`](crate::case::SurfaceRoute)): VA-API's, the
+    /// first of a dma-buf, an opaque fd and an NT handle the device exports at 256-byte pitch and
+    /// start multiples; NVIDIA's, the first of an opaque fd and an NT handle at a pitch multiple
+    /// of 4 and a start multiple of 1. The layout is the runtime's rule's. The case's texture is its plane's,
     /// at an index of its own; the other planes are reached through views alone. The case reads
     /// the texels alone, so the runtime's layout is not the case's to state.
     fn surface_texture(&mut self, spec: &crate::case::SurfaceTexture) -> Answer<Handle> {
@@ -1673,11 +1675,27 @@ impl Side for RtSide<'_> {
             })
             .collect();
         let on = self.on;
+        let (handles, pitch_multiple, start_multiple) = match spec.route {
+            crate::case::SurfaceRoute::VaApi => (
+                &[
+                    rt::ExportHandle::DmaBuf,
+                    rt::ExportHandle::OpaqueFd,
+                    rt::ExportHandle::OpaqueWin32,
+                ][..],
+                256,
+                256,
+            ),
+            crate::case::SurfaceRoute::Nvidia => (
+                &[rt::ExportHandle::OpaqueFd, rt::ExportHandle::OpaqueWin32][..],
+                4,
+                1,
+            ),
+        };
         let make = |handle| {
             on.device.new_exported_surface(&rt::SurfaceSpec {
                 handle,
-                pitch_multiple: 256,
-                start_multiple: 256,
+                pitch_multiple,
+                start_multiple,
                 planes: &planes,
             })
         };
@@ -1698,8 +1716,8 @@ impl Side for RtSide<'_> {
         // form. A handle the platform or the device does not export is passed over. Measured: the
         // RX 550's dma-buf surfaces took the copy form and its opaque fd's were in place (53627),
         // and the RTX 3090's two-plane surfaces took the copy form under both (53626).
-        let mut answer = make(rt::ExportHandle::DmaBuf);
-        for handle in [rt::ExportHandle::OpaqueFd, rt::ExportHandle::OpaqueWin32] {
+        let mut answer = make(handles[0]);
+        for &handle in &handles[1..] {
             if in_place(&answer) || (answer.is_err() && !unexported(&answer)) {
                 break;
             }

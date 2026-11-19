@@ -9,6 +9,7 @@
 //! | `surface-textures-420v-chroma-rg8` | the same | `RG8Unorm` over plane 1 |
 //! | `surface-textures-x420-luma-r16` | `'x420'`, 64x32: a 64x32 plane of 16-bit words at 0, then a 32x16 plane of word pairs at 4,096, each 128 bytes a row | `R16Unorm` over plane 0 |
 //! | `surface-textures-x420-chroma-rg16` | the same | `RG16Unorm` over plane 1 |
+//! | `surface-textures-420v-luma-r8-nvidia`, `-420v-chroma-rg8-nvidia`, `-x420-luma-r16-nvidia`, `-x420-chroma-rg16-nvidia` | the four two-plane cases' surfaces | the same, the new runtime's surface made by NVIDIA's route |
 //!
 //! Each case makes the texture with `newTextureWithDescriptor:iosurface:plane:` (2D, `Shared`,
 //! shader-read usage), writes every texel with `replaceRegion:mipmapLevel:withBytes:bytesPerRow:`,
@@ -22,13 +23,16 @@
 //! the surface's length that stands for it, as the runtime takes an IOSurface
 //! (`Buffer::new_texture_with_iosurface_plane`). The new runtime's side makes the surface as its
 //! consumer does: an exported surface of the planes (`Device::new_exported_surface`), laid by the
-//! runtime's own rule, which the device's queries make in place or in the copy form. The replay
+//! runtime's own rule, which the device's queries make in place or in the copy form. The
+//! `-nvidia` cases make it by NVIDIA's decoder's route, an opaque handle at a pitch multiple of 4
+//! and a start multiple of 1, and the others by VA-API's, a dma-buf first at 256-byte multiples
+//! (`SurfaceRoute`); Metal's side and the old runtime's make the same surface for both. The replay
 //! prints, for each case, how many surfaces of each form it made. A case reads the texture's texels
 //! alone, never the surface's bytes, so where a side laid the planes is not compared.
 
 use crate::allowance::Allowance;
 use crate::case::{
-    call, made, Abort, Case, Input, MetalSource, Side, SurfacePlane, SurfaceTexture,
+    call, made, Abort, Case, Input, MetalSource, Side, SurfacePlane, SurfaceRoute, SurfaceTexture,
 };
 use crate::render::{Plane, ReadAt, RenderWork};
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
@@ -66,18 +70,19 @@ fn one_plane(
         }],
         length: bytes_per_row * u64::from(SIZE[1]),
         plane: 0,
+        route: SurfaceRoute::VaApi,
     }
 }
 
 /// A 4:2:0 surface of two planes, made with a plane dictionary: the luma plane of `code`-byte
 /// texels at 0, then the chroma plane of pairs of them, both `bytes_per_row` apart, and the
-/// texture over `plane`.
+/// texture over `plane`, made by the new runtime's side by `route`.
 fn two_plane(
     ostype: [u8; 4],
     [luma, chroma]: [PixelFormat; 2],
-    code: u64,
-    bytes_per_row: u64,
+    (code, bytes_per_row): (u64, u64),
     plane: u32,
+    route: SurfaceRoute,
 ) -> SurfaceTexture {
     let chroma_at = bytes_per_row * u64::from(SIZE[1]);
     SurfaceTexture {
@@ -101,6 +106,7 @@ fn two_plane(
         ],
         length: chroma_at + bytes_per_row * u64::from(CHROMA[1]),
         plane,
+        route,
     }
 }
 
@@ -119,19 +125,35 @@ fn table() -> Vec<(&'static str, SurfaceTexture)> {
         ),
         (
             "surface-textures-420v-luma-r8",
-            two_plane(*b"420v", v420, 1, 64, 0),
+            two_plane(*b"420v", v420, (1, 64), 0, SurfaceRoute::VaApi),
         ),
         (
             "surface-textures-420v-chroma-rg8",
-            two_plane(*b"420v", v420, 1, 64, 1),
+            two_plane(*b"420v", v420, (1, 64), 1, SurfaceRoute::VaApi),
         ),
         (
             "surface-textures-x420-luma-r16",
-            two_plane(*b"x420", x420, 2, 128, 0),
+            two_plane(*b"x420", x420, (2, 128), 0, SurfaceRoute::VaApi),
         ),
         (
             "surface-textures-x420-chroma-rg16",
-            two_plane(*b"x420", x420, 2, 128, 1),
+            two_plane(*b"x420", x420, (2, 128), 1, SurfaceRoute::VaApi),
+        ),
+        (
+            "surface-textures-420v-luma-r8-nvidia",
+            two_plane(*b"420v", v420, (1, 64), 0, SurfaceRoute::Nvidia),
+        ),
+        (
+            "surface-textures-420v-chroma-rg8-nvidia",
+            two_plane(*b"420v", v420, (1, 64), 1, SurfaceRoute::Nvidia),
+        ),
+        (
+            "surface-textures-x420-luma-r16-nvidia",
+            two_plane(*b"x420", x420, (2, 128), 0, SurfaceRoute::Nvidia),
+        ),
+        (
+            "surface-textures-x420-chroma-rg16-nvidia",
+            two_plane(*b"x420", x420, (2, 128), 1, SurfaceRoute::Nvidia),
         ),
     ]
 }

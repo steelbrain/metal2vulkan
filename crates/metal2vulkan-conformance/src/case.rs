@@ -2968,6 +2968,21 @@ pub struct SurfaceTexture {
     pub length: u64,
     /// The plane the texture covers, whose format and extent it takes.
     pub plane: u32,
+    /// The route the new runtime's side makes the surface by. Metal's side and the old runtime's
+    /// lay it as the case states and read nothing of it, so it is not one of the case's inputs.
+    pub route: SurfaceRoute,
+}
+
+/// How the new runtime's consumer makes a [`SurfaceTexture`]'s surface for one decoder
+/// (`Device::new_exported_surface`): the handles it tries in turn and the layout's multiples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceRoute {
+    /// VA-API's: a dma-buf at 256-byte pitch and start multiples, then an opaque fd and an NT
+    /// handle at the same multiples, the first surface in place kept.
+    VaApi,
+    /// NVIDIA's decoder's: an opaque fd, then an NT handle, at a pitch multiple of 4 and a start
+    /// multiple of 1, each plane directly below the one before.
+    Nvidia,
 }
 
 /// One plane of a [`SurfaceTexture`]: the format a texture over it takes, its extent in that
