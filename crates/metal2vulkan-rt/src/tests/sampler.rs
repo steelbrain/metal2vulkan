@@ -210,7 +210,7 @@ mod on_device {
             gap(render.set_fragment_sampler_state_with_lod_clamps(Some(&state), 0.0, f32::NAN, 1));
             render.end_encoding();
             command_buffer.commit().expect("a commit");
-            crate::tests::command::on_device::finished(name, &command_buffer);
+            crate::tests::command::on_device::finished(&name, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{name}");
         }
     }

@@ -287,10 +287,10 @@ pub(crate) fn mipmapped_min_lod(lo: f32) -> f32 {
 /// Whether `desc` samples alike with its LOD clamps replaced by `lod_min_clamp` and
 /// `lod_max_clamp`, as Metal's bind-time clamps replace them
 /// (`setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:`, its vertex and compute forms, and
-/// their range forms): where each bound, held to `[0, LAST_WORD_LEVEL]`, is the descriptor's own
-/// so held. A sample's level is clamped into the bounds and then to the texture's levels, which
-/// are at least 0 and at most 14 (Metal's largest textures have 15 levels), so a bound below 0
-/// clamps as 0 does and every bound at or past [`LAST_WORD_LEVEL`] clamps nothing, in Metal's
+/// their range forms): where each bound, held to `[0, 15]`, is the descriptor's own so held. A
+/// sample's level is clamped into the bounds and then to the texture's levels, which are at least
+/// 0 and at most 14 (Metal's largest textures have 15 levels), so a bound below 0 clamps as 0 does
+/// and every bound at or past 15 (the last level a sampler word names) clamps nothing, in Metal's
 /// sampler, in the device sampler [`vk_sampler`] makes (Vulkan clamps the level into `[minLod,
 /// maxLod]` and then to the view's levels) and in the word [`SamplerWord::of`] makes. A NaN bound
 /// reads alike with none.
