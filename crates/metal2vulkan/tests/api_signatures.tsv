@@ -13868,6 +13868,7 @@ variant	metal2vulkan-rt::Refusal::DrawableAcquired	DrawableAcquired
 variant	metal2vulkan-rt::Refusal::DrawableDescriptor	DrawableDescriptor
 variant	metal2vulkan-rt::Refusal::DrawableFormat	DrawableFormat { pixel_format: PixelFormat, held: i32, swapchain: i32 }
 variant	metal2vulkan-rt::Refusal::DrawableNotAcquired	DrawableNotAcquired
+variant	metal2vulkan-rt::Refusal::DrawableSemaphoreRepeated	DrawableSemaphoreRepeated
 variant	metal2vulkan-rt::Refusal::DrawableUsage	DrawableUsage { missing: u32 }
 variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
 variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen

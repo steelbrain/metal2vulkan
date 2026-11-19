@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 68 | 68 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 69 | 69 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 25 | 25 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 19 | 16 | 0 | 0 | 33 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 19 | 16 | 0 | 0 | 34 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 9 | 4 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 25 | 0 | 0 | 0 |
 
@@ -672,6 +672,7 @@ Columns:
 | `NotDrawable` | `Texture::drawable_acquired` or `CommandBuffer::present_drawable` of a texture that is not over a swapchain's image, or a view of one | every device (a public call's own check of its arguments) | `ours`: only a swapchain's image is acquired and presented | 2: `crates/metal2vulkan-rt/src/texture.rs (drawable_acquired)`, `crates/metal2vulkan-rt/src/texture.rs (present_turn)` | `-` |
 | `DrawableAcquired` | `Texture::drawable_acquired` of a drawable acquired and not presented since | every device (a public call's own check of its arguments) | `ours`: a swapchain's image is acquired again only once it was presented | 1: `crates/metal2vulkan-rt/src/texture.rs (drawable_acquired)` | `-` |
 | `DrawableNotAcquired` | `CommandBuffer::present_drawable` of a drawable not acquired since its last present, or one a command buffer not yet committed already presents | every device (a public call's own check of its arguments) | `ours`: a swapchain's image is presented once for each acquire | 1: `crates/metal2vulkan-rt/src/texture.rs (present_turn)` | `-` |
+| `DrawableSemaphoreRepeated` | `CommandBuffer::present_drawable` with a semaphore the command buffer already signals for another drawable | every device (a public call's own check of its arguments) | `ours`: Vulkan signals a binary semaphore only while it is unsignalled, and each present waits on a semaphore of its own | 1: `crates/metal2vulkan-rt/src/command.rs (present_drawable)` | `-` |
 | `BufferCopyRange` | A copy between buffers (`BlitCommandEncoder::copy_from_buffer_to_buffer`) whose range, `size` bytes from `offset`, leaves the source or the... | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation stops a copy past either buffer's length | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)` | `-` |
 | `BufferCopyUnaligned` | A copy between buffers whose source offset, destination offset or size is not a multiple of 4 | every device (a public call's own check of its arguments) | `metal-documented`: `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`: on macOS both offsets and the size are multiples of 4 | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)` | `-` |
 | `BufferCopyOverlap` | A copy between buffers whose source and destination share bytes | every device (a public call's own check of its arguments) | `ours`: Metal states no result for such a copy, and `vkCmdCopyBuffer` reads no byte it also writes, `VUID-vkCmdCopyBuffer-pRegions-00117`; the runtime does not emulate one | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)` | `-` |
@@ -1279,6 +1280,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::NotDrawable`: `crates/metal2vulkan-rt/src/texture.rs (drawable_acquired)`; `crates/metal2vulkan-rt/src/texture.rs (present_turn)`
 - `rt:Refusal::DrawableAcquired`: `crates/metal2vulkan-rt/src/texture.rs (drawable_acquired)`
 - `rt:Refusal::DrawableNotAcquired`: `crates/metal2vulkan-rt/src/texture.rs (present_turn)`
+- `rt:Refusal::DrawableSemaphoreRepeated`: `crates/metal2vulkan-rt/src/command.rs (present_drawable)`
 - `rt:Refusal::BufferCopyRange`: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)`
 - `rt:Refusal::BufferCopyUnaligned`: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)`
 - `rt:Refusal::BufferCopyOverlap`: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)`

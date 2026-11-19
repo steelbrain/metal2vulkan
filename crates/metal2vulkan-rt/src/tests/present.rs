@@ -1,28 +1,36 @@
-//! Presenting: a drawable's texture over a swapchain's image, the consumer's acquire of it, and the
-//! command buffer that presents it.
+//! Presenting: a drawable's texture over a swapchain's image, the consumer's acquire of it, the
+//! command buffer that presents it, and the swapchain's end.
 //!
-//! No test has a window, so an image made as a swapchain makes its images stands in for one: a 2D
-//! `B8G8R8A8_UNORM` image of one level and layer, optimal, of the usage a consumer's swapchain asks
-//! (colour attachment, transfer source and destination, sampled), in the undefined layout, with
-//! memory the test allocates and frees. A submission of the test's own on the presenting queue
-//! stands in for the present: it waits on the command buffer's semaphore, as a present does, copies
-//! the image out of the present layout, and leaves it in that layout, as the presentation engine
-//! leaves an image it showed.
+//! No test has a window or a surface, so an image made as a swapchain makes its images stands in
+//! for one: a 2D `B8G8R8A8_UNORM` image of one level and layer, optimal, of the usage a consumer's
+//! swapchain asks (colour attachment, transfer source and destination, sampled), in the undefined
+//! layout, with memory the test allocates and frees. A submission of the test's own on the
+//! presenting queue stands in for the present: it waits on the command buffer's semaphore, as a
+//! present does, copies the image out of the present layout, and leaves it in that layout, as the
+//! presentation engine leaves an image it showed. The layer holds its wait to the rule a present's
+//! is held to: a binary semaphore wait on a signal already submitted. Destroying the stand-in
+//! image stands in for destroying the swapchain, under the same rule (every use complete).
 //!
 //! - Under a device cfg, on every device of the cfg's kind, under the validation layer, for a
 //!   render-target drawable (home: the attachment layout) and a shader-read one at an index (home:
 //!   shader-read-only): three frames of acquire, a pass, present and the stand-in present. The
 //!   first clears, the second loads and stores what the first left (the move home after a present
-//!   starts in the present layout and keeps the texels), the third clears again. The stand-in
+//!   starts in the present layout and keeps the texels), the third clears again. The first and
+//!   third present from the test's thread once `wait_until_scheduled` returns, beside a scheduled
+//!   handler that sleeps, so a command buffer scheduled before its submission passed
+//!   `vkQueueSubmit2` would have the stand-in wait on an unsubmitted signal, which the layer
+//!   reports; the second presents from the command buffer's own scheduled handler. The stand-in
 //!   reads each frame's texels in the present layout, which the layer checks against what the
-//!   runtime recorded. A presenting command buffer is one submission, and its scheduled handler,
-//!   which sleeps, has returned before its `wait_until_scheduled` does, so the present waits on a
-//!   signal already submitted. The runtime never destroys the image: the test does, once the
-//!   texture's views are gone.
+//!   runtime recorded. A presenting command buffer is one submission. The swapchain goes as the
+//!   guide says: its command buffers complete, its texture dropped, then the image destroyed,
+//!   before the texture's views go.
+//! - One command buffer presents two drawables, each signalling a semaphore of its own; the same
+//!   semaphore for both, and the same drawable twice, are refused.
 //! - What a drawable's texture is not is refused: another descriptor, format or usage than the
 //!   swapchain's images, an acquire or a present of a texture that is not a drawable's, a present
 //!   of a drawable not acquired, a second acquire, and a second present; a command buffer dropped
-//!   uncommitted leaves its drawable acquired for another present.
+//!   uncommitted leaves its drawable acquired, and the swapchain goes once a command buffer with
+//!   commands committed after the acquire has completed.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -33,9 +41,9 @@ mod on_device {
         LoadAction, PixelFormat, Refusal, RenderPassDescriptor, StorageMode, StoreAction, Texture,
         TextureDescriptor, TextureType, TextureUsage,
     };
+    use ash::prelude::VkResult;
     use ash::vk;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, PoisonError};
     use std::thread;
     use std::time::Duration;
 
@@ -129,12 +137,13 @@ mod on_device {
             }
         }
 
-        /// Destroys the image and frees its memory.
+        /// Destroys the image and frees its memory, as `vkDestroySwapchainKHR` destroys a
+        /// swapchain's images.
         ///
         /// # Safety
         ///
-        /// Nothing uses the image: its texture's views are gone, and every submission that used
-        /// it has completed.
+        /// Every submission that used the image has completed, and nothing uses it again. Its
+        /// texture's views may live on.
         unsafe fn destroy(self, device: &Device) {
             let raw = device.raw();
             // SAFETY: the caller's contract.
@@ -146,10 +155,10 @@ mod on_device {
     }
 
     /// The consumer's present, stood in for on the presenting queue: a submission that waits on
-    /// `ready`, as a present does, copies the stand-in's image out of the present layout into
+    /// `ready`, as a present does, copies `image`, a stand-in's, out of the present layout into
     /// `out`, and moves it back to that layout, as the presentation engine leaves an image it
-    /// showed; its fence waited for.
-    fn shown(name: &str, device: &Device, stand_in: &StandIn, ready: vk::Semaphore, out: &Buffer) {
+    /// showed; its fence waited for. It panics in nothing, as a scheduled handler runs it.
+    fn show(device: &Device, image: vk::Image, ready: vk::Semaphore, out: &Buffer) -> VkResult<()> {
         let raw = device.raw();
         let d = raw.device;
         let range = vk::ImageSubresourceRange {
@@ -168,7 +177,7 @@ mod on_device {
                 .new_layout(new)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(stand_in.image)
+                .image(image)
                 .subresource_range(range)
         };
         // After the semaphore wait, which waits in every stage.
@@ -206,27 +215,26 @@ mod on_device {
                 depth: 1,
             })];
         // SAFETY: the pool, the command buffer and the fence are this call's, used by this thread
-        // alone and destroyed once the fence is waited for; the image is the stand-in's, in the
-        // present layout once the submission's wait is met; `out` holds the copy's bytes.
+        // alone and destroyed once the fence is waited for (left where the wait fails, which
+        // fails the test); the image is a stand-in's, in the present layout once the submission's
+        // wait is met; `out` holds the copy's bytes.
         unsafe {
             let pool_info =
                 vk::CommandPoolCreateInfo::default().queue_family_index(raw.queue_family_index);
-            let pool = d.create_command_pool(&pool_info, None).expect("a pool");
+            let pool = d.create_command_pool(&pool_info, None)?;
             let allocate = vk::CommandBufferAllocateInfo::default()
                 .command_pool(pool)
                 .level(vk::CommandBufferLevel::PRIMARY)
                 .command_buffer_count(1);
-            let command = d
-                .allocate_command_buffers(&allocate)
-                .expect("a command buffer")[0];
+            let command = d.allocate_command_buffers(&allocate)?[0];
             let begin = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            d.begin_command_buffer(command, &begin).expect("a begin");
+            d.begin_command_buffer(command, &begin)?;
             let dependency = vk::DependencyInfo::default().image_memory_barriers(&away);
             d.cmd_pipeline_barrier2(command, &dependency);
             d.cmd_copy_image_to_buffer(
                 command,
-                stand_in.image,
+                image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 target,
                 &copy,
@@ -235,10 +243,8 @@ mod on_device {
                 .memory_barriers(&host)
                 .image_memory_barriers(&back);
             d.cmd_pipeline_barrier2(command, &dependency);
-            d.end_command_buffer(command).expect("an end");
-            let fence = d
-                .create_fence(&vk::FenceCreateInfo::default(), None)
-                .expect("a fence");
+            d.end_command_buffer(command)?;
+            let fence = d.create_fence(&vk::FenceCreateInfo::default(), None)?;
             let waits = [vk::SemaphoreSubmitInfo::default()
                 .semaphore(ready)
                 .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)];
@@ -246,18 +252,12 @@ mod on_device {
             let submit = [vk::SubmitInfo2::default()
                 .wait_semaphore_infos(&waits)
                 .command_buffer_infos(&commands)];
-            device
-                .with_present_queue(|queue| d.queue_submit2(queue, &submit, fence))
-                .expect("the stand-in present's submission");
-            let waited = d.wait_for_fences(&[fence], true, PATIENCE.as_nanos() as u64);
-            assert_eq!(
-                waited,
-                Ok(()),
-                "{name}: the stand-in present waited on the presenting command buffer's semaphore"
-            );
+            device.with_present_queue(|queue| d.queue_submit2(queue, &submit, fence))?;
+            d.wait_for_fences(&[fence], true, PATIENCE.as_nanos() as u64)?;
             d.destroy_fence(fence, None);
             d.destroy_command_pool(pool, None);
         }
+        Ok(())
     }
 
     /// The bytes of the image's texels as the stand-in present copied them into `out`.
@@ -269,67 +269,115 @@ mod on_device {
         unsafe { std::slice::from_raw_parts(contents.as_ptr(), len) }.to_vec()
     }
 
+    /// A pass in `command_buffer` into `drawable` that clears it to `clear`, or loads it, and
+    /// stores it.
+    fn pass(command_buffer: &CommandBuffer, drawable: &Texture, clear: Option<ClearColor>) {
+        let mut d = RenderPassDescriptor::default();
+        let color = &mut d.color_attachments[0];
+        color.texture = Some(drawable.clone());
+        color.store_action = StoreAction::Store;
+        match clear {
+            Some(clear) => {
+                color.load_action = LoadAction::Clear;
+                color.clear_color = clear;
+            }
+            None => color.load_action = LoadAction::Load,
+        }
+        command_buffer
+            .render_command_encoder(&d)
+            .expect("a pass into the drawable")
+            .end_encoding();
+    }
+
+    /// A binary semaphore of the device, which the caller destroys once every submission that
+    /// signalled or waited on it has completed.
+    fn semaphore(device: &Device) -> vk::Semaphore {
+        let info = vk::SemaphoreCreateInfo::default();
+        // SAFETY: a valid create info on the live device.
+        unsafe { device.raw().device.create_semaphore(&info, None) }.expect("a binary semaphore")
+    }
+
+    /// Where a frame's present is made.
+    #[derive(Clone, Copy, Debug)]
+    enum Presenter {
+        /// The test's thread, once `wait_until_scheduled` returns, while a scheduled handler that
+        /// sleeps 100 ms first runs: under an order that schedules the command buffer before its
+        /// submission and runs the handler before that, the present comes while the handler
+        /// sleeps, before the signal is submitted, and the layer reports it.
+        Thread,
+        /// The command buffer's own scheduled handler.
+        Handler,
+    }
+
     /// What a frame presents through: the drawable over the stand-in, the consumer's semaphore,
     /// and the buffer the stand-in present copies the texels into.
     struct Presenting<'a> {
         name: &'a str,
         device: &'a Device,
         drawable: &'a Texture,
-        stand_in: &'a StandIn,
+        image: vk::Image,
         ready: vk::Semaphore,
         out: &'a Buffer,
     }
 
     impl Presenting<'_> {
         /// One frame, the drawable acquired: a pass into it in `command_buffer` that clears it to
-        /// `clear` or loads it, its present, with a scheduled handler that sleeps first, and the
-        /// stand-in present, all complete.
-        fn frame(&self, command_buffer: CommandBuffer, clear: Option<ClearColor>) {
+        /// `clear` or loads it, its present, and the stand-in present made `from` the test's
+        /// thread or the command buffer's scheduled handler, all complete.
+        fn frame(&self, command_buffer: CommandBuffer, clear: Option<ClearColor>, from: Presenter) {
             let name = self.name;
-            let mut d = RenderPassDescriptor::default();
-            let color = &mut d.color_attachments[0];
-            color.texture = Some(self.drawable.clone());
-            color.store_action = StoreAction::Store;
-            match clear {
-                Some(clear) => {
-                    color.load_action = LoadAction::Clear;
-                    color.clear_color = clear;
+            pass(&command_buffer, self.drawable, clear);
+            type Shown = Arc<Mutex<Option<(CommandBufferStatus, VkResult<()>)>>>;
+            let shown: Shown = Arc::new(Mutex::new(None));
+            let handler = {
+                let shown = Arc::clone(&shown);
+                let device = self.device.clone();
+                let (image, ready, out) = (self.image, self.ready, self.out.clone());
+                move |command_buffer: &CommandBuffer| {
+                    let result = match from {
+                        Presenter::Thread => {
+                            thread::sleep(Duration::from_millis(100));
+                            Ok(())
+                        }
+                        Presenter::Handler => show(&device, image, ready, &out),
+                    };
+                    let mut shown = shown.lock().unwrap_or_else(PoisonError::into_inner);
+                    *shown = Some((command_buffer.status(), result));
                 }
-                None => color.load_action = LoadAction::Load,
-            }
+            };
             command_buffer
-                .render_command_encoder(&d)
-                .unwrap_or_else(|error| panic!("{name}: a pass into the drawable: {error}"))
-                .end_encoding();
-            let handled = Arc::new(AtomicBool::new(false));
-            let mark = Arc::clone(&handled);
-            command_buffer
-                .add_scheduled_handler(move |_| {
-                    thread::sleep(Duration::from_millis(100));
-                    mark.store(true, Ordering::SeqCst);
-                })
+                .add_scheduled_handler(handler)
                 .expect("a scheduled handler");
-            // SAFETY: `ready` is a binary semaphore of the device, unsignalled with no signal
-            // pending (the last stand-in present waited on it), and lives past the command buffer.
+            // SAFETY: `ready` is a binary semaphore of the device, unsignalled with no signal or
+            // wait pending (the last stand-in present waited on it and completed), and lives past
+            // the command buffer.
             unsafe { command_buffer.present_drawable(self.drawable, self.ready) }
                 .unwrap_or_else(|error| panic!("{name}: a present: {error}"));
             command_buffer.commit().expect("a commit");
-            command_buffer
-                .wait_until_scheduled()
-                .expect("a wait outside a handler");
-            assert!(
-                handled.load(Ordering::SeqCst),
-                "{name}: wait_until_scheduled returned before the scheduled handler, which runs \
-                 before the presenting command buffer's submission"
-            );
-            assert_ne!(
-                command_buffer.status(),
-                CommandBufferStatus::Error,
-                "{name}: the presenting command buffer ran"
-            );
-            shown(name, self.device, self.stand_in, self.ready, self.out);
+            if let Presenter::Thread = from {
+                command_buffer
+                    .wait_until_scheduled()
+                    .expect("a wait outside a handler");
+                assert_ne!(
+                    command_buffer.status(),
+                    CommandBufferStatus::Error,
+                    "{name}: the presenting command buffer is scheduled"
+                );
+                let shown = show(self.device, self.image, self.ready, self.out);
+                assert_eq!(
+                    shown,
+                    Ok(()),
+                    "{name}: the stand-in present from the thread"
+                );
+            }
             finished(name, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{name}");
+            let shown = shown.lock().unwrap_or_else(PoisonError::into_inner).take();
+            assert_eq!(
+                shown,
+                Some((CommandBufferStatus::Scheduled, Ok(()))),
+                "{name} {from:?}: the scheduled handler ran, with the command buffer scheduled"
+            );
         }
     }
 
@@ -338,7 +386,9 @@ mod on_device {
     /// presenting command buffer is one submission and one pass, with two barriers (its upload's,
     /// which moves the image home, and its end's, which moves it to the present layout) where the
     /// pass renders at home and four where it moves the image to the attachment layout and back.
-    /// Its wait until scheduled returns after its scheduled handler. The image outlives its texture.
+    /// The second frame presents from the command buffer's scheduled handler. The image is
+    /// destroyed once the frames' command buffers completed and the texture is dropped, before
+    /// its views go.
     #[test]
     fn every_device_renders_into_a_drawable_and_signals_its_present() {
         each_device("present", |name, _, device| {
@@ -346,14 +396,7 @@ mod on_device {
                 .grant_indices(IndexClass::Texture, 4096, 4)
                 .expect("a grant");
             let counters = device.counters();
-            let raw = device.raw();
-            // SAFETY: a valid create info on the live device; destroyed below, after every
-            // submission that used it has completed.
-            let ready = unsafe {
-                raw.device
-                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-            }
-            .expect("a binary semaphore");
+            let ready = semaphore(&device);
             let mut arena = Arena::new(&device);
             let queue = device.new_command_queue(4).expect("a queue");
             let first = queue.command_buffer().expect("a command buffer");
@@ -376,7 +419,7 @@ mod on_device {
                 let stand_in = StandIn::new(&device, &info);
                 let textures = counters.gauges().textures;
                 // SAFETY: the stand-in is made with `info` on the device, in the undefined
-                // layout, and outlives the texture and its command buffers.
+                // layout, and is destroyed as a swapchain may be, below.
                 let drawable = unsafe {
                     device.new_drawable_texture(&descriptor(usage), index, stand_in.image, &info)
                 }
@@ -387,14 +430,14 @@ mod on_device {
                     name,
                     device: &device,
                     drawable: &drawable,
-                    stand_in: &stand_in,
+                    image: stand_in.image,
                     ready,
                     out: &out,
                 };
-                for (clear, expected) in [
-                    (Some(first_clear), &first_texels),
-                    (None, &first_texels),
-                    (Some(third_clear), &third_texels),
+                for (clear, expected, from) in [
+                    (Some(first_clear), &first_texels, Presenter::Thread),
+                    (None, &first_texels, Presenter::Handler),
+                    (Some(third_clear), &third_texels, Presenter::Thread),
                 ] {
                     // SAFETY: the stand-in is the test's, in the present layout (or undefined
                     // before the first frame), and nothing reads it.
@@ -403,7 +446,7 @@ mod on_device {
                     settled(&device);
                     let before = counters.metrics();
                     let command_buffer = queue.command_buffer().expect("a command buffer");
-                    presenting.frame(command_buffer, clear);
+                    presenting.frame(command_buffer, clear, from);
                     let after = counters.metrics();
                     assert_eq!(
                         (
@@ -412,26 +455,136 @@ mod on_device {
                             after.passes - before.passes,
                         ),
                         (1, barriers, 1),
-                        "{name} {usage:?}: submissions, barriers, passes of a presenting command \
-                         buffer"
+                        "{name} {usage:?} {from:?}: submissions, barriers, passes of a presenting \
+                         command buffer"
                     );
                     assert_eq!(
                         &texels(&out),
                         expected,
-                        "{name} {usage:?}: the presented texels"
+                        "{name} {usage:?} {from:?}: the presented texels"
                     );
                 }
+                // The swapchain's end, as the guide orders it: every command buffer that used the
+                // image has completed (each frame's, waited for), the texture is dropped, and the
+                // image goes while its views may live on.
                 drop(drawable);
+                // SAFETY: every submission that used the image has completed, and nothing uses it
+                // again.
+                unsafe { stand_in.destroy(&device) };
                 within("the drawable's views to go", || {
                     counters.gauges().textures == textures
                 });
-                // SAFETY: the texture's views are gone, and its command buffers and the stand-in
-                // presents have completed.
-                unsafe { stand_in.destroy(&device) };
             }
             // SAFETY: every submission that signalled or waited on it has completed.
-            unsafe { raw.device.destroy_semaphore(ready, None) };
-            println!("{name}: three frames presented from each drawable");
+            unsafe { device.raw().device.destroy_semaphore(ready, None) };
+            println!("{name}: three frames presented from each drawable, one from a handler");
+        });
+    }
+
+    /// One command buffer clears two drawables and presents both, each signalling a semaphore of
+    /// its own, which each stand-in present waits on: each reads its own drawable's texels. A
+    /// second drawable's present with the first's semaphore, and the first drawable's again, are
+    /// refused.
+    #[test]
+    fn every_device_presents_two_drawables_from_one_command_buffer() {
+        each_device("present_two", |name, _, device| {
+            let counters = device.counters();
+            let info = swapchain(USAGE);
+            let mut arena = Arena::new(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let clears = [
+                ClearColor::new(0.2, 0.6, 0.0, 1.0),
+                ClearColor::new(1.0, 0.0, 0.4, 1.0),
+            ];
+            // `BGRA8Unorm`'s bytes: blue, green, red, alpha.
+            let expected = [
+                [0u8, 153, 51, 255].repeat(32),
+                [102u8, 0, 255, 255].repeat(32),
+            ];
+            let stand_ins = [StandIn::new(&device, &info), StandIn::new(&device, &info)];
+            let readies = [semaphore(&device), semaphore(&device)];
+            let outs = [arena.buffer(), arena.buffer()];
+            let drawables = stand_ins.each_ref().map(|stand_in| {
+                // SAFETY: the stand-in is made with `info` on the device, in the undefined
+                // layout, and is destroyed as a swapchain may be, below.
+                unsafe {
+                    device.new_drawable_texture(
+                        &descriptor(TextureUsage::RENDER_TARGET),
+                        None,
+                        stand_in.image,
+                        &info,
+                    )
+                }
+                .unwrap_or_else(|error| panic!("{name}: a drawable's texture: {error}"))
+            });
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            for (drawable, clear) in drawables.iter().zip(clears) {
+                // SAFETY: the stand-in is the test's, in the undefined layout, and nothing reads
+                // it.
+                unsafe { drawable.drawable_acquired() }.expect("an acquire");
+                pass(&command_buffer, drawable, Some(clear));
+            }
+            // SAFETY: each semaphore is a binary semaphore of the device, unsignalled with no
+            // signal or wait pending, and lives past the command buffer; the refused presents
+            // signal nothing.
+            unsafe {
+                command_buffer
+                    .present_drawable(&drawables[0], readies[0])
+                    .expect("a present");
+                assert_eq!(
+                    refusal(
+                        name,
+                        command_buffer.present_drawable(&drawables[0], readies[1])
+                    ),
+                    Refusal::DrawableNotAcquired,
+                    "{name}: the same drawable twice"
+                );
+                assert_eq!(
+                    refusal(
+                        name,
+                        command_buffer.present_drawable(&drawables[1], readies[0])
+                    ),
+                    Refusal::DrawableSemaphoreRepeated,
+                    "{name}: another drawable with the same semaphore"
+                );
+                command_buffer
+                    .present_drawable(&drawables[1], readies[1])
+                    .expect("a second drawable's present");
+            }
+            command_buffer.commit().expect("a commit");
+            command_buffer
+                .wait_until_scheduled()
+                .expect("a wait outside a handler");
+            assert_ne!(
+                command_buffer.status(),
+                CommandBufferStatus::Error,
+                "{name}: the presenting command buffer is scheduled"
+            );
+            let each = stand_ins.iter().zip(readies).zip(&outs).enumerate();
+            for (at, ((stand_in, ready), out)) in each {
+                let shown = show(&device, stand_in.image, ready, out);
+                assert_eq!(shown, Ok(()), "{name}: drawable {at}'s stand-in present");
+            }
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            for (at, (out, expected)) in outs.iter().zip(&expected).enumerate() {
+                assert_eq!(&texels(out), expected, "{name}: drawable {at}'s texels");
+            }
+            // The swapchain's end, as the guide orders it.
+            drop((drawables, command_buffer));
+            for stand_in in stand_ins {
+                // SAFETY: every submission that used the image has completed, and nothing uses
+                // it again.
+                unsafe { stand_in.destroy(&device) };
+            }
+            within("the drawables' views to go", || {
+                counters.gauges().textures == 0
+            });
+            for ready in readies {
+                // SAFETY: every submission that signalled or waited on it has completed.
+                unsafe { device.raw().device.destroy_semaphore(ready, None) };
+            }
+            println!("{name}: two drawables presented from one command buffer");
         });
     }
 
@@ -446,7 +599,9 @@ mod on_device {
 
     /// Another descriptor, format or usage than the swapchain's images is refused, and so is an
     /// acquire or a present out of turn or of a texture that is not a drawable's; a command buffer
-    /// dropped uncommitted leaves its drawable acquired.
+    /// dropped uncommitted leaves its drawable acquired. The image is destroyed once a command
+    /// buffer with commands committed after the acquire has completed and the textures are
+    /// dropped, before their views go.
     #[test]
     fn every_device_refuses_what_a_drawable_is_not() {
         each_device("present_refusals", |name, _, device| {
@@ -561,7 +716,10 @@ mod on_device {
                     .present_drawable(&drawable, no_semaphore)
                     .expect("a present once the first command buffer is dropped uncommitted");
             }
-            // The acquire's move home goes with the next submission, before the stand-in goes.
+            // The swapchain's end, as the guide orders it for a drawable acquired and not
+            // presented: a command buffer with commands committed after the acquire completes, its
+            // submission or an earlier one carrying the move home; the textures are dropped; the
+            // image goes while their views may live on.
             let flush = queue.command_buffer().expect("a command buffer");
             flush
                 .record_for_test(&[], |_, _| {})
@@ -569,12 +727,12 @@ mod on_device {
             flush.commit().expect("a commit");
             finished(name, &flush);
             drop((drawable, plain, flush));
+            // SAFETY: every submission that used the image has completed, and nothing uses it
+            // again.
+            unsafe { stand_in.destroy(&device) };
             within("the textures' views to go", || {
                 counters.gauges().textures == 0
             });
-            // SAFETY: the texture's views are gone, and the submission that moved the image has
-            // completed.
-            unsafe { stand_in.destroy(&device) };
         });
     }
 }

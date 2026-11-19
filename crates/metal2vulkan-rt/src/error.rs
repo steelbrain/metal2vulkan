@@ -662,6 +662,12 @@ pub enum Refusal {
     ///
     /// Basis: ours (a swapchain's image is presented once for each acquire).
     DrawableNotAcquired,
+    /// [`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable) with a
+    /// semaphore the command buffer already signals for another drawable.
+    ///
+    /// Basis: ours (Vulkan signals a binary semaphore only while it is unsignalled, and each
+    /// present waits on a semaphore of its own).
+    DrawableSemaphoreRepeated,
     /// A copy between buffers
     /// ([`BlitCommandEncoder::copy_from_buffer_to_buffer`](crate::BlitCommandEncoder::copy_from_buffer_to_buffer))
     /// whose range, `size` bytes from `offset`, leaves the source or the destination.
@@ -1654,6 +1660,9 @@ impl fmt::Display for Refusal {
             }
             Refusal::DrawableNotAcquired => f.write_str(
                 "the drawable is not acquired since its last present, or a command buffer presents it already",
+            ),
+            Refusal::DrawableSemaphoreRepeated => f.write_str(
+                "the command buffer already signals the semaphore for another drawable's present",
             ),
             Refusal::BufferCopyRange { offset, size, len } => write!(
                 f,

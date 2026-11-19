@@ -857,8 +857,9 @@ impl Device {
     /// No Metal counterpart of its making: the texture a `CAMetalDrawable` answers (`texture`),
     /// at `index`, over `image`, an image of the consumer's swapchain, made with `swapchain` on
     /// this device. The runtime never destroys the image or frees its memory: the consumer does,
-    /// with its swapchain, once the texture and every command buffer that used it are gone. The
-    /// texture's descriptor is a 2D texture of one level of the swapchain's image extent, its
+    /// with its swapchain, once every command buffer that used the image has completed, and the
+    /// move home of its last acquire with it, as the crate's guide says (Presenting, Destroying a
+    /// swapchain); the texture's views may outlive the image. The texture's descriptor is a 2D texture of one level of the swapchain's image extent, its
     /// image's format the one the runtime holds the pixel format in, and its home layout, views,
     /// elements of set 1 and hazards a texture's of its usage, as [`Device::new_texture`] makes
     /// them. Its other-format views are [`Gap::TextureView`], and a draw that reads it as an
@@ -881,13 +882,17 @@ impl Device {
     ///
     /// # Safety
     ///
-    /// - `image` is one of the images `vkGetSwapchainImagesKHR` gives of a swapchain made on this
-    ///   device with `swapchain` (its `pNext` chain is not read), whose sharing takes the device's
-    ///   queue family ([`RawDevice::queue_family_index`](crate::RawDevice::queue_family_index)), and no drawable texture
-    ///   is over it while this one lives. It is not acquired, or acquired and in the undefined
-    ///   layout, as `vkGetSwapchainImagesKHR` gives it.
-    /// - The swapchain outlives the texture, every view of it, and every command buffer that used
-    ///   them.
+    /// Vulkan's rules on a swapchain's images, which the runtime cannot check:
+    ///
+    /// - `image` is one of the images `vkGetSwapchainImagesKHR` gives of the swapchain made on
+    ///   this device with `swapchain` (its `pNext` chain is not read), whose sharing takes the
+    ///   device's queue family
+    ///   ([`RawDevice::queue_family_index`](crate::RawDevice::queue_family_index)), and no
+    ///   drawable texture is over it while this one lives. It is not acquired, or acquired and in
+    ///   the undefined layout, as `vkGetSwapchainImagesKHR` gives it.
+    /// - The swapchain is destroyed only once every command buffer that used the texture has
+    ///   completed, and a command buffer with commands committed after its last acquire has too;
+    ///   the texture is not used after.
     pub unsafe fn new_drawable_texture(
         &self,
         descriptor: &TextureDescriptor,
@@ -3338,7 +3343,8 @@ impl Texture {
     /// # Safety
     ///
     /// The consumer acquired the image (`vkAcquireNextImageKHR`) since its texture was made or
-    /// last presented, and waited for the acquire's fence.
+    /// last presented, and waited for the acquire's fence; its swapchain is not destroyed. These
+    /// are Vulkan's rules on a swapchain's image, which the runtime cannot check.
     pub unsafe fn drawable_acquired(&self) -> Result<(), Error> {
         let image = &self.inner.image;
         let drawable = (image.drawable.as_ref()).ok_or(Error::Refused(Refusal::NotDrawable))?;

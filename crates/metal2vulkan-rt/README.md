@@ -835,15 +835,17 @@ made, with no lock, and never rewritten for layouts.
   1,536.6 ms. The thread holds a segment whose event waits are not met, and its queue's later
   command buffers behind it, while the segments before it run, so the host can see a signal the
   command buffer makes before its wait. Other queues go on. `Scheduled` means the last segment is in
-  a submission: passed to `vkQueueSubmit2`, or in a group held. A command buffer whose segments hold
-  no commands, no event wait and no event signal takes no submission: the submit thread schedules it
-  as it reaches it, and it completes with its queue's command buffer before it, in flight, or at
-  once where that one has completed. Where that one is in a group held, it joins the group, which
+  a submission: passed to `vkQueueSubmit2`, or in a group held; a command buffer that presents a
+  drawable is never held, and is scheduled once its submission has passed `vkQueueSubmit2` (see
+  "Presenting"). A command buffer whose segments hold no commands, no event wait and no event
+  signal takes no submission: the submit thread schedules it as it reaches it, and it completes
+  with its queue's command buffer before it, in flight, or at once where that one has completed. Where that one is in a group held, it joins the group, which
   goes at once, so its completion waits only on submitted work.
 - A command buffer's scheduled handlers run on the submit thread, once it is scheduled and before
-  its submission goes to the driver (one that ends without a submission: once it ends, before it
-  retires), with no lock of the runtime's held. In the handler its status is `Scheduled` and its
-  kernel times are set, and it runs before the command buffer's completed handlers. The queue's
+  its submission goes to the driver (one that presents a drawable: after, before the completion
+  thread learns of it; one that ends without a submission: once it ends, before it retires), with
+  no lock of the runtime's held. In the handler its status is `Scheduled` and its kernel times are
+  set, and it runs before the command buffer's completed handlers. The queue's
   later submissions wait while it runs, and it may run while another command buffer's completed
   handler runs on the completion thread. A scheduled handler may read the command buffer's status
   and times, enqueue command buffers, make objects that take no upload, and do the consumer's own
@@ -2006,16 +2008,16 @@ swapchain, the acquires, the presents, their pacing and the window's recovery, a
 renders into the swapchain's images. Nothing is exported, imported or copied.
 
 - `Device::new_drawable_texture` (unsafe) is the texture a `CAMetalDrawable` answers, over one of
-  the swapchain's images, which the runtime never destroys: the consumer destroys its swapchain
-  once the texture and every command buffer that used it are gone. The consumer gives the
-  swapchain's create info and a texture descriptor: a 2D texture of one level of the swapchain's
-  image extent (else `Refusal::DrawableDescriptor`, as for a swapchain of more than one array
-  layer), of a pixel format the runtime holds in the swapchain's image format
-  (`Refusal::DrawableFormat`; `BGRA8Unorm` in `B8G8R8A8_UNORM`), and of a usage whose image usage
-  the swapchain's images have: transfer source and destination always, as the CPU and blits reach
-  any Metal texture, and sampled, storage and colour attachment for shader-read, shader-write and
-  render-target usage (`Refusal::DrawableUsage`, naming what they lack). Its home layout, views,
-  elements of set 1 at its index and hazards are a texture's of its usage.
+  the swapchain's images, which the runtime never destroys. The consumer gives the swapchain's
+  create info and a texture descriptor: a 2D texture of one level of the swapchain's image extent
+  (else `Refusal::DrawableDescriptor`, as for a swapchain of more than one array layer), of a pixel
+  format the runtime holds in the swapchain's image format (`Refusal::DrawableFormat`;
+  `BGRA8Unorm` in `B8G8R8A8_UNORM`), and of a usage whose image usage the swapchain's images have:
+  transfer source and destination always, as the CPU and blits reach any Metal texture, and
+  sampled, storage and colour attachment for shader-read, shader-write and render-target usage
+  (`Refusal::DrawableUsage`, naming what they lack). Its home layout, views, elements of set 1 at
+  its index and hazards are a texture's of its usage. That the image is the swapchain's is the
+  call's safety contract: the runtime cannot check it.
 - `Texture::drawable_acquired` (unsafe) is the runtime's part of `nextDrawable`, called once the
   consumer has acquired the image with a fence (`vkAcquireNextImageKHR`) and waited for the fence.
   The image moves to its home layout in the upload of the next submission, ahead of every command
@@ -2026,29 +2028,48 @@ renders into the swapchain's images. Nothing is exported, imported or copied.
   every command of the command buffer has run, wherever it was encoded, the image is in the present
   layout, moved in the last segment's end barrier, and the consumer's binary semaphore is
   signalled, in that segment's submit info beside the progress semaphore. The group with it goes
-  to the driver at once. Its `wait_until_scheduled` returns once that submission has passed
-  `vkQueueSubmit2` (its scheduled handlers run before that), so the consumer's present, on the
-  presenting queue under `Device::with_present_queue`, waits on a signal already submitted, as
-  Vulkan requires. The drawable is presented at the commit, the presentation engine's until the
-  next acquire. A present of a drawable not acquired since its last present, or that another
-  command buffer already presents, is `Refusal::DrawableNotAcquired`; of a texture not over a
-  swapchain's image, `Refusal::NotDrawable`. A command buffer dropped uncommitted leaves its
-  drawable acquired.
+  to the driver at once. The command buffer is scheduled once that submission has passed
+  `vkQueueSubmit2`: its status, its kernel times, its scheduled handlers and `wait_until_scheduled`
+  all follow the call, so a present made from then waits on a signal already submitted, as Vulkan
+  requires. A present from the command buffer's own scheduled handler is valid, but that handler
+  runs on the submit thread, whose later submissions wait while a present blocks: the consumer
+  presents from its own thread. The drawable is presented at the commit, the presentation engine's
+  until the next acquire. A command buffer may present several drawables, each with a semaphore of
+  its own; the same semaphore twice is `Refusal::DrawableSemaphoreRepeated`. A present of a
+  drawable not acquired since its last present, or that a command buffer (this one too) already
+  presents, is `Refusal::DrawableNotAcquired`; of a texture not over a swapchain's image,
+  `Refusal::NotDrawable`. A command buffer dropped uncommitted leaves its drawable acquired. That
+  the semaphore is unsignalled with no signal or wait pending is the call's safety contract.
 - The consumer's order: one drawable texture per swapchain image; then each frame the acquire and
   its fence, `drawable_acquired`, the encoders into the texture, `present_drawable` with the
   image's semaphore, `commit`, `wait_until_scheduled`, and, where the status is not `Error`,
   `vkQueuePresentKHR` waiting on the semaphore inside `with_present_queue`.
 
+### Destroying a swapchain
+
+`vkDestroySwapchainKHR` needs every use of the swapchain's images complete. The runtime uses an
+image in the command buffers that encode into or present its drawable, and in the move home each
+`drawable_acquired` queues for the runtime's next submission. Before the consumer destroys a
+swapchain:
+
+1. Every command buffer that encoded into or presented one of its drawables has completed
+   (`wait_until_completed` has returned for it), and so has each of the consumer's presents.
+2. A drawable acquired since the commit of the last command buffer that presented it (one whose
+   presenting command buffer was dropped uncommitted): a command buffer with commands committed
+   after the acquire has completed. Its submission, or an earlier one, carried the move home.
+3. The drawables' textures over its images are dropped: the runtime records nothing more for
+   their images. Their views go once the runtime frees them, which may be after the swapchain:
+   Vulkan lets a view outlive its image, as a view's parent is the device.
+
 ### Known gaps of presenting
 
 - The move home after an acquire waits on no semaphore: the consumer acquires with a fence and
-  waits for it first. A binary semaphore wait is not built.
-- A present must not be made in the presenting command buffer's own scheduled handler, which runs
-  before its submission; Metal's `presentDrawable:` presents from a scheduled handler of its own
-  (Apple's documentation of the call).
-- A presenting command buffer that ends without running (`NotRun`, `DeviceLost`) signals nothing
-  and leaves the image acquired, possibly not in the present layout: the consumer makes its
-  swapchain again.
+  waits for it first. A semaphore wait would go in a submission that carries its group's other
+  command buffers, holding them behind the window system's release of the image.
+- A presenting command buffer that ends without running (`NotRun`, `DeviceLost`) before its
+  submission is never scheduled and signals nothing: its status goes to `Error`, its scheduled
+  handlers run as it retires, and the image stays acquired, possibly not in the present layout.
+  The consumer presents nothing and makes its swapchain again.
 
 ## One path for every device
 

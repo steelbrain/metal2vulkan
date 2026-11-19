@@ -646,9 +646,10 @@ impl Device {
     /// The queue is externally synchronized only inside `f`, so the Vulkan calls `f` makes with it
     /// keep no handle past its return. `f` waits for no work of the runtime's, which may need the
     /// lock `f` holds; a present in `f` waits only on semaphores whose signal is already submitted:
-    /// [`CommandBuffer::wait_until_scheduled`](crate::CommandBuffer::wait_until_scheduled) has
-    /// returned for the command buffer that presents the image
-    /// ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)).
+    /// the command buffer that presents the image
+    /// ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)) is
+    /// scheduled ([`CommandBuffer::wait_until_scheduled`](crate::CommandBuffer::wait_until_scheduled)
+    /// has returned for it, or `f` runs in its scheduled handler).
     pub fn with_present_queue<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R {
         let queue = lock(&self.shared.core.queues.present);
         f(*queue)

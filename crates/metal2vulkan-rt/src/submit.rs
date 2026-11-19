@@ -1444,8 +1444,9 @@ impl WorkState {
 
     /// Stages the next ready segment, in commit order, into its queue's group, or ends the next
     /// ended command buffer behind its queue's work. A command buffer whose last segment joins a
-    /// group is scheduled at `now`, its scheduled handlers going to `joined`; one ended with
-    /// nothing held goes to `ended`.
+    /// group is scheduled at `now`, its scheduled handlers going to `joined`, but one that
+    /// presents a drawable, which `submit` schedules once its submission has passed
+    /// `vkQueueSubmit2`; one ended with nothing held goes to `ended`.
     fn step(&mut self, now: u64, joined: &mut Vec<Joined>, ended: &mut Vec<Ended>) -> Step {
         let Some(index) = self.next_ready() else {
             return Step::Idle;
@@ -1622,10 +1623,12 @@ impl WorkState {
         else {
             return Step::Staged;
         };
-        cb.scheduled(now);
-        let scheduled = std::mem::take(&mut pending.handlers.scheduled);
-        if !scheduled.is_empty() {
-            joined.push((Arc::clone(&cb), scheduled));
+        if !pending.gpu.presents() {
+            cb.scheduled(now);
+            let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+            if !scheduled.is_empty() {
+                joined.push((Arc::clone(&cb), scheduled));
+            }
         }
         group.finished.push((cb, pending, None));
         group.partial = false;
@@ -1996,7 +1999,7 @@ fn scheduled(joined: &mut Vec<Joined>) {
 fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
     let Batch {
         mut segments,
-        finished,
+        mut finished,
         watch,
         overs,
         backs,
@@ -2120,12 +2123,19 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         drop(queue);
     }
     if ok {
-        // A presenting command buffer's semaphores are signalled by what was just submitted: a
-        // present may wait on them from now (`CommandBuffer::wait_until_scheduled`).
-        for (cb, pending, error) in &finished {
-            let last = pending.gpu.segments.last();
-            if error.is_none() && last.is_some_and(|segment| !segment.binary.is_empty()) {
-                cb.signal_submitted();
+        // A command buffer that presents a drawable is scheduled now that the submission that
+        // signals the consumer's semaphores has passed `vkQueueSubmit2`: a present made from here,
+        // its own scheduled handlers' included, waits on a submitted signal. They run before the
+        // completion thread learns of it below, so before its completed handlers. One whose
+        // submission failed is not scheduled; its scheduled handlers run as it retires.
+        let now = times::host_time();
+        for (cb, pending, error) in &mut finished {
+            if error.is_none() && pending.gpu.presents() {
+                cb.scheduled(now);
+                let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+                if !scheduled.is_empty() {
+                    command::run_scheduled(Arc::clone(cb), scheduled);
+                }
             }
         }
     } else {

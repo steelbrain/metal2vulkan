@@ -59,7 +59,9 @@ pub enum CommandBufferStatus {
     Committed,
     /// `MTLCommandBufferStatusScheduled`: the last segment is in a submission: passed to
     /// `vkQueueSubmit2`, or in a group its queue holds while three of its submissions run, which
-    /// goes with no other call.
+    /// goes with no other call. A command buffer that presents a drawable
+    /// ([`CommandBuffer::present_drawable`]) is never held: it is scheduled once its submission
+    /// has passed `vkQueueSubmit2`.
     Scheduled,
     /// `MTLCommandBufferStatusCompleted`.
     Completed,
@@ -110,9 +112,6 @@ struct CbState {
     encoding: bool,
     /// From its commit until it retires: its pair of timestamp queries, where it took one.
     stamps: Option<Pair>,
-    /// It presents a drawable, and the submission that signals the consumer's semaphore has not
-    /// passed `vkQueueSubmit2` yet: [`CommandBuffer::wait_until_scheduled`] waits for that.
-    signal_unsubmitted: bool,
 }
 
 impl CbState {
@@ -227,6 +226,13 @@ impl Gpu {
                 && segment.binary.is_empty()
         })
     }
+
+    /// Its last segment signals the consumer's semaphores: the command buffer presents drawables
+    /// ([`CommandBuffer::present_drawable`]), and is scheduled once its submission has passed
+    /// `vkQueueSubmit2`.
+    pub(crate) fn presents(&self) -> bool {
+        (self.segments.last()).is_some_and(|segment| !segment.binary.is_empty())
+    }
 }
 
 /// One submission's part of a command buffer: its waits, its commands and its signals.
@@ -339,7 +345,6 @@ impl CommandBuffer {
                     times: Times::default(),
                     encoding: false,
                     stamps: None,
-                    signal_unsubmitted: false,
                 }),
                 changed: Condvar::new(),
             }),
@@ -414,32 +419,39 @@ impl CommandBuffer {
     /// buffer has run, wherever it was encoded, the drawable's image is in the present layout and
     /// `ready`, the consumer's binary semaphore, is signalled, in the submission of the command
     /// buffer's last commands, which goes to the driver at once rather than waiting in a group.
-    /// The consumer presents the image itself, its present waiting on `ready`, on the presenting
-    /// queue ([`Device::with_present_queue`](crate::Device::with_present_queue)) once
-    /// [`wait_until_scheduled`](Self::wait_until_scheduled) has returned with the command
-    /// buffer's status not [`CommandBufferStatus::Error`]: for such a command buffer it returns
-    /// once that submission has passed `vkQueueSubmit2`, as Vulkan requires of a present's wait.
-    /// Not in the command buffer's own scheduled handler, which runs before its submission. Metal
-    /// presents the drawable itself once the command buffer is scheduled; pacing and the window
-    /// stay the consumer's here.
+    /// The command buffer is scheduled ([`CommandBufferStatus::Scheduled`], its scheduled
+    /// handlers, [`wait_until_scheduled`](Self::wait_until_scheduled)) once that submission has
+    /// passed `vkQueueSubmit2`, so from then a present that waits on `ready` waits on a submitted
+    /// signal, as Vulkan requires. The consumer presents the image itself, on the presenting queue
+    /// ([`Device::with_present_queue`](crate::Device::with_present_queue)), from its own thread
+    /// once `wait_until_scheduled` returns with the status not [`CommandBufferStatus::Error`]. A
+    /// present from the command buffer's own scheduled handler is valid too, but the handler runs
+    /// on the submit thread, whose later submissions wait while a present blocks. Metal presents
+    /// the drawable itself once the command buffer is scheduled; the present, its pacing and the
+    /// window stay the consumer's here.
     ///
-    /// The drawable is presented at the commit: from then it is the presentation engine's, until
-    /// the consumer acquires it again ([`Texture::drawable_acquired`]). A command buffer dropped
+    /// A command buffer may present several drawables, each signalling a semaphore of its own. The
+    /// drawable is presented at the commit: from then it is the presentation engine's, until the
+    /// consumer acquires it again ([`Texture::drawable_acquired`]). A command buffer dropped
     /// uncommitted leaves it acquired. One that ends without running
-    /// ([`CommandBufferError::NotRun`], [`CommandBufferError::DeviceLost`]) signals nothing and
-    /// leaves the image acquired, in its home layout or not yet moved there: the consumer makes
-    /// its swapchain again.
+    /// ([`CommandBufferError::NotRun`], [`CommandBufferError::DeviceLost`]) before its submission
+    /// is never scheduled and signals nothing: its status goes to [`CommandBufferStatus::Error`],
+    /// its scheduled handlers run as it retires, and the image stays acquired, in its home layout
+    /// or not yet moved there; the consumer presents nothing and makes its swapchain again.
     ///
     /// Err: [`Refusal::Committed`]; [`Refusal::EncoderOpen`]; [`Refusal::OtherDevice`] for
     /// another device's texture; [`Refusal::NotDrawable`] for a texture not over a swapchain's
     /// image; [`Refusal::DrawableNotAcquired`] for a drawable not acquired since its last
-    /// present, or one a command buffer already presents.
+    /// present, or one a command buffer already presents, this one included;
+    /// [`Refusal::DrawableSemaphoreRepeated`] for a `ready` the command buffer signals already.
     ///
     /// # Safety
     ///
-    /// `ready` is a binary semaphore of the device, unsignalled with no signal pending when the
-    /// command buffer's last commands run, and lives until the command buffer completes; only the
-    /// consumer's present waits on its signal.
+    /// `ready` is a binary semaphore of this device. When the command buffer's submission is made
+    /// it is unsignalled, with no signal or wait pending (the last present that waited on it has
+    /// done its wait); it lives until the command buffer completes, and only the consumer's
+    /// present waits on its signal. These are Vulkan's rules on a binary semaphore's signal,
+    /// which the runtime cannot check.
     pub unsafe fn present_drawable(
         &self,
         drawable: &Texture,
@@ -448,6 +460,13 @@ impl CommandBuffer {
         self.building(|building| {
             if !drawable.is_of(building.device.core()) {
                 return Err(Error::Refused(Refusal::OtherDevice));
+            }
+            if building
+                .presents
+                .iter()
+                .any(|&(_, signalled)| signalled == ready)
+            {
+                return Err(Error::Refused(Refusal::DrawableSemaphoreRepeated));
             }
             drawable.present_turn()?;
             building.keep_texture(drawable);
@@ -458,7 +477,9 @@ impl CommandBuffer {
 
     /// `addScheduledHandler:`: runs on the submit thread once the command buffer is scheduled,
     /// before its submission goes to the driver, or for one that ends without running once it
-    /// ends, before it retires. In the handler the command buffer's status is
+    /// ends, before it retires. For one that presents a drawable
+    /// ([`present_drawable`](Self::present_drawable)) it runs once its submission has passed
+    /// `vkQueueSubmit2`, and is not yet in flight for the completion thread. In the handler the command buffer's status is
     /// [`CommandBufferStatus::Scheduled`] and its kernel times are set, and it runs before the
     /// command buffer's completed handlers. Its queue's later submissions wait while it runs, and
     /// it may run while another command buffer's completed handler runs on the completion thread.
@@ -577,7 +598,6 @@ impl CommandBuffer {
         for (drawable, _) in &presents {
             drawable.presented();
         }
-        state.signal_unsubmitted = !presents.is_empty();
         let pending = Pending {
             seq: work.seq(),
             next: 0,
@@ -610,10 +630,9 @@ impl CommandBuffer {
     }
 
     /// `waitUntilScheduled`: returns once the command buffer is scheduled, or has completed or
-    /// ended. It sends nothing: a command buffer held in a group is scheduled already. One that
-    /// presents a drawable ([`present_drawable`](Self::present_drawable)) goes to the driver at
-    /// once, and the wait returns once its submission has passed `vkQueueSubmit2`, after its
-    /// scheduled handlers, so a present waits only on a signal already submitted.
+    /// ended. It sends nothing: a command buffer held in a group is scheduled already, and one
+    /// that presents a drawable ([`present_drawable`](Self::present_drawable)) is scheduled once
+    /// its submission has passed `vkQueueSubmit2`.
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Refusal::WaitOnOwnThread`]
     /// in a completed handler or a listener of its device for one not yet scheduled.
@@ -621,11 +640,12 @@ impl CommandBuffer {
         not_in_scheduled_handler()?;
         let own = self.on_completion_thread();
         let mut state = self.state();
-        while !match state.status {
-            CommandBufferStatus::Scheduled => !state.signal_unsubmitted,
-            CommandBufferStatus::Completed | CommandBufferStatus::Error => true,
-            _ => false,
-        } {
+        while !matches!(
+            state.status,
+            CommandBufferStatus::Scheduled
+                | CommandBufferStatus::Completed
+                | CommandBufferStatus::Error
+        ) {
             if own {
                 return Err(Error::Refused(Refusal::WaitOnOwnThread));
             }
@@ -1306,13 +1326,6 @@ impl CbInner {
         self.changed.notify_all();
     }
 
-    /// The submission that signals its drawables' semaphores has passed `vkQueueSubmit2`.
-    pub(crate) fn signal_submitted(&self) {
-        let mut state = lock(&self.state);
-        state.signal_unsubmitted = false;
-        self.changed.notify_all();
-    }
-
     /// Ended while enqueued and not committed: the commit ends it with `error`.
     pub(crate) fn end_uncommitted(&self, error: CommandBufferError) {
         lock(&self.state).ended = Some(error);
@@ -1343,8 +1356,8 @@ pub(crate) fn not_in_scheduled_handler() -> Result<(), Error> {
 }
 
 /// On the submit thread, with no lock of the runtime's held: runs the scheduled handlers of a
-/// command buffer scheduled, before its submission goes to the driver and before it is handed
-/// on as ended.
+/// command buffer scheduled, before its submission goes to the driver (after, for one that
+/// presents a drawable) and before it is handed on to the completion thread.
 pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
     /// Clears the mark as the handlers end, a panic among them too.
     struct Running;
