@@ -51,6 +51,38 @@ where
     metal(call, uint(call, at)?)
 }
 
+/// Argument `at`, a float, as an `f32`.
+fn float(call: &Call, at: usize) -> Result<f32, PlayError> {
+    match arg(call, at)?.as_f64() {
+        Some(value) => Ok(value as f32),
+        None => Err(refuse(call, format!("argument {at} is no float"))),
+    }
+}
+
+/// A LOD clamp of a list, as an `f32`.
+fn clamp(call: &Call, value: &Value) -> Result<f32, PlayError> {
+    match value.as_f64() {
+        Some(clamp) => Ok(clamp as f32),
+        None => Err(refuse(call, format!("{value} is no clamp"))),
+    }
+}
+
+/// The viewport of `value`, an `MTLViewport`'s fields.
+fn viewport(call: &Call, value: &Value) -> Result<Viewport, PlayError> {
+    let known = ["originX", "originY", "width", "height", "znear", "zfar"];
+    let f = Fields::of(call, value, &known)?;
+    let [x, y, width, height, near, far] = known.map(|key| f.required(key, Fields::float));
+    Ok(Viewport::new(x?, y?, width?, height?, near?, far?))
+}
+
+/// The scissor rectangle of `value`, an `MTLScissorRect`'s fields.
+fn scissor(call: &Call, value: &Value) -> Result<ScissorRect, PlayError> {
+    let known = ["x", "y", "width", "height"];
+    let f = Fields::of(call, value, &known)?;
+    let [x, y, width, height] = known.map(|key| f.required(key, Fields::uint));
+    Ok(ScissorRect::new(x?, y?, width?, height?))
+}
+
 /// `BlitOption` of its raw value.
 fn blit_option(call: &Call, raw: u64) -> Result<BlitOption, PlayError> {
     match raw {
@@ -490,6 +522,49 @@ impl OldRuntime {
                 let at = index(call, 1)?;
                 self.render(id).set_fragment_texture(texture.as_ref(), at)
             }
+            "setVertexBytes:length:atIndex:" | "setFragmentBytes:length:atIndex:" => {
+                let bytes = data(call, 0)?;
+                if bytes.len() as u64 != uint(call, 1)? {
+                    return Err(refuse(call, "data of another length than its length"));
+                }
+                let at = index(call, 2)?;
+                match &*call.selector {
+                    "setVertexBytes:length:atIndex:" => self.render(id).set_vertex_bytes(bytes, at),
+                    _ => self.render(id).set_fragment_bytes(bytes, at),
+                }
+            }
+            "setVertexTexture:atIndex:" => {
+                let texture = self.optional_texture(call, 0)?;
+                let at = index(call, 1)?;
+                self.render(id).set_vertex_texture(texture.as_ref(), at)
+            }
+            // A sampler of its own slot, and with LOD clamps as a range of one.
+            "setVertexSamplerState:atIndex:"
+            | "setFragmentSamplerState:atIndex:"
+            | "setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:"
+            | "setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:" => {
+                let sampler = self.sampler(call, arg(call, 0)?)?;
+                let clamped = call.args.len() == 4;
+                let at = index(call, if clamped { 3 } else { 1 })?;
+                let clamps = match clamped {
+                    true => Some(([float(call, 1)?], [float(call, 2)?])),
+                    false => None,
+                };
+                let clamps = clamps.as_ref().map(|(min, max)| (&min[..], &max[..]));
+                let samplers = [sampler.as_ref()];
+                let encoder = self.render(id);
+                match call.selector.starts_with("setVertex") {
+                    true => encoder.set_vertex_sampler_states(&samplers, clamps, at),
+                    false => encoder.set_fragment_sampler_states(&samplers, clamps, at),
+                }
+            }
+            "setVertexSamplerStates:withRange:" => {
+                let samplers = self.samplers(call, 0)?;
+                let at = first(call, 1, samplers.len())?;
+                let samplers: Vec<_> = samplers.iter().map(Option::as_ref).collect();
+                self.render(id)
+                    .set_vertex_sampler_states(&samplers, None, at)
+            }
             "setFragmentSamplerStates:withRange:" => {
                 let samplers = self.samplers(call, 0)?;
                 let at = first(call, 1, samplers.len())?;
@@ -497,13 +572,11 @@ impl OldRuntime {
                 self.render(id)
                     .set_fragment_sampler_states(&samplers, None, at)
             }
-            "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:" => {
+            "setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:"
+            | "setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:" => {
                 let samplers = self.samplers(call, 0)?;
                 let clamps = |at: usize| -> Result<Vec<f32>, PlayError> {
-                    let clamps = list(call, at)?.iter().map(|value| match value.as_f64() {
-                        Some(clamp) => Ok(clamp as f32),
-                        None => Err(refuse(call, format!("{value} is no clamp"))),
-                    });
+                    let clamps = list(call, at)?.iter().map(|value| clamp(call, value));
                     let clamps = clamps.collect::<Result<Vec<_>, _>>()?;
                     match clamps.len() == samplers.len() {
                         true => Ok(clamps),
@@ -513,7 +586,12 @@ impl OldRuntime {
                 let (mins, maxes) = (clamps(1)?, clamps(2)?);
                 let at = first(call, 3, samplers.len())?;
                 let samplers: Vec<_> = samplers.iter().map(Option::as_ref).collect();
-                (self.render(id)).set_fragment_sampler_states(&samplers, Some((&mins, &maxes)), at)
+                let clamps = Some((&mins[..], &maxes[..]));
+                let encoder = self.render(id);
+                match call.selector.starts_with("setVertex") {
+                    true => encoder.set_vertex_sampler_states(&samplers, clamps, at),
+                    false => encoder.set_fragment_sampler_states(&samplers, clamps, at),
+                }
             }
             "setColorStoreAction:atIndex:" => {
                 let action = StoreAction::from_raw(uint(call, 0)?).map_err(failed(call))?;
@@ -528,19 +606,46 @@ impl OldRuntime {
                 }
             }
             "setViewport:" => {
-                let known = ["originX", "originY", "width", "height", "znear", "zfar"];
-                let f = Fields::arg(call, 0, &known)?;
-                let [x, y, width, height, near, far] =
-                    known.map(|key| f.required(key, Fields::float));
-                let viewport = Viewport::new(x?, y?, width?, height?, near?, far?);
+                let viewport = viewport(call, arg(call, 0)?)?;
                 self.render(id).set_viewport(viewport)
             }
+            "setViewports:count:" => {
+                let viewports = (list(call, 0)?.iter())
+                    .map(|value| viewport(call, value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.render(id).set_viewports(&viewports)
+            }
             "setScissorRect:" => {
-                let known = ["x", "y", "width", "height"];
-                let f = Fields::arg(call, 0, &known)?;
-                let [x, y, width, height] = known.map(|key| f.required(key, Fields::uint));
-                let rect = ScissorRect::new(x?, y?, width?, height?);
+                let rect = scissor(call, arg(call, 0)?)?;
                 self.render(id).set_scissor_rect(rect)
+            }
+            "setScissorRects:count:" => {
+                let rects = (list(call, 0)?.iter())
+                    .map(|value| scissor(call, value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.render(id).set_scissor_rects(&rects)
+            }
+            "setCullMode:" => {
+                self.render(id).set_cull_mode(raw(call, 0)?);
+                Ok(())
+            }
+            "setFrontFacingWinding:" => {
+                self.render(id).set_front_facing_winding(raw(call, 0)?);
+                Ok(())
+            }
+            "setTriangleFillMode:" => self.render(id).set_triangle_fill_mode(raw(call, 0)?),
+            "setDepthClipMode:" | "setDepthClipModeSPI:" => {
+                self.render(id).set_depth_clip_mode(raw(call, 0)?)
+            }
+            "setDepthBias:slopeScale:clamp:" => {
+                let [bias, slope, clamp] = [float(call, 0)?, float(call, 1)?, float(call, 2)?];
+                self.render(id).set_depth_bias(bias, slope, clamp)
+            }
+            "setBlendColorRed:green:blue:alpha:" => {
+                let [red, green, blue] = [float(call, 0)?, float(call, 1)?, float(call, 2)?];
+                let alpha = float(call, 3)?;
+                self.render(id).set_blend_color(red, green, blue, alpha);
+                Ok(())
             }
             "setStencilFrontReferenceValue:backReferenceValue:" => {
                 let (front, back) = (index(call, 0)?, index(call, 1)?);
@@ -553,19 +658,26 @@ impl OldRuntime {
                 Ok(())
             }
             "drawPrimitives:vertexStart:vertexCount:"
-            | "drawPrimitives:vertexStart:vertexCount:instanceCount:" => {
+            | "drawPrimitives:vertexStart:vertexCount:instanceCount:"
+            | "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:" => {
                 let kind = primitive(0)?;
                 let (start, count) = (index(call, 1)?, index(call, 2)?);
                 let instances = match call.args.len() {
                     3 => 1,
                     _ => index(call, 3)?,
                 };
+                let base_instance = match call.args.len() {
+                    5 => index(call, 4)?,
+                    _ => 0,
+                };
                 self.render(id)
-                    .draw_primitives(kind, start, count, instances, 0)
+                    .draw_primitives(kind, start, count, instances, base_instance)
             }
             "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:"
             | "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:\
-               instanceCount:" => {
+               instanceCount:"
+            | "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:\
+               instanceCount:baseVertex:baseInstance:" => {
                 let kind = primitive(0)?;
                 let count = index(call, 1)?;
                 let index_type: IndexType = raw(call, 2)?;
@@ -575,8 +687,28 @@ impl OldRuntime {
                     5 => 1,
                     _ => index(call, 5)?,
                 };
+                let (base_vertex, base_instance) = match call.args.len() {
+                    8 => {
+                        // `NSInteger`: signed where the recorder saw it negative.
+                        let base = match arg(call, 6)? {
+                            Value::Sint(base) => i32::try_from(*base).ok(),
+                            Value::Uint(base) => i32::try_from(*base).ok(),
+                            _ => None,
+                        };
+                        let base = base.ok_or_else(|| refuse(call, "argument 6 is no i32"))?;
+                        (base, index(call, 7)?)
+                    }
+                    _ => (0, 0),
+                };
                 self.render(id).draw_indexed_primitives(
-                    kind, count, index_type, &buffer, offset, instances, 0, 0,
+                    kind,
+                    count,
+                    index_type,
+                    &buffer,
+                    offset,
+                    instances,
+                    base_vertex,
+                    base_instance,
                 )
             }
             "updateFence:afterStages:" => {

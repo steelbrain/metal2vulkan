@@ -289,9 +289,9 @@ impl OldRuntime {
         })
     }
 
-    /// The samplers of a list argument, nil for none.
-    fn samplers(&self, call: &Call, at: usize) -> Result<Vec<Option<SamplerState>>, PlayError> {
-        let sampler = |value: &Value| match value {
+    /// The sampler `value` names, nil for none.
+    fn sampler(&self, call: &Call, value: &Value) -> Result<Option<SamplerState>, PlayError> {
+        match value {
             Value::Nil => Ok(None),
             Value::Object(id) => self
                 .kind(call, *id, "sampler state", |object| match object {
@@ -300,8 +300,13 @@ impl OldRuntime {
                 })
                 .map(Some),
             _ => Err(refuse(call, format!("{value} is no sampler state"))),
-        };
-        args::list(call, at)?.iter().map(sampler).collect()
+        }
+    }
+
+    /// The samplers of a list argument, nil for none.
+    fn samplers(&self, call: &Call, at: usize) -> Result<Vec<Option<SamplerState>>, PlayError> {
+        let list = args::list(call, at)?.iter();
+        list.map(|value| self.sampler(call, value)).collect()
     }
 
     fn event<'s>(&'s self, call: &Call, at: usize) -> Result<EventRef<'s>, PlayError> {

@@ -180,10 +180,19 @@ fn render_library(dir: &ScratchDir) -> Vec<u8> {
     library(dir, &[("colored_vertex", 0, 1), ("colored_fragment", 1, 2)])
 }
 
-/// A metallib of `functions` of the runtime examples, each `(name, type code, list)`: `list` 0 the
-/// kernels', 1 the vertex functions', 2 the fragment functions'.
+/// A metallib of `functions` of the runtime examples ([`library_of`]).
 fn library(dir: &ScratchDir, functions: &[(&'static str, u8, usize)]) -> Vec<u8> {
     let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
+    library_of(dir, &ll, functions)
+}
+
+/// A metallib of `functions` of the fixture `ll`, each `(name, type code, list)`: `list` 0 the
+/// kernels', 1 the vertex functions', 2 the fragment functions'.
+pub(super) fn library_of(
+    dir: &ScratchDir,
+    ll: &Path,
+    functions: &[(&'static str, u8, usize)],
+) -> Vec<u8> {
     let text = std::fs::read_to_string(ll).unwrap();
     let lists = ["!air.kernel = ", "!air.vertex = ", "!air.fragment = "];
     let function = |name: &'static str, type_code, list: &str| {

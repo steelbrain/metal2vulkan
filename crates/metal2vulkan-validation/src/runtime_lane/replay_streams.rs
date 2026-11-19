@@ -26,11 +26,15 @@
 //! - A store action an encoder sets over its pass's unknown one stores the pass's clear, with
 //!   fragment samplers bound with LOD clamps; the depth and stencil store actions an encoder sets
 //!   store a depth-only and a stencil-only pass's clears.
+//! - The render encoder's setters each show their effect in a pass of their own where a draw
+//!   shows it (bytes, viewports, scissor rectangles, culling and winding, lines, a base instance
+//!   and a negative base vertex); the rest play before a draw that still covers its target.
 //!
 //! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
 //! their own beside the stream's.
 
 use super::host_memory::on_device_with;
+use super::rt_replay::library_of;
 use super::{at_plan, public_case};
 use crate::replay::{
     OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value, WAIT_COMPLETED,
@@ -1240,6 +1244,322 @@ fn an_encoder_s_depth_and_stencil_store_actions_play() {
     on_device_with(at_plan, |device| {
         let report = play("depth-stencil-store", device, &path);
         assert_eq!(report.checks.len(), 2);
+        for check in &report.checks {
+            assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
+        }
+    });
+}
+
+/// A 4 by 4 RGBA8 target's texels: green where `green(x, y)`, the clear's red elsewhere.
+fn texels(green: impl Fn(u32, u32) -> bool) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for y in 0..4 {
+        for x in 0..4 {
+            bytes.extend(match green(x, y) {
+                true => [0u8, 255, 0, 255],
+                false => [255, 0, 0, 255],
+            });
+        }
+    }
+    bytes
+}
+
+/// A float list's little-endian bytes.
+fn f32_bytes(values: &[f32]) -> Value {
+    Value::Bytes(values.iter().flat_map(|v| v.to_le_bytes()).collect())
+}
+
+/// The render encoder's setters, each in a pass of its own into a 4 by 4 `RGBA8Unorm` target
+/// cleared red, drawn by the owned fixture `engine/cof_offsets.ll`: `cof_constant` places a
+/// triangle at its `float4` (corner, legs) and `cof_flat` colours it with its `float4`, each from
+/// `set*Bytes`; `cof_device` places it at the instance's element of a buffer. Where the setter's
+/// effect shows in the target, the target is checked for it:
+/// - the bytes: the whole target green;
+/// - a viewport of the left half (`setViewports:count:`): its two columns green;
+/// - a scissor rectangle of the top half (`setScissorRects:count:`): its two rows green;
+/// - a triangle counter-clockwise in Metal's clip space, culled at its back: dropped under the
+///   clockwise winding (Metal's default, set) and drawn under the counter-clockwise one;
+/// - lines (`setTriangleFillMode:`) of a triangle whose edges lie outside the target: nothing;
+/// - base instance 1 (`drawPrimitives:...:baseInstance:`) of `cof_device`: the buffer's second
+///   element, the whole target, where its first lies outside;
+/// - base vertex -3 (`drawIndexedPrimitives:...:baseVertex:baseInstance:`) of indices 3, 4 and 5:
+///   vertices 0, 1 and 2, the whole target, where 3, 4 and 5 make no triangle.
+/// The setters whose effect no such draw shows play before the first draw, which still covers
+/// the target: the depth bias and clip mode, the blend colour, a vertex texture of nil, and the
+/// vertex and fragment sampler forms (one, one with LOD clamps, a range, a range with clamps).
+#[test]
+fn render_encoder_setters_play_with_their_effects() {
+    let dir = ScratchDir::new("replay-render-setters").unwrap();
+    let ll = metal2vulkan_devtools::engine_dir().join("cof_offsets.ll");
+    let functions = [
+        ("cof_constant", 0, 1),
+        ("cof_device", 0, 1),
+        ("cof_flat", 1, 2),
+    ];
+    let library = library_of(&dir, &ll, &functions);
+    // A triangle's corner and legs: over the whole target, outside it, and around it.
+    let whole = [-1.0f32, -1.0, 4.0, 4.0];
+    let outside = [5.0f32, 5.0, 1.0, 1.0];
+    let around = [-3.0f32, -3.0, 9.0, 9.0];
+    let bytes = |values: [f32; 4]| vec![f32_bytes(&values), Value::Uint(16), Value::Uint(0)];
+    let triangle = vec![Value::Uint(3), Value::Uint(0), Value::Uint(3)];
+    let range = |at: u64| uints(&[("location", at), ("length", 1)]);
+    let (constant, device, sampler, instances, indices) = (7u64, 8u64, 9u64, 10u64, 11u64);
+    let s = || Value::Object(sampler);
+    type Calls = Vec<(&'static str, Vec<Value>)>;
+    let effectless: Calls = vec![
+        ("setDepthBias:slopeScale:clamp:", vec![Value::F64(0.0); 3]),
+        ("setDepthClipMode:", vec![Value::Uint(0)]),
+        ("setDepthClipModeSPI:", vec![Value::Uint(0)]),
+        (
+            "setBlendColorRed:green:blue:alpha:",
+            vec![Value::F64(0.5); 4],
+        ),
+        (
+            "setVertexTexture:atIndex:",
+            vec![Value::Nil, Value::Uint(0)],
+        ),
+        ("setVertexSamplerState:atIndex:", vec![s(), Value::Uint(0)]),
+        (
+            "setFragmentSamplerState:atIndex:",
+            vec![s(), Value::Uint(0)],
+        ),
+        (
+            "setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:",
+            vec![s(), Value::F64(0.0), Value::F64(4.0), Value::Uint(1)],
+        ),
+        (
+            "setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:",
+            vec![s(), Value::F64(0.0), Value::F64(4.0), Value::Uint(1)],
+        ),
+        (
+            "setVertexSamplerStates:withRange:",
+            vec![Value::List(vec![s()]), range(2)],
+        ),
+        (
+            "setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:",
+            vec![
+                Value::List(vec![s()]),
+                Value::List(vec![Value::F64(0.0)]),
+                Value::List(vec![Value::F64(4.0)]),
+                range(3),
+            ],
+        ),
+    ];
+    let viewport = Value::Map(
+        [
+            ("originX", 0.0),
+            ("originY", 0.0),
+            ("width", 2.0),
+            ("height", 4.0),
+            ("znear", 0.0),
+            ("zfar", 1.0),
+        ]
+        .map(|(key, value)| (key.into(), Value::F64(value)))
+        .to_vec(),
+    );
+    let rect = uints(&[("x", 0), ("y", 0), ("width", 4), ("height", 2)]);
+    let draw = "drawPrimitives:vertexStart:vertexCount:";
+    let based = "drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:";
+    let indexed = "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:\
+                   instanceCount:baseVertex:baseInstance:";
+    let set_bytes = "setVertexBytes:length:atIndex:";
+    // (pipeline, the calls before the draw, the draw, the target's texels)
+    let cases: Vec<(u64, Calls, (&str, Vec<Value>), Vec<u8>)> = vec![
+        (
+            constant,
+            [vec![(set_bytes, bytes(whole))], effectless].concat(),
+            (draw, triangle.clone()),
+            texels(|_, _| true),
+        ),
+        (
+            constant,
+            vec![
+                (set_bytes, bytes(whole)),
+                (
+                    "setViewports:count:",
+                    vec![Value::List(vec![viewport]), Value::Uint(1)],
+                ),
+            ],
+            (draw, triangle.clone()),
+            texels(|x, _| x < 2),
+        ),
+        (
+            constant,
+            vec![
+                (set_bytes, bytes(whole)),
+                (
+                    "setScissorRects:count:",
+                    vec![Value::List(vec![rect]), Value::Uint(1)],
+                ),
+            ],
+            (draw, triangle.clone()),
+            texels(|_, y| y < 2),
+        ),
+        (
+            constant,
+            vec![
+                (set_bytes, bytes(whole)),
+                ("setFrontFacingWinding:", vec![Value::Uint(0)]),
+                ("setCullMode:", vec![Value::Uint(2)]),
+            ],
+            (draw, triangle.clone()),
+            texels(|_, _| false),
+        ),
+        (
+            constant,
+            vec![
+                (set_bytes, bytes(whole)),
+                ("setFrontFacingWinding:", vec![Value::Uint(1)]),
+                ("setCullMode:", vec![Value::Uint(2)]),
+            ],
+            (draw, triangle.clone()),
+            texels(|_, _| true),
+        ),
+        (
+            constant,
+            vec![
+                (set_bytes, bytes(around)),
+                ("setTriangleFillMode:", vec![Value::Uint(1)]),
+            ],
+            (draw, triangle.clone()),
+            texels(|_, _| false),
+        ),
+        (
+            device,
+            vec![(
+                "setVertexBuffer:offset:atIndex:",
+                vec![Value::Object(instances), Value::Uint(0), Value::Uint(0)],
+            )],
+            (
+                based,
+                [&triangle[..], &[Value::Uint(1), Value::Uint(1)]].concat(),
+            ),
+            texels(|_, _| true),
+        ),
+        (
+            constant,
+            vec![(set_bytes, bytes(whole))],
+            (
+                indexed,
+                vec![
+                    Value::Uint(3),
+                    Value::Uint(3),
+                    Value::Uint(0),
+                    Value::Object(indices),
+                    Value::Uint(0),
+                    Value::Uint(1),
+                    Value::Sint(-3),
+                    Value::Uint(0),
+                ],
+            ),
+            texels(|_, _| true),
+        ),
+    ];
+    let path = written(&dir, |w| {
+        let library = w.blob(&library)?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let data = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &data, &[])?;
+        for (function, (name, ..)) in (4..).zip(functions) {
+            let name = [Value::Str(name.into())];
+            w.call("newFunctionWithName:", 3, function, &name, &[])?;
+        }
+        for (pipeline, vertex) in [(constant, 4), (device, 5)] {
+            // The short descriptor: the two functions and colour 0's format, RGBA8Unorm.
+            let descriptor = Value::Map(vec![
+                ("vertex".into(), Value::Object(vertex)),
+                ("fragment".into(), Value::Object(6)),
+                ("color0PixelFormat".into(), Value::Uint(70)),
+            ]);
+            let made = "newRenderPipelineStateWithDescriptor:error:";
+            w.call(made, 1, pipeline, &[descriptor], &[])?;
+        }
+        let plain = [Value::Map(Vec::new())];
+        w.call("newSamplerStateWithDescriptor:", 1, sampler, &plain, &[])?;
+        let elements = [
+            f32_bytes(&[outside, whole].concat()),
+            Value::Uint(32),
+            Value::Uint(0),
+        ];
+        w.call(
+            "newBufferWithBytes:length:options:",
+            1,
+            instances,
+            &elements,
+            &[],
+        )?;
+        let shorts: Vec<u8> = [3u16, 4, 5, 0]
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect();
+        let shorts = [Value::Bytes(shorts), Value::Uint(8), Value::Uint(0)];
+        w.call(
+            "newBufferWithBytes:length:options:",
+            1,
+            indices,
+            &shorts,
+            &[],
+        )?;
+        w.call(
+            "m2v.textureDescriptor",
+            0,
+            12,
+            &[render_target(vec![])],
+            &[],
+        )?;
+        w.call("commandBuffer", 2, 13, &[], &[])?;
+        let red = [("red", 1.0), ("green", 0.0), ("blue", 0.0), ("alpha", 1.0)]
+            .map(|(key, value)| (key.into(), Value::F64(value)));
+        let mut targets = Vec::new();
+        for (case, (pipeline, calls, (selector, args), _)) in (0u64..).zip(&cases) {
+            let (target, pass, encoder) = (100 + 10 * case, 101 + 10 * case, 102 + 10 * case);
+            w.call(
+                "newTextureWithDescriptor:",
+                1,
+                target,
+                &[Value::Object(12)],
+                &[],
+            )?;
+            targets.push(Value::Object(target));
+            w.call("MTLRenderPassDescriptor.new", 0, pass, &[], &[])?;
+            let Value::Map(mut color) =
+                uints(&[("level", 0), ("loadAction", 2), ("storeAction", 1)])
+            else {
+                unreachable!("a map");
+            };
+            color.push(("texture".into(), Value::Object(target)));
+            color.push(("clearColor".into(), Value::Map(red.to_vec())));
+            let args = [Value::Uint(0), Value::Map(color)];
+            w.call("m2v.setColorAttachment", pass, 0, &args, &[])?;
+            let at = [Value::Object(pass)];
+            w.call("renderCommandEncoderWithDescriptor:", 13, encoder, &at, &[])?;
+            let state = [Value::Object(*pipeline)];
+            w.call("setRenderPipelineState:", encoder, 0, &state, &[])?;
+            let green = bytes([0.0, 1.0, 0.0, 1.0]);
+            w.call("setFragmentBytes:length:atIndex:", encoder, 0, &green, &[])?;
+            for (selector, args) in calls {
+                w.call(selector, encoder, 0, args, &[])?;
+            }
+            w.call(selector, encoder, 0, args, &[])?;
+            w.call("endEncoding", encoder, 0, &[], &[])?;
+        }
+        w.call("commit", 13, 0, &[], &[])?;
+        let sums = (cases.iter())
+            .map(|(.., texels)| Value::Bytes(Sha256::digest(texels).to_vec()))
+            .collect();
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &targets,
+            &[("sha256", Value::List(sums))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("render-setters", device, &path);
+        assert_eq!(report.checks.len(), cases.len());
         for check in &report.checks {
             assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
         }
