@@ -59,10 +59,10 @@ threads-required = 'num-test-threads'
 # The indirect-command census's shards each run alone. A case's command buffer that runs past
 # Metal's bound fails as Metal's timeout (the old runtime's watchdog, 20.2 s of wall time with its
 # queue not advancing), and the census fails it as hung. On lavapipe (LLVM 23.1.1, Mesa 26.2.4,
-# LP_NUM_THREADS=1, a 24-CPU host) the census's longest case, a division of every pair of half
-# values, took 7.4 to 8.9 s in each form with the shard alone (4 runs, 0.4 s at most of it waiting
-# for a CPU), and 18.6 to 20.4 s in the matrix's lavapipe leg beside the rest of the workspace,
-# 3.5 to 12.1 s of it waiting for a CPU: past the watchdog in some runs, in either form.
+# LP_NUM_THREADS=1, a 24-CPU host), each shard alone, no case's dispatch or command waited 2.02 s,
+# a tenth of the watchdog (one run of every shard); the eight cases of the division of every pair
+# of half values, an eighth of the dividends each, waited 0.8 to 1.4 s each in either form, at
+# most 0.12 s of it for a CPU. A shard alone keeps the other tests' work off its cases' CPUs.
 [[profile.default.overrides]]
 filter = 'package(metal2vulkan-validation) & test(/^runtime_lane::indirect_executions::every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch_[0-9]+$/)'
 threads-required = 'num-test-threads'
