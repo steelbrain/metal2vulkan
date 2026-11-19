@@ -1568,10 +1568,12 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `DeviceLost`; a second Vulkan device, such as another process's, keeps running. NVIDIA's driver
   (620.70.06; an RTX 2080 and an RTX 3090) tells only a later submission or `vkDeviceWaitIdle`: the
   faulting submission's semaphore never signals, and an unbounded wait for it had not returned after
-  60 s. The hang lasts until the device's next submission on any queue: that submission meets the
-  loss, the completion thread wakes, and everything ends as a loss. Where something submits on the
-  device every frame, the hang lasts about a frame and then every guest process sees the device
-  lost; it lasts indefinitely only when nothing else submits. RADV (a 780M and an RX 7900 XTX)
+  60 s. A submission made before the driver's own context-switch timeout returns `SUCCESS`; the
+  loss is told only to the first submission on any queue after that timeout, which on an RTX 3090
+  came 4.3 s after the fault in one run and 10.1 s in another. Until then, a wait on the faulting
+  work does not return; then the completion thread wakes, everything ends as a loss, and every
+  guest process sees the device lost. The hang lasts indefinitely only when nothing submits after
+  that timeout. RADV (a 780M and an RX 7900 XTX)
   signals the semaphore within about 2 s and refuses the next submission; Intel's Windows driver (a
   UHD 630) does so at once; ANV (an Iris Xe) takes the store with no fault. On RADV (a 780M), the
   command buffers of the submission a reset cut can report completed, since the reset signals its
