@@ -757,9 +757,12 @@ counted from 0), completes the work committed so far, reports as at the stream's
   buffer as a buffer is refused, and a texture of a format that reads across a surface's two planes
   (a two-plane YCbCr or XR10 format) is skipped (`skipped_surfaces_across_planes`). The counts
   (`surface_textures`, `surface_entries`, `surface_fills`, `surface_shape_changes`,
-  `surface_cpu_writes`, `surface_external_writes`, `surface_refills`, `surface_copies_in`,
-  `surface_copies_out`, `surface_bytes`) are the player's work, among its executed counters, and
-  the report's `surfaces` line gives them with the frames of the first older-shape uses. A check
+  `surface_cpu_writes`, `surface_external_writes`, `surface_refills`, `surface_refill_bytes`,
+  `surface_refill_gpu_nanos`, `surface_copies_in`, `surface_copies_out`, `surface_bytes`) are the
+  player's work, among its executed counters; `surface_refill_gpu_nanos` is the GPU time of the
+  refills' command buffers, counted in the frame whose end first sees each complete. The report's
+  `surfaces` line gives them with the longest refill command buffer and the frames of the first
+  older-shape uses. A check
   of a texture reads its first level and slice as the old runtime's backend lays them out.
 
   The counts are among its executed counters; a `skipped_` one above zero makes the play no gate
