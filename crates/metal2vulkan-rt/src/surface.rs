@@ -26,7 +26,7 @@ use crate::error::{Error, Gap, Limit, Refusal};
 use crate::export::{Export, ExportHandle};
 use crate::memory;
 use crate::submit::Held;
-use crate::texture::{Backing, SurfaceImage, Texture, TextureDescriptor};
+use crate::texture::{Backing, SurfaceImage, Texture, TextureDescriptor, TextureObject};
 use ash::vk;
 use std::sync::Arc;
 

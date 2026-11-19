@@ -4177,7 +4177,7 @@ impl Device {
             None => None,
         };
         let inner = TextureInner {
-            device: self.clone(),
+            core: Arc::clone(core),
             descriptor: d,
             image,
             format: plan.format,
@@ -4195,6 +4195,7 @@ impl Device {
         };
         let texture = Texture {
             inner: Arc::new(inner),
+            device: self.clone(),
         };
         core.work.home(core, &texture.inner.image)?;
         Ok(texture)
