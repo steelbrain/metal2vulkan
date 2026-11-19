@@ -38,13 +38,6 @@ struct Fill {
     pieces: u64,
 }
 
-/// A command buffer's owed copies, in the stream's order.
-#[derive(Default)]
-struct Owed {
-    fills: Vec<Fill>,
-    downloads: Vec<Download>,
-}
-
 /// A copy back committed whose runs the CPU has not copied out: its commit, its scratch and the
 /// scratch's place, and its runs.
 struct Downloading {
@@ -71,8 +64,10 @@ struct Counts {
 /// The copies owed, in flight, and made.
 #[derive(Default)]
 pub(super) struct GuestRam {
-    /// The copies each command buffer not yet committed owes.
-    owed: HashMap<u64, Owed>,
+    /// The copies in and the copies back each command buffer not yet committed owes, in the
+    /// stream's order.
+    fills: HashMap<u64, Vec<Fill>>,
+    downloads: HashMap<u64, Vec<Download>>,
     /// The copies back committed whose runs the CPU has not copied out, by the stream's command
     /// buffer they follow.
     downloading: HashMap<u64, Vec<Downloading>>,
@@ -184,8 +179,8 @@ impl NewRuntime {
             span: start..stop,
             runs: runs.collect(),
         };
-        let owed = self.guest_ram.owed.entry(command_buffer).or_default();
-        owed.downloads.push(download);
+        let owed = self.guest_ram.downloads.entry(command_buffer).or_default();
+        owed.push(download);
         Ok(())
     }
 
@@ -272,8 +267,8 @@ impl NewRuntime {
             super::write_into(&scratch, from + (at - to), bytes)?;
         }
         let command_buffer = self.owner(call)?;
-        let owed = self.guest_ram.owed.entry(command_buffer).or_default();
-        owed.fills.push(Fill {
+        let owed = self.guest_ram.fills.entry(command_buffer).or_default();
+        owed.push(Fill {
             scratch,
             place,
             target: target.clone(),
@@ -292,13 +287,9 @@ impl NewRuntime {
     /// Before command buffer `call.receiver` commits: each copy in it owes, in a command buffer of
     /// the play's own committed now, ahead of it on its queue.
     pub(super) fn guest_ram_fill(&mut self, call: &Call) -> Result<(), PlayError> {
-        let Some(owed) = self.guest_ram.owed.get_mut(&call.receiver) else {
+        let Some(fills) = self.guest_ram.fills.remove(&call.receiver) else {
             return Ok(());
         };
-        let fills: Vec<Fill> = owed.fills.drain(..).collect();
-        if fills.is_empty() {
-            return Ok(());
-        }
         let queue = self.queue_for(call)?;
         for fill in fills {
             let command_buffer = queue.command_buffer().map_err(failed(call))?;
@@ -328,14 +319,11 @@ impl NewRuntime {
     /// Shared scratch of the play's own in a command buffer of the play's own committed now,
     /// behind it on its queue.
     pub(super) fn guest_ram_download(&mut self, call: &Call) -> Result<(), PlayError> {
-        let Some(owed) = self.guest_ram.owed.remove(&call.receiver) else {
+        let Some(downloads) = self.guest_ram.downloads.remove(&call.receiver) else {
             return Ok(());
         };
-        if owed.downloads.is_empty() {
-            return Ok(());
-        }
         let queue = self.queue_for(call)?;
-        for download in owed.downloads {
+        for download in downloads {
             let len = download.span.end - download.span.start;
             let completed = self.completed();
             // The play's own scratch: no recorded slack.
@@ -371,10 +359,13 @@ impl NewRuntime {
     /// Command buffer `command_buffer` released uncommitted: it runs nothing, so its copies are
     /// not made, and their scratch places are given back.
     pub(super) fn guest_ram_released(&mut self, command_buffer: u64) {
-        let Some(owed) = self.guest_ram.owed.remove(&command_buffer) else {
-            return;
-        };
-        for fill in owed.fills {
+        self.guest_ram.downloads.remove(&command_buffer);
+        let fills = self
+            .guest_ram
+            .fills
+            .remove(&command_buffer)
+            .unwrap_or_default();
+        for fill in fills {
             self.places.give(fill.place, self.commits, Vec::new());
         }
     }
