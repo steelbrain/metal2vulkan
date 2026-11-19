@@ -1052,6 +1052,12 @@ pub enum Gap {
         /// The `VkImageUsageFlags` bits the tiling lacks.
         missing: u32,
     },
+    /// An import of a picture's Direct3D 11 textures as a surface (`Device::import_d3d11_surface`,
+    /// a Windows host's): not built yet, so every call refuses. Metal's counterpart is a texture
+    /// over an IOSurface's plane (`newTextureWithDescriptor:iosurface:plane:`).
+    ///
+    /// Basis: ours (the import is not built).
+    D3d11Surface,
     /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) or
     /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
     /// whose bytes no copy command in the floor addresses, though Metal takes them: an image's
@@ -1967,6 +1973,9 @@ impl fmt::Display for Gap {
                 "a surface plane of {pixel_format:?} in place lacks image usage {missing:#x} on \
                  this device"
             ),
+            Gap::D3d11Surface => {
+                f.write_str("an import of Direct3D 11 textures as a surface is not built")
+            }
             Gap::BufferCopyAlignment {
                 pixel_format,
                 offset,

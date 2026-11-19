@@ -18,6 +18,8 @@ mod command;
 mod complete;
 mod copy_out;
 mod counters;
+#[cfg(windows)]
+mod d3d11;
 mod depth_stencil;
 mod device;
 mod encoder;
@@ -63,6 +65,8 @@ pub use block::Block;
 pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics, SiteAllocations};
+#[cfg(windows)]
+pub use d3d11::D3d11Plane;
 pub use depth_stencil::DepthStencilState;
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};

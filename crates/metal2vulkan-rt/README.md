@@ -629,6 +629,10 @@ kernel's write through the buffer is ordered before the next kernel's read throu
 the global memory barrier rt records between them. `Surface::buffer`'s doc comment quotes the
 sections.
 
+On Windows, `Device::import_d3d11_surface(&[D3d11Plane])` takes a picture's planes the other API
+made as Direct3D 11 textures, each by its shared handle, its own format and the texture rt makes
+over it. It is not built yet: every call is `Gap::D3d11Surface`.
+
 ### Known gaps of memory blocks
 
 - An exported surface takes the copy form, its planes copied at each acquire and release, in

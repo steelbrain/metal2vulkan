@@ -8,6 +8,7 @@ mod command;
 mod compute;
 mod copy_out;
 mod copy_over;
+mod d3d11;
 mod device;
 mod draw;
 mod export;

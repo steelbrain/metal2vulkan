@@ -39,7 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 72 | 72 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 27 | 27 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 28 | 28 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -57,7 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 20 | 16 | 0 | 0 | 36 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 12 | 4 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 1 | 26 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 1 | 27 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -733,6 +733,7 @@ Columns:
 | `TextureOverBuffer` | A texture over a buffer (`Buffer::new_texture`) the runtime does not make | every device (a public call's own check of its arguments) | `ours`: the in-place linear image and the copy form take one 2D color image | 4: `crates/metal2vulkan-rt/src/texture.rs (check_over)`, `crates/metal2vulkan-rt/src/texture.rs (make)` (+2) | `-` |
 | `HeapTexture` | A heap texture the runtime does not place (`Device::new_heap_texture`, `Device::new_heap_texture_for_views` and `Device::heap_texture_size_and_align`) | every device (a public call's own check of its arguments) | `ours`: heap textures are built for Private heaps of placeable images | 2: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`, `crates/metal2vulkan-rt/src/texture.rs (heap_source)` | `-` |
 | `SurfaceUsage` | A surface plane in place (`Device::new_exported_surface`) whose texture's uses ask an image usage its linear tiling lacks (storage, for one) | at the device's limit | `device`: the image format query of the plane's tiling | 2: `crates/metal2vulkan-rt/src/surface.rs (plane)`, `crates/metal2vulkan-rt/src/texture.rs (surface_texture)` | `-` |
+| `D3d11Surface` | An import of a picture's Direct3D 11 textures as a surface (`Device::import_d3d11_surface`, a Windows host's) | every device (a public call's own check of its arguments) | `ours`: the import is not built | 1: `crates/metal2vulkan-rt/src/d3d11.rs (import_d3d11_surface)` | `-` |
 | `BufferCopyAlignment` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose bytes no copy command in the floor addresses,... | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an aligned offset; each is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)` | `-` |
 | `FillAlignment` | `BlitCommandEncoder::fill_buffer` of a range that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal fills byte... | every device (a public call's own check of its arguments) | `ours`: `vkCmdFillBuffer` writes whole words; a byte fill is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (fill_range)` | `-` |
 | `RenderPipeline` | A render pipeline state of something the runtime does not build yet | every device (a public call's own check of its arguments) | `ours`: the replay streams' render pipelines draw into colour, depth and stencil attachments of one sample, with no tessellation and no framebuffer fetch; each other kind is built when a replay stream makes one | 5: `crates/metal2vulkan-rt/src/render.rs (draw_input)`, `crates/metal2vulkan-rt/src/render.rs (of, 3 sites)` (+1) | `-` |
@@ -1339,6 +1340,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::TextureOverBuffer`: `crates/metal2vulkan-rt/src/texture.rs (check_over)`; `crates/metal2vulkan-rt/src/texture.rs (make)`; `crates/metal2vulkan-rt/src/texture.rs (over_texel)`; `crates/metal2vulkan-rt/src/texture.rs (texture)`
 - `rt:Gap::HeapTexture`: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`; `crates/metal2vulkan-rt/src/texture.rs (heap_source)`
 - `rt:Gap::SurfaceUsage`: `crates/metal2vulkan-rt/src/surface.rs (plane)`; `crates/metal2vulkan-rt/src/texture.rs (surface_texture)`
+- `rt:Gap::D3d11Surface`: `crates/metal2vulkan-rt/src/d3d11.rs (import_d3d11_surface)`
 - `rt:Gap::BufferCopyAlignment`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`
 - `rt:Gap::FillAlignment`: `crates/metal2vulkan-rt/src/blit.rs (fill_range)`
 - `rt:Gap::RenderPipeline`: `crates/metal2vulkan-rt/src/render.rs (draw_input)`; `crates/metal2vulkan-rt/src/render.rs (of, 3 sites)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
