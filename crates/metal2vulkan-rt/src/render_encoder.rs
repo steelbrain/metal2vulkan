@@ -819,6 +819,44 @@ impl RenderCommandEncoder {
         self.set_sampler_state(FRAGMENT, sampler, index)
     }
 
+    /// `setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:`
+    /// (`setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:` is a loop of it): the state
+    /// bound as [`set_vertex_sampler_state`](Self::set_vertex_sampler_state) binds it, where its
+    /// samples read alike with its LOD clamps replaced by these: each bound, held to the levels a
+    /// sample can read (`[0, 15]`; Metal's largest textures have 15 levels), is the state's own so
+    /// held, as a clamp of 1000 over a state's `FLT_MAX` is.
+    ///
+    /// Err: [`Gap::LodClamps`] where they read otherwise (nothing is bound); as
+    /// [`set_vertex_sampler_state`](Self::set_vertex_sampler_state).
+    pub fn set_vertex_sampler_state_with_lod_clamps(
+        &mut self,
+        sampler: Option<&SamplerState>,
+        lod_min_clamp: f32,
+        lod_max_clamp: f32,
+        index: u32,
+    ) -> Result<(), Error> {
+        crate::sampler::clamps_at_bind(sampler, lod_min_clamp, lod_max_clamp)?;
+        self.set_sampler_state(VERTEX, sampler, index)
+    }
+
+    /// `setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:`
+    /// (`setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:` is a loop of it), as
+    /// [`set_vertex_sampler_state_with_lod_clamps`](Self::set_vertex_sampler_state_with_lod_clamps)
+    /// for the fragment function.
+    ///
+    /// Err: as
+    /// [`set_vertex_sampler_state_with_lod_clamps`](Self::set_vertex_sampler_state_with_lod_clamps).
+    pub fn set_fragment_sampler_state_with_lod_clamps(
+        &mut self,
+        sampler: Option<&SamplerState>,
+        lod_min_clamp: f32,
+        lod_max_clamp: f32,
+        index: u32,
+    ) -> Result<(), Error> {
+        crate::sampler::clamps_at_bind(sampler, lod_min_clamp, lod_max_clamp)?;
+        self.set_sampler_state(FRAGMENT, sampler, index)
+    }
+
     fn set_sampler_state(
         &mut self,
         table: usize,

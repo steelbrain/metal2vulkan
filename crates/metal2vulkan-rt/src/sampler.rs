@@ -16,7 +16,7 @@ use crate::error::{Error, Gap, Limit};
 use crate::reaper::{Free, Job};
 use ash::vk;
 use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::metal::sampler::{vk_sampler, SamplerUse, SamplerWord};
+use metal2vulkan::metal::sampler::{lod_clamps_read_alike, vk_sampler, SamplerUse, SamplerWord};
 use metal2vulkan::metal::{CompareFunction, SamplerMinMagFilter};
 use metal2vulkan::vk::{BorderColor, SamplerAddressMode, SamplerDesc};
 use std::collections::HashMap;
@@ -79,6 +79,27 @@ impl<K: Clone + Eq + Hash> SamplerTable<K> {
             0 => self.entries.remove(desc).map(|_| sampler),
             _ => None,
         }
+    }
+}
+
+/// The LOD clamps a sampler state is bound with (Metal's `lodMinClamp:lodMaxClamp:` bind forms):
+/// the state is bound as it is where its samples read alike with its clamps replaced by these
+/// ([`lod_clamps_read_alike`]: each bound held to the levels a sample can read is the state's
+/// own). `None` binds no state and reads no clamps.
+///
+/// Err: [`Gap::LodClamps`] where they read otherwise.
+pub(crate) fn clamps_at_bind(
+    sampler: Option<&SamplerState>,
+    lod_min_clamp: f32,
+    lod_max_clamp: f32,
+) -> Result<(), Error> {
+    match sampler {
+        Some(sampler)
+            if !lod_clamps_read_alike(sampler.descriptor(), lod_min_clamp, lod_max_clamp) =>
+        {
+            Err(Error::Unsupported(Gap::LodClamps))
+        }
+        _ => Ok(()),
     }
 }
 

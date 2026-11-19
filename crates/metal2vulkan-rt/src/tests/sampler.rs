@@ -11,7 +11,9 @@
 //!   another holds takes it, and the earlier state's going leaves it; the grant waits for the
 //!   index's owner, and the index is free once that state is gone. The device's samplers come
 //!   back to zero with the device. A state's constexpr samplers numbered up to one the
-//!   translator refuses give back what the earlier ones took.
+//!   translator refuses give back what the earlier ones took. A state binds with LOD clamps that
+//!   read as its own on the compute encoder and the render encoder's vertex and fragment
+//!   functions, and clamps that read otherwise are `Gap::LodClamps`.
 
 use crate::error::{Error, Limit};
 use crate::sampler::SamplerTable;
@@ -47,8 +49,9 @@ fn a_device_sampler_is_shared_by_create_info_up_to_the_cap() {
 mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        CompareFunction, Device, DeviceOptions, Error, Gap, IndexClass, Refusal,
-        SamplerBorderColor, SamplerDescriptor, SamplerMinMagFilter, SamplerState,
+        CompareFunction, Device, DeviceOptions, DispatchType, Error, Gap, IndexClass, PixelFormat,
+        Refusal, RenderPassDescriptor, SamplerBorderColor, SamplerDescriptor, SamplerMinMagFilter,
+        SamplerState, TextureDescriptor, TextureType, TextureUsage,
     };
     use metal2vulkan::metal::sampler::SamplerWord;
 
@@ -150,6 +153,65 @@ mod on_device {
                 (0, 0, 0),
                 "{name}"
             );
+        }
+    }
+
+    /// A state bound with LOD clamps that read as its own, `(0, 1000)` over its `(0, FLT_MAX)` as
+    /// a replay stream binds it, and `(-1, infinity)`, binds on the compute encoder and on the
+    /// render encoder's vertex and fragment functions; clamps that read otherwise, a raised lower
+    /// bound, an upper bound below the last level a sample can read, or a NaN, are
+    /// `Gap::LodClamps` on each. No state binds with any clamps.
+    #[test]
+    fn every_device_binds_a_state_with_clamps_that_read_as_its_own() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(
+            !devices.is_empty(),
+            "the loader lists no device of this cfg's kind"
+        );
+        for (name, physical) in devices {
+            let device = Device::new(&physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let _grant = device
+                .grant_indices(IndexClass::Sampler, 1, 1)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let state = device
+                .new_sampler_state(&SamplerDescriptor::new(), 1)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let bound = |result: Result<(), Error>| {
+                result.unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            let gap = |result: Result<(), Error>| {
+                assert!(
+                    matches!(result, Err(Error::Unsupported(Gap::LodClamps))),
+                    "{name}: {result:?}"
+                )
+            };
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut compute = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            bound(compute.set_sampler_state_with_lod_clamps(Some(&state), 0.0, 1000.0, 0));
+            bound(compute.set_sampler_state_with_lod_clamps(Some(&state), -1.0, f32::INFINITY, 1));
+            gap(compute.set_sampler_state_with_lod_clamps(Some(&state), 0.5, f32::MAX, 2));
+            bound(compute.set_sampler_state_with_lod_clamps(None, 3.0, 2.0, 2));
+            compute.end_encoding();
+            let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+            d.usage = TextureUsage::RENDER_TARGET;
+            let color =
+                (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut pass = RenderPassDescriptor::default();
+            pass.color_attachments[0].texture = Some(color);
+            let mut render = (command_buffer.render_command_encoder(&pass))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            bound(render.set_vertex_sampler_state_with_lod_clamps(Some(&state), 0.0, 1000.0, 0));
+            bound(render.set_fragment_sampler_state_with_lod_clamps(Some(&state), 0.0, 1000.0, 0));
+            gap(render.set_vertex_sampler_state_with_lod_clamps(Some(&state), 0.0, 14.0, 1));
+            gap(render.set_fragment_sampler_state_with_lod_clamps(Some(&state), 0.0, f32::NAN, 1));
+            render.end_encoding();
+            command_buffer.commit().expect("a commit");
+            crate::tests::command::on_device::finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
         }
     }
 

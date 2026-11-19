@@ -790,6 +790,15 @@ pub enum Gap {
     /// Basis: ours (the translator's identity domains do not filter bicubically, and Vulkan's
     /// cubic filter is not Metal's).
     CubicSampler,
+    /// A sampler state bound with LOD clamps its samples read otherwise through
+    /// ([`ComputeCommandEncoder::set_sampler_state_with_lod_clamps`](crate::ComputeCommandEncoder::set_sampler_state_with_lod_clamps)
+    /// and the render encoder's vertex and fragment forms): a bound that differs from the state's
+    /// own once both are held to the levels a sample can read
+    /// ([`lod_clamps_read_alike`](metal2vulkan::metal::sampler::lod_clamps_read_alike)).
+    ///
+    /// Basis: ours (no replay stream binds such clamps: every bind-time clamp the streams make
+    /// reads as its state's own).
+    LodClamps,
     /// [`Texture::replace_region`](crate::Texture::replace_region),
     /// [`Texture::get_bytes`](crate::Texture::get_bytes) or a blit copy between a buffer and a
     /// texture
@@ -1503,6 +1512,9 @@ impl fmt::Display for Gap {
             Gap::MemorylessTexture => f.write_str("Memoryless textures are not built"),
             Gap::CubeArrayTexture => f.write_str("cube array textures are not built"),
             Gap::CubicSampler => f.write_str("cubic sampler filters are not built"),
+            Gap::LodClamps => f.write_str(
+                "a sampler state's bind-time LOD clamps that read otherwise than its own are not built",
+            ),
             Gap::TextureBuffer => f.write_str("texture buffers are not built"),
             Gap::TextureFormat { pixel_format } => write!(
                 f,

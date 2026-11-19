@@ -653,6 +653,14 @@ made, with no lock, and never rewritten for layouts.
 - Anisotropy is the device's own filter (`samplerAnisotropy` is in the floor). A cubic filter is
   `Gap::CubicSampler`. A descriptor the translator makes no device sampler of is
   `Error::Translation`.
+- A state bound with LOD clamps (`set_sampler_state_with_lod_clamps`, and the render encoder's
+  `set_vertex_sampler_state_with_lod_clamps` and `set_fragment_sampler_state_with_lod_clamps`:
+  Metal's `lodMinClamp:lodMaxClamp:` forms, whose range forms are loops of them) is bound as it
+  is where its samples read alike with its clamps replaced by these: each bound, held to `[0,
+  15]`, is the state's own so held (`metal::sampler::lod_clamps_read_alike`). A sample's level
+  lies in `[0, 14]` (Metal's largest textures have 15 levels), so a clamp of 1000 over a state's
+  `FLT_MAX`, which a replay stream binds, reads as the state's own. Clamps that read otherwise
+  are `Gap::LodClamps`, and nothing is bound.
 
 ## Queues, command buffers and events
 

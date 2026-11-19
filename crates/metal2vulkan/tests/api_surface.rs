@@ -1029,6 +1029,7 @@ surface! {
         fn check_sampler;
         fn vk_sampler;
         fn device_lod_bias;
+        fn lod_clamps_read_alike;
         fn check_border_swizzle;
         fn check_border_view;
         fn opaque_black_reads_transparent;

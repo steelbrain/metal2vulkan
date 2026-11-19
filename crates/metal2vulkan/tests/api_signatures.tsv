@@ -6185,6 +6185,7 @@ fn	metal2vulkan::metal::sampler::check_border_view	pub fn check_border_view(opaq
 fn	metal2vulkan::metal::sampler::check_sampler	pub fn check_sampler(shape: &SamplerShape, use_: SamplerUse, profile: &DeviceProfile) -> Result<(), Error>
 fn	metal2vulkan::metal::sampler::compare_op	pub fn compare_op(f: CompareFunction) -> vk::CompareOp
 fn	metal2vulkan::metal::sampler::device_lod_bias	pub fn device_lod_bias(lod_bias: f32, profile: &DeviceProfile) -> DeviceLodBias
+fn	metal2vulkan::metal::sampler::lod_clamps_read_alike	pub fn lod_clamps_read_alike(desc: &SamplerDescriptor, lod_min_clamp: f32, lod_max_clamp: f32) -> bool
 fn	metal2vulkan::metal::sampler::opaque_black_border	pub fn opaque_black_border(pf: PixelFormat, mapping: &FormatMapping, swizzle: TextureSwizzleChannels, profile: &DeviceProfile) -> Result<OpaqueBlackBorder, Error>
 fn	metal2vulkan::metal::sampler::opaque_black_reads_transparent	pub fn opaque_black_reads_transparent(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> bool
 fn	metal2vulkan::metal::sampler::vk_sampler	pub fn vk_sampler(desc: &SamplerDescriptor, use_: SamplerUse, profile: &DeviceProfile) -> Result<vk::SamplerDesc, Error>
@@ -9511,6 +9512,7 @@ method	metal2vulkan-rt::ComputeCommandEncoder::set_buffer_offset	pub fn set_buff
 method	metal2vulkan-rt::ComputeCommandEncoder::set_bytes	pub fn set_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_compute_pipeline_state	pub fn set_compute_pipeline_state(&mut self, state: &ComputePipelineState) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_sampler_state	pub fn set_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::set_sampler_state_with_lod_clamps	pub fn set_sampler_state_with_lod_clamps(&mut self, sampler: Option<&SamplerState>, lod_min_clamp: f32, lod_max_clamp: f32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_texture	pub fn set_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_threadgroup_memory_length	pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
@@ -9604,6 +9606,7 @@ method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_buffer	pub fn set_fra
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_buffer_offset	pub fn set_fragment_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_bytes	pub fn set_fragment_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_sampler_state	pub fn set_fragment_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps	pub fn set_fragment_sampler_state_with_lod_clamps(&mut self, sampler: Option<&SamplerState>, lod_min_clamp: f32, lod_max_clamp: f32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_texture	pub fn set_fragment_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_front_facing_winding	pub fn set_front_facing_winding(&mut self, winding: Winding)
 method	metal2vulkan-rt::RenderCommandEncoder::set_render_pipeline_state	pub fn set_render_pipeline_state(&mut self, state: &RenderPipelineState) -> Result<(), Error>
@@ -9617,6 +9620,7 @@ method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_buffer	pub fn set_verte
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_buffer_offset	pub fn set_vertex_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_bytes	pub fn set_vertex_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_sampler_state	pub fn set_vertex_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_sampler_state_with_lod_clamps	pub fn set_vertex_sampler_state_with_lod_clamps(&mut self, sampler: Option<&SamplerState>, lod_min_clamp: f32, lod_max_clamp: f32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_texture	pub fn set_vertex_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_viewport	pub fn set_viewport(&mut self, viewport: Viewport) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_viewports	pub fn set_viewports(&mut self, viewports: &[Viewport]) -> Result<(), Error>
@@ -13650,6 +13654,7 @@ variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: 
 variant	metal2vulkan-rt::Gap::HeapTexture	HeapTexture { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
 variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
+variant	metal2vulkan-rt::Gap::LodClamps	LodClamps
 variant	metal2vulkan-rt::Gap::MemorylessTexture	MemorylessTexture
 variant	metal2vulkan-rt::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_threadgroup: [u32; 3], width: u32 }
 variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }

@@ -284,6 +284,26 @@ pub(crate) fn mipmapped_min_lod(lo: f32) -> f32 {
     lo.clamp(0.0, LAST_WORD_LEVEL as f32)
 }
 
+/// Whether `desc` samples alike with its LOD clamps replaced by `lod_min_clamp` and
+/// `lod_max_clamp`, as Metal's bind-time clamps replace them
+/// (`setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:`, its vertex and compute forms, and
+/// their range forms): where each bound, held to `[0, LAST_WORD_LEVEL]`, is the descriptor's own
+/// so held. A sample's level is clamped into the bounds and then to the texture's levels, which
+/// are at least 0 and at most 14 (Metal's largest textures have 15 levels), so a bound below 0
+/// clamps as 0 does and every bound at or past [`LAST_WORD_LEVEL`] clamps nothing, in Metal's
+/// sampler, in the device sampler [`vk_sampler`] makes (Vulkan clamps the level into `[minLod,
+/// maxLod]` and then to the view's levels) and in the word [`SamplerWord::of`] makes. A NaN bound
+/// reads alike with none.
+pub fn lod_clamps_read_alike(
+    desc: &SamplerDescriptor,
+    lod_min_clamp: f32,
+    lod_max_clamp: f32,
+) -> bool {
+    let held = |c: f32| c.clamp(0.0, LAST_WORD_LEVEL as f32);
+    held(lod_min_clamp) == held(desc.lod_min_clamp)
+        && held(lod_max_clamp) == held(desc.lod_max_clamp)
+}
+
 /// Metal's level clamp bound `c` on the sixty-fourths grid of its level and weight: its value at or
 /// above 0, truncated onto sixty-fourths. Metal clamps a sample's level into the sampler's clamp
 /// before truncating it, so a level clamped by bounds on the grid truncates to the level clamped by
@@ -1223,6 +1243,55 @@ mod tests {
             compare_function: CompareFunction::Never,
             reduction_mode: SamplerReductionMode::WeightedAverage,
             lod_bias: 0.0,
+        }
+    }
+
+    /// Bind-time clamps read as the descriptor's own where each bound held to the levels a sample
+    /// can read is the descriptor's: a replay's `(0, 1000)` over a state's `(0, FLT_MAX)` among
+    /// them. Each pair that reads alike gives the descriptor's word and its device sampler's
+    /// `minLod`, and a `maxLod` at or past every level.
+    #[test]
+    fn bind_time_lod_clamps_read_alike_where_each_held_bound_is_the_descriptors() {
+        let desc = metal_default();
+        assert!(lod_clamps_read_alike(&desc, 0.0, 1000.0));
+        assert!(lod_clamps_read_alike(&desc, -1.0, f32::INFINITY));
+        assert!(lod_clamps_read_alike(&desc, -0.0, LAST_WORD_LEVEL as f32));
+        assert!(!lod_clamps_read_alike(&desc, 0.0, 14.0));
+        assert!(!lod_clamps_read_alike(&desc, 0.5, f32::MAX));
+        assert!(!lod_clamps_read_alike(&desc, f32::NAN, f32::MAX));
+        assert!(!lod_clamps_read_alike(&desc, 0.0, f32::NAN));
+        let raised = SamplerDescriptor {
+            lod_min_clamp: 2.25,
+            lod_max_clamp: 6.5,
+            ..metal_default()
+        };
+        assert!(lod_clamps_read_alike(&raised, 2.25, 6.5));
+        assert!(!lod_clamps_read_alike(&raised, 2.25, 6.75));
+        for mip_filter in [
+            SamplerMipFilter::NotMipmapped,
+            SamplerMipFilter::Nearest,
+            SamplerMipFilter::Linear,
+        ] {
+            let own = SamplerDescriptor {
+                mip_filter,
+                ..metal_default()
+            };
+            for (lo, hi) in [(0.0, 1000.0), (-1.0, f32::INFINITY), (0.0, 15.0)] {
+                assert!(lod_clamps_read_alike(&own, lo, hi));
+                let bound = SamplerDescriptor {
+                    lod_min_clamp: lo,
+                    lod_max_clamp: hi,
+                    ..own
+                };
+                assert_eq!(SamplerWord::of(&bound).0, SamplerWord::of(&own).0);
+                assert_eq!(query_min_level(&bound), query_min_level(&own));
+                assert_eq!(mipmapped_min_lod(lo), mipmapped_min_lod(own.lod_min_clamp));
+                assert_eq!(
+                    not_mipmapped_lods(lo, hi),
+                    not_mipmapped_lods(0.0, f32::MAX)
+                );
+                assert!(hi >= LAST_WORD_LEVEL as f32);
+            }
         }
     }
 
