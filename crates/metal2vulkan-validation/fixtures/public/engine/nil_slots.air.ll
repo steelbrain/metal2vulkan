@@ -37,182 +37,163 @@ define <{ <4 x float> }> @nil_vertex(i32 noundef %0, %struct._texture_2d_t addrs
 define internal fastcc void @_ZL6probesN5metal9texture2dIfLNS_6accessE0ELNS_16memory_coherenceE0EvEERU11MTLconstantK8TexturesNS_7samplerEPU9MTLdevicej(%struct._texture_2d_t addrspace(1)* nocapture readonly %0, %struct.Textures addrspace(2)* nocapture noundef readonly align 8 dereferenceable(32) %1, %struct._sampler_t addrspace(2)* nocapture readonly %2, i32 addrspace(1)* nocapture noundef writeonly %3) unnamed_addr #1 {
   %5 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %0, %struct._sampler_t addrspace(2)* nocapture readonly %2, <2 x float> <float 2.500000e-01, float 7.500000e-01>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.000000e+00, float 0.000000e+00, i32 0) #9
   %6 = extractvalue { <4 x float>, i8 } %5, 0
-  %7 = tail call %struct._sampler_t addrspace(2)* @air.get_read_sampler() #10
-  %8 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %0, %struct._sampler_t addrspace(2)* %7, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
-  %9 = extractvalue { <4 x float>, i8 } %8, 0
-  %10 = bitcast <4 x float> %6 to <4 x i32>
-  %11 = bitcast <4 x float> %9 to <4 x i32>
-  br label %12
+  %7 = bitcast <4 x float> %6 to <4 x i32>
+  br label %21
 
-12:                                               ; preds = %12, %4
-  %13 = phi i32 [ 0, %4 ], [ %21, %12 ]
-  %14 = extractelement <4 x i32> %10, i32 %13
-  %15 = zext i32 %13 to i64
-  %16 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 %15
-  store i32 %14, i32 addrspace(1)* %16, align 4, !tbaa !44
-  %17 = extractelement <4 x i32> %11, i32 %13
-  %18 = add nuw nsw i32 %13, 4
-  %19 = zext i32 %18 to i64
-  %20 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 %19
-  store i32 %17, i32 addrspace(1)* %20, align 4, !tbaa !44
-  %21 = add nuw nsw i32 %13, 1
-  %22 = icmp eq i32 %21, 4
-  br i1 %22, label %23, label %12, !llvm.loop !55
+8:                                                ; preds = %21
+  %9 = tail call %struct._sampler_t addrspace(2)* @air.get_read_sampler() #10
+  %10 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %0, %struct._sampler_t addrspace(2)* %9, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
+  %11 = extractvalue { <4 x float>, i8 } %10, 0
+  %12 = bitcast <4 x float> %11 to <4 x i32>
+  br label %13
 
-23:                                               ; preds = %12
-  %24 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %0, i32 0) #11
-  %25 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 8
-  store i32 %24, i32 addrspace(1)* %25, align 4, !tbaa !44
-  %26 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %0, i32 0) #11
-  %27 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 9
-  store i32 %26, i32 addrspace(1)* %27, align 4, !tbaa !44
-  %28 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %0) #11
-  %29 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 10
-  store i32 %28, i32 addrspace(1)* %29, align 4, !tbaa !44
-  %30 = getelementptr inbounds %struct.Textures, %struct.Textures addrspace(2)* %1, i64 0, i32 0, i32 0, i64 0, i32 0
-  %31 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %30, align 8
-  %32 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 11
-  %33 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %31, %struct._sampler_t addrspace(2)* nocapture readonly %2, <2 x float> <float 2.500000e-01, float 7.500000e-01>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.000000e+00, float 0.000000e+00, i32 0) #9
-  %34 = extractvalue { <4 x float>, i8 } %33, 0
-  %35 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %31, %struct._sampler_t addrspace(2)* %7, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
-  %36 = extractvalue { <4 x float>, i8 } %35, 0
-  %37 = bitcast <4 x float> %34 to <4 x i32>
-  %38 = bitcast <4 x float> %36 to <4 x i32>
-  br label %39
+13:                                               ; preds = %13, %8
+  %14 = phi i32 [ 0, %8 ], [ %19, %13 ]
+  %15 = extractelement <4 x i32> %12, i32 %14
+  %16 = add nuw nsw i32 %14, 4
+  %17 = zext i32 %16 to i64
+  %18 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 %17
+  store i32 %15, i32 addrspace(1)* %18, align 4, !tbaa !44
+  %19 = add nuw nsw i32 %14, 1
+  %20 = icmp eq i32 %19, 4
+  br i1 %20, label %28, label %13, !llvm.loop !55
 
-39:                                               ; preds = %39, %23
-  %40 = phi i32 [ 0, %23 ], [ %48, %39 ]
-  %41 = extractelement <4 x i32> %37, i32 %40
-  %42 = zext i32 %40 to i64
-  %43 = getelementptr inbounds i32, i32 addrspace(1)* %32, i64 %42
-  store i32 %41, i32 addrspace(1)* %43, align 4, !tbaa !44
-  %44 = extractelement <4 x i32> %38, i32 %40
-  %45 = add nuw nsw i32 %40, 4
-  %46 = zext i32 %45 to i64
-  %47 = getelementptr inbounds i32, i32 addrspace(1)* %32, i64 %46
-  store i32 %44, i32 addrspace(1)* %47, align 4, !tbaa !44
-  %48 = add nuw nsw i32 %40, 1
-  %49 = icmp eq i32 %48, 4
-  br i1 %49, label %50, label %39, !llvm.loop !55
+21:                                               ; preds = %21, %4
+  %22 = phi i32 [ 0, %4 ], [ %26, %21 ]
+  %23 = extractelement <4 x i32> %7, i32 %22
+  %24 = zext i32 %22 to i64
+  %25 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 %24
+  store i32 %23, i32 addrspace(1)* %25, align 4, !tbaa !44
+  %26 = add nuw nsw i32 %22, 1
+  %27 = icmp eq i32 %26, 4
+  br i1 %27, label %8, label %21, !llvm.loop !57
 
-50:                                               ; preds = %39
-  %51 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %31, i32 0) #11
-  %52 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 19
-  store i32 %51, i32 addrspace(1)* %52, align 4, !tbaa !44
-  %53 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %31, i32 0) #11
-  %54 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 20
-  store i32 %53, i32 addrspace(1)* %54, align 4, !tbaa !44
-  %55 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %31) #11
-  %56 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 21
-  store i32 %55, i32 addrspace(1)* %56, align 4, !tbaa !44
-  %57 = getelementptr inbounds %struct.Textures, %struct.Textures addrspace(2)* %1, i64 0, i32 0, i32 0, i64 1, i32 0
-  %58 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %57, align 8
-  %59 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 22
-  %60 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %58, %struct._sampler_t addrspace(2)* nocapture readonly %2, <2 x float> <float 2.500000e-01, float 7.500000e-01>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.000000e+00, float 0.000000e+00, i32 0) #9
-  %61 = extractvalue { <4 x float>, i8 } %60, 0
-  %62 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %58, %struct._sampler_t addrspace(2)* %7, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
-  %63 = extractvalue { <4 x float>, i8 } %62, 0
-  %64 = bitcast <4 x float> %61 to <4 x i32>
-  %65 = bitcast <4 x float> %63 to <4 x i32>
-  br label %66
+28:                                               ; preds = %13
+  %29 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %0, i32 0) #11
+  %30 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 8
+  store i32 %29, i32 addrspace(1)* %30, align 4, !tbaa !44
+  %31 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %0, i32 0) #11
+  %32 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 9
+  store i32 %31, i32 addrspace(1)* %32, align 4, !tbaa !44
+  %33 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %0) #11
+  %34 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 10
+  store i32 %33, i32 addrspace(1)* %34, align 4, !tbaa !44
+  %35 = getelementptr inbounds %struct.Textures, %struct.Textures addrspace(2)* %1, i64 0, i32 0, i32 0, i64 0, i32 0
+  %36 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %35, align 8
+  %37 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 11
+  %38 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %36, %struct._sampler_t addrspace(2)* %9, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
+  %39 = extractvalue { <4 x float>, i8 } %38, 0
+  %40 = bitcast <4 x float> %39 to <4 x i32>
+  br label %41
 
-66:                                               ; preds = %66, %50
-  %67 = phi i32 [ 0, %50 ], [ %75, %66 ]
-  %68 = extractelement <4 x i32> %64, i32 %67
-  %69 = zext i32 %67 to i64
-  %70 = getelementptr inbounds i32, i32 addrspace(1)* %59, i64 %69
-  store i32 %68, i32 addrspace(1)* %70, align 4, !tbaa !44
-  %71 = extractelement <4 x i32> %65, i32 %67
-  %72 = add nuw nsw i32 %67, 4
-  %73 = zext i32 %72 to i64
-  %74 = getelementptr inbounds i32, i32 addrspace(1)* %59, i64 %73
-  store i32 %71, i32 addrspace(1)* %74, align 4, !tbaa !44
-  %75 = add nuw nsw i32 %67, 1
-  %76 = icmp eq i32 %75, 4
-  br i1 %76, label %77, label %66, !llvm.loop !55
+41:                                               ; preds = %41, %28
+  %42 = phi i32 [ 0, %28 ], [ %47, %41 ]
+  %43 = extractelement <4 x i32> %40, i32 %42
+  %44 = add nuw nsw i32 %42, 4
+  %45 = zext i32 %44 to i64
+  %46 = getelementptr inbounds i32, i32 addrspace(1)* %37, i64 %45
+  store i32 %43, i32 addrspace(1)* %46, align 4, !tbaa !44
+  %47 = add nuw nsw i32 %42, 1
+  %48 = icmp eq i32 %47, 4
+  br i1 %48, label %49, label %41, !llvm.loop !55
 
-77:                                               ; preds = %66
-  %78 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %58, i32 0) #11
-  %79 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 30
-  store i32 %78, i32 addrspace(1)* %79, align 4, !tbaa !44
-  %80 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %58, i32 0) #11
-  %81 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 31
-  store i32 %80, i32 addrspace(1)* %81, align 4, !tbaa !44
-  %82 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %58) #11
-  %83 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 32
-  store i32 %82, i32 addrspace(1)* %83, align 4, !tbaa !44
-  %84 = getelementptr inbounds %struct.Textures, %struct.Textures addrspace(2)* %1, i64 0, i32 0, i32 0, i64 2, i32 0
-  %85 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %84, align 8
-  %86 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 33
-  %87 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %85, %struct._sampler_t addrspace(2)* nocapture readonly %2, <2 x float> <float 2.500000e-01, float 7.500000e-01>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.000000e+00, float 0.000000e+00, i32 0) #9
-  %88 = extractvalue { <4 x float>, i8 } %87, 0
-  %89 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %85, %struct._sampler_t addrspace(2)* %7, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
-  %90 = extractvalue { <4 x float>, i8 } %89, 0
-  %91 = bitcast <4 x float> %88 to <4 x i32>
-  %92 = bitcast <4 x float> %90 to <4 x i32>
-  br label %93
+49:                                               ; preds = %41
+  %50 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %36, i32 0) #11
+  %51 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 19
+  store i32 %50, i32 addrspace(1)* %51, align 4, !tbaa !44
+  %52 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %36, i32 0) #11
+  %53 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 20
+  store i32 %52, i32 addrspace(1)* %53, align 4, !tbaa !44
+  %54 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %36) #11
+  %55 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 21
+  store i32 %54, i32 addrspace(1)* %55, align 4, !tbaa !44
+  %56 = getelementptr inbounds %struct.Textures, %struct.Textures addrspace(2)* %1, i64 0, i32 0, i32 0, i64 1, i32 0
+  %57 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %56, align 8
+  %58 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 22
+  %59 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %57, %struct._sampler_t addrspace(2)* %9, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
+  %60 = extractvalue { <4 x float>, i8 } %59, 0
+  %61 = bitcast <4 x float> %60 to <4 x i32>
+  br label %62
 
-93:                                               ; preds = %93, %77
-  %94 = phi i32 [ 0, %77 ], [ %102, %93 ]
-  %95 = extractelement <4 x i32> %91, i32 %94
-  %96 = zext i32 %94 to i64
-  %97 = getelementptr inbounds i32, i32 addrspace(1)* %86, i64 %96
-  store i32 %95, i32 addrspace(1)* %97, align 4, !tbaa !44
-  %98 = extractelement <4 x i32> %92, i32 %94
-  %99 = add nuw nsw i32 %94, 4
-  %100 = zext i32 %99 to i64
-  %101 = getelementptr inbounds i32, i32 addrspace(1)* %86, i64 %100
-  store i32 %98, i32 addrspace(1)* %101, align 4, !tbaa !44
-  %102 = add nuw nsw i32 %94, 1
-  %103 = icmp eq i32 %102, 4
-  br i1 %103, label %104, label %93, !llvm.loop !55
+62:                                               ; preds = %62, %49
+  %63 = phi i32 [ 0, %49 ], [ %68, %62 ]
+  %64 = extractelement <4 x i32> %61, i32 %63
+  %65 = add nuw nsw i32 %63, 4
+  %66 = zext i32 %65 to i64
+  %67 = getelementptr inbounds i32, i32 addrspace(1)* %58, i64 %66
+  store i32 %64, i32 addrspace(1)* %67, align 4, !tbaa !44
+  %68 = add nuw nsw i32 %63, 1
+  %69 = icmp eq i32 %68, 4
+  br i1 %69, label %70, label %62, !llvm.loop !55
 
-104:                                              ; preds = %93
-  %105 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %85, i32 0) #11
-  %106 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 41
-  store i32 %105, i32 addrspace(1)* %106, align 4, !tbaa !44
-  %107 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %85, i32 0) #11
-  %108 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 42
-  store i32 %107, i32 addrspace(1)* %108, align 4, !tbaa !44
-  %109 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %85) #11
-  %110 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 43
-  store i32 %109, i32 addrspace(1)* %110, align 4, !tbaa !44
-  %111 = getelementptr inbounds %struct.Textures, %struct.Textures addrspace(2)* %1, i64 0, i32 0, i32 0, i64 3, i32 0
-  %112 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %111, align 8
-  %113 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 44
-  %114 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %112, %struct._sampler_t addrspace(2)* nocapture readonly %2, <2 x float> <float 2.500000e-01, float 7.500000e-01>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.000000e+00, float 0.000000e+00, i32 0) #9
-  %115 = extractvalue { <4 x float>, i8 } %114, 0
-  %116 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %112, %struct._sampler_t addrspace(2)* %7, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
-  %117 = extractvalue { <4 x float>, i8 } %116, 0
-  %118 = bitcast <4 x float> %115 to <4 x i32>
-  %119 = bitcast <4 x float> %117 to <4 x i32>
-  br label %120
+70:                                               ; preds = %62
+  %71 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %57, i32 0) #11
+  %72 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 30
+  store i32 %71, i32 addrspace(1)* %72, align 4, !tbaa !44
+  %73 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %57, i32 0) #11
+  %74 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 31
+  store i32 %73, i32 addrspace(1)* %74, align 4, !tbaa !44
+  %75 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %57) #11
+  %76 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 32
+  store i32 %75, i32 addrspace(1)* %76, align 4, !tbaa !44
+  %77 = getelementptr inbounds %struct.Textures, %struct.Textures addrspace(2)* %1, i64 0, i32 0, i32 0, i64 2, i32 0
+  %78 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %77, align 8
+  %79 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 33
+  %80 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %78, %struct._sampler_t addrspace(2)* %9, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
+  %81 = extractvalue { <4 x float>, i8 } %80, 0
+  %82 = bitcast <4 x float> %81 to <4 x i32>
+  br label %83
 
-120:                                              ; preds = %120, %104
-  %121 = phi i32 [ 0, %104 ], [ %129, %120 ]
-  %122 = extractelement <4 x i32> %118, i32 %121
-  %123 = zext i32 %121 to i64
-  %124 = getelementptr inbounds i32, i32 addrspace(1)* %113, i64 %123
-  store i32 %122, i32 addrspace(1)* %124, align 4, !tbaa !44
-  %125 = extractelement <4 x i32> %119, i32 %121
-  %126 = add nuw nsw i32 %121, 4
-  %127 = zext i32 %126 to i64
-  %128 = getelementptr inbounds i32, i32 addrspace(1)* %113, i64 %127
-  store i32 %125, i32 addrspace(1)* %128, align 4, !tbaa !44
-  %129 = add nuw nsw i32 %121, 1
-  %130 = icmp eq i32 %129, 4
-  br i1 %130, label %131, label %120, !llvm.loop !55
+83:                                               ; preds = %83, %70
+  %84 = phi i32 [ 0, %70 ], [ %89, %83 ]
+  %85 = extractelement <4 x i32> %82, i32 %84
+  %86 = add nuw nsw i32 %84, 4
+  %87 = zext i32 %86 to i64
+  %88 = getelementptr inbounds i32, i32 addrspace(1)* %79, i64 %87
+  store i32 %85, i32 addrspace(1)* %88, align 4, !tbaa !44
+  %89 = add nuw nsw i32 %84, 1
+  %90 = icmp eq i32 %89, 4
+  br i1 %90, label %91, label %83, !llvm.loop !55
 
-131:                                              ; preds = %120
-  %132 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %112, i32 0) #11
-  %133 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 52
-  store i32 %132, i32 addrspace(1)* %133, align 4, !tbaa !44
-  %134 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %112, i32 0) #11
-  %135 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 53
-  store i32 %134, i32 addrspace(1)* %135, align 4, !tbaa !44
-  %136 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %112) #11
-  %137 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 54
-  store i32 %136, i32 addrspace(1)* %137, align 4, !tbaa !44
+91:                                               ; preds = %83
+  %92 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %78, i32 0) #11
+  %93 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 41
+  store i32 %92, i32 addrspace(1)* %93, align 4, !tbaa !44
+  %94 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %78, i32 0) #11
+  %95 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 42
+  store i32 %94, i32 addrspace(1)* %95, align 4, !tbaa !44
+  %96 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %78) #11
+  %97 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 43
+  store i32 %96, i32 addrspace(1)* %97, align 4, !tbaa !44
+  %98 = getelementptr inbounds %struct.Textures, %struct.Textures addrspace(2)* %1, i64 0, i32 0, i32 0, i64 3, i32 0
+  %99 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %98, align 8
+  %100 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 44
+  %101 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* nocapture readonly %99, %struct._sampler_t addrspace(2)* %9, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 0) #11
+  %102 = extractvalue { <4 x float>, i8 } %101, 0
+  %103 = bitcast <4 x float> %102 to <4 x i32>
+  br label %104
+
+104:                                              ; preds = %104, %91
+  %105 = phi i32 [ 0, %91 ], [ %110, %104 ]
+  %106 = extractelement <4 x i32> %103, i32 %105
+  %107 = add nuw nsw i32 %105, 4
+  %108 = zext i32 %107 to i64
+  %109 = getelementptr inbounds i32, i32 addrspace(1)* %100, i64 %108
+  store i32 %106, i32 addrspace(1)* %109, align 4, !tbaa !44
+  %110 = add nuw nsw i32 %105, 1
+  %111 = icmp eq i32 %110, 4
+  br i1 %111, label %112, label %104, !llvm.loop !55
+
+112:                                              ; preds = %104
+  %113 = tail call i32 @air.get_width_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %99, i32 0) #11
+  %114 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 52
+  store i32 %113, i32 addrspace(1)* %114, align 4, !tbaa !44
+  %115 = tail call i32 @air.get_height_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %99, i32 0) #11
+  %116 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 53
+  store i32 %115, i32 addrspace(1)* %116, align 4, !tbaa !44
+  %117 = tail call i32 @air.get_num_mip_levels_texture_2d(%struct._texture_2d_t addrspace(1)* nocapture readonly %99) #11
+  %118 = getelementptr inbounds i32, i32 addrspace(1)* %3, i64 54
+  store i32 %117, i32 addrspace(1)* %118, align 4, !tbaa !44
   ret void
 }
 
@@ -238,7 +219,7 @@ define <{ <4 x float> }> @nil_post_tess(%struct._patch_control_point_t* %0, <4 x
 19:                                               ; preds = %22
   %20 = add nuw nsw i32 %16, 1
   %21 = icmp eq i32 %20, 3
-  br i1 %21, label %35, label %15, !llvm.loop !57
+  br i1 %21, label %35, label %15, !llvm.loop !58
 
 22:                                               ; preds = %15, %22
   %23 = phi i32 [ 0, %15 ], [ %31, %22 ]
@@ -249,14 +230,14 @@ define <{ <4 x float> }> @nil_post_tess(%struct._patch_control_point_t* %0, <4 x
   %28 = add nuw nsw i32 %18, %23
   %29 = zext i32 %28 to i64
   %30 = getelementptr inbounds i32, i32 addrspace(1)* %7, i64 %29
-  store i32 %27, i32 addrspace(1)* %30, align 4, !tbaa !44, !alias.scope !58, !noalias !61
+  store i32 %27, i32 addrspace(1)* %30, align 4, !tbaa !44, !alias.scope !59, !noalias !62
   %31 = add nuw nsw i32 %23, 1
   %32 = icmp eq i32 %31, 4
-  br i1 %32, label %19, label %22, !llvm.loop !65
+  br i1 %32, label %19, label %22, !llvm.loop !66
 
 33:                                               ; preds = %35
   %34 = getelementptr inbounds i32, i32 addrspace(1)* %7, i64 72
-  store i32 2, i32 addrspace(1)* %34, align 4, !tbaa !44, !alias.scope !58, !noalias !61
+  store i32 2, i32 addrspace(1)* %34, align 4, !tbaa !44, !alias.scope !59, !noalias !62
   br label %43
 
 35:                                               ; preds = %19, %35
@@ -265,10 +246,10 @@ define <{ <4 x float> }> @nil_post_tess(%struct._patch_control_point_t* %0, <4 x
   %38 = add nuw nsw i32 %36, 68
   %39 = zext i32 %38 to i64
   %40 = getelementptr inbounds i32, i32 addrspace(1)* %7, i64 %39
-  store i32 %37, i32 addrspace(1)* %40, align 4, !tbaa !44, !alias.scope !58, !noalias !61
+  store i32 %37, i32 addrspace(1)* %40, align 4, !tbaa !44, !alias.scope !59, !noalias !62
   %41 = add nuw nsw i32 %36, 1
   %42 = icmp eq i32 %41, 4
-  br i1 %42, label %33, label %35, !llvm.loop !66
+  br i1 %42, label %33, label %35, !llvm.loop !67
 
 43:                                               ; preds = %33, %8
   %44 = shufflevector <3 x float> %2, <3 x float> undef, <4 x i32> zeroinitializer
@@ -309,7 +290,7 @@ define <4 x float> @nil_fragment(<4 x float> %0, %struct._texture_2d_t addrspace
   %14 = getelementptr inbounds i32, i32 addrspace(1)* %4, i64 152
   %15 = getelementptr inbounds i32, i32 addrspace(1)* %4, i64 80
   tail call fastcc void @_ZL6probesN5metal9texture2dIfLNS_6accessE0ELNS_16memory_coherenceE0EvEERU11MTLconstantK8TexturesNS_7samplerEPU9MTLdevicej(%struct._texture_2d_t addrspace(1)* %1, %struct.Textures addrspace(2)* noundef align 8 dereferenceable(32) %3, %struct._sampler_t addrspace(2)* %2, i32 addrspace(1)* noundef %15) #8
-  store i32 3, i32 addrspace(1)* %14, align 4, !tbaa !44, !alias.scope !67, !noalias !70
+  store i32 3, i32 addrspace(1)* %14, align 4, !tbaa !44, !alias.scope !68, !noalias !71
   br label %16
 
 16:                                               ; preds = %13, %9, %5
@@ -418,19 +399,20 @@ attributes #13 = { nounwind readnone willreturn }
 !55 = distinct !{!55, !56}
 !56 = !{!"llvm.loop.mustprogress"}
 !57 = distinct !{!57, !56}
-!58 = !{!59}
-!59 = distinct !{!59, !60, !"air-alias-scope-arg(7)"}
-!60 = distinct !{!60, !"air-alias-scopes(nil_post_tess)"}
-!61 = !{!62, !63, !64}
-!62 = distinct !{!62, !60, !"air-alias-scope-textures"}
-!63 = distinct !{!63, !60, !"air-alias-scope-samplers"}
-!64 = distinct !{!64, !60, !"air-alias-scope-arg(6)"}
-!65 = distinct !{!65, !56}
+!58 = distinct !{!58, !56}
+!59 = !{!60}
+!60 = distinct !{!60, !61, !"air-alias-scope-arg(7)"}
+!61 = distinct !{!61, !"air-alias-scopes(nil_post_tess)"}
+!62 = !{!63, !64, !65}
+!63 = distinct !{!63, !61, !"air-alias-scope-textures"}
+!64 = distinct !{!64, !61, !"air-alias-scope-samplers"}
+!65 = distinct !{!65, !61, !"air-alias-scope-arg(6)"}
 !66 = distinct !{!66, !56}
-!67 = !{!68}
-!68 = distinct !{!68, !69, !"air-alias-scope-arg(4)"}
-!69 = distinct !{!69, !"air-alias-scopes(nil_fragment)"}
-!70 = !{!71, !72, !73}
-!71 = distinct !{!71, !69, !"air-alias-scope-textures"}
-!72 = distinct !{!72, !69, !"air-alias-scope-samplers"}
-!73 = distinct !{!73, !69, !"air-alias-scope-arg(3)"}
+!67 = distinct !{!67, !56}
+!68 = !{!69}
+!69 = distinct !{!69, !70, !"air-alias-scope-arg(4)"}
+!70 = distinct !{!70, !"air-alias-scopes(nil_fragment)"}
+!71 = !{!72, !73, !74}
+!72 = distinct !{!72, !70, !"air-alias-scope-textures"}
+!73 = distinct !{!73, !70, !"air-alias-scope-samplers"}
+!74 = distinct !{!74, !70, !"air-alias-scope-arg(3)"}
