@@ -40,6 +40,7 @@ mod on_device {
             let counters = device.counters();
             let block = (device.take_block(MemoryClass::Private, MemoryClass::Private.block_len()))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+            core.pool.await_internals();
             wait_until("a wholly free unit in each class", || {
                 core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
             });
@@ -183,6 +184,12 @@ mod on_device {
             let counters = device.counters();
             let block = (device.take_block(MemoryClass::Private, MemoryClass::Private.block_len()))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // The take left the class no wholly free unit: the block-maker thread makes the next,
+            // which the gauge read below must not count.
+            core.pool.await_internals();
+            wait_until("a wholly free unit in each class", || {
+                core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
+            });
             let heap = HeapRange {
                 block: block.id,
                 offset: MIB,
