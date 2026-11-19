@@ -13790,8 +13790,9 @@ variant	metal2vulkan-rt::Refusal::ViewportNotFinite	ViewportNotFinite
 variant	metal2vulkan-rt::Refusal::WaitOnOwnThread	WaitOnOwnThread
 variant	metal2vulkan-rt::Refusal::ZeroRangePastBlock	ZeroRangePastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-rt::Refusal::ZeroRangeShared	ZeroRangeShared { block: BlockId }
+variant	metal2vulkan-rt::RenderPassKind::ClearDepth	ClearDepth
 variant	metal2vulkan-rt::RenderPassKind::ClearFormat	ClearFormat
-variant	metal2vulkan-rt::RenderPassKind::DepthAttachment	DepthAttachment
+variant	metal2vulkan-rt::RenderPassKind::DepthStencilViews	DepthStencilViews
 variant	metal2vulkan-rt::RenderPassKind::Multisample	Multisample
 variant	metal2vulkan-rt::RenderPassKind::NoAttachment	NoAttachment
 variant	metal2vulkan-rt::RenderPassKind::Resolve	Resolve
@@ -13799,7 +13800,6 @@ variant	metal2vulkan-rt::RenderPassKind::StoreAction	StoreAction
 variant	metal2vulkan-rt::RenderPassKind::TextureType	TextureType
 variant	metal2vulkan-rt::RenderPipelineKind::AlphaToOne	AlphaToOne
 variant	metal2vulkan-rt::RenderPipelineKind::ConstantData	ConstantData
-variant	metal2vulkan-rt::RenderPipelineKind::DepthAttachment	DepthAttachment
 variant	metal2vulkan-rt::RenderPipelineKind::DeviceFeature	DeviceFeature
 variant	metal2vulkan-rt::RenderPipelineKind::DrawInput	DrawInput
 variant	metal2vulkan-rt::RenderPipelineKind::DynamicState	DynamicState

@@ -123,11 +123,20 @@ pub struct RenderPassColorAttachmentDescriptor {
     pub clear_color: ClearColor,
 }
 
-/// `MTLRenderPassDepthAttachmentDescriptor`: a pass with a depth texture is refused,
-/// [`Gap::RenderPass`] of [`RenderPassKind::DepthAttachment`].
+/// `MTLRenderPassDepthAttachmentDescriptor`.
+///
+/// Loaded, cleared and stored as a color attachment is; a draw neither tests nor writes it yet
+/// ([`DrawKind::DepthTest`](crate::DrawKind::DepthTest)). With a stencil attachment beside it,
+/// both are one texture's same level and slice, a format of depth and stencil, as Vulkan's
+/// rendering takes them; two others are refused, [`Gap::RenderPass`] of
+/// [`RenderPassKind::DepthStencilViews`]. A `Clear` load's depth lies in `[0, 1]`; another is
+/// refused, [`RenderPassKind::ClearDepth`].
+///
+/// Not built: a resolve and a 3D texture's `depthPlane`, as a color attachment's.
 #[derive(Clone)]
 pub struct RenderPassDepthAttachmentDescriptor {
-    /// `texture`: the depth texture rendered into; `None` for no depth attachment.
+    /// `texture`: the texture whose depth is rendered into; `None` for no depth attachment. It
+    /// needs `RenderTarget` usage, a format with depth and one sample.
     pub texture: Option<Texture>,
     /// `level`: the mipmap level rendered into.
     pub level: u32,
@@ -306,14 +315,21 @@ pub(crate) fn layout_barrier(
 pub(crate) struct Pass {
     /// Up to the last color attachment with a texture.
     pub(crate) colors: Vec<Option<Target>>,
+    /// The depth attachment and the stencil attachment: one view of one image where both are set
+    /// (`Pass::check`), each with its own load, store and clear.
+    pub(crate) depth: Option<Target>,
     pub(crate) stencil: Option<Target>,
     pub(crate) area: [u32; 2],
 }
 
 impl Pass {
-    /// Every attachment, colors first.
+    /// Every attachment's image once, colors first: the stencil attachment's only where there is
+    /// no depth attachment, whose image it otherwise is.
     pub(crate) fn targets(&self) -> impl Iterator<Item = &Target> {
-        (self.colors.iter().flatten()).chain(&self.stencil)
+        let stencil = self.stencil.as_ref().filter(|_| self.depth.is_none());
+        (self.colors.iter().flatten())
+            .chain(&self.depth)
+            .chain(stencil)
     }
 
     /// Records `vkCmdBeginRendering` of the pass into `command`; `resumed`, again after the
@@ -335,6 +351,7 @@ impl Pass {
                     .map_or_else(Default::default, |t| t.info(resumed))
             })
             .collect();
+        let depth = self.depth.as_ref().map(|t| t.info(resumed));
         let stencil = self.stencil.as_ref().map(|t| t.info(resumed));
         let [width, height] = self.area;
         let mut info = vk::RenderingInfo::default()
@@ -344,11 +361,15 @@ impl Pass {
             })
             .layer_count(1)
             .color_attachments(&colors);
+        if let Some(depth) = &depth {
+            info = info.depth_attachment(depth);
+        }
         if let Some(stencil) = &stencil {
             info = info.stencil_attachment(stencil);
         }
-        // SAFETY: as the caller states; the render area lies inside every attachment, and each
-        // is a view of one level and layer of its image.
+        // SAFETY: as the caller states; the render area lies inside every attachment, each is a
+        // view of one level and layer of its image, and a depth and a stencil attachment both set
+        // are one view.
         unsafe { device.cmd_begin_rendering(command, &info) };
     }
 
@@ -392,10 +413,41 @@ impl Pass {
                 clear,
             )?);
         }
-        if let Some(texture) = &d.depth_attachment.texture {
-            mine(texture)?;
-            return Err(gap(RenderPassKind::DepthAttachment));
-        }
+        let z = &d.depth_attachment;
+        let depth = match &z.texture {
+            Some(texture) => {
+                mine(texture)?;
+                let pf = texture.descriptor().pixel_format;
+                let depth = metal2vulkan::vk::ImageAspectFlags::DEPTH;
+                if !formats::aspects(pf).is_some_and(|aspects| aspects.contains(depth)) {
+                    return Err(Error::Refused(Refusal::AttachmentFormat {
+                        pixel_format: pf,
+                    }));
+                }
+                let attachment = texture.attachment(z.level, z.slice)?;
+                let clear = match z.load_action {
+                    LoadAction::Clear if !(0.0..=1.0).contains(&z.clear_depth) => {
+                        return Err(gap(RenderPassKind::ClearDepth))
+                    }
+                    LoadAction::Clear => z.clear_depth as f32,
+                    LoadAction::Load | LoadAction::DontCare => 0.0,
+                };
+                let clear = vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: clear,
+                        stencil: 0,
+                    },
+                };
+                Some(target(
+                    texture,
+                    attachment,
+                    z.load_action,
+                    z.store_action,
+                    clear,
+                )?)
+            }
+            None => None,
+        };
         let s = &d.stencil_attachment;
         let stencil = match &s.texture {
             Some(texture) => {
@@ -424,8 +476,14 @@ impl Pass {
             }
             None => None,
         };
+        if let (Some(depth), Some(stencil)) = (&depth, &stencil) {
+            if depth.attachment.view != stencil.attachment.view {
+                return Err(gap(RenderPassKind::DepthStencilViews));
+            }
+        }
         let mut pass = Pass {
             colors,
+            depth,
             stencil,
             area: [u32::MAX; 2],
         };

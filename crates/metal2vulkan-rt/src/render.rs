@@ -179,6 +179,8 @@ struct Fixed {
     blends: Vec<vk::PipelineColorBlendAttachmentState>,
     /// Each colour attachment's format by Metal index, `UNDEFINED` for an absent one.
     colors: Vec<vk::Format>,
+    /// The depth and the stencil attachment's formats, `UNDEFINED` for none.
+    depth: vk::Format,
     stencil: vk::Format,
 }
 
@@ -201,7 +203,9 @@ impl crate::Device {
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     ///
     /// Built: one vertex and at most one fragment function, colour attachments of any format the
-    /// translator maps for the device, a stencil attachment, one sample, and every blend state,
+    /// translator maps for the device, a depth and a stencil attachment of a format the device
+    /// renders depth or stencil in (its format query, through the translator's mapping; another
+    /// is the translator's refusal), one sample, and every blend state,
     /// write mask and vertex descriptor of static strides Vulkan's fixed-function state takes with
     /// what device creation enables; what else the translator states is refused at the creation,
     /// by kind.
@@ -440,8 +444,6 @@ fn draws(
 fn refuse(d: &RenderPipelineDescriptor) -> Result<(), Error> {
     let kind = if d.support_indirect_command_buffers {
         return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
-    } else if d.depth_format.is_some() {
-        RenderPipelineKind::DepthAttachment
     } else if d.raster_sample_count != 1 {
         RenderPipelineKind::Multisample
     } else if d.max_vertex_amplification_count != 1 {
@@ -561,6 +563,11 @@ impl Fixed {
                     })
             })
             .collect();
+        let format = |format: Option<metal2vulkan::vk::Format>| {
+            format.map_or(vk::Format::UNDEFINED, |format| {
+                vk::Format::from_raw(format.as_raw())
+            })
+        };
         Fixed {
             bindings,
             divisors,
@@ -570,9 +577,8 @@ impl Fixed {
             alpha_to_coverage: g.alpha_to_coverage,
             blends,
             colors,
-            stencil: g.stencil_format.map_or(vk::Format::UNDEFINED, |format| {
-                vk::Format::from_raw(format.as_raw())
-            }),
+            depth: format(g.depth_format),
+            stencil: format(g.stencil_format),
         }
     }
 }
@@ -717,7 +723,7 @@ impl RenderCompiled {
 
     /// Whether the content's `VkPipeline`s render into `pass`'s attachments: its colour formats are
     /// the pass's colour attachments', by index, an absent one where the pass has none, and its
-    /// stencil format the pass's stencil attachment's, or none without one.
+    /// depth and stencil formats the pass's depth and stencil attachments', or none without one.
     pub(crate) fn renders_into(&self, pass: &Pass) -> bool {
         let fixed = &self.fixed;
         let format = |t: Option<&crate::pass::Target>| {
@@ -725,6 +731,7 @@ impl RenderCompiled {
         };
         fixed.colors.len() == pass.colors.len()
             && (fixed.colors.iter().zip(&pass.colors)).all(|(&f, t)| f == format(t.as_ref()))
+            && fixed.depth == format(pass.depth.as_ref())
             && fixed.stencil == format(pass.stencil.as_ref())
     }
 
@@ -783,6 +790,7 @@ impl RenderCompiled {
         let dynamic_states = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&states);
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&fixed.colors)
+            .depth_attachment_format(fixed.depth)
             .stencil_attachment_format(fixed.stencil);
         let mut info = vk::GraphicsPipelineCreateInfo::default()
             .push_next(&mut rendering)

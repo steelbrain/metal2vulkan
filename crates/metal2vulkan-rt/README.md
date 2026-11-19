@@ -1487,8 +1487,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of render pipeline states
 
-- Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: a depth
-  attachment, more than one sample, vertex amplification, a post-tessellation vertex function,
+- Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: more than one
+  sample, vertex amplification, a post-tessellation vertex function,
   stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
   fragment function's stencil output, alpha to one, constant data the binder supplies, a
   specialization other than the sample and amplification counts, dynamic state beyond Vulkan
@@ -1524,6 +1524,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   even); an integer channel's is truncated toward zero and saturated to the channel's width, NaN
   0, as Metal's. A rotated format's clear color, and `A8Unorm`'s held in `R8_UNORM`, go through
   the format's rotation. A clear stencil keeps its low 8 bits.
+- A depth attachment is loaded, cleared and stored as a color attachment is, its clear depth a
+  `float`. A draw neither tests nor writes it yet (`DrawKind::DepthTest`, below). Where a pass
+  has both a depth and a stencil attachment they are one texture's same level and slice, a
+  format of depth and stencil, rendered through one view: Vulkan's rendering takes one view for
+  both (`VUID-VkRenderingInfo-pDepthAttachment-06085`). A pipeline state's depth and stencil
+  formats are the pass's, as its color formats are; the format query decides which depth and
+  stencil formats a device renders, a texture of `RenderTarget` usage in one it does not is not
+  made, and a pipeline state of one is the translator's refusal.
 - The render area is the smallest attachment's level, cut to `renderTargetWidth` and
   `renderTargetHeight` where they are set.
 - A pass orders itself as a blit's copy does, with two barriers. The first runs it after every
@@ -1541,8 +1549,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   copies nothing.
 - Refused, as Metal's validation stops them: an attachment's texture made without
   `RenderTarget` usage (`Refusal::AttachmentUsage`), a level or slice past its texture's
-  (`Refusal::AttachmentPlace`), a color attachment of a depth or stencil format or a stencil
-  attachment of a format without stencil (`Refusal::AttachmentFormat`). A refused descriptor
+  (`Refusal::AttachmentPlace`), a color attachment of a depth or stencil format, a depth
+  attachment of a format without depth or a stencil attachment of a format without stencil
+  (`Refusal::AttachmentFormat`). A refused descriptor
   leaves the command buffer open for another encoder. A pass may use all eight color attachments:
   the floor's `maxColorAttachments` is 8.
 - An encoder holds Metal's render state: a pipeline state, the vertex and fragment functions'
@@ -1623,7 +1632,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
 ### Known gaps of render encoders
 
 - Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points, a depth-stencil state that
-  tests or writes depth (no pass has a depth attachment yet), a viewport Vulkan's is not (a
+  tests or writes depth (a pass's depth attachment is loaded, cleared and stored, and no draw
+  tests or writes it yet), a viewport Vulkan's is not (a
   negative width, a depth range past `[0, 1]`, bounds past the device's viewport limits), a
   pipeline state whose formats are not the pass's attachments', a draw that binds a texture
   whose image the pass renders, where neither the feedback loop nor a copy reads it: on a device
@@ -1651,15 +1661,21 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `useHeap:stages:` (`command-replay shapes` counts a stream's calls of each selector), it is
   built in the compute encoder's form, `use_heap`: the command buffer keeps the block and declares
   no access.
-- Refused by `Gap::RenderPass`, naming its `RenderPassKind`: a depth attachment, an attachment of
-  more than one sample, a resolve, a 1D or 3D texture's attachment, the `Unknown` and
+- Refused by `Gap::RenderPass`, naming its `RenderPassKind`: a depth and a stencil attachment
+  that are not one texture's same level and slice (`DepthStencilViews`: Vulkan's rendering takes
+  one view for both), a `Clear` load of a depth attachment whose clear depth is outside `[0, 1]`
+  or NaN (`ClearDepth`: Vulkan clears no such depth without `VK_EXT_depth_range_unrestricted`,
+  `VUID-VkClearDepthStencilValue-depth-00022`, which the floor does not require), an attachment
+  of more than one sample, a resolve, a 1D or 3D texture's attachment, the `Unknown` and
   `CustomSampleDepthStore` store actions, a clear of a format only a shader clears (extended
   range, bfloat, YCbCr), and a pass with no attachment. The descriptor has no field for a
   visibility result buffer, a rasterization rate map, tile sizes, imageblock and threadgroup
   memory, sample buffer attachments, layered rendering or store action options. The replay
-  streams' passes render into one or two color attachments and a stencil attachment, each a level
-  of a 2D texture of one sample, with `Load`, `Clear` and `DontCare` loads and `Store` and
-  `DontCare` stores.
+  streams' passes render into one or two color attachments and a stencil attachment or a
+  `Depth32Float` depth attachment, each a level of a 2D texture of one sample, with `Load`,
+  `Clear` and `DontCare` loads and `Store` and `DontCare` stores. Their depth attachments (478
+  passes of one stream, none beside a stencil attachment) clear to 1 or load, and store, under
+  Metal's default depth-stencil state.
 - An attachment whose home layout is shader-read-only (a texture of shader-read and render-target
   usage) is moved to the attachment layout and back by every pass that renders into it. A pass
   that reads it through a texture moves the whole image to the feedback layout at its first

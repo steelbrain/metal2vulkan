@@ -20,6 +20,10 @@
 //!     its row.
 //!   - a stencil state that replaces the stencil marks what a draw covers, and one that tests it
 //!     keeps a later draw to those pixels.
+//!   - a pass clears, loads and stores a shader-read `Depth32Float` depth attachment that its
+//!     draws, under Metal's default depth-stencil state, neither test nor write: one submission,
+//!     three barriers and one pass each; a state without the pass's depth format, or with one in
+//!     a pass without a depth attachment, is the formats' gap, and a depth test is its own.
 //!   - a fragment function samples a texture through its constexpr sampler at the index the
 //!     consumer gave it: each pixel reads its own texel.
 //!   - a vertex function that reads `[[base_instance]]` (the owned fixture
@@ -659,6 +663,130 @@ mod on_device {
             encoder.end_encoding();
             run(name, &command_buffer);
             println!("{name}: the stencil marks and tests");
+        });
+    }
+
+    /// A pass with a depth attachment (a shader-read `Depth32Float` texture, as a replay stream's)
+    /// clears, loads and stores it while its draws, under Metal's default depth-stencil state,
+    /// neither test nor write it: a pass is one submission, three barriers (the attachment moves
+    /// from its shader-read home and back) and one pass. A pipeline state's depth format is the
+    /// pass's: a state without one, or one drawn in a pass without a depth attachment, is the
+    /// formats' gap, and a state that tests depth is the depth test's.
+    #[test]
+    fn every_device_clears_loads_and_stores_a_depth_attachment_its_draws_do_not_test() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let mut d = plain.clone();
+        d.depth_format = Some(PixelFormat::Depth32Float);
+        each_device("draw_depth", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 4)
+                .expect("a grant");
+            let depth_state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let mut zd =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::Depth32Float, SIDE, SIDE);
+            zd.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+            zd.storage_mode = StorageMode::Shared;
+            let depth = (device.new_texture(&zd, Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let with_depth = |load| {
+                let mut d = pass(&color, None);
+                let z = &mut d.depth_attachment;
+                z.texture = Some(depth.clone());
+                z.load_action = load;
+                z.store_action = crate::StoreAction::Store;
+                z.clear_depth = 0.25;
+                d
+            };
+            let queue = device.new_command_queue(4).expect("a queue");
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let counters = device.counters();
+            for (load, first, color_of) in [
+                (crate::LoadAction::Clear, 3, BLUE),
+                (crate::LoadAction::Load, 6, WHITE),
+            ] {
+                settled(&device);
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&with_depth(load)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                draw(encoder.set_render_pipeline_state(&depth_state));
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, first, 3, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let after = counters.metrics();
+                assert_eq!(
+                    (
+                        after.submissions - before.submissions,
+                        after.barriers - before.barriers,
+                        after.passes - before.passes,
+                        after.bytes_copied - before.bytes_copied,
+                    ),
+                    (1, 3, 1, 0),
+                    "{name}: {load:?}: submissions, barriers, passes, bytes copied"
+                );
+                assert_eq!(read(&color, 4), texels(|_, _| color_of), "{name}: {load:?}");
+                if depth.unit().is_some() {
+                    let want = floats(&[0.25; (SIDE * SIDE) as usize]);
+                    assert_eq!(read(&depth, 4), want, "{name}: {load:?}: the depth kept");
+                } else {
+                    println!("{name}: the depth's bytes are not copied on this device");
+                }
+            }
+
+            // The pipeline state's depth format is the pass's, and a depth test is a gap.
+            let plain = state(name, &device, &plain);
+            let mut less = DepthStencilDescriptor::default();
+            less.depth_compare_function = CompareFunction::Less;
+            let less = device.new_depth_stencil_state(&less);
+            let gap = |kind| Err::<(), _>(Error::Unsupported(Gap::Draw { kind }));
+            let same = |got: Result<(), Error>, want: Result<(), Error>, case: &str| {
+                assert_eq!(format!("{got:?}"), format!("{want:?}"), "{name}: {case}");
+            };
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer
+                .render_command_encoder(&with_depth(crate::LoadAction::Load)))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_render_pipeline_state(&plain));
+            same(
+                encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0),
+                gap(DrawKind::AttachmentFormats),
+                "a state without the pass's depth format",
+            );
+            draw(encoder.set_render_pipeline_state(&depth_state));
+            draw(encoder.set_depth_stencil_state(Some(&less)));
+            same(
+                encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0),
+                gap(DrawKind::DepthTest),
+                "a depth test",
+            );
+            encoder.end_encoding();
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_render_pipeline_state(&depth_state));
+            same(
+                encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0),
+                gap(DrawKind::AttachmentFormats),
+                "a depth format in a pass without a depth attachment",
+            );
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            println!("{name}: the depth attachment cleared, loaded and stored, untested");
         });
     }
 

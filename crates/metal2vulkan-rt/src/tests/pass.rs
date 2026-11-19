@@ -14,8 +14,10 @@
 //!   area; a pass clears one slice of a 2D array, the other slices kept. A pass alone is one
 //!   submission, three barriers (its two and the segment's end) and one pass, and copies no byte
 //!   of the runtime's own. Each attachment's view is made once and kept with its texture, then
-//!   freed with it. What Metal refuses is refused, what a pass does not build is a gap, and either
-//!   leaves the command buffer open for another encoder.
+//!   freed with it. What Metal refuses is refused (a depth attachment of a colour format among
+//!   it), what a pass does not build is a gap (a depth and a stencil attachment of two textures,
+//!   and a clear depth past `[0, 1]` or NaN, among them), and either leaves the command buffer
+//!   open for another encoder.
 
 use crate::error::{Error, Gap, RenderPassKind};
 use crate::pass::{clear_color, ops};
@@ -520,8 +522,16 @@ mod on_device {
             };
             let mut store = color(&colors, 0);
             store.color_attachments[0].store_action = StoreAction::Unknown;
-            let mut with_depth = color(&colors, 0);
-            with_depth.depth_attachment.texture = Some(depth.clone());
+            let mut depth_of_color = color(&colors, 0);
+            depth_of_color.depth_attachment.texture = Some(colors.clone());
+            let mut two_views = color(&colors, 0);
+            two_views.depth_attachment.texture = Some(depth.clone());
+            two_views.stencil_attachment.texture = Some(stencil.clone());
+            let mut far_clear = color(&colors, 0);
+            far_clear.depth_attachment.texture = Some(depth.clone());
+            far_clear.depth_attachment.clear_depth = 2.0;
+            let mut nan_clear = far_clear.clone();
+            nan_clear.depth_attachment.clear_depth = f64::NAN;
             let mut stencil_of_color = color(&colors, 0);
             stencil_of_color.stencil_attachment.texture = Some(colors.clone());
             let cases = [
@@ -548,9 +558,27 @@ mod on_device {
                     }),
                 ),
                 (
-                    with_depth,
+                    depth_of_color,
+                    Error::Refused(Refusal::AttachmentFormat {
+                        pixel_format: PixelFormat::RGBA8Unorm,
+                    }),
+                ),
+                (
+                    two_views,
                     Error::Unsupported(Gap::RenderPass {
-                        kind: RenderPassKind::DepthAttachment,
+                        kind: RenderPassKind::DepthStencilViews,
+                    }),
+                ),
+                (
+                    far_clear,
+                    Error::Unsupported(Gap::RenderPass {
+                        kind: RenderPassKind::ClearDepth,
+                    }),
+                ),
+                (
+                    nan_clear,
+                    Error::Unsupported(Gap::RenderPass {
+                        kind: RenderPassKind::ClearDepth,
                     }),
                 ),
                 (

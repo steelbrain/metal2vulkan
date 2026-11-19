@@ -363,7 +363,8 @@ enum Call<'a> {
 ///
 /// Built: a render pipeline state, the vertex and fragment functions' buffers, bytes, textures
 /// and sampler states, one viewport and scissor rectangle, the cull mode, the front-facing
-/// winding, a depth-stencil state that tests the stencil, the stencil references, the blend color,
+/// winding, a depth-stencil state that tests the stencil and neither tests nor writes depth (a
+/// pass's depth attachment is loaded, cleared and stored), the stencil references, the blend color,
 /// memory barriers, fences, and direct draws of lines and triangles, indexed or not. Not built,
 /// and so not methods: indirect draws, several viewports or scissor rectangles, the triangle fill
 /// mode, the depth clip mode, depth bias, visibility results, `useResource:`, the store action
@@ -1688,8 +1689,8 @@ impl RenderCommandEncoder {
                 device.cmd_set_front_face(command, face);
             }
             if dirty & TESTS != 0 {
-                // No pass has a depth attachment: a state that tests depth draws nothing
-                // (`DrawKind::DepthTest`).
+                // A pass's depth attachment is neither tested nor written: a state that tests or
+                // writes depth draws nothing (`DrawKind::DepthTest`).
                 device.cmd_set_depth_test_enable(command, false);
                 device.cmd_set_depth_write_enable(command, false);
                 device.cmd_set_depth_compare_op(command, vk::CompareOp::ALWAYS);

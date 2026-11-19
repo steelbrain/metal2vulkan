@@ -637,11 +637,12 @@ pub enum Refusal {
         /// The slice asked for.
         slice: u32,
     },
-    /// A render pass color attachment of a depth or stencil pixel format, or a stencil attachment
-    /// of a format without stencil.
+    /// A render pass color attachment of a depth or stencil pixel format, a depth attachment of a
+    /// format without depth, or a stencil attachment of a format without stencil.
     ///
-    /// Basis: metal-documented (a color attachment takes a color-renderable format and a stencil
-    /// attachment a format with stencil; Metal's validation stops the descriptor).
+    /// Basis: metal-documented (a color attachment takes a color-renderable format, a depth
+    /// attachment a format with depth and a stencil attachment a format with stencil; Metal's
+    /// validation stops the descriptor).
     AttachmentFormat {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
@@ -883,9 +884,9 @@ pub enum Gap {
     },
     /// A render pipeline state of something the runtime does not build yet: what `kind` names.
     ///
-    /// Basis: ours (the replay streams' render pipelines draw into colour and stencil attachments
-    /// of one sample, with no depth attachment, no tessellation and no framebuffer fetch; each
-    /// other kind is built when a replay stream makes one).
+    /// Basis: ours (the replay streams' render pipelines draw into colour, depth and stencil
+    /// attachments of one sample, with no tessellation and no framebuffer fetch; each other kind
+    /// is built when a replay stream makes one).
     RenderPipeline {
         /// What the pipeline asks for.
         kind: RenderPipelineKind,
@@ -911,9 +912,10 @@ pub enum Gap {
     /// what `kind` names.
     ///
     /// Basis: ours (the replay streams' passes render into one to two color attachments and a
-    /// stencil attachment, each a level of a 2D texture of one sample, with no depth attachment,
-    /// no resolve and no store action left unknown; each other kind is built when a replay stream
-    /// makes one).
+    /// stencil or a `Depth32Float` depth attachment, each a level of a 2D texture of one sample,
+    /// with no resolve, no store action left unknown and a clear depth of 1; each other kind is
+    /// built when a replay stream makes one; `DepthStencilViews` and `ClearDepth` are what Vulkan's
+    /// rendering under the floor takes no form of).
     RenderPass {
         /// What the pass asks for.
         kind: RenderPassKind,
@@ -936,8 +938,6 @@ pub enum Gap {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RenderPipelineKind {
-    /// A depth attachment (`depthAttachmentPixelFormat`).
-    DepthAttachment,
     /// More than one sample (`rasterSampleCount`).
     Multisample,
     /// Vertex amplification (`maxVertexAmplificationCount` above 1).
@@ -976,7 +976,8 @@ pub enum RenderPipelineKind {
 pub enum DrawKind {
     /// A draw of points (`MTLPrimitiveTypePoint`).
     Points,
-    /// A depth-stencil state that tests or writes depth: no pass has a depth attachment yet.
+    /// A depth-stencil state that tests or writes depth: a pass's depth attachment is loaded,
+    /// cleared and stored, and no draw tests or writes it yet.
     DepthTest,
     /// A viewport Vulkan's is not: a negative width (Metal mirrors the draw), a depth range past
     /// `[0, 1]`, or bounds past the device's viewport limits.
@@ -1003,8 +1004,14 @@ pub enum DrawKind {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RenderPassKind {
-    /// A depth attachment (`depthAttachment.texture`).
-    DepthAttachment,
+    /// A depth attachment and a stencil attachment that are not one texture's same level and
+    /// slice: Vulkan's rendering takes one image view for both
+    /// (VUID-VkRenderingInfo-pDepthAttachment-06085).
+    DepthStencilViews,
+    /// A `Clear` load of a depth attachment whose `clearDepth` lies outside `[0, 1]`, or is NaN:
+    /// Vulkan clears no such depth without `VK_EXT_depth_range_unrestricted`
+    /// (VUID-VkClearDepthStencilValue-depth-00022), which the floor does not require.
+    ClearDepth,
     /// An attachment of more than one sample.
     Multisample,
     /// A resolve texture, or a store action that resolves.

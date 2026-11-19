@@ -9,7 +9,7 @@
 //! - Filled past a cap of 2, the map holds 2 render contents and forgets the least recently used,
 //!   which lives while a state holds it and goes once that state does; a forgotten content
 //!   compiles again, and one the map holds does not.
-//! - A depth attachment or more than one sample is refused by kind, making no `VkPipeline`.
+//! - More than one sample is refused by kind, making no `VkPipeline`.
 //! - A device on a cache directory a device before it used lowers nothing at creation: both
 //!   lowerings are read from the directory, and the triangle class's `VkPipeline` is made from
 //!   its file; the first device writes one pipeline file for each `VkPipeline` it made, and the
@@ -219,18 +219,9 @@ mod on_device {
             return;
         };
         let plain = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
-        let mut depth = plain.clone();
-        depth.depth_format = Some(PixelFormat::Depth32Float);
         let mut samples = plain.clone();
         samples.raster_sample_count = 4;
-        let cases = [
-            (
-                "a depth attachment",
-                depth,
-                RenderPipelineKind::DepthAttachment,
-            ),
-            ("four samples", samples, RenderPipelineKind::Multisample),
-        ];
+        let cases = [("four samples", samples, RenderPipelineKind::Multisample)];
         each_device("render_refused", |name, _, device| {
             let counters = device.counters();
             for (case, d, kind) in &cases {
