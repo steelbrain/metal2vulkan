@@ -1291,8 +1291,8 @@ pub struct Metrics {
     /// [`SurfaceForm::Copy`](crate::SurfaceForm::Copy)).
     pub surfaces_copied: u64,
     /// `vkQueueBindSparse` calls: one for each import over several dma-bufs
-    /// ([`Device::import_dma_bufs`](crate::Device::import_dma_bufs)), binding its imports into its
-    /// buffer. Each signals a value the next `vkQueueSubmit2` waits for.
+    /// (`Device::import_dma_bufs`, on Unix), binding its imports into its buffer. Each signals a
+    /// value the next `vkQueueSubmit2` waits for.
     pub sparse_binds: u64,
 }
 

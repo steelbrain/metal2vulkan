@@ -1448,7 +1448,7 @@ pub enum Limit {
     /// the device does not bind them into one sparse buffer: it lacks `sparseBinding`, its queue
     /// family binds no sparse memory, its sparse buffers import no dma-buf or only dedicated, or
     /// such a buffer does not take every host-visible, host-coherent type a plain one takes
-    /// ([`Device::dma_buf_granule`](crate::Device::dma_buf_granule) is `None`). Metal's
+    /// (`Device::dma_buf_granule`, on Unix, is `None`). Metal's
     /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned
     /// memory.
     ///
@@ -1477,7 +1477,7 @@ pub enum Limit {
     },
     /// An import of no bytes, or one whose address or length is not a multiple of `alignment`:
     /// for host memory the device's `minImportedHostPointerAlignment`, for several dma-bufs each
-    /// one's length against [`Device::dma_buf_granule`](crate::Device::dma_buf_granule) (or the
+    /// one's length against `Device::dma_buf_granule` on Unix (or the
     /// sparse buffer's alignment where the granule is no multiple of it), and for one handle the
     /// alignment of the buffer's memory requirements where their size is past the length. Metal's
     /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes memory of a
@@ -1492,12 +1492,11 @@ pub enum Limit {
         /// The multiple the device takes.
         alignment: u64,
     },
-    /// An import over several dma-bufs
-    /// ([`Device::import_dma_bufs`](crate::Device::import_dma_bufs)) whose sparse buffer would
-    /// take the device's sparse address space past its `sparseAddressSpaceSize`, with the sparse
-    /// buffers still live (`VUID-vkCreateBuffer-flags-00911`): nothing is imported. Metal's
-    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any
-    /// page-aligned memory.
+    /// An import over several dma-bufs (`Device::import_dma_bufs`, on Unix) whose sparse buffer
+    /// would take the device's sparse address space past its `sparseAddressSpaceSize`, with the
+    /// sparse buffers still live (`VUID-vkCreateBuffer-flags-00911`): nothing is imported. Metal's
+    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned
+    /// memory.
     ///
     /// Basis: device (`sparseAddressSpaceSize`).
     SparseAddressSpace {

@@ -35,7 +35,8 @@ use std::sync::OnceLock;
 pub enum ImportHandle {
     /// A Linux dma-buf by its fd (`Device::import_dma_buf`, on Unix).
     DmaBuf,
-    /// Several Linux dma-bufs by their fds, behind one buffer ([`Device::import_dma_bufs`]).
+    /// Several Linux dma-bufs by their fds, behind one buffer (`Device::import_dma_bufs`, on
+    /// Unix).
     DmaBufs,
     /// Host memory by its address ([`Device::import_host_memory`]).
     HostMemory,
@@ -157,11 +158,12 @@ impl Imports {
 }
 
 /// Whether device creation enables `sparseBinding` for imports over several dma-bufs
-/// ([`Device::import_dma_bufs`]): the device reports the feature, the runtime's queue `family`
-/// binds sparse memory, `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` are in
-/// `extensions`, and a sparse buffer of the floor's usage imports a dma-buf with no dedicated
-/// allocation (`vkGetPhysicalDeviceExternalBufferProperties`, as the Vulkan rules for a sparse
-/// bind of imported memory name the handle in the buffer, `VUID-VkSparseMemoryBind-memory-02731`).
+/// (`Device::import_dma_bufs`, on Unix): the device reports the feature, the runtime's queue
+/// `family` binds sparse memory, `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`
+/// are in `extensions`, and a sparse buffer of the floor's usage imports a dma-buf with no
+/// dedicated allocation (`vkGetPhysicalDeviceExternalBufferProperties`, as the Vulkan rules for a
+/// sparse bind of imported memory name the handle in the buffer,
+/// `VUID-VkSparseMemoryBind-memory-02731`).
 /// Elsewhere the feature stays as the floor and the consumer leave it, and the import refuses.
 /// The feature changes nothing else: only a buffer made with `VK_BUFFER_CREATE_SPARSE_BINDING_BIT`
 /// binds sparse, and only this import makes one.
