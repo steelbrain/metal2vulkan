@@ -33,8 +33,10 @@
 //!   indirect-command support**: the sample length is the two texels packed, so a case where the
 //!   packing rule has something to get wrong;
 //! - **the same pipeline at four samples**: the memory length is the sample length times the
-//!   extent times the raster sample count, and the sample count is the factor only this case
-//!   moves;
+//!   extent times the raster sample count, and the sample count is the factor only this case and
+//!   its twin move;
+//! - **its twin without indirect-command support**: the same lengths from a state a side that
+//!   makes no state for indirect commands makes too;
 //! - **a drawing state over `R8Unorm` then `RG16Float`**: the one set of formats whose sample
 //!   length tells three packing rules apart, 6 where each texel aligns to its component's size, 5
 //!   where the texels pack tight, 8 where every texel wider than a byte aligns to 4. The M3 Max
@@ -43,8 +45,8 @@
 //!   attachment**: the M3 Max answers 12, the two colors' length without them, so depth and
 //!   stencil take no room in the record.
 //!
-//! The last two ask for no label and no indirect-command support, so a side that makes no state
-//! for indirect commands still makes theirs and answers their lengths.
+//! The last three ask for no indirect-command support, so a side that makes no state for
+//! indirect commands still makes theirs and answers their lengths.
 //!
 //! # Why this family is safe
 //!
@@ -210,6 +212,18 @@ pub fn all() -> Vec<PipelineFactsCase> {
                 RenderPipelineSpec::new(VERTEX, TWO_TARGETS, TWO_COLORS)
                     .labelled("conformance-render-state")
                     .for_indirect_commands()
+                    .multisampled(4),
+            ),
+        },
+        // The multisampled case without indirect-command support: the same lengths, from a state
+        // a side with no indirect command buffers makes too.
+        PipelineFactsCase {
+            name: "pipeline-facts-render-multisampled-direct",
+            fixture: RENDER_FIXTURE,
+            entry: VERTEX,
+            subject: Subject::Render(
+                RenderPipelineSpec::new(VERTEX, TWO_TARGETS, TWO_COLORS)
+                    .labelled("conformance-render-state")
                     .multisampled(4),
             ),
         },
