@@ -732,11 +732,13 @@ impl<D: ComputeDevice> Harness<D> {
                     None => {
                         let vertex = library.new_function(key.0, &dispatch.constants)?;
                         let fragment = library.new_function(fragment, &dispatch.constants)?;
-                        let format = plan.textures[target].pixel_format;
-                        render_states.push(
-                            self.device
-                                .new_render_pipeline_state(&vertex, &fragment, format)?,
-                        );
+                        let drawn = &plan.textures[target];
+                        render_states.push(self.device.new_render_pipeline_state(
+                            &vertex,
+                            &fragment,
+                            drawn.pixel_format,
+                            drawn.sample_count,
+                        )?);
                         renders.push(key);
                         renders.len() - 1
                     }
@@ -842,6 +844,7 @@ impl<D: ComputeDevice> Harness<D> {
         for (dispatch, &state) in plan.dispatches[range].iter().zip(states) {
             if let Grid::Draw {
                 target,
+                resolve,
                 vertex_count,
                 ..
             } = dispatch.grid
@@ -856,10 +859,13 @@ impl<D: ComputeDevice> Harness<D> {
                 let (encoder, _, bound) = match pass {
                     Some(ref mut pass) => pass,
                     None => {
-                        let texture = made.textures.get(target);
-                        let texture = texture.ok_or("a texture the plan names is unmade")?;
+                        let made_texture = |at: usize| {
+                            (made.textures.get(at)).ok_or("a texture the plan names is unmade")
+                        };
+                        let texture = made_texture(target)?;
+                        let resolve = resolve.map(made_texture).transpose()?;
                         pass.insert((
-                            command_buffer.render_command_encoder(texture)?,
+                            command_buffer.render_command_encoder(texture, resolve)?,
                             target,
                             None,
                         ))

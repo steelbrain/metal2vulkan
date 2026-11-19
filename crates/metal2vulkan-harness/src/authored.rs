@@ -7,7 +7,7 @@ use crate::plan::{
     SamplerPlan, Scaled, Source, TextureExpect, TexturePlan, Values,
 };
 use crate::{Result, Storage};
-use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use std::ops::Range;
 
 /// An authored workload: its name, and the builder of its plan. A plan holds its inputs and
@@ -21,7 +21,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 38] = [
+pub const WORKLOADS: [Workload; 39] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -165,6 +165,10 @@ pub const WORKLOADS: [Workload; 38] = [
     Workload {
         name: "draw_full",
         plan: draw_full,
+    },
+    Workload {
+        name: "draw_full_4x",
+        plan: draw_full_4x,
     },
     Workload {
         name: "draw_2000",
@@ -350,6 +354,27 @@ fn draw_full() -> Plan {
     draws("draw_full", 512, 64)
 }
 
+/// [`draw_full`]'s draws into a target of 4 samples, which the pass resolves into the 1-sample
+/// texture the row checks as it ends (`MTLStoreActionMultisampleResolve`): the samples' fill and
+/// the resolve, in one pass.
+fn draw_full_4x() -> Plan {
+    let mut plan = draws("draw_full_4x", 512, 64);
+    let mut samples = TexturePlan::rgba16_float(512, 512, None);
+    samples.texture_type = TextureType::Type2DMultisample;
+    samples.sample_count = 4;
+    samples.usage = TextureUsage::RENDER_TARGET;
+    plan.textures.push(samples);
+    for dispatch in &mut plan.dispatches {
+        dispatch.grid = Grid::Draw {
+            fragment: "colored_fragment",
+            target: 1,
+            resolve: Some(0),
+            vertex_count: 3,
+        };
+    }
+    plan
+}
+
 /// Draw-bound draws: 2,000 in one pass, each a triangle over the whole of a 16 by 16 target, so
 /// each draw's own cost leads.
 fn draw_2000() -> Plan {
@@ -398,6 +423,7 @@ fn draws(name: &str, side: u32, count: usize) -> Plan {
         grid: Grid::Draw {
             fragment: "colored_fragment",
             target: 0,
+            resolve: None,
             vertex_count: 3,
         },
     };

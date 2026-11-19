@@ -569,6 +569,7 @@ fn texture(
         width: number(width)?,
         height: number(height)?,
         array_length: number(array_length)?,
+        sample_count: 1,
         usage: TextureUsage::try_from(raw(usage)?).map_err(|why| why.to_string())?,
         storage: match storage {
             "shared" => Storage::Shared,

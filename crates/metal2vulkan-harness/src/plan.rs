@@ -159,8 +159,8 @@ pub(crate) fn with_private(
     function.with_linked(linked)
 }
 
-/// One texture of a plan: its `MTLTextureDescriptor` (one level, one sample, the default
-/// swizzle and CPU cache mode), what makes it, and what it starts with.
+/// One texture of a plan: its `MTLTextureDescriptor` (one level, the default swizzle and CPU
+/// cache mode), what makes it, and what it starts with.
 #[derive(Clone, Debug)]
 pub struct TexturePlan {
     /// `textureType`: 2D, or a 2D array.
@@ -173,6 +173,9 @@ pub struct TexturePlan {
     pub height: u32,
     /// `arrayLength`: 1 for a 2D texture.
     pub array_length: u32,
+    /// `sampleCount`: 1, or more for a `Type2DMultisample` texture, which only a draw renders
+    /// into and only its pass's resolve reads ([`Grid::Draw`]).
+    pub sample_count: u32,
     /// `usage`.
     pub usage: TextureUsage,
     /// `storageMode`.
@@ -201,6 +204,7 @@ impl TexturePlan {
             width,
             height,
             array_length: 1,
+            sample_count: 1,
             usage: TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
             storage: Storage::Private,
             source: TextureSource::Plain,
@@ -228,12 +232,23 @@ impl TexturePlan {
         if width == 0 || height == 0 || slices == 0 {
             return Some(format!("its size {width}x{height}x{slices} is empty"));
         }
-        match (self.texture_type, slices) {
-            (TextureType::Type2D, 1) | (TextureType::Type2DArray, _) => {}
-            (kind, _) => {
+        match (self.texture_type, slices, self.sample_count) {
+            (TextureType::Type2D, 1, 1) | (TextureType::Type2DArray, _, 1) => {}
+            (TextureType::Type2DMultisample, 1, 2..) => {
+                if texels_move || self.texels.is_some() || self.bytes.is_some() {
+                    return Some(
+                        "a multisample texture's texels are a draw's alone: no kernel or CPU \
+                         write moves them"
+                            .to_owned(),
+                    );
+                }
+                return None;
+            }
+            (kind, _, samples) => {
                 return Some(format!(
-                    "a {kind:?} texture of {slices} slices: the harness makes 2D textures and 2D \
-                     arrays"
+                    "a {kind:?} texture of {slices} slices and {samples} samples: the harness \
+                     makes 2D textures and 2D arrays of one sample, and 2D multisample textures \
+                     of more"
                 ))
             }
         }
@@ -690,9 +705,11 @@ pub enum Grid {
     },
     /// `drawPrimitives:vertexStart:vertexCount:` of triangles from vertex 0, in a render encoder
     /// whose one colour attachment is the plan's texture `target`, cleared to zero as the pass
-    /// starts: consecutive draws into one target share one pass. The step's function is the
-    /// vertex function, its render pipeline state `fragment`'s too, drawing into `target`'s
-    /// format with Metal's defaults otherwise; its bindings are the vertex function's buffers
+    /// starts, and stored as it ends, or resolved into the plan's texture `resolve` where given
+    /// (`MTLStoreActionMultisampleResolve`): consecutive draws into one target share one pass. The
+    /// step's function is the vertex function, its render pipeline state `fragment`'s too, drawing
+    /// into `target`'s format and sample count with Metal's defaults otherwise; its bindings are
+    /// the vertex function's buffers
     /// (`setVertexBuffer:offset:atIndex:`) and the fragment function's textures
     /// (`setFragmentTexture:atIndex:`), and a draw binds nothing else.
     Draw {
@@ -700,6 +717,9 @@ pub enum Grid {
         fragment: &'static str,
         /// The plan's texture it draws into, of `RenderTarget` usage.
         target: usize,
+        /// The plan's texture the pass resolves `target` into: of `RenderTarget` usage, one
+        /// sample, and `target`'s format and size, where `target` has more than one sample.
+        resolve: Option<usize>,
         /// Its vertices.
         vertex_count: u32,
     },
@@ -891,15 +911,34 @@ impl Plan {
         }
         let known = |buffer: usize| buffer < self.buffers.len();
         for (i, dispatch) in self.dispatches.iter().enumerate() {
-            if let Grid::Draw { target, .. } = dispatch.grid {
-                let renders = (self.textures.get(target))
-                    .is_some_and(|t| t.usage.contains(TextureUsage::RENDER_TARGET));
-                if !renders {
+            if let Grid::Draw {
+                target, resolve, ..
+            } = dispatch.grid
+            {
+                let renders = |t: &TexturePlan| t.usage.contains(TextureUsage::RENDER_TARGET);
+                let Some(samples) = self.textures.get(target).filter(|t| renders(t)) else {
                     return Err(format!(
                         "{name}: dispatch {i} draws into texture {target}, which the plan lacks \
                          or made without RenderTarget usage"
                     )
                     .into());
+                };
+                if let Some(into) = resolve {
+                    let fits = (self.textures.get(into)).is_some_and(|t| {
+                        renders(t)
+                            && t.sample_count == 1
+                            && samples.sample_count > 1
+                            && (t.pixel_format, t.width, t.height)
+                                == (samples.pixel_format, samples.width, samples.height)
+                    });
+                    if !fits {
+                        return Err(format!(
+                            "{name}: dispatch {i} resolves texture {target} into texture {into}, \
+                             which the plan lacks, or which is not a 1-sample RenderTarget \
+                             texture of a multisample target's format and size"
+                        )
+                        .into());
+                    }
                 }
                 let drawn = (dispatch.bindings.iter()).all(|binding| {
                     matches!(binding, Binding::Buffer { .. } | Binding::Texture { .. })

@@ -155,11 +155,13 @@ impl crate::ComputeDevice for runtime::Device {
         vertex: &runtime::Function,
         fragment: &runtime::Function,
         color: metal2vulkan::metal::PixelFormat,
+        samples: u32,
     ) -> Result<runtime::RenderPipelineState> {
         let vertex = StageSource::Function(vertex.function_descriptor());
         let mut descriptor = RenderPipelineDescriptor::new(vertex);
         descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
         descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(color));
+        descriptor.raster_sample_count = samples;
         Ok(runtime::Device::new_render_pipeline_state(
             self,
             &descriptor,
@@ -179,6 +181,7 @@ impl crate::ComputeDevice for runtime::Device {
         descriptor.width = texture.width.into();
         descriptor.height = texture.height.into();
         descriptor.array_length = texture.array_length.into();
+        descriptor.sample_count = texture.sample_count.into();
         descriptor.usage = texture.usage;
         descriptor.resource_options = options;
         let made = |texture, heap, buffer| Texture {
@@ -317,12 +320,20 @@ impl crate::CommandBuffer<runtime::Device> for runtime::CommandBuffer {
         Ok(runtime::CommandBuffer::blit_command_encoder(self)?)
     }
 
-    fn render_command_encoder(&self, target: &Texture) -> Result<runtime::RenderCommandEncoder> {
+    fn render_command_encoder(
+        &self,
+        target: &Texture,
+        resolve: Option<&Texture>,
+    ) -> Result<runtime::RenderCommandEncoder> {
         let mut d = runtime::RenderPassDescriptor::new();
         let color = &mut d.color_attachments[0];
         color.texture = Some(target.texture.clone());
         color.load_action = runtime::LoadAction::Clear;
-        color.store_action = runtime::StoreAction::Store;
+        color.store_action = match resolve {
+            Some(_) => runtime::StoreAction::MultisampleResolve,
+            None => runtime::StoreAction::Store,
+        };
+        color.resolve_texture = resolve.map(|texture| texture.texture.clone());
         color.clear_color = runtime::ClearColor::new(0.0, 0.0, 0.0, 0.0);
         Ok(runtime::CommandBuffer::render_command_encoder(self, &d)?)
     }

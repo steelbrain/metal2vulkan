@@ -18,7 +18,8 @@
 //! again before each run (`plan::BufferPlan::modified`), and `constant_private` the same reads
 //! from a `Private` table, its reference. `draw_full` and `draw_2000` are draws of the render
 //! library's `colored_vertex` and `colored_fragment` (`plan::Grid::Draw`) in one pass: 64 that
-//! each cover a 512 by 512 target, and 2,000 that each cover a 16 by 16 one; `bind_2000` is
+//! each cover a 512 by 512 target, and 2,000 that each cover a 16 by 16 one; `draw_full_4x` is
+//! `draw_full` into a target of 4 samples, which the pass resolves as it ends; `bind_2000` is
 //! `draw_2000` with a vertex buffer and a fragment texture set before each draw, each alternating
 //! between two objects.
 //! Every command buffer of a workload's runs carries a scheduled handler (on the old runtime, its
@@ -343,12 +344,14 @@ pub trait ComputeDevice: Device {
     ) -> Result<Self::ComputePipelineState>;
 
     /// `newRenderPipelineStateWithDescriptor:error:` of `vertex` and `fragment`, drawing into one
-    /// colour attachment of `color`, with Metal's defaults otherwise.
+    /// colour attachment of `color` at `samples` samples (`rasterSampleCount`), with Metal's
+    /// defaults otherwise.
     fn new_render_pipeline_state(
         &self,
         vertex: &Self::Function,
         fragment: &Self::Function,
         color: metal2vulkan::metal::PixelFormat,
+        samples: u32,
     ) -> Result<Self::RenderPipelineState>;
 
     /// `newCommandQueue`.
@@ -415,8 +418,13 @@ pub trait CommandBuffer<D: ComputeDevice> {
     fn blit_command_encoder(&self) -> Result<D::BlitCommandEncoder>;
 
     /// `renderCommandEncoderWithDescriptor:` of one colour attachment: level 0 of `target`,
-    /// cleared to zero as the pass starts and stored as it ends.
-    fn render_command_encoder(&self, target: &D::Texture) -> Result<D::RenderCommandEncoder>;
+    /// cleared to zero as the pass starts and stored as it ends, or resolved into level 0 of
+    /// `resolve` where given (`MTLStoreActionMultisampleResolve`).
+    fn render_command_encoder(
+        &self,
+        target: &D::Texture,
+        resolve: Option<&D::Texture>,
+    ) -> Result<D::RenderCommandEncoder>;
 
     /// `commit`.
     fn commit(&self) -> Result<()>;

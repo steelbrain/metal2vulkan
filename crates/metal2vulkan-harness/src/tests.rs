@@ -357,6 +357,41 @@ fn a_draw_needs_a_render_target_and_binds_buffers_and_textures_alone() {
     assert!(bound.validate().is_err());
 }
 
+/// A draw that resolves draws into a multisample target and resolves it into a 1-sample render
+/// target of its format and size; a multisample texture takes no texels of a kernel or the CPU.
+#[test]
+fn a_resolving_draw_needs_a_multisample_target_and_a_matching_resolve_texture() {
+    let plan = || {
+        (WORKLOADS
+            .iter()
+            .find(|w| w.name == "draw_full_4x")
+            .unwrap()
+            .plan)()
+    };
+    assert!(plan().validate().is_ok());
+    let mut one = plan();
+    one.textures[1].sample_count = 1;
+    assert!(one.validate().is_err(), "a target of one sample");
+    let mut smaller = plan();
+    smaller.textures[0].width = 256;
+    assert!(
+        smaller.validate().is_err(),
+        "a resolve texture of another size"
+    );
+    let mut unrendered = plan();
+    unrendered.textures[0].usage = TextureUsage::SHADER_READ;
+    assert!(
+        unrendered.validate().is_err(),
+        "a resolve texture without RenderTarget usage"
+    );
+    let mut filled = plan();
+    filled.textures[1].texels = Some(vec![0.0; 4 * 512 * 512]);
+    assert!(
+        filled.validate().is_err(),
+        "texels written into a multisample texture"
+    );
+}
+
 /// Each authored plan is whole: its builder's inputs, kernels and references agree in shape.
 #[test]
 fn every_authored_plan_validates() {

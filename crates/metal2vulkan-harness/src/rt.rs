@@ -539,11 +539,13 @@ impl crate::ComputeDevice for Device {
         vertex: &rt::FunctionDescriptor,
         fragment: &rt::FunctionDescriptor,
         color: rt::PixelFormat,
+        samples: u32,
     ) -> Result<rt::RenderPipelineState> {
         let mut descriptor =
             rt::RenderPipelineDescriptor::new(rt::StageSource::Function(vertex.clone()));
         descriptor.fragment = Some(rt::StageSource::Function(fragment.clone()));
         descriptor.color_attachments[0] = Some(rt::ColorAttachmentDescriptor::new(color));
+        descriptor.raster_sample_count = samples;
         (self.device)
             .new_render_pipeline_state(&descriptor, |samplers| self.sampler_ids(samplers))
             .map_err(error)
@@ -577,6 +579,7 @@ impl crate::ComputeDevice for Device {
             texture.height,
         );
         descriptor.array_length = texture.array_length;
+        descriptor.sample_count = texture.sample_count;
         descriptor.usage = texture.usage;
         descriptor.storage_mode = match texture.storage {
             Storage::Shared => rt::StorageMode::Shared,
@@ -667,12 +670,20 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
         rt::CommandBuffer::blit_command_encoder(self).map_err(error)
     }
 
-    fn render_command_encoder(&self, target: &rt::Texture) -> Result<rt::RenderCommandEncoder> {
+    fn render_command_encoder(
+        &self,
+        target: &rt::Texture,
+        resolve: Option<&rt::Texture>,
+    ) -> Result<rt::RenderCommandEncoder> {
         let mut d = rt::RenderPassDescriptor::default();
         let color = &mut d.color_attachments[0];
         color.texture = Some(target.clone());
         color.load_action = rt::LoadAction::Clear;
-        color.store_action = rt::StoreAction::Store;
+        color.store_action = match resolve {
+            Some(_) => rt::StoreAction::MultisampleResolve,
+            None => rt::StoreAction::Store,
+        };
+        color.resolve_texture = resolve.cloned();
         color.clear_color = rt::ClearColor::new(0.0, 0.0, 0.0, 0.0);
         rt::CommandBuffer::render_command_encoder(self, &d).map_err(error)
     }
