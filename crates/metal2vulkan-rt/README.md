@@ -543,9 +543,12 @@ buffer barrier, counted in `Metrics::external_acquires`. A block that is not exp
 `Refusal::NotExported`. The contract has three parts: between `external_writes_done` and the
 other API's next write, the other API does not access the block; when it writes again, it reads
 nothing of the block but what it has itself written since; and after each acquire, a byte the
-other API has not written since the previous acquire is undefined to the runtime. No release
-follows the acquire: without one, Vulkan leaves the block's contents undefined to the other API's
-reads (section 7.7.6), and in this direction that API reads only its own writes.
+other API has not written since the previous acquire is undefined to the runtime, unless the
+consumer released the block between the two (`release_to_external`, below): a release and the
+acquire after it transfer ownership, which keeps the bytes the other API did not write (section
+7.7.6). No release follows the acquire: without one, Vulkan leaves the block's contents undefined
+to the other API's reads (section 7.7.6), and in this direction that API reads only its own
+writes.
 
 Where the other API is to read what the runtime's commands wrote (a video encoder reading the
 frames a blit wrote), the consumer calls `BlitCommandEncoder::release_to_external(&buffer)`, with a
@@ -706,7 +709,8 @@ plane's acquire from `VK_QUEUE_FAMILY_EXTERNAL` in the general layout, and
 exported surface. No keyed mutex is used; the consumer orders the two APIs' work by its waits. A
 plane rt uses before any Direct3D 11 access has undefined contents, as a Metal texture nothing
 wrote does. The surface has no buffer: `Surface::buffer()` is `Gap::D3d11SurfaceBuffer`, as its
-planes lie in memories of their own, and `Surface::handle()` is `None`.
+planes lie in memories of their own, and `Surface::handle()` is `None`. No move goes ahead of the
+planes' first use, so `Surface::wait_until_ready()` returns at once.
 
 ### Known gaps of memory blocks
 
