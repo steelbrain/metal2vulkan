@@ -503,7 +503,7 @@ pub struct LinkedCounts {
 
 /// What a render pipeline descriptor answers of itself. Each field is one Metal getter's answer,
 /// an enumeration by its raw ordinal so an ordinal neither side names still compares.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderDescriptorFacts {
     /// `label`; `None` is Metal's nil.
     pub label: crate::case::Field<Option<String>>,

@@ -472,7 +472,7 @@ pub fn field<T>(field: &Field<T>, observed: impl FnOnce(&T) -> Value) -> Observe
 /// `Err` as the site is written, and the annotation ([`Failure::at_step`]) can only reach the
 /// inside of it. Nothing a failure carries, now or later, can displace the layer the comparison
 /// reads.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
     /// The typed error **inside** the call's `Err`: a `Value::Variant` of the error's variant
     /// path and its payload. Private, so the `Err` layer cannot be lost: see the type's own

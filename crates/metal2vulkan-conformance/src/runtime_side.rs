@@ -31,9 +31,7 @@ use crate::function_bindings::{
     ArrayFacts, BindingFacts, BufferFacts, MemberFacts, PayloadFacts, PointerFacts, ReferenceFacts,
     StageBindings, StageReflection, StructFacts, TextureFacts, ThreadgroupFacts, TypeFacts, DEPTH,
 };
-use crate::function_facts::{
-    AttributeFacts, ConstantAt, ConstantFacts, ConstantValue, FunctionFacts,
-};
+use crate::function_facts::{ConstantFacts, ConstantValue, FunctionFacts};
 use crate::heap_query::{HeapBufferSpec, HeapOwnFacts, HeapSpec, QueriedResource, ResourceFacts};
 use crate::indirect_commands::{
     CommandsMade, ComputeCommandStep, EncodedCommand, IcbDescriptor, RenderCommandStep,
@@ -1139,52 +1137,6 @@ struct EncoderAt {
     target: Option<(Handle, u64)>,
 }
 
-/// One stage-input attribute of ours, in the vocabulary both sides answer in.
-fn our_attribute(attribute: &metal2vulkan::reflection::Attribute) -> AttributeFacts {
-    AttributeFacts {
-        name: attribute.name().to_owned(),
-        attribute_index: attribute.attribute_index(),
-        attribute_type: attribute.attribute_type(),
-        active: attribute.is_active(),
-        patch_data: attribute.is_patch_data(),
-        patch_control_point_data: attribute.is_patch_control_point_data(),
-    }
-}
-
-/// The constant values the case states, as the runtime's `MTLFunctionConstantValues`.
-///
-/// The runtime holds values by index and by name, which is the two single setters; a range is
-/// **expanded** into one value an index from its first, which is what
-/// `setConstantValues:type:withRange:` means. The bytes are split by the type's own size, so a
-/// range of three `bool`s is three one-byte values at three indices.
-fn our_constants(values: &[ConstantValue]) -> metal2vulkan::library::FunctionConstantValues {
-    let mut built = metal2vulkan::library::FunctionConstantValues::defaults();
-    for value in values {
-        let one = |bytes: &[u8]| {
-            metal2vulkan::library::FunctionConstantValue::new(value.data_type, bytes.to_vec())
-        };
-        match &value.at {
-            ConstantAt::Index(index) => built = built.with_index(*index, one(&value.bytes)),
-            ConstantAt::Name(name) => built = built.with_name(name.clone(), one(&value.bytes)),
-            ConstantAt::Range { first, count } => {
-                let count = *count as usize;
-                let each = match count {
-                    0 => 0,
-                    count => value.bytes.len() / count,
-                };
-                for step in 0..count {
-                    let at = step * each;
-                    built = built.with_index(
-                        first + step as u32,
-                        one(&value.bytes[at..at.saturating_add(each).min(value.bytes.len())]),
-                    );
-                }
-            }
-        }
-    }
-    built
-}
-
 /// Every `MTLFunction` getter the vocabulary reads, off a function however it was made.
 ///
 /// Shared by `newFunctionWithName:`, `newFunctionWithName:constantValues:` and
@@ -1209,11 +1161,11 @@ fn our_function_facts(
         vertex_attributes: function
             .vertex_attributes()
             .map_err(|error| Failure::of(&error))?
-            .map(|held| held.iter().map(our_attribute).collect()),
+            .map(|held| held.iter().map(crate::function_facts::attribute).collect()),
         stage_input_attributes: function
             .stage_input_attributes()
             .map_err(|error| Failure::of(&error))?
-            .map(|held| held.iter().map(our_attribute).collect()),
+            .map(|held| held.iter().map(crate::function_facts::attribute).collect()),
         // A `BTreeMap`, so the names are already in the order the Metal side sorts its own into:
         // the comparison is of two sorted lists of a dictionary's entries.
         constants: dictionary
@@ -1225,11 +1177,11 @@ fn our_function_facts(
                 required: constant.is_required(),
             })
             .collect(),
-        options: function.options(),
+        options: Ok(function.options()),
         // The registry ID is each host's own number, so only the **comparison** is portable: the
         // two sides agree that the function came from the case's device, never on the number that
         // says so.
-        device_is_the_cases: function.device().registry_id() == registry,
+        device_is_the_cases: Ok(function.device().registry_id() == registry),
     })
 }
 
@@ -3010,9 +2962,10 @@ impl Side for RuntimeSide<'_> {
             .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
         let function = match constants.is_empty() {
             true => library.new_function_with_name(entry),
-            false => {
-                library.new_function_with_name_constant_values(entry, &our_constants(constants))
-            }
+            false => library.new_function_with_name_constant_values(
+                entry,
+                &crate::function_facts::constant_values(constants),
+            ),
         }
         .map_err(|error| Failure::of(&error))?;
         our_function_facts(&function, registry)
@@ -3030,7 +2983,7 @@ impl Side for RuntimeSide<'_> {
             install_name: library.install_name().map(str::to_owned),
             // The registry ID is each host's own number, so only the **comparison** is portable,
             // as it is for a function's own device.
-            device_is_the_cases: library.device().registry_id() == registry,
+            device_is_the_cases: Ok(library.device().registry_id() == registry),
         })
     }
 
@@ -3046,7 +2999,9 @@ impl Side for RuntimeSide<'_> {
             .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
         let mut made = metal2vulkan_runtime::FunctionDescriptor::new(&descriptor.name);
         if !descriptor.constants.is_empty() {
-            made.constant_values = Some(our_constants(&descriptor.constants));
+            made.constant_values = Some(crate::function_facts::constant_values(
+                &descriptor.constants,
+            ));
         }
         made.options = descriptor.options;
         let function = library
@@ -8167,7 +8122,7 @@ fn runtime_step(
                 function_names: library.function_names(),
                 library_type: library.library_type(),
                 install_name: library.install_name().map(str::to_owned),
-                device_is_the_cases: library.device().registry_id() == registry,
+                device_is_the_cases: Ok(library.device().registry_id() == registry),
             });
             let refused = made.is_none();
             from_data.push(made);

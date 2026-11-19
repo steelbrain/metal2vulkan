@@ -18,7 +18,7 @@ use crate::transcript::{Node, NodeName, Observed, Value};
 pub const WAIT_MS: u64 = 10;
 
 /// What one run of the rising-value probe observed. Each field is one call's answer.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EventRise {
     /// `label`, after `setLabel:`; a side whose runtime keeps no label refuses it.
     pub label: crate::case::Field<Option<String>>,

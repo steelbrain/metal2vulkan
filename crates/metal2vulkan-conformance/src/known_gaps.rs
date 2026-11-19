@@ -218,11 +218,14 @@ pub enum ConsumerObject {
     /// The `label` of an object or a descriptor: the runtime keeps no label on anything, and its
     /// consumer keeps the label it set.
     Label,
+    /// The `device` of a library or a function: the runtime's library and functions are the
+    /// translator's, which keep no device, and its consumer knows which device it made each on.
+    Device,
 }
 
 impl ConsumerObject {
     /// Every object, in the order the count line names them.
-    pub const ALL: [ConsumerObject; 7] = [
+    pub const ALL: [ConsumerObject; 8] = [
         ConsumerObject::RenderPassDescriptor,
         ConsumerObject::Heap,
         ConsumerObject::DispatchType,
@@ -230,6 +233,7 @@ impl ConsumerObject {
         ConsumerObject::PipelineReflection,
         ConsumerObject::TextureViewParents,
         ConsumerObject::Label,
+        ConsumerObject::Device,
     ];
 
     /// The name a row states in its parentheses.
@@ -250,6 +254,7 @@ impl ConsumerObject {
                 "parentTexture, parentRelativeLevel, parentRelativeSlice, shareable"
             }
             ConsumerObject::Label => "label",
+            ConsumerObject::Device => "device",
         }
     }
 

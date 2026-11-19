@@ -28,6 +28,7 @@
 //! answers **no** function constants. That is the only way to reach `MTLFunctionConstantValues`,
 //! whose three setters a case states as [`ConstantValue`]s.
 
+use crate::case::field;
 use crate::transcript::{Node, NodeName, Observed, Value};
 use metal2vulkan::metal::{DataType, FunctionOptions, FunctionType, PatchType};
 
@@ -51,12 +52,12 @@ pub struct FunctionFacts {
     /// the sites are named by the key rather than by a position neither side promises.
     pub constants: Vec<ConstantFacts>,
     /// `options`: the `MTLFunctionOptions` bits the function was made with.
-    pub options: FunctionOptions,
+    pub options: crate::case::Field<FunctionOptions>,
     /// Whether `device` is the device the case's other objects were made on.
     ///
     /// The device object itself is not comparable — its name and its identity are the host's — so
     /// what the case asks is the one portable question the getter answers.
-    pub device_is_the_cases: bool,
+    pub device_is_the_cases: crate::case::Field<bool>,
 }
 
 /// One stage-input attribute: `MTLVertexAttribute` and `MTLAttribute`, which state the same six
@@ -217,11 +218,11 @@ impl FunctionFacts {
             ))
             .with(Node::leaf(
                 "options",
-                Observed::value(options(self.options)),
+                field(&self.options, |held| options(*held)),
             ))
             .with(Node::leaf(
                 "device",
-                Observed::value(Value::Bool(self.device_is_the_cases)),
+                field(&self.device_is_the_cases, |held| Value::Bool(*held)),
             ));
         node = node.with(attributes("vertex_attributes", &self.vertex_attributes));
         node = node.with(attributes(
@@ -324,4 +325,53 @@ impl ConstantFacts {
                 Observed::value(Value::Bool(self.required)),
             ))
     }
+}
+
+/// One stage-input attribute the translator reflects, in the vocabulary every side answers in.
+pub(crate) fn attribute(attribute: &metal2vulkan::reflection::Attribute) -> AttributeFacts {
+    AttributeFacts {
+        name: attribute.name().to_owned(),
+        attribute_index: attribute.attribute_index(),
+        attribute_type: attribute.attribute_type(),
+        active: attribute.is_active(),
+        patch_data: attribute.is_patch_data(),
+        patch_control_point_data: attribute.is_patch_control_point_data(),
+    }
+}
+
+/// The constant values the case states, as the translator's `MTLFunctionConstantValues`, which
+/// both runtimes take.
+///
+/// The runtime holds values by index and by name, which is the two single setters; a range is
+/// **expanded** into one value an index from its first, which is what
+/// `setConstantValues:type:withRange:` means. The bytes are split by the type's own size, so a
+/// range of three `bool`s is three one-byte values at three indices.
+pub(crate) fn constant_values(
+    values: &[ConstantValue],
+) -> metal2vulkan::library::FunctionConstantValues {
+    let mut built = metal2vulkan::library::FunctionConstantValues::defaults();
+    for value in values {
+        let one = |bytes: &[u8]| {
+            metal2vulkan::library::FunctionConstantValue::new(value.data_type, bytes.to_vec())
+        };
+        match &value.at {
+            ConstantAt::Index(index) => built = built.with_index(*index, one(&value.bytes)),
+            ConstantAt::Name(name) => built = built.with_name(name.clone(), one(&value.bytes)),
+            ConstantAt::Range { first, count } => {
+                let count = *count as usize;
+                let each = match count {
+                    0 => 0,
+                    count => value.bytes.len() / count,
+                };
+                for step in 0..count {
+                    let at = step * each;
+                    built = built.with_index(
+                        first + step as u32,
+                        one(&value.bytes[at..at.saturating_add(each).min(value.bytes.len())]),
+                    );
+                }
+            }
+        }
+    }
+    built
 }

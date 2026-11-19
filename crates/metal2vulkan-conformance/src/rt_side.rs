@@ -46,6 +46,7 @@ use std::time::Duration;
 mod compute;
 mod descriptors;
 mod events;
+mod functions;
 mod render;
 mod states;
 mod tables;
@@ -1493,6 +1494,27 @@ impl Side for RtSide<'_> {
         spec: &crate::compute_descriptors::DescriptorSpec<'_>,
     ) -> Answer<crate::compute_descriptors::ComputeDescriptorFacts> {
         self.compute_descriptor(library, spec)
+    }
+
+    fn function_facts(
+        &mut self,
+        library: Handle,
+        entry: &str,
+        constants: &[crate::function_facts::ConstantValue],
+    ) -> Answer<crate::function_facts::FunctionFacts> {
+        self.function_facts_of(library, entry, constants)
+    }
+
+    fn library_facts(&mut self, library: Handle) -> Answer<crate::library_facts::LibraryFacts> {
+        self.library_facts_of(library)
+    }
+
+    fn function_facts_from_descriptor(
+        &mut self,
+        library: Handle,
+        descriptor: &crate::library_facts::FunctionDescriptorSpec,
+    ) -> Answer<crate::function_facts::FunctionFacts> {
+        self.described_function_facts(library, descriptor)
     }
 
     fn queue_slots(

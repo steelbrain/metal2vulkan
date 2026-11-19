@@ -513,12 +513,12 @@ fn our_function_facts(
         vertex_attributes: our_vertex_attributes(vertex.as_deref())?,
         stage_input_attributes: our_stage_input_attributes(stage_in.as_deref())?,
         constants: found,
-        options: FunctionOptions::try_from(function.options().0 as u32)
-            .map_err(|error| Failure::named("UnknownFunctionOptions", error.to_string()))?,
+        options: Ok(FunctionOptions::try_from(function.options().0 as u32)
+            .map_err(|error| Failure::named("UnknownFunctionOptions", error.to_string()))?),
         // The registry ID is each host's own number, so only the **comparison** is portable: the
         // two sides agree that the function came from the case's device, never on the number that
         // says so.
-        device_is_the_cases: function.device().registryID() == registry,
+        device_is_the_cases: Ok(function.device().registryID() == registry),
     })
 }
 
@@ -4018,7 +4018,7 @@ impl Side for MetalSide {
             install_name: install.map(|name| name.to_string()),
             // The registry ID is each host's own number, so only the **comparison** is portable,
             // as it is for a function's own device.
-            device_is_the_cases: library.device().registryID() == registry,
+            device_is_the_cases: Ok(library.device().registryID() == registry),
         })
     }
 
@@ -11550,7 +11550,7 @@ fn metal_library_facts(
         function_names: names.iter().map(|name| name.to_string()).collect(),
         library_type: our_library_type(library.r#type().0)?,
         install_name: install.map(|name| name.to_string()),
-        device_is_the_cases: library.device().registryID() == registry,
+        device_is_the_cases: Ok(library.device().registryID() == registry),
     })
 }
 

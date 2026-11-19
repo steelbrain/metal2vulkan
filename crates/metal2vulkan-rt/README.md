@@ -11,7 +11,7 @@ device against the floor below.
 
 ## What the consumer implements
 
-Seven of Metal's objects and getters have no counterpart here by design. The consumer implements
+Eight of Metal's objects and getters have no counterpart here by design. The consumer implements
 them over this crate's items:
 
 - `MTLRenderPassDescriptor`'s read-back of its own fields. `RenderPassDescriptor` is a value the
@@ -35,6 +35,8 @@ them over this crate's items:
   A view's descriptor (its type, format, levels, slices and combined swizzle) is this crate's.
 - The `label` of every object and descriptor. Nothing here keeps a label; the consumer keeps the
   label it set.
+- The `device` of a library and of a function. Both are the translator's, which keep no device;
+  the consumer knows which device it made each on.
 
 ## Instance and device
 

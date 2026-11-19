@@ -40,6 +40,7 @@
 //! A descriptor whose options a side dropped reads as a different `options` field rather than as
 //! nothing.
 
+use crate::case::field;
 use crate::transcript::{Node, NodeName, Observed, Value};
 use metal2vulkan::library::LibraryType;
 use metal2vulkan::metal::FunctionOptions;
@@ -59,7 +60,7 @@ pub struct LibraryFacts {
     /// The device object itself is not comparable — its name and its identity are the host's — so
     /// what the case asks is the one portable question the getter answers, as
     /// [`crate::function_facts::FunctionFacts::device_is_the_cases`] asks it of a function.
-    pub device_is_the_cases: bool,
+    pub device_is_the_cases: crate::case::Field<bool>,
 }
 
 /// `MTLFunctionDescriptor` as a case states it: the three facts a side sets on one before
@@ -146,7 +147,7 @@ impl LibraryFacts {
             ))
             .with(Node::leaf(
                 "device",
-                Observed::value(Value::Bool(self.device_is_the_cases)),
+                field(&self.device_is_the_cases, |held| Value::Bool(*held)),
             ))
     }
 }

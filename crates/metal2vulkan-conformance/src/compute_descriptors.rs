@@ -196,7 +196,7 @@ pub struct SuppliedLists {
 
 /// What a compute pipeline descriptor answers of itself. Each field is one Metal getter's answer,
 /// an enumeration by its raw ordinal so an ordinal neither side names still compares.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComputeDescriptorFacts {
     /// `label`; `None` is Metal's nil.
     pub label: crate::case::Field<Option<String>>,
