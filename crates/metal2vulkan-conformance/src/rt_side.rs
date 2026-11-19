@@ -632,6 +632,37 @@ impl Side for RtSide<'_> {
         Ok(keep(&mut self.buffers, (buffer, block)))
     }
 
+    /// `newBufferWithBytesNoCopy:length:options:deallocator:` of writable pages: the runtime's
+    /// import of them (`Device::import_host_memory`), whose release unmaps them once the runtime
+    /// frees the memory, and a buffer over the whole block, its bytes the pages' own. Metal's
+    /// private read-only bit (`MTLResourceOptions` bit 24) has no counterpart in the runtime, so
+    /// that form answers its call unavailable.
+    fn host_buffer(&mut self, spec: &crate::host_pages::HostBufferSpec) -> Answer<Handle> {
+        if let Some(why) = spec.unmappable() {
+            return Err(Failure::named("UnmappableHostBuffer", why));
+        }
+        if spec.read_only {
+            return Err(Failure::unavailable(
+                "newBufferWithBytesNoCopy:length:options:deallocator: with MTLResourceOptions bit 24",
+            ));
+        }
+        let length = usize::try_from(spec.bytes)
+            .map_err(|_| Failure::named("UnmappableHostBuffer", "more bytes than a usize"))?;
+        let pages = crate::host_pages::HostPages::of(length, spec.pattern)
+            .ok_or_else(|| Failure::named("MmapFailed", format!("{length} bytes")))?;
+        let pointer = pages.pointer();
+        let release: Box<dyn FnOnce() + Send> = Box::new(move || drop(pages));
+        // SAFETY: the pages are this side's own mapping of `length` readable and writable bytes.
+        // The release owns them and unmaps them only once the runtime freed the import, or at
+        // once where the import fails, and nothing maps them anew meanwhile.
+        let imported =
+            unsafe { (self.on.device).import_host_memory(pointer, spec.bytes, Some(release)) };
+        let (block, _) = imported.map_err(|error| self.on.failure(&error))?;
+        let buffer = (self.on.device.new_buffer(block.id, 0, spec.bytes, None))
+            .map_err(|error| self.on.failure(&error))?;
+        Ok(keep(&mut self.buffers, (buffer, block)))
+    }
+
     fn texture_2d(
         &mut self,
         format: PixelFormat,
@@ -1610,7 +1641,7 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 18] = [
+    const CALLS: [(&str, &str); 19] = [
         (
             "heap_buffer_size_and_align",
             crate::cases::device_queries::HEAP_BUFFERS,
@@ -1658,6 +1689,10 @@ mod answered {
         (
             "heap_texture",
             crate::cases::texture_descriptor_pairs::HEAP_TEXTURES,
+        ),
+        (
+            "newBufferWithBytesNoCopy",
+            "host-page-writes-kernel-store-writable",
         ),
     ];
 
