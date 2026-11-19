@@ -1098,9 +1098,11 @@ through buffer arguments it reads at any index.
   "Configures the size of a block of threadgroup memory." and points to the specification's
   section 4.4, which says "Threadgroup variables in a kernel, mesh, or object function only exist
   for the lifetime of the threadgroup that executes the kernel." and nothing of what they hold
-  first. An Apple M3 Max under macOS 27.0.1 reads zero there (the conformance case
-  `compute-threadgroup-memory-reads-zero`), and recorded programs read entries of it they have not
-  written. On `Device::new`'s profile no `Workgroup` variable has an initializer, and such a read
+  first. An Apple M3 Max under macOS 27.0.1 reads zero there, a declared array and a
+  `[[threadgroup(n)]]` argument alike, in the later threadgroups of a dispatch of 2048
+  threadgroups of 16 KiB each, many more than its cores hold at once, and in a second dispatch
+  (the conformance case `compute-threadgroup-memory-reads-zero`); recorded programs read entries of
+  it they have not written. On `Device::new`'s profile no `Workgroup` variable has an initializer, and such a read
   gives what the device's memory holds.
 - **Binary functions, required threadgroup sizes, buffer mutability.** Whether a binary function
   was compiled to a binary (`LinkedFunction::precompiled`), required threadgroup sizes and buffer
