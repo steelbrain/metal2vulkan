@@ -29,7 +29,9 @@
 //! atomics need. A device-replay variant (`LowerInputs.replay_bindings`) reads it, as every other
 //! slot, through its root entry in the replayed command's slot table. The fetch reads a storage view at the bind residual plus its Metal displacement,
 //! contained by the profile's encoding, and a device address through the slot's root entry (`psb`,
-//! window start 0), always contained unless containment is off. Reads are plain: a vertex function
+//! window start 0), always contained unless containment is off. Under the identity domains every
+//! source buffer is its device address, which the fetch reads from the slot's own pushed address
+//! (`SlotGuestBase`) plus its displacement, uncontained, as Metal contains no fetch. Reads are plain: a vertex function
 //! has no barrier a coherence could order them with.
 
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
@@ -251,6 +253,25 @@ pub fn psb_read(
     })
 }
 
+/// A read of a source buffer under the identity domains, at the `u32` Metal displacement `m` from
+/// its bind offset in a slot whose window starts at `start`: from `address` (a `u64`), the slot's
+/// own device address, the word below the read and the byte offset in it (`psb::prepare_at`). No
+/// table is read, and the read is not contained, as Metal contains no fetch: a fetch outside its
+/// buffer reads what the device gives.
+fn address_read(
+    fb: &mut FunctionBuilder<'_>,
+    address: SValue,
+    m: SValue,
+    start: i64,
+) -> BResult<SourceRead> {
+    let a = psb::prepare_at(fb, address, m, start)?;
+    Ok(SourceRead {
+        mem: SourceMem(Mem::Psb(a.mem)),
+        off: a.off,
+        inb: a.inb,
+    })
+}
+
 /// Prepare an `n`-byte read of source buffer `buffer` at the `u32` Metal displacement `m` from
 /// its bind offset, in the form [`super::finish_slots`] chose; a view is contained by `check`.
 pub fn prepare(
@@ -268,6 +289,7 @@ pub fn prepare(
             start,
             contained,
         } => psb_read(fb, table, buffer, m, start, n, contained),
+        Source::Address { address, start } => address_read(fb, address, m, start),
     }
 }
 
@@ -309,6 +331,11 @@ pub fn prepare_within(
             let m = fb.select(fits, m, zero)?;
             (psb_read(fb, table, buffer, m, start, n, contained)?, fits)
         }
+        Source::Address { address, start } => {
+            let zero = k32(fb, 0)?;
+            let m = fb.select(fits, m, zero)?;
+            (address_read(fb, address, m, start)?, fits)
+        }
     };
     let inb = match read.inb {
         Some(inb) => fb.binary(BinOp::LogicalAnd, inb, fits)?,
@@ -331,6 +358,9 @@ enum Source {
         start: i64,
         contained: bool,
     },
+    /// Under the identity domains, its own device address (`SlotGuestBase`, a `u64`), in a slot
+    /// whose window starts at `start`.
+    Address { address: SValue, start: i64 },
 }
 
 /// The form source buffer `buffer` is read in.
@@ -344,6 +374,7 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
         .map(|p| p.reach);
     // The form is `AccessPlan::source_lowering`'s, which the census reads too.
     let lowering = access.source_lowering(slot);
+    let identity = access.identity;
     let view = match reach {
         Some(Reach::Shared { slot }) => cx.decl.families.access.views.get(slot).copied().flatten(),
         Some(Reach::Own(_)) => cx
@@ -376,6 +407,11 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
                 None => residual,
             };
             Ok(Source::View { view, residual })
+        }
+        (Some(SlotLowering::Psb { start }), _) if identity => {
+            let v = cx.push_field(fb, PushField::SlotGuestBase(slot))?;
+            let address = super::pointer::slot_guest_base_u64(fb, v)?;
+            Ok(Source::Address { address, start })
         }
         (Some(SlotLowering::Psb { start }), _) => {
             let table = cx.push_field(fb, PushField::RootTableAddress)?;
