@@ -71,7 +71,10 @@
 use crate::allowance::Allowance;
 use crate::attribute_coding as coding;
 use crate::attribute_coding::{shape, FILLER, ROWS, SLOT};
-use crate::case::{call, made, probe, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::case::{
+    call, drawn_or_refused, made, pipeline_or_refused, refused_leg, Abort, Case, Failure, Handle,
+    Input, MetalSource, Side,
+};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -337,11 +340,12 @@ impl Case for WideIntAttributes {
 
         // A pipeline Metal or we refuse is recorded at its own site and the sweep carries on, so
         // one refused format compares as a refusal there while every other format still compares.
-        let mut pipelines: Vec<Option<Handle>> = Vec::with_capacity(formats.len());
+        // Its slice then stays at the filler, so the format's row answers with that refusal.
+        let mut pipelines: Vec<Result<Handle, Failure>> = Vec::with_capacity(formats.len());
         for &format in &formats {
             let attributes = self.attributes(format);
             let layouts = self.layouts();
-            pipelines.push(probe(
+            pipelines.push(pipeline_or_refused(
                 sites,
                 &format!("{}/pipeline", site_name(format)),
                 side.render_pipeline(
@@ -351,7 +355,6 @@ impl Case for WideIntAttributes {
                         VertexLayout::new(&attributes, &layouts),
                     ),
                 ),
-                |_| Value::Absent,
             ));
         }
 
@@ -359,7 +362,7 @@ impl Case for WideIntAttributes {
         // buffer, so the case costs one commit and one wait rather than one per format.
         let mut work = Vec::new();
         for (at, pipeline) in pipelines.iter().enumerate() {
-            let Some(pipeline) = pipeline else { continue };
+            let Ok(pipeline) = pipeline else { continue };
             let base = at as u64 * u64::from(ANSWER_BYTES);
             let steps = vec![
                 RenderStep::Pipeline(*pipeline),
@@ -400,19 +403,17 @@ impl Case for WideIntAttributes {
         for (at, &format) in formats.iter().enumerate() {
             let first = at * ANSWER_BYTES as usize;
             let answer = bytes[first..first + ANSWER_BYTES as usize].to_vec();
-            let mut row = Node::branch(site_name(format), Vec::new()).with(Node::leaf(
+            let row = Node::branch(site_name(format), Vec::new()).with(Node::leaf(
                 "rows",
                 Observed::bytes(answer, self.declared.answer_layout()),
             ));
-            // What the format's pass answered, which is `None` on Metal's side: a pass of ours that
-            // refuses compares against Metal encoding and reads as a refusal rather than a
-            // divergence.
-            if let Some(pass) = drawn.iter().position(|held| *held == at) {
-                if let Some(Some(failure)) = outcome.refused.get(pass) {
-                    row = row.with(Node::leaf("pass", Observed::value(failure.recorded())));
-                }
-            }
-            sites.push(row);
+            // A format whose pipeline or pass our side refused has no rows: its slice holds the
+            // filler, which no site records, so the refusal is the format's answer.
+            let pass = drawn.iter().position(|held| *held == at);
+            sites.push(drawn_or_refused(
+                row,
+                refused_leg(&pipelines[at], &outcome, pass),
+            ));
         }
         Ok(())
     }

@@ -85,7 +85,10 @@
 //! finite numbers whose products the same ceiling bounds.
 
 use crate::allowance::Allowance;
-use crate::case::{call, made, Abort, Case, Handle, Input, MetalSource, Side};
+use crate::case::{
+    call, drawn_or_refused, made, pipeline_or_refused, refused_leg, Abort, Case, Handle, Input,
+    MetalSource, Side,
+};
 use crate::recording::ShaderRef;
 use crate::render::{RenderPass, RenderStep, RenderWork, TessellationState};
 use crate::transcript::{Node, Observed, Sites};
@@ -95,10 +98,9 @@ use metal2vulkan::metal::{
 use metal2vulkan_runtime::Degradation;
 
 use super::tessellation_sweeps::{
-    air_inputs, domain_pipeline, drawn_or_refused, grid_record, load, medium_layout,
-    pipeline_or_refused, quad_factors, raw_quad_factors, read_medium_marks, refused_leg,
-    shaders_of, tessellation_notices, Domain, FINITE, MEDIUM_GRID, MEDIUM_MAX, QUAD_FACTOR_BYTES,
-    REGION_BYTES,
+    air_inputs, domain_pipeline, grid_record, load, medium_layout, quad_factors, raw_quad_factors,
+    read_medium_marks, shaders_of, tessellation_notices, Domain, FINITE, MEDIUM_GRID, MEDIUM_MAX,
+    QUAD_FACTOR_BYTES, REGION_BYTES,
 };
 
 // ---- The vocabulary every case of the family states its cells in ------------------------------

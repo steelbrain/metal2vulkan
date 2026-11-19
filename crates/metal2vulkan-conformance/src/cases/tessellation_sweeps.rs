@@ -143,7 +143,8 @@
 
 use crate::allowance::Allowance;
 use crate::case::{
-    call, made, probe, Abort, Answer, Case, Failure, Handle, Input, MetalSource, PassOutcome, Side,
+    call, drawn_or_refused, made, pipeline_or_refused, refused_leg, Abort, Case, Failure, Handle,
+    Input, MetalSource, Side,
 };
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -1628,57 +1629,6 @@ pub(super) fn medium_layout(offset: u64) -> ByteLayout {
     }
 }
 
-/// [`probe`] of a render pipeline that keeps our refusal: the state, or the failure its site
-/// recorded, which each leg that needed the state answers with (`refused_leg`).
-pub(super) fn pipeline_or_refused(
-    sites: &mut Sites,
-    at: &str,
-    answer: Answer<Handle>,
-) -> Result<Handle, Failure> {
-    match answer {
-        Ok(state) => {
-            sites.value(at, Value::ok(Value::Absent));
-            Ok(state)
-        }
-        Err(failure) => {
-            probe::<Handle>(sites, at, Err(failure.clone()), |_| Value::Absent);
-            Err(failure)
-        }
-    }
-}
-
-/// Our refusal of a leg: of the pipeline it needed, where our side refused that and so never drew
-/// the leg, else of the pass that drew it ([`refused_pass`]).
-pub(super) fn refused_leg<'a>(
-    pipeline: &'a Result<Handle, Failure>,
-    outcome: &'a PassOutcome,
-    pass: Option<usize>,
-) -> Option<&'a Failure> {
-    match pipeline {
-        Err(failure) => Some(failure),
-        Ok(_) => refused_pass(outcome, pass),
-    }
-}
-
-/// Our refusal of the pass a leg was drawn by, `pass` being its place among the passes the run
-/// encoded where it was encoded at all.
-fn refused_pass(outcome: &PassOutcome, pass: Option<usize>) -> Option<&Failure> {
-    outcome.refused.get(pass?)?.as_ref()
-}
-
-/// A leg's site as our side answers it: `node`, the leg's answer, or where our side did not draw
-/// the leg, the refusal that stopped it (its pipeline's or its pass's) as the site's own value
-/// with nothing under it. An undrawn leg has no answer: what a read-back holds is the buffer's
-/// starting bytes, which no site records. The comparison reads our refusal at a site whose Metal
-/// answer is a tree as that refusal alone and does not descend under it, so the leg's one row is
-/// the refusal's.
-pub(super) fn drawn_or_refused(node: Node, refused: Option<&Failure>) -> Node {
-    match refused {
-        Some(failure) => Node::leaf(node.name, Observed::value(failure.recorded())),
-        None => node,
-    }
-}
-
 /// The rows a medium grid can reach of the region at `base`.
 pub(super) fn read_medium_marks(
     side: &mut dyn Side,
@@ -2175,6 +2125,7 @@ pub(super) fn load(fixture: Fixture) -> Result<crate::fixture::Loaded, Abort> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::case::PassOutcome;
 
     /// The four step functions the sweep names are every `MTLTessellationFactorStepFunction`
     /// there is, so a value the SDK grows is a failure here rather than a leg quietly missing.

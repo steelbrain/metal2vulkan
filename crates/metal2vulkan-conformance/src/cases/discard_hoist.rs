@@ -39,8 +39,8 @@
 
 use crate::allowance::Allowance;
 use crate::case::{
-    call, made, Abort, Case, Failure, Handle, Input, MetalSource, SamplerSpec, Side, TextureRole,
-    TextureSpec,
+    call, drawn_or_refused, made, Abort, Case, Failure, Handle, Input, MetalSource, SamplerSpec,
+    Side, TextureRole, TextureSpec,
 };
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -354,19 +354,14 @@ impl Case for DiscardHoist {
         for (at, shape) in SHAPES.iter().enumerate() {
             let first = at * TARGET_BYTES as usize;
             let target_bytes = bytes[first..first + TARGET_BYTES as usize].to_vec();
-            let mut row = Node::branch(*shape, Vec::new()).with(Node::leaf(
+            let row = Node::branch(*shape, Vec::new()).with(Node::leaf(
                 "texels",
                 Observed::bytes(target_bytes, layout()),
             ));
-            // What each of the row's two pieces of work answered, which is `None` on Metal's side:
-            // a piece of ours that refuses compares against Metal answering and reads as a refusal
-            // rather than a divergence.
-            for (piece, what) in [(2 * at, "pass"), (2 * at + 1, "read")] {
-                if let Some(Some(failure)) = outcome.refused.get(piece) {
-                    row = row.with(Node::leaf(what, Observed::value(failure.recorded())));
-                }
-            }
-            sites.push(row);
+            // A row whose pass or read our side refused has no texels: Metal's encoder calls
+            // answer nothing, so the refusal is the row's answer and compares as one.
+            let refused = (outcome.refusal(2 * at)).or_else(|| outcome.refusal(2 * at + 1));
+            sites.push(drawn_or_refused(row, refused));
         }
         Ok(())
     }

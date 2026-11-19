@@ -119,7 +119,9 @@
 //! for. The shapes that do fault are measured in the probe and are deliberately absent.
 
 use crate::allowance::Allowance;
-use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::case::{
+    call, drawn_or_refused, made, Abort, Case, Failure, Handle, Input, MetalSource, Side,
+};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::host_pages::{HostBufferSpec, PAGE_MULTIPLE};
 use crate::recording::ShaderRef;
@@ -607,19 +609,33 @@ impl Case for HostPageWrite {
         let afterwards = call(sites, "read-again", side.render(&read), |_| Value::Absent)?;
         super::extended_range_targets::program(sites, "read-program", &afterwards, &read);
 
-        for (at, from) in [
-            ("bytes-in-the-same-command-buffer", same),
-            ("bytes-in-a-later-command-buffer", later),
-            ("bytes-the-cpu-reads", memory),
+        // Bytes a write or a copy our side refused never reached have no answer: what they hold is
+        // the destination's starting bytes, so the refusal is their answer and compares as one.
+        let write_refused = wrote.refusal(0);
+        for (at, from, refused) in [
+            (
+                "bytes-in-the-same-command-buffer",
+                same,
+                write_refused.or_else(|| wrote.refusal(1)),
+            ),
+            (
+                "bytes-in-a-later-command-buffer",
+                later,
+                write_refused.or_else(|| afterwards.refusal(0)),
+            ),
+            ("bytes-the-cpu-reads", memory, write_refused),
         ] {
             // Each name is its own: three reads of the same bytes are three questions, and two
             // sites of one name at one path is a site a comparison cannot settle.
             let bytes = call(sites, at, side.read_buffer(from, 0, WINDOW), |_| {
                 Value::Absent
             })?;
-            sites.push(Node::leaf(
-                format!("{at}-bytes"),
-                Observed::bytes(bytes, self.row.layout()),
+            sites.push(drawn_or_refused(
+                Node::leaf(
+                    format!("{at}-bytes"),
+                    Observed::bytes(bytes, self.row.layout()),
+                ),
+                refused,
             ));
         }
         Ok(())

@@ -33,7 +33,9 @@
 //! fetch is inside a record the case bound.
 
 use crate::allowance::Allowance;
-use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::case::{
+    call, drawn_or_refused, made, Abort, Case, Failure, Handle, Input, MetalSource, Side,
+};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -367,15 +369,11 @@ impl Case for IntAttributes {
             let name = row_name(conversion, format, step);
             let first = at * ANSWER_BYTES as usize;
             let answer = bytes[first..first + ANSWER_BYTES as usize].to_vec();
-            let mut row = Node::branch(name, Vec::new())
+            let row = Node::branch(name, Vec::new())
                 .with(Node::leaf("rows", Observed::bytes(answer, answer_layout())));
-            // What the row's pass answered, which is `None` on Metal's side: a pass of ours that
-            // refuses compares against Metal encoding and reads as a refusal rather than a
-            // divergence.
-            if let Some(Some(failure)) = outcome.refused.get(at) {
-                row = row.with(Node::leaf("pass", Observed::value(failure.recorded())));
-            }
-            sites.push(row);
+            // A row whose pass our side refused has no rows: Metal's encoder calls answer
+            // nothing, so the refusal is the row's answer and compares as one.
+            sites.push(drawn_or_refused(row, outcome.refusal(at)));
         }
         Ok(())
     }

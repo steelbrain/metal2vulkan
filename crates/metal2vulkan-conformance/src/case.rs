@@ -3211,6 +3211,13 @@ pub struct PassOutcome {
     pub error: Option<Value>,
 }
 
+impl PassOutcome {
+    /// Our refusal of piece `at` of the program, where the side refused it.
+    pub fn refusal(&self, at: usize) -> Option<&Failure> {
+        self.refused.get(at)?.as_ref()
+    }
+}
+
 /// What an indirect render command's getters answered, beside what the whole record holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndirectReadBack {
@@ -3503,4 +3510,51 @@ pub fn probe<T>(
 /// what it answered.
 pub fn made<T>(sites: &mut Sites, at: &str, answer: Answer<T>) -> Result<T, Abort> {
     call(sites, at, answer, |_| Value::Absent)
+}
+
+/// [`probe`] of a pipeline state that keeps the side's refusal: the state, or the failure its site
+/// recorded, which each leg that needed the state answers with ([`refused_leg`]).
+pub fn pipeline_or_refused(
+    sites: &mut Sites,
+    at: &str,
+    answer: Answer<Handle>,
+) -> Result<Handle, Failure> {
+    match answer {
+        Ok(state) => {
+            sites.value(at, Value::ok(Value::Absent));
+            Ok(state)
+        }
+        Err(failure) => {
+            probe::<Handle>(sites, at, Err(failure.clone()), |_| Value::Absent);
+            Err(failure)
+        }
+    }
+}
+
+/// The side's refusal of a leg: of the pipeline state it needed, where the side refused that and
+/// so never drew the leg, else of the piece that drew it, `piece` being its place in the program
+/// where it was encoded at all.
+pub fn refused_leg<'a>(
+    pipeline: &'a Result<Handle, Failure>,
+    outcome: &'a PassOutcome,
+    piece: Option<usize>,
+) -> Option<&'a Failure> {
+    match pipeline {
+        Err(failure) => Some(failure),
+        Ok(_) => outcome.refusal(piece?),
+    }
+}
+
+/// A leg's site as a side answers it: `node`, the leg's answer, or where the side did not run the
+/// leg, the refusal that stopped it (its pipeline's or a piece's) as the site's own value with
+/// nothing under it.
+///
+/// A leg that did not run has no answer: what its read-back holds is the buffer's starting bytes,
+/// which no site records. The comparison reads a refusal at a site whose Metal answer is a tree as
+/// that refusal alone and does not descend under it, so the leg's one row is the refusal's.
+pub fn drawn_or_refused(node: Node, refused: Option<&Failure>) -> Node {
+    match refused {
+        Some(failure) => Node::leaf(node.name, Observed::value(failure.recorded())),
+        None => node,
+    }
 }

@@ -39,7 +39,7 @@
 //! no index buffer.
 
 use crate::allowance::Allowance;
-use crate::case::{call, made, Abort, Case, Failure, Input, MetalSource, Side};
+use crate::case::{call, drawn_or_refused, made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -362,19 +362,14 @@ impl Case for WidePoints {
             let first = at * TARGET_BYTES as usize;
             let target_bytes = &bytes[first..first + TARGET_BYTES as usize];
             written.extend(written_words(target_bytes));
-            let mut row = Node::branch(name, Vec::new()).with(Node::leaf(
+            // A row whose pass or read our side refused has no coverage: Metal's encoder calls
+            // answer nothing, so the refusal is the row's answer and compares as one.
+            let refused = (outcome.refusal(2 * at)).or_else(|| outcome.refusal(2 * at + 1));
+            let row = Node::branch(name, Vec::new()).with(Node::leaf(
                 "coverage",
                 Observed::value(coverage(target_bytes)),
             ));
-            // What each of the row's two pieces of work answered, which is `None` on Metal's side:
-            // a piece of ours that refuses compares against Metal answering and reads as a refusal
-            // rather than a divergence.
-            for (piece, what) in [(2 * at, "pass"), (2 * at + 1, "read")] {
-                if let Some(Some(failure)) = outcome.refused.get(piece) {
-                    row = row.with(Node::leaf(what, Observed::value(failure.recorded())));
-                }
-            }
-            sites.push(row);
+            sites.push(drawn_or_refused(row, refused));
         }
         written.sort();
         written.dedup();
@@ -382,7 +377,13 @@ impl Case for WidePoints {
         // function writes opaque white and nothing blends, so this is one word, and a draw that
         // wrote another colour or a partial coverage value moves this site rather than hiding
         // inside a coverage set that happens to match.
-        sites.leaf("written-words", Observed::value(Value::set(written)));
+        // A roll-up over a row our side did not draw has no answer either: the first refusal is
+        // its answer.
+        let first_refused = (0..2 * rows.len()).find_map(|piece| outcome.refusal(piece));
+        sites.push(drawn_or_refused(
+            Node::leaf("written-words", Observed::value(Value::set(written))),
+            first_refused,
+        ));
         Ok(())
     }
 }
