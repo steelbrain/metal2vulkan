@@ -1704,6 +1704,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
     form, or a storage texture with a format), one read through another numeric type than its
     own or as the raw texels of an extended-range member, and a handle that reads its table
     entry beyond its element: no test yet.
+
+  The plays' counts of the pipeline states they skipped read 0, a refusal under the identity
+  domains among them, on five recorded streams: three played to their end (1,047, 1,100 and
+  1,129 frames) and two to their line-width stop (frames 379 and 394), in jobs m3-max-51725,
+  -51726, -51757, -51772, -51839 and -51840. No tool translates every pipeline state of the
+  recorded streams under the identity domains without a GPU, so the count is of these streams
+  to these frames.
 - No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it: a
   state reads only its lowerings from the cache directory, each variant is lowered at the first
   dispatch that needs it, and each `VkPipeline` past the first tile is made at its first dispatch,
