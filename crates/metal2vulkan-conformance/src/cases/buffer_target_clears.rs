@@ -95,8 +95,8 @@
 //! (`MTLRenderPass.h` says only that it is the default.) The M3 Max's kept bytes are one outcome
 //! of that and the clear another, and `metal2vulkan-rt` stores the clear. So a `DontCare` row's
 //! 64 texel bytes are unchecked on the new runtime's run alone, under the accepted difference
-//! [`DONT_CARE_TEXELS`] names; on the old runtime's, whose answer is the M3's, they compare
-//! exactly, and every byte outside the texels compares on both.
+//! `the-new-runtime-s-dontcare-store-writes-what-the-pass-rendered`; on the old runtime's, whose
+//! answer is the M3's, they compare exactly, and every byte outside the texels compares on both.
 //!
 //! So a clearing pass treats the inter-row bytes exactly as a blit does, which is what the landed
 //! [`super::buffer_texture_blits`] family measured: the padding keeps its original fill throughout.
