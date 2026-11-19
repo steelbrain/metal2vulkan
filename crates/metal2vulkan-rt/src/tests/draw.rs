@@ -33,6 +33,10 @@
 //!     requires;
 //!     a 1-sample state in the pass is the formats' gap, and a pass of a 4-sample and a 1-sample
 //!     attachment `RenderPassKind::SampleCounts`.
+//!   - a fragment function that returns `get_num_samples()` (the owned fixture
+//!     `engine/spc_num_samples.ll`) writes 1 to every pixel of a 1-sample `R32Uint` target through
+//!     a state of `rasterSampleCount` 1, and 4 to every sample of a 4-sample one through a state
+//!     of 4, where the device renders 4 samples of `R32Uint`.
 //!   - a vertex function that reads `[[base_instance]]` (the owned fixture
 //!     `engine/icb_merged_draws.ll`'s `icb_merged_vertex`) draws, and every pixel it covers reads
 //!     the draw's base instance and its instance ID from it.
@@ -2356,6 +2360,117 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             }
             drop((samples, flat));
             println!("{name}: four samples drawn and read per sample");
+        });
+    }
+
+    /// The sample count a fragment function reads: `spc_num_samples` returns `get_num_samples()`
+    /// into an `R32Uint` `SIDE` square, cleared to 0 and covered by `ido_full`'s fullscreen
+    /// triangle (the owned fixture `engine/ido_draw_order.ll`). Through a state of
+    /// `rasterSampleCount` 1 every pixel of a 1-sample target holds 1, and through one of 4 every
+    /// sample of a `Type2DMultisample` target of 4, each copied out by `ido_samples`, holds 4.
+    /// Vulkan requires 4 samples of no integer format (`framebufferIntegerColorSampleCounts`): a
+    /// device that renders none makes the state of 4 and draws only the one sample.
+    #[test]
+    fn every_device_draws_the_sample_count_of_its_state() {
+        let (Some(counts), Some(order)) = (
+            library(&engine_dir().join("spc_num_samples.ll")),
+            library(&engine_dir().join("ido_draw_order.ll")),
+        ) else {
+            return;
+        };
+        let function = |library: &Library, name| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let descriptor = |samples| {
+            let mut d = RenderPipelineDescriptor::new(function(&order, "ido_full"));
+            d.fragment = Some(function(&counts, "spc_num_samples"));
+            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
+            d.raster_sample_count = samples;
+            d
+        };
+        let (one, four) = (descriptor(1), descriptor(4));
+        each_device("draw_sample_count", |name, _, device| {
+            let one = state(name, &device, &one);
+            let four = state(name, &device, &four);
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let flat = target(&device, PixelFormat::R32Uint, TextureUsage::RENDER_TARGET);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&flat, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_render_pipeline_state(&one));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let words: Vec<u32> = (read(&flat, 4).chunks_exact(4))
+                .map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+                .collect();
+            assert_eq!(words, [1; (SIDE * SIDE) as usize], "{name}: one sample");
+
+            (device.grant_indices(IndexClass::Texture, 1, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut td = TextureDescriptor::new(
+                TextureType::Type2DMultisample,
+                PixelFormat::R32Uint,
+                SIDE,
+                SIDE,
+            );
+            td.sample_count = 4;
+            td.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+            td.storage_mode = StorageMode::Private;
+            let samples = match device.new_texture(&td, Some(1)) {
+                Ok(samples) => samples,
+                Err(Error::Limit(crate::Limit::TextureSamples { .. })) => {
+                    println!("{name}: one sample drawn; no 4-sample R32Uint target to draw four");
+                    return;
+                }
+                Err(error) => panic!("{name}: {error}"),
+            };
+            let function = order.function("ido_samples").expect("the kernel");
+            let kernel = (device.new_compute_pipeline_state(
+                &crate::ComputePipelineDescriptor::new(StageSource::Function(
+                    FunctionDescriptor::new(function),
+                )),
+                |samplers| Ok(vec![0; samplers.len()]),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut buffers = Buffers::new(&device);
+            let out = buffers.of(&device, &[0xffu8; 4 * 4 * (SIDE * SIDE) as usize]);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&samples, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_render_pipeline_state(&four));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            encoder.end_encoding();
+            let mut compute = (command_buffer.compute_command_encoder(crate::DispatchType::Serial))
+                .expect("an encoder");
+            compute
+                .set_compute_pipeline_state(&kernel)
+                .expect("the state");
+            compute.set_texture(Some(&samples), 0).expect("a texture");
+            compute.set_buffer(Some(&out), 0, 0).expect("a buffer");
+            (compute.dispatch_threadgroups([1, 1, 1], [SIDE, SIDE, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            compute.end_encoding();
+            run(name, &command_buffer);
+            let contents = out.contents().expect("a Shared buffer");
+            // SAFETY: the buffer holds four words for each of the `SIDE` square's pixels, which
+            // the finished dispatch wrote and whose writes reach the host.
+            let words = unsafe {
+                std::slice::from_raw_parts(
+                    contents.as_ptr().cast::<u32>(),
+                    4 * (SIDE * SIDE) as usize,
+                )
+            };
+            assert_eq!(
+                words,
+                [4; 4 * (SIDE * SIDE) as usize],
+                "{name}: four samples"
+            );
+            drop(samples);
+            println!("{name}: each state drew its own sample count");
         });
     }
 }

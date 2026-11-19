@@ -338,6 +338,10 @@ fn draws(
             // parameters. The push field the translator places without the feature is a push
             // field the encoder does not fill, refused below.
             RuntimeFact::BaseVertexInstance => {}
+            // The rasterization sample count (`get_num_samples()`, the mask of a sample index):
+            // the `SpecKey::SampleCount` constant, which the state's creation sets to its
+            // `rasterSampleCount`, the count of every pass it draws in (`renders_into`).
+            RuntimeFact::SampleCount => {}
             // A colour moved into a storage form, which the runtime never moves.
             RuntimeFact::MovableStorageWrites { .. } => {}
             // A post-tessellation function's pulled attributes and their layouts' strides: the
