@@ -9,6 +9,7 @@
 //!   report says the play is no verdict past it: its gap, frame and call.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
+//! - A compute encoder's `setStageInRegion:` plays: the runtime takes it.
 //! - The host's library from source is made of its display library where the backend has it, a
 //!   function of it with it; without it both are skipped.
 //! - A Managed buffer of a stream recorded with two copies keeps both on any device (the player's
@@ -444,6 +445,32 @@ fn a_compute_state_the_runtime_does_not_build_is_counted_and_its_dispatch_skippe
     assert_eq!(executed["skipped_dispatches"], 1, "{executed:?}");
     let line = "skipped compute states IndirectCommandBuffers 1, the first #5: ";
     assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
+}
+
+#[test]
+fn a_stage_in_region_plays_on_a_compute_encoder() {
+    let dir = ScratchDir::new("rt-replay-stage-in").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("commandBuffer", 2, 3, &[], &[])?;
+        w.call("computeCommandEncoder", 3, 4, &[], &[])?;
+        let region = Value::Map(vec![
+            ("origin".into(), uints(&[("x", 0), ("y", 0), ("z", 0)])),
+            (
+                "size".into(),
+                uints(&[("width", 64), ("height", 1), ("depth", 1)]),
+            ),
+        ]);
+        w.call("setStageInRegion:", 4, 0, &[region], &[])?;
+        w.call("endEncoding", 4, 0, &[], &[])?;
+        w.call("commit", 3, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 3, 0, &[], &[])
+    });
+    let (report, _) = play("stage-in", &path);
+    let executed = &report.total.executed;
+    assert_eq!(executed["skipped_calls"], 0, "{executed:?}");
+    assert_eq!(report.first_skip, None);
 }
 
 #[test]
