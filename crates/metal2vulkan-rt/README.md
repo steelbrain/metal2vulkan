@@ -450,9 +450,13 @@ between, `external_writes_done` comes first, as above.
   replaced was 6.8 to 9.5% slower. On the Intel UHD 630's Windows driver the compute harness
   measured three of its 38 workloads slower in this form than in the sign-extended one:
   image_filter by 3.4%, dispatch_chain by 2.6% and burst_160 by 2.2%, the median moving 0.05%.
-  Each reaches a buffer through a computed index; the cause is inferred, not measured: one more
-  32-bit add per access, which that device does not fold into the index's shift. In an earlier
-  probe of constant reads,
+  Each reaches a buffer through a computed index. On that device (Gen9) the cause is inferred, not
+  measured: one more 32-bit add per access, which it does not fold into the index's shift. On the
+  Iris Xe (Gen12, Mesa's ANV) the harness measured image_filter 7.6% slower, alu and long_4cb
+  (`fma_chains`: an FMA loop that reads its count from a `setBytes` constant) 14% slower, and
+  zero_products and vote_loop 18% and 9% faster, the median moving 0.03%. There the form is not
+  more instructions: image_filter's kernel compiles to 261 against the sign-extended form's 268,
+  the same loads, the sign extension's 10 shifts gone. In an earlier probe of constant reads,
   32-bit offsets bought 4.3 to 6.6% on AMD cards and more on the RTX 3090, where a 64-bit sum was
   8.9% slower on the RX 7900 XTX. A longer buffer is `Refusal::BufferTooLong`.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
