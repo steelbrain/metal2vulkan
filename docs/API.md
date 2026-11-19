@@ -4027,12 +4027,15 @@ bound.
   Cost: a read, sample or gather of its texels answers the device's decode of its blocks (an sRGB
   form's code through the device's sRGB decode), where Metal interpolates with 6-bit weights: a BC1
   to BC3 channel up to 4/255 off Metal's on NVIDIA (615.71.09, the RTX 3090 and RTX 5080 Laptop
-  GPU; 620.70.06, the RTX 2080, 3/255; BC3's alpha 6/255 on both), 3/255 on lavapipe, 1/255 on ANV
-  (the Iris Xe of Raptor Lake-P) and Intel's Windows driver (the UHD 630; BC3's alpha 2/255 on
-  both); a BC4 or BC5 channel up to 7.4/255 (signed 0.065) on NVIDIA, 1.4/255 (signed 0.0134) on
-  ANV and Intel's Windows driver, 2.4/255 (signed 0.022) on lavapipe, and on RADV
+  GPU; BC3's alpha 6/255), 3/255 on lavapipe, 1/255 on ANV; a BC4 or BC5 channel up to 7.4/255
+  (signed 0.065) on NVIDIA, 1.3/255 (signed 0.013) on ANV, 2.4/255 (signed 0.022) on lavapipe, and on RADV
   (Mesa 26.2.4, the Radeon 780M) a signed texel with an endpoint of -128 up to 1.7/255; a BC7
-  channel a `float` ulp on lavapipe; its blocks' bytes, copies and sizes are Metal's.
+  channel a `float` ulp on lavapipe; its blocks' bytes, copies and sizes are Metal's. Measured
+  on more drivers: NVIDIA's 620.70.06 (the RTX 2080) a BC1 to BC3 channel 3/255 (BC3's alpha
+  6/255) and a BC4 or BC5 channel 7.33/255 (signed 0.064); ANV (the Iris Xe of Raptor Lake-P) and
+  Intel's Windows driver (the UHD 630) BC3's alpha 2/255 and a BC4 or BC5 channel 1.4/255 (signed
+  0.0134), a BC4 or BC5 texel within 0.0001 of the specification's exact decode there, so what
+  moves is Metal's 6-bit weights.
 - `metal2vulkan-degrade-cpu-block-decode` (performance). `CpuBlockDecode`: A CPU copy into a texture
   with a decoded twin (`replace_region`) whose CPU copies go on the host or the staging queue: its
   region is decoded on the CPU, on the device's decode thread, and copied into the twin; the first

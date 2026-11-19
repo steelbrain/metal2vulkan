@@ -2105,8 +2105,10 @@ mod tests {
     /// (`BGRA10_XR`, its sRGB twin, `RGB9E5Float`; the notes lavapipe announced) name a further
     /// notice. The two `Depth32Float` rows apart: each also leaves its `fresh` site unchecked under
     /// `fresh-pattern-zeroed` and declares that notice ([`zeroed_depth_pattern`]), and the texture
-    /// row declares `restricted-depth-upload` too, the notices MoltenVK announced. A row whose
-    /// notices were a guess would show here as a row loosening a site nothing needed.
+    /// row declares `restricted-depth-upload` too, the notices MoltenVK announced; and a
+    /// block-compressed texture row declares `compressed-texel-decode`, which `metal2vulkan-rt`
+    /// announces for every such texture. A row whose notices were a guess would show here as a
+    /// row loosening a site nothing needed.
     #[test]
     fn a_row_loosens_the_notices_site_and_a_private_texture_s_fresh_site() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
@@ -2136,10 +2138,19 @@ mod tests {
         for row in TEXTURES {
             let private = row.storage == Storage::Private;
             let depth = row.shape.format == DEPTH32FLOAT.format;
+            let compressed = row.shape.block.1 > 1;
             let allowances = FreshTexture { row }.allowances();
             assert_eq!(
                 allowances.len(),
-                1 + usize::from(private) + 3 * usize::from(depth),
+                1 + usize::from(private) + 3 * usize::from(depth) + usize::from(compressed),
+                "{}",
+                row.case
+            );
+            assert_eq!(
+                allowances.contains(&crate::replay::notice_allowance(
+                    metal2vulkan_runtime::Degradation::CompressedTexelDecode.code()
+                )),
+                compressed,
                 "{}",
                 row.case
             );
