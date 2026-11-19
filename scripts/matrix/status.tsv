@@ -14,19 +14,7 @@
 # is named for removal in the report (results.entries_within); remove it then.
 # The owned ratios of the entries below are their rows' ratios in the matrix note of b0c08e51b5.
 card      | row                              | status | who                                | since      | owned | note
-8086:a7a0 | create_state/first               | gap    | the planner's ruling of 2026-11-18 | -          | -     | the meter's artifact
 1002:15bf | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | 0.988 | -
-1002:1900 | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | 1.001 | -
-1002:699f | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | 1.013 | -
-1002:744c | create_64MiB                     | open   | memory2                            | 5f2494bfc5 | 1.009 | -
-1002:744c | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | 0.995 | -
-10de:1e87 | create_64MiB                     | open   | memory2                            | 5f2494bfc5 | 1.016 | -
-10de:1e87 | create_private_16MiB/first_take  | gap    | the planner's ruling of 2026-11-18 | -          | -     | NVIDIA holds the submit for the block-maker's allocation
-10de:2204 | create_64MiB                     | open   | memory2                            | 5f2494bfc5 | 0.991 | -
-10de:2204 | create_private_16MiB/first_take  | gap    | the planner's ruling of 2026-11-18 | -          | -     | NVIDIA holds the submit for the block-maker's allocation
-8086:3e9b | create_private_16MiB/first_take  | open   | memory2                            | 5f2494bfc5 | 1.196 | -
-8086:a7a0 | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | 0.998 | -
-8086:a7a0 | create_private_16MiB/first_take  | open   | memory2                            | 5f2494bfc5 | 1.512 | -
 1002:699f | wide_bindings                    | open   | identity                           | 5f2494bfc5 | 1.123 | waits for the card's native table
 8086:3e9b | sampling_deep_64x64x16           | open   | identity                           | 5f2494bfc5 | 1.017 | waits for the card's native table
 8086:a7a0 | row_cells                        | open   | identity                           | 795c834ded | 1.144 | waits for the card's native table
@@ -37,9 +25,7 @@ card      | row                              | status | who                     
 8086:a7a0 | sampling_deep_512x512x16_16x16x1 | open   | identity                           | 5f2494bfc5 | 1.262 | waits for the card's native table
 8086:a7a0 | sampling_deep_512x512x16_4x4x4   | open   | identity                           | 5f2494bfc5 | 1.273 | waits for the card's native table
 8086:a7a0 | sampling_deep_512x512x16_8x8x1   | open   | identity                           | 5f2494bfc5 | 1.268 | waits for the card's native table
-8086:a7a0 | sampling_deep_64x64x16           | open   | identity                           | 5f2494bfc5 | 1.012 | waits for the card's native table
 8086:a7a0 | threadgroup_scan                 | open   | identity                           | 5f2494bfc5 | 1.075 | waits for the card's native table
 8086:a7a0 | waves                            | open   | identity                           | 5f2494bfc5 | 1.152 | waits for the card's native table
-10de:1e87 | frame_5cb                        | gap    | the planner's ruling of 2026-11-18 | -          | -     | the runtime guide's known gaps: NVIDIA's latency per submission; throughput 8-14% behind, latency from idle equal
 10de:1e87 | frame                            | note   | -                                  | -          | -     | new ahead in throughput and in latency from idle
 8086:a7a0 | frame                            | note   | -                                  | -          | -     | new ahead in throughput and in latency from idle
