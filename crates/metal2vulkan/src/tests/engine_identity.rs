@@ -57,6 +57,10 @@
 //! - A kernel that samples through a bicubic constexpr sampler (`engine/a2_bicubic_weights`) is
 //!   still refused as `Unsupported{IdentityDomains}`, not implemented, where the default domains
 //!   compile it.
+//! - A kernel that encodes compute commands into an indirect command buffer it reaches through an
+//!   argument buffer (`engine/icb_replay_encode`) is refused as
+//!   `Unsupported{GpuEncodedIndirectCommands}`, not implemented: the feature it uses, not the
+//!   domains' generic refusal.
 //! - A kernel's emulated-simdgroup variant (`engine/gsm2_simd_products`'s `simd_float_products`)
 //!   opens every barrier of its exchanges under a branch on `1 < N`, which the default domains do
 //!   not; on the CPU interpreter a threadgroup of one thread passes no barrier, and threadgroups of
@@ -607,6 +611,28 @@ fn a_bicubic_kernel_is_refused_under_the_identity_domains() {
                 assert_eq!(
                     (u.feature, u.needs),
                     (Feature::IdentityDomains, Needs::NotImplemented),
+                    "{stem}"
+                );
+            }
+            other => panic!("{stem}: {other:?}"),
+        }
+    }
+}
+
+/// Under the identity domains a kernel that encodes indirect commands is refused for that feature,
+/// `Unsupported{GpuEncodedIndirectCommands}`, not implemented, on every profile.
+#[test]
+fn a_gpu_encoding_kernel_is_refused_as_gpu_encoded_commands_under_the_identity_domains() {
+    let Some(bc) = assemble("icb_replay_encode") else {
+        return;
+    };
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        match compile(&bc, "icb_replay_encode", &p) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::GpuEncodedIndirectCommands, Needs::NotImplemented),
                     "{stem}"
                 );
             }

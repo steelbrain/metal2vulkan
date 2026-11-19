@@ -1328,7 +1328,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - A kernel that reads anything the encoder does not supply yet, a function table, a
   `[[stage_in]]` fetch, constant data, or a sampler or texture state the translator would take
   from the bound object rather than from its resource ID, is refused (`Gap::KernelInput`). So is
-  a state for indirect command buffers (`Gap::IndirectCommandBuffers`).
+  a state for indirect command buffers (`Gap::IndirectCommandBuffers`), and a kernel that encodes
+  commands into one, which the translator refuses
+  (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
 - A threadgroup that is not whole SIMD groups of a kernel whose SIMD groups run one per subgroup
   of 32 is refused (`Gap::PartialSimdgroups`) where the state has no emulated-SIMD-group module:
   for a kernel the consumer compiled (`StageSource::Compiled`), and where the translator refuses

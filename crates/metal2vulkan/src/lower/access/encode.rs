@@ -399,8 +399,14 @@ pub fn select(
     }
 }
 
-/// The refusal of an encoder operation on a device that cannot run it.
+/// The refusal of an encoder operation on a device that cannot run it, or under the identity
+/// domains, which lower none yet: an operation reaches its command buffer's records through the
+/// resident set's root table and the execution status (`dynamic::plan_search`), which those
+/// domains do not push (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
 fn needs(cx: &SelectCx<'_>) -> Result<(), Error> {
+    if super::identity(cx.profile) {
+        return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
+    }
     let f = cx.profile.fields();
     if f.buffer_access != BufferAccess::Addressed {
         return Err(Unsupported::needs_any_of(
