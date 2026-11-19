@@ -2181,8 +2181,8 @@ impl TurnRun {
 /// Under `Fair` each held one goes at the wake for it: the completion that lets it go, or the time
 /// the run ahead of it brings its queue's work under the budget, never a sleep slice
 /// (`WorkCounts::scheduler_slice_rescues` 0, which a wake at that time counted as a slice did
-/// not keep), each submitted at most 20 ms after the GPU end of the one before it (the slice is
-/// 100 ms), with at most a completion's waking for each.
+/// not keep), with at most a completion's waking for each. Both are the runtime's own counts; how
+/// soon after its wake the host's scheduler runs the submitting thread is not asserted.
 ///
 /// The burst's fourth goes once the first completed: a run whose small one was committed only
 /// after that (the test's thread late on a loaded host) shows nothing of the turns, and is made
@@ -2219,13 +2219,6 @@ fn a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst(
                     run.completion_wakes <= BURST as u64,
                     "at most a completion's waking for each of the burst"
                 );
-                for (at, pair) in run.burst.windows(2).enumerate() {
-                    assert!(
-                        pair[1].0 <= pair[0].2 + 0.020,
-                        "the burst's {} was submitted within 20 ms of the GPU end before it",
-                        at + 2
-                    );
-                }
                 if device_times {
                     assert!(
                         run.small.1 < run.burst[3].1,
