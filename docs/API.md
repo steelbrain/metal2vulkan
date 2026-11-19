@@ -1531,10 +1531,12 @@ for dependency in &pipeline.dependencies {
   address, the bound buffer's `gpuAddress` plus the bind offset (or the address of its
   `setBytes` copy, or of the consumer's nil buffer where nothing is bound), less 2^31, modulo
   2^64. An access through the slot adds its 32-bit byte offset plus 2^31, modulo 2^32,
-  zero-extended, to that word; a pointer compare, a pointer converted to an integer or stored, a
-  pulled vertex fetch and an access from the word below it add the 2^31 back to read the address
-  itself. A pointer loaded from an argument buffer is the address the buffer holds, unbiased. A
-  texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased.
+  zero-extended, to that word; a pointer compare, a pulled vertex fetch and an access from the
+  word below it add the 2^31 back to read the address itself. A slot pointer converted to an
+  integer is a wide pointer, which reads the root table: the identity domains refuse it. The
+  binder (`BindingPlan::instantiate_*`) of a device that compiles under the identity domains
+  writes the word so. A pointer loaded from an argument buffer is the address the buffer holds,
+  unbiased. A texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased.
 - The layout numbers set 0 densely, in `ResourceSlot` order. Set 1 holds the heap arrays (the
   resources reached through argument buffers and resource IDs); `pipeline::heap_sampler_capacity`
   is the most elements a set-1 sampler array has on a profile. A texture buffer reached so is an

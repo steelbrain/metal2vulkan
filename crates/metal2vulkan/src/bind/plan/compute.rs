@@ -858,6 +858,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     uses.append(&mut resources.uses);
     let mut diagnostics = resources.diagnostics;
     let mut template = resources.template;
+    template.biased_slot_words = crate::lower::access::identity(device.profile());
     if let Some(h) = heap {
         h.finish(
             &mut descriptors,

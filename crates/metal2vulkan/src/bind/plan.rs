@@ -508,6 +508,11 @@ pub(crate) struct ResourceTemplate {
     /// pipeline reads the tables' words there.
     #[cfg_attr(feature = "serde", serde(default))]
     pub function_table_addresses: bool,
+    /// Each `SlotGuestBase` word is the slot's address less
+    /// [`SLOT_ADDRESS_BIAS`](crate::lower::access::SLOT_ADDRESS_BIAS), which the pipeline's
+    /// accesses add back: the device compiles under the identity domains (docs/API.md section 5).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub biased_slot_words: bool,
 }
 
 /// One bound texel buffer of a plan.

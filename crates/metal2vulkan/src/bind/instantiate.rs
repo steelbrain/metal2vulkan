@@ -913,7 +913,8 @@ impl FromIterator<u8> for FieldBytes {
 }
 
 /// The bytes of a slot push field (`SlotBindOffset`: the residual, 0 unbound; `SlotGuestBase`: the
-/// slot's `gpu_address + offset`, which is Metal's `nil`; `TextureLevels`: the level count the plan
+/// slot's word of its `gpu_address + offset`, of 0 (Metal's `nil`) unbound ([`guest_word`]);
+/// `TextureLevels`: the level count the plan
 /// bound; `InstanceCount`: the bound structure's instance count; `Specialized`: the value the plan
 /// recorded for its key), or `None` for another field. Planning refuses a `SlotGuestBase` of a
 /// `set*Bytes` slot (`MissingGuestAddress`), so no inline-bytes slot is written as null here.
@@ -990,7 +991,11 @@ pub(crate) fn slot_field(
             .find(|(s, _)| *s == slot)
             .map(|(_, word)| FieldBytes::of(&word.to_le_bytes())),
         PushField::SlotBindOffset(slot) => Some(FieldBytes::of(&slot_bind_offset(residuals, slot))),
-        PushField::SlotGuestBase(slot) => Some(FieldBytes::of(&slot_guest_base(state, slot))),
+        PushField::SlotGuestBase(slot) => Some(FieldBytes::of(&slot_guest_base(
+            state,
+            slot,
+            resources.biased_slot_words,
+        ))),
         _ => None,
     }
 }
@@ -1001,9 +1006,20 @@ fn slot_bind_offset(residuals: &Residuals, slot: SlotRef) -> [u8; 4] {
     residuals.of(slot).unwrap_or(0).to_le_bytes()
 }
 
-/// The bytes of `PushField::SlotGuestBase(slot)` ([`slot_field`]): the slot's `gpu_address +
-/// offset`, 0 (Metal's `nil`) where it binds no buffer.
-pub(crate) fn slot_guest_base(state: &BindState, slot: SlotRef) -> [u8; 8] {
+/// The `SlotGuestBase` word of Metal address `address`: the address, or where `biased` (a plan of a
+/// device compiling under the identity domains, `ResourceTemplate::biased_slot_words`) the address
+/// less [`SLOT_ADDRESS_BIAS`](crate::lower::access::SLOT_ADDRESS_BIAS), modulo 2^64, which the
+/// pipeline's accesses add back.
+pub(crate) fn guest_word(address: u64, biased: bool) -> u64 {
+    match biased {
+        true => address.wrapping_sub(crate::lower::access::SLOT_ADDRESS_BIAS),
+        false => address,
+    }
+}
+
+/// The bytes of `PushField::SlotGuestBase(slot)` ([`slot_field`]): the word ([`guest_word`]) of the
+/// slot's `gpu_address + offset`, of 0 (Metal's `nil`) where it binds no buffer.
+pub(crate) fn slot_guest_base(state: &BindState, slot: SlotRef, biased: bool) -> [u8; 8] {
     let base = match state
         .stages
         .get(&slot.stage)
@@ -1016,7 +1032,7 @@ pub(crate) fn slot_guest_base(state: &BindState, slot: SlotRef) -> [u8; 8] {
         }) => gpu_address.wrapping_add(offset),
         _ => 0,
     };
-    base.to_le_bytes()
+    guest_word(base, biased).to_le_bytes()
 }
 
 /// A field's bytes at its placed location: the push bytes (relative to the push range's start

@@ -319,9 +319,9 @@ use std::collections::BTreeMap;
 
 use crate::bind::heap::{planner, HeapPlanner};
 use crate::bind::instantiate::{
-    bind_buffers, descriptor_range, put, slot_field, slot_guest_base, BufferExtent, BufferRange,
-    DescriptorBytes, DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef, PushConstantWrite,
-    PushHole, RangeError, RootTable,
+    bind_buffers, descriptor_range, guest_word, put, slot_field, slot_guest_base, BufferExtent,
+    BufferRange, DescriptorBytes, DescriptorRange, FieldBytes, IndexBufferRef, IndirectRef,
+    PushConstantWrite, PushHole, RangeError, RootTable,
 };
 use crate::bind::mesh_arguments::{
     fold_object_grid, metal_mesh_grid_draws_nothing, metal_object_grid, MeshArguments,
@@ -2570,6 +2570,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
 
     let mut diagnostics = resources.diagnostics;
     let mut template = resources.template;
+    template.biased_slot_words = crate::lower::access::identity(profile);
     if let Some(h) = heap {
         h.finish(
             &mut descriptors,
@@ -5274,6 +5275,7 @@ fn rebind_with(
             Some(&BoundBuffer::Bytes { len, .. }) => (0, u64::from(len.max(1)), 0),
             None => (0, 0, 0),
         };
+        let base = guest_word(base, t.resources.biased_slot_words);
         // An unbound slot has no residual: its `SlotBindOffset` reads 0.
         let mut residual = 0;
         if let (Some((place, key)), Some(_)) = (entry.place, bound) {
@@ -5314,7 +5316,11 @@ fn rebind_with(
     for &(field, word) in &rebinds.loose {
         let written = match word {
             LooseWord::Offset => put_word(out, field, 0u32.to_le_bytes())?,
-            LooseWord::Base(slot) => put_word(out, field, slot_guest_base(state, slot))?,
+            LooseWord::Base(slot) => put_word(
+                out,
+                field,
+                slot_guest_base(state, slot, t.resources.biased_slot_words),
+            )?,
             LooseWord::Stride(layout) => {
                 let stride = pulled_stride(t, state, layout)?;
                 let Some(write) = out.push_constants.get_mut(field.push) else {

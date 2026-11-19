@@ -293,47 +293,47 @@ fn a_buffer_kernel_reads_each_slot_at_its_pushed_device_address() {
 }
 
 /// A slot pointer used as a value under the identity domains is its Metal address, though the
-/// runtime pushes each buffer slot's address less 2^31 (`lower::access::SLOT_ADDRESS_BIAS`): a
-/// `ptrtoint` to `i64` and to `i32` and an address compare add the bias back, and the loads beside
-/// them, one 4 bytes below its slot's bind address, add their offsets plus the bias to the word.
+/// runtime pushes each buffer slot's address less 2^31 (`lower::access::SLOT_ADDRESS_BIAS`): two
+/// address compares add the bias back, and the loads beside them, one 4 bytes below its slot's
+/// bind address, add their offsets plus the bias to the word. The two slots lie on either side of
+/// 2^31, so their words lie on either side of 0 and a compare of the words would answer the other
+/// way.
 #[test]
 fn a_slot_pointer_used_as_a_value_is_its_metal_address() {
     use super::engine_pointer_memory::{assemble, kernel};
     let body = "  %p = getelementptr inbounds i8, ptr addrspace(1) %b0, i64 20
-  %a = ptrtoint ptr addrspace(1) %p to i64
-  store i64 %a, ptr addrspace(1) %b2, align 8
-  %a32 = ptrtoint ptr addrspace(1) %b1 to i32
-  %o2 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 2
-  store i32 %a32, ptr addrspace(1) %o2, align 4
+  %q = getelementptr inbounds i8, ptr addrspace(1) %b1, i64 -4
   %lt = icmp ult ptr addrspace(1) %b0, %b1
   %z = zext i1 %lt to i32
-  %o3 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 3
-  store i32 %z, ptr addrspace(1) %o3, align 4
-  %q = getelementptr inbounds i8, ptr addrspace(1) %b1, i64 -4
+  store i32 %z, ptr addrspace(1) %b2, align 4
+  %gt = icmp ugt ptr addrspace(1) %p, %q
+  %y = zext i1 %gt to i32
+  %o1 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 1
+  store i32 %y, ptr addrspace(1) %o1, align 4
   %w = load i32, ptr addrspace(1) %q, align 4
-  %o4 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 4
-  store i32 %w, ptr addrspace(1) %o4, align 4
+  %o2 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 2
+  store i32 %w, ptr addrspace(1) %o2, align 4
   %v = load i32, ptr addrspace(1) %p, align 4
-  %o5 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 5
-  store i32 %v, ptr addrspace(1) %o5, align 4
+  %o3 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 3
+  store i32 %v, ptr addrspace(1) %o3, align 4
 ";
     let name = "slot_values";
     let Some(bc) = assemble(name, &kernel(name, 3, body, "")) else {
         return;
     };
-    // (the buffer's device address, the bind offset): above 4 GiB, so a dropped high word shows.
+    // (the buffer's device address, the bind offset): slot 0 just below 2^31 and slot 1 just
+    // above it, the output above 4 GiB, so a dropped high word shows.
     let at = [
-        (0x1_0000_0000u64, 0u64),
-        (0x2_0000_1000, 16),
+        (0x7FFF_FF00u64, 0u64),
+        (0x8000_0100, 16),
         (0x3_0000_2000, 0),
     ];
     let words =
         |base: u32| -> Vec<u8> { (0..16u32).flat_map(|i| (base + i).to_le_bytes()).collect() };
-    let bytes = [words(0x100), words(0x200), vec![0xEE; 28]];
+    let bytes = [words(0x100), words(0x200), vec![0xEE; 20]];
     let slot_address = |i: usize| at[i].0 + at[i].1;
-    let mut want = slot_address(0).wrapping_add(20).to_le_bytes().to_vec();
-    want.extend_from_slice(&(slot_address(1) as u32).to_le_bytes());
-    want.extend_from_slice(&1u32.to_le_bytes());
+    let mut want = 1u32.to_le_bytes().to_vec();
+    want.extend_from_slice(&0u32.to_le_bytes());
     want.extend_from_slice(&bytes[1][12..16]);
     want.extend_from_slice(&bytes[0][20..24]);
     want.extend_from_slice(&[0xEE; 4]);
@@ -373,6 +373,37 @@ fn a_slot_pointer_used_as_a_value_is_its_metal_address() {
         };
         let got = run(&module, &Config::default(), res).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(got.buffers[2], want, "{stem}: out");
+    }
+}
+
+/// A slot pointer converted to an integer (`ptrtoint`) is a wide pointer, which reads the root
+/// table: the identity domains refuse the kernel as `Unsupported{IdentityDomains}`, not
+/// implemented, where the default domains compile it.
+#[test]
+fn a_slot_pointer_converted_to_an_integer_is_refused_under_the_identity_domains() {
+    use super::engine_pointer_memory::{assemble, kernel};
+    let body = "  %p = getelementptr inbounds i8, ptr addrspace(1) %b0, i64 20
+  %a = ptrtoint ptr addrspace(1) %p to i64
+  store i64 %a, ptr addrspace(1) %b1, align 8
+";
+    let name = "slot_to_int";
+    let Some(bc) = assemble(name, &kernel(name, 2, body, "")) else {
+        return;
+    };
+    for stem in PROFILES {
+        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        compile(&bc, name, &default).unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        match compile(&bc, name, &p) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::IdentityDomains, Needs::NotImplemented),
+                    "{stem}"
+                );
+            }
+            other => panic!("{stem}: {other:?}"),
+        }
     }
 }
 
