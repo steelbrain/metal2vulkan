@@ -1149,19 +1149,19 @@ pub struct Metrics {
     pub translations_loaded: u64,
     /// `VkPipeline` creations that went through the device's empty pipeline cache while the
     /// reaper read and took in the device's blob ([`DeviceOptions::pipeline_cache_dir`]): each
-    /// compiled without the blob's data. What they compiled is merged into the blob's cache at
-    /// the reaper's next look at it, or at the device's drop. Zero with no directory, or where the
-    /// device's first creation came after the seed.
+    /// compiled without the blob's data, and those pipelines are not in this run's blob, so a
+    /// later run compiles them again, once. Zero with no directory, or where the device's first
+    /// creation came after the seed.
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     pub creations_before_seed: u64,
     /// The reaper's looks at the pipeline cache skipped because a creation began after creation
-    /// was quiet: a look merges into the cache and reads its size and data only while no creation
-    /// runs, and never waits for one, so it looks again once creation is quiet again.
+    /// was quiet: a look reads the cache's size and data only while no creation runs, and never
+    /// waits for one, so it looks again once creation is quiet again.
     pub pipeline_cache_looks_skipped: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) creations through the pipeline cache
     /// waited for the reaper's looks at it, in total: a creation that begins during a look waits
-    /// for that look's merge and reads alone.
+    /// for that look's reads alone.
     pub pipeline_cache_lock_wait_nanos: u64,
     /// The longest such wait, in nanoseconds; a maximum since the device was made, so the
     /// difference of two reads does not apply to it.

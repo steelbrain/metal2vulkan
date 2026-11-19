@@ -1986,24 +1986,23 @@ comes before it waits for (microseconds). Then, off every guest thread, it reads
 cache from it and makes that the cache creations take; the empty one is destroyed once no creation
 holds it. So no creation waits for the blob's read or the driver's parse of it, which for a blob
 near 32 MiB take tens of milliseconds: a creation meanwhile goes through the empty cache
-(`Metrics::creations_before_seed` counts them), and what those compiled is merged into the blob's
-cache (`vkMergePipelineCaches`) at the reaper's first look after it, or at the device's drop. A blob
-that does not check, whose data does not begin with the device's pipeline cache header (whole, the
-`pipelineCacheUUID` a new driver version changes included), or that the driver refuses, is removed,
-and the empty cache stays. Once pipeline creation has been quiet for 20 ms (no creation running and
-none ending) after a creation, the reaper looks at the cache: it reads the cache's size
-(`vkGetPipelineCacheData` with no buffer), and where it grew by more than an eighth since the last
-write, writes the cache's data over the blob: a temporary file renamed over it, never appended to.
-So it writes at most once a quiet period, a run that makes no new pipeline writes nothing, and a
-device's writes over its life come to a few times the blob's final size. The look's merge and reads
-run under a lock every creation holds shared, which the look takes exclusive by a try, so none of
-them runs during a creation (which Vulkan allows, and during which Intel's Windows driver 101.2145
-for the UHD 630 has faulted reading the data): a look that finds a creation begun since creation was
-quiet is skipped until creation is quiet again (`Metrics::pipeline_cache_looks_skipped`), and a
-creation that begins during a look waits for that look alone (`Metrics::pipeline_cache_lock_wait_nanos`
-and `pipeline_cache_lock_wait_max_nanos`). The device's drop writes the blob once more where the size
-changed at all. A crash between writes loses only the pipelines made since the last; no creation
-waits for a write.
+(`Metrics::creations_before_seed` counts them), and what those compiled is not in this run's blob: a
+later run compiles those pipelines again, once. A blob that does not check, whose data does not
+begin with the device's pipeline cache header (whole, the `pipelineCacheUUID` a new driver version
+changes included), or that the driver refuses, is removed, and the empty cache stays. Once pipeline
+creation has been quiet for 20 ms (no creation running and none ending) after a creation, the reaper
+looks at the cache: it reads the cache's size (`vkGetPipelineCacheData` with no buffer), and where
+it grew by more than an eighth since the last write, writes the cache's data over the blob: a
+temporary file renamed over it, never appended to. So it writes at most once a quiet period, a run
+that makes no new pipeline writes nothing, and a device's writes over its life come to a few times
+the blob's final size. The look's reads run under a lock every creation holds shared, which the look
+takes exclusive by a try, so none of them runs during a creation (which Vulkan allows, and during
+which Intel's Windows driver 101.2145 for the UHD 630 has faulted reading the data): a look that
+finds a creation begun since creation was quiet is skipped until creation is quiet again
+(`Metrics::pipeline_cache_looks_skipped`), and a creation that begins during a look waits for that
+look alone (`Metrics::pipeline_cache_lock_wait_nanos` and `pipeline_cache_lock_wait_max_nanos`). The
+device's drop writes the blob once more where the size changed at all. A crash between writes loses
+only the pipelines made since the last; no creation waits for a write.
 
 The cache holds at most 32 MiB when the reaper looks (about five times the 6.25 MB of pipeline data
 a long recorded session made): one past it is replaced by a fresh, empty cache that creations take

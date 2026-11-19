@@ -1619,9 +1619,9 @@ mod on_device {
     }
 
     /// A creation while the seed reads and takes in the blob goes through the empty cache and
-    /// never waits for it; it counts as a creation before the seed, and what it compiled is merged
-    /// into the blob's cache at the reaper's next look, with no creation holding the lock
-    /// creations take.
+    /// never waits for it; it counts as a creation before the seed, and once it has ended the
+    /// empty cache, retired at the swap, is destroyed, with no creation holding the lock creations
+    /// take during a look.
     #[test]
     fn every_device_creates_through_the_empty_cache_while_its_seed_takes_the_blob() {
         let (Some(first), Some(second)) = (
@@ -1634,7 +1634,7 @@ mod on_device {
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
-            let dir = std::env::temp_dir().join(format!("m2v-rt-merge-{}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("m2v-rt-seed-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let device = on_directory(name, physical, &dir);
             // With no blob there is no seed to take.
@@ -1672,7 +1672,7 @@ mod on_device {
                 "{name}: the creation counted before the seed"
             );
             within("the seed", || caches.is_seeded());
-            within("the merge at the look", || !caches.merge_pending());
+            within("the empty cache's destruction", || caches.retired() == 0);
             assert_eq!(caches.overlaps(), 0, "{name}: a creation during a look");
             drop(made);
             drop(device);
@@ -1682,7 +1682,7 @@ mod on_device {
     }
 
     /// The reaper's look at the pipeline cache holds the lock creations take exclusive around its
-    /// merge and its reads of the cache's size and data, and takes it by a try. A creation that
+    /// reads of the cache's size and data, and takes it by a try. A creation that
     /// begins once the reaper chose to look, before its try, makes the look skip, counted
     /// (`Metrics::pipeline_cache_looks_skipped`), and the reaper looks again once creation is
     /// quiet again. A creation that begins while a look holds the lock waits for that look, and

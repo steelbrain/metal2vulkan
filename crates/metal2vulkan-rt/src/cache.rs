@@ -13,9 +13,10 @@
 //! makes an empty cache first when it starts, which a creation that comes before it waits for
 //! (microseconds); then it reads the blob, makes a cache from it and makes that the cache
 //! creations take. So no creation waits for the blob's read or parse. What creations compiled in
-//! the empty cache meanwhile is merged into the blob's cache at the reaper's first look after it
-//! (below), or at the device's drop. A blob that does not check, whose data does not begin with
-//! the device's header, or that the driver refuses, is removed, and the empty cache stays.
+//! the empty cache meanwhile is not in this run's blob: the empty cache retires at the swap and is
+//! destroyed once no creation holds it, and a later run compiles those pipelines again, once. A
+//! blob that does not check, whose data does not begin with the device's header, or that the
+//! driver refuses, is removed, and the empty cache stays.
 //!
 //! The reaper writes the cache's data over the blob, a temporary file renamed over it and never
 //! appended to, once creation is quiet (no creation running and none for [`QUIET_NANOS`]) after a
@@ -27,7 +28,7 @@
 //!
 //! **Reads exclude creations.** Every creation holds a lock shared ([`Caches::creations`]) from
 //! before it takes a cache until it ends, and the reaper's look holds it exclusive around its
-//! merge and its reads of the cache's size and data, taken by a try: where a creation began after
+//! reads of the cache's size and data, taken by a try: where a creation began after
 //! creation was quiet, the look is skipped and counted (`Metrics::pipeline_cache_looks_skipped`),
 //! and the reaper looks again once creation is quiet again. So the reaper never waits for a
 //! creation, and a creation that begins during a look waits for that look alone, its wait counted
@@ -716,8 +717,8 @@ pub(crate) struct Caches {
     /// Signalled once the reaper made the cache.
     made: Condvar,
     /// Held shared by each creation from before it takes a cache until it ends, and exclusive by
-    /// the reaper's look around its merge and its reads of the cache's size and data, which it
-    /// takes by a try (the module's doc). Taken before [`Caches::pipelines`].
+    /// the reaper's look around its reads of the cache's size and data, which it takes by a try
+    /// (the module's doc). Taken before [`Caches::pipelines`].
     creations: RwLock<()>,
     /// Creations through the cache that have not ended, those waiting for [`Caches::creations`]
     /// among them.
@@ -748,8 +749,7 @@ pub(crate) struct Caches {
     /// Where a look waits before it tries [`Caches::creations`].
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) look_hold: Hold,
-    /// Where a look waits once it holds [`Caches::creations`] exclusive, before its merge and
-    /// reads.
+    /// Where a look waits once it holds [`Caches::creations`] exclusive, before its reads.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) alone_hold: Hold,
     /// Creations holding [`Caches::creations`] shared.
@@ -826,11 +826,7 @@ struct Pipelines {
     seeding: bool,
     /// The cache creations take; none where the driver made none.
     current: Option<Arc<PipelineCache>>,
-    /// The empty cache, where a creation went through it while the reaper seeded: once the blob's
-    /// cache replaced it, what it compiled is merged into the current cache at the reaper's next
-    /// look, or at the drop, and it is held here, among the retired, until then.
-    unmerged: Option<Arc<PipelineCache>>,
-    /// The caches a fresh one replaced, each destroyed once no creation holds it.
+    /// The caches a fresh one or the blob's replaced, each destroyed once no creation holds it.
     retired: Vec<Arc<PipelineCache>>,
     /// The size of the current cache's data when the blob was last written from it, or when it
     /// was made: what the next write must grow past.
@@ -949,9 +945,8 @@ pub(crate) fn creation(core: &Core) -> Creation<'_> {
         pipelines = (caches.made.wait(pipelines)).unwrap_or_else(PoisonError::into_inner);
     }
     if pipelines.seeding {
+        // Through the empty cache: what it compiles is not in this run's blob.
         core.counters.count(Metric::CreationsBeforeSeed);
-        // Through the empty cache, merged into the blob's at the reaper's next look.
-        pipelines.unmerged = pipelines.current.clone();
     }
     let cache = pipelines.current.clone();
     drop(pipelines);
@@ -1011,7 +1006,6 @@ impl Caches {
                 made: false,
                 seeding: false,
                 current: None,
-                unmerged: None,
                 retired: Vec::new(),
                 written: 0,
             }),
@@ -1050,13 +1044,6 @@ impl Caches {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn hold_next_seed() {
         HOLD_NEXT_SEED.with(|hold| hold.set(true));
-    }
-
-    /// Whether what creations compiled in the empty cache while the reaper seeded waits for a
-    /// look to merge it.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn merge_pending(&self) -> bool {
-        lock(&self.pipelines).unmerged.is_some()
     }
 
     /// Creations that have not ended, those waiting for [`Caches::creations`] among them.
@@ -1223,8 +1210,7 @@ impl Caches {
     /// it and makes that the cache creations take from then on. A blob that is not taken is
     /// removed. So no creation waits for the blob's read or the driver's parse of it, which for a
     /// blob of 32 MiB take tens of milliseconds: a creation meanwhile goes through the empty
-    /// cache, and what it compiles there is merged into the blob's cache at the reaper's next look
-    /// ([`Caches::look`]), with no creation running, or at the drop.
+    /// cache, and what it compiles there is not in this run's blob.
     ///
     /// The blob is named by the whole header in hex ([`blob_name`]); before its read, the blobs
     /// past the [`BLOBS_KEPT`] most recently written are removed. A device whose cache data
@@ -1273,23 +1259,16 @@ impl Caches {
             }
             let _ = self.blob.set(path);
         }
-        let mut pipelines = lock(&self.pipelines);
-        // Still seeding where no blob was taken: the empty cache stays the one creations take, and
-        // nothing is merged into it.
-        if pipelines.seeding {
-            pipelines.seeding = false;
-            pipelines.unmerged = None;
-        }
-        drop(pipelines);
+        // Where no blob was taken, the empty cache stays the one creations take.
+        lock(&self.pipelines).seeding = false;
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.seeded
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    /// Makes `seeded`, made from the blob, the cache creations take; the empty cache is destroyed
-    /// once no creation holds it and what creations compiled in it is merged
-    /// ([`Pipelines::unmerged`]). `seeded`'s size is what the next write must grow past: the
-    /// blob's, without the merge.
+    /// Makes `seeded`, made from the blob, the cache creations take; the empty cache retires, and
+    /// is destroyed once no creation holds it, with what creations compiled in it. `seeded`'s size
+    /// is what the next write must grow past: the blob's.
     ///
     /// # Safety
     ///
@@ -1355,12 +1334,12 @@ impl Caches {
     }
 
     /// On the reaper, creation quiet: where no creation began since, holds [`Caches::creations`]
-    /// exclusive while it merges what creations compiled in the empty cache while it seeded, reads
-    /// the cache's size, and past the bound starts a fresh cache, else reads its data where it grew
-    /// by more than an eighth since the last write; then lets creations go on, writes the blob, and
-    /// destroys each replaced cache no creation holds. Where a creation began since creation was
-    /// quiet, the look is skipped and counted (`Metrics::pipeline_cache_looks_skipped`), and the
-    /// reaper looks again once creation is quiet again.
+    /// exclusive while it reads the cache's size, and past the bound starts a fresh cache, else
+    /// reads its data where it grew by more than an eighth since the last write; then lets
+    /// creations go on, writes the blob, and destroys each replaced cache no creation holds. Where
+    /// a creation began since creation was quiet, the look is skipped and counted
+    /// (`Metrics::pipeline_cache_looks_skipped`), and the reaper looks again once creation is quiet
+    /// again.
     ///
     /// # Safety
     ///
@@ -1404,12 +1383,7 @@ impl Caches {
     ) -> Option<(&Path, Vec<u8>, u64)> {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.alone_hold.pass();
-        let (current, unmerged) = {
-            let mut pipelines = lock(&self.pipelines);
-            (pipelines.current.clone()?, pipelines.unmerged.take())
-        };
-        // SAFETY: the caller's contract.
-        unsafe { merge(device, &current, unmerged) };
+        let current = lock(&self.pipelines).current.clone()?;
         // SAFETY: the cache is the device's.
         let size = unsafe { data_size(device, current.0) };
         counters.set(Gauge::PipelineCacheBytes, size);
@@ -1435,7 +1409,7 @@ impl Caches {
         Some((path, data, size))
     }
 
-    /// Destroys each replaced cache that neither a creation nor a merge to come holds.
+    /// Destroys each replaced cache that no creation holds.
     ///
     /// # Safety
     ///
@@ -1443,7 +1417,7 @@ impl Caches {
     unsafe fn reap(&self, device: &ash::Device) {
         let mut pipelines = lock(&self.pipelines);
         // A replaced cache is never handed out again: once the list holds its last reference,
-        // no creation holds it, and no merge waits for it.
+        // no creation holds it.
         let (idle, held) =
             (pipelines.retired.drain(..)).partition(|old| Arc::strong_count(old) == 1);
         pipelines.retired = held;
@@ -1482,22 +1456,18 @@ impl Caches {
         }
     }
 
-    /// At the device's drop, no creation running: merges what creations compiled in the empty
-    /// cache while the reaper seeded, where no look has, and writes the blob where the cache's
-    /// data changed since the last write; then destroys every cache.
+    /// At the device's drop, no creation running: writes the blob where the cache's data changed
+    /// since the last write; then destroys every cache.
     ///
     /// # Safety
     ///
     /// `device` is the device of the caches, and no creation runs.
     pub(crate) unsafe fn close(&self, device: &ash::Device, counters: &Counters) {
-        let (current, unmerged, written) = {
+        let (current, written) = {
             let mut pipelines = lock(&self.pipelines);
-            let (current, unmerged) = (pipelines.current.take(), pipelines.unmerged.take());
-            (current, unmerged, pipelines.written)
+            (pipelines.current.take(), pipelines.written)
         };
         if let Some(current) = &current {
-            // SAFETY: the caller's contract.
-            unsafe { merge(device, current, unmerged) };
             // SAFETY: the cache is the device's.
             let size = unsafe { data_size(device, current.0) };
             if let Some(path) = self.blob_to_write().filter(|_| size != written) {
@@ -1511,25 +1481,6 @@ impl Caches {
         // SAFETY: the caches are the device's, and no creation runs.
         unsafe { destroy(device, pipelines.retired.drain(..).chain(current)) };
         counters.set(Gauge::PipelineCacheBytes, 0);
-    }
-}
-
-/// Merges into `current`, the cache creations take, what creations compiled in `unmerged`, the
-/// empty cache the blob's replaced, where it is some; where the merge fails, `current` holds its
-/// own pipelines alone.
-///
-/// # Safety
-///
-/// Both caches are `device`'s, and no creation runs: the merge's destination is externally
-/// synchronized.
-unsafe fn merge(
-    device: &ash::Device,
-    current: &PipelineCache,
-    unmerged: Option<Arc<PipelineCache>>,
-) {
-    if let Some(empty) = unmerged {
-        // SAFETY: the caller's contract; `empty` is retired and never `current`.
-        let _ = unsafe { device.merge_pipeline_caches(current.0, &[empty.0]) };
     }
 }
 
