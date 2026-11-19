@@ -17,7 +17,7 @@
 //!
 //! Every parent is `RGBA16Float`, 8 by 8 texels at level 0, of three levels, `Private`, of
 //! render-target and shader-read usage; a cube's slices are its faces, as Metal counts a view's
-//! `sliceRange`, and a 2D array has [`ARRAY_SLICES`]. Each case makes the parent and
+//! `sliceRange`, and a 2D array has eight slices. Each case makes the parent and
 //! the view, and records the view's `textureType`, `pixelFormat`, `mipmapLevelCount` and
 //! `arrayLength`. Then, twice:
 //!
