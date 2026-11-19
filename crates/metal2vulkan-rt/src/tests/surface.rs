@@ -482,6 +482,9 @@ mod on_device {
                 device.core().imports.dma_buf.is_some()
             );
             let kernels = kernels(name, &device);
+            // The compute rounds' two textures, each round's displacing the last's.
+            let first = IndexClass::Texture.range().start;
+            let _grant = (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
             for row in &ROWS {
                 let handle = row.handle;
                 let foreign = device
@@ -733,7 +736,7 @@ mod on_device {
                     };
                     let buffer = buffer_round(&round, &other);
                     if let (0, Some(kernels)) = (at, &kernels) {
-                        compute_round(&round, &buffer, kernels);
+                        compute_round(&round, &buffer, kernels, first);
                     }
                     drop(buffer);
                     println!(
@@ -944,13 +947,14 @@ mod on_device {
 
     /// The compute round on the 1080p picture: `add` writes picture 7 through the surface's
     /// buffer, and the encoder's next dispatch reads plane 0 through a view (`invert_texels`, into
-    /// a texture of its own): every texel the inverse of picture 7's luma, and the planes read
+    /// a texture of its own; the two at `first` and the next index, granted): every texel the inverse of picture 7's luma, and the planes read
     /// picture 7. In place, the pair takes one barrier more than a control whose `add` writes a
     /// buffer of its own, the ordering of the buffer's write before the plane's read.
     fn compute_round(
         round: &Round<'_>,
         buffer: &crate::Buffer,
         (add, invert): &(ComputePipelineState, ComputePipelineState),
+        first: u32,
     ) {
         let Round {
             label,
@@ -975,8 +979,6 @@ mod on_device {
             out.fill(0);
             lay_picture(7, planes, layout, out);
         });
-        let first = IndexClass::Texture.range().start;
-        let _grant = (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
         let [width, height] = [planes[0].width, planes[0].height];
         let view = (surface.planes()[0].new_texture_view(
             planes[0].format,
