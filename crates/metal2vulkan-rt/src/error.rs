@@ -1449,7 +1449,8 @@ impl fmt::Display for Refusal {
             ),
             Refusal::TextureViewFormat { texture, view } => write!(
                 f,
-                "a {view:?} view of a {texture:?} texture made without PixelFormatView usage"
+                "a {view:?} view of a {texture:?} texture, which Metal does not view it as with \
+                 its usage"
             ),
             Refusal::MipmapFormat { pixel_format } => write!(
                 f,
