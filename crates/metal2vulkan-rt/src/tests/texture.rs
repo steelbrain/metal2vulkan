@@ -559,8 +559,9 @@ mod on_device {
         each_device("host_bytes", |name, _, device| {
             let mut d = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [8, 4, 1]);
             d.storage_mode = StorageMode::Shared;
-            // No shader usage, so no index: a shader-read texture takes one.
-            d.usage = TextureUsage::empty();
+            // No shader usage, so no index: a texture shaders read or write takes one, and no
+            // usage at all is Metal's unknown usage, which counts as every usage.
+            d.usage = TextureUsage::RENDER_TARGET;
             let texture =
                 (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
             let region = Region {
