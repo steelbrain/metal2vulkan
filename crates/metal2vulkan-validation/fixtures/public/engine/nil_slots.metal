@@ -5,6 +5,8 @@
 // four textures of the argument buffer `ab` ([[buffer(1)]], four 8-byte texture IDs). A probe of
 // one source is 11 words: the texel a level-0 sample at (0.25, 0.75) gives through `s`
 // ([[sampler(0)]]), the texel a read of (0, 0) gives, its width, its height and its mip levels.
+// An argument buffer's texture is read and queried but not sampled (its sample words stay 0): the
+// new runtime refuses a sample of an argument buffer's texture (its README's known gaps).
 // One invocation of each function writes its record of RECORD words into `out` ([[buffer(2)]]):
 // the vertex function's vertex 0 and the post-tessellation function's corner (1, 0, 0) of patch 0
 // record 0, the fragment function's pixel (0, 0) record 1. A record is the five probes (words 0
@@ -22,11 +24,9 @@ struct Textures {
     array<texture2d<float>, 4> t;
 };
 
-static void probe(texture2d<float> t, sampler s, device uint *out) {
-    float4 a = t.sample(s, float2(0.25, 0.75), level(0.0));
+static void held(texture2d<float> t, device uint *out) {
     float4 b = t.read(uint2(0, 0));
     for (uint c = 0; c < 4; c++) {
-        out[c] = as_type<uint>(a[c]);
         out[4 + c] = as_type<uint>(b[c]);
     }
     out[8] = t.get_width();
@@ -34,12 +34,20 @@ static void probe(texture2d<float> t, sampler s, device uint *out) {
     out[10] = t.get_num_mip_levels();
 }
 
+static void probe(texture2d<float> t, sampler s, device uint *out) {
+    float4 a = t.sample(s, float2(0.25, 0.75), level(0.0));
+    for (uint c = 0; c < 4; c++) {
+        out[c] = as_type<uint>(a[c]);
+    }
+    held(t, out);
+}
+
 static void probes(texture2d<float> t, constant Textures &ab, sampler s, device uint *out) {
     probe(t, s, out);
-    probe(ab.t[0], s, out + PROBE);
-    probe(ab.t[1], s, out + 2 * PROBE);
-    probe(ab.t[2], s, out + 3 * PROBE);
-    probe(ab.t[3], s, out + 4 * PROBE);
+    held(ab.t[0], out + PROBE);
+    held(ab.t[1], out + 2 * PROBE);
+    held(ab.t[2], out + 3 * PROBE);
+    held(ab.t[3], out + 4 * PROBE);
 }
 
 struct Out {

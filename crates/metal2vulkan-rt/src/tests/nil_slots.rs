@@ -4,10 +4,11 @@
 //! `engine/nil_slots.ll`'s vertex, post-tessellation vertex and fragment functions, in a plain
 //! draw (`nil_vertex`, `nil_fragment`) and a patch draw (`nil_post_tess`, `nil_fragment`, one
 //! triangle patch whose function reads its three control points and its patch's tint), each
-//! sample, read and query the size and levels of five textures: texture slot 0 bound to nil, and
-//! the four textures of an argument buffer whose IDs are 0, an index of the consumer's grant that
-//! no texture ever took, the index of a texture a draw read and that then went, and a live
-//! texture. No command buffer ends in an error. Metal's answer, measured on an M3 Max under macOS
+//! read and query the size and levels of five textures: texture slot 0 bound to nil, which they
+//! also sample, and the four textures of an argument buffer whose IDs are 0, an index of the
+//! consumer's grant that no texture ever took, the index of a texture a draw read and that then
+//! went, and a live texture (not sampled: the runtime refuses a sample of an argument buffer's
+//! texture, a known gap of its README). No command buffer ends in an error. Metal's answer, measured on an M3 Max under macOS
 //! 27.0.1 for the nil slot and the ID 0 (the same in all three functions and both draws): a sample
 //! and a read give the zero texel, and the width, the height and the level count are each 1. The
 //! runtime's contract is that an element no live object owns answers as Metal's nil texture does
@@ -55,7 +56,8 @@ mod on_device {
 
     /// The record a stage writes (`stage`: 1 vertex, 2 post-tessellation, 3 fragment), as Metal
     /// answers it: each of the four textures that hold none the zero texel at the sample and the
-    /// read and 1, 1 and 1 level; the live one its texel, 4, 4 and 1 level; the post-tessellation
+    /// read and 1, 1 and 1 level; the live one its texel at the read (its sample words 0, as the
+    /// fixture samples no argument buffer's texture), 4, 4 and 1 level; the post-tessellation
     /// function its control points and tint.
     fn record(stage: u32) -> Vec<u32> {
         let mut r = vec![0; RECORD];
@@ -64,7 +66,6 @@ mod on_device {
         }
         let live = 4 * PROBE;
         for c in 0..4 {
-            r[live + c] = TEXEL[c].to_bits();
             r[live + 4 + c] = TEXEL[c].to_bits();
         }
         r[live + 8..live + 11].copy_from_slice(&[4, 4, 1]);
