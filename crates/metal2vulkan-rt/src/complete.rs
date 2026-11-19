@@ -299,8 +299,8 @@ impl Retiree {
         }
     }
 
-    /// A completed command buffer's two timestamps, where it wrote both: the read waits for them,
-    /// and a query never written would never become available.
+    /// A completed command buffer's two timestamps, where it recorded both: the read does not
+    /// wait (`readback::timestamps`), so a pair a cancelled submission never wrote reads as none.
     fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
         match &self.item {
             Item::Command {

@@ -269,8 +269,8 @@ impl Pending {
     /// for the GPU. A segment is passed once the submit thread stages it into its queue's group,
     /// which is always submitted: it goes before any later one, and at a loss or a failed
     /// submission the command buffer ends `DeviceLost`, whose timestamps are never read. So the
-    /// completion thread's read, which waits and which it makes only for a command buffer that
-    /// completed with both counted, waits only on queries a submission it saw complete wrote.
+    /// completion thread reads, with no wait, only queries of a submission it saw complete
+    /// (`readback::timestamps`), which wrote both unless the device cancelled it.
     pub(crate) fn stamps_written(&self) -> u32 {
         if !self.timed {
             return 0;
@@ -1229,7 +1229,8 @@ impl CbInner {
     /// Its start and end timestamps, once it completed having written both.
     pub(crate) fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
         let pair = lock(&self.state).stamps?;
-        // SAFETY: the pair's pool holds its two queries, which a submission that completed wrote.
+        // SAFETY: the pair's pool holds its two queries, which only this command buffer's
+        // retirement resets, after this read.
         unsafe { readback::timestamps(&core.device, pair.pool, pair.first) }
     }
 }

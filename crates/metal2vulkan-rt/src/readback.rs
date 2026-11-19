@@ -7,20 +7,28 @@
 use ash::vk;
 
 /// A completed command buffer's two timestamps, from its pair in the device's pools; None where
-/// the driver does not report both, so the command buffer's GPU times stay 0.
+/// the driver does not report both available, so the command buffer's GPU times stay 0.
 ///
-/// The read waits for the two values (`VK_QUERY_RESULT_WAIT_BIT`): a driver may make a timestamp
-/// available only after the submission's signal (MoltenVK 1.4.2 on an M3 Max did for most
-/// command buffers, which then had no times). Both were written by a submission that completed,
-/// so Vulkan makes them available; the caller reads only such queries.
+/// The read does not wait (no `VK_QUERY_RESULT_WAIT_BIT`). The caller reads a pair only once the
+/// completion thread has seen its submission's progress value. The signal's first synchronization
+/// scope "includes every command in the same batch that the signal operation is defined in, and
+/// all commands that occur earlier in submission order" (`vkQueueSubmit2`, all commands' stages);
+/// the host wait that sees the value happens after the signal ("signal operations happening
+/// before host operations that wait on them"); and "a query is made available by the operation of
+/// ... `vkCmdWriteTimestamp2`". So both queries of a submission that ran are available, and a
+/// read without the wait reports them. A submission the device cancelled at a reset may still
+/// signal its value having run nothing: its queries stay unavailable ("`vkGetQueryPoolResults`
+/// may return `VK_NOT_READY` if there are queries in the unavailable state"), and the read reports
+/// no times at once, where a waiting read runs until the driver gives up (RADV: twice the
+/// kernel's 60 s compute timeout).
 ///
 /// Bound: the values only decide that command buffer's `GPUStartTime`, through arithmetic defined
 /// for every value that gives a time no later than its `GPUEndTime`.
 ///
 /// # Safety
 ///
-/// `pool` is a timestamp pool of `device` with the queries `first` and `first + 1`, both written
-/// by a submission that completed.
+/// `pool` is a timestamp pool of `device` with the queries `first` and `first + 1`, which no other
+/// thread resets while it reads.
 pub(crate) unsafe fn timestamps(
     device: &ash::Device,
     pool: vk::QueryPool,
@@ -29,12 +37,7 @@ pub(crate) unsafe fn timestamps(
     let mut values = [0_u64; 2];
     // SAFETY: by the caller; `values` holds two 64-bit results.
     let read = unsafe {
-        device.get_query_pool_results(
-            pool,
-            first,
-            &mut values,
-            vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
-        )
+        device.get_query_pool_results(pool, first, &mut values, vk::QueryResultFlags::TYPE_64)
     };
     read.ok().map(|()| (values[0], values[1]))
 }
