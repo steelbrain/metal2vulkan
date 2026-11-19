@@ -303,10 +303,15 @@ Both end with one table: every harness row over its limit on every leg (the harn
 below), with its kind (GPU time, host time, own part for a creation row judged on the new runtime's own
 part, or count for the instructions gate), its ratio and
 limit, the frozen arm's verdict on it (`VOID`, `stands`, `rebased` or `no base`), and its
-status, from `scripts/matrix/status.tsv` by card and row: an open record, with its owner and its
-age in rounds; a known gap, with the place it was ruled; or, for a row with neither, `NEW` in the
-first round it is over and `UNOWNED` after. A row of a card's own variance (`CARD_VARIANCE`)
-reads as its card's known gap. The table changes no verdict.
+status, from `scripts/matrix/status.tsv` by card and row: an open record, with its owner, its
+age in rounds and the ratio it was owned at; a known gap, with the place it was ruled; or, for a
+row with neither, `NEW` in the first round it is over and `UNOWNED` after. A row of a card's own
+variance (`CARD_VARIANCE`) reads as its card's known gap. A row past its limit that an open
+record holds fails no leg while its ratio, after its re-time, is within 3% of the ratio it was
+owned at, and fails it past that; a known gap's row fails no leg unless a ruling gave it a
+ceiling (`HARNESS_CEILINGS`) and it is past it. Either is still listed. After the table, the
+report names every open record and gap whose rows are within their limits on every leg of their
+card that timed them, for removal from `status.tsv`.
 
 A leg is one GPU, named by its PCI `vendor:device`, or `lavapipe`, or `lint`. Each GPU runs on one node, and
 the nodes run at once; a node with several leg GPUs runs their device tests in turn in one job that
@@ -356,7 +361,7 @@ changes the harness sets the base for the next.
 | `metric` | A deterministic count per frame or per command buffer: submissions, passes, barriers, bytes copied, pipelines created | It is larger than the base's |
 | `instructions` | User-space CPU instructions per draw or per dispatch, and per harness run, the p50 over the row's timed runs: the whole process's (`harness-<runtime>/<row>/per_run`), and where the runtime names its threads, theirs with the harness's thread (`.../own_per_run`) and the rest, a driver's own threads (`.../others_per_run`) | It is more than 1% over the base's; the harness's counts are judged by the instructions gate instead |
 | `gauge` | Live objects of one resource kind, the key ending in the point it was read at: `@100` and `@200` (loop iterations), `@drop` (after the device dropped) | `@drop` is not 0, or `@200` differs from `@100`; for the memory pool's `blocks`, which frees allocations an earlier workload left idle once the most bytes in use over its window falls and the device is quiet for 20 ms, only `@200` over `@100` |
-| `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: for the frame rows (`frame`, `frame_5cb`), their throughput, two runs in flight, from one run's last completed handler to the next's, and their latency from idle as rows of their own (`<row>_from_idle`, held to the row's ceiling and floor), one run in flight, from its first commit to its last completed handler; for another workload that times its command buffers, its last command buffer's commit-to-complete time (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a record of its own, `harness-gpu-<runtime>/<row>`, parked here and judged by the harness budget) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs |
+| `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: for the frame rows (`frame`, `frame_5cb`), their throughput, two runs in flight, from one run's last completed handler to the next's, and their latency from idle as rows of their own (`<row>_from_idle`, held to the row's ceiling and floor), one run in flight, from its first commit to its last completed handler; for another workload that times its command buffers, its last command buffer's commit-to-complete time (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a record of its own, `harness-gpu-<runtime>/<row>`, parked here and judged by the harness budget) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs. A leg with such an outlier of a harness row's time on the new runtime has its harness timed once more after every leg is in, and an outlier fails the leg only where both passes agree |
 | `size` | The size a harness row whose size follows the device ran at (`long_4cb`) | The leg's two runtimes ran the row at different sizes: its times are then not compared (the harness budget) |
 | `locks` | The lock budget's locked instructions per million added commands (`lock_budget/draw`, `lock_budget/bound_draw`, `lock_budget/dispatch`; rt's `tests::locks`), the whole process's in user space, on a node whose matrix setup names its CPU's event in `M2V_LOCK_EVENT` (`cpu_core/r21d0`, `r1e25`) | The test fails past 0.25 per added command, on every node alike; on a node whose setup names the event, a GPU leg missing any of the three fails; elsewhere the budget prints `LOCKS-UNMEASURED` and passes |
 

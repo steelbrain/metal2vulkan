@@ -545,6 +545,9 @@ class Run:
         self.spaces = load(STATE / "workspaces.json", {})
         self.lock = threading.Lock()
         self.jobs, self.carries, self.failures = [], [], {}
+        #: Each Linux GPU node's carry, (--carry value, mirror variable, commit), once its legs
+        #: started: a leg's harness timed once more for a cross-GPU outlier (retime) takes it.
+        self.carried = {}
         self.build_info = None
         #: Whether the commit has the harness, whose timed workloads each GPU leg runs.
         #: Whether the commit has the lock budget, which a node naming its event must measure.
@@ -714,6 +717,8 @@ class Run:
         if not made:
             return self.fail(legs, why)
         carry, mirror, rev = made
+        with self.lock:
+            self.carried[node] = made
         for leg in legs:
             leg.started = time.time()
         jobs = [("rt", legs, f"rt-{node}")] + ([("harness", [leg], f"harness-{leg.id}") for leg in legs]
@@ -743,6 +748,44 @@ class Run:
             log(f"{leg.id}: the old runtime's own spread {spread[0]:.1%} on {spread[1]} voids its times; "
                 "timed once more, later")
         return again
+
+    def retime(self, legs):
+        """Each of LEGS's harness timed once more, after every leg is in: a leg whose one pass has
+        a harness row's cross-GPU outlier (results.outliers_to_retime), which then fails it only
+        where both passes agree (results.time_outliers). The second pass's records take the
+        first's, as a timing's do in timed_again. A node's legs in turn, the nodes at once, each
+        job holding its node alone as a timing does; a Linux node's job lays the tree out again
+        and its last one tidies, as the node's last job had."""
+        by_node = {}
+        for leg in legs:
+            by_node.setdefault(leg.node, []).append(leg)
+
+        def chain(node, these):
+            for leg in these:
+                try:
+                    if self.nodes[node]["os"] == "windows":
+                        code, out, rec = self.job("wintime", node, winrun_script(leg, "harness"),
+                                                  f"winharness-{leg.id}-outlier", gpus=[leg.gpu], space="win",
+                                                  exclusive=True)
+                    elif node in self.carried:
+                        carry, mirror, rev = self.carried[node]
+                        script = gpu_script(self.short, self.setup(node), [leg], mirror, rev, "harness",
+                                            leg is these[-1], None, self.nodes.get(node, {}).get("cpu_model"))
+                        code, out, rec = self.job("time", node, script, f"harness-{leg.id}-outlier",
+                                                  gpus=[leg.gpu], carries=[carry], space="gpu", exclusive=True)
+                    else:
+                        self.fail([leg], f"its cross-GPU outlier's re-time found no carry on {node}")
+                        continue
+                    self.finish([leg], code, out, rec, "harness")
+                except Exception as error:  # a re-time's own failure fails its leg, not the run
+                    log(f"retime {leg.id}: {error!r}")
+                    self.fail([leg], f"its cross-GPU outlier's re-time failed: {error!r}")
+
+        threads = [threading.Thread(target=chain, args=(node, these)) for node, these in sorted(by_node.items())]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     def finish(self, legs, code, out, rec, suite):
         """Merge one job's legs into theirs: a leg it did not run, or whose suite never reported its
@@ -912,6 +955,23 @@ def leg_entry(run, leg):
         **({"timed": timed} if timed is not None else {}))
 
 
+def cross_gpu(sha, doc, entries):
+    """The GPU legs' times and their bases' times that the cross-GPU rule compares
+    (results.outlier_keys): this run's ENTRIES' and the note DOC's other GPU legs'. The median
+    takes every GPU leg of the note, so a run of some legs (--legs) is judged against the GPUs it
+    did not run again; only this run's legs are judged."""
+    times, bases = {}, {}
+    for leg_id, e in doc["legs"].items():
+        if e.get("gpu") and leg_id not in entries:
+            times[leg_id] = e["records"]["time"]
+            bases[leg_id] = base_times(sha, *base_of(sha, leg_id))
+    for leg_id, e in entries.items():
+        if e["gpu"]:
+            times[leg_id] = e["records"]["time"]
+            bases[leg_id] = base_times(sha, e["base"], e["base_records"] and {"records": e["base_records"]})
+    return times, bases
+
+
 def run_cmd(sha, only, dry):
     cfg = load(CONFIG, None)
     if not cfg or not cfg.get("builders"):
@@ -942,24 +1002,23 @@ def run_cmd(sha, only, dry):
     rdir = STATE / "runs" / f"{sha[:12]}-{time.strftime('%m%d-%H%M%S')}"
     rdir.mkdir(parents=True)
     run = Run(sha, cfg, nodes, legs, b, rdir)
+    doc = note(sha) or dict(sha=sha, runs=[], legs={})
     try:
         run.go()
+        entries = {leg.id: leg_entry(run, leg) for leg in legs}
+        # A harness row's cross-GPU outlier in one pass fails nothing yet: once every leg is in,
+        # the legs that have one are timed once more, and an outlier fails a leg only where both
+        # passes agree (results.time_outliers).
+        found = results.outlier_keys(*cross_gpu(sha, doc, entries))
+        first = results.outliers_to_retime({leg_id: keys for leg_id, keys in found.items() if leg_id in entries})
+        if first:
+            log(f"cross-GPU outliers in one pass on {', '.join(sorted(first))}: timed once more")
+            again = [leg for leg in legs if leg.id in first]
+            run.retime(again)
+            entries.update({leg.id: leg_entry(run, leg) for leg in again})
     finally:
         run.cleanup()
-    entries = {leg.id: leg_entry(run, leg) for leg in legs}
-    doc = note(sha) or dict(sha=sha, runs=[], legs={})
-    # The cross-GPU median takes every GPU leg of the note, so a run of some legs (--legs) is
-    # judged against the GPUs it did not run again; only this run's legs are judged.
-    times, bases = {}, {}
-    for leg_id, e in doc["legs"].items():
-        if e.get("gpu") and leg_id not in entries:
-            times[leg_id] = e["records"]["time"]
-            bases[leg_id] = base_times(sha, *base_of(sha, leg_id))
-    for leg_id, e in entries.items():
-        if e["gpu"]:
-            times[leg_id] = e["records"]["time"]
-            bases[leg_id] = base_times(sha, e["base"], e["base_records"] and {"records": e["base_records"]})
-    outliers, parked = results.time_outliers(times, bases)
+    outliers, parked = results.time_outliers(*cross_gpu(sha, doc, entries), first)
     for leg_id, problems in outliers.items():
         if leg_id in entries:
             entries[leg_id]["problems"] += problems
@@ -1023,7 +1082,8 @@ def rounds_since(sha, since):
 def print_over(sha, doc):
     """The report's one table: every row over its limit on each leg of SHA's note DOC
     (results.over_lines), with the frozen arm's verdict on its base and its status
-    (results.row_status, status.tsv)."""
+    (results.row_status, status.tsv); then the status entries whose rows are all within their
+    limits, to remove (results.entries_within)."""
     lines = []
     for leg_id, leg in sorted(doc["legs"].items()):
         if not (leg.get("records") or {}).get("time"):
@@ -1035,6 +1095,11 @@ def print_over(sha, doc):
     print(f"rows over their limits: {len(lines)}")
     for line in lines:
         print(f"  {line}")
+    within = results.entries_within({leg_id: (leg.get("records") or {}, leg.get("cpu"))
+                                     for leg_id, leg in doc["legs"].items() if (leg.get("records") or {}).get("time")})
+    print(f"status.tsv entries whose rows are within their limits, to remove: {len(within)}")
+    for card, row, status, who in within:
+        print(f"  {card} {row} ({status}, {who}): within its limit on every leg of its card that timed it")
 
 
 def show_cmd(sha):

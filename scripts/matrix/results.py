@@ -310,13 +310,12 @@ def old_path_moved(leg, messages):
             if s.get("golden") and (s["golden"]["changed"] or s["golden"]["profile"])]
 
 
-def time_outliers(times, bases):
-    """Timing fails only as a cross-GPU outlier. TIMES and BASES: {leg: {key: microseconds}} of
-    the GPU legs now and at their bases. For each key that at least TIME_MIN_GPUS legs timed at
-    both, a leg whose slowdown (now over base) is more than TIME_OUTLIER times the legs' median
-    slowdown is an outlier. Returns ({leg: [problems]}, {leg: [parked]}): an outlier of a
-    PARKED_RECORDS key is parked, not a problem."""
-    out, parked = {}, {}
+def outlier_keys(times, bases):
+    """The cross-GPU outliers of TIMES against BASES, {leg: {key: microseconds}} of the GPU legs
+    now and at their bases: for each key that at least TIME_MIN_GPUS legs timed at both, a leg
+    whose slowdown (now over base) is more than TIME_OUTLIER times the legs' median slowdown.
+    Returns {leg: {key: (slowdown, median, legs)}}, PARKED_RECORDS keys among them."""
+    out = {}
     keys = {key for values in times.values() for key in values}
     for key in sorted(keys):
         ratios = {leg: values[key] / bases[leg][key]
@@ -327,9 +326,48 @@ def time_outliers(times, bases):
         median = statistics.median(ratios.values())
         for leg, ratio in sorted(ratios.items()):
             if ratio > TIME_OUTLIER * median:
-                (parked if key.startswith(PARKED_RECORDS) else out).setdefault(leg, []).append(
-                    f"time {key}: {ratio:.2f}x its base, against a median of {median:.2f}x "
-                    f"over {len(ratios)} GPUs")
+                out.setdefault(leg, {})[key] = (ratio, median, len(ratios))
+    return out
+
+
+def outliers_to_retime(found):
+    """The legs of FOUND (outlier_keys) whose harness is timed once more before an outlier fails
+    them: those with an outlier of a harness row's time on the new runtime (HARNESS_NEW), one
+    pass of which never fails a leg on its own. Returns {leg: its outliers in FOUND}, time_outliers's
+    FIRST once they are timed again."""
+    return {leg: keys for leg, keys in found.items() if any(key.startswith(HARNESS_NEW) for key in keys)}
+
+
+def time_outliers(times, bases, first=None):
+    """Timing fails only as a cross-GPU outlier (outlier_keys). Returns ({leg: [problems]}, {leg:
+    [parked]}): an outlier of a PARKED_RECORDS key is parked, not a problem. FIRST: the legs whose
+    harness was timed once more for a harness row's outlier (outliers_to_retime), each with its
+    first pass's outliers; TIMES then hold their second pass, and an outlier of theirs is a
+    problem only where their first pass had it too, the two passes agreeing; one the second pass
+    alone has is parked."""
+    out, parked = {}, {}
+    first = first or {}
+    now = outlier_keys(times, bases)
+    for leg, found in sorted(now.items()):
+        for key, (ratio, median, count) in sorted(found.items()):
+            line = f"time {key}: {ratio:.2f}x its base, against a median of {median:.2f}x over {count} GPUs"
+            if key.startswith(PARKED_RECORDS):
+                parked.setdefault(leg, []).append(line)
+            elif leg not in first:
+                out.setdefault(leg, []).append(line)
+            elif key in first[leg]:
+                was = first[leg][key]
+                out.setdefault(leg, []).append(f"{line}, and {was[0]:.2f}x against {was[1]:.2f}x in the "
+                                               "first pass: both passes agree")
+            else:
+                parked.setdefault(leg, []).append(f"{line} when timed once more, but not in the first pass: "
+                                                  "the passes disagree, so it fails nothing")
+    for leg, keys in sorted(first.items()):
+        for key in sorted(keys):
+            if not key.startswith(PARKED_RECORDS) and key not in now.get(leg, {}):
+                parked.setdefault(leg, []).append(
+                    f"time {key}: an outlier in the first pass, {keys[key][0]:.2f}x its base against a median "
+                    f"of {keys[key][1]:.2f}x, but not when timed once more: the passes disagree, so it fails nothing")
     return out, parked
 
 
@@ -901,8 +939,21 @@ def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
     (frozen_rebased). Where the old runtime's own spread across its passes in the leg is past
     BASE_SPREAD (base_spread), every row its times would fail is named VOID and fails nothing;
     the problems of its records and its counts stand. On a node whose CPU model is CPU, a row
-    counts_judge judges by its counts is judged by the instructions gate alone, its time named."""
+    counts_judge judges by its counts is judged by the instructions gate alone, its time named. A
+    row past its limit that status.tsv holds (owned_verdict) is named and fails nothing: an open
+    record's within OWNED_WORSE of the ratio it was owned at, judged after its re-time, and a
+    gap's without a ruled ceiling; past that, it fails as any row."""
     problems, parked, timed = [], [], []
+
+    def past_its_limit(row, line, ratio):
+        """ROW past its limit, LINE naming it, judged by RATIO: a problem (timed) unless its status
+        holds it (owned_verdict), in which case it is named with that and fails nothing."""
+        verdict = owned_verdict(leg_id, row, ratio)
+        if verdict is None:
+            timed.append(line)
+        else:
+            (timed if verdict[0] else parked).append(f"{line}: {verdict[1]}")
+
     suites = leg["suites"].values()
     for row in sorted({test[len(HARNESS_OLD):] for suite in suites for test in suite["failed"]
                        if test.startswith(HARNESS_OLD)}):
@@ -973,12 +1024,12 @@ def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
                         f"part {own:.1f} us over old's whole {old:.1f} us is {own / old:.3f}; the "
                         f"driver's part {driver:.1f} us, new {new:.1f} us whole is {new / old:.3f}: {gap}")
                 if own / old > limit:
-                    timed.append(f"{line}, {past_limit(leg_id, row)}: a regression of its own")
+                    past_its_limit(row, f"{line}, {past_limit(leg_id, row)}: a regression of its own", own / old)
                 else:
                     parked.append(line)
                 continue
             if new / old > limit:
-                timed.append(f"{line}, {past_limit(leg_id, row)}")
+                past_its_limit(row, f"{line}, {past_limit(leg_id, row)}", new / old)
             elif listed_row(row) in ceilings:
                 parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
             continue
@@ -997,17 +1048,18 @@ def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
         if ratio > limit:
             past = f"{line}, {past_limit(leg_id, row, gpu)}"
             ratios = retimed(times, row, gpu)
+            judged = ratio
             if ratios is not None:
-                median = statistics.median(ratios)
+                judged = statistics.median(ratios)
                 past = (f"{past}; re-timed in {RETIME_PAIRS} pairs, "
-                        f"{', '.join(f'{r:.3f}' for r in ratios)}, median {median:.3f}")
-                if median <= limit:
+                        f"{', '.join(f'{r:.3f}' for r in ratios)}, median {judged:.3f}")
+                if judged <= limit:
                     parked.append(f"{past}, within: judged by the median")
                     continue
             if variance:
                 parked.append(f"{past}: the card's own variance, not judged ({variance})")
             else:
-                timed.append(past)
+                past_its_limit(row, past, judged)
         elif variance and ratio > HARNESS_BUDGET:
             parked.append(f"{line}, within its limit: the card's own variance ({variance})")
         elif listed_row(row) not in ceilings:
@@ -1076,54 +1128,122 @@ def over_rows(leg_id, records, cpu=None):
 
 
 #: The status of each row a report lists over its limit (over_rows), by card and row, read from
-#: status.tsv (read_status): `open`, an open record, with its owner and the round it first went
-#: over; `gap`, a known gap, with the place it was ruled; `note`, a note alone. A row with no open
-#: record or gap reads NEW in the first round it is over (not over in its leg's base) and UNOWNED
-#: after; a CARD_VARIANCE row reads as its card's known gap.
+#: status.tsv (read_status): `open`, an open record, with its owner, the round it first went over
+#: and the ratio it was owned at; `gap`, a known gap, with the place it was ruled; `note`, a note
+#: alone. A row with no open record or gap reads NEW in the first round it is over (not over in
+#: its leg's base) and UNOWNED after; a CARD_VARIANCE row reads as its card's known gap. An open
+#: record's row past its limit fails its leg only more than OWNED_WORSE worse than its owned ratio,
+#: and a gap's only past the ceiling a ruling gave it (HARNESS_CEILINGS); both are listed
+#: (owned_verdict). An entry whose rows are all within their limits is named for removal
+#: (entries_within).
 STATUSES = ("open", "gap", "note")
+#: How much worse than the ratio it was owned at an open record's row may judge before it fails
+#: its leg again: its owner's work holds it there, and a row that grows past it is a new
+#: regression on top of the owned one.
+OWNED_WORSE = 1.03
 
 
 def read_status(text):
     """The status table's TEXT: `#` comments, a header line, then one entry a line, `|` between
     its fields: card (`vendor:device`), row (`*` matches any run of characters), status
     (STATUSES), who owns it or where it was ruled, since (an open record's first round, a commit;
-    else `-`) and a note (or `-`). Returns [(card, row, status, who, since, note)]; a malformed
-    line raises ValueError."""
+    else `-`), owned (an open record's ratio when it was owned, new over old as the row is judged;
+    else `-`) and a note (or `-`). Returns [(card, row, status, who, since, owned, note)], owned a
+    float or None; a malformed line raises ValueError."""
     entries = []
     lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
     for line in lines[1:]:
         fields = [field.strip() for field in line.split("|")]
-        if len(fields) != 6:
-            raise ValueError(f"status.tsv: {len(fields)} fields, not 6: {line}")
-        card, row, status, who, since, note = fields
+        if len(fields) != 7:
+            raise ValueError(f"status.tsv: {len(fields)} fields, not 7: {line}")
+        card, row, status, who, since, owned, note = fields
         if (not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", card) or status not in STATUSES or not row
                 or (status == "open") != bool(re.fullmatch(r"[0-9a-f]{7,40}", since))
+                or (status == "open") != bool(re.fullmatch(r"[0-9]+\.[0-9]+", owned))
+                or (status != "open" and owned != "-")
                 or (status != "note" and who == "-")):
             raise ValueError(f"status.tsv: malformed entry: {line}")
-        entries.append((card, row, status, who, since, note))
+        entries.append((card, row, status, who, since, float(owned) if status == "open" else None, note))
     return entries
 
 
 STATUS = read_status((Path(__file__).resolve().parent / "status.tsv").read_text())
 
 
-def row_status(leg_id, row, over_before, rounds_since):
+def status_entries(leg_id, row):
+    """The status entries (STATUS) of LEG_ID's card whose row matches ROW."""
+    return [entry for entry in STATUS
+            if entry[0] == card_of(leg_id) and re.fullmatch(re.escape(entry[1]).replace(r"\*", ".*"), row)]
+
+
+def row_status(leg_id, row, over_before, rounds_since, ratio=None):
     """ROW's status on LEG_ID for the report's table: `open, <who>'s, <n> rounds` (ROUNDS_SINCE
-    gives the rounds from a commit on, this one's included, or None), `known gap: <where>`,
-    `NEW`, or `UNOWNED` where OVER_BEFORE (the row was over in the leg's base), each with the
-    entries' notes."""
-    entries = [entry for entry in STATUS
-               if entry[0] == card_of(leg_id) and re.fullmatch(re.escape(entry[1]).replace(r"\*", ".*"), row)]
-    notes = "".join(f"; {note}" for _, _, _, _, _, note in entries if note != "-")
-    for _, _, status, who, since, _ in entries:
+    gives the rounds from a commit on, this one's included, or None) with the ratio it was owned
+    at and, given the RATIO it is judged by now, whether that is within OWNED_WORSE of it;
+    `known gap: <where>`; `NEW`, or `UNOWNED` where OVER_BEFORE (the row was over in the leg's
+    base), each with the entries' notes."""
+    entries = status_entries(leg_id, row)
+    notes = "".join(f"; {note}" for *_, note in entries if note != "-")
+    for _, _, status, who, since, owned, _ in entries:
         if status == "open":
             age = rounds_since(since)
-            return f"open, {who}'s, {'?' if age is None else age} round{'' if age == 1 else 's'}" + notes
+            line = f"open, {who}'s, {'?' if age is None else age} round{'' if age == 1 else 's'}, owned at {owned:.3f}"
+            if ratio is not None:
+                line += (f", within {owned * OWNED_WORSE:.3f}" if ratio <= owned * OWNED_WORSE
+                         else f", WORSE than {owned * OWNED_WORSE:.3f}: fails its leg")
+            return line + notes
         if status == "gap":
             return f"known gap: {who}" + notes
     if row in CARD_VARIANCE.get(card_of(leg_id), {}):
         return "known gap: the card's own variance (CARD_VARIANCE)" + notes
     return ("UNOWNED" if over_before else "NEW") + notes
+
+
+def entries_within(legs):
+    """The open records and gaps of status.tsv (STATUS) whose rows are back within their limits, so
+    the report names them for removal and no entry outlives its problem. LEGS: {leg_id: (records,
+    cpu)}, a note's legs. An entry is within where it matches a row timed on both runtimes on a
+    leg of its card and no row it matches is over its limit on any such leg (over_rows, of any
+    kind); an entry that matches no timed row says nothing. Each `(card, row, status, who)`, in the
+    table's order."""
+    out = []
+    for card, row, status, who, *_ in STATUS:
+        if status == "note":
+            continue
+        pattern = re.escape(row).replace(r"\*", ".*")
+        timed = over = False
+        for leg_id, (records, cpu) in sorted(legs.items()):
+            times = records.get("time") or {}
+            if card_of(leg_id) != card:
+                continue
+            if any(key.startswith(HARNESS_NEW) and times.get(HARNESS_OLD + key[len(HARNESS_NEW):])
+                   and re.fullmatch(pattern, key[len(HARNESS_NEW):]) for key in times):
+                timed = True
+                over = over or any(re.fullmatch(pattern, r) for r, *_ in over_rows(leg_id, records, cpu))
+        if timed and not over:
+            out.append((card, row, status, who))
+    return out
+
+
+def owned_verdict(leg_id, row, ratio):
+    """How a row past its limit on LEG_ID, judged by RATIO (new over old, after its re-time where
+    it was re-timed), stands by its status (STATUS): None where no open record or gap holds it, so
+    it fails its leg as any row; else (fails, why). An open record's row fails only past its owned
+    ratio times OWNED_WORSE; a gap's row fails only where a ruling gave it a ceiling
+    (HARNESS_CEILINGS), being past it, as a row past its ceiling always has; both are still
+    listed (over_lines)."""
+    for _, _, status, who, _, owned, _ in status_entries(leg_id, row):
+        if status == "open":
+            bound = owned * OWNED_WORSE
+            if ratio > bound:
+                return True, (f"owned by {who} at {owned:.3f}, and {ratio:.3f} is more than "
+                              f"{OWNED_WORSE - 1:.0%} worse ({bound:.3f})")
+            return False, f"owned by {who} at {owned:.3f}, within {bound:.3f}: listed, fails nothing"
+        if status == "gap":
+            if listed_row(row) in HARNESS_CEILINGS.get(card_of(leg_id), {}):
+                return True, f"a known gap ({who}), past the ceiling its ruling gave it"
+            return False, f"a known gap ({who}): listed, fails nothing"
+    return None
 
 
 def over_lines(leg_id, records, base, rebased, rounds_since, cpu=None):
@@ -1140,7 +1260,7 @@ def over_lines(leg_id, records, base, rebased, rounds_since, cpu=None):
         move = frozen_move(records["time"], base_times, row)
         meter = ("-" if kind == "count" else "VOID" if void else "no base" if move is None
                  else "rebased" if frozen_rebased(row, rebased) else "VOID" if abs(move[2]) > FROZEN_DRIFT else "stands")
-        status = row_status(leg_id, row, (row, kind) in before, rounds_since)
+        status = row_status(leg_id, row, (row, kind) in before, rounds_since, None if kind == "count" else ratio)
         lines.append(f"{leg_id:<24} {row:<36} {kind:<9} {ratio:6.3f} over {limit:.3f}  {meter:<7}  {status}")
     return lines
 

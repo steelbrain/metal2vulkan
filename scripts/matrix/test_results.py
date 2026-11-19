@@ -225,6 +225,33 @@ class RuleTests(unittest.TestCase):
         self.assertEqual([cold in line for line in failing["d"]], [True])
         self.assertEqual([warm in line for line in parked["d"]], [True])
 
+    def test_a_harness_row_s_outlier_in_one_pass_fails_only_where_a_second_pass_agrees(self):
+        alu, frame, bandwidth = (f"{results.HARNESS_NEW}{row}" for row in ("alu", "frame", "bandwidth"))
+        bases = {leg: {alu: 100, frame: 100, bandwidth: 100, "loop/gpu": 100} for leg in "abcd"}
+        times = {leg: dict(bases[leg]) for leg in "abcd"}
+        times["d"].update({alu: 150, frame: 150})
+        times["c"]["loop/gpu"] = 150
+        found = results.outlier_keys(times, bases)
+        self.assertEqual(found, {"c": {"loop/gpu": (1.5, 1.0, 4)}, "d": {alu: (1.5, 1.0, 4), frame: (1.5, 1.0, 4)}})
+        # Only a harness row's outlier is timed once more; another fails at once, as before.
+        first = results.outliers_to_retime(found)
+        self.assertEqual(first, {"d": found["d"]})
+        # The second pass: alu again, frame back with the others, bandwidth new.
+        times["d"].update({frame: 100, bandwidth: 150})
+        failing, parked = results.time_outliers(times, bases, first)
+        self.assertEqual(failing, {
+            "c": ["time loop/gpu: 1.50x its base, against a median of 1.00x over 4 GPUs"],
+            "d": [f"time {alu}: 1.50x its base, against a median of 1.00x over 4 GPUs, and 1.50x against 1.00x "
+                  "in the first pass: both passes agree"]})
+        self.assertEqual(parked, {"d": [
+            f"time {bandwidth}: 1.50x its base, against a median of 1.00x over 4 GPUs when timed once more, but "
+            "not in the first pass: the passes disagree, so it fails nothing",
+            f"time {frame}: an outlier in the first pass, 1.50x its base against a median of 1.00x, but not when "
+            "timed once more: the passes disagree, so it fails nothing"]})
+        # Without a second pass, every outlier fails, as one pass did before.
+        self.assertEqual(sorted(results.time_outliers(times, bases)[0]["d"]),
+                         [f"time {key}: 1.50x its base, against a median of 1.00x over 4 GPUs" for key in (alu, bandwidth)])
+
     def test_the_old_path_moving_fails_unless_a_commit_since_the_bless_is_its_fix(self):
         # The golden test's two panics, as its captured output prints them.
         changed = ("    tests/golden_hashes.tsv: output changed under an unchanged key: 333 cell(s) "
@@ -264,9 +291,11 @@ class RuleTests(unittest.TestCase):
 
 class HarnessBudgetTests(unittest.TestCase):
     def setUp(self):
-        # The rules below on no floors and no card's variance unless a test gives its own.
-        for name in ("HARNESS_FLOORS", "HARNESS_GPU_FLOORS", "CARD_VARIANCE"):
-            patch = mock.patch.object(results, name, {})
+        # The rules below on no floors, no card's variance and no status entry unless a test gives
+        # its own.
+        for name, value in (("HARNESS_FLOORS", {}), ("HARNESS_GPU_FLOORS", {}), ("CARD_VARIANCE", {}),
+                            ("STATUS", [])):
+            patch = mock.patch.object(results, name, value)
             patch.start()
             self.addCleanup(patch.stop)
 
@@ -983,11 +1012,72 @@ class HarnessBudgetTests(unittest.TestCase):
             for row, ceiling in rows.items():
                 self.assertGreater(ceiling, results.HARNESS_BUDGET, f"{leg} {row}")
 
+    def test_an_owned_row_fails_only_past_its_owned_ratio_and_a_gap_only_past_its_ruled_ceiling(self):
+        entries = [("10de:1e87", "alu", "open", "core", "abc1234", 1.2, "-"),
+                   ("10de:1e87", "sampling_*", "gap", "a ruling", "-", None, "-"),
+                   ("10de:1e87", "bandwidth", "gap", "its ruling", "-", None, "-"),
+                   ("10de:1e87", "frame", "note", "-", "-", None, "looked at once")]
+        times = {"harness-old/alu": 100.0, "harness-new/alu": 123.0,
+                 "harness-old/sampling_deep": 100.0, "harness-new/sampling_deep": 150.0,
+                 "harness-old/bandwidth": 100.0, "harness-new/bandwidth": 120.0,
+                 "harness-old/frame": 100.0, "harness-new/frame": 110.0}
+        with mock.patch.object(results, "STATUS", entries), \
+                mock.patch.object(results, "HARNESS_CEILINGS", {"10de:1e87": {"bandwidth": 1.1}}):
+            # alu is within 3% of the ratio it was owned at, sampling_deep a gap with no ruled
+            # ceiling: both named, neither failing. bandwidth's gap is past the ceiling its ruling
+            # gave it, and frame's note holds nothing: both fail.
+            self.assertEqual(self.budget("10de:1e87", times), ([
+                "harness budget bandwidth: new 120.0 us over old 100.0 us is 1.200, past its ceiling 1.1 with "
+                "its allowance, 1.133: a known gap (its ruling), past the ceiling its ruling gave it",
+                "harness budget frame: new 110.0 us over old 100.0 us is 1.100, past 1.03"], [
+                "harness budget alu: new 123.0 us over old 100.0 us is 1.230, past 1.03: owned by core at 1.200, "
+                "within 1.236: listed, fails nothing",
+                "harness budget sampling_deep: new 150.0 us over old 100.0 us is 1.500, past 1.03: a known gap "
+                "(a ruling): listed, fails nothing"]))
+            # More than 3% worse than its owned ratio, alu fails its leg again.
+            problems, _ = self.budget("10de:1e87", dict(times, **{"harness-new/alu": 124.0}))
+            self.assertIn("harness budget alu: new 124.0 us over old 100.0 us is 1.240, past 1.03: owned by core "
+                          "at 1.200, and 1.240 is more than 3% worse (1.236)", problems)
+            # Re-timed, it is judged by its pairs' median: one pass at 1.300 fails nothing where the
+            # pairs bring it back within.
+            again = dict(times, **{"harness-new/alu": 130.0})
+            for pair, new in enumerate((121.0, 123.0), 1):
+                again[f"{results.HARNESS_RETIME}alu/{pair}/old"] = 100.0
+                again[f"{results.HARNESS_RETIME}alu/{pair}/new"] = new
+            problems, parked = self.budget("10de:1e87", again)
+            self.assertNotIn("alu", " ".join(problems))
+            self.assertIn("harness budget alu: new 130.0 us over old 100.0 us is 1.300, past 1.03; re-timed in 2 "
+                          "pairs, 1.210, 1.230, median 1.220: owned by core at 1.200, within 1.236: listed, fails "
+                          "nothing", parked)
+            # The pairs agreeing with the one pass, it fails.
+            for pair in (1, 2):
+                again[f"{results.HARNESS_RETIME}alu/{pair}/new"] = 130.0
+            self.assertIn("alu", " ".join(self.budget("10de:1e87", again)[0]))
+        # Without its entry, alu fails at 1.230 as any row.
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(self.budget("10de:1e87", {"harness-old/alu": 100.0, "harness-new/alu": 123.0}),
+                             (["harness budget alu: new 123.0 us over old 100.0 us is 1.230, past 1.03"], []))
+
+    def test_an_owned_first_take_is_judged_by_its_processes_median(self):
+        row = "create_64MiB/first_take"
+        times = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 1200.0}
+        for n in range(2, results.FIRST_RUNS + 1):
+            times[f"{results.HARNESS_FIRST}{row}/{n}/old"] = 1000.0
+            times[f"{results.HARNESS_FIRST}{row}/{n}/new"] = 1200.0
+        for owned, fails in ((1.17, False), (1.16, True)):
+            entries = [("10de:1e87", "create_64MiB/*", "open", "core", "abc1234", owned, "-")]
+            with mock.patch.object(results, "STATUS", entries), mock.patch.object(results, "OWN_PART_GATES", {}), \
+                    mock.patch.object(results, "HARNESS_CEILINGS", {}):
+                problems, parked = self.budget("10de:1e87", times)
+            self.assertEqual((len(problems), len(parked)), (1, 0) if fails else (0, 1), owned)
+            self.assertIn(f"owned by core at {owned:.3f}", (problems + parked)[0])
+
 
 class OverTableTests(unittest.TestCase):
     def setUp(self):
         for name, value in (("HARNESS_FLOORS", {}), ("HARNESS_GPU_FLOORS", {}), ("CARD_VARIANCE", {}),
-                            ("HARNESS_CEILINGS", {"a:0001": {"listed": 2.0}}), ("STORED_INSTRUCTIONS", {})):
+                            ("HARNESS_CEILINGS", {"a:0001": {"listed": 2.0}}), ("STORED_INSTRUCTIONS", {}),
+                            ("STATUS", [])):
             patch = mock.patch.object(results, name, value)
             patch.start()
             self.addCleanup(patch.stop)
@@ -995,15 +1085,22 @@ class OverTableTests(unittest.TestCase):
     def test_the_stored_status_table_reads_and_a_malformed_entry_is_refused(self):
         stored = results.read_status((Path(results.__file__).parent / "status.tsv").read_text())
         self.assertTrue(stored)
-        self.assertTrue(all(status in results.STATUSES for _, _, status, _, _, _ in stored))
-        head = "card | row | status | who | since | note\n"
-        self.assertEqual(results.read_status(head + "10de:1e87 | frame | open | core | 140714ceae | -\n"),
-                         [("10de:1e87", "frame", "open", "core", "140714ceae", "-")])
-        for bad in ("10de:1e87 | frame | open | core | - | -",  # an open record without its first round
-                    "10de:1e87 | frame | gap | - | - | -",  # a gap without its place
-                    "10de:1e87 | frame | closed | core | - | -",  # no such status
-                    "nvidia | frame | gap | here | - | -",  # not a card
-                    "10de:1e87 | frame | gap | here | -"):  # a field short
+        self.assertTrue(all(status in results.STATUSES for _, _, status, _, _, _, _ in stored))
+        # Every open record names the ratio it was owned at; nothing else has one.
+        self.assertTrue(all((status == "open") == (owned is not None) for _, _, status, _, _, owned, _ in stored))
+        head = "card | row | status | who | since | owned | note\n"
+        self.assertEqual(results.read_status(head + "10de:1e87 | frame | open | core | 140714ceae | 1.120 | -\n"
+                                             "10de:1e87 | alu | gap | here | - | - | ruled\n"),
+                         [("10de:1e87", "frame", "open", "core", "140714ceae", 1.12, "-"),
+                          ("10de:1e87", "alu", "gap", "here", "-", None, "ruled")])
+        for bad in ("10de:1e87 | frame | open | core | - | 1.120 | -",  # an open record without its first round
+                    "10de:1e87 | frame | open | core | 140714ceae | - | -",  # nor the ratio it was owned at
+                    "10de:1e87 | frame | open | core | 140714ceae | 1.1x | -",  # a ratio that is no number
+                    "10de:1e87 | frame | gap | here | - | 1.120 | -",  # a gap is owned by no one
+                    "10de:1e87 | frame | gap | - | - | - | -",  # a gap without its place
+                    "10de:1e87 | frame | closed | core | - | - | -",  # no such status
+                    "nvidia | frame | gap | here | - | - | -",  # not a card
+                    "10de:1e87 | frame | gap | here | - | -"):  # a field short
             with self.assertRaises(ValueError, msg=bad):
                 results.read_status(head + bad + "\n")
 
@@ -1097,9 +1194,9 @@ class OverTableTests(unittest.TestCase):
         self.assertEqual(over(1500.0), [(row, "own part", 1.5)])
 
     def test_a_listed_row_reads_its_status_and_an_unlisted_one_new_then_unowned(self):
-        entries = [("a:0001", "frame", "open", "core", "abc1234", "-"),
-                   ("a:0001", "sampling_*", "gap", "a ruling", "-", "its ceiling holds"),
-                   ("a:0001", "alu", "note", "-", "-", "looked at once")]
+        entries = [("a:0001", "frame", "open", "core", "abc1234", 1.48, "-"),
+                   ("a:0001", "sampling_*", "gap", "a ruling", "-", None, "its ceiling holds"),
+                   ("a:0001", "alu", "note", "-", "-", None, "looked at once")]
         times = {"harness-old/frame": 100.0, "harness-new/frame": 150.0,
                  "harness-old/sampling_deep": 100.0, "harness-new/sampling_deep": 150.0,
                  "harness-old/alu": 100.0, "harness-new/alu": 150.0,
@@ -1110,7 +1207,8 @@ class OverTableTests(unittest.TestCase):
             lines = results.over_lines("a:0001@node", recs(time=times), base, None, rounds.get)
             self.assertEqual([line.split(None, 1)[1] for line in lines], [
                 "alu                                  host time  1.500 over 1.030  stands   UNOWNED; looked at once",
-                "frame                                host time  1.500 over 1.030  VOID     open, core's, 3 rounds",
+                "frame                                host time  1.500 over 1.030  VOID     open, core's, 3 rounds, "
+                "owned at 1.480, within 1.524",
                 "sampling_deep                        host time  1.500 over 1.030  stands   known gap: a ruling; "
                 "its ceiling holds",
                 "waves                                host time  1.500 over 1.030  stands   NEW"])
@@ -1118,7 +1216,11 @@ class OverTableTests(unittest.TestCase):
             # Without a base, every unlisted row is new and the arm has nothing to say; on another
             # harness, only the creation rows are compared.
             lines = results.over_lines("a:0001", recs(time=times), None, None, rounds.get)
-            self.assertEqual([line.split()[-1] for line in lines], ["once", "rounds", "holds", "NEW"])
+            self.assertEqual([line.split()[-1] for line in lines], ["once", "1.524", "holds", "NEW"])
+            # Past its owned ratio by more than OWNED_WORSE, the open record's row says it fails.
+            entries[0] = entries[0][:5] + (1.4, "-")
+            self.assertTrue(results.over_lines("a:0001", recs(time=times), None, None, rounds.get)[1].endswith(
+                "open, core's, 3 rounds, owned at 1.400, WORSE than 1.442: fails its leg"))
             self.assertEqual({line.split("  ")[-2].strip() for line in
                               results.over_lines("a:0001", recs(time=times), base, results.REBASED_TREES,
                                                  rounds.get)}, {"rebased"})
@@ -1126,6 +1228,33 @@ class OverTableTests(unittest.TestCase):
                 mock.patch.object(results, "CARD_VARIANCE", {"a:0001": {"waves": "it varies"}}):
             self.assertEqual(results.row_status("a:0001", "waves", True, rounds.get),
                              "known gap: the card's own variance (CARD_VARIANCE)")
+
+    def test_an_entry_whose_rows_are_all_within_their_limits_is_named_for_removal(self):
+        entries = [("a:0001", "frame", "open", "core", "abc1234", 1.48, "-"),
+                   ("a:0001", "sampling_*", "gap", "a ruling", "-", None, "-"),
+                   ("a:0001", "alu", "open", "core", "abc1234", 1.2, "-"),
+                   ("a:0001", "waves", "note", "-", "-", None, "looked at once"),
+                   ("a:0001", "untimed", "open", "core", "abc1234", 1.2, "-"),
+                   ("b:0002", "frame", "gap", "a ruling", "-", None, "-")]
+        within = {"harness-old/frame": 100.0, "harness-new/frame": 101.0,
+                  "harness-old/sampling_deep": 100.0, "harness-new/sampling_deep": 102.0,
+                  "harness-old/sampling_wide": 100.0, "harness-new/sampling_wide": 150.0,
+                  "harness-old/alu": 100.0, "harness-new/alu": 102.0,
+                  "harness-old/waves": 100.0, "harness-new/waves": 100.0,
+                  "harness-new/untimed": 100.0}
+        over = dict(within, **{"harness-new/alu": 110.0})
+        with mock.patch.object(results, "STATUS", entries):
+            # frame is within; one of sampling_*'s rows is still over; alu is within on one leg of
+            # its card and over on the other; a note is never named; untimed and b:0002's frame
+            # were timed on no leg of theirs.
+            self.assertEqual(results.entries_within({"a:0001": (recs(time=within), None),
+                                                     "a:0001@other": (recs(time=over), None)}),
+                             [("a:0001", "frame", "open", "core")])
+            # sampling_wide back within, the gap is named too.
+            back = dict(within, **{"harness-new/sampling_wide": 101.0})
+            self.assertEqual(results.entries_within({"a:0001": (recs(time=back), None)}),
+                             [("a:0001", "frame", "open", "core"), ("a:0001", "sampling_*", "gap", "a ruling"),
+                              ("a:0001", "alu", "open", "core")])
 
 
 if __name__ == "__main__":

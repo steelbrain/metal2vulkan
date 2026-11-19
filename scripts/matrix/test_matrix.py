@@ -28,6 +28,8 @@ def run_of(stats):
     run.nodes = {"host": {"os": "windows"}}
     run.short = "abc"
     run.jobs = []
+    run.failures = {}
+    run.carried = {}
     return run
 
 
@@ -190,6 +192,58 @@ class TimedAgainTests(unittest.TestCase):
                                  ("harness-1002:744c-again", True)])
         self.assertEqual([(round(spread, 2), row) for spread, row in legs[0].timings], [(0.15, "alu"), (0.04, "alu")])
         self.assertEqual([(round(spread, 2), row) for spread, row in legs[1].timings], [(0.01, "alu")])
+        self.assertEqual(run.carried, {"n": ("carry", "mirror", "rev")})
+
+
+class OutlierRetimeTests(unittest.TestCase):
+    def test_each_leg_is_timed_once_more_alone_its_records_taking_the_first_pass_s(self):
+        run = run_of({})
+        run.harness, run.layer, run.cfg = True, None, {}
+        run.nodes = {"n": {"os": "linux"}, "w": {"os": "windows"}, "away": {"os": "linux"}}
+        run.carried = {"n": ("carry", "mirror", "rev")}
+        legs = [matrix.Leg("1002:744c", "n", "0000:06:00.0", "radeon"),
+                matrix.Leg("10de:1e87", "n", "0000:09:00.0", "nvidia"),
+                matrix.Leg("8086:3e9b", "w", "8086:3e9b"),
+                matrix.Leg("1002:15bf", "away", "0000:c7:00.0", "radeon")]
+        for leg in legs:
+            leg.parsed["suites"][matrix.HARNESS_SUITE] = {"records": {"time": {"harness-new/alu": 200.0}}}
+        asked = []
+
+        def job(kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None):
+            asked.append((kind, node, name, list(gpus), list(carries), space, exclusive, 'rm -rf "$S"' in script))
+            leg_id = name.split("-", 1)[1].removesuffix("-outlier")
+            return 0, (f"M2V-LEG {leg_id} begin\nM2V-MATRIX time harness-old/alu 100.0\n"
+                       f"M2V-MATRIX time harness-new/alu 101.0\nM2V-SUITE {leg_id} harness exit 0\n"), {"id": name}
+
+        with mock.patch.object(run, "job", job, create=True), mock.patch.object(matrix, "log"):
+            run.retime(legs)
+        # A Linux node's legs in turn with its carry, its last job tidying; the Windows leg in its
+        # workspace; each holding its node alone. A node whose legs never started has no carry.
+        self.assertEqual(sorted(asked), [
+            ("time", "n", "harness-1002:744c-outlier", ["0000:06:00.0"], ["carry"], "gpu", True, False),
+            ("time", "n", "harness-10de:1e87-outlier", ["0000:09:00.0"], ["carry"], "gpu", True, True),
+            ("wintime", "w", "winharness-8086:3e9b-outlier", ["8086:3e9b"], [], "win", True, False)])
+        self.assertEqual([name for _, node, name, *_ in asked if node == "n"],
+                         ["harness-1002:744c-outlier", "harness-10de:1e87-outlier"])
+        for leg, name in zip(legs, ("harness-1002:744c-outlier", "harness-10de:1e87-outlier",
+                                    "winharness-8086:3e9b-outlier")):
+            self.assertEqual(leg.parsed["suites"][matrix.HARNESS_SUITE]["records"]["time"],
+                             {"harness-old/alu": 100.0, "harness-new/alu": 101.0})
+            self.assertEqual(leg.jobs, [name])
+        self.assertEqual(run.failures, {"1002:15bf": ["its cross-GPU outlier's re-time found no carry on away"]})
+
+    def test_a_re_time_that_raises_fails_its_leg_not_the_run(self):
+        run = run_of({})
+        run.cfg = {}
+        run.nodes = {"w": {"os": "windows"}}
+        leg = matrix.Leg("8086:3e9b", "w", "8086:3e9b")
+
+        def job(*args, **kwargs):
+            raise OSError("no potluck")
+
+        with mock.patch.object(run, "job", job, create=True), mock.patch.object(matrix, "log"):
+            run.retime([leg])
+        self.assertEqual(run.failures, {"8086:3e9b": ["its cross-GPU outlier's re-time failed: OSError('no potluck')"]})
 
 
 class HarnessRunTests(unittest.TestCase):
