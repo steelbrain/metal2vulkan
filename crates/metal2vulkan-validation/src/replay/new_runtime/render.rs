@@ -753,6 +753,16 @@ impl NewRuntime {
                 let mode = metal(call, uint(call, 0)?)?;
                 self.render(id).encoder.set_depth_clip_mode(mode)
             }
+            // Apple's private line width: kept by the encoder, whose draw of lines at another
+            // width than 1 is the runtime's gap, skipped and counted.
+            "setLineWidth:" => {
+                let width = match arg(call, 0)?.as_f64() {
+                    Some(value) => value as f32,
+                    None => return Err(refuse(call, "argument 0 is no float")),
+                };
+                self.render(id).encoder.set_line_width(width);
+                Ok(())
+            }
             _ => return Err(refuse(call, "not played on a render encoder")),
         };
         match result {

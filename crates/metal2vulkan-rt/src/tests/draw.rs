@@ -18,6 +18,8 @@
 //!     instruction.
 //!   - a draw of lines makes its content's line `VkPipeline` once, a first-use wait, and draws
 //!     its row.
+//!   - lines draw at width 1 alone: at width 2 a draw of lines or a line strip is
+//!     `DrawKind::LineWidth` and a triangle draws; at 1 again, and in a later encoder, lines draw.
 //!   - a stencil state that replaces the stencil marks what a draw covers, and one that tests it
 //!     keeps a later draw to those pixels.
 //!   - a pass clears, loads and stores a shader-read `Depth32Float` depth attachment that its
@@ -603,6 +605,96 @@ pub(crate) mod on_device {
                 }
             }
             println!("{name}: one line pipeline, made at the first draw of lines");
+        });
+    }
+
+    /// Lines draw at width 1 alone (`set_line_width`, Apple's `setLineWidth:`): at width 2 a draw
+    /// of lines or of a line strip is `DrawKind::LineWidth` and records nothing, a draw of no
+    /// vertices records nothing as at any width, and a triangle draws; at 1 again lines draw, and
+    /// a later encoder starts at 1 whatever the earlier one set.
+    #[test]
+    fn every_device_draws_lines_at_width_1_alone() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("line_width", |name, _, device| {
+            let state = state(name, &device, &d);
+            // Lines across rows 2 and 0 through their centres, Metal's y up, then a triangle over
+            // rows 4 to 7.
+            let row = |y: f32| 1.0 - (y + 0.5) / 4.0;
+            let (two, zero) = (row(2.0), row(0.0));
+            let positions = [
+                -1.0, two, 1.0, two, -1.0, zero, 1.0, zero, -1.0, 0.0, 3.0, 0.0, -1.0, -4.0,
+            ];
+            let mut buffers = Buffers::new(&device);
+            let positions = buffers.of(&device, &floats(&positions));
+            let colors = [GREEN, GREEN, GREEN, GREEN, WHITE, WHITE, WHITE].concat();
+            let colors = buffers.of(&device, &floats(&colors));
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let refused = |got: Result<(), Error>, case: &str| {
+                let want = Error::Unsupported(Gap::Draw {
+                    kind: DrawKind::LineWidth,
+                });
+                assert_eq!(
+                    format!("{got:?}"),
+                    format!("{:?}", Err::<(), _>(want)),
+                    "{name}: {case}"
+                );
+            };
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            encoder.set_line_width(2.0);
+            refused(
+                encoder.draw_primitives(PrimitiveType::Line, 0, 2, 1, 0),
+                "lines at width 2",
+            );
+            refused(
+                encoder.draw_primitives(PrimitiveType::LineStrip, 0, 2, 1, 0),
+                "a line strip at width 2",
+            );
+            draw(encoder.draw_primitives(PrimitiveType::Line, 0, 0, 1, 0));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 4, 3, 1, 0));
+            encoder.set_line_width(1.0);
+            draw(encoder.draw_primitives(PrimitiveType::Line, 0, 2, 1, 0));
+            encoder.set_line_width(0.5);
+            encoder.end_encoding();
+            let mut load = pass(&color, None);
+            load.color_attachments[0].load_action = crate::LoadAction::Load;
+            let mut encoder = (command_buffer.render_command_encoder(&load))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.draw_primitives(PrimitiveType::Line, 2, 2, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let texels = read(&color, 4);
+            let at = |x: u32, y: u32| {
+                let i = ((y * SIDE + x) * 4) as usize;
+                [texels[i], texels[i + 1], texels[i + 2], texels[i + 3]]
+            };
+            for x in 1..SIDE - 1 {
+                for (y, want) in [(0, GREEN), (1, BLACK), (2, GREEN), (3, BLACK)] {
+                    assert_eq!(at(x, y), rgba8(want), "{name}: ({x}, {y})");
+                }
+            }
+            for y in 4..SIDE {
+                for x in 0..SIDE {
+                    assert_eq!(at(x, y), rgba8(WHITE), "{name}: ({x}, {y})");
+                }
+            }
+            println!("{name}: lines at width 1, refused at 2 where a triangle draws");
         });
     }
 

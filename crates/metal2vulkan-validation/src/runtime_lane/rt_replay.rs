@@ -7,6 +7,8 @@
 //!   which the stream checks green, and nothing is skipped.
 //! - A draw of points after it, which the runtime does not build, is skipped and counted, and the
 //!   report says the play is no verdict past it: its gap, frame and call.
+//! - `setLineWidth:` plays: at width 1 a draw of lines after it plays; at width 2 a draw of
+//!   triangles plays and one of lines is the runtime's gap, skipped and counted.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
 //! - A compute encoder's `setStageInRegion:` plays: the runtime takes it.
@@ -238,13 +240,24 @@ pub(super) fn library_of(
 
 /// A stream of a draw into a pass, its target copied to a buffer that the stream checks green
 /// (`green`); with `points`, a draw of points (call 19) after the draw.
-fn draw_into_a_pass(dir: &ScratchDir, green: &[u8], points: bool) -> PathBuf {
-    draw_with_clamps(dir, green, points, None)
+fn draw_into_a_pass(dir: &ScratchDir, green: &[u8], then: Then) -> PathBuf {
+    draw_with_clamps(dir, green, then, None)
+}
+
+/// What [`draw_with_clamps`]' stream draws after its triangle.
+#[derive(Clone, Copy)]
+enum Then {
+    Nothing,
+    /// The triangle's vertices as points: call 19.
+    Points,
+    /// `setLineWidth:` of the width (call 19), the triangle again (call 20), and its first two
+    /// vertices as a line (call 21).
+    Lines(f32),
 }
 
 /// [`draw_into_a_pass`]'s stream; where `clamp` is given, a sampler state of the default
 /// descriptor (#15) bound at fragment slot 0 with LOD clamps 0 and `clamp` before the draw.
-fn draw_with_clamps(dir: &ScratchDir, green: &[u8], points: bool, clamp: Option<f32>) -> PathBuf {
+fn draw_with_clamps(dir: &ScratchDir, green: &[u8], then: Then, clamp: Option<f32>) -> PathBuf {
     written(dir, |w| {
         let library = w.blob(&render_library(dir))?;
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
@@ -335,10 +348,20 @@ fn draw_with_clamps(dir: &ScratchDir, green: &[u8], points: bool, clamp: Option<
         // MTLPrimitiveTypeTriangle, from vertex 0, three vertices.
         let draw = [Value::Uint(3), Value::Uint(0), Value::Uint(3)];
         w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
-        if points {
-            // MTLPrimitiveTypePoint: call 19.
-            let draw = [Value::Uint(0), Value::Uint(0), Value::Uint(3)];
-            w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
+        match then {
+            Then::Nothing => {}
+            Then::Points => {
+                // MTLPrimitiveTypePoint: call 19.
+                let draw = [Value::Uint(0), Value::Uint(0), Value::Uint(3)];
+                w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
+            }
+            Then::Lines(width) => {
+                w.call("setLineWidth:", 13, 0, &[Value::F32(width)], &[])?;
+                w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
+                // MTLPrimitiveTypeLine, vertices 0 and 1, along the target's bottom edge.
+                let line = [Value::Uint(1), Value::Uint(0), Value::Uint(2)];
+                w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &line, &[])?;
+            }
         }
         w.call("endEncoding", 13, 0, &[], &[])?;
         w.call("blitCommandEncoder", 12, 14, &[], &[])?;
@@ -368,7 +391,7 @@ fn draw_with_clamps(dir: &ScratchDir, green: &[u8], points: bool, clamp: Option<
 fn a_draw_into_a_pass_plays_on_the_new_runtime() {
     let dir = ScratchDir::new("rt-replay-draw").unwrap();
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
-    let path = draw_into_a_pass(&dir, &green, false);
+    let path = draw_into_a_pass(&dir, &green, Then::Nothing);
     let (report, _) = play("draw", &path);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     let executed = &report.total.executed;
@@ -389,7 +412,7 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
 fn a_draw_the_runtime_does_not_build_is_skipped_and_ends_the_verdict() {
     let dir = ScratchDir::new("rt-replay-points").unwrap();
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
-    let path = draw_into_a_pass(&dir, &green, true);
+    let path = draw_into_a_pass(&dir, &green, Then::Points);
     let (report, lines) = play("points", &path);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     let executed = &report.total.executed;
@@ -398,6 +421,35 @@ fn a_draw_the_runtime_does_not_build_is_skipped_and_ends_the_verdict() {
     let note = report.verdict_note();
     assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 19"));
     let line = "skipped render commands Draw { kind: Points } 1, the first at frame 0, call 19";
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
+/// `setLineWidth:` plays: at width 1 the triangle and the line after it play, nothing skipped; at
+/// width 2 the triangle draws and the line is the runtime's gap, skipped and counted.
+#[test]
+fn a_line_width_plays_and_a_line_drawn_at_another_width_is_skipped() {
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let dir = ScratchDir::new("rt-replay-line-width-1").unwrap();
+    let (report, _) = play(
+        "line-width-1",
+        &draw_into_a_pass(&dir, &green, Then::Lines(1.0)),
+    );
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let executed = &report.total.executed;
+    for skipped in ["skipped_render_commands", "skipped_draws", "skipped_calls"] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
+    assert_eq!(report.first_skip, None);
+    let dir = ScratchDir::new("rt-replay-line-width-2").unwrap();
+    let (report, lines) = play(
+        "line-width-2",
+        &draw_into_a_pass(&dir, &green, Then::Lines(2.0)),
+    );
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let executed = &report.total.executed;
+    assert_eq!(executed["skipped_render_commands"], 1, "{executed:?}");
+    assert_eq!(report.first_skip, Some((0, 21)));
+    let line = "skipped render commands Draw { kind: LineWidth } 1, the first at frame 0, call 21";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
 }
 
@@ -435,7 +487,10 @@ fn a_sampler_bound_with_lod_clamps_plays_where_the_runtime_takes_them() {
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
     // The sampler's own clamps, and (0, 1000), which reads as its own (0, FLT_MAX): both bind.
     for (test, clamp) in [("clamps-own", f32::MAX), ("clamps-1000", 1000.0)] {
-        let (report, _) = play(test, &draw_with_clamps(&dir, &green, false, Some(clamp)));
+        let (report, _) = play(
+            test,
+            &draw_with_clamps(&dir, &green, Then::Nothing, Some(clamp)),
+        );
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
         let executed = &report.total.executed;
         assert_eq!(executed["skipped_clamped_samplers"], 0, "{executed:?}");
@@ -444,7 +499,7 @@ fn a_sampler_bound_with_lod_clamps_plays_where_the_runtime_takes_them() {
     // (0, 2) reads otherwise: the runtime's gap, the bind and the draw skipped.
     let (report, _) = play(
         "clamps-2",
-        &draw_with_clamps(&dir, &green, false, Some(2.0)),
+        &draw_with_clamps(&dir, &green, Then::Nothing, Some(2.0)),
     );
     let executed = &report.total.executed;
     assert_eq!(executed["skipped_clamped_samplers"], 1, "{executed:?}");

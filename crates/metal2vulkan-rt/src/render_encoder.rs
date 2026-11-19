@@ -415,8 +415,9 @@ enum Call<'a> {
 /// Built: a render pipeline state, the vertex and fragment functions' buffers, bytes, textures
 /// and sampler states, one viewport and scissor rectangle, the cull mode, the front-facing
 /// winding, a depth-stencil state's depth and stencil tests, the depth bias without a clamp, the
-/// stencil references, the blend color, the store actions an encoder sets for an attachment whose
-/// pass left them unknown, memory barriers, fences, direct draws of lines and triangles,
+/// stencil references, the blend color, the line width (lines drawn at 1 alone: a draw of lines
+/// at another width is [`DrawKind::LineWidth`]), the store actions an encoder sets for an
+/// attachment whose pass left them unknown, memory barriers, fences, direct draws of lines and triangles,
 /// indexed or not, direct draws of patches with a tessellation factor buffer, and the `Disabled`
 /// visibility result mode (`Boolean` and `Counting` are [`DrawKind::VisibilityResults`]). Not
 /// built, and so not methods: indirect draws, several viewports or scissor rectangles, the
@@ -463,6 +464,8 @@ pub struct RenderCommandEncoder {
     /// The alpha test reference's 8-bit unorm code (`metal2vulkan::bind::alpha_test_code`),
     /// Metal's 1 until set.
     alpha_test: u32,
+    /// The line width `set_line_width` set last, Metal's 1 until set.
+    line_width: f32,
     /// The depth bias's constant and slope scale, Metal's `depthBias` and `slopeScale`.
     depth_bias: [f32; 2],
     /// Whether the last draw recorded the depth bias enabled.
@@ -547,6 +550,7 @@ impl CommandBuffer {
                     stencil_reference: [0; 2],
                     blend_color: [0.0; 4],
                     alpha_test: alpha_test_code(1.0),
+                    line_width: 1.0,
                     depth_bias: [0.0; 2],
                     biased: false,
                     recorded: None,
@@ -1070,6 +1074,18 @@ impl RenderCommandEncoder {
             self.alpha_test = code;
             self.push_filled = false;
         }
+    }
+
+    /// `setLineWidth:`, a method of Metal's render command encoders that Apple does not declare
+    /// in its headers (SPI): the width the encoder's later lines are drawn at, each encoder
+    /// starting at Metal's 1. Every width is accepted and kept, as on Metal; 1 records nothing.
+    /// The runtime draws lines at width 1 alone: Vulkan's wide lines are a device feature
+    /// (`wideLines`) the floor does not require, and no second form is built on it. A draw of
+    /// lines or a line strip while the width is not 1 is refused; a draw of triangles runs at any
+    /// width, as Metal draws filled triangles alike at every width (a triangle fill mode of
+    /// lines, which Metal draws at the width, is refused where it is set).
+    pub fn set_line_width(&mut self, width: f32) {
+        self.line_width = width;
     }
 
     /// The static precision note of a draw of triangles under a depth bias
@@ -1714,6 +1730,13 @@ impl RenderCommandEncoder {
         if draws.first_instance_zero && base_instance != 0 {
             return gap(DrawKind::DividedBaseInstance);
         }
+        let lines = matches!(
+            topology,
+            vk::PrimitiveTopology::LINE_LIST | vk::PrimitiveTopology::LINE_STRIP
+        );
+        if lines && self.line_width != 1.0 {
+            return gap(DrawKind::LineWidth);
+        }
         let pipeline = compiled.pipeline(topology)?;
         let discards = compiled.discards();
         let writes_memory = draws.writes_memory;
@@ -2274,10 +2297,6 @@ impl Drop for RenderCommandEncoder {
     }
 }
 
-/// Fills `push`, the push bytes of a draw of `state`, from the `tables`, a buffer argument bound to
-/// nothing taking `nil`, the nil buffer's address: a texture whose image the pass `moved` to the
-/// feedback layout reads through its second element in that layout, and one in `shadow_slots`,
-/// which reads a shadow, through its second element, the shadow's.
 /// The topology of a draw of `primitive_type`, and whether it restarts strips.
 ///
 /// Err: [`Gap::Draw`] of [`DrawKind::Points`].
@@ -2292,6 +2311,10 @@ fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, b
     Ok((topology, restart))
 }
 
+/// Fills `push`, the push bytes of a draw of `state`, from the `tables`, a buffer argument bound to
+/// nothing taking `nil`, the nil buffer's address: a texture whose image the pass `moved` to the
+/// feedback layout reads through its second element in that layout, and one in `shadow_slots`,
+/// which reads a shadow, through its second element, the shadow's.
 fn fill_push(
     push: &mut Vec<u8>,
     (tables, nil, factors, alpha_test): (&[Tables; 2], u64, u64, u32),

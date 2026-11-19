@@ -1199,6 +1199,12 @@ pub enum DrawKind {
     FillMode,
     /// The depth clip mode `Clamp` (`setDepthClipMode:`), which no replay stream sets.
     DepthClamp,
+    /// A draw of lines or a line strip while the encoder's line width (Apple's `setLineWidth:`
+    /// SPI, [`RenderCommandEncoder::set_line_width`](crate::RenderCommandEncoder::set_line_width))
+    /// is not 1: Metal draws such a line as a parallelogram that width wide; the runtime draws
+    /// lines at width 1 alone, as Vulkan's wider lines are a device feature (`wideLines`) the
+    /// floor does not require.
+    LineWidth,
     /// More than one viewport or scissor rectangle, or none (`setViewports:count:`,
     /// `setScissorRects:count:`), which no replay stream sets.
     Viewports,

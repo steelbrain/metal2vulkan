@@ -2009,6 +2009,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   a compare function other than `Never` or `Always`) reads it at each draw, pushed as Metal's
   8-bit unorm code (`metal2vulkan::bind::alpha_test_code`), and its fragment function compares its
   color 0's alpha's code with it; a fragment that fails writes nothing.
+- An encoder also holds the line width (`set_line_width`, Apple's `setLineWidth:` SPI): 1 until
+  the encoder sets it, every width kept. Lines draw at width 1 alone; a draw of triangles runs at
+  any width, as Metal's filled triangles do.
 - `draw_primitives` and `draw_indexed_primitives` are one `vkCmdDraw` or `vkCmdDrawIndexed` each.
   A draw pushes its functions' fields in the one push range (the addresses of their buffer slots
   plus offsets, the resource IDs of their textures and sampler states, the state's constexpr
@@ -2100,7 +2103,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `set_viewports`, `set_scissor_rects`), a visibility result mode but `Disabled`
   (`VisibilityResults`, `set_visibility_result_mode`), each refused where it is set, the
   encoder's state unchanged; the replay streams set Metal's defaults alone, which those setters
-  take as nothing; a
+  take as nothing; a draw of lines or a line strip while the encoder's line width
+  (`set_line_width`, which keeps every width) is not 1 (`LineWidth`): Metal draws such a line as
+  a parallelogram that width wide, and Vulkan's wider lines are a device feature (`wideLines`)
+  the floor does not require; a
   viewport Vulkan's is not (a
   negative width, a depth range past `[0, 1]`, bounds past the device's viewport limits), a
   pipeline state whose formats are not the pass's attachments', a draw that binds a texture

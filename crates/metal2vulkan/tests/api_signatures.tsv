@@ -9706,6 +9706,7 @@ method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_sampler_state	pub fn 
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps	pub fn set_fragment_sampler_state_with_lod_clamps(&mut self, sampler: Option<&SamplerState>, lod_min_clamp: f32, lod_max_clamp: f32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_texture	pub fn set_fragment_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_front_facing_winding	pub fn set_front_facing_winding(&mut self, winding: Winding)
+method	metal2vulkan-rt::RenderCommandEncoder::set_line_width	pub fn set_line_width(&mut self, width: f32)
 method	metal2vulkan-rt::RenderCommandEncoder::set_render_pipeline_state	pub fn set_render_pipeline_state(&mut self, state: &RenderPipelineState) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_scissor_rect	pub fn set_scissor_rect(&mut self, rect: ScissorRect)
 method	metal2vulkan-rt::RenderCommandEncoder::set_scissor_rects	pub fn set_scissor_rects(&mut self, rects: &[ScissorRect]) -> Result<(), Error>
@@ -13747,6 +13748,7 @@ variant	metal2vulkan-rt::DrawKind::DepthBiasClamp	DepthBiasClamp
 variant	metal2vulkan-rt::DrawKind::DepthClamp	DepthClamp
 variant	metal2vulkan-rt::DrawKind::DividedBaseInstance	DividedBaseInstance
 variant	metal2vulkan-rt::DrawKind::FillMode	FillMode
+variant	metal2vulkan-rt::DrawKind::LineWidth	LineWidth
 variant	metal2vulkan-rt::DrawKind::PatchIndexBuffer	PatchIndexBuffer
 variant	metal2vulkan-rt::DrawKind::Points	Points
 variant	metal2vulkan-rt::DrawKind::Viewport	Viewport
