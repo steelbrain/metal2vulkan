@@ -88,9 +88,10 @@ impl Device {
     /// `MTLPixelFormatGetInfoForDevice(device, raw)` (Apple SPI): Metal's description of the raw
     /// pixel format value `raw` on an Apple M3 Max under macOS 27.0.1, on every device (the
     /// module docs). Any value is taken, as Metal takes any: one it describes no format for
-    /// answers [`PixelFormatInfo::INVALID`]. The flags are those of Apple's GPU, not this
-    /// device's, and a format described here may be one this device makes no texture of
-    /// ([`Device::new_texture`]'s `Gap::TextureFormat`). An Apple M4 also describes the values
+    /// answers [`PixelFormatInfo::INVALID`]. The description, its flags included, is an Apple
+    /// GPU's, not this device's: a format this device lacks is still described here, and is
+    /// refused where a texture of it is made, with its typed gap ([`Device::new_texture`]'s
+    /// [`Gap::TextureFormat`](crate::Gap::TextureFormat)). An Apple M4 also describes the values
     /// from 630 to 645, which this answers [`PixelFormatInfo::INVALID`] (the README's known gaps
     /// of textures). No Vulkan call is made.
     ///
