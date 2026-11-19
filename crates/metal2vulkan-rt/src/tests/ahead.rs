@@ -115,26 +115,12 @@ mod on_device {
         each_device("internals_off_the_caller", |name, _, device| {
             let core = device.core();
             let counters = device.counters();
+            // What the device's making and the block-maker thread's first work left, read before
+            // any call needs an internal.
             let made = counters.metrics();
-            let gauges = counters.gauges();
-            assert_eq!(
-                made.consumer_allocations, 0,
-                "{name}: the making allocated on the caller's thread"
-            );
-            assert!(
-                made.maker_allocation_nanos > 0,
-                "{name}: the block-maker thread's makes"
-            );
-            assert!(core.filler.get().is_some(), "{name}: the zero source");
-            assert_eq!(
-                core.ring.chunks().map(|(blocks, _)| blocks),
-                Some(1),
-                "{name}: the ring's first block"
-            );
-            assert_eq!(
-                gauges.staging_bytes, REGION_LEN,
-                "{name}: the staging region"
-            );
+            let staging_bytes = counters.gauges().staging_bytes;
+            let zero_source = core.filler.get().is_some();
+            let ring_blocks = core.ring.chunks().map(|(blocks, _)| blocks);
 
             let calls = first_calls(name, &device);
             let before = counters.metrics();
@@ -144,10 +130,26 @@ mod on_device {
             }
             let after = counters.metrics();
             let on_caller = allocated(&after);
+            println!(
+                "ahead: {name}: {what:?}: consumer-thread sites {:?}, maker waits {}",
+                sites(&after),
+                after.maker_waits
+            );
             assert!(
                 on_caller.is_empty(),
                 "{name}: allocated on the caller's thread: {on_caller:?}"
             );
+            assert_eq!(
+                made.consumer_allocations, 0,
+                "{name}: the making allocated on the caller's thread"
+            );
+            assert!(
+                made.maker_allocation_nanos > 0,
+                "{name}: the block-maker thread's makes"
+            );
+            assert!(zero_source, "{name}: the zero source");
+            assert_eq!(ring_blocks, Some(1), "{name}: the ring's first block");
+            assert_eq!(staging_bytes, REGION_LEN, "{name}: the staging region");
             assert_eq!(
                 after.maker_waits, 0,
                 "{name}: waited for the block-maker thread"
@@ -155,11 +157,6 @@ mod on_device {
             assert!(
                 after.ring_writes > before.ring_writes,
                 "{name}: the encoder wrote the ring"
-            );
-            println!(
-                "ahead: {name}: {what:?}: consumer-thread sites {:?}, maker waits {}",
-                sites(&after),
-                after.maker_waits
             );
         });
     }
