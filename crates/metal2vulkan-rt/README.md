@@ -398,6 +398,17 @@ which is dedicated to its buffer (`VUID-vkBindImageMemory-memory-10926`): a text
 in it is the counted copy, as over an imported block, and a heap texture in it is
 `Gap::HeapTexture`.
 
+Once the other API's work that wrote the block has completed (the consumer's own wait on the
+decoder), the consumer calls `Block::external_writes_done()` before it commits the command buffers
+that use what was written. The call records the block's acquire from the other API's queue family
+(`VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle, `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf) in
+the upload, ahead of every command buffer committed after it, without waiting for the GPU: one
+buffer barrier, counted in `Metrics::external_acquires`. A block that is not exported is
+`Refusal::NotExported`. The contract: between `external_writes_done` and the other API's next
+write of the whole block, the other API does not access the block, to read or to write. The
+runtime records no release back: Vulkan skips an ownership transfer whose contents are not needed,
+and an API that overwrites the whole block needs nothing the runtime left there.
+
 ### Known gaps of memory blocks
 
 - A shader uses a buffer's `gpuAddress` directly, unchecked: a stale one, of a released buffer, can

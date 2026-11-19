@@ -1,7 +1,9 @@
 //! Exports, under a device cfg, on every device of the cfg's kind: each handle the device exports
 //! gives a Private block of its own, counted live in `Gauges::exports` until its memory is freed,
-//! whose handle a second device of the same physical device imports and reads rt's bytes through;
-//! each handle it does not export is refused typed; an exported block holds no image (a texture
+//! whose handle a second device of the same physical device imports, reading rt's bytes through it
+//! and writing the whole block, which rt acquires (`Block::external_writes_done`) and reads; an
+//! acquire of a block that is not exported is refused; each handle the device does not export is
+//! refused typed; an exported block holds no image (a texture
 //! over a buffer in it is the counted copy, and a heap texture in it is refused); and what 64 live
 //! exports cost each submission.
 //!
@@ -15,21 +17,13 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         BufferLayout, Device, Error, Export, ExportHandle, Gap, HeapRange, Limit, MemoryClass,
-        PixelFormat, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
+        PixelFormat, Refusal, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
     use ash::vk;
     use std::time::Instant;
 
     /// The length of each export the tests make.
     const LEN: u64 = 1 << 20;
-
-    /// The queue family that names the other side of `handle` in an ownership transfer.
-    fn external_family(handle: ExportHandle) -> u32 {
-        match handle.foreign() {
-            true => vk::QUEUE_FAMILY_FOREIGN_EXT,
-            false => vk::QUEUE_FAMILY_EXTERNAL,
-        }
-    }
 
     /// Whether `device` enabled `name`.
     fn enabled(device: &Device, name: &std::ffi::CStr) -> bool {
@@ -171,15 +165,24 @@ mod on_device {
     }
 
     /// Each handle the device exports gives a Private block of its own, counted live in
-    /// `Gauges::exports`, that rt writes and releases to the other API's queue family, and that a
-    /// second device of the same physical device imports and reads rt's bytes from; the gauge is
-    /// back once the block is given back. Each handle it does not export is `Limit::NoExport`,
+    /// `Gauges::exports`, that rt writes and the test releases to the other API's queue family,
+    /// and that a second device of the same physical device imports and reads rt's bytes from;
+    /// the second device then fills the whole block and releases it, and rt's acquire
+    /// (`Block::external_writes_done`, counted) lets a blit read its bytes. The gauge is back
+    /// once the block is given back. An acquire of a taken block is `Refusal::NotExported`. Each handle it does not export is `Limit::NoExport`,
     /// and a dma-buf on a device without the foreign queue family `Limit::ExportType`.
     #[test]
     fn every_device_exports_each_offered_handle_and_refuses_the_rest() {
         each_device("export", |name, instance, device| {
             let counters = device.counters();
             let foreign = enabled(&device, ash::ext::queue_family_foreign::NAME);
+            let taken = (device.take_block(MemoryClass::Private, LEN))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            match taken.external_writes_done() {
+                Err(Error::Refused(Refusal::NotExported { block })) if block == taken.id => {}
+                other => panic!("{name}: an acquire of a taken block: {other:?}"),
+            }
+            drop(taken);
             let mut exported = 0;
             for handle in ExportHandle::ALL {
                 if !device.core().exports.offers(handle) || (handle.foreign() && !foreign) {
@@ -223,7 +226,7 @@ mod on_device {
                 encoder.end_encoding();
                 let family = device.raw().queue_family_index;
                 let (vk_buffer, _) = buffer.device_range();
-                let external = external_family(handle);
+                let external = handle.family();
                 command_buffer
                     .record_for_test(&[&buffer], |raw, command| {
                         // SAFETY: the command buffer is recording; the buffer is held.
@@ -279,7 +282,64 @@ mod on_device {
                     wrong, None,
                     "{name}: {handle:?}: the import read rt's bytes"
                 );
-                drop((read, other_queue, out, out_block));
+
+                // The other API writes the whole block and releases it; rt acquires it and a
+                // blit reads the other API's bytes.
+                let write = other_queue.command_buffer().expect("a command buffer");
+                write
+                    .record_for_test(&[], |raw, command| {
+                        // SAFETY: the command buffer is recording; the import lives until the
+                        // test frees it after the wait.
+                        unsafe {
+                            raw.cmd_fill_buffer(command, imported, 0, LEN, 0x3c3c_3c3c);
+                            record(
+                                raw,
+                                command,
+                                transfer(imported, other_family, external, true),
+                            );
+                        }
+                    })
+                    .expect("the write");
+                write.commit().expect("a commit");
+                finished(name, &write);
+                assert_eq!(write.error(), None, "{name}");
+                let acquires = counters.metrics().external_acquires;
+                (block.external_writes_done())
+                    .unwrap_or_else(|error| panic!("{name}: {handle:?}: the acquire: {error}"));
+                assert_eq!(
+                    counters.metrics().external_acquires,
+                    acquires + 1,
+                    "{name}: the acquire, counted"
+                );
+                let mine_block = (device.take_block(MemoryClass::Shared, LEN))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let mine = (device.new_buffer(mine_block.id, 0, LEN, None)).expect("a buffer");
+                let back = queue.command_buffer().expect("a command buffer");
+                let mut encoder = back.blit_command_encoder().expect("an encoder");
+                (encoder.copy_from_buffer_to_buffer(&buffer, 0, &mine, 0, LEN))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                encoder.end_encoding();
+                back.commit().expect("a commit");
+                finished(name, &back);
+                assert_eq!(back.error(), None, "{name}");
+                let contents = mine.contents().expect("Shared");
+                // SAFETY: the buffer's bytes, which no command writes any more.
+                let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), LEN as usize) };
+                let wrong = (bytes.iter().enumerate()).find(|&(_, &byte)| byte != 0x3c);
+                assert_eq!(
+                    wrong, None,
+                    "{name}: {handle:?}: rt read the other API's bytes"
+                );
+                drop((
+                    back,
+                    mine,
+                    mine_block,
+                    write,
+                    read,
+                    other_queue,
+                    out,
+                    out_block,
+                ));
                 // SAFETY: nothing uses the import any more.
                 unsafe {
                     other.raw().device.destroy_buffer(imported, None);
@@ -299,7 +359,7 @@ mod on_device {
                 exported += 1;
                 println!(
                     "export: {name}: {handle:?} exported ({} bytes, type {}), imported by a second \
-                     device, read back, freed",
+                     device, read back, written there, acquired, read by rt, freed",
                     LEN, device.core().memory_type(MemoryClass::Private)
                 );
             }
@@ -453,7 +513,9 @@ mod on_device {
                 assert_eq!(device.counters().gauges().exports, EXPORTS as u64, "{name}");
                 live.push(submits());
                 drop(exports);
-                within("the exports' frees", || device.counters().gauges().exports == 0);
+                within("the exports' frees", || {
+                    device.counters().gauges().exports == 0
+                });
             }
             // SAFETY: nothing is pending.
             unsafe {

@@ -2417,6 +2417,7 @@ impl Backend for NewRuntime {
             ("capture_wait_nanos", metrics.capture_wait_nanos),
             ("stamps_not_available", metrics.stamps_not_available),
             ("waits_behind_counter", metrics.waits_behind_counter),
+            ("external_acquires", metrics.external_acquires),
             ("skipped_encoders", self.skips.encoders),
             ("skipped_objects", self.skips.objects),
             ("skipped_render_states", self.skips.render_state_count()),

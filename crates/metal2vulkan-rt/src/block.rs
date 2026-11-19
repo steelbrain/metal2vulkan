@@ -2,6 +2,7 @@
 //! handle's drop gives the block back.
 
 use crate::device::{lock, Core};
+use crate::error::Error;
 use crate::memory::{self, BlockInfo};
 use std::fmt;
 use std::ops::Deref;
@@ -56,6 +57,15 @@ impl Block {
     /// Whether the block is of `core`'s device.
     pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
         Weak::as_ptr(&self.claim.core) == Arc::as_ptr(core)
+    }
+
+    /// Its device and the block, while the claim holds it.
+    ///
+    /// Err: [`Error::Quiesced`] once the device's teardown took the block.
+    pub(crate) fn held(&self) -> Result<(Arc<Core>, Arc<memory::Block>), Error> {
+        let core = self.claim.core.upgrade().ok_or(Error::Quiesced)?;
+        let block = self.claim.block().ok_or(Error::Quiesced)?;
+        Ok((core, block))
     }
 }
 

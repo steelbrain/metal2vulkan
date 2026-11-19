@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 69 | 69 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 70 | 70 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 26 | 26 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 19 | 16 | 0 | 0 | 34 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 19 | 16 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 11 | 4 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 26 | 0 | 0 | 0 |
 
@@ -625,6 +625,7 @@ Columns:
 | `ManagedCopyNotPrivate` | A Managed buffer whose device copy is placed in a block that is not Private (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: shaders reach the device copy in Private memory, device-local where it has room, as a discrete GPU's Metal keeps the copy in its own memory | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ZeroRangePastBlock` | A zero fill whose range leaves its block (`Device::zero_block_range`), as a buffer placed there would | every device (a public call's own check of its arguments) | `ours`: the fill stands for the zeroed contents of a buffer placed in the range, and Metal answers nil for a buffer placed past the end of its heap | 1: `crates/metal2vulkan-rt/src/buffer.rs (zero_block_range)` | `-` |
 | `ZeroRangeShared` | A zero fill of a Shared block (`Device::zero_block_range`) | every device (a public call's own check of its arguments) | `ours`: the host maps a Shared block, and its bytes are zeroed through the mapping, as a zeroed Shared buffer's are; the fill is for the memory the host does not map | 1: `crates/metal2vulkan-rt/src/buffer.rs (zero_block_range)` | `-` |
+| `NotExported` | An acquire of another API's writes into a block that is not exported (`Block::external_writes_done`) | every device (a public call's own check of its arguments) | `ours`: only an exported block's memory is another API's to write | 1: `crates/metal2vulkan-rt/src/export.rs (external_writes_done)` | `-` |
 | `ModifiedRange` | A changed range that leaves its buffer (`Buffer::did_modify_range`) | every device (a public call's own check of its arguments) | `ours`: the copy of such a range would write past the buffer's device copy | 1: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)` | `-` |
 | `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
 | `InScheduledHandler` | A call a scheduled handler may not make (`CommandBuffer::add_scheduled_handler`) | every device (a public call's own check of its arguments) | `ours`: the consumer's scheduled handlers run on the submit thread, and the one consumer's make none of these calls; a guest's scheduled handler runs in the guest | 1: `crates/metal2vulkan-rt/src/command.rs (not_in_scheduled_handler)` | `-` |
@@ -1236,6 +1237,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::ManagedCopyNotPrivate`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ZeroRangePastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (zero_block_range)`
 - `rt:Refusal::ZeroRangeShared`: `crates/metal2vulkan-rt/src/buffer.rs (zero_block_range)`
+- `rt:Refusal::NotExported`: `crates/metal2vulkan-rt/src/export.rs (external_writes_done)`
 - `rt:Refusal::ModifiedRange`: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)`
 - `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (open)`
 - `rt:Refusal::InScheduledHandler`: `crates/metal2vulkan-rt/src/command.rs (not_in_scheduled_handler)`

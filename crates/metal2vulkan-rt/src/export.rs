@@ -10,10 +10,12 @@
 //! buffers export it (`vkGetPhysicalDeviceExternalBufferProperties`), and refused elsewhere.
 
 use crate::block::Block;
+use crate::counters::Metric;
 use crate::device::Device;
-use crate::error::{Error, Limit};
+use crate::error::{Error, Limit, Refusal};
 use crate::floor;
-use crate::memory;
+use crate::memory::{self, Own};
+use crate::submit::Held;
 use ash::vk;
 use std::ffi::CStr;
 use std::sync::Arc;
@@ -63,6 +65,14 @@ impl ExportHandle {
     /// imported by the same device and driver, which `VK_QUEUE_FAMILY_EXTERNAL` names.
     pub(crate) fn foreign(self) -> bool {
         self == ExportHandle::DmaBuf
+    }
+
+    /// The queue family an ownership transfer names as the other side of its handle.
+    pub(crate) fn family(self) -> u32 {
+        match self.foreign() {
+            true => vk::QUEUE_FAMILY_FOREIGN_EXT,
+            false => vk::QUEUE_FAMILY_EXTERNAL,
+        }
     }
 }
 
@@ -228,6 +238,60 @@ impl Device {
             memory_type: core.memory_type(crate::MemoryClass::Private),
         };
         Ok((block, export))
+    }
+}
+
+impl Block {
+    /// No Metal counterpart: the other API's writes into this exported block
+    /// ([`Device::new_exported_block`]) are done, and the runtime's commands may now read and
+    /// write it. The consumer calls it once the other API's work that wrote the block has
+    /// completed (its own wait on the decoder, for one), and before it commits the command
+    /// buffers that use what was written.
+    ///
+    /// The call records the block's acquire from the other API's queue family: the whole
+    /// block, from `VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle, or from
+    /// `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf, to the runtime's, made visible to every
+    /// later command. It goes in the upload, as [`Device::zero_block_range`]'s fill does:
+    /// submitted ahead of every command buffer committed after this call, holding the block until
+    /// it completes. The call never waits for the GPU. One call is one buffer barrier,
+    /// counted in [`Metrics::external_acquires`](crate::Metrics::external_acquires).
+    ///
+    /// The contract: between this call and the other API's next write of the whole block, the
+    /// other API does not access the block, to read or to write. The runtime records no release
+    /// back to the other API: one that overwrites the whole block needs nothing the runtime left
+    /// in it, and Vulkan skips the transfer of contents not needed ("If an application does not
+    /// need the contents of a resource to remain valid when transferring from one queue family to
+    /// another, then the ownership transfer should be skipped").
+    ///
+    /// Err: [`Refusal::NotExported`] for a block that is not exported;
+    /// [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`]; and
+    /// [`Error::Vulkan`] where the upload's command buffer cannot be made.
+    pub fn external_writes_done(&self) -> Result<(), Error> {
+        crate::command::not_in_scheduled_handler()?;
+        let (core, block) = self.held()?;
+        let Some(Own::Export(handle)) = block.memory.own else {
+            return Err(Error::Refused(Refusal::NotExported { block: self.id }));
+        };
+        let (buffer, _) = block.memory.range(0);
+        let acquire = [vk::BufferMemoryBarrier2::default()
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
+            .src_queue_family_index(handle.family())
+            .dst_queue_family_index(core.family)
+            .buffer(buffer)
+            .offset(0)
+            .size(vk::WHOLE_SIZE)];
+        let held = [Held::Block(Arc::clone(&block))];
+        core.work.upload(&core, None, held, |device, command| {
+            let dependency = vk::DependencyInfo::default().buffer_memory_barriers(&acquire);
+            // SAFETY: the upload's command buffer is recording, under the work lock; the buffer
+            // spans the block's allocation, which the upload holds, and a dma-buf's foreign
+            // family is enabled (`Device::new_exported_block`).
+            unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
+        })?;
+        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::ExternalAcquires);
+        Ok(())
     }
 }
 

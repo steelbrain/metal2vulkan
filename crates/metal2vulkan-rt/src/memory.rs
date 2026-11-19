@@ -277,8 +277,8 @@ pub(crate) struct Memory {
 pub(crate) enum Own {
     /// An import of memory the consumer brought ([`import`]).
     Import,
-    /// A dedicated allocation the consumer shares by a handle ([`export`]).
-    Export,
+    /// A dedicated allocation the consumer shares by a handle of this kind ([`export`]).
+    Export(crate::ExportHandle),
 }
 
 impl Memory {
@@ -1544,7 +1544,7 @@ pub(crate) unsafe fn export(
         mapping: None,
         device_local: core.device_local & (1 << index) != 0,
         spilled: false,
-        own: Some(Own::Export),
+        own: Some(Own::Export(handle)),
     };
     Ok((memory, needs.size))
 }
@@ -1562,7 +1562,7 @@ fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
     core.pool.freeing.store(false, Relaxed);
     core.counters.fall(Gauge::Blocks);
     core.counters.fall(match memory.own {
-        Some(Own::Export) => Gauge::Exports,
+        Some(Own::Export(_)) => Gauge::Exports,
         _ => Gauge::Imports,
     });
     if let Some(release) = release {

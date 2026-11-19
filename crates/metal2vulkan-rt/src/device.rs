@@ -148,7 +148,8 @@ pub(crate) struct Core {
     instance: Instance,
     physical: vk::PhysicalDevice,
     pub(crate) device: ash::Device,
-    family: u32,
+    /// The family of the runtime's queues, which ownership transfers name as the device's own.
+    pub(crate) family: u32,
     extensions: Vec<CString>,
     /// The consumer's features enabled.
     consumer_features: Vec<ConsumerFeature>,
