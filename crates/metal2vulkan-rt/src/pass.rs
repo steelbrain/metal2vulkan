@@ -363,7 +363,7 @@ impl RenderPassDescriptor {
 
 /// The device's depth and stencil resolve modes
 /// (`VkPhysicalDeviceVulkan12Properties`, Vulkan 1.2's depth-stencil resolve properties).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub(crate) struct ResolveModes {
     /// `supportedDepthResolveModes`.
     pub(crate) depth: vk::ResolveModeFlags,
