@@ -40,7 +40,7 @@ mod on_device {
     };
     use ash::vk;
     use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     /// A plane of a picture: its format, size and texel bytes.
     #[derive(Clone, Copy)]
@@ -1095,6 +1095,100 @@ mod on_device {
             "surface: {label}: the compute round exact, barriers {ordered} against the control's {control}"
         );
         drop((view, out));
+    }
+
+    /// The handles and multiples the busy-queue timing makes a surface of, where the device
+    /// exports the handle: the product's VA-API row and its NVIDIA row.
+    #[cfg(unix)]
+    const BUSY_ROWS: [(ExportHandle, u64, u64); 2] = [
+        (ExportHandle::DmaBuf, 256, 256),
+        (ExportHandle::OpaqueFd, 4, 1),
+    ];
+    #[cfg(windows)]
+    const BUSY_ROWS: [(ExportHandle, u64, u64); 1] = [(ExportHandle::OpaqueWin32, 4, 1)];
+
+    /// A surface make behind a busy queue: for each row the device exports, fills of a 256 MiB
+    /// Private buffer committed back to back until about 100 ms of the GPU's work is ahead, then
+    /// a 1080p NV12 surface made at once. Printed: the make's time, the surface waits it counted
+    /// with their time and the submissions they waited for, and when the last fill completed,
+    /// from the make's start.
+    #[test]
+    fn every_device_times_a_surface_make_behind_a_busy_queue() {
+        each_device("surface_busy", |name, _, device| {
+            let len = 256 << 20;
+            let block = (device.take_block(MemoryClass::Private, len)).expect("a block");
+            let buffer = (device.new_buffer(block.id, 0, len, None)).expect("a buffer");
+            let queue = device.new_command_queue(64).expect("a queue");
+            let fill = |value: u8| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                (encoder.fill_buffer(&buffer, 0..len, value)).expect("a fill");
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                command_buffer
+            };
+            let began = Instant::now();
+            let one = fill(0);
+            finished(name, &one);
+            let each = began.elapsed().max(Duration::from_micros(100));
+            let count = (Duration::from_millis(100).as_secs_f64() / each.as_secs_f64()).ceil();
+            let count = (count as usize).clamp(1, 60);
+            let specs = [
+                (PixelFormat::R8Unorm, 1920, 1080),
+                (PixelFormat::RG8Unorm, 960, 540),
+            ]
+            .map(|(format, width, height)| {
+                let mut descriptor =
+                    TextureDescriptor::new(TextureType::Type2D, format, width, height);
+                descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+                PlaneSpec {
+                    descriptor,
+                    index: None,
+                    rows_below: 0,
+                }
+            });
+            let counters = device.counters();
+            for (handle, pitch_multiple, start_multiple) in BUSY_ROWS {
+                let label = format!("{name}: {handle:?} x{pitch_multiple}");
+                if !device.core().exports.offers(handle) {
+                    println!("surface-busy: {label}: not exported");
+                    continue;
+                }
+                let fills: Vec<_> = (0..count).map(|at| fill(at as u8)).collect();
+                let spec = SurfaceSpec {
+                    handle,
+                    pitch_multiple,
+                    start_multiple,
+                    planes: &specs,
+                };
+                let before = counters.metrics();
+                let began = Instant::now();
+                let (surface, export) = (device.new_exported_surface(&spec))
+                    .unwrap_or_else(|error| panic!("{label}: {error}"));
+                let made = began.elapsed();
+                let after = counters.metrics();
+                let last = fills.last().expect("a fill");
+                finished(&label, last);
+                let drained = began.elapsed();
+                println!(
+                    "surface-busy: {label}: {count} fills ahead ({:.3} ms each alone), form {:?}: \
+                     the make {:.3} ms, {} surface waits of {:.3} ms for {} submissions; the last \
+                     fill done {:.3} ms after the make began",
+                    each.as_secs_f64() * 1e3,
+                    export.form,
+                    made.as_secs_f64() * 1e3,
+                    after.surface_waits - before.surface_waits,
+                    (after.surface_wait_nanos - before.surface_wait_nanos) as f64 / 1e6,
+                    after.surface_wait_submissions - before.surface_wait_submissions,
+                    drained.as_secs_f64() * 1e3,
+                );
+                for command_buffer in &fills {
+                    finished(&label, command_buffer);
+                    assert_eq!(command_buffer.error(), None, "{label}");
+                }
+                drop(surface);
+            }
+        });
     }
 
     /// The channels of a plane's format.
