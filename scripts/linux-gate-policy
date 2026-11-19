@@ -89,14 +89,16 @@ ids_up() {
 }
 
 # True when the directories $1 and $2 are the same directory or one lies inside the other, by
-# file identity in both directions; also true when either cannot be read.
+# file identity in both directions; also true when either cannot be read. The lists are matched
+# in the shell, not piped to `grep -q`: under pipefail, grep's exit at the first match can end
+# the writer with SIGPIPE, and the pipeline then reads false on a match.
 overlaps() {
     local id_a id_b up_a up_b
     if ! id_a=$(file_id "$1") || ! id_b=$(file_id "$2") || ! up_a=$(ids_up "$1") ||
         ! up_b=$(ids_up "$2"); then
         return 0
     fi
-    printf '%s\n' "$up_a" | grep -qxF "$id_b" || printf '%s\n' "$up_b" | grep -qxF "$id_a"
+    [[ $'\n'"$up_a"$'\n' == *$'\n'"$id_b"$'\n'* || $'\n'"$up_b"$'\n' == *$'\n'"$id_a"$'\n'* ]]
 }
 
 # The protected path the directory $1 overlaps, if any.

@@ -305,7 +305,8 @@ else
 fi
 # The listed files as a pax archive (symlinks as links, mtimes to the nanosecond, as `cp -a` kept
 # them; no macOS metadata).
-if tar --version 2>/dev/null | grep -q bsdtar; then
+# Matched in the shell: under pipefail, `| grep -q` can read false on a match (SIGPIPE).
+if [[ $(tar --version 2>/dev/null) == *bsdtar* ]]; then
     tar_flags=(--no-mac-metadata --no-xattrs --no-acls --no-fflags)
 else
     tar_flags=()

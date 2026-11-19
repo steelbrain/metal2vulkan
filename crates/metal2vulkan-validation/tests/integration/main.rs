@@ -35,6 +35,7 @@ mod half_division_cases;
 mod linux_gate_policy;
 mod metal_coverage;
 mod no_conflict_markers;
+mod no_quiet_grep_under_pipefail;
 mod pipeline_selection;
 mod private_corpus_root;
 mod public_entry_rows;
