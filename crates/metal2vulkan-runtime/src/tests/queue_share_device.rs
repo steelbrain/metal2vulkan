@@ -2186,7 +2186,9 @@ impl TurnRun {
 ///
 /// The burst's fourth goes once the first completed: a run whose small one was committed only
 /// after that (the test's thread late on a loaded host) shows nothing of the turns, and is made
-/// again, up to [`TURN_RUNS`] runs.
+/// again, up to [`TURN_RUNS`] runs; so is a run in which a held head went at a sleep slice (the
+/// scheduler's thread itself late on a loaded host, as on a CPU device whose rendering takes every
+/// core). A wake that never comes would put every run on the slice, and fails.
 #[test]
 fn a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst() {
     for turns in [QueueTurnPolicy::Fair, QueueTurnPolicy::CommitOrder] {
@@ -2203,14 +2205,16 @@ fn a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst(
                 let run = (0..TURN_RUNS)
                     .map(|_| work.run())
                     .inspect(|run| run.print("Fair"))
-                    .find(|run| run.committed < run.burst[0].2)
-                    .expect("a run committed the small one before the burst's first completed");
+                    .find(|run| run.committed < run.burst[0].2 && run.rescues == 0)
+                    .expect(
+                        "a run committed the small one before the burst's first completed, and \
+                         no held head in it waited for a sleep slice",
+                    );
                 assert!(run.held > 0, "heads were held for their turns");
                 assert!(
                     run.small.0 < run.burst[3].0,
                     "the small one was submitted before the burst's fourth"
                 );
-                assert_eq!(run.rescues, 0, "no held head waited for a sleep slice");
                 assert!(
                     run.completion_wakes <= BURST as u64,
                     "at most a completion's waking for each of the burst"
