@@ -18,7 +18,7 @@ pub(super) mod second;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
-use super::player::{Backend, Counters, HeldBuffer, Made, PlayError};
+use super::player::{Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::translator;
 use super::value::Value;
@@ -280,7 +280,7 @@ pub struct NewRuntime {
     backend: SubmissionBackend,
     /// The committed command buffers no record played so far lets complete, by stream id, as the
     /// player last told them (`Backend::held`): a placement never waits for one.
-    held: HashMap<u64, HeldBuffer>,
+    held: HashSet<u64>,
     /// The descriptor of the sampler state placed last at each sampler index, as recorded: a
     /// later one of the same descriptor there displaces nothing that work in flight reads.
     sampler_descriptors: HashMap<u32, Value>,
@@ -576,7 +576,7 @@ impl NewRuntime {
             commits: 0,
             in_flight: VecDeque::new(),
             backend: SubmissionBackend::vulkan(device_type),
-            held: HashMap::new(),
+            held: HashSet::new(),
             sampler_descriptors: HashMap::new(),
             completed: 0,
             skips: Skips::default(),
@@ -781,22 +781,20 @@ impl NewRuntime {
 
     /// Waits until the commits up to `commit` have retired, each wait bounded (`gpu::wait`): one
     /// past the bound ends the process as a hang. Where one of them is held (`held`), no wait can
-    /// end: that one's stream id, unwaited.
-    fn wait_for(&mut self, commit: u64) -> Result<(), u64> {
-        let held = (self.in_flight.iter())
-            .take_while(|flight| flight.commit <= commit)
-            .find(|flight| self.held.contains_key(&flight.id));
-        if let Some(flight) = held {
-            return Err(flight.id);
+    /// end: false, unwaited.
+    fn wait_for(&mut self, commit: u64) -> bool {
+        let mut flights = (self.in_flight.iter()).take_while(|flight| flight.commit <= commit);
+        if flights.any(|flight| self.held.contains(&flight.id)) {
+            return false;
         }
         while self.completed() < commit {
             let Some(front) = self.in_flight.front() else {
-                return Ok(());
+                return true;
             };
             let operation = "the replay's wait for an index's commits";
             front.wait(self.backend, operation);
         }
-        Ok(())
+        true
     }
 
     /// `make` at the index the stream names for the object `call` makes (`indices`): the call's
@@ -823,7 +821,7 @@ impl NewRuntime {
                     let retired = self.completed();
                     self.indices.equal(class, index, retired);
                 }
-                false => self.settle(call, class, index)?,
+                false => self.settle(class, index),
             }
         }
         let made = match self.indices.place(call.result, class, named, make) {
@@ -836,61 +834,22 @@ impl NewRuntime {
         Ok(made)
     }
 
-    /// Before a placement at `index` of `class` (`call`'s): waits for the commits that named an
-    /// object holding it to retire, where they have not (`Indices::owed`), and counts the wait.
-    /// Where one of them is held on records not yet played, the play stops ([`PlayError::Held`]):
-    /// no wait for it can end.
-    fn settle(&mut self, call: &Call, class: rt::IndexClass, index: u32) -> Result<(), PlayError> {
+    /// Before a placement at `index` of `class`: waits for the commits that named an object
+    /// holding it to retire, where they have not (`Indices::owed`), and counts the wait. Where one
+    /// of them is held on records not yet played, no wait for it can end, and the recording
+    /// device gave the index to the new object before that commit completed, as its index policy
+    /// does: the placement takes the index without waiting, as the recording did, and is counted
+    /// (`Indices::unwaited`).
+    fn settle(&mut self, class: rt::IndexClass, index: u32) {
         let retired = self.completed();
         if let Some(commit) = self.indices.owed(class, index, retired) {
             let began = std::time::Instant::now();
-            if let Err(awaited) = self.wait_for(commit) {
-                return Err(self.held_error(call, class, index, awaited));
+            if !self.wait_for(commit) {
+                self.indices.unwaited();
+                return;
             }
             let nanos = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
             self.indices.waited(class, index, nanos);
-        }
-        Ok(())
-    }
-
-    /// The stop of a placement at `index` of `class` (`call`'s) that owes the index to held
-    /// command buffer `awaited`: what holds it, following each held command buffer ahead of it on
-    /// its queue.
-    fn held_error(
-        &self,
-        call: &Call,
-        class: rt::IndexClass,
-        index: u32,
-        awaited: u64,
-    ) -> PlayError {
-        let mut chain = Vec::new();
-        let mut at = self.held.get(&awaited);
-        while let Some(held) = at {
-            if !held.unmet.is_empty() {
-                let waits: Vec<String> = (held.unmet.iter())
-                    .map(|(event, value)| format!("#{event} to reach {value}"))
-                    .collect();
-                chain.push(format!(
-                    "#{} on queue #{} waits for {}, which no played record signals",
-                    held.command_buffer,
-                    held.queue,
-                    waits.join(" and ")
-                ));
-                break;
-            }
-            chain.push(format!(
-                "#{} on queue #{} is behind a held command buffer of its queue",
-                held.command_buffer, held.queue
-            ));
-            at = (self.held.values()).find(|h| h.queue == held.queue && !h.unmet.is_empty());
-        }
-        PlayError::Held {
-            placement: format!(
-                "{} (result #{}) at {class:?} index {index}",
-                call.selector, call.result
-            ),
-            awaited,
-            chain: chain.join("; "),
         }
     }
 
@@ -903,7 +862,7 @@ impl NewRuntime {
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Result<T, PlayError> {
         if let Some(index) = self.indices.highest(class, |_| false) {
-            self.settle(call, class, index)?;
+            self.settle(class, index);
         }
         match self.indices.top(call.result, class, make) {
             Some(made) => made.map_err(failed(call)),
@@ -1779,10 +1738,8 @@ fn write_into(buffer: &rt::Buffer, offset: u64, bytes: &[u8]) -> Result<(), Play
 }
 
 impl Backend for NewRuntime {
-    fn held(&mut self, held: &[HeldBuffer]) {
-        self.held = (held.iter())
-            .map(|h| (h.command_buffer, h.clone()))
-            .collect();
+    fn held(&mut self, held: &[u64]) {
+        self.held = held.iter().copied().collect();
     }
 
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
@@ -2295,6 +2252,7 @@ impl Backend for NewRuntime {
         lines.push(self.places.line());
         lines.push(self.unwritten.line());
         lines.push(self.indices.line());
+        lines.push(self.indices.unwaited_line());
         lines
     }
 

@@ -28,8 +28,10 @@
 //!   bytes reads zero where nothing wrote it: the player zeroes each block and heap of the stream
 //!   once at its making, as the live system does.
 //! - A sampler state placed at an index a held commit owes (its command buffer waits for an event
-//!   only a later record signals) takes it without waiting where its descriptor is the one placed
-//!   there last, and otherwise stops the play naming what holds the commit.
+//!   only a later record signals) takes it without waiting: where its descriptor is the one placed
+//!   there last, as Metal hands an equal descriptor the same ID; otherwise as the recording
+//!   device's index policy gave the index away before the commit completed, counted on a line of
+//!   its own.
 //! - A buffer's linear texture (the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:
 //!   bytesPerImage:`) of a 2D descriptor plays as the public texture over the buffer, and one of a
 //!   2D array, whose slices Metal lays out itself, is refused.
@@ -731,26 +733,25 @@ fn an_equal_sampler_state_takes_an_index_a_held_commit_owes_without_waiting() {
 }
 
 #[test]
-fn a_placement_a_held_commit_owes_stops_the_play_naming_what_holds_it() {
+fn a_placement_a_held_commit_owes_takes_the_index_without_waiting_and_is_counted() {
     let dir = ScratchDir::new("rt-replay-held-placement").unwrap();
     // A sampler state of another descriptor at index 16: #6, which reads 16, waits for a signal
-    // only a later record makes.
+    // only a later record makes, so the recording device gave 16 away before #6 completed.
     let other = uints(&[("minFilter", 1), ("magFilter", 1)]);
     let path = held_placement(&dir, other);
-    let cache = ScratchCache::new().unwrap();
-    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
-    let mut reader = StreamReader::open(&[path], None).unwrap();
-    let (_, ended) = Player::new(&mut backend).play(&mut reader);
-    match ended {
-        Err(PlayError::Held { awaited, chain, .. }) => {
-            assert_eq!(awaited, 6);
-            assert_eq!(
-                chain,
-                "#6 on queue #2 waits for #4 to reach 1, which no played record signals"
-            );
-        }
-        other => panic!("a held placement's stop: {other:?}"),
-    }
+    let (_, lines, indices) = played("held-placement", &path, &[8]);
+    assert_eq!(indices, [16]);
+    let unwaited = "indices given while a commit they owe is held 1: placed without waiting at an \
+                    index owed to a command buffer no record played so far lets complete, as the \
+                    recording device's index policy gave the index to a new object before that \
+                    command buffer completed";
+    assert!(lines.iter().any(|line| line == unwaited), "{lines:?}");
+    let indices = lines.iter().find(|line| line.starts_with("indices named "));
+    let indices = indices.unwrap_or_else(|| panic!("an indices line: {lines:?}"));
+    assert!(
+        indices.contains("0 placed at an index whose holders' commits were in flight"),
+        "{indices}"
+    );
 }
 
 #[test]

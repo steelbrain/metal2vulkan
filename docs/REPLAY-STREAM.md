@@ -640,8 +640,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   commits were in flight (Metal hands an equal descriptor the same sampler state and ID, so work in
   flight reads nothing new there). A placement that owes its index to a command buffer no record
   played so far lets complete (its event waits only later records signal, or it is behind such a
-  one on its queue) stops the play with an `error` line naming that chain, rather than wait for
-  ever. Its readback serves
+  one on its queue) shows that the recording device gave the index to the new object before that
+  command buffer completed, as its index policy does: it takes the index without waiting, as the
+  recording did, and its own `indices given while a commit they owe is held N: ...` line counts
+  it. The index stays owed to that command buffer. Its readback serves
   Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives a
   compute or render pipeline state no `gpuResourceID`, so each one the program saw is reported on
   an `id` line as `none` and counted (`gap_pipeline_ids`); each skipped object's the program saw

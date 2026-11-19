@@ -119,11 +119,11 @@ pub trait Backend {
     /// a backend that says where it skipped something.
     fn locate(&mut self, _frame: u64, _call: u64) {}
 
-    /// The committed command buffers that cannot complete with what the player has played: each
-    /// one's event waits that no played signal or CPU value meets, or a held one ahead of it on
-    /// its queue. Told whenever the player looks for command buffers to wait for, so a backend
-    /// that waits for a commit of its own accord does not wait for one of these.
-    fn held(&mut self, _held: &[HeldBuffer]) {}
+    /// The committed command buffers that cannot complete with what the player has played, by
+    /// stream id: each one's event waits that no played signal or CPU value meets, or a held one
+    /// ahead of it on its queue. Told whenever the player looks for command buffers to wait for,
+    /// so a backend that waits for a commit of its own accord does not wait for one of these.
+    fn held(&mut self, _held: &[u64]) {}
 
     /// The stream's header marks its announced bytes recorded
     /// ([`FLAG_ANNOUNCED_BYTES_RECORDED`](super::FLAG_ANNOUNCED_BYTES_RECORDED)), told before its
@@ -165,15 +165,6 @@ pub enum PlayError {
     },
     /// The stream contradicts itself (an object it never made, a wait nothing can meet).
     Invalid(String),
-    /// A placement at an index (`placement`, its call) owes the index to command buffer
-    /// `awaited`, which no record played so far lets complete: `chain` says what holds it (its
-    /// event waits no played signal meets, or a held command buffer ahead of it on its queue).
-    /// The backend would wait for it for ever.
-    Held {
-        placement: String,
-        awaited: u64,
-        chain: String,
-    },
 }
 
 impl fmt::Display for PlayError {
@@ -183,15 +174,6 @@ impl fmt::Display for PlayError {
             PlayError::Refused { selector, why } => write!(f, "refused {selector}: {why}"),
             PlayError::Runtime { selector, error } => write!(f, "{selector}: {error}"),
             PlayError::Invalid(why) => write!(f, "invalid stream: {why}"),
-            PlayError::Held {
-                placement,
-                awaited,
-                chain,
-            } => write!(
-                f,
-                "{placement} waits for #{awaited}, which no record played so far lets complete: \
-                 {chain}"
-            ),
         }
     }
 }
@@ -249,17 +231,6 @@ impl Counts {
         add(&mut self.stream, &from.stream);
         add(&mut self.executed, &from.executed);
     }
-}
-
-/// A committed command buffer that cannot complete with the records played so far
-/// ([`Backend::held`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HeldBuffer {
-    pub command_buffer: u64,
-    pub queue: u64,
-    /// Its event waits (event, value) that no played signal or CPU value meets; empty where it is
-    /// held behind a held command buffer ahead of it on its queue.
-    pub unmet: Vec<(u64, u64)>,
 }
 
 /// What a play did.
@@ -2064,29 +2035,11 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     /// Tells the backend the committed command buffers that cannot complete: those `ready` (the
-    /// ones that can) leaves out, each with its waits that neither the CPU's values nor the ready
-    /// ones' signals meet.
+    /// ones that can) leaves out.
     fn tell_held(&mut self, ready: &[u64]) {
-        let mut values = self.events.clone();
-        for id in ready {
-            for &(event, value) in &self.pending[id].signals {
-                let known = values.entry(event).or_default();
-                *known = (*known).max(value);
-            }
-        }
-        let held: Vec<HeldBuffer> = (self.committed.iter())
+        let held: Vec<u64> = (self.committed.iter())
+            .copied()
             .filter(|id| !ready.contains(id))
-            .map(|&command_buffer| {
-                let pending = &self.pending[&command_buffer];
-                let met = |&(event, value): &(u64, u64)| {
-                    values.get(&event).copied().unwrap_or(0) >= value
-                };
-                HeldBuffer {
-                    command_buffer,
-                    queue: pending.queue,
-                    unmet: pending.waits.iter().copied().filter(|w| !met(w)).collect(),
-                }
-            })
             .collect();
         self.backend.held(&held);
     }

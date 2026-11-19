@@ -10,7 +10,11 @@
 //! placement there takes the index's element from under that work, which Metal leaves to the
 //! program never to do while the work runs (docs/RESOURCE-ID.md), and the program's own timing
 //! kept that duty. The player keeps it by waiting for those commits to retire before such a
-//! placement, and counts the waits and their time.
+//! placement, and counts the waits and their time. Where one of them is held on records not yet
+//! played (its command buffer waits for an event only a later record signals), the recording
+//! device gave the index to the new object before that commit could complete, as its index policy
+//! does: the player takes the index without waiting, as the recording did, and counts it on a line
+//! of its own. The index stays owed to the held commit.
 
 use metal2vulkan_rt as rt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -50,6 +54,9 @@ pub(in crate::replay) struct Indices {
     /// The placements of a sampler state equal to the one placed last at its index, which took
     /// the index without waiting for the commits in flight it was owed to.
     equal: u64,
+    /// The placements that took the index without waiting for a commit it was owed to that is held
+    /// on records not yet played, as the recording device's index policy gave it.
+    unwaited: u64,
 }
 
 impl Indices {
@@ -153,6 +160,12 @@ impl Indices {
             Some(_) => drop(self.owed.remove(&key)),
             None => {}
         }
+    }
+
+    /// A placement took its index without waiting for an owed commit held on records not yet
+    /// played, as the recording device's index policy did; the index stays owed to the commit.
+    pub(in crate::replay) fn unwaited(&mut self) {
+        self.unwaited += 1;
     }
 
     /// The index `object` holds, where it holds one.
@@ -260,6 +273,18 @@ impl Indices {
              sampler states placed without waiting at an index whose last sampler state had the \
              same descriptor while its commits were in flight",
             self.named, self.refused, self.waits, self.wait_nanos, self.equal
+        )
+    }
+
+    /// The report's line of the placements that took an index without waiting for a commit owed
+    /// held on records not yet played.
+    pub(in crate::replay) fn unwaited_line(&self) -> String {
+        format!(
+            "indices given while a commit they owe is held {}: placed without waiting at an index \
+             owed to a command buffer no record played so far lets complete, as the recording \
+             device's index policy gave the index to a new object before that command buffer \
+             completed",
+            self.unwaited
         )
     }
 }
