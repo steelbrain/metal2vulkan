@@ -1,10 +1,10 @@
 //! The layouts the device's commands name each image in, recorded for a test that reads them: a
 //! device made while [`RECORDING`] is set has its table of Vulkan commands loaded with this
 //! module's own for each core command rt records that names an image layout (its barriers, its
-//! copies between images and buffers, its colour clears, dynamic rendering's attachments and its
-//! descriptor writes), each noting the layouts it names, then calling the driver's. The core
-//! commands that name a layout and that rt does not record get no entry, so that a call of one
-//! panics (ash's stub for a command it did not load) and the test learns of it.
+//! copies between images and buffers, its blits, its colour clears, dynamic rendering's
+//! attachments and its descriptor writes), each noting the layouts it names, then calling the
+//! driver's. The core commands that name a layout and that rt does not record get no entry, so
+//! that a call of one panics (ash's stub for a command it did not load) and the test learns of it.
 //!
 //! Under a device cfg, on every device of the cfg's kind: one command buffer runs every blit
 //! entry that takes a texture over a texture over a Shared buffer in place (a copy from and to
@@ -50,6 +50,7 @@ struct Driver {
     cmd_copy_image: vk::PFN_vkCmdCopyImage,
     cmd_copy_buffer_to_image: vk::PFN_vkCmdCopyBufferToImage,
     cmd_copy_image_to_buffer: vk::PFN_vkCmdCopyImageToBuffer,
+    cmd_blit_image: vk::PFN_vkCmdBlitImage,
     cmd_clear_color_image: vk::PFN_vkCmdClearColorImage,
     cmd_begin_rendering: vk::PFN_vkCmdBeginRendering,
 }
@@ -85,14 +86,13 @@ pub(crate) fn forget() {
 }
 
 /// The core commands that name an image layout and that rt does not record: none loaded.
-const UNRECORDED: [&CStr; 13] = [
+const UNRECORDED: [&CStr; 12] = [
     c"vkCmdPipelineBarrier",
     c"vkCmdWaitEvents",
     c"vkCmdWaitEvents2",
     c"vkCmdCopyImage2",
     c"vkCmdCopyBufferToImage2",
     c"vkCmdCopyImageToBuffer2",
-    c"vkCmdBlitImage",
     c"vkCmdBlitImage2",
     c"vkCmdResolveImage",
     c"vkCmdResolveImage2",
@@ -147,6 +147,9 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
                 *const c_void,
                 vk::PFN_vkCmdCopyImageToBuffer,
             >(load(c"vkCmdCopyImageToBuffer")),
+            cmd_blit_image: std::mem::transmute::<*const c_void, vk::PFN_vkCmdBlitImage>(load(
+                c"vkCmdBlitImage",
+            )),
             cmd_clear_color_image: std::mem::transmute::<*const c_void, vk::PFN_vkCmdClearColorImage>(
                 load(c"vkCmdClearColorImage"),
             ),
@@ -165,6 +168,7 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
             b"vkCmdCopyImage" => cmd_copy_image as *const c_void,
             b"vkCmdCopyBufferToImage" => cmd_copy_buffer_to_image as *const c_void,
             b"vkCmdCopyImageToBuffer" => cmd_copy_image_to_buffer as *const c_void,
+            b"vkCmdBlitImage" => cmd_blit_image as *const c_void,
             b"vkCmdClearColorImage" => cmd_clear_color_image as *const c_void,
             b"vkCmdBeginRendering" => cmd_begin_rendering as *const c_void,
             _ => return None,
@@ -390,6 +394,39 @@ unsafe extern "system" fn cmd_copy_image_to_buffer(
     }
 }
 
+unsafe extern "system" fn cmd_blit_image(
+    command_buffer: vk::CommandBuffer,
+    source: vk::Image,
+    source_layout: vk::ImageLayout,
+    destination: vk::Image,
+    destination_layout: vk::ImageLayout,
+    count: u32,
+    regions: *const vk::ImageBlit,
+    filter: vk::Filter,
+) {
+    let (device, driver) = driver_of(command_buffer);
+    note(
+        device,
+        [
+            ("a blit's source", source, source_layout),
+            ("a blit's destination", destination, destination_layout),
+        ],
+    );
+    // SAFETY: the caller's arguments, passed on.
+    unsafe {
+        (driver.cmd_blit_image)(
+            command_buffer,
+            source,
+            source_layout,
+            destination,
+            destination_layout,
+            count,
+            regions,
+            filter,
+        )
+    }
+}
+
 unsafe extern "system" fn cmd_clear_color_image(
     command_buffer: vk::CommandBuffer,
     image: vk::Image,
@@ -459,9 +496,26 @@ mod on_device {
     /// blit entry that takes a texture over it, and a pass that renders to it where the device
     /// takes it in place as a render target, and in its descriptor and a read of its image; the
     /// one other layout named is preinitialized, the old layout of its move home.
+    /// Sets [`RECORDING`] while it lives, so that no device a later test makes in the same
+    /// process (libtest runs every test in one) is recorded.
+    struct Recording;
+
+    impl Recording {
+        fn start() -> Recording {
+            RECORDING.store(true, Ordering::Relaxed);
+            Recording
+        }
+    }
+
+    impl Drop for Recording {
+        fn drop(&mut self) {
+            RECORDING.store(false, Ordering::Relaxed);
+        }
+    }
+
     #[test]
     fn a_texture_over_a_buffer_in_place_is_in_the_general_layout_in_every_command() {
-        RECORDING.store(true, Ordering::Relaxed);
+        let _recording = Recording::start();
         each_device("layouts", |name, _, device| {
             let handle = device.core().device.handle();
             let answer = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
