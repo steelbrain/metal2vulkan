@@ -1360,8 +1360,9 @@ fn acquire(from: u32, to: u32, buffer: vk::Buffer) -> vk::BufferMemoryBarrier2<'
         .size(vk::WHOLE_SIZE)
 }
 
-/// The flags every allocation of a surface's memory takes: device addresses, which its buffer
-/// needs (`VUID-vkBindBufferMemory-bufferDeviceAddress-03339`).
+/// The flags every allocation of a dma-buf surface's memory takes: device addresses, which its
+/// buffer needs (`VUID-vkBindBufferMemory-bufferDeviceAddress-03339`).
+#[cfg(unix)]
 fn address_flags() -> vk::MemoryAllocateFlagsInfo<'static> {
     vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS)
 }
