@@ -106,8 +106,8 @@ impl DeviceProfile {
         self.facts.reconvergence_note
     }
 
-    /// Whether a render pipeline that draws into a signed normalized attachment records Metal's
-    /// tile store of its minimum code as a note.
+    /// Whether a render pipeline that draws into a signed normalized or `RGB9E5Float` attachment
+    /// records Metal's tile store of it as a note.
     pub(crate) fn snorm_minimum_note(&self) -> SnormMinimumNote {
         self.facts.snorm_minimum_note
     }
@@ -592,8 +592,8 @@ pub(crate) struct ProfileFacts {
     pub(crate) half_pair_note: HalfPairNote,
     /// Whether a stage of implementation-defined reconvergence records it as a note.
     pub(crate) reconvergence_note: ReconvergenceNote,
-    /// Whether a render pipeline that draws into a signed normalized attachment records Metal's
-    /// tile store of its minimum code as a note.
+    /// Whether a render pipeline that draws into a signed normalized or `RGB9E5Float` attachment
+    /// records Metal's tile store of it as a note.
     pub(crate) snorm_minimum_note: SnormMinimumNote,
     /// Which narrow integer results clear the bits above their width.
     pub(crate) narrow_wrap: NarrowWrap,
@@ -806,13 +806,14 @@ pub(crate) enum ReconvergenceNote {
     Noted,
 }
 
-/// Whether a render pipeline that draws into a single-sampled color attachment of a signed
-/// normalized format records `PrecisionNote::SnormMinimumKept`: Metal's pass stores such an
-/// attachment's minimum code as the code above it in each tile a draw reaches, and the device's
-/// pass keeps it.
+/// Whether a render pipeline that draws into a single-sampled color attachment records Metal's
+/// tile store as a note: `PrecisionNote::SnormMinimumKept` into a signed normalized format, whose
+/// minimum code Metal's pass stores as the code above it in each tile a draw reaches, and
+/// `PrecisionNote::SharedExponentKept` into `RGB9E5Float`, whose unnormalized words Metal's pass
+/// stores normalized; the device's pass keeps both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SnormMinimumNote {
-    /// No note: `metal2vulkan-runtime` announces it at a draw in a pass that loads such an
+    /// No note: `metal2vulkan-runtime` announces each at a draw in a pass that loads such an
     /// attachment, which only its encoder knows: `Device::new`'s profile.
     Announced,
     /// The note, a static note of the pipeline: `Device::from_queries`' profile.

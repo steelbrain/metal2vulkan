@@ -2501,6 +2501,20 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     CompressedTexelDecode,
+    /// The render pipeline draws into a single-sampled `RGB9E5Float` color attachment. Metal's
+    /// pass, once it draws, writes each 32 by 32 tile a draw reaches back through the texels'
+    /// values, so a word whose largest mantissa is below 256 under an exponent above 0 is stored
+    /// normalized, the same value under a smaller exponent, in the texels no fragment writes too
+    /// (measured on an Apple M3 Max under macOS 27.0.1). The device's pass keeps the words its
+    /// draws do not write. Static per pipeline, as [`PrecisionNote::SnormMinimumKept`] is:
+    /// recorded on the fragment stage (the vertex stage where the pipeline has none) of every such
+    /// pipeline on a device `Device::from_queries` made, whatever its passes load. A device
+    /// `Device::new` made records none: `metal2vulkan-runtime` announces `shared-exponent-kept`
+    /// at each draw in a pass that loads such an attachment, which only its encoder knows.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    SharedExponentKept,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

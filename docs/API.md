@@ -3713,7 +3713,10 @@ bound.
   compresses every such word: a texel whose bytes no Metal write left (uploaded or copied words)
   keeps a word Metal would change, of the same value. Not on a driver whose pass stores the words
   as Metal's (`DriverFact::TileStoreIsMetals`), nor, for a blit, where the device's copy of the
-  compressed image is Metal's blit (MoltenVK's).
+  compressed image is Metal's blit (MoltenVK's). On a device `Device::from_queries` made
+  (`metal2vulkan-rt`'s) the draw's part is the static note `PrecisionNote::SharedExponentKept` of
+  every render pipeline that draws into such an attachment, whatever its passes load, on its
+  fragment stage (its vertex stage where it has none).
 - `metal2vulkan-degrade-two-plane-buffer-blit` (precision). `TwoPlaneBufferBlit`: A blit between a
   buffer and a level of `RGB10A8_2P_XR10` or its sRGB twin whose width is not a multiple of 4,
   where Metal's blit addresses the level's rows `⌊4 w / 16⌋ · 16` bytes apart, short of where they

@@ -236,6 +236,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             DepthDenormals,
             DeviceFilteredMipmaps,
             CompressedTexelDecode,
+            SharedExponentKept,
         ],
     }
 }

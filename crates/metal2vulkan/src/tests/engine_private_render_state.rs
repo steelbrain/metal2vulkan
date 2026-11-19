@@ -572,6 +572,55 @@ fn a_snorm_attachment_notes_the_minimum_code_metal_s_pass_rewrites() {
     }
 }
 
+/// A pipeline that draws single-sampled into an `RGB9E5Float` attachment records
+/// `PrecisionNote::SharedExponentKept` on its fragment stage alone through `Device::from_queries`;
+/// through `Device::new`, whose note `metal2vulkan-runtime` announces at the draw, at four samples,
+/// and into another float or a signed normalized attachment, no stage records it.
+#[test]
+fn a_shared_exponent_attachment_notes_the_words_metal_s_pass_normalizes() {
+    use crate::pipeline::artifact::PrecisionNote;
+    use crate::vk::ShaderStage;
+    let Some(lib) = fixture("rt6_render_state") else {
+        return;
+    };
+    let with = |pf: PixelFormat, samples: u32| {
+        let mut d = render(&lib, samples);
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(pf));
+        d
+    };
+    let noted = |p: &RenderPipeline, stage: ShaderStage| {
+        p.stages.iter().any(|s| {
+            s.stage == stage
+                && s.precision_notes
+                    .contains(&PrecisionNote::SharedExponentKept)
+        })
+    };
+    for stem in STEMS {
+        let new = device(stem);
+        let desc = crate::pipeline::testing::description(stem).expect("description");
+        let queries = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let what = format!("{stem} RGB9E5Float");
+        let p = compile(&queries, &with(PixelFormat::RGB9E5Float, 1), &what);
+        assert!(noted(&p, ShaderStage::FRAGMENT), "{what}");
+        assert!(!noted(&p, ShaderStage::VERTEX), "{what}");
+        let p = compile(&new, &with(PixelFormat::RGB9E5Float, 1), &what);
+        assert!(
+            !noted(&p, ShaderStage::FRAGMENT),
+            "{what} through Device::new"
+        );
+        let p = compile(&queries, &with(PixelFormat::RGB9E5Float, 4), &what);
+        assert!(!noted(&p, ShaderStage::FRAGMENT), "{what} at four samples");
+        for pf in [
+            PixelFormat::RG11B10Float,
+            PixelFormat::RGBA16Float,
+            PixelFormat::RGBA8Snorm,
+        ] {
+            let p = compile(&queries, &with(pf, 1), stem);
+            assert!(!noted(&p, ShaderStage::FRAGMENT), "{stem} {pf:?}");
+        }
+    }
+}
+
 /// The private logic operation: every normalized, sRGB and integer attachment is unblended, and
 /// under a no-op unwritten, which draws copy and no-op on both profiles with no Vulkan operation;
 /// another operation (xor, raw 10, and raw 26, whose low four bits are xor's) is Vulkan's

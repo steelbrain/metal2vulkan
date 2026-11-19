@@ -634,39 +634,51 @@ pub(crate) fn note_vulkan_codes(
     }
 }
 
-/// Note `PrecisionNote::SnormMinimumKept` among `modules` of the render pipeline `d` where the
-/// profile `p` records it ([`SnormMinimumNote::Noted`]) and `d` draws single-sampled into a color
-/// attachment of a signed normalized format: Metal's pass stores each tile a draw reaches back
-/// through the channels' values, so a minimum code (-128, or -32768) it loaded is stored as the
-/// code above it, where the device's pass keeps the bytes its draws do not write. The note is the
-/// fragment stage's, the vertex stage's where the pipeline has none.
+/// Note Metal's tile store among `modules` of the render pipeline `d` where the profile `p`
+/// records it ([`SnormMinimumNote::Noted`]) and `d` draws single-sampled: Metal's pass stores each
+/// tile a draw reaches back through the texels' values, where the device's pass keeps the bytes its
+/// draws do not write. Into a color attachment of a signed normalized format, a minimum code (-128,
+/// or -32768) it loaded is stored as the code above it (`PrecisionNote::SnormMinimumKept`); into an
+/// `RGB9E5Float` one, a word whose largest mantissa is below 256 under an exponent above 0 is
+/// stored normalized (`PrecisionNote::SharedExponentKept`). A note is the fragment stage's, the
+/// vertex stage's where the pipeline has none.
 ///
 /// [`SnormMinimumNote::Noted`]: crate::device::profile::SnormMinimumNote::Noted
-pub(crate) fn note_snorm_minimum(
+pub(crate) fn note_tile_store(
     d: &RenderPipelineDescriptor,
     p: &DeviceProfile,
     modules: &mut [StageModule],
 ) {
     use crate::device::profile::SnormMinimumNote;
     use PixelFormat as P;
-    let snorm = d.color_attachments.iter().flatten().any(|a| {
+    if p.snorm_minimum_note() != SnormMinimumNote::Noted || d.raster_sample_count > 1 {
+        return;
+    }
+    let formats = || d.color_attachments.iter().flatten().map(|a| a.pixel_format);
+    let snorm = formats().any(|f| {
         matches!(
-            a.pixel_format,
+            f,
             P::R8Snorm | P::RG8Snorm | P::RGBA8Snorm | P::R16Snorm | P::RG16Snorm | P::RGBA16Snorm
         )
     });
-    if p.snorm_minimum_note() != SnormMinimumNote::Noted || d.raster_sample_count > 1 || !snorm {
-        return;
-    }
+    let shared_exponent = formats().any(|f| f == P::RGB9E5Float);
+    let notes = [
+        (snorm, PrecisionNote::SnormMinimumKept),
+        (shared_exponent, PrecisionNote::SharedExponentKept),
+    ];
     let fragment = modules.iter().any(|m| m.stage == vk::ShaderStage::FRAGMENT);
-    let note = PrecisionNote::SnormMinimumKept;
-    for m in modules
-        .iter_mut()
-        .filter(|m| !fragment || m.stage == vk::ShaderStage::FRAGMENT)
+    for note in notes
+        .into_iter()
+        .filter_map(|(held, note)| held.then_some(note))
     {
-        if !m.precision_notes.contains(&note) {
-            m.precision_notes.push(note);
-            m.precision_notes.sort_unstable();
+        for m in modules
+            .iter_mut()
+            .filter(|m| !fragment || m.stage == vk::ShaderStage::FRAGMENT)
+        {
+            if !m.precision_notes.contains(&note) {
+                m.precision_notes.push(note);
+                m.precision_notes.sort_unstable();
+            }
         }
     }
 }
