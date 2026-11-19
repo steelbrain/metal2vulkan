@@ -9614,6 +9614,7 @@ method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDev
 method	metal2vulkan-rt::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-rt::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-rt::RenderCommandEncoder::draw_indexed_primitives	pub fn draw_indexed_primitives(&mut self, primitive_type: PrimitiveType, index_count: u32, indices: IndexBuffer<'_>, instance_count: u32, base_vertex: i32, base_instance: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::draw_patches	pub fn draw_patches(&mut self, number_of_patch_control_points: u32, patch_start: u32, patch_count: u32, patch_index_buffer: Option<(&Buffer, u64)>, instance_count: u32, base_instance: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::draw_primitives	pub fn draw_primitives(&mut self, primitive_type: PrimitiveType, vertex_start: u32, vertex_count: u32, instance_count: u32, base_instance: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::end_encoding	pub fn end_encoding(mut self)
 method	metal2vulkan-rt::RenderCommandEncoder::memory_barrier	pub fn memory_barrier(&mut self) -> Result<(), Error>
@@ -9637,6 +9638,7 @@ method	metal2vulkan-rt::RenderCommandEncoder::set_scissor_rects	pub fn set_sciss
 method	metal2vulkan-rt::RenderCommandEncoder::set_stencil_front_back_reference_value	pub fn set_stencil_front_back_reference_value(&mut self, front: u32, back: u32)
 method	metal2vulkan-rt::RenderCommandEncoder::set_stencil_reference_value	pub fn set_stencil_reference_value(&mut self, value: u32)
 method	metal2vulkan-rt::RenderCommandEncoder::set_stencil_store_action	pub fn set_stencil_store_action(&mut self, action: StoreAction) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_tessellation_factor_buffer	pub fn set_tessellation_factor_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, instance_stride: u64) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_triangle_fill_mode	pub fn set_triangle_fill_mode(&mut self, mode: TriangleFillMode) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_buffer	pub fn set_vertex_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_buffer_offset	pub fn set_vertex_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
@@ -13657,6 +13659,7 @@ variant	metal2vulkan-rt::DrawKind::DepthBiasClamp	DepthBiasClamp
 variant	metal2vulkan-rt::DrawKind::DepthClamp	DepthClamp
 variant	metal2vulkan-rt::DrawKind::DividedBaseInstance	DividedBaseInstance
 variant	metal2vulkan-rt::DrawKind::FillMode	FillMode
+variant	metal2vulkan-rt::DrawKind::PatchIndexBuffer	PatchIndexBuffer
 variant	metal2vulkan-rt::DrawKind::Points	Points
 variant	metal2vulkan-rt::DrawKind::Viewport	Viewport
 variant	metal2vulkan-rt::DrawKind::Viewports	Viewports
@@ -13834,10 +13837,13 @@ variant	metal2vulkan-rt::Refusal::ModifiedRange	ModifiedRange { start: u64, leng
 variant	metal2vulkan-rt::Refusal::NoBufferAtIndex	NoBufferAtIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::NoCommandBuffers	NoCommandBuffers
 variant	metal2vulkan-rt::Refusal::NoPipeline	NoPipeline
+variant	metal2vulkan-rt::Refusal::NoTessellationFactorBuffer	NoTessellationFactorBuffer
 variant	metal2vulkan-rt::Refusal::OtherDevice	OtherDevice
+variant	metal2vulkan-rt::Refusal::PatchDraw	PatchDraw
 variant	metal2vulkan-rt::Refusal::SamplerArgumentIndex	SamplerArgumentIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::SamplerIds	SamplerIds { numbered: usize, given: usize }
 variant	metal2vulkan-rt::Refusal::StencilAttachment	StencilAttachment
+variant	metal2vulkan-rt::Refusal::TessellationFactorOffset	TessellationFactorOffset { offset: u64 }
 variant	metal2vulkan-rt::Refusal::TextureArgumentIndex	TextureArgumentIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::TextureArrayLength	TextureArrayLength { array_length: u32 }
 variant	metal2vulkan-rt::Refusal::TextureBytesLayout	TextureBytesLayout { bytes_per_row: u64, bytes_per_image: u64, len: u64 }
@@ -16778,6 +16784,7 @@ variant	metal2vulkan::pipeline::PushField::StageInRegion	StageInRegion
 variant	metal2vulkan::pipeline::PushField::StageInStride	StageInStride(u32)
 variant	metal2vulkan::pipeline::PushField::StorageKeptChannels	StorageKeptChannels
 variant	metal2vulkan::pipeline::PushField::TessellationChunk	TessellationChunk
+variant	metal2vulkan::pipeline::PushField::TessellationFactorAddress	TessellationFactorAddress
 variant	metal2vulkan::pipeline::PushField::TessellationFactorInstanceStride	TessellationFactorInstanceStride
 variant	metal2vulkan::pipeline::PushField::TessellationFactorOffset	TessellationFactorOffset
 variant	metal2vulkan::pipeline::PushField::TessellationFactorScale	TessellationFactorScale
