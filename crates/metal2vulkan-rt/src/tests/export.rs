@@ -5,7 +5,7 @@
 //! acquire of a block that is not exported is refused; each handle the device does not export is
 //! refused typed; an exported block holds no image (a texture
 //! over a buffer in it is the counted copy, and a heap texture in it is refused); and what 64 live
-//! exports cost each submission.
+//! exports cost each submission, timed without the validation layer.
 //!
 //! The second device stands in for the other API (a video decoder): a device of another instance
 //! cannot run under the validation layer, whose log is one file per test process
@@ -13,8 +13,9 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::{each_device, finished, within};
+    use crate::tests::command::on_device::{each_device, finished, on_each_device, within};
     use crate::tests::devices_of_the_cfgs_kind;
+    use crate::tests::validation::{bare, validation_tool};
     use crate::{
         BufferLayout, Device, Error, Export, ExportHandle, Gap, HeapRange, IndexClass, Limit,
         MemoryClass, PixelFormat, Refusal, TextureDescriptor, TexturePlace, TextureType,
@@ -441,13 +442,24 @@ mod on_device {
 
     /// What live exports cost each submission: `vkQueueSubmit2` of one small fill, timed on the
     /// host, with no export and with 64 live (the consumer's cap of surface caches), in rounds
-    /// that take turns. Printed only; one GPU's exclusive run is the measurement.
+    /// that take turns. Printed only; one GPU's exclusive run is the measurement. The instance has
+    /// no validation layer, whose own checks of each submission would be part of the time: the
+    /// test fails where a device lists it active.
     #[test]
     fn exported_blocks_submit_cost() {
         const EXPORTS: usize = 64;
         const SUBMITS: usize = 200;
         const ROUNDS: usize = 3;
-        each_device("export_submit_cost", |name, _, device| {
+        let instance = bare(&[]);
+        for (name, physical) in devices_of_the_cfgs_kind(&instance) {
+            let tool = validation_tool(&instance, &name, physical.raw());
+            assert!(
+                tool.is_none(),
+                "{name} lists {tool:?} active: the time is the runtime's and the driver's, \
+                 without the layer"
+            );
+        }
+        on_each_device("export_submit_cost", &instance, |name, _, device| {
             let Some(handle) = (ExportHandle::ALL.into_iter()).find(|&handle| {
                 device.core().exports.offers(handle)
                     && (!handle.foreign() || enabled(&device, ash::ext::queue_family_foreign::NAME))

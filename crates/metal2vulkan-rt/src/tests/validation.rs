@@ -1,5 +1,7 @@
 //! The Khronos validation layer under every instance the device tests open, and its log; but the
-//! lock budget's (`crate::tests::locks`), whose count the layer's own locks would be.
+//! lock budget's (`crate::tests::locks`), whose count the layer's own locks would be, and the
+//! exports' submit cost's (`crate::tests::export`), whose time the layer's own checks would be
+//! part of ([`bare`]).
 //!
 //! The job points the loader at the layer's directory (`VK_LAYER_PATH`; `scripts/validation-layer`
 //! makes it). [`instance`] enables the layer for its own process through the loader's and the
@@ -79,12 +81,7 @@ pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
         !OPEN.swap(true, Ordering::AcqRel),
         "{test}: a second instance in the process: its layer's log is one file per process"
     );
-    let made = match direct_driver() {
-        // SAFETY: the driver's library stays loaded for the process (`direct_driver`).
-        Some(driver) => unsafe { Instance::with_drivers(None, extensions, &[driver]) },
-        None => Instance::new(extensions),
-    };
-    let instance = made.unwrap_or_else(|error| panic!("{test}: an instance at the floor: {error}"));
+    let instance = bare(extensions);
     let watch = Watch {
         instance: std::sync::Arc::downgrade(&instance.shared),
         test: test.clone(),
@@ -105,6 +102,18 @@ pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
     }
     drop(devices);
     validated
+}
+
+/// An instance for a test, with the extensions `Instance::new` takes, on the driver
+/// [`direct_driver`] loaded, else on those the loader finds; under the layer only where this
+/// process enabled it ([`instance`]).
+pub(crate) fn bare(extensions: &[&CStr]) -> Instance {
+    let made = match direct_driver() {
+        // SAFETY: the driver's library stays loaded for the process (`direct_driver`).
+        Some(driver) => unsafe { Instance::with_drivers(None, extensions, &[driver]) },
+        None => Instance::new(extensions),
+    };
+    made.unwrap_or_else(|error| panic!("{}: an instance at the floor: {error}", test_name()))
 }
 
 /// The driver `M2V_DIRECT_DRIVER` names, loaded once for the process and never unloaded: its
