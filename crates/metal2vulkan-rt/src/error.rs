@@ -313,8 +313,9 @@ pub enum Refusal {
         /// The index asked for.
         index: u32,
     },
-    /// A threadgroup of no threads, or of more than the pipeline state's
-    /// `maxTotalThreadsPerThreadgroup`.
+    /// A threadgroup of no threads, or of more than Metal's `maxTotalThreadsPerThreadgroup` for
+    /// the kernel (a required size's threads, where the descriptor requires one). One within it
+    /// and past the state's on this device is the device's [`Limit::ThreadgroupThreads`].
     ///
     /// Basis: metal-documented (a threadgroup's threads total at most the state's
     /// `maxTotalThreadsPerThreadgroup`).
@@ -1304,6 +1305,19 @@ pub enum Limit {
         /// The device's most.
         max: u32,
     },
+    /// A dispatch whose threadgroup is within Metal's `maxTotalThreadsPerThreadgroup` for the
+    /// kernel and past the state's on this device: the state answers the least of Metal's and
+    /// the device's limits for the kernel (`maxComputeWorkGroupSize`, its subgroups' count, and
+    /// for emulated SIMD groups their scratch beside `maxComputeSharedMemorySize`). Metal runs
+    /// the threadgroup; a threadgroup past Metal's own answer is [`Refusal::ThreadgroupSize`].
+    ///
+    /// Basis: device (the device's compute work-group and shared-memory limits).
+    ThreadgroupThreads {
+        /// The threadgroup size asked for.
+        size: [u32; 3],
+        /// The state's `maxTotalThreadsPerThreadgroup` on this device.
+        max: u32,
+    },
     /// `setBytes` data longer than one parameter ring chunk. Metal documents the call for data
     /// under 4 KB.
     ///
@@ -1932,6 +1946,11 @@ impl fmt::Display for Limit {
             Limit::ThreadgroupMemory { length, max } => write!(
                 f,
                 "{length} bytes of threadgroup memory are past the device's {max}"
+            ),
+            Limit::ThreadgroupThreads { size, max } => write!(
+                f,
+                "a threadgroup of {size:?} threads is within Metal's limit for the kernel and past \
+                 this device's {max}"
             ),
             Limit::BytesLength { len, max } => {
                 write!(f, "{len} bytes are past the most one call takes, {max}")

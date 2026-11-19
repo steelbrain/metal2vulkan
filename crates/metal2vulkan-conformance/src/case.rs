@@ -507,6 +507,10 @@ impl Failure {
             metal2vulkan_rt::Error::Translation(metal2vulkan::error::Error::Unsupported(
                 unsupported,
             )) => device_gap_of(unsupported),
+            // A threadgroup Metal runs and this device's limits for the kernel do not.
+            metal2vulkan_rt::Error::Limit(metal2vulkan_rt::Limit::ThreadgroupThreads {
+                ..
+            }) => Some(error.to_string()),
             _ => None,
         };
         Self {

@@ -13811,6 +13811,7 @@ variant	metal2vulkan-rt::Limit::NoImport	NoImport { handle: ImportHandle }
 variant	metal2vulkan-rt::Limit::TextureSamples	TextureSamples { sample_count: u32, counts: u32 }
 variant	metal2vulkan-rt::Limit::TextureSize	TextureSize { extent: [u32; 3], layers: u32, max_extent: [u32; 3], max_layers: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32 }
+variant	metal2vulkan-rt::Limit::ThreadgroupThreads	ThreadgroupThreads { size: [u32; 3], max: u32 }
 variant	metal2vulkan-rt::LoadAction::Clear	Clear
 variant	metal2vulkan-rt::LoadAction::DontCare	DontCare
 variant	metal2vulkan-rt::LoadAction::Load	Load

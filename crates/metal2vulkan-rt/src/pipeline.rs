@@ -442,6 +442,10 @@ pub(crate) struct Interface {
     pub(crate) threadgroups: Vec<u32>,
     /// `maxTotalThreadsPerThreadgroup`.
     pub(crate) max_total_threads: u32,
+    /// Metal's `maxTotalThreadsPerThreadgroup` for the kernel before this device's limits
+    /// (`ComputePipelineMetalInfo::metal_max_total_threads_per_threadgroup`), or a required
+    /// size's threads.
+    pub(crate) metal_max_total_threads: u32,
     /// The threadgroup memory every threadgroup takes beside the lengths set: Metal's static part,
     /// or an emulated module's arena and scratch; and a predicated walk's vote word.
     pub(crate) memory: Memory,
@@ -1148,6 +1152,10 @@ fn interface(
         Some(size) => size.iter().product(),
         None => pipeline.metal_info.max_total_threads_per_threadgroup,
     };
+    let metal_max_total_threads = match required_size {
+        Some(size) => size.iter().product(),
+        None => pipeline.metal_info.metal_max_total_threads_per_threadgroup,
+    };
     Ok(Interface {
         buffers,
         textures,
@@ -1166,6 +1174,7 @@ fn interface(
         constants,
         threadgroups,
         max_total_threads,
+        metal_max_total_threads,
         memory: Memory { own, vote },
         multiples,
         required_subgroup_size: stage.required_subgroup_size,

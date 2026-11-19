@@ -757,7 +757,8 @@ impl ComputeCommandEncoder {
     /// the kernel's emulated-SIMD-group module, waiting for the reaper's lowering of it where
     /// that is not done.
     ///
-    /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`];
+    /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`] past Metal's limit for the
+    /// kernel; [`Limit::ThreadgroupThreads`] within it and past this device's;
     /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off its argument's
     /// alignment, which nothing records; [`Gap::SwizzledReadWrite`];
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
@@ -884,8 +885,11 @@ impl ComputeCommandEncoder {
         let inner = &state.compiled;
         let max = inner.whole.interface.max_total_threads;
         let total = size.iter().map(|&axis| u64::from(axis)).product::<u64>();
-        if total == 0 || total > u64::from(max) {
+        if total == 0 || total > u64::from(inner.whole.interface.metal_max_total_threads) {
             return Err(Error::Refused(Refusal::ThreadgroupSize { size, max }));
+        }
+        if total > u64::from(max) {
+            return Err(Error::Limit(Limit::ThreadgroupThreads { size, max }));
         }
         // Every module of a state is the same function, with the same arguments and alignments,
         // so the whole module answers this check and the next, once after each change.

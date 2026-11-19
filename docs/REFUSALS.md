@@ -38,7 +38,7 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 71 | 71 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 27 | 27 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -56,7 +56,7 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 20 | 16 | 0 | 0 | 35 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 11 | 4 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 12 | 4 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 27 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -642,7 +642,7 @@ Columns:
 | `SamplerArgumentIndex` | A sampler argument index past Metal's 16 entries (`setSamplerState`) | every device (a public call's own check of its arguments) | `metal-documented`: the sampler argument table has 16 entries per stage | 2: `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`, `crates/metal2vulkan-rt/src/render_encoder.rs (set_sampler_state)` | `-` |
 | `SamplerIds` | A consumer's answer to `Device::new_compute_pipeline_state`'s numbered samplers with another count of indices | every device (a public call's own check of its arguments) | `ours`: each numbered sampler takes one index | 1: `crates/metal2vulkan-rt/src/pipeline.rs (number_samplers)` | `-` |
 | `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound, or a draw whose vertex descriptor reads a vertex buffer index where none is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change, and none whose vertices the draw reads; Metal's validation stops such a draw | 3: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)`, `crates/metal2vulkan-rt/src/render_encoder.rs (find)` (+1) | `-` |
-| `ThreadgroupSize` | A threadgroup of no threads, or of more than the pipeline state's `maxTotalThreadsPerThreadgroup` | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)` | `-` |
+| `ThreadgroupSize` | A threadgroup of no threads, or of more than Metal's `maxTotalThreadsPerThreadgroup` for the kernel (a required size's threads, where the... | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)` | `-` |
 | `IndirectOffset` | An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer than 12 bytes (three 32-bit counts) in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset inside the buffer | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` | `-` |
 | `BufferOffsetAlignment` | A dispatch whose kernel, or a draw whose vertex or fragment function, reaches a buffer bound where its address, the buffer's `gpuAddress` plus the... | every device (a public call's own check of its arguments) | `metal-documented`: Metal's API validation refuses the bind offset: "must be a multiple of 4 but was set to 2" for a `uint *` argument bound at offset 2, an Apple M3 Max, macOS 27.0.1, `probes/vector_access_placement.m` in the conformance crate | 1: `crates/metal2vulkan-rt/src/encoder.rs (check_alignment)` | `-` |
 | `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
@@ -695,6 +695,7 @@ Columns:
 | `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 2: `crates/metal2vulkan-rt/src/import.rs (check_len)`, `crates/metal2vulkan-rt/src/memory.rs (round)` | `-` |
 | `BlockIds` | A block after every block number has been used (`Device::take_block`) | every device (a public call's own check of its arguments) | `ours`: block numbers are 32 bits | 2: `crates/metal2vulkan-rt/src/memory.rs (allocation_number)`, `crates/metal2vulkan-rt/src/memory.rs (number)` | `-` |
 | `ThreadgroupMemory` | A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up to 16 bytes), is past the device's... | at the device's limit | `device`: the device's `maxComputeSharedMemorySize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `ThreadgroupThreads` | A dispatch whose threadgroup is within Metal's `maxTotalThreadsPerThreadgroup` for the kernel and past the state's on this device | at the device's limit | `device`: the device's compute work-group and shared-memory limits | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 2: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`, `crates/metal2vulkan-rt/src/render_encoder.rs (set_bytes)` | `-` |
 | `IndexRange` | A grant of no indices, or one past its class's range (`Device::grant_indices`, [`IndexClass::range`]) | every device (a public call's own check of its arguments) | `ours`: the descriptor arrays are 65,536 sampled and 65,536 storage textures, one index of both a texture's, and 4,000 samplers of each use, and index 0 is nil | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
 | `TextureSize` | A texture whose extent or array layers are past what the device makes of its format, type, usage and sample count | at the device's limit | `device`: the image format query's `maxExtent` and `maxArrayLayers` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
@@ -1304,6 +1305,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/import.rs (check_len)`; `crates/metal2vulkan-rt/src/memory.rs (round)`
 - `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (allocation_number)`; `crates/metal2vulkan-rt/src/memory.rs (number)`
 - `rt:Limit::ThreadgroupMemory`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Limit::ThreadgroupThreads`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_bytes)`
 - `rt:Limit::IndexRange`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
 - `rt:Limit::TextureSize`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
