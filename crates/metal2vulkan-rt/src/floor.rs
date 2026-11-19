@@ -949,7 +949,7 @@ fn second_elements_fit(device: &Queried) -> bool {
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
 /// uses.
-pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 16] {
+pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
     [
@@ -1027,6 +1027,12 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 16] {
         (
             "timestampComputeAndGraphics",
             limits.timestamp_compute_and_graphics,
+            vk::TRUE,
+        ),
+        // Metal's sample positions of 1, 2 and 4 samples are Vulkan's standard locations.
+        (
+            "standardSampleLocations",
+            limits.standard_sample_locations,
             vk::TRUE,
         ),
         // Every slot of a render pass descriptor (`MTLRenderPassDescriptor.colorAttachments`),

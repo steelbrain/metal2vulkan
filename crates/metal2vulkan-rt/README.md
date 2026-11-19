@@ -2024,6 +2024,7 @@ A Boolean limit's minimum is 1,
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |
 | `maxComputeWorkGroupSize[2]` | `64` | a threadgroup's depth; a deeper one runs as one row |
 | `timestampComputeAndGraphics` | `1` | GPU times of command buffers |
+| `standardSampleLocations` | `1` | Metal's sample positions: those of 1, 2 and 4 samples are Vulkan's standard locations |
 | `timestampValidBits` | `36` | GPU times of command buffers |
 | `maxColorAttachments` | `8` | every color attachment of a render pass descriptor |
 

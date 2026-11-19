@@ -90,7 +90,8 @@ fn at_the_floor() -> Queried {
             .max_push_constants_size(256)
             .max_compute_work_group_invocations(1024)
             .max_compute_work_group_size([1024, 1024, 64])
-            .timestamp_compute_and_graphics(true),
+            .timestamp_compute_and_graphics(true)
+            .standard_sample_locations(true),
         vulkan12: vk::PhysicalDeviceVulkan12Properties::default()
             .max_per_stage_descriptor_update_after_bind_sampled_images(65_536)
             .max_descriptor_set_update_after_bind_sampled_images(65_536)
@@ -567,6 +568,11 @@ fn each_low_limit_is_named() {
         (
             |d| d.limits.timestamp_compute_and_graphics = vk::FALSE,
             "timestampComputeAndGraphics",
+            1,
+        ),
+        (
+            |d| d.limits.standard_sample_locations = vk::FALSE,
+            "standardSampleLocations",
             1,
         ),
         (

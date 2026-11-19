@@ -29,7 +29,8 @@
 //!   - four samples (the owned fixture `engine/psc_sample_coverage.ll`'s `psc_read_samples`): a
 //!     triangle drawn by a state of `rasterSampleCount` 4 into a 4-sample target covers, per
 //!     sample as a kernel reads them, every pixel on one side of its edge, none on the other and,
-//!     on it, Metal's 4x positions below it where the device takes Vulkan's standard locations;
+//!     on it, Metal's 4x positions below it, which are Vulkan's standard locations the floor
+//!     requires;
 //!     a 1-sample state in the pass is the formats' gap, and a pass of a 4-sample and a 1-sample
 //!     attachment `RenderPassKind::SampleCounts`.
 //!   - a vertex function that reads `[[base_instance]]` (the owned fixture
@@ -2225,8 +2226,9 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
     /// `rasterSampleCount` 4, stored, then each pixel's samples read by `psc_read_samples`
     /// (`texture2d_ms` read, one bit a sample above half white). Every pixel above the diagonal is
     /// all four samples, every pixel below it none, and each on it the samples Metal's 4x
-    /// positions put below the edge, (0.125, 0.625) and (0.625, 0.875): samples 2 and 3, where
-    /// the device takes Vulkan's standard locations (`standardSampleLocations`), which are Metal's.
+    /// positions put below the edge, (0.125, 0.625) and (0.625, 0.875): samples 2 and 3, as
+    /// Vulkan's standard locations are Metal's and the floor requires them
+    /// (`standardSampleLocations`).
     /// A state of one sample drawn in the pass is `DrawKind::AttachmentFormats`, and a pass of a
     /// 4-sample and a 1-sample attachment `RenderPassKind::SampleCounts`.
     #[test]
@@ -2320,22 +2322,13 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             let words = unsafe {
                 std::slice::from_raw_parts(contents.as_ptr().cast::<u32>(), 16 * SIDE as usize)
             };
-            let raw = device.raw();
-            // SAFETY: the physical device is the device's own.
-            let limits = unsafe {
-                raw.instance
-                    .get_physical_device_properties(raw.physical_device)
-            }
-            .limits;
-            let standard = limits.standard_sample_locations == ash::vk::TRUE;
             for y in 0..SIDE {
                 for x in 0..SIDE {
                     let got = words[(y * 16 + x) as usize];
                     let expected = match x.cmp(&y) {
                         std::cmp::Ordering::Less => 0b1111,
                         std::cmp::Ordering::Greater => 0,
-                        std::cmp::Ordering::Equal if standard => 0b1100,
-                        std::cmp::Ordering::Equal => continue,
+                        std::cmp::Ordering::Equal => 0b1100,
                     };
                     assert_eq!(got, expected, "{name}: pixel ({x}, {y})'s samples");
                 }
@@ -2358,9 +2351,7 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                 Ok(_) => panic!("{name}: two sample counts made a pass"),
             }
             drop((samples, flat));
-            println!(
-                "{name}: four samples drawn and read per sample (standard locations {standard})"
-            );
+            println!("{name}: four samples drawn and read per sample");
         });
     }
 }
