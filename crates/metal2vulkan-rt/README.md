@@ -618,13 +618,14 @@ made, with no lock, and never rewritten for layouts.
 - Texture views that change what the replay streams' views keep are not built
   (`Gap::TextureView`, naming the kind): another pixel format, another texture type (but a 2D
   view of one slice of a 2D array), and some of a cube's faces or a cube array's cubes.
-- A swizzle reaches a texture's sampled element alone. A swizzled texture, or a view made with
-  a swizzle or of a swizzled texture, has a storage element and attachment views that map each
-  channel to itself, as Vulkan requires of a storage image and an attachment. A `read` of an
-  `access::read_write` texture through it reads the texels unswizzled, where Metal reads them
-  through the swizzle, and a write stores them unswizzled, where Metal stores them with the
-  swizzle undone (the conformance cases `swizzled-storage-*` record both on an Apple M3 Max).
-  A texture's own descriptor takes a swizzle only without shader-write and render-target usage
+- A swizzle reaches a texture's sampled element alone, as Apple defines it for reads and
+  samples. A swizzled texture, or a view made with a swizzle or of a swizzled texture, has a
+  storage element and attachment views that map each channel to itself, as Vulkan requires of
+  a storage image and an attachment: a write and a render pass store the texels unswizzled.
+  A draw or dispatch whose function declares `access::read_write` at a slot bound to such a
+  texture is `Gap::SwizzledReadWrite`, found when the pipeline state or a binding changes: its
+  read would answer the texel unswizzled, where Metal reads it through the swizzle. A texture's
+  own descriptor takes a swizzle only without shader-write and render-target usage
   (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone.
 - Textures over a swapchain image are not built yet. Heap textures are placed only in Private
   heaps (`Gap::HeapTexture` for a Shared block).

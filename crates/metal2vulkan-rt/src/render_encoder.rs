@@ -231,7 +231,7 @@ impl Facts {
     /// draw checks after its attachment reads.
     ///
     /// Err: [`Refusal::VertexBufferOffset`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the
-    /// vertex descriptor reads that is not bound.
+    /// vertex descriptor reads that is not bound; [`Gap::SwizzledReadWrite`].
     fn find(&mut self, draws: &Draws, tables: &[Tables; 2], pass: &Pass) -> Result<(), Error> {
         self.vertex.clear();
         for &(binding, index) in &draws.bindings {
@@ -253,6 +253,13 @@ impl Facts {
                 }
             };
             self.vertex.push((binding, buffer, offset));
+        }
+        for &(table, slot, access) in &draws.textures {
+            if matches!(access, Access::ReadWrite)
+                && tables[table].texture(slot).is_some_and(Texture::swizzled)
+            {
+                return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
+            }
         }
         self.attachments = (draws.textures.iter()).any(|&(table, slot, _)| {
             tables[table].texture(slot).is_some_and(|texture| {
@@ -1334,7 +1341,8 @@ impl RenderCommandEncoder {
     /// [`Refusal::BufferOffsetAlignment`] for a buffer a function reaches bound off its argument's
     /// alignment, checked before anything is recorded; [`Refusal::StencilAttachment`];
     /// [`Gap::Draw`] for what the runtime does not build, naming
-    /// it; [`Error::Vulkan`] where a pipeline cannot be made or the command buffer cannot record.
+    /// it; [`Gap::SwizzledReadWrite`]; [`Error::Vulkan`] where a pipeline cannot be made or the
+    /// command buffer cannot record.
     pub fn draw_primitives(
         &mut self,
         primitive_type: PrimitiveType,

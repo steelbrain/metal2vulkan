@@ -751,7 +751,7 @@ impl ComputeCommandEncoder {
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`];
     /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off its argument's
-    /// alignment, which nothing records;
+    /// alignment, which nothing records; [`Gap::SwizzledReadWrite`];
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
     /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
     /// [`Error::Quiesced`] where the device was quiesced before that module was lowered;
@@ -883,6 +883,13 @@ impl ComputeCommandEncoder {
         // so the whole module answers this check and the next, once after each change.
         if !self.facts.aligned {
             self.facts.nil = check_alignments(&self.core, &self.slots, &inner.whole.interface)?;
+            for &(slot, access) in &inner.whole.interface.textures {
+                if matches!(access, Access::ReadWrite)
+                    && matches!(self.textures.get(slot as usize), Some(Some(t)) if t.swizzled())
+                {
+                    return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
+                }
+            }
             self.facts.aligned = true;
         }
         let core = &*self.core;

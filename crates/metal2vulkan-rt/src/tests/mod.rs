@@ -42,6 +42,7 @@ mod staging;
 #[cfg(m2v_gpu)]
 mod stamps;
 mod submit_infos;
+mod swizzle;
 mod texture;
 mod translate;
 mod upload;

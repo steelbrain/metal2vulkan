@@ -13654,6 +13654,7 @@ variant	metal2vulkan-rt::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_
 variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
 variant	metal2vulkan-rt::Gap::RenderPass	RenderPass { kind: RenderPassKind }
 variant	metal2vulkan-rt::Gap::RenderPipeline	RenderPipeline { kind: RenderPipelineKind }
+variant	metal2vulkan-rt::Gap::SwizzledReadWrite	SwizzledReadWrite { slot: u32 }
 variant	metal2vulkan-rt::Gap::TextureBuffer	TextureBuffer
 variant	metal2vulkan-rt::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureCopy	TextureCopy { source: PixelFormat, destination: PixelFormat }

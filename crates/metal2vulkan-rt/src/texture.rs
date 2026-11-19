@@ -2386,12 +2386,12 @@ impl Texture {
     /// Metal takes the call whatever the texture's usage (its own descriptor refuses a swizzle
     /// with shader-write or render-target usage), and so does this.
     ///
-    /// Apple states the swizzle for sampling and reading. The view's sampled element (`sample`,
+    /// Apple defines the swizzle for sampling and reading. The view's sampled element (`sample`,
     /// and `read` of an `access::read` texture) takes the combined swizzle. Its storage element
     /// and its attachment views map each channel to itself, as Vulkan requires of a storage image
-    /// and of an attachment: a render pass and a shader's write reach the texels unswizzled, and a
-    /// `read` of an `access::read_write` texture reads them unswizzled, where Metal reads them
-    /// through the swizzle (and, measured, writes through it undone), a known gap.
+    /// and of an attachment: a render pass and a shader's write store the texels unswizzled. A
+    /// slot that reads through the storage element, `access::read_write`, would read them
+    /// unswizzled: a draw or dispatch that binds the view there is [`Gap::SwizzledReadWrite`].
     ///
     /// Err: as [`Texture::new_texture_view`]; [`Gap::TextureFormat`] for a swizzle source this
     /// crate does not know.
@@ -2838,6 +2838,11 @@ impl Texture {
             Some(named) if named.form == Form::InPlace => named.buffer.id(),
             _ => self.inner.id,
         }
+    }
+
+    /// Whether it reads through a swizzle other than each channel's own.
+    pub(crate) fn swizzled(&self) -> bool {
+        self.inner.descriptor.swizzle != TextureSwizzleChannels::DEFAULT
     }
 
     /// Whether the host reads the GPU's writes to it with no copy: a texture in place over a

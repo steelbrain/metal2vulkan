@@ -897,6 +897,21 @@ pub enum Gap {
     ///
     /// Basis: ours (a fence is built for one queue; the replay streams use each on one queue).
     FenceOtherQueue,
+    /// A draw or dispatch whose function declares `access::read_write` at texture slot `slot`
+    /// where the texture bound there has a swizzle other than each channel's own (a view made
+    /// with one, [`Texture::new_texture_view_with_swizzle`](crate::Texture::new_texture_view_with_swizzle)):
+    /// such a slot reads through the texture's storage element, which maps each channel to
+    /// itself as Vulkan requires of a storage image
+    /// (VUID-VkWriteDescriptorSet-descriptorType-00336), so its `read` would answer the texel
+    /// unswizzled, where Metal reads it through the swizzle. Found when the pipeline state or a
+    /// binding changes, for the read-write slots alone. Writes through `access::write` are
+    /// Metal's: the swizzle is defined for reads and samples.
+    ///
+    /// Basis: ours (built when a replay stream counts one).
+    SwizzledReadWrite {
+        /// The function's texture slot.
+        slot: u32,
+    },
     /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a kind Metal makes and
     /// the runtime does not build: what `kind` names.
     ///
@@ -1529,6 +1544,10 @@ impl fmt::Display for Gap {
                 "a fill of {start}..{end}, not whole 4-byte words, is not built"
             ),
             Gap::FenceOtherQueue => f.write_str("a fence used on a second queue is not built"),
+            Gap::SwizzledReadWrite { slot } => write!(
+                f,
+                "a read_write texture slot {slot} bound to a swizzled texture is not built"
+            ),
             Gap::RenderPipeline { kind } => {
                 write!(f, "a render pipeline state with {kind:?} is not built")
             }
