@@ -39,7 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 71 | 71 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 26 | 26 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 27 | 27 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -57,7 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 20 | 16 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 11 | 4 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 26 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 27 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -714,6 +714,7 @@ Columns:
 |---|---|---|---|---|---|
 | `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 2: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`, `crates/metal2vulkan-rt/src/render.rs (refuse)` | `-` |
 | `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 2: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`, `crates/metal2vulkan-rt/src/pipeline.rs (of)` | `-` |
+| `ImageblockMemoryLength` | `imageblockMemoryLengthForDimensions:` of a compute state whose kernel declares an imageblock it never reaches, or whose compile kept no... | every device (a public call's own check of its arguments) | `ours`: the length is not measured against Metal's | 1: `crates/metal2vulkan-rt/src/pipeline.rs (imageblock_memory_length_for_dimensions)` | `-` |
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `NoStageInRegion` | A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`) on an encoder that never set one... | every device (a public call's own check of its arguments) | `ours`: no replay stream dispatches such a kernel without setting a region | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
@@ -1317,6 +1318,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`; `crates/metal2vulkan-rt/src/pipeline.rs (of)`
+- `rt:Gap::ImageblockMemoryLength`: `crates/metal2vulkan-rt/src/pipeline.rs (imageblock_memory_length_for_dimensions)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Gap::NoStageInRegion`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`

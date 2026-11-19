@@ -852,6 +852,16 @@ pub enum Gap {
     ///
     /// Basis: ours (the encoder supplies only those).
     KernelInput,
+    /// `imageblockMemoryLengthForDimensions:` of a compute state whose kernel declares an
+    /// imageblock it never reaches, or whose compile kept no reflection to tell whether it
+    /// declares one: Metal answers the imageblock's bytes for `dimensions`, and no case measures
+    /// its rounding. A kernel that declares none answers 0, as Metal's does.
+    ///
+    /// Basis: ours (the length is not measured against Metal's).
+    ImageblockMemoryLength {
+        /// The dimensions asked for.
+        dimensions: [u32; 3],
+    },
     /// A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD
     /// group as one subgroup of `width` threads (a pinned subgroup of 32, or the device's own
     /// 32), where the state has no emulated-SIMD-group module to run it on: Metal runs the last
@@ -1818,6 +1828,11 @@ impl fmt::Display for Gap {
             Gap::KernelInput => {
                 f.write_str("the kernel reads an input the compute encoder does not supply yet")
             }
+            Gap::ImageblockMemoryLength { dimensions } => write!(
+                f,
+                "the imageblock memory length for {dimensions:?} of a kernel that declares an \
+                 imageblock, or may, is not measured against Metal's"
+            ),
             Gap::NoStageInRegion => {
                 f.write_str("the kernel reads the stage-in region, which the encoder never set")
             }

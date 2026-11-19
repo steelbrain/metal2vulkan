@@ -63,7 +63,7 @@ use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::error::{Error as TranslationError, Feature};
 use metal2vulkan::library::CompiledFunction;
-use metal2vulkan::metal::BindingAccess;
+use metal2vulkan::metal::{BindingAccess, BindingType};
 use metal2vulkan::pipeline::{
     arena_bytes, AccessSet, Axis, BindingSource, BufferKind, CombinedSampler, ComputePipeline,
     ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, LoweringInputs,
@@ -122,6 +122,47 @@ pub(crate) struct Compiled {
     /// The translator's notes of where the kernel's answers may differ from Metal's, of the
     /// modules made with the content.
     notes: Vec<PrecisionNote>,
+    /// What Metal's state answers of the content, beside its threads.
+    answers: Answers,
+}
+
+/// What Metal's compute state answers of a content beside its threads, from its whole module's
+/// translation.
+#[derive(Clone, Copy, Default)]
+struct Answers {
+    /// `staticThreadgroupMemoryLength` (`ComputePipelineMetalInfo`).
+    static_threadgroup_memory_length: u32,
+    /// `threadExecutionWidth` (`ComputePipelineMetalInfo`).
+    thread_execution_width: u32,
+    /// Whether the kernel declares an imageblock, as the compile's kept reflection answers it;
+    /// `None` where the compile kept none.
+    imageblock: Option<bool>,
+}
+
+impl Answers {
+    /// `pipeline`'s answers, with `imageblock`.
+    fn of(pipeline: &ComputePipeline, imageblock: Option<bool>) -> Answers {
+        Answers {
+            static_threadgroup_memory_length: pipeline.metal_info.static_threadgroup_memory_length,
+            thread_execution_width: pipeline.metal_info.thread_execution_width,
+            imageblock,
+        }
+    }
+}
+
+/// Whether the kernel `function`, compiled for `descriptor`, declares an imageblock: what the
+/// compile kept of its reflection answers, decoding nothing; `None` where it kept none (a binding
+/// whose answer is unmeasured).
+fn declares_imageblock(
+    descriptor: &ComputePipelineDescriptor,
+    function: &CompiledFunction,
+    budget: &Budget,
+) -> Option<bool> {
+    let mut compiled = descriptor.clone();
+    compiled.kernel = StageSource::Compiled(function.clone());
+    let reflection = compiled.reflection(budget).ok()?;
+    let mut bindings = reflection.bindings().iter();
+    Some(bindings.any(|binding| matches!(binding.binding_type(), BindingType::Imageblock)))
 }
 
 /// The samplers a state numbers ([`Interface::numbered`]), the index the consumer gave each, and
@@ -644,7 +685,7 @@ impl Compiled {
             compiled.kernel = StageSource::Compiled(function);
             translator.compile_compute_pipeline(&compiled, &budget)
         };
-        let (whole, partial, image_only, source, rows) = match &descriptor.kernel {
+        let (whole, partial, image_only, source, rows, answers) = match &descriptor.kernel {
             StageSource::Function(function) => {
                 let entries = &core.entries;
                 let plain = translator
@@ -697,9 +738,11 @@ impl Compiled {
                     // tiles where the variant states them, else at its own size.
                     Some(variant) if !variant.observes_threadgroup_partition() => {
                         let image_only = variant.is_image_only();
+                        let imageblock = declares_imageblock(descriptor, &variant, &budget);
                         let pipeline = compiled(variant).map_err(Error::Translation)?;
                         let partial = (!grid_tiles(&pipeline)).then_some(None);
-                        (pipeline, partial, image_only, Some(source), None)
+                        let answers = Answers::of(&pipeline, imageblock);
+                        (pipeline, partial, image_only, Some(source), None, answers)
                     }
                     // The kernel observes its partition, or its variant is refused: its plain
                     // module, the variant lowered at the first grid that needs it, and its
@@ -709,7 +752,9 @@ impl Compiled {
                     _ => {
                         let plain = lower(&plain).map_err(Error::Translation)?;
                         let in_rows = plain.runs_lockstep_barriers_in_rows();
+                        let imageblock = declares_imageblock(descriptor, &plain, &budget);
                         let plain = compiled(plain).map_err(Error::Translation)?;
+                        let answers = Answers::of(&plain, imageblock);
                         let rows = match in_rows && !holds_threadgroup_memory(&plain) {
                             true => one_row(&core, descriptor, function, &inputs, &budget)?,
                             false => None,
@@ -720,7 +765,14 @@ impl Compiled {
                             inputs,
                             lowered: OnceLock::new(),
                         });
-                        (plain, Some(Some(partial)), false, Some(source), rows)
+                        (
+                            plain,
+                            Some(Some(partial)),
+                            false,
+                            Some(source),
+                            rows,
+                            answers,
+                        )
                     }
                 }
             }
@@ -736,7 +788,16 @@ impl Compiled {
                 // variant states `GridTiles`: a module without it observes its partition or is
                 // the plain module, and runs at its own size.
                 let partial = (!grid_tiles(&pipeline)).then_some(None);
-                (pipeline, partial, function.is_image_only(), None, None)
+                let imageblock = declares_imageblock(descriptor, function, &budget);
+                let answers = Answers::of(&pipeline, imageblock);
+                (
+                    pipeline,
+                    partial,
+                    function.is_image_only(),
+                    None,
+                    None,
+                    answers,
+                )
             }
         };
         let required = descriptor.required_threads_per_threadgroup;
@@ -782,7 +843,7 @@ impl Compiled {
             (None, false) => Form::Tiled,
             (None, true) => Form::Square,
         };
-        let compiled = Compiled::new(core, (whole, rows), form, emulated, notes);
+        let compiled = Compiled::new(core, (whole, rows), form, emulated, (notes, answers));
         // A tiling kernel's grids one deep run on one `VkPipeline`, made with the state: its
         // tiles', or an image-only kernel's square workgroups'; and so do an observing kernel's
         // one-row tiles.
@@ -805,14 +866,14 @@ impl Compiled {
         Ok(compiled)
     }
 
-    /// The content of `whole`, its one-row module, its form, emulated variant and notes, counted
-    /// live.
+    /// The content of `whole`, its one-row module, its form, emulated variant, notes and Metal's
+    /// answers, counted live.
     fn new(
         core: Arc<Core>,
         (whole, rows): (Kernel, Option<Kernel>),
         form: Form,
         emulated: Option<Later>,
-        notes: Vec<PrecisionNote>,
+        (notes, answers): (Vec<PrecisionNote>, Answers),
     ) -> Compiled {
         core.counters.rise(Gauge::Kernels);
         Compiled {
@@ -822,6 +883,7 @@ impl Compiled {
             rows,
             emulated,
             notes,
+            answers,
         }
     }
 }
@@ -1261,6 +1323,42 @@ impl ComputePipelineState {
         self.inner.compiled.whole.interface.max_total_threads
     }
 
+    /// `staticThreadgroupMemoryLength`: the bytes of the kernel's statically sized threadgroup
+    /// memory, as Metal reports them, rounded up to a multiple of 16 (the translator's
+    /// `ComputePipelineMetalInfo::static_threadgroup_memory_length`). The threadgroup memory the
+    /// runtime adds beside it (an emulated SIMD group's scratch, a vote word) is no part of
+    /// Metal's, and is not counted.
+    pub fn static_threadgroup_memory_length(&self) -> u32 {
+        self.inner.compiled.answers.static_threadgroup_memory_length
+    }
+
+    /// `threadExecutionWidth`: 32 on every device, Metal's answer on Apple's GPUs (the
+    /// translator's `ComputePipelineMetalInfo::thread_execution_width`). A kernel that observes
+    /// its SIMD group runs it 32 wide on every device, and one that does not observe it cannot
+    /// tell its width.
+    pub fn thread_execution_width(&self) -> u32 {
+        self.inner.compiled.answers.thread_execution_width
+    }
+
+    /// `imageblockMemoryLengthForDimensions:`: 0 for a kernel that declares no imageblock, as
+    /// Metal answers. A kernel that reaches an imageblock has no state here
+    /// ([`Gap::KernelInput`]).
+    ///
+    /// Err: [`Gap::ImageblockMemoryLength`] for a kernel that declares an imageblock it never
+    /// reaches, or whose compile kept no reflection to tell: its length is not measured against
+    /// Metal's.
+    pub fn imageblock_memory_length_for_dimensions(
+        &self,
+        dimensions: [u32; 3],
+    ) -> Result<u32, Error> {
+        match self.inner.compiled.answers.imageblock {
+            Some(false) => Ok(0),
+            Some(true) | None => Err(Error::Unsupported(Gap::ImageblockMemoryLength {
+                dimensions,
+            })),
+        }
+    }
+
     /// No Metal counterpart as such: each texture slot the kernel uses, by index, ascending, with
     /// the access a dispatch of the state marks in its encoder's hazards for the texture bound
     /// there, read from the same interface: `ReadOnly` where the kernel samples, reads or only
@@ -1316,7 +1414,8 @@ impl ComputePipelineState {
             variants: Variants::default(),
         };
         let form = Form::Sized { partial: None };
-        let compiled = Compiled::new(core, (whole, None), form, None, Vec::new());
+        let answers = Answers::default();
+        let compiled = Compiled::new(core, (whole, None), form, None, (Vec::new(), answers));
         Ok(ComputePipelineState {
             inner: Arc::new(PipelineInner {
                 compiled: Arc::new(compiled),

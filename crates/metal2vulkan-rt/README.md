@@ -1519,6 +1519,16 @@ that touch blocks first.
   qualifier, which Metal's reflection answers (`MTLBinding.access`): a `read_write` slot the
   kernel only writes is `WriteOnly`. A texture an argument buffer, a heap or a resource ID
   reaches is in no slot.
+- A state answers Metal's `staticThreadgroupMemoryLength`
+  (`ComputePipelineState::static_threadgroup_memory_length`), rounded up to 16 bytes as Metal
+  reports it, without the threadgroup memory the runtime adds beside it, and
+  `threadExecutionWidth` (`thread_execution_width`), 32 on every device: a kernel that observes
+  its SIMD group runs it 32 wide, and one that does not cannot tell its width.
+  `imageblockMemoryLengthForDimensions:` (`imageblock_memory_length_for_dimensions`) answers 0
+  for a kernel that declares no imageblock, as Metal does. A kernel that reaches an imageblock
+  has no state (`Gap::KernelInput`); one that declares an imageblock it never reaches, or whose
+  compile kept no reflection to tell, answers `Gap::ImageblockMemoryLength`, as no case measures
+  Metal's length.
 
 ### The cache directory
 
