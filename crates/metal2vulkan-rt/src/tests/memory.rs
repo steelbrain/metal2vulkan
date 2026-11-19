@@ -1934,6 +1934,59 @@ mod on_device {
         }
     }
 
+    /// The block-maker thread starts no zero step while a memset of Shared bytes runs on the
+    /// consumer's thread, so the two never share the memory bus: with a memset held open
+    /// ([`Pool::fill`](crate::memory::Pool::fill)), a Shared block written and given back is kept
+    /// with its mark at 0, the thread holds its step back (counted) and zeroes nothing; once the
+    /// memset ends, the thread zeroes the block to its end.
+    #[test]
+    fn every_device_holds_its_zero_steps_while_a_consumer_memset_runs() {
+        const LEN: u64 = 4 << 20;
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            let block = (device.take_block(MemoryClass::Shared, LEN))
+                .unwrap_or_else(|error| panic!("{name}: a Shared block: {error}"));
+            let id = block.id;
+            bytes(&block).fill(0xCD);
+            let before = counters.metrics();
+            let fill = core.pool.fill();
+            device.release_block(block).expect("a release");
+            wait_until("the step held back", || {
+                counters.metrics().zero_steps_held > before.zero_steps_held
+            });
+            thread::sleep(Duration::from_millis(20));
+            assert_eq!(
+                (
+                    core.pool.kept_zeroed(MemoryClass::Shared),
+                    counters.metrics().kept_bytes_zeroed - before.kept_bytes_zeroed
+                ),
+                (vec![(id, 0)], 0),
+                "{name}: no step beside the memset"
+            );
+            drop(fill);
+            wait_until("the block zeroed to its end", || {
+                core.pool.kept_zeroed(MemoryClass::Shared) == [(id, LEN)]
+            });
+            assert_eq!(
+                counters.metrics().kept_bytes_zeroed - before.kept_bytes_zeroed,
+                LEN,
+                "{name}: zeroed once the memset ended"
+            );
+            println!(
+                "memory: {name}: zero steps held {} times beside a memset",
+                counters.metrics().zero_steps_held - before.zero_steps_held
+            );
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
+        }
+    }
+
     /// The add kernel over `a`, `b` and `out`, committed on `queue` and waited for.
     fn add_into(
         name: &str,

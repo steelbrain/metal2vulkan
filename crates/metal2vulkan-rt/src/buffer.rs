@@ -148,12 +148,15 @@ impl Device {
             match contents {
                 Some(contents) => {
                     let start = from.max(clean);
+                    // No zero step of the block-maker thread runs beside the memset.
+                    let fill = self.core().pool.fill();
                     // SAFETY: `start..length` lies in the new buffer, whose range is in the block.
                     unsafe {
                         (contents.get().as_ptr())
                             .add(start as usize)
                             .write_bytes(0, (length - start) as usize)
                     };
+                    drop(fill);
                     self.core().counters.zeroed(length - start);
                 }
                 None => {

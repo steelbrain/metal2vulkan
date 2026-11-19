@@ -165,7 +165,9 @@ in its memory.
   threads: each Shared allocation it makes ahead of need, whole, before any take lands in it
   (each device's first one in its making), and each Shared block given back and kept, in steps of
   256 KiB while it waits for a take of its length. A take waits at most for the step that runs and
-  answers the bytes zeroed so far, so a mark is any length up to the block's. Nothing else counts:
+  answers the bytes zeroed so far, so a mark is any length up to the block's. The thread starts no
+  step while a zeroed buffer's memset runs on the consumer's thread (below), so the two do not
+  share the memory bus (`Metrics::zero_steps_held` counts the steps held back). Nothing else counts:
   not the driver, the memory type or a new allocation. A Private block's mark is 0, as is a block
   of an allocation a take makes itself. The consumer writes the bytes inside the mark only
   through a buffer it places over them, which lowers the mark to the buffer's offset; a zeroed

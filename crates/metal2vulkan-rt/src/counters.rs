@@ -235,6 +235,7 @@ struct Atomics {
     allocation_zeroing_nanos: AtomicU64,
     kept_bytes_zeroed: AtomicU64,
     kept_zeroing_nanos: AtomicU64,
+    zero_steps_held: AtomicU64,
     zeroed_bytes_taken: AtomicU64,
     zeroed_bytes_freed: AtomicU64,
     block_zero_fills: AtomicU64,
@@ -493,6 +494,11 @@ impl Counters {
         a.allocation_zeroing_nanos.fetch_add(nanos, Relaxed);
     }
 
+    /// A zero step held back for a consumer memset ([`Metrics::zero_steps_held`]).
+    pub(crate) fn zero_step_held(&self) {
+        self.atomics.zero_steps_held.fetch_add(1, Relaxed);
+    }
+
     /// A step of a kept block zeroed, `bytes` in `nanos` ([`Metrics::kept_bytes_zeroed`]).
     pub(crate) fn zeroed_kept(&self, bytes: u64, nanos: u64) {
         let a = &self.atomics;
@@ -650,6 +656,7 @@ impl Counters {
             allocation_zeroing_nanos: a.allocation_zeroing_nanos.load(Relaxed),
             kept_bytes_zeroed: a.kept_bytes_zeroed.load(Relaxed),
             kept_zeroing_nanos: a.kept_zeroing_nanos.load(Relaxed),
+            zero_steps_held: a.zero_steps_held.load(Relaxed),
             zeroed_bytes_taken: a.zeroed_bytes_taken.load(Relaxed),
             zeroed_bytes_freed: a.zeroed_bytes_freed.load(Relaxed),
             block_zero_fills: a.block_zero_fills.load(Relaxed),
@@ -808,6 +815,10 @@ pub struct Metrics {
     pub kept_bytes_zeroed: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) those steps took, in total.
     pub kept_zeroing_nanos: u64,
+    /// Times the block-maker thread held a zero step back because a memset of Shared bytes ran
+    /// on the consumer's thread ([`Device::new_buffer`](crate::Device::new_buffer)'s zeroing): it
+    /// starts the step once the memset ends, so the two do not share the memory bus.
+    pub zero_steps_held: u64,
     /// The zero marks of every take, summed: the bytes the takes found zeroed.
     pub zeroed_bytes_taken: u64,
     /// Bytes the runtime zeroed that an idle allocation's free gave back before any take found

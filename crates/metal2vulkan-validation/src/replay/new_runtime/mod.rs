@@ -2113,6 +2113,7 @@ impl Backend for NewRuntime {
             ("allocation_zeroing_nanos", metrics.allocation_zeroing_nanos),
             ("kept_bytes_zeroed", metrics.kept_bytes_zeroed),
             ("kept_zeroing_nanos", metrics.kept_zeroing_nanos),
+            ("zero_steps_held", metrics.zero_steps_held),
             ("zeroed_bytes_taken", metrics.zeroed_bytes_taken),
             ("zeroed_bytes_freed", metrics.zeroed_bytes_freed),
             ("block_zero_fills", metrics.block_zero_fills),

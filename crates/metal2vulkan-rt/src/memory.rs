@@ -15,7 +15,7 @@ use crate::places::Ranges;
 use ash::vk;
 use std::collections::{HashSet, VecDeque};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -367,6 +367,12 @@ pub(crate) struct Pool {
     granule: u64,
     /// Whether the block-maker thread is in an idle allocation's `vkFreeMemory`.
     freeing: AtomicBool,
+    /// The consumer's memsets of Shared bytes that run ([`Pool::fill`]): the block-maker thread
+    /// starts no zero step while one does, so the two never share the memory bus.
+    fills: AtomicUsize,
+    /// The block-maker thread holds a zero step back for a memset that runs: the last memset to
+    /// end wakes it.
+    fill_held: AtomicBool,
     /// For the device tests: while set, the block-maker thread waits inside each idle
     /// allocation's free, with [`freeing`](Self::freeing) set, before it calls `vkFreeMemory`.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -424,6 +430,22 @@ struct State {
     zero_budget: Option<u64>,
 }
 
+/// A consumer memset of Shared bytes that runs ([`Pool::fill`]).
+pub(crate) struct Fill<'a>(&'a Pool);
+
+impl Drop for Fill<'_> {
+    fn drop(&mut self) {
+        let pool = self.0;
+        // The block-maker thread sets `fill_held` before it reads `fills`, and this reads it after
+        // the memset left `fills`: one of the two sees the other. The notify is under the lock,
+        // so the thread is either before its read or waiting.
+        if pool.fills.fetch_sub(1, SeqCst) == 1 && pool.fill_held.load(SeqCst) {
+            let _state = pool.lock();
+            pool.changed.notify_all();
+        }
+    }
+}
+
 thread_local! {
     /// Whether this thread makes allocations ahead of need: the block-maker thread ([`run`]), or
     /// the device's making while it makes the first allocations ([`stock`]). For the
@@ -472,6 +494,8 @@ impl Pool {
             counters,
             granule: GRANULE.max(granularity.next_power_of_two()),
             freeing: AtomicBool::new(false),
+            fills: AtomicUsize::new(0),
+            fill_held: AtomicBool::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             hold_frees: Mutex::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -848,6 +872,15 @@ impl Pool {
         self.changed.notify_all();
     }
 
+    /// A memset of Shared bytes on the consumer's thread begins
+    /// ([`Device::new_buffer`](crate::Device::new_buffer)'s zeroing): the block-maker thread
+    /// starts no zero step until the returned guard drops, so the memset does not share the memory
+    /// bus with one. A step that runs already ends first: at most [`ZERO_STEP`] bytes.
+    pub(crate) fn fill(&self) -> Fill<'_> {
+        self.fills.fetch_add(1, SeqCst);
+        Fill(self)
+    }
+
     /// Stops the block-maker thread once it finishes what it is doing.
     pub(crate) fn stop(&self) {
         self.lock().stop = true;
@@ -1180,8 +1213,16 @@ pub(crate) fn run(core: Arc<Core>) {
             continue;
         }
         // Last, the kept Shared blocks' bytes, the newest block first, a step at a time from its
-        // first byte, off the lock; none while a take waits for a step.
-        if let Some((id, at, len)) = state.zero_step() {
+        // first byte, off the lock; none while a take waits for a step, and none while a consumer
+        // memset runs ([`Pool::fill`]): the step waits for the memset's end.
+        let step = state.zero_step();
+        pool.fill_held.store(step.is_some(), SeqCst);
+        let held = step.is_some() && pool.fills.load(SeqCst) > 0;
+        if held {
+            core.counters.zero_step_held();
+        }
+        if let Some((id, at, len)) = step.filter(|_| !held) {
+            pool.fill_held.store(false, Relaxed);
             state.zeroing = Some(id);
             drop(state);
             let start = crate::host_time();
