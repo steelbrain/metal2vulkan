@@ -1,6 +1,6 @@
 //! The player's report names the recording range a play uses, where it came from, and whether the
-//! play ends there, and whether the stream has the host's display library beside it
-//! (`docs/REPLAY-STREAM.md`, sections 1 and 10).
+//! play ends there, and whether the stream has the host's display library beside it; every report
+//! line goes to the standard error too (`docs/REPLAY-STREAM.md`, sections 1 and 10).
 
 use metal2vulkan_validation::replay::{
     StreamWriter, FLAG_ANNOUNCED_BYTES_RECORDED, FLAG_COMPLETION_BYTES_RECORDED,
@@ -12,9 +12,10 @@ use std::process::Command;
 
 /// The exit status and report of `command-replay play` over the one-call stream `first` with
 /// `extra` options, given a device type no device has, so the play stops before any device opens.
+/// Its standard error carries every line of the report, in order (section 10).
 fn report(dir: &Path, first: &Path, run: &str, extra: &[&str]) -> (Option<i32>, String) {
     let out = dir.join(run);
-    let status = Command::new(bin_exe!("command-replay"))
+    let played = Command::new(bin_exe!("command-replay"))
         .arg("play")
         .arg("--stream")
         .arg(first)
@@ -23,10 +24,18 @@ fn report(dir: &Path, first: &Path, run: &str, extra: &[&str]) -> (Option<i32>, 
         .args(["--device-type", "none", "--shader-cache"])
         .arg(dir.join("cache"))
         .args(extra)
-        .status()
+        .output()
         .unwrap();
     let text = std::fs::read_to_string(out.join("report.txt")).unwrap();
-    (status.code(), text)
+    let stderr = String::from_utf8_lossy(&played.stderr);
+    let mut rest = stderr.lines();
+    for line in text.lines() {
+        assert!(
+            rest.any(|written| written == line),
+            "{line:?} not on the standard error in order: {stderr}"
+        );
+    }
+    (played.status.code(), text)
 }
 
 /// With no sidecar and no table row the range is the whole stream; a sidecar's `last-frame F` ends

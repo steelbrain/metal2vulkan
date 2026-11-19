@@ -11,15 +11,15 @@
 //! Managed buffer stops the play), and `--until-frame` stopping the play after frame `F`'s present
 //! (frames counted from 0). The play ends at the stream's recording range (its sidecar's, else
 //! its row of `RECORDED_RANGES`, else the whole stream) unless `--past-range yes` takes it past.
-//! It writes `DIR/report.txt`: first, where the stream's header lacks
-//! `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's completion fix: the
-//! stream may differ from what the program did` by itself, then `range ...` (the recording range,
-//! where it came from, and whether the play ends there), then
-//! `device NAME runtime old|rt snapshots yes|no`, each frame's `frame`
-//! and `end` lines as the frame ends (flushed, so a play that never ends leaves the frames it
-//! finished), `addresses ...` (the written words that look like addresses, which play as
-//! recorded, the address arguments and those moved, and the objects whose ID differs from the
-//! recording's), the player's other report lines, the
+//! It writes `DIR/report.txt`, each line to the standard error too: first, where the stream's
+//! header lacks `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's
+//! completion fix: the stream may differ from what the program did` by itself, then `range ...`
+//! (the recording range, where it came from, and whether the play ends there), then `device NAME
+//! runtime old|rt snapshots yes|no`, each frame's `frame` and `end` lines as the frame ends
+//! (flushed, so a play that never ends leaves the frames it finished), `addresses ...` (the
+//! written words that look like addresses, which play as recorded, the address arguments and those
+//! moved, and the objects whose ID differs from the recording's), the player's other report lines,
+//! the
 //! backend's own lines, `until-frame F` where the play stopped there (at `--until-frame` or at the
 //! recording range), `cut SEGMENT OFFSET` where
 //! the last
@@ -229,15 +229,28 @@ fn range_line(range: RecordingRange, source: RangeSource, past: bool) -> String 
     }
 }
 
-/// The report file, written as the play goes.
+/// The report file, written as the play goes: every line it takes, the frame lines among them,
+/// goes to the standard error too, so a caller that loses the file keeps the lines.
 struct ReportFile {
     file: std::fs::File,
 }
 
 impl ReportFile {
     fn line(&mut self, line: &str) {
-        let _ = writeln!(self.file, "{line}");
-        let _ = self.file.flush();
+        let _ = writeln!(self, "{line}");
+        let _ = self.flush();
+    }
+}
+
+impl std::io::Write for ReportFile {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.file.write_all(bytes)?;
+        let _ = std::io::stderr().write_all(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
     }
 }
 
@@ -458,7 +471,7 @@ fn run<B: Backend>(
     snapshots: bool,
     until: Option<usize>,
 ) -> i32 {
-    let player = Player::new(backend).with_frame_lines(&mut report.file);
+    let player = Player::new(backend).with_frame_lines(&mut *report);
     let player = match snapshots {
         true => player,
         false => player.without_snapshots(),
