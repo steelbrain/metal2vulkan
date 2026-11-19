@@ -514,7 +514,7 @@ mod on_device {
             // The views outlive their parents' handles, and every gauge falls with the last.
             drop((flat, array));
             assert_eq!(fnv(&read(&of_view)), 0x5d01_ec06_0898_5ec5);
-            drop((views, of_view, formats, cube, apple, written));
+            drop((views, of_view, formats, cube, six, apple, written));
             within("the textures freed", || counters.gauges().textures == 0);
         });
     }
