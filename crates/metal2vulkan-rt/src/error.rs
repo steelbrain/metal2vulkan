@@ -703,6 +703,16 @@ pub enum Refusal {
         /// The buffer's length.
         length: u64,
     },
+    /// A tessellation factor buffer whose factors, at its address plus the offset, start at an
+    /// odd byte: a factor is a `half`. An offset 2 past a multiple of 4 is read at that byte, as
+    /// plain Metal reads it (Metal probe case `factor_offset_2` on an M4).
+    ///
+    /// Basis: metal-documented (`setTessellationFactorBuffer:offset:instanceStride:`'s offset is a
+    /// multiple of 4; Metal's validation stops a patch draw with any other).
+    TessellationFactorOffset {
+        /// The offset asked for.
+        offset: u64,
+    },
     /// An indirect dispatch's arguments, or an indexed draw's indices, at a byte of the
     /// allocation the buffer's block lies in (its device copy's, for a Managed buffer with one)
     /// that is not a multiple of 4, or of the index size.
@@ -1570,6 +1580,10 @@ impl fmt::Display for Refusal {
             Refusal::IndexBufferOffset { offset, length } => write!(
                 f,
                 "indices at offset {offset} of a {length}-byte buffer are misaligned or past its end"
+            ),
+            Refusal::TessellationFactorOffset { offset } => write!(
+                f,
+                "tessellation factors at offset {offset} start at an odd byte"
             ),
             Refusal::ArgumentPlace { place, alignment } => write!(
                 f,

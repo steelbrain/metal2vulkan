@@ -23,6 +23,10 @@ use std::collections::HashSet;
 /// Where a binding is: the stage (fragment or not) and whether it is a texture.
 type Slot = (bool, bool, u32);
 
+/// The tessellation factor buffer's place among a render encoder's slots that hold a skipped
+/// object.
+const FACTORS: Slot = (false, false, u32::MAX);
+
 /// A render encoder, its stages' buffer and texture slots that hold a skipped object, its stages'
 /// sampler slots whose bind it skipped (`clamped`), and whether its pipeline state is a skipped
 /// one.
@@ -630,6 +634,45 @@ impl NewRuntime {
                     indices,
                     instances,
                     base_vertex,
+                    base_instance,
+                )
+            }
+            "setTessellationFactorBuffer:offset:instanceStride:" => {
+                let (offset, stride) = (uint(call, 1)?, uint(call, 2)?);
+                let Some(buffer) = self.bound(call, 0, FACTORS, Self::buffer_of)? else {
+                    return Ok(());
+                };
+                (self.render(id).encoder).set_tessellation_factor_buffer(
+                    buffer.as_ref(),
+                    offset,
+                    stride,
+                )
+            }
+            "drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:\
+             instanceCount:baseInstance:" => {
+                let (points, start, count) = (index(call, 0)?, index(call, 1)?, index(call, 2)?);
+                let indices = match arg(call, 3)? {
+                    Value::Nil => None,
+                    _ => Some((Self::id(call, 3)?, uint(call, 4)?)),
+                };
+                let (instances, base_instance) = (index(call, 5)?, index(call, 6)?);
+                if indices.is_some_and(|(buffer, _)| self.skipped(buffer)) {
+                    self.skips.draws += 1;
+                    return Ok(());
+                }
+                let indices = match indices {
+                    Some((buffer, offset)) => Some((self.buffer_of(call, buffer)?, offset)),
+                    None => None,
+                };
+                if self.draw_skipped(id) {
+                    return Ok(());
+                }
+                (self.render(id).encoder).draw_patches(
+                    points,
+                    start,
+                    count,
+                    indices.as_ref().map(|(buffer, offset)| (buffer, *offset)),
+                    instances,
                     base_instance,
                 )
             }

@@ -1572,11 +1572,29 @@ or does not check is rebuilt from the generations' names, with young counted ful
     and one past `maxVertexInputAttributeOffset` or `maxVertexInputBindingStride`, and more
     attributes or layouts than `maxVertexInputAttributes` or `maxVertexInputBindings`
     (`VertexInputLayout`, with the limit where one is passed);
-  - the per-patch and per-patch-control-point steps, with tessellation (`Tessellation`).
+  - the per-patch and per-patch-control-point steps for a vertex function that is not
+    post-tessellation (`Tessellation`).
 - The triangle class's `VkPipeline` is made with the state, through the device's pipeline
   cache; the line class's is made by the content's first draw of lines, which waits for it (`Metrics::first_use_waits`). Of the two replay streams' 537 render contents
   drawn, 527 draw only triangles and 2 lines and triangles; a content drawn only as lines (8 of
   them) makes a triangle `VkPipeline` it never uses.
+- A post-tessellation vertex function's state draws its patches through the device's tessellator
+  (`tessellationShader`, Floor). Its one `VkPipeline` is the patch class's, made with the state:
+  the translator's synthesized vertex stage (each patch one vertex of a `PATCH_LIST` of one control
+  point, at its position), its synthesized control stage, the function as the evaluation stage,
+  and the fragment function. The control stage reads each patch's factors from the encoder's
+  tessellation factor buffer through their device address, which a draw pushes beside the
+  functions' values; it binds no descriptor, and nothing about the factors happens on the CPU at a
+  draw. The evaluation stage reads its control points' and per-patch attributes from their buffers
+  through the slots' pushed addresses, at the descriptor's layout strides, which the state fixes.
+  The partition modes, windings and maximum factors are the control stage's own, each as Metal
+  states it (the translator's control stage), with its precision notes.
+- Refused at creation for a post-tessellation vertex function, naming what is not built: a
+  per-instance factor step function (`PerInstance`, `PerPatchAndPerInstance`) and an enabled
+  factor scale (`Gap::RenderPipeline` of `Tessellation`), whose instance stride and scale no draw
+  pushes; a control-point index type (`Error::Translation`, `Tessellation` not implemented: the
+  address form reads no control-point index buffer); a layout whose stride is set per bind
+  (`DrawInput`). No replay stream's tessellation state uses any of them.
 
 ### Known gaps of render pipeline states
 
@@ -1585,9 +1603,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   (`DepthStencilFormats`: Vulkan's pipeline takes one format for both,
   `VUID-VkGraphicsPipelineCreateInfo-renderPass-06589`), a `rasterSampleCount` that is not a
   power of two from 1 to 64 (`SampleCount`: Vulkan's rasterization takes one of its sample
-  count bits), vertex amplification, a post-tessellation vertex function (the translation states one;
+  count bits), vertex amplification, a post-tessellation vertex function's per-instance factor
+  step function or enabled factor scale (`Tessellation`;
   a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
-  stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
+  stages the translator synthesizes beside the functions' and a tessellation's, framebuffer fetch, an imageblock, a
   fragment function's stencil output, alpha to one, constant data the binder supplies, a
   specialization other than the sample and amplification counts, dynamic state beyond Vulkan
   1.3's (a vertex buffer layout whose stride is set per bind among it), a
@@ -1699,6 +1718,20 @@ or does not check is rebuilt from the generations' names, with young counted ful
   A draw takes no barrier, as Metal orders none between the draws of one encoder, so a pass of
   any number of draws records the barriers a pass of one does. A draw of no vertices, indices or instances
   records nothing.
+- `set_tessellation_factor_buffer` is `setTessellationFactorBuffer:offset:instanceStride:`, and
+  `draw_patches` is `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:`
+  with a post-tessellation vertex function's state: one `vkCmdDraw` of `patchCount` vertices from
+  `patchStart`, each patch one vertex of the state's patch list. The draw pushes the factor
+  buffer's address plus its offset with the functions' fields, filled once per change of the
+  state or a binding as every field is, so a patch draw records what a plain draw of the same
+  bindings records. The factor buffer counts among the draw's reads as an index buffer does (a
+  Managed one's device copy brought up to date first), and the command buffer keeps it until it
+  retires. The draw's `numberOfPatchControlPoints` changes nothing: the function's own count is
+  what Metal draws. A patch draw with a state that is not post-tessellation, or a draw of
+  primitives with one that is, is `Refusal::PatchDraw`; a patch draw with no factor buffer
+  `Refusal::NoTessellationFactorBuffer`; factors at an odd byte
+  `Refusal::TessellationFactorOffset` (an offset 2 past a multiple of 4, which Metal's validation
+  refuses, is read at that byte, as plain Metal reads it).
 - A viewport is Vulkan's with its height negated (from `y + height`): framebuffer rows, the
   fragment position and derivatives follow Metal's clip space, whose y points up, and Metal's
   front-facing winding is Vulkan's front face of the same name. A viewport of no width or height,
@@ -1774,7 +1807,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   instance other than 0 through a state that steps a layout per instance at a rate above 1
   (`DividedBaseInstance`: Vulkan's divisor takes `firstInstance` 0 alone there,
   VUID-vkCmdDraw-pNext-09461); the same draw from base instance 0 runs. An indirect draw, whose
-  base instance the CPU does not see, is not built. The replay streams draw lines and triangles
+  base instance the CPU does not see, is not built. A patch draw through a patch index buffer is
+  `PatchIndexBuffer`: the control stage takes each patch's index from its position, and no replay
+  stream's patch draw names one. The replay streams draw lines and triangles
   under depth biases with no clamp; every attachment they read through a texture is
   a shader-read colour render target of `Private` storage, read from the fragment function; and
   their stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0.
@@ -1784,9 +1819,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   the level and layer it reads.
 - A vertex fetch outside its buffer returns what the device gives: the floor enables no buffer
   robustness, so there is no bounds guarantee beyond the device's.
-- Not built, and so not methods: indirect draws, visibility results, `useResource:`,
-  `useHeap:stages:`, the store action options setters, tile functions and
-  `setVertexBuffer:offset:attributeStride:atIndex:`. Where a replay stream calls
+- Not built, and so not methods: indirect draws (of patches too), visibility results,
+  `useResource:`, `useHeap:stages:`, the store action options setters, tile functions,
+  `setVertexBuffer:offset:attributeStride:atIndex:`, `setTessellationFactorScale:` (read only by a
+  state that enables the scale, which is refused) and `drawIndexedPatches:` (whose control-point
+  index buffer only a state of a control-point index type reads, which is refused). Where a replay stream calls
   `useHeap:stages:` (`command-replay shapes` counts a stream's calls of each selector), it is
   built in the compute encoder's form, `use_heap`: the command buffer keeps the block and declares
   no access.
