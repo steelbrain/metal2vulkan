@@ -22,7 +22,9 @@
 //!   instance at rate 2 without the divisor feature is refused as `Unsupported{VertexStepRate}`,
 //!   needing `vertexAttributeInstanceRateDivisor`; with it, the layout is an instance-rate binding
 //!   of divisor 2 whether or not the device reports `supportsNonZeroFirstInstance`, and at a rate
-//!   past `maxVertexAttribDivisor` it is refused naming the limit.
+//!   past `maxVertexAttribDivisor` it is refused naming the limit. A pulled-vertex-buffer variant
+//!   of the position's layout pulls it through the slot's pushed address at the layout's pushed
+//!   stride (`VertexBufferStride`); the de-indexed and private list forms stay refused.
 //!
 //! `llvm-as` assembles the fixture; a missing tool skips visibly. No GPU is used.
 
@@ -454,5 +456,85 @@ fn from_queries_fetches_a_constant_step_at_vertex_rate_with_stride_zero() {
             assert_eq!(u.feature, Feature::VertexInputLayout, "moltenvk-m3: {u:?}")
         }
         other => panic!("moltenvk-m3: {:?}", other.map(|_| "compiled")),
+    }
+}
+
+/// Under the identity domains with no buffer robustness, a pulled-vertex-buffer variant of layout 0
+/// pulls `ima_vertex`'s position: the vertex function reads it through the slot's pushed device
+/// address at the layout's pushed stride (`PushField::VertexBufferStride(0)`, the descriptor's 8
+/// a static stride), with no bind offset and no descriptor, and fetches its `short` mark in fixed
+/// function; both modules L3-valid. The de-indexed and private list forms, which read the draw's
+/// raw indices at `PushField::CaptureIndexAddress`, stay `Unsupported{IdentityDomains}`.
+#[test]
+fn from_queries_pulls_a_pulled_vertex_buffer_variant_s_layout_at_its_pushed_stride() {
+    use crate::cache::VariantKey;
+    let Some(library) = ima_library() else {
+        return;
+    };
+    let d = ima_descriptor(&library);
+    let mut pulled = VariantKey::new();
+    pulled.pulled_vertex_buffers.insert(0);
+    let mut de_indexed = VariantKey::new();
+    de_indexed.primitive_id_indices = Some(crate::metal::IndexType::UInt16);
+    let mut private_list = VariantKey::new();
+    private_list.private_list = true;
+    for stem in PROFILES {
+        let device = fixed_function_device(stem);
+        let p = (device.compile_render_variant(&d, &pulled, &Budget::standard()))
+            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        let pulled_layouts: Vec<(u32, u32, VertexStride)> = (p.vertex_input.pulled.iter())
+            .map(|a| (a.attribute, a.buffer_index, a.stride))
+            .collect();
+        assert_eq!(
+            pulled_layouts,
+            [(0, 0, VertexStride::Static(8))],
+            "{stem}: the position pulled"
+        );
+        let formats: Vec<vk::Format> = p.vertex_input.attributes.iter().map(|a| a.format).collect();
+        assert_eq!(formats, [vk::Format::R16_SINT], "{stem}: the mark fetched");
+        let vertex = &p.interface.push[0];
+        assert_eq!(vertex.stage, Stage::Vertex, "{stem}");
+        let fields: Vec<PushField> = vertex.fields.iter().map(|f| f.field).collect();
+        assert!(
+            fields.contains(&PushField::VertexBufferStride(0)),
+            "{stem}: the layout's stride pushed: {fields:?}"
+        );
+        assert!(
+            fields
+                .iter()
+                .any(|f| matches!(f, PushField::SlotGuestBase(_))),
+            "{stem}: the buffer's address pushed: {fields:?}"
+        );
+        assert!(
+            !fields
+                .iter()
+                .any(|f| matches!(f, PushField::SlotBindOffset(_))),
+            "{stem}: no bind offset: {fields:?}"
+        );
+        assert!(
+            vertex
+                .fields
+                .iter()
+                .all(|f| matches!(f.loc, PushLoc::Push { .. })),
+            "{stem}: every field in the push range"
+        );
+        assert!(
+            p.layout.sets.iter().all(|s| s.bindings.is_empty()),
+            "{stem}: no descriptor"
+        );
+        for stage in &p.stages {
+            check_words_valid(&stage.spirv, &p.requirements, device.profile())
+                .unwrap_or_else(|e| panic!("{stem}: {:?}: {e}", stage.stage));
+        }
+        for (form, v) in [("de-indexed", &de_indexed), ("private list", &private_list)] {
+            match device.compile_render_variant(&d, v, &Budget::standard()) {
+                Err(Error::Unsupported(u)) => assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::IdentityDomains, Needs::NotImplemented),
+                    "{stem}: the {form} form"
+                ),
+                other => panic!("{stem}: the {form} form: {:?}", other.map(|_| "compiled")),
+            }
+        }
     }
 }

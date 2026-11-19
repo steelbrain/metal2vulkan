@@ -1923,8 +1923,11 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// and runtime samplers' resource IDs and its constexpr samplers' pushed indices, with no
 /// descriptor and no state of a bound texture or sampler but its resource ID's
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). The values it reads of the encoder are
-/// pushed: the dispatch's region, a storage texture's integer channel widths and the compute
-/// encoder's stage-in region (`PushField::StageInRegion`). Its fields past the push window are a
+/// pushed: the dispatch's region, a storage texture's integer channel widths, the compute
+/// encoder's stage-in region (`PushField::StageInRegion`), and the stride of a vertex layout whose
+/// attributes the function pulls (`PushField::VertexBufferStride`): a post-tessellation function's
+/// control points and patches, and a plain vertex function's layouts that a pulled-vertex-buffer
+/// variant or the de-indexed and private list forms pull. Its fields past the push window are a
 /// parameter block, whose address the window holds.
 fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
     let fields = plan.push.fields.iter().all(|f| match (f.field, f.loc) {
@@ -1936,6 +1939,7 @@ fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
                 | PushField::TextureIntegerChannels(_)
                 | PushField::ConstexprSampler(_)
                 | PushField::StageInRegion
+                | PushField::VertexBufferStride(_)
         ),
     });
     let addressed = plan
