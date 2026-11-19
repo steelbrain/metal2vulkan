@@ -1242,6 +1242,20 @@ on both cards, which says nothing of a device that ran work.
   (15 ms at the 90th). The last command buffer's own report is not late: on the 2080 it came
   97.2-97.5 ms after its commit, where the old runtime's came 94.9-96.4 ms after. The harness prints each command buffer's lateness, from
   its `gpu_end_time` to its completed handler (`late_us`).
+- Every queue's command buffers go to the device's one `VkQueue`, which takes one
+  `vkQueueSubmit2` call at a time (Vulkan requires a queue's host access to be externally
+  synchronized), all of them made by the device's one submit thread. A command buffer is
+  scheduled (its status, its scheduled handlers, `wait_until_scheduled`) by that thread once its
+  earlier calls have returned, whichever queue they were for, so one long driver call delays
+  every queue's scheduling by its length. Metal promises no time between a command buffer's
+  dependencies resolving and its scheduling. Measured on an Iris Xe (RPL-P, Mesa's ANV, job
+  m3-max-52564): the device's first submission, one command buffer filling a new 256 MiB block
+  192 times, spent 27 to 30 ms in the call, and another queue's command buffer whose wait that
+  submission's signal met, committed 0.05 ms after it, was scheduled 0.02 ms after the call
+  returned, where an Apple M3 Max schedules it while the signalling command buffer still runs.
+  The call's time grows with the new block it is the first to use: 2.1 and 2.5 ms with a 1 MiB
+  block, 9.1 ms with 64 MiB and 28.4 ms with 256 MiB (job m3-max-52745); the probe's later
+  submissions spent at most 0.18 ms each.
 - On NVIDIA, short command buffers committed back to back reach the GPU in more submissions than
   the old runtime made of them, and such a burst runs behind it. The cost is NVIDIA's latency per
   submission: the runtime submits sooner, each command buffer as soon as it can. On an RTX 2080
