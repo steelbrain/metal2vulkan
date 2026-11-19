@@ -157,6 +157,47 @@ fn placed(
     Ok(addressed(buffer.map_err(unplaced(call, at))?))
 }
 
+/// `made`, a buffer of `options` that `call` made, holding `bytes` from its first byte, the bytes
+/// the stream says it was made with (a descriptor's `contents`, a no-copy buffer's pages): where it
+/// plays as the runtime's Managed buffer, its GPU copy starts from them too, as Metal makes it
+/// where the device keeps two copies (`docs/REPLAY-STREAM.md`, Managed buffers). The player writes
+/// them again once the buffer is made, which changes nothing.
+fn made_with(
+    call: &Call,
+    made: (Object, Made),
+    options: ResourceOptions,
+    bytes: &[u8],
+) -> Result<(Object, Made), PlayError> {
+    let (Object::Buffer(buffer), _) = &made else {
+        unreachable!("a buffer maker's object");
+    };
+    if bytes.is_empty() || options.storage_mode() != Ok(StorageMode::Managed) {
+        return Ok(made);
+    }
+    write_into(buffer, 0, bytes).map_err(|why| refuse(call, why))?;
+    let end = bytes.len() as u64;
+    buffer.did_modify_range(0..end).map_err(failed(call))?;
+    Ok(made)
+}
+
+/// `bytes` into `buffer`'s CPU-visible bytes at `offset`; why not, where they do not fit.
+fn write_into(buffer: &Buffer, offset: u64, bytes: &[u8]) -> Result<(), String> {
+    let fits = offset
+        .checked_add(bytes.len() as u64)
+        .is_some_and(|end| end <= buffer.length());
+    let contents = (buffer.contents().filter(|_| fits)).ok_or("bytes past its CPU-visible ones")?;
+    // SAFETY: `[offset, offset + len)` lies in the buffer's mapped bytes, and the player waited
+    // for every command buffer that can complete before writing.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            contents.as_ptr().add(offset as usize),
+            bytes.len(),
+        );
+    }
+    Ok(())
+}
+
 /// A buffer of the player's own (a staging copy, a read-back), `length` bytes of `contents`:
 /// outside the space, so that no recorded address can meet it.
 pub(super) fn own_buffer(
@@ -385,7 +426,10 @@ impl OldRuntime {
                 // Played as a buffer of its length: without the read-only option (`buffer`).
                 let options = options(call, uint(call, 2)? & !ResourceOptions::PRIVATE_BIT)?;
                 let options = self.played(call, options)?;
-                placed(device, call, uint(call, 1)?, options, BufferContents::Zero)?
+                let made = placed(device, call, uint(call, 1)?, options, BufferContents::Zero)?;
+                // The pages' bytes at its making, where the stream gives them.
+                let bytes = arg(call, 0)?.as_bytes().unwrap_or_default();
+                made_with(call, made, options, bytes)?
             }
             "newBufferWithBytes:length:options:" => {
                 let bytes = data(call, 0)?;
@@ -398,9 +442,10 @@ impl OldRuntime {
                 placed(device, call, length, options, BufferContents::Copy(bytes))?
             }
             "newBufferWithDescriptor:" => {
-                let (length, options) = descriptors::buffer(call)?;
+                let (length, options, contents) = descriptors::buffer(call)?;
                 let options = self.played(call, options)?;
-                placed(device, call, length, options, BufferContents::Zero)?
+                let made = placed(device, call, length, options, BufferContents::Zero)?;
+                made_with(call, made, options, contents)?
             }
             "m2v.newBlockWithLength:storageMode:" => {
                 let length = uint(call, 0)?;
@@ -991,22 +1036,11 @@ impl Backend for OldRuntime {
                 )))
             }
         };
-        let fits = offset
-            .checked_add(bytes.len() as u64)
-            .is_some_and(|end| end <= buffer.length());
-        let contents = buffer.contents().filter(|_| fits).ok_or_else(|| {
-            PlayError::Invalid(format!("m2v.write past #{target}'s CPU-visible bytes"))
-        })?;
-        // SAFETY: `[offset, offset + len)` lies in the buffer's mapped bytes, and the player waited
-        // for every command buffer that can complete before writing.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                contents.as_ptr().add(offset as usize),
-                bytes.len(),
-            );
-        }
-        Ok(())
+        write_into(buffer, offset, bytes).map_err(|why| {
+            PlayError::Invalid(format!(
+                "m2v.write past #{target}'s CPU-visible bytes: {why}"
+            ))
+        })
     }
 
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError> {

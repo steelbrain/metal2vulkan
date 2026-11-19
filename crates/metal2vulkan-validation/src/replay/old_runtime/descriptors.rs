@@ -117,14 +117,14 @@ pub(super) fn texture(call: &Call, f: &Fields, d: &mut TextureDescriptor) -> Res
     Ok(())
 }
 
-/// `newBufferWithDescriptor:`: the buffer's length and options. Its host memory reaches it nil: a
-/// copied buffer's `contents` the player writes once the buffer is made, a no-copy buffer's bytes
-/// arrive as `m2v.write`, and the pinned address is the recorded one the call answers, where the
-/// backend makes the buffer (`address_placement`). A
+/// `newBufferWithDescriptor:`: the buffer's length, options and the bytes it was made with (its
+/// `contents`, empty where the stream gives none), which the player also writes once the buffer
+/// is made; a no-copy buffer's later bytes arrive as `m2v.write`, and the pinned address is the
+/// recorded one the call answers, where the backend makes the buffer (`address_placement`). A
 /// no-copy buffer is played as a buffer of its length, so one of the read-only option
 /// (`ResourceOptions::PRIVATE_BIT`) is made without it: its GPU writes, which Metal drops, are
 /// kept.
-pub(super) fn buffer(call: &Call) -> Result<(u64, ResourceOptions), PlayError> {
+pub(super) fn buffer(call: &Call) -> Result<(u64, ResourceOptions, &[u8]), PlayError> {
     let f = Fields::arg(
         call,
         0,
@@ -138,15 +138,23 @@ pub(super) fn buffer(call: &Call) -> Result<(u64, ResourceOptions), PlayError> {
             "zeroFrom",
         ],
     )?;
-    if f.get("contents").is_some() {
-        return Err(refuse(call, "contents that are no bytes"));
-    }
+    // The bytes it was made with, where the stream gives them (`docs/REPLAY-STREAM.md`, section 5).
+    let contents = match f.get("contents") {
+        None => &[][..],
+        Some(value) => {
+            (value.as_bytes()).ok_or_else(|| refuse(call, "contents that are no bytes"))?
+        }
+    };
     let sets = f.list("options")?.unwrap_or_default();
     let mut raw = option_sets(call, 0, sets)?;
     if f.bool("noCopy")? == Some(true) {
         raw &= !ResourceOptions::PRIVATE_BIT;
     }
-    Ok((f.required("length", Fields::uint)?, options(call, raw)?))
+    Ok((
+        f.required("length", Fields::uint)?,
+        options(call, raw)?,
+        contents,
+    ))
 }
 
 /// `newHeapWithDescriptor:`: Metal's new heap descriptor holds `Private` storage.

@@ -23,6 +23,9 @@
 //! - A one-copy stream's Managed buffer plays as Shared: a CPU write with no `didModifyRange:`
 //!   reaches a blit's read of it, on a device that keeps Managed buffers in two copies as on one
 //!   that keeps one.
+//! - A two-copy stream's Managed buffers start their GPU copies from the bytes they were made with
+//!   (`rt_replay::made_with`): a no-copy descriptor buffer and a copied one read through a blit as
+//!   the bytes each was made with, on a device that keeps two copies as on one that keeps one.
 //! - A buffer made as a copy of host memory starts with its contents, and the IDs the program saw
 //!   are compared with the runtime's.
 //! - A texture its descriptor marks `outside` takes none of the program's IDs.
@@ -43,7 +46,7 @@
 //! their own beside the stream's.
 
 use super::host_memory::on_device_with;
-use super::rt_replay::library_of;
+use super::rt_replay::{library_of, made_with};
 use super::{at_plan, public_case};
 use crate::replay::{
     Backend, OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value,
@@ -1723,6 +1726,31 @@ fn a_one_copy_stream_s_managed_buffer_plays_as_shared() {
         );
         let managed = "managed one copy (the stream's device identity): 1 Managed buffers and \
                        blocks played as Shared";
+        assert!(lines.iter().any(|l| l == managed), "{lines:?}");
+    });
+}
+
+/// `rt_replay::made_with`'s stream on the old runtime: both Managed buffers' GPU copies start from
+/// the bytes they were made with, and the report says two copies, from the stream's identity.
+#[test]
+fn a_two_copy_stream_s_managed_buffers_start_from_the_bytes_they_were_made_with() {
+    let dir = ScratchDir::new("replay-made-with").unwrap();
+    let path = written(&dir, made_with);
+    on_device_with(at_plan, |device| {
+        let mut backend = OldRuntime::new(device.clone(), crate::gpu::TEST_DEVICE);
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let (report, ended) = Player::new(&mut backend).play(&mut reader);
+        let lines = backend.lines();
+        for line in report.lines().iter().chain(&lines) {
+            eprintln!("REPLAY made-with {} {line}", device.name());
+        }
+        ended.unwrap();
+        assert_eq!(report.checks.len(), 2);
+        for check in &report.checks {
+            let object = check.object;
+            assert_eq!(Some(check.sha256), check.recorded, "#{object}'s GPU copy");
+        }
+        let managed = "managed two copies (the stream's device identity): played as recorded";
         assert!(lines.iter().any(|l| l == managed), "{lines:?}");
     });
 }

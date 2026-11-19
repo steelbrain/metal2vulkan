@@ -542,7 +542,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
   the play with an error that says so. One copy: every Managed buffer plays as a Shared buffer, on
   every device. Two copies: it plays as the runtime's Managed buffer, whose GPU copy starts from
   the bytes it was made with: a copied buffer's bytes, or a no-copy one's bytes at its making
-  (section 5). A stream with no identity record gives a no-copy buffer none, so its GPU copy takes
+  (section 5), which the backend's making takes from the call (a descriptor's `contents`, the
+  pages `newBufferWithBytesNoCopy:length:options:deallocator:` holds) and the player writes again
+  once the buffer is made. A stream with no identity record gives a no-copy buffer none, so its GPU copy takes
   the writes recorded before its first use (a commit of a command buffer one of whose encoders
   names it), the nearest record the stream has of its bytes at its making. Where the device keeps
   a GPU copy, the player places it as it places a Private buffer of the buffer's length (below), a
@@ -554,8 +556,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   record (or `--managed one-copy`), every Managed buffer and block plays as a Shared one, so a CPU
   write reaches the GPU as it reached the recording device's, with or without a
   `didModifyRange:`. Otherwise a Managed buffer plays as the old runtime's, which keeps a GPU copy
-  on a device without unified memory. Its report's `managed` line says which form played, from
-  what, and counts the buffers and blocks played as Shared.
+  on a device without unified memory, and that copy starts from the bytes the buffer was made
+  with, as on the new runtime: the backend's making takes them from the call and announces them
+  (`didModifyRange:` over them). Its report's `managed` line says which form played, from what,
+  and counts the buffers and blocks played as Shared.
 - **No-copy buffers** (the new runtime) play as the product makes them, by creator:
   - A `newBufferWithDescriptor:` with `noCopy` is a pool buffer in the product: a guest buffer's
     storage in one of the host's blocks. Where its recorded address and length lie inside a live

@@ -1135,23 +1135,14 @@ fn cut(call: &Call) -> Result<bool, PlayError> {
     }
 }
 
-/// `descriptor`, a `newBufferWithDescriptor:` map, with its `contents` nil, and the bytes they
-/// held: what a buffer made as a copy of host memory starts with, which the player writes once the
-/// buffer is made (`docs/REPLAY-STREAM.md`, section 5).
-fn copied(descriptor: Value) -> (Value, Option<Vec<u8>>) {
-    let Value::Map(fields) = descriptor else {
-        return (descriptor, None);
-    };
-    let mut contents = None;
-    let fields = fields.into_iter().map(|(key, value)| match value {
-        Value::Bytes(bytes) if &*key == "contents" => {
-            contents = Some(bytes);
-            (key, Value::Nil)
-        }
-        value => (key, value),
-    });
-    let fields = fields.collect();
-    (Value::Map(fields), contents)
+/// The bytes `descriptor`, a `newBufferWithDescriptor:` map, says the buffer was made with (its
+/// `contents`): a copied buffer's, or a no-copy one's at its making. The backend's making takes
+/// them with the descriptor, so a buffer that plays with two copies starts its GPU copy from them,
+/// and the player writes them once the buffer is made (`docs/REPLAY-STREAM.md`, section 5).
+fn copied(descriptor: &Value) -> Option<Vec<u8>> {
+    let fields = descriptor.as_map()?;
+    let (_, contents) = fields.iter().find(|(key, _)| &**key == "contents")?;
+    contents.as_bytes().map(<[u8]>::to_vec)
 }
 
 /// Whether a blob of `around` holds as many bytes as its range.
@@ -1857,9 +1848,8 @@ impl<'b, B: Backend> Player<'b, B> {
             let arg = self.resolve(stream, arg, &mut relocated)?;
             let arg = match (at, &*call.selector) {
                 (0, "newBufferWithDescriptor:") => {
-                    let (descriptor, bytes) = copied(arg);
-                    contents = bytes;
-                    descriptor
+                    contents = copied(&arg);
+                    arg
                 }
                 _ => arg,
             };

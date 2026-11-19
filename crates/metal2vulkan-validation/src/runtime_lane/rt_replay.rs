@@ -27,6 +27,10 @@
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
 //!   commit, and a synchronize brings the GPU's bytes into the CPU's copy.
+//! - A two-copy stream's Managed buffers start their GPU copies from the bytes they were made with:
+//!   a no-copy descriptor buffer and a copied one, each made with 7s and written 7s before its
+//!   first use with no `didModifyRange:`, read as 7s through a blit (on the old runtime too,
+//!   `replay_streams`).
 //! - A Private buffer, which has no CPU mapping, reads back through a copy into a Shared buffer of
 //!   the play's own: a blit's fill of it reads as the fill's bytes.
 //! - In a stream whose header marks its announced bytes recorded, an announcement after a
@@ -2343,4 +2347,72 @@ fn a_copy_from_the_guest_s_ram_plays_as_a_cpu_gather_then_one_copy() {
     // #3: one copy of the words 4..20; #4: 0..4 and 16..24.
     assert_eq!(executed["guest_ram_fill_copies"], 1 + 2);
     assert_eq!(executed["guest_ram_fill_bytes"], 16 + 4 + 8);
+}
+
+/// A stream recorded with two copies (`hasUnifiedMemory` false), with Managed #3, a no-copy
+/// descriptor buffer, and Managed #5, a copied one, 4 bytes each, made with `[7; 4]` and
+/// `[9; 4]` (their descriptors' `contents`) and written so before their first use with no
+/// `didModifyRange:`, as a recorder writes every buffer's bytes before its first use; a blit
+/// copies each into Shared #4 and #6, which a check reads as the bytes each was made with: the
+/// recording device's GPU copy started from them.
+pub(super) fn made_with(w: &mut StreamWriter<File>) -> std::io::Result<()> {
+    w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+    let identity = [("hasUnifiedMemory", Value::Bool(false))];
+    w.call("m2v.deviceIdentity", 1, 0, &[], &identity)?;
+    w.call("newCommandQueue", 1, 2, &[], &[])?;
+    let managed = Value::List(vec![Value::Map(vec![(
+        "ResourceOptions".into(),
+        Value::Uint(16),
+    )])]);
+    let copy_from = "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:";
+    let mut sums = Vec::new();
+    w.call("commandBuffer", 2, 10, &[], &[])?;
+    for (id, no_copy, byte) in [(3, true, 7u8), (5, false, 9)] {
+        let bytes = vec![byte; 4];
+        let descriptor = Value::Map(vec![
+            ("length".into(), Value::Uint(4)),
+            ("options".into(), managed.clone()),
+            ("contents".into(), Value::Bytes(bytes.clone())),
+            ("noCopy".into(), Value::Bool(no_copy)),
+        ]);
+        w.call("newBufferWithDescriptor:", 1, id, &[descriptor], &[])?;
+        let shared = [Value::Uint(4), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, id + 1, &shared, &[])?;
+        let pairs = [Value::Uint(0), Value::Bytes(bytes.clone())];
+        w.call("m2v.write", id, 0, &pairs, &[])?;
+        let encoder = 10 + id;
+        w.call("blitCommandEncoder", 10, encoder, &[], &[])?;
+        let (zero, four) = (Value::Uint(0), Value::Uint(4));
+        let copy = [
+            Value::Object(id),
+            zero.clone(),
+            Value::Object(id + 1),
+            zero,
+            four,
+        ];
+        w.call(copy_from, encoder, 0, &copy, &[])?;
+        w.call("endEncoding", encoder, 0, &[], &[])?;
+        sums.push(Value::Bytes(Sha256::digest(&bytes).to_vec()));
+    }
+    w.call("commit", 10, 0, &[], &[])?;
+    w.call(WAIT_COMPLETED, 10, 0, &[], &[])?;
+    let answer = [("sha256", Value::List(sums))];
+    let checked = [Value::Object(4), Value::Object(6)];
+    w.call("m2v.check", 0, 0, &checked, &answer)
+}
+
+#[test]
+fn a_two_copy_stream_s_managed_buffers_start_from_the_bytes_they_were_made_with() {
+    let dir = ScratchDir::new("rt-replay-made-with").unwrap();
+    let path = written(&dir, made_with);
+    let (report, lines) = play("made-with", &path);
+    assert_eq!(report.checks.len(), 2);
+    for check in &report.checks {
+        let object = check.object;
+        assert_eq!(Some(check.sha256), check.recorded, "#{object}'s GPU copy");
+    }
+    let managed = "managed two copies (the stream's device identity): 2 Managed buffers; 0 \
+                   no-copy ones with contents from first use, not from create";
+    // A device with unified memory adds that it played the two copies as its one.
+    assert!(lines.iter().any(|l| l.starts_with(managed)), "{lines:?}");
 }
