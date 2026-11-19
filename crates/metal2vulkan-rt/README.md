@@ -1068,7 +1068,10 @@ once the GPU went idle and every thread ended within the timeout, and false at o
 or a listener, whose thread cannot wait for itself. A second call returns at once. The timeout
 bounds only the answer: every runtime thread is joined before the call returns, past the timeout
 too, and so before the device's last handle can destroy the device and the instance, which a
-thread still in the driver would reach. A thread that never returns from a driver call keeps
+thread still in the driver would reach. Nothing is cancelled at the timeout (held work ends
+`NotRun` when the stop begins, and the GPU runs what was submitted to the end), so a false answer
+outside a handler or a listener says only that this took longer than the timeout: the call
+returns once the GPU has completed everything submitted and every thread has ended, as on true. A thread that never returns from a driver call keeps
 quiesce, and the device's drop, from returning: on NVIDIA's driver, where the GPU faulted, the
 completion thread's `vkWaitSemaphores` with no timeout does not return until a later submission,
 which after quiesce the runtime never makes; a known gap on NVIDIA.
