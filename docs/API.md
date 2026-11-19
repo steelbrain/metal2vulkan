@@ -111,8 +111,11 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   addresses used directly and a texture's or sampler's handle is its `gpuResourceID`
   ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
   them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
-  pushed less 2^31 as `PushField::SlotGuestBase` (section 5), with no root table, no descriptor
-  and no containment, as Metal contains no device-address access. A slot whose argument states an
+  pushed less 2^31 as `PushField::SlotGuestBase` (section 5), with no root table and no
+  descriptor. With containment on, an access of the slot whose byte offset is not a
+  translation-time constant is checked against the slot's `PushField::SlotRemaining`, the bytes
+  from its bind offset to its buffer's end: outside, a load reads zero and a store or atomic does
+  nothing (section 5). An access at a constant offset is not checked. A slot whose argument states an
   alignment of at least 4 (`air.arg_type_align_size`) is reached from that address as it is: each
   access is at the pushed word plus its 32-bit byte offset plus 2^31, modulo 2^32, zero-extended,
   which is the address plus the offset read as signed, exact as the new runtime makes no buffer
@@ -1566,6 +1569,23 @@ for dependency in &pipeline.dependencies {
   binder (`BindingPlan::instantiate_*`) of a device that compiles under the identity domains
   writes the word so. A pointer loaded from an argument buffer is the address the buffer holds,
   unbiased. A texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased.
+- Under the identity domains with containment on, a buffer slot that an access may reach at a
+  byte offset that is not a translation-time constant (an index the memory plan does not prove
+  one value, a looping `memcpy` or `memset`, a pulled fetch) also reads
+  `PushField::SlotRemaining`: a `u32`, the bound buffer's length less the bind offset, the length
+  of its `setBytes` copy, or 0 where nothing is bound. Each such access whose offset the module
+  does not hold as a constant is checked with the normative check, `(len >= n) && (offset <= len -
+  n)` in `u32`, for an `n`-byte access at its 32-bit byte offset from the bind offset, so an
+  offset before the bind offset, which wraps to at least 2^31, is outside, as the default domains'
+  descriptor range starts at the bind offset. A load outside reads each of its units at
+  `PushField::ZeroAddress`, a `u64` the consumer pushes: the address of 16 bytes of zeros, a
+  multiple of 16, that nothing writes. That is one select of each unit's address, with no select
+  of the value and no branch, and the load touches nothing of the slot. A store or an atomic
+  outside sits in the check's selection and runs nothing; an atomic's answer there is 0. Nil and a
+  slot shorter than one access push a length that every such access past it fails. An access at
+  a constant offset, and an access through a pointer loaded from memory or made from an integer,
+  is not checked. The binder writes `SlotRemaining` from the bound buffer and refuses
+  `ZeroAddress` (`Unsupported{IdentityDomains}`): the zero range is the new runtime's own memory.
 - The layout numbers set 0 densely, in `ResourceSlot` order. Set 1 holds the heap arrays (the
   resources reached through argument buffers and resource IDs); `pipeline::heap_sampler_capacity`
   is the most elements a set-1 sampler array has on a profile. A texture buffer reached so is an
