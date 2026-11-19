@@ -1289,6 +1289,10 @@ pub enum Feature {
     ConstantGlobalEscaping,
     /// Threadgroup memory above the device limit.
     ThreadgroupMemorySize,
+    /// Threadgroup memory that reads zero until the program writes it, on
+    /// `Device::from_queries`' profile: a null initializer of each `Workgroup` variable that holds
+    /// it, which needs `shaderZeroInitializeWorkgroupMemory`.
+    ZeroedThreadgroupMemory,
     /// `coherent(device)` accesses (Vulkan memory model).
     CoherentMemory,
     /// 64-bit atomics.

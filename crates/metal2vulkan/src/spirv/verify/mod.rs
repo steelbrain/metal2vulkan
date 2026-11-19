@@ -40,8 +40,8 @@
 //! - **Derived facts.** The recorded entry interface and requirements equal what the module
 //!   contains (a transform that changes the module re-derives them).
 //! - **Profile rules** ([`verify`] only): no `Workgroup` initializer unless the profile enables
-//!   `shaderZeroInitializeWorkgroupMemory`, and the requirements are a subset of the profile
-//!   (`Internal(RequirementsExceedProfile)`).
+//!   `shaderZeroInitializeWorkgroupMemory`, and none but `OpConstantNull`; the requirements are a
+//!   subset of the profile (`Internal(RequirementsExceedProfile)`).
 //!
 //! A pass counts what it covered as it checks it, and that count is the module's public
 //! [`ModuleStats`]: the verifier runs on every translation, so the statistics cost nothing beyond
@@ -161,7 +161,7 @@ pub enum Violation {
     RequirementsStale,
     // ---- Profile ----
     /// A `Workgroup` variable with an initializer on a profile without
-    /// `shaderZeroInitializeWorkgroupMemory`.
+    /// `shaderZeroInitializeWorkgroupMemory`, or with one that is not `OpConstantNull`.
     WorkgroupInitializer(GlobalId),
     /// An atomic in `block` whose pointer operand `ptr` is not a place (a variable, an access
     /// chain, or a texel pointer).

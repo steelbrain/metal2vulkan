@@ -13,8 +13,8 @@ use crate::spirv::error::{
 use crate::spirv::ids::{ConstId, GlobalId, TypeId};
 use crate::spirv::ir::{
     natural_layout, ConstBits, Constant, Decl, Dim, ExecMode, ExecModel, ImageType, ImageUsage,
-    Inst, IoDecor, IoDir, LayoutRule, MemAccess, MemberLayout, Scope, StorageClass, StructLayout,
-    Terminator, Type, TypedModule, ValueOrigin,
+    Inst, IoDecor, IoDir, LayoutRule, MemAccess, MemberLayout, Scope, SpecOp, StorageClass,
+    StructLayout, Terminator, Type, TypedModule, ValueOrigin,
 };
 use std::collections::BTreeSet;
 
@@ -669,6 +669,38 @@ fn constants_are_checked_and_deduped() {
         Err(BuildError::Constant(ConstRule::NullType))
     );
     t.b.constant(Constant::Null { ty: v2 }).expect("null uvec2");
+}
+
+/// The null of an array whose length an `OpSpecConstantOp` gives, as a threadgroup arena whose
+/// regions specialization sizes, is a constant like any other array's null, and initializes a
+/// `Workgroup` variable of that type; a runtime array has none.
+#[test]
+fn a_specialization_sized_array_has_a_null() {
+    let mut t = T::new();
+    let u = t.u32();
+    let len =
+        t.b.spec(SpecKey::TgLength(0), u, ConstBits(16))
+            .expect("spec");
+    let four = t.uconst(4);
+    let sized = t.b.spec_op(SpecOp::IAdd, u, &[len, four]).expect("spec op");
+    let wg = t.ty(Type::Array {
+        elem: u,
+        len: sized,
+        stride: None,
+    });
+    let null =
+        t.b.constant(Constant::Null { ty: wg })
+            .expect("null of a spec-op array");
+    t.b.plain_global(StorageClass::Workgroup, wg, Some(null))
+        .expect("an initialized workgroup array");
+    let runtime = t.ty(Type::RuntimeArray {
+        elem: u,
+        stride: Some(4),
+    });
+    assert_eq!(
+        t.b.constant(Constant::Null { ty: runtime }),
+        Err(BuildError::Constant(ConstRule::NullType))
+    );
 }
 
 #[test]

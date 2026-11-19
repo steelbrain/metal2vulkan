@@ -884,7 +884,7 @@ fn a_small_specialized_threadgroup_arena_is_floored_at_eight_words() {
                 fragment: None,
                 words: Default::default(),
             };
-            Ok(declare_threadgroup(mb, &shape)?.decl.global)
+            Ok(declare_threadgroup(mb, &shape, false)?.decl.global)
         });
         let mut res = buffers(&[64]);
         res.spec.insert(SpecKey::TgLength(0), len);
@@ -909,7 +909,7 @@ fn a_small_specialized_threadgroup_arena_is_floored_at_eight_words() {
             fragment: None,
             words: Default::default(),
         };
-        Ok(declare_threadgroup(mb, &shape)?.decl.global)
+        Ok(declare_threadgroup(mb, &shape, false)?.decl.global)
     });
     let mut res = buffers(&[64]);
     res.spec.insert(SpecKey::TgLength(0), 48);

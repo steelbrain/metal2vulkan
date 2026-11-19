@@ -1605,6 +1605,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
   Metal's is its `maxThreadgroupMemoryLength`. A kernel's access past its threadgroup memory is
   undefined, as in Metal, and the runtime does not confine it.
+- Threadgroup memory, a function's declared threadgroup variables and its `[[threadgroup(n)]]`
+  arguments, reads zero in every threadgroup until the program writes it, as an Apple GPU reads it
+  (the translator's null initializers, docs/API.md, "Threadgroup memory before the program writes
+  it").
 
 ## Compute encoders
 

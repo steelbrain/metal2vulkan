@@ -16562,6 +16562,7 @@ variant	metal2vulkan::error::Feature::ViewportDepthRange	ViewportDepthRange
 variant	metal2vulkan::error::Feature::VulkanVersion	VulkanVersion
 variant	metal2vulkan::error::Feature::WideLines	WideLines
 variant	metal2vulkan::error::Feature::WideSwitchLiteral	WideSwitchLiteral
+variant	metal2vulkan::error::Feature::ZeroedThreadgroupMemory	ZeroedThreadgroupMemory
 variant	metal2vulkan::error::GenericPointer::Aggregate	Aggregate
 variant	metal2vulkan::error::GenericPointer::Call	Call
 variant	metal2vulkan::error::GenericPointer::Integer	Integer

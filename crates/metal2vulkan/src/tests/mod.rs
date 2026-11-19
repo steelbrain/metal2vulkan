@@ -218,6 +218,7 @@ mod engine_workgroup_layout;
 mod engine_ycbcr_in_place;
 mod engine_zero_factors;
 mod engine_zeroed_colors;
+mod engine_zeroed_threadgroup;
 mod env_registry;
 mod fast_paths;
 mod fuzz_interp;

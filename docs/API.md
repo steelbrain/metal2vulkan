@@ -1079,6 +1079,29 @@ through buffer arguments it reads at any index.
   `access.threadgroup.load.floats` and `access.threadgroup.store.floats`. Every other kernel, and
   every kernel on `Device::new`'s profile, holds `u32` words; on `Device::new`'s profile each
   access is contained, a load past the memory reading 0 and its store dropped.
+- **Threadgroup memory before the program writes it.** On `Device::from_queries`' profile a
+  function's threadgroup memory reads zero until the program writes it: the `Workgroup` variables
+  that hold it, its threadgroup arena (declared threadgroup variables, `[[threadgroup(n)]]`
+  arguments and an explicit imageblock) and its typed threadgroup objects, have a null
+  initializer, in every threadgroup of every dispatch. That needs
+  `shaderZeroInitializeWorkgroupMemory`, which Vulkan 1.3 requires; a function that uses
+  threadgroup memory on a profile without it is `Unsupported` with
+  `Feature::ZeroedThreadgroupMemory`. The translator's own `Workgroup` words (an emulated SIMD
+  group's exchange scratch and vote word, an object function's mesh grid, a mesh function's
+  primitive count and staged indices, an emulated object or mesh function's payload, and the
+  binder's own scan and merge kernels) have none: each is written before any read of it, and an
+  object function's payload "is assumed uninitialized at the entry of the object function" (the
+  Metal Shading Language Specification, the `payload` attribute). Metal's documents give
+  threadgroup memory no first contents: `MTLComputeCommandEncoder.h`'s
+  `setThreadgroupMemoryLength:atIndex:` reads "Set the threadgroup memory byte length at the
+  binding point specified by the index. This applies to all compute kernels.", Apple's page for it
+  "Configures the size of a block of threadgroup memory." and points to the specification's
+  section 4.4, which says "Threadgroup variables in a kernel, mesh, or object function only exist
+  for the lifetime of the threadgroup that executes the kernel." and nothing of what they hold
+  first. An Apple M3 Max under macOS 27.0.1 reads zero there (the conformance case
+  `compute-threadgroup-memory-reads-zero`), and recorded programs read entries of it they have not
+  written. On `Device::new`'s profile no `Workgroup` variable has an initializer, and such a read
+  gives what the device's memory holds.
 - **Binary functions, required threadgroup sizes, buffer mutability.** Whether a binary function
   was compiled to a binary (`LinkedFunction::precompiled`), required threadgroup sizes and buffer
   mutability change no translation and are in no compile key; the runtime checks them as Metal

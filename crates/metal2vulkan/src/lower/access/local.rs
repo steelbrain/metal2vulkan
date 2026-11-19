@@ -103,8 +103,9 @@ use crate::air::ir::{
     IntPredicate, Type, TypeId, Value, ValueId,
 };
 use crate::budget::{tree_bytes, Meter, PRIVATE_ARENA_BYTES};
-use crate::device::profile::{Containment, GuestIsolation, ThreadgroupMemory};
-use crate::error::{Error, Feature, Limit, LowerFamily, Unsupported};
+use crate::device::profile::{Containment, GuestIsolation, ThreadgroupMemory, ThreadgroupStart};
+use crate::device::requirements::VkFeature;
+use crate::error::{Capability, Error, Feature, Limit, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{Plan, SelectCx};
 use crate::memory::alloca::{self, Init, Shape, Step, Strides, TypedPath, TypedTy};
@@ -461,6 +462,10 @@ pub struct LocalPlan {
     pub typed: Vec<TypedObject>,
     /// Each typed object's position in `typed`, so a use finds it in one search, not a scan.
     pub positions: BTreeMap<Home, u32>,
+    /// Whether the threadgroup arena's array and every typed threadgroup object are declared with
+    /// a null initializer, so the function's threadgroup memory reads zero until it writes it
+    /// (`ThreadgroupStart::Zero`, [`zero_threadgroup`]).
+    pub zeroed: bool,
 }
 
 impl LocalPlan {
@@ -571,6 +576,9 @@ fn use_home(cx: &mut SelectCx<'_>, home: Home, m: &mut Meter) -> Result<(), Erro
     if cx.families.access.local.position(home).is_some() {
         return Ok(());
     }
+    if let Home::Shared(_) = home {
+        zero_threadgroup(cx)?;
+    }
     let (ty, count) = object(cx, home)?;
     let tt = alloca::typed_ty(cx.entry, cx.profile, ty, fragments(cx, home), m)??;
     // A refusal past the shape releases it.
@@ -628,6 +636,26 @@ fn count_and_init(
     Ok((count, init))
 }
 
+/// Where the profile's threadgroup memory starts at zero (`ThreadgroupStart::Zero`), record that
+/// the function's threadgroup memory, a `Workgroup` variable, is declared with a null initializer:
+/// `Unsupported{ZeroedThreadgroupMemory}` on a profile without
+/// `shaderZeroInitializeWorkgroupMemory`, which Vulkan requires of any initializer there.
+fn zero_threadgroup(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+    if cx.profile.threadgroup_start() != ThreadgroupStart::Zero {
+        return Ok(());
+    }
+    let feature = VkFeature::ShaderZeroInitializeWorkgroupMemory;
+    if !cx.profile.fields().enabled.features.contains(&feature) {
+        return Err(Unsupported::needs(
+            Feature::ZeroedThreadgroupMemory,
+            Capability::Feature(feature),
+        )
+        .into());
+    }
+    cx.families.access.local.zeroed = true;
+    Ok(())
+}
+
 /// Record that the function uses `arena`. The threadgroup arena's shape is fixed and checked
 /// against `maxComputeSharedMemorySize` once, and every region's length becomes a runtime fact of
 /// the function. A private arena past `budget::PRIVATE_ARENA_BYTES` is
@@ -654,6 +682,11 @@ pub(super) fn use_arena(cx: &mut SelectCx<'_>, arena: Arena) -> Result<(), Error
                 return Err(super::tile::threadgroup_variable());
             }
             let mut shape = TgShape::of(&cx.memory.tg_arena);
+            // A fragment function's arena is its tile's memory in the pass's buffer, no
+            // `Workgroup` variable.
+            if !fragment {
+                zero_threadgroup(cx)?;
+            }
             if fragment {
                 // Its arguments are its tile's memory in the pass's buffer, no workgroup array.
                 if shape.regions.is_empty() {
@@ -1038,8 +1071,9 @@ pub fn param_value(
 }
 
 /// Declare a typed object's variable: an array of `count` elements, `Private` with a constant
-/// global's initializer, or a typed threadgroup object's `Workgroup` one.
-fn declare_typed(mb: &mut ModuleBuilder, o: &TypedObject) -> BResult<GlobalId> {
+/// global's initializer, or a typed threadgroup object's `Workgroup` one, with a null initializer
+/// where the plan's threadgroup memory is `zeroed`.
+fn declare_typed(mb: &mut ModuleBuilder, o: &TypedObject, zeroed: bool) -> BResult<GlobalId> {
     let (elem, types) = alloca::spirv_types(mb, &o.ty)?;
     let u32_ = mb.ty(SType::Int {
         width: 32,
@@ -1063,6 +1097,9 @@ fn declare_typed(mb: &mut ModuleBuilder, o: &TypedObject) -> BResult<GlobalId> {
                 parts: parts.into(),
             })?)
         }
+        None if zeroed && matches!(o.home, Home::Shared(_)) => {
+            Some(mb.constant(Constant::Null { ty })?)
+        }
         None => None,
     };
     let class = match o.home {
@@ -1077,11 +1114,11 @@ pub fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<LocalDecl> {
     let p = &plan.families.access.local;
     let mut typed = Vec::with_capacity(p.typed.len());
     for o in &p.typed {
-        typed.push((o.home, declare_typed(mb, o)?));
+        typed.push((o.home, declare_typed(mb, o, p.zeroed)?));
     }
     Ok(LocalDecl {
         tg: match &p.tg {
-            Some(shape) => Some(arena::declare_threadgroup(mb, shape)?),
+            Some(shape) => Some(arena::declare_threadgroup(mb, shape, p.zeroed)?),
             None => None,
         },
         private: match p.private {

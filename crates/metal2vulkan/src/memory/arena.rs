@@ -333,15 +333,37 @@ fn konst(mb: &mut ModuleBuilder, v: u64) -> BResult<ConstId> {
     })
 }
 
-/// The `u32` array of `words` (a constant) in storage class `class`.
-fn array(mb: &mut ModuleBuilder, class: StorageClass, words: ConstId) -> BResult<GlobalId> {
+/// The `class` variable of type `ty`, with a null initializer where it is `zeroed`: a
+/// threadgroup arena on a profile whose threadgroup memory reads zero until the program writes it
+/// (`ThreadgroupStart::Zero`).
+fn variable(
+    mb: &mut ModuleBuilder,
+    class: StorageClass,
+    ty: TypeId,
+    zeroed: bool,
+) -> BResult<GlobalId> {
+    let init = match zeroed {
+        true => Some(mb.constant(Constant::Null { ty })?),
+        false => None,
+    };
+    mb.plain_global(class, ty, init)
+}
+
+/// The `u32` array of `words` (a constant) in storage class `class`, null-initialized where it is
+/// `zeroed`.
+fn array(
+    mb: &mut ModuleBuilder,
+    class: StorageClass,
+    words: ConstId,
+    zeroed: bool,
+) -> BResult<GlobalId> {
     let elem = u32_ty(mb)?;
     let ty = mb.ty(Type::Array {
         elem,
         len: words,
         stride: None,
     })?;
-    mb.plain_global(class, ty, None)
+    variable(mb, class, ty, zeroed)
 }
 
 /// The length of an arena of `float` words of `words` whole words: its words, and never under
@@ -350,15 +372,16 @@ pub fn float_len(words: u64) -> u64 {
     words.max(FLOAT_LEAST)
 }
 
-/// The `Workgroup` `float` array of `len` (a constant) words: an arena of `float` words.
-fn float_array(mb: &mut ModuleBuilder, len: ConstId) -> BResult<GlobalId> {
+/// The `Workgroup` `float` array of `len` (a constant) words: an arena of `float` words,
+/// null-initialized where it is `zeroed`.
+fn float_array(mb: &mut ModuleBuilder, len: ConstId, zeroed: bool) -> BResult<GlobalId> {
     let elem = mb.ty(Type::Float { width: 32 })?;
     let ty = mb.ty(Type::Array {
         elem,
         len,
         stride: None,
     })?;
-    mb.plain_global(StorageClass::Workgroup, ty, None)
+    variable(mb, StorageClass::Workgroup, ty, zeroed)
 }
 
 /// Words of a static arena of `bytes`: whole words, at least [`MIN_ARENA_BYTES`].
@@ -374,17 +397,23 @@ fn static_words(bytes: u64) -> u64 {
 /// constants (default 0 by 0). The size is the last region's end, and the array's length `max(size
 /// / 4, MIN_ARENA_BYTES / 4)`, all `OpSpecConstantOp`s. An arena of `float` words
 /// ([`TgWords::Floats`]) is a `float` array of its whole words, at least [`FLOAT_LEAST`]
-/// ([`float_len`]).
-pub fn declare_threadgroup(mb: &mut ModuleBuilder, shape: &TgShape) -> BResult<TgDecl> {
+/// ([`float_len`]). A `zeroed` arena's array has a null initializer: the program's threadgroup
+/// memory, its tile's memory and its imageblock among it, reads zero until it is written
+/// (`ThreadgroupStart::Zero`).
+pub fn declare_threadgroup(
+    mb: &mut ModuleBuilder,
+    shape: &TgShape,
+    zeroed: bool,
+) -> BResult<TgDecl> {
     let u32_ = u32_ty(mb)?;
     if shape.regions.is_empty() && shape.imageblock.is_none() {
         let size = konst(mb, shape.static_size)?;
         let (global, floats) = if shape.words == TgWords::Floats {
             let len = konst(mb, float_len(shape.static_size.div_ceil(4)))?;
-            (float_array(mb, len)?, true)
+            (float_array(mb, len, zeroed)?, true)
         } else {
             let words = konst(mb, static_words(shape.static_size))?;
-            (array(mb, StorageClass::Workgroup, words)?, false)
+            (array(mb, StorageClass::Workgroup, words, zeroed)?, false)
         };
         return Ok(TgDecl {
             decl: ArenaDecl {
@@ -399,6 +428,7 @@ pub fn declare_threadgroup(mb: &mut ModuleBuilder, shape: &TgShape) -> BResult<T
             fragment: None,
         });
     }
+    // Its tile's memory in the pass's buffer: no `Workgroup` variable.
     if let Some(coord) = shape.fragment {
         return declare_fragment(mb, shape, coord);
     }
@@ -447,7 +477,7 @@ pub fn declare_threadgroup(mb: &mut ModuleBuilder, shape: &TgShape) -> BResult<T
         let bool_ = mb.ty(Type::Bool)?;
         let small = mb.spec_op(SpecOp::ULessThan, bool_, &[words, least])?;
         let len = mb.spec_op(SpecOp::Select, u32_, &[small, least, words])?;
-        (float_array(mb, len)?, true)
+        (float_array(mb, len, zeroed)?, true)
     } else {
         // The composed form's words, made in this order so its module is the same word for word.
         let min = konst(mb, MIN_ARENA_BYTES / 4)?;
@@ -455,7 +485,7 @@ pub fn declare_threadgroup(mb: &mut ModuleBuilder, shape: &TgShape) -> BResult<T
         let bool_ = mb.ty(Type::Bool)?;
         let small = mb.spec_op(SpecOp::ULessThan, bool_, &[words, min])?;
         let words = mb.spec_op(SpecOp::Select, u32_, &[small, min, words])?;
-        (array(mb, StorageClass::Workgroup, words)?, false)
+        (array(mb, StorageClass::Workgroup, words, zeroed)?, false)
     };
     Ok(TgDecl {
         decl: ArenaDecl {
@@ -528,7 +558,10 @@ pub fn payload_bytes(size: u64) -> u64 {
 
 /// Declare the payload arena of a payload of `size` bytes: a `TaskPayloadWorkgroupEXT` array of
 /// [`payload_bytes`], or, for an emulated object or mesh function (`emulated`), a `Workgroup` one
-/// that its wrapper copies out of or into its slot of the draw's work buffer.
+/// that its wrapper copies out of or into its slot of the draw's work buffer. Neither has an
+/// initializer: an object function's payload "is assumed uninitialized at the entry of the object
+/// function" (the Metal Shading Language Specification's `payload` attribute), and an emulated
+/// mesh function's wrapper copies its payload in before the function runs.
 pub fn declare_payload(mb: &mut ModuleBuilder, size: u64, emulated: bool) -> BResult<ArenaDecl> {
     let bytes = konst(mb, size)?;
     let words = konst(mb, static_words(size))?;
@@ -537,7 +570,7 @@ pub fn declare_payload(mb: &mut ModuleBuilder, size: u64, emulated: bool) -> BRe
     } else {
         StorageClass::TaskPayloadWorkgroupEXT
     };
-    let global = array(mb, class, words)?;
+    let global = array(mb, class, words, false)?;
     Ok(ArenaDecl {
         arena: Arena::Payload,
         global,
@@ -551,7 +584,7 @@ pub fn declare_payload(mb: &mut ModuleBuilder, size: u64, emulated: bool) -> BRe
 pub fn declare_private(mb: &mut ModuleBuilder, size: u64) -> BResult<ArenaDecl> {
     let bytes = konst(mb, size)?;
     let words = konst(mb, static_words(size))?;
-    let global = array(mb, StorageClass::Private, words)?;
+    let global = array(mb, StorageClass::Private, words, false)?;
     Ok(ArenaDecl {
         arena: Arena::Private,
         global,

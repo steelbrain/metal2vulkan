@@ -33,6 +33,7 @@ feature	PointerCompare	rare	comparing pointers of different roots
 feature	HandleAsPointer	rare	resource handles used as byte pointers
 feature	ConstantGlobalEscaping	rare	a constant global whose address escapes
 feature	ThreadgroupMemorySize	rare	threadgroup memory past a smaller device's limit
+feature	ZeroedThreadgroupMemory	rare	threadgroup memory on a device without shaderZeroInitializeWorkgroupMemory, which Vulkan 1.3 requires
 feature	CoherentMemory	rare	coherent(device) accesses
 feature	Int64Atomics	rare	64-bit atomics
 feature	ImageAtomics	rare	texture atomics beyond 32-bit integers

@@ -1225,24 +1225,26 @@ fn large_module_defects_are_keyed_on_anv() {
     }
 }
 
-/// The stage bound, two notes, the narrow wrap, the push window, the `half` fused multiply-add and
-/// the absent read are facts of the profile, on every committed profile: `Device::new` bounds a stage only where
+/// The stage bound, two notes, the narrow wrap, the push window, the `half` fused multiply-add, the
+/// absent read and the threadgroup memory's start are facts of the profile, on every committed profile: `Device::new` bounds a stage only where
 /// its driver's identity names a stage-size defect (`StageBound::Defects`), notes the controlled
 /// `half` pair only where its driver fuses arithmetic into the narrowing (`HalfPairNote::Fused`),
 /// records implementation-defined reconvergence as the stage's field alone
 /// (`ReconvergenceNote::Field`), masks every narrow result (`NarrowWrap::Every`), pushes 128 bytes
 /// to a kernel (`PushWindow::Guaranteed`) and takes the 16-bit `Fma` only where its driver is
-/// measured (`HalfFma::Measured`), and marks an absent argument's read (`AbsentReads::Marked`);
-/// `Device::from_queries` bounds every stage, notes every pair, notes the reconvergence, masks
-/// only the narrow results a use reads, pushes 256 bytes, takes the 16-bit `Fma` under the 16-bit
-/// float controls and reads an absent argument as zero alone (`Every`, `Every`, `Noted`, `Read`,
-/// `Floor`, `Native`, `Nil`). The facts key the fingerprint: a profile of the same fields with another fact is
-/// another profile, the `half` fused multiply-add's included.
+/// measured (`HalfFma::Measured`), marks an absent argument's read (`AbsentReads::Marked`) and
+/// initializes no threadgroup memory (`ThreadgroupStart::Unwritten`); `Device::from_queries`
+/// bounds every stage, notes every pair, notes the reconvergence, masks only the narrow results a
+/// use reads, pushes 256 bytes, takes the 16-bit `Fma` under the 16-bit float controls, reads an
+/// absent argument as zero alone and zeroes threadgroup memory until the program writes it
+/// (`Every`, `Every`, `Noted`, `Read`, `Floor`, `Native`, `Nil`, `Zero`). The facts key the
+/// fingerprint: a profile of the same fields with another fact is another profile, the `half`
+/// fused multiply-add's and the threadgroup memory's start included.
 #[test]
 fn the_profiles_facts_follow_its_constructor() {
     use crate::device::profile::{
         AbsentReads, DeviceProfile, HalfFma, HalfPairNote, NarrowWrap, ProfileFacts, PushWindow,
-        ReconvergenceNote, StageBound,
+        ReconvergenceNote, StageBound, ThreadgroupStart,
     };
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
@@ -1276,6 +1278,12 @@ fn the_profiles_facts_follow_its_constructor() {
             queries.profile().absent_reads(),
         );
         assert_eq!(reads, (AbsentReads::Marked, AbsentReads::Nil), "{stem}");
+        let starts = (
+            old.profile().threadgroup_start(),
+            queries.profile().threadgroup_start(),
+        );
+        let want = (ThreadgroupStart::Unwritten, ThreadgroupStart::Zero);
+        assert_eq!(starts, want, "{stem}");
         let fields = queries.profile().fields().clone();
         for facts in [
             ProfileFacts {
@@ -1284,6 +1292,10 @@ fn the_profiles_facts_follow_its_constructor() {
             },
             ProfileFacts {
                 half_fma: HalfFma::Measured,
+                ..ProfileFacts::EVERY
+            },
+            ProfileFacts {
+                threadgroup_start: ThreadgroupStart::Unwritten,
                 ..ProfileFacts::EVERY
             },
         ] {

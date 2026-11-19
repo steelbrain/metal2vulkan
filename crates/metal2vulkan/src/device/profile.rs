@@ -162,6 +162,11 @@ impl DeviceProfile {
         self.facts.threadgroup_memory
     }
 
+    /// What a program's threadgroup memory holds before the program writes it.
+    pub(crate) fn threadgroup_start(&self) -> ThreadgroupStart {
+        self.facts.threadgroup_start
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -618,6 +623,8 @@ pub(crate) struct ProfileFacts {
     /// Whether a threadgroup memory access is contained, and how a kernel's threadgroup arena
     /// holds its words when every access of it is a whole, aligned `float` word.
     pub(crate) threadgroup_memory: ThreadgroupMemory,
+    /// What a program's threadgroup memory holds before the program writes it.
+    pub(crate) threadgroup_start: ThreadgroupStart,
 }
 
 impl ProfileFacts {
@@ -636,6 +643,7 @@ impl ProfileFacts {
         deep_threadgroups: DeepThreadgroups::Axes,
         absent_reads: AbsentReads::Marked,
         threadgroup_memory: ThreadgroupMemory::Contained,
+        threadgroup_start: ThreadgroupStart::Unwritten,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -653,6 +661,7 @@ impl ProfileFacts {
         deep_threadgroups: DeepThreadgroups::OneRow,
         absent_reads: AbsentReads::Nil,
         threadgroup_memory: ThreadgroupMemory::Native,
+        threadgroup_start: ThreadgroupStart::Zero,
     };
 }
 
@@ -747,6 +756,23 @@ pub(crate) enum ThreadgroupMemory {
     /// word is a `float` array of its own words, each access one typed load or store per lane at
     /// its word index, with no branch and no bitcast: `Device::from_queries`' profile.
     Native,
+}
+
+/// What a program's threadgroup memory holds before the program writes it: the words of the
+/// `Workgroup` variables that hold it, a function's threadgroup arena (its declared threadgroup
+/// variables, its `[[threadgroup(n)]]` arguments and its imageblock, `memory::arena`) and its
+/// typed threadgroup objects (`lower::access::local`). Metal's documents give threadgroup memory
+/// no first contents; an Apple GPU reads zero there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThreadgroupStart {
+    /// Whatever the device's memory holds: no `Workgroup` variable has an initializer.
+    /// `Device::new`'s profile.
+    Unwritten,
+    /// Zero: each of those variables has a null initializer, which needs
+    /// `shaderZeroInitializeWorkgroupMemory` (a function that uses threadgroup memory on a
+    /// profile without it is refused). The translator's own `Workgroup` words, which it writes
+    /// before any read of them, have none. `Device::from_queries`' profile.
+    Zero,
 }
 
 /// How a kernel whose workgroup is its threadgroup (`lower::dispatch::LocalSizeForm::Spec`) runs

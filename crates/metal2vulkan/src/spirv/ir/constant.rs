@@ -515,7 +515,13 @@ impl Consts {
                     | Type::Vector { .. }
                     | Type::Matrix { .. }
                     | Type::Struct { .. } => true,
-                    Type::Array { len, .. } => self.array_len(*len, types)?.is_some(),
+                    // Of any valid length, an `OpSpecConstantOp`'s too (a threadgroup arena whose
+                    // regions specialization sizes): `spirv-val`'s `IsTypeNullable` reads an
+                    // array's element type alone.
+                    Type::Array { len, .. } => {
+                        self.array_len(*len, types)?;
+                        true
+                    }
                     _ => false,
                 };
                 if ok && !types.facts(*id)?.runtime_sized {

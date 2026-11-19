@@ -27,7 +27,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 135 | 135 | 8 | 33 | 74 | 20 | 0 |
+| Translator and front-end refusals | 136 | 136 | 8 | 33 | 75 | 20 | 0 |
 | Runtime gaps | 80 | 80 | 1 | 10 | 46 | 23 | 0 |
 | Apple-only calls | 4 | 4 | 0 | 0 | 0 | 4 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
@@ -45,7 +45,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 51 | 61 | 0 | 0 | 23 |
+| Translator and front-end refusals | 0 | 0 | 0 | 52 | 61 | 0 | 0 | 23 |
 | Runtime gaps | 0 | 0 | 0 | 0 | 80 | 0 | 0 | 0 |
 | Apple-only calls | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
@@ -94,6 +94,7 @@ Columns:
 | `HandleAsPointer` | A resource handle used as a byte pointer, or conflicting handle provenance | every device (no Vulkan mechanism); every device (not implemented) | `ours` | 6: `crates/metal2vulkan/src/lower/access/handle.rs (domain_kind)`, `crates/metal2vulkan/src/lower/access/handle.rs (element, 2 sites)` (+3) | `rare`: resource handles used as byte pointers |
 | `ConstantGlobalEscaping` | A constant global whose address escapes | every device (not implemented) | `ours` | 2: `crates/metal2vulkan/src/memory/plan.rs (blob_nodes)`, `crates/metal2vulkan/src/memory/plan.rs (serialize)` | `rare`: a constant global whose address escapes |
 | `ThreadgroupMemorySize` | Threadgroup memory above the device limit | devices short of a device limit the site names; devices without VkLimit::MaxComputeSharedMemorySize; every device (no Vulkan mechanism) | `device` | 3: `crates/metal2vulkan/src/bind/plan/compute.rs (plan)`, `crates/metal2vulkan/src/memory/arena.rs (check)` (+1) | `rare`: threadgroup memory past a smaller device's limit |
+| `ZeroedThreadgroupMemory` | Threadgroup memory that reads zero until the program writes it, on `Device::from_queries`' profile | devices short of a Vulkan feature the site names | `device` | 1: `crates/metal2vulkan/src/lower/access/local.rs (zero_threadgroup)` | `rare`: threadgroup memory on a device without shaderZeroInitializeWorkgroupMemory, which Vulkan 1.3 requires |
 | `CoherentMemory` | `coherent(device)` accesses (Vulkan memory model) | devices short of a Vulkan feature the site names | `device` | 1: `crates/metal2vulkan/src/lower/sync/memory_model.rs (check)` | `rare`: coherent(device) accesses |
 | `Int64Atomics` | 64-bit atomics | devices short of a Vulkan feature the site names; devices without buffer device addresses (`addressed_needs`) | `device` | 2: `crates/metal2vulkan/src/lower/access/atomic.rs (select, 2 sites)` | `rare`: 64-bit atomics |
 | `ImageAtomics` | Image atomics beyond 32-bit integers | devices without a capability the site computes (`gaps`); every device (no Vulkan mechanism) | `device` | 3: `crates/metal2vulkan-runtime/src/families/formats.rs (atomic_gap, 2 sites)`, `crates/metal2vulkan/src/lower/texture/slot.rs (atomic_format)` | `rare`: texture atomics beyond 32-bit integers |
@@ -780,6 +781,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::HandleAsPointer`: `crates/metal2vulkan/src/lower/access/handle.rs (domain_kind)`; `crates/metal2vulkan/src/lower/access/handle.rs (element, 2 sites)`; `crates/metal2vulkan/src/memory/plan.rs (reprs)`; `crates/metal2vulkan/src/memory/provenance.rs (classify)`; `crates/metal2vulkan/src/memory/provenance.rs (seed)`
 - `feature::ConstantGlobalEscaping`: `crates/metal2vulkan/src/memory/plan.rs (blob_nodes)`; `crates/metal2vulkan/src/memory/plan.rs (serialize)`
 - `feature::ThreadgroupMemorySize`: `crates/metal2vulkan/src/bind/plan/compute.rs (plan)`; `crates/metal2vulkan/src/memory/arena.rs (check)`; `crates/metal2vulkan/src/memory/plan.rs (too_large)`
+- `feature::ZeroedThreadgroupMemory`: `crates/metal2vulkan/src/lower/access/local.rs (zero_threadgroup)`
 - `feature::CoherentMemory`: `crates/metal2vulkan/src/lower/sync/memory_model.rs (check)`
 - `feature::Int64Atomics`: `crates/metal2vulkan/src/lower/access/atomic.rs (select, 2 sites)`
 - `feature::ImageAtomics`: `crates/metal2vulkan-runtime/src/families/formats.rs (atomic_gap, 2 sites)`; `crates/metal2vulkan/src/lower/texture/slot.rs (atomic_format)`
