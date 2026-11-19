@@ -342,12 +342,12 @@ fn a_render_state_the_runtime_does_not_build_is_counted_by_its_gap() {
         w.call("newFunctionWithName:", 3, 4, &vertex, &[])?;
         let fragment = [Value::Str("colored_fragment".into())];
         w.call("newFunctionWithName:", 3, 5, &fragment, &[])?;
-        // Colour 0 RGBA8Unorm and a Depth32Float depth attachment, which the runtime refuses.
-        let color = Value::List(vec![Value::Uint(0), uints(&[("pixelFormat", 70)])]);
+        // Colour 0 RGBA8Unorm (the short descriptor's key) and a Depth32Float depth attachment,
+        // which the runtime refuses.
         let pipeline = Value::Map(vec![
             ("vertex".into(), Value::Object(4)),
             ("fragment".into(), Value::Object(5)),
-            ("colors".into(), Value::List(vec![color])),
+            ("color0PixelFormat".into(), Value::Uint(70)),
             ("depthPixelFormat".into(), Value::Uint(252)),
         ]);
         let made = "newRenderPipelineStateWithDescriptor:error:";
