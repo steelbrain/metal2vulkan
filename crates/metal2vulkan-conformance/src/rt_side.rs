@@ -48,6 +48,7 @@ mod descriptors;
 mod events;
 mod functions;
 mod render;
+mod state_facts;
 mod states;
 mod tables;
 mod work;
@@ -619,6 +620,22 @@ impl Side for RtSide<'_> {
     fn static_threadgroup_memory_length(&mut self, pipeline: Handle) -> Answer<u64> {
         let state = self.held_pipeline(pipeline)?;
         Ok(u64::from(state.static_threadgroup_memory_length()))
+    }
+
+    fn compute_pipeline_facts(
+        &mut self,
+        state: Handle,
+        imageblock: [u32; 3],
+    ) -> Answer<crate::pipeline_facts::ComputeStateFacts> {
+        self.compute_state_facts(state, imageblock)
+    }
+
+    fn render_pipeline_facts(
+        &mut self,
+        state: Handle,
+        imageblock: [u32; 3],
+    ) -> Answer<crate::pipeline_facts::RenderStateFacts> {
+        self.render_state_facts(state, imageblock)
     }
 
     fn buffer(&mut self, bytes: &[u8]) -> Answer<Handle> {

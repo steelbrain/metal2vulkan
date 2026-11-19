@@ -33,6 +33,7 @@
 //!
 //! [`Side::static_threadgroup_memory_length`]: crate::case::Side::static_threadgroup_memory_length
 
+use crate::case::{field, Field};
 use crate::transcript::{Node, NodeName, Observed, Value};
 
 /// A compute pipeline state a case makes from a whole descriptor:
@@ -99,37 +100,39 @@ impl<'a> ComputeStateSpec<'a> {
     }
 }
 
-/// What a compute pipeline state answers of itself. Each field is a Metal getter's answer.
+/// What a compute pipeline state answers of itself. Each field is a Metal getter's answer, and a
+/// [`Field`] one a side may refuse alone, the state's other getters still compared.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComputeStateFacts {
     /// `label`, which the state echoes from its descriptor; `None` is nil.
-    pub label: Option<String>,
+    pub label: Field<Option<String>>,
     /// Whether `device` is the device the case's other objects were made on. The device object
     /// itself is not comparable, so this is the one portable question the getter answers.
-    pub device_is_the_cases: bool,
+    pub device_is_the_cases: Field<bool>,
     /// `staticThreadgroupMemoryLength`: the bytes the kernel's own `threadgroup` arrays take.
     pub static_threadgroup_memory_length: u64,
     /// `supportIndirectCommandBuffers`, echoed from the descriptor.
     pub support_indirect_command_buffers: bool,
     /// `imageblockMemoryLengthForDimensions:` of the dimensions the case asked about.
-    pub imageblock_memory_length: u64,
+    pub imageblock_memory_length: Field<u64>,
     /// `requiredThreadsPerThreadgroup`, as three axes; a zero size where the descriptor requires
     /// none.
     pub required_threads_per_threadgroup: [u64; 3],
 }
 
-/// What a render pipeline state answers of itself. Each field is a Metal getter's answer.
+/// What a render pipeline state answers of itself. Each field is a Metal getter's answer, and a
+/// [`Field`] one a side may refuse alone, the state's other getters still compared.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderStateFacts {
     /// `label`, which the state echoes from its descriptor; `None` is nil.
-    pub label: Option<String>,
+    pub label: Field<Option<String>>,
     /// Whether `device` is the device the case's other objects were made on.
-    pub device_is_the_cases: bool,
-    /// `maxTotalThreadsPerThreadgroup`: 0 for a drawing state, which is a constant and not the
-    /// device's limit, so it compares exactly on every venue.
-    pub max_total_threads_per_threadgroup: u64,
+    pub device_is_the_cases: Field<bool>,
+    /// `maxTotalThreadsPerThreadgroup`, a tile threadgroup's: 0 for a drawing state, which is a
+    /// constant and not the device's limit, so it compares exactly on every venue.
+    pub max_total_threads_per_threadgroup: Field<u64>,
     /// `threadgroupSizeMatchesTileSize`: false for a drawing state.
-    pub threadgroup_size_matches_tile_size: bool,
+    pub threadgroup_size_matches_tile_size: Field<bool>,
     /// `imageblockSampleLength`: the color attachments' texels packed. `None` where the side
     /// answered a typed error for it rather than a length.
     pub imageblock_sample_length: Option<u64>,
@@ -139,7 +142,7 @@ pub struct RenderStateFacts {
     /// `supportIndirectCommandBuffers`, echoed from the descriptor.
     pub support_indirect_command_buffers: bool,
     /// `requiredThreadsPerTileThreadgroup`, as three axes; a zero size for a drawing state.
-    pub required_threads_per_tile_threadgroup: [u64; 3],
+    pub required_threads_per_tile_threadgroup: Field<[u64; 3]>,
 }
 
 /// `label` as a site records it.
@@ -181,10 +184,10 @@ impl ComputeStateFacts {
     /// The facts as the sites a case emits under one node, so both sides emit one shape.
     pub fn node(&self, name: impl Into<NodeName>) -> Node {
         Node::branch(name, Vec::new())
-            .with(Node::leaf("label", Observed::value(label(&self.label))))
+            .with(Node::leaf("label", field(&self.label, label)))
             .with(Node::leaf(
                 "device",
-                Observed::value(Value::Bool(self.device_is_the_cases)),
+                field(&self.device_is_the_cases, |held| Value::Bool(*held)),
             ))
             .with(Node::leaf(
                 "static_threadgroup_memory_length",
@@ -196,7 +199,9 @@ impl ComputeStateFacts {
             ))
             .with(Node::leaf(
                 "imageblock_memory_length",
-                Observed::value(Value::Uint(self.imageblock_memory_length)),
+                field(&self.imageblock_memory_length, |length| {
+                    Value::Uint(*length)
+                }),
             ))
             .with(Node::leaf(
                 "required_threads_per_threadgroup",
@@ -209,18 +214,22 @@ impl RenderStateFacts {
     /// The facts as the sites a case emits under one node, so both sides emit one shape.
     pub fn node(&self, name: impl Into<NodeName>) -> Node {
         Node::branch(name, Vec::new())
-            .with(Node::leaf("label", Observed::value(label(&self.label))))
+            .with(Node::leaf("label", field(&self.label, label)))
             .with(Node::leaf(
                 "device",
-                Observed::value(Value::Bool(self.device_is_the_cases)),
+                field(&self.device_is_the_cases, |held| Value::Bool(*held)),
             ))
             .with(Node::leaf(
                 "max_total_threads_per_threadgroup",
-                Observed::value(Value::Uint(self.max_total_threads_per_threadgroup)),
+                field(&self.max_total_threads_per_threadgroup, |threads| {
+                    Value::Uint(*threads)
+                }),
             ))
             .with(Node::leaf(
                 "threadgroup_size_matches_tile_size",
-                Observed::value(Value::Bool(self.threadgroup_size_matches_tile_size)),
+                field(&self.threadgroup_size_matches_tile_size, |matches| {
+                    Value::Bool(*matches)
+                }),
             ))
             .with(Node::leaf(
                 "imageblock_sample_length",
@@ -236,7 +245,7 @@ impl RenderStateFacts {
             ))
             .with(Node::leaf(
                 "required_threads_per_tile_threadgroup",
-                Observed::value(size(&self.required_threads_per_tile_threadgroup)),
+                field(&self.required_threads_per_tile_threadgroup, size),
             ))
     }
 }

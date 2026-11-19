@@ -10907,16 +10907,16 @@ fn compute_state_facts(
 ) -> ComputeStateFacts {
     let required = state.requiredThreadsPerThreadgroup();
     ComputeStateFacts {
-        label: state.label().map(|label| label.to_string()),
+        label: Ok(state.label().map(|label| label.to_string())),
         // The registry ID is each host's own number, so only the **comparison** is portable.
-        device_is_the_cases: state.device().registryID() == registry,
+        device_is_the_cases: Ok(state.device().registryID() == registry),
         static_threadgroup_memory_length: state.staticThreadgroupMemoryLength() as u64,
         support_indirect_command_buffers: state.supportIndirectCommandBuffers(),
         // SAFETY: the dimensions are the case's own three positive extents, which the call
         // multiplies by the kernel's imageblock cell size and nothing else.
-        imageblock_memory_length: unsafe {
+        imageblock_memory_length: Ok(unsafe {
             state.imageblockMemoryLengthForDimensions(size(imageblock))
-        } as u64,
+        } as u64),
         required_threads_per_threadgroup: [
             required.width as u64,
             required.height as u64,
@@ -10935,20 +10935,20 @@ fn render_state_facts(
 ) -> RenderStateFacts {
     let required = state.requiredThreadsPerTileThreadgroup();
     RenderStateFacts {
-        label: state.label().map(|label| label.to_string()),
-        device_is_the_cases: state.device().registryID() == registry,
-        max_total_threads_per_threadgroup: state.maxTotalThreadsPerThreadgroup() as u64,
-        threadgroup_size_matches_tile_size: state.threadgroupSizeMatchesTileSize(),
+        label: Ok(state.label().map(|label| label.to_string())),
+        device_is_the_cases: Ok(state.device().registryID() == registry),
+        max_total_threads_per_threadgroup: Ok(state.maxTotalThreadsPerThreadgroup() as u64),
+        threadgroup_size_matches_tile_size: Ok(state.threadgroupSizeMatchesTileSize()),
         imageblock_sample_length: Some(state.imageblockSampleLength() as u64),
         imageblock_memory_length: Some(
             state.imageblockMemoryLengthForDimensions(size(imageblock)) as u64
         ),
         support_indirect_command_buffers: state.supportIndirectCommandBuffers(),
-        required_threads_per_tile_threadgroup: [
+        required_threads_per_tile_threadgroup: Ok([
             required.width as u64,
             required.height as u64,
             required.depth as u64,
-        ],
+        ]),
     }
 }
 

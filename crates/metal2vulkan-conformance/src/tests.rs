@@ -7080,11 +7080,11 @@ struct HandlerStub {
 /// The facts the stub's delivered compute state answers, whatever asked.
 fn stub_compute_facts() -> crate::pipeline_facts::ComputeStateFacts {
     crate::pipeline_facts::ComputeStateFacts {
-        label: None,
-        device_is_the_cases: true,
+        label: Ok(None),
+        device_is_the_cases: Ok(true),
         static_threadgroup_memory_length: 0,
         support_indirect_command_buffers: false,
-        imageblock_memory_length: 0,
+        imageblock_memory_length: Ok(0),
         required_threads_per_threadgroup: [0, 0, 0],
     }
 }

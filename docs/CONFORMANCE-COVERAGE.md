@@ -2253,6 +2253,8 @@ A facts call answers many getters at once, and a side answers or refuses each of
 | `ComputeDescriptorFacts` | 11 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `FunctionFacts` | 9 | 2 | `options`: `options`, 22 (22), 22; `device_is_the_cases`: `device`, 24 (24), 24 |
 | `LibraryFacts` | 4 | 1 | `device_is_the_cases`: `device`, 9 (9), 9 |
+| `ComputeStateFacts` | 6 | 3 | `label`: `label`, 2 (2), 2; `device_is_the_cases`: `device`, 2 (2), 2; `imageblock_memory_length`: `imageblock_memory_length`, 0 (0), 0 |
+| `RenderStateFacts` | 8 | 5 | `label`: `label`, 2 (2), 2; `device_is_the_cases`: `device`, 2 (2), 2; `max_total_threads_per_threadgroup`: `max_total_threads_per_threadgroup`, 1 (1), 1; `threadgroup_size_matches_tile_size`: `threadgroup_size_matches_tile_size`, 1 (1), 1; `required_threads_per_tile_threadgroup`: `required_threads_per_tile_threadgroup`, 1 (1), 1 |
 | `RenderDescriptorFacts` | 30 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `EventRise` | 7 | 1 | `label`: `label`, 1 (1), 1 |
 

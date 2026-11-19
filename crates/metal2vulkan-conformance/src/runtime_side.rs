@@ -7855,12 +7855,14 @@ fn our_compute_state_facts(
 ) -> ComputeStateFacts {
     let required = state.required_threads_per_threadgroup();
     ComputeStateFacts {
-        label: state.label().map(str::to_owned),
+        label: Ok(state.label().map(str::to_owned)),
         // The registry ID is each host's own number, so only the **comparison** is portable.
-        device_is_the_cases: state.device().registry_id() == registry,
+        device_is_the_cases: Ok(state.device().registry_id() == registry),
         static_threadgroup_memory_length: u64::from(state.static_threadgroup_memory_length()),
         support_indirect_command_buffers: state.support_indirect_command_buffers(),
-        imageblock_memory_length: state.imageblock_memory_length_for_dimensions(size(imageblock)),
+        imageblock_memory_length: Ok(
+            state.imageblock_memory_length_for_dimensions(size(imageblock))
+        ),
         required_threads_per_threadgroup: [required.width, required.height, required.depth],
     }
 }
@@ -7875,16 +7877,20 @@ fn our_render_state_facts(
 ) -> RenderStateFacts {
     let required = state.required_threads_per_tile_threadgroup();
     RenderStateFacts {
-        label: state.label().map(str::to_owned),
-        device_is_the_cases: state.device().registry_id() == registry,
-        max_total_threads_per_threadgroup: u64::from(state.max_total_threads_per_threadgroup()),
-        threadgroup_size_matches_tile_size: state.threadgroup_size_matches_tile_size(),
+        label: Ok(state.label().map(str::to_owned)),
+        device_is_the_cases: Ok(state.device().registry_id() == registry),
+        max_total_threads_per_threadgroup: Ok(u64::from(state.max_total_threads_per_threadgroup())),
+        threadgroup_size_matches_tile_size: Ok(state.threadgroup_size_matches_tile_size()),
         imageblock_sample_length: state.imageblock_sample_length().ok(),
         imageblock_memory_length: state
             .imageblock_memory_length_for_dimensions(size(imageblock))
             .ok(),
         support_indirect_command_buffers: state.support_indirect_command_buffers(),
-        required_threads_per_tile_threadgroup: [required.width, required.height, required.depth],
+        required_threads_per_tile_threadgroup: Ok([
+            required.width,
+            required.height,
+            required.depth,
+        ]),
     }
 }
 

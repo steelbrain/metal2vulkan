@@ -1824,7 +1824,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   384; the same at four samples 12 and 1536. `support_indirect_command_buffers` is false, as a
   compute state's is: a descriptor that asks for indirect command buffers is refused at the
   making. The runtime makes no tile render state, so it has no tile getters
-  (`threadgroupSizeMatchesTileSize`, `requiredThreadsPerTileThreadgroup`).
+  (`maxTotalThreadsPerThreadgroup`, a tile threadgroup's, `threadgroupSizeMatchesTileSize`,
+  `requiredThreadsPerTileThreadgroup`).
 - A state numbers its functions' samplers as a compute state numbers its kernel's:
   `sampler_ids` takes the vertex function's, then the fragment function's, each in Metal's order,
   and answers the index the consumer gives each. Each constexpr sampler a function samples
