@@ -200,7 +200,13 @@ struct Fixed {
     discard: bool,
     samples: vk::SampleCountFlags,
     alpha_to_coverage: bool,
+    /// `alphaToOneEnabled`, the device's own (`alphaToOne`, which the floor requires).
+    alpha_to_one: bool,
     blends: Vec<vk::PipelineColorBlendAttachmentState>,
+    /// The logic operation the translator states (private render state), the device's own
+    /// (`logicOp`, which the floor requires); `None` with the operation off, or copy or no-op,
+    /// which the attachments' states already draw.
+    logic_op: Option<vk::LogicOp>,
     /// Each colour attachment's format by Metal index, `UNDEFINED` for an absent one.
     colors: Vec<vk::Format>,
     /// A patch list's control points per patch (`patchControlPoints`), 0 but for a
@@ -556,8 +562,6 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
         RenderPipelineKind::Imageblock
     } else if g.shadow_stencil.is_some() {
         RenderPipelineKind::ShaderStencil
-    } else if g.alpha_to_one {
-        RenderPipelineKind::AlphaToOne
     } else if (pipeline.stages.iter()).any(|stage| stage.constant_blob.is_some()) {
         RenderPipelineKind::ConstantData
     } else if !(g.dynamic_states.iter()).all(|state| DYNAMIC.contains(&dynamic(*state))) {
@@ -646,7 +650,9 @@ impl Fixed {
             discard: g.rasterizer_discard,
             samples: vk::SampleCountFlags::from_raw(g.rasterization_samples.as_raw()),
             alpha_to_coverage: g.alpha_to_coverage,
+            alpha_to_one: g.alpha_to_one,
             blends,
+            logic_op: (g.logic_op).map(|op| vk::LogicOp::from_raw(op.as_raw())),
             colors,
             depth: format(g.depth_format),
             stencil: format(g.stencil_format),
@@ -872,9 +878,13 @@ impl RenderCompiled {
             .line_width(1.0);
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(fixed.samples)
-            .alpha_to_coverage_enable(fixed.alpha_to_coverage);
+            .alpha_to_coverage_enable(fixed.alpha_to_coverage)
+            .alpha_to_one_enable(fixed.alpha_to_one);
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default();
-        let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&fixed.blends);
+        let mut blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&fixed.blends);
+        if let Some(op) = fixed.logic_op {
+            blend = blend.logic_op_enable(true).logic_op(op);
+        }
         // Where the device reads attachments through textures, every pipeline takes the feedback
         // loop's enable as dynamic state too: a state is made before any draw binds its textures.
         let feedback = core.feedback.is_some();

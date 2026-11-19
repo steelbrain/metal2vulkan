@@ -292,8 +292,18 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan12.shader_sampled_image_array_non_uniform_indexing => ShaderSampledImageArrayNonUniformIndexing),
     feature!(vulkan12.shader_storage_image_array_non_uniform_indexing => ShaderStorageImageArrayNonUniformIndexing),
     feature!(core.shader_storage_image_write_without_format => ShaderStorageImageWriteWithoutFormat),
+    // A read-write texture of a format Vulkan lists among the storage image extended formats
+    // (`RG16Float`, `RG11B10Float`, `R8Unorm` and the rest), declared with its format where a
+    // shader reads it. Vulkan 1.4 and Roadmap 2022 require it of every device.
+    feature!(core.shader_storage_image_extended_formats => ShaderStorageImageExtendedFormats),
     // A sampler state's anisotropy is the device's own filter.
     feature!(core.sampler_anisotropy => SamplerAnisotropy),
+    // A sampler state's `MTLSamplerAddressModeMirrorClampToEdge`, the device's own address mode.
+    // Vulkan 1.4 and Roadmap 2022 require it of every device.
+    feature!(vulkan12.sampler_mirror_clamp_to_edge => SamplerMirrorClampToEdge),
+    // A gather at an offset the shader computes, as Metal's `gather` takes one. Vulkan 1.4
+    // requires it of every device.
+    feature!(core.shader_image_gather_extended => ShaderImageGatherExtended),
     // Every array element no texture owns is a null descriptor: a nil, freed or unowned texture
     // index reads zeros, answers 0 to its size queries and drops its writes, as Metal's nil
     // texture does, with no code in the shader.
@@ -326,10 +336,28 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // requires both of every graphics device.
     feature!(core.independent_blend => IndependentBlend),
     feature!(core.fragment_stores_and_atomics => FragmentStoresAndAtomics),
+    // A render pipeline's `alphaToOneEnabled`, the device's own: each sample's alpha 1 after the
+    // coverage is taken. Every floor driver reports it.
+    feature!(core.alpha_to_one => AlphaToOne),
+    // A render pipeline's logic operation (private render state), the device's own `logicOp`. A
+    // device without it would compute the operation in the fragment function, which needs
+    // fragment interlock or raster-order attachment access, neither in the floor. Every floor
+    // driver reports it.
+    feature!(core.logic_op => LogicOp),
+    // An indexed draw's 32-bit indices past `2^24 - 1`, which Metal draws. Vulkan 1.4 and
+    // Roadmap 2022 require it of every device.
+    feature!(core.full_draw_index_uint32 => FullDrawIndexUint32),
+    // A vertex or post-tessellation vertex function's `[[clip_distance]]`, the device's own
+    // clipping. Every floor driver reports it.
+    feature!(core.shader_clip_distance => ShaderClipDistance),
     // A render pipeline of a post-tessellation vertex function draws its patches through the
     // device's tessellator: a synthesized control stage reads each patch's factors through their
     // address, and the function is the evaluation stage. A device without it is below the floor.
     feature!(core.tessellation_shader => TessellationShader),
+    // A post-tessellation vertex function's `[[point_size]]`, which a point draw of its patches
+    // takes. Without it the device draws every such point at size 1. Every floor driver reports
+    // it.
+    feature!(core.shader_tessellation_and_geometry_point_size => ShaderTessellationAndGeometryPointSize),
     // A fragment function's second output for a colour attachment (`[[color(0), index(1)]]`)
     // blends with its first, as Metal's dual-source blending does. A device without it is below
     // the floor.

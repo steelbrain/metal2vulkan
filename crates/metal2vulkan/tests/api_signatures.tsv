@@ -13973,7 +13973,6 @@ variant	metal2vulkan-rt::RenderPassKind::Resolve	Resolve
 variant	metal2vulkan-rt::RenderPassKind::SampleCounts	SampleCounts
 variant	metal2vulkan-rt::RenderPassKind::StoreAction	StoreAction
 variant	metal2vulkan-rt::RenderPassKind::TextureType	TextureType
-variant	metal2vulkan-rt::RenderPipelineKind::AlphaToOne	AlphaToOne
 variant	metal2vulkan-rt::RenderPipelineKind::ConstantData	ConstantData
 variant	metal2vulkan-rt::RenderPipelineKind::DepthStencilFormats	DepthStencilFormats
 variant	metal2vulkan-rt::RenderPipelineKind::DeviceFeature	DeviceFeature

@@ -1164,8 +1164,6 @@ pub enum RenderPipelineKind {
     Imageblock,
     /// A fragment function's stencil output applied by the shader.
     ShaderStencil,
-    /// `alphaToOneEnabled`, which needs a feature the floor does not require.
-    AlphaToOne,
     /// A function that reads constant data the binder supplies.
     ConstantData,
     /// A specialization the draw would set, beside the sample and amplification counts.

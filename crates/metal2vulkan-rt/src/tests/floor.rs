@@ -56,6 +56,14 @@ fn at_the_floor() -> Queried {
         .shader_storage_image_array_non_uniform_indexing = vk::TRUE;
     features.core.shader_storage_image_write_without_format = vk::TRUE;
     features.core.sampler_anisotropy = vk::TRUE;
+    features.core.shader_storage_image_extended_formats = vk::TRUE;
+    features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
+    features.core.shader_image_gather_extended = vk::TRUE;
+    features.core.alpha_to_one = vk::TRUE;
+    features.core.logic_op = vk::TRUE;
+    features.core.full_draw_index_uint32 = vk::TRUE;
+    features.core.shader_clip_distance = vk::TRUE;
+    features.core.shader_tessellation_and_geometry_point_size = vk::TRUE;
     features.core.shader_int16 = vk::TRUE;
     features.vulkan12.shader_int8 = vk::TRUE;
     features.vulkan11.storage_buffer16_bit_access = vk::TRUE;
@@ -336,7 +344,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 42] = [
+    let cases: [(Clear, Missing); 50] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -510,6 +518,35 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.sampler_anisotropy = vk::FALSE,
             feature(CORE, "samplerAnisotropy"),
+        ),
+        (
+            |f| f.core.shader_storage_image_extended_formats = vk::FALSE,
+            feature(CORE, "shaderStorageImageExtendedFormats"),
+        ),
+        (
+            |f| f.vulkan12.sampler_mirror_clamp_to_edge = vk::FALSE,
+            feature(V12, "samplerMirrorClampToEdge"),
+        ),
+        (
+            |f| f.core.shader_image_gather_extended = vk::FALSE,
+            feature(CORE, "shaderImageGatherExtended"),
+        ),
+        (
+            |f| f.core.alpha_to_one = vk::FALSE,
+            feature(CORE, "alphaToOne"),
+        ),
+        (|f| f.core.logic_op = vk::FALSE, feature(CORE, "logicOp")),
+        (
+            |f| f.core.full_draw_index_uint32 = vk::FALSE,
+            feature(CORE, "fullDrawIndexUint32"),
+        ),
+        (
+            |f| f.core.shader_clip_distance = vk::FALSE,
+            feature(CORE, "shaderClipDistance"),
+        ),
+        (
+            |f| f.core.shader_tessellation_and_geometry_point_size = vk::FALSE,
+            feature(CORE, "shaderTessellationAndGeometryPointSize"),
         ),
     ];
     assert_eq!(

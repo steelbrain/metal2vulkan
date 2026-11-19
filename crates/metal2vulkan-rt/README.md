@@ -1858,7 +1858,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   step function or enabled factor scale (`Tessellation`;
   a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
   stages the translator synthesizes beside the functions' and a tessellation's, framebuffer fetch, an imageblock, a
-  fragment function's stencil output, alpha to one, constant data the binder supplies, a
+  fragment function's stencil output, constant data the binder supplies, a
   specialization other than the sample and amplification counts, dynamic state beyond Vulkan
   1.3's (a vertex buffer layout whose stride is set per bind among it), a
   feature or extension device creation does not enable, and a function that reads what a draw
@@ -2303,6 +2303,9 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderStorageImageWriteWithoutFormat` | `VkPhysicalDeviceFeatures` | writes to array elements of any pixel format |
 | `nullDescriptor` | `VkPhysicalDeviceRobustness2FeaturesEXT` | every texture element no texture owns: a nil, freed or unowned index reads zeros, sizes 0 and drops writes, as Metal's nil texture does. The robust buffer access beside it stays off |
 | `samplerAnisotropy` | `VkPhysicalDeviceFeatures` | a sampler state's `maxAnisotropy`, which the device's own filter takes |
+| `shaderStorageImageExtendedFormats` | `VkPhysicalDeviceFeatures` | a read-write texture of a format Vulkan lists among the storage image extended formats (`RG16Float`, `RG11B10Float`, `R8Unorm` and the rest), declared with its format where a shader reads it; Vulkan 1.4 and Roadmap 2022 require it |
+| `samplerMirrorClampToEdge` | `VkPhysicalDeviceVulkan12Features` | a sampler state's `MTLSamplerAddressModeMirrorClampToEdge`; Vulkan 1.4 and Roadmap 2022 require it |
+| `shaderImageGatherExtended` | `VkPhysicalDeviceFeatures` | a gather at an offset the shader computes; Vulkan 1.4 requires it |
 | `shaderInt16` | `VkPhysicalDeviceFeatures` | `short` and `ushort` in shaders |
 | `shaderInt8` | `VkPhysicalDeviceVulkan12Features` | `char` and `uchar` in shaders |
 | `storageBuffer16BitAccess` | `VkPhysicalDeviceVulkan11Features` | 16-bit values in buffers |
@@ -2317,7 +2320,12 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `robustImageAccess2` | `VkPhysicalDeviceRobustness2FeaturesEXT` | an image read or fetch out of range, past the view's levels included, answering Metal's texel (zero, alpha 1 for a format without alpha), with no check in the shader; a texel buffer's read is still checked in the shader |
 | `independentBlend` | `VkPhysicalDeviceFeatures` | each color attachment of a render pipeline blended by its own state, as Metal's are |
 | `fragmentStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a fragment function's writes and atomics on device memory |
+| `alphaToOne` | `VkPhysicalDeviceFeatures` | a render pipeline's `alphaToOneEnabled` |
+| `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the fragment function would compute it, which needs fragment interlock or raster-order attachment access |
+| `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
+| `shaderClipDistance` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's `[[clip_distance]]` |
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |
+| `shaderTessellationAndGeometryPointSize` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's `[[point_size]]`; without it the device draws every such point at size 1 |
 | `dualSrcBlend` | `VkPhysicalDeviceFeatures` | a fragment function's second output for colour attachment 0 (`[[color(0), index(1)]]`) as the blend's second source (`Source1Color`, `Source1Alpha` and their complements) |
 | `sampleRateShading` | `VkPhysicalDeviceFeatures` | a fragment function that reads its `[[sample_id]]`, or an interpolant at a sample, run once per covered sample as Metal runs it; Vulkan 1.4 requires it |
 | `vertexPipelineStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's writes and atomics on device memory |
