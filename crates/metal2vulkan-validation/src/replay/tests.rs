@@ -2652,6 +2652,53 @@ fn a_heap_texture_write_covers_the_buffer_and_texture_it_meets_until_they_are_wr
     );
 }
 
+/// A texture bound through a range takes the slot of the range's location plus its place in the
+/// list: a dispatch of a state that writes slot 1 covers what the texture meets in its placement
+/// heap where the range put it at slot 1, and nothing where it put it at slot 0.
+#[test]
+fn a_texture_bound_through_a_range_takes_the_slot_its_location_names() {
+    let mut kept = Kept::default();
+    kept.heap_answers.insert(4, (0x1000, 0x1000));
+    kept.kernel_writes.insert(9, vec![1]);
+    let encoded = |w: &mut StreamWriter<File>, at: u64, location: u64| {
+        w.call("commandBuffer", 6, at, &[], &[])?;
+        w.call("computeCommandEncoder", at, at + 1, &[], &[])?;
+        let state = [Value::Object(9)];
+        w.call("setComputePipelineState:", at + 1, 0, &state, &[])?;
+        let range = map(&[
+            ("location", Value::Uint(location)),
+            ("length", Value::Uint(1)),
+        ]);
+        let slots = [Value::List(vec![Value::Object(5)]), range];
+        w.call("setTextures:withRange:", at + 1, 0, &slots, &[])?;
+        let size = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+        let groups = [size.clone(), size];
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, at + 1, 0, &groups, &[])?;
+        w.call("endEncoding", at + 1, 0, &[], &[])?;
+        w.call("commit", at, 0, &[], &[])
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newHeapWithDescriptor:", 1, 2, &heap_of(0x1_0000, 1), &[])?;
+        let buffer = [Value::Uint(0x1000), Value::Uint(0), Value::Uint(0)];
+        w.call("newBufferWithLength:options:offset:", 2, 3, &buffer, &[])?;
+        w.call("m2v.textureDescriptor", 0, 4, &[map(&[])], &[])?;
+        let texture = [Value::Object(4), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 2, 5, &texture, &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        let state = "newComputePipelineStateWithFunction:error:";
+        w.call(state, 1, 9, &[], &[])?;
+        encoded(w, 20, 0)?;
+        w.call("m2v.check", 0, 0, &[Value::Object(3)], &[])?;
+        encoded(w, 30, 1)?;
+        w.call("m2v.check", 0, 0, &[Value::Object(3)], &[])
+    });
+    ended.unwrap();
+    let covered: Vec<bool> = report.checks.iter().map(|check| check.covered).collect();
+    assert_eq!(covered, [false, true]);
+}
+
 /// A buffer a texture over a surface's plane was made on stands for the surface's pages: its checks
 /// are compared on no runtime, the texture's are, and once the buffer is released and made again
 /// as an ordinary buffer, its checks are compared again.

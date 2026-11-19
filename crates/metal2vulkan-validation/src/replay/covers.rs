@@ -309,20 +309,47 @@ impl Covers {
                     encoder.pipeline = object(0);
                 }
             }
-            "setTexture:atIndex:" | "setVertexTexture:atIndex:" | "setFragmentTexture:atIndex:" => {
+            "setTexture:atIndex:"
+            | "setVertexTexture:atIndex:"
+            | "setFragmentTexture:atIndex:"
+            | "setTextures:withRange:"
+            | "setVertexTextures:withRange:"
+            | "setFragmentTextures:withRange:" => {
                 let stage = match selector {
-                    "setVertexTexture:atIndex:" => SlotStage::Vertex,
-                    "setFragmentTexture:atIndex:" => SlotStage::Fragment,
+                    "setVertexTexture:atIndex:" | "setVertexTextures:withRange:" => {
+                        SlotStage::Vertex
+                    }
+                    "setFragmentTexture:atIndex:" | "setFragmentTextures:withRange:" => {
+                        SlotStage::Fragment
+                    }
                     _ => SlotStage::Kernel,
                 };
-                let (Some(index), Some(encoder)) = (uint(1), self.encoders.get_mut(&receiver))
-                else {
+                // Each texture and its index: a range's from its location.
+                let bound: Vec<(u64, Option<u64>)> = match selector.ends_with("withRange:") {
+                    false => uint(1)
+                        .map(|index| (index, object(0)))
+                        .into_iter()
+                        .collect(),
+                    true => {
+                        let textures = call.args.first().and_then(Value::as_list);
+                        let first = range(call.args.get(1)).map(|(location, _)| location);
+                        let (Some(textures), Some(first)) = (textures, first) else {
+                            return;
+                        };
+                        (first..)
+                            .zip(textures.iter().map(Value::as_object))
+                            .collect()
+                    }
+                };
+                let Some(encoder) = self.encoders.get_mut(&receiver) else {
                     return;
                 };
-                match object(0) {
-                    Some(texture) => encoder.slots.insert((stage, index), texture),
-                    None => encoder.slots.remove(&(stage, index)),
-                };
+                for (index, texture) in bound {
+                    match texture {
+                        Some(texture) => encoder.slots.insert((stage, index), texture),
+                        None => encoder.slots.remove(&(stage, index)),
+                    };
+                }
             }
             "endEncoding" => {
                 self.encoders.remove(&receiver);

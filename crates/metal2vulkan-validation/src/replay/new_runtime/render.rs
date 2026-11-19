@@ -399,16 +399,16 @@ impl NewRuntime {
         }
     }
 
-    /// A buffer or texture argument `at` bound at `slot`: none where it is nil, and the slot
+    /// A buffer or texture `value` of `call` bound at `slot`: none where it is nil, and the slot
     /// marked skipped where it is a skipped object.
     fn bound<T>(
         &mut self,
         call: &Call,
-        at: usize,
+        value: &Value,
         slot: Slot,
         of: impl Fn(&Self, &Call, u64) -> Result<T, PlayError>,
     ) -> Result<Option<Option<T>>, PlayError> {
-        let id = match arg(call, at)? {
+        let id = match value {
             Value::Nil => None,
             Value::Object(id) => Some(*id),
             other => return Err(refuse(call, format!("{other} is no buffer or texture"))),
@@ -423,6 +423,47 @@ impl NewRuntime {
         };
         self.render(call.receiver).skipped.remove(&slot);
         Ok(Some(held))
+    }
+
+    /// Binds the buffer `value` names at `slot` of the stage `fragment` names, at `offset`:
+    /// nothing where it is a skipped object, whose slot [`bound`](Self::bound) marks.
+    fn bind_render_buffer(
+        &mut self,
+        call: &Call,
+        value: &Value,
+        fragment: bool,
+        offset: u64,
+        slot: u32,
+    ) -> Result<Result<(), rt::Error>, PlayError> {
+        let at = (fragment, false, slot);
+        let Some(buffer) = self.bound(call, value, at, Self::buffer_of)? else {
+            return Ok(Ok(()));
+        };
+        let encoder = &mut self.render(call.receiver).encoder;
+        Ok(match fragment {
+            false => encoder.set_vertex_buffer(buffer.as_ref(), offset, slot),
+            true => encoder.set_fragment_buffer(buffer.as_ref(), offset, slot),
+        })
+    }
+
+    /// Binds the texture `value` names at `slot` of the stage `fragment` names: nothing where it
+    /// is a skipped object, whose slot [`bound`](Self::bound) marks.
+    fn bind_render_texture(
+        &mut self,
+        call: &Call,
+        value: &Value,
+        fragment: bool,
+        slot: u32,
+    ) -> Result<Result<(), rt::Error>, PlayError> {
+        let at = (fragment, true, slot);
+        let Some(texture) = self.bound(call, value, at, Self::texture_of)? else {
+            return Ok(Ok(()));
+        };
+        let encoder = &mut self.render(call.receiver).encoder;
+        Ok(match fragment {
+            false => encoder.set_vertex_texture(texture.as_ref(), slot),
+            true => encoder.set_fragment_texture(texture.as_ref(), slot),
+        })
     }
 
     pub(super) fn render_call(&mut self, call: &Call) -> Result<(), PlayError> {
@@ -463,15 +504,22 @@ impl NewRuntime {
             }
             "setVertexBuffer:offset:atIndex:" | "setFragmentBuffer:offset:atIndex:" => {
                 let (offset, at) = (uint(call, 1)?, index(call, 2)?);
-                let Some(buffer) = self.bound(call, 0, (fragment, false, at), Self::buffer_of)?
-                else {
-                    return Ok(());
-                };
-                let encoder = &mut self.render(id).encoder;
-                match fragment {
-                    false => encoder.set_vertex_buffer(buffer.as_ref(), offset, at),
-                    true => encoder.set_fragment_buffer(buffer.as_ref(), offset, at),
+                self.bind_render_buffer(call, arg(call, 0)?, fragment, offset, at)?
+            }
+            "setVertexBuffers:offsets:withRange:" | "setFragmentBuffers:offsets:withRange:" => {
+                let buffers = list(call, 0)?;
+                let offsets = arg(call, 1)?.as_uints();
+                let offsets = offsets.ok_or_else(|| refuse(call, "argument 1 is no offsets"))?;
+                if offsets.len() != buffers.len() {
+                    return Err(refuse(call, "as many offsets as buffers"));
                 }
+                let at = first(call, 2, buffers.len())?;
+                let mut result = Ok(());
+                for ((slot, buffer), offset) in (at..).zip(buffers).zip(offsets) {
+                    let bound = self.bind_render_buffer(call, buffer, fragment, offset, slot)?;
+                    result = result.and(bound);
+                }
+                result
             }
             "setVertexBufferOffset:atIndex:" | "setFragmentBufferOffset:atIndex:" => {
                 let (offset, at) = (uint(call, 0)?, index(call, 1)?);
@@ -496,15 +544,16 @@ impl NewRuntime {
             }
             "setVertexTexture:atIndex:" | "setFragmentTexture:atIndex:" => {
                 let at = index(call, 1)?;
-                let Some(texture) = self.bound(call, 0, (fragment, true, at), Self::texture_of)?
-                else {
-                    return Ok(());
-                };
-                let encoder = &mut self.render(id).encoder;
-                match fragment {
-                    false => encoder.set_vertex_texture(texture.as_ref(), at),
-                    true => encoder.set_fragment_texture(texture.as_ref(), at),
+                self.bind_render_texture(call, arg(call, 0)?, fragment, at)?
+            }
+            "setVertexTextures:withRange:" | "setFragmentTextures:withRange:" => {
+                let textures = list(call, 0)?;
+                let at = first(call, 1, textures.len())?;
+                let mut result = Ok(());
+                for (slot, texture) in (at..).zip(textures) {
+                    result = result.and(self.bind_render_texture(call, texture, fragment, slot)?);
                 }
+                result
             }
             "setVertexSamplerState:atIndex:" | "setFragmentSamplerState:atIndex:" => {
                 let sampler = self.sampler(call, arg(call, 0)?)?;
@@ -676,7 +725,8 @@ impl NewRuntime {
             }
             "setTessellationFactorBuffer:offset:instanceStride:" => {
                 let (offset, stride) = (uint(call, 1)?, uint(call, 2)?);
-                let Some(buffer) = self.bound(call, 0, FACTORS, Self::buffer_of)? else {
+                let Some(buffer) = self.bound(call, arg(call, 0)?, FACTORS, Self::buffer_of)?
+                else {
                     return Ok(());
                 };
                 (self.render(id).encoder).set_tessellation_factor_buffer(

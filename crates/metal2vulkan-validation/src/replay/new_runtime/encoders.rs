@@ -218,6 +218,28 @@ impl NewRuntime {
         }
     }
 
+    /// Binds the texture `value` names at `slot` of the compute encoder `call` is sent to: none
+    /// where it is nil; nothing where it is a skipped object, the slot marked skipped.
+    fn bind_compute_texture(
+        &mut self,
+        call: &Call,
+        value: &Value,
+        slot: u32,
+    ) -> Result<Result<(), rt::Error>, PlayError> {
+        let texture = match value {
+            Value::Nil => None,
+            Value::Object(object) if self.skipped(*object) => {
+                self.compute(call.receiver).skipped.insert((true, slot));
+                return Ok(Ok(()));
+            }
+            Value::Object(object) => Some(self.texture_of(call, *object)?),
+            other => return Err(refuse(call, format!("{other} is no texture"))),
+        };
+        let compute = self.compute(call.receiver);
+        compute.skipped.remove(&(true, slot));
+        Ok(compute.encoder.set_texture(texture.as_ref(), slot))
+    }
+
     pub(super) fn compute_call(&mut self, call: &Call) -> Result<(), PlayError> {
         let id = call.receiver;
         let result = match &*call.selector {
@@ -287,18 +309,16 @@ impl NewRuntime {
             }
             "setTexture:atIndex:" => {
                 let at = index(call, 1)?;
-                let texture = match arg(call, 0)? {
-                    Value::Nil => None,
-                    Value::Object(object) if self.skipped(*object) => {
-                        self.compute(id).skipped.insert((true, at));
-                        return Ok(());
-                    }
-                    Value::Object(object) => Some(self.texture_of(call, *object)?),
-                    other => return Err(refuse(call, format!("{other} is no texture"))),
-                };
-                let compute = self.compute(id);
-                compute.skipped.remove(&(true, at));
-                compute.encoder.set_texture(texture.as_ref(), at)
+                self.bind_compute_texture(call, arg(call, 0)?, at)?
+            }
+            "setTextures:withRange:" => {
+                let textures = list(call, 0)?;
+                let at = first(call, 1, textures.len())?;
+                let mut result = Ok(());
+                for (slot, texture) in (at..).zip(textures) {
+                    result = result.and(self.bind_compute_texture(call, texture, slot)?);
+                }
+                result
             }
             "setSamplerStates:withRange:" => {
                 let samplers = list(call, 0)?.iter().map(|value| match value {
