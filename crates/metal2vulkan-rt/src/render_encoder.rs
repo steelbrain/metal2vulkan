@@ -1638,6 +1638,7 @@ impl RenderCommandEncoder {
             return gap(DrawKind::DividedBaseInstance);
         }
         let pipeline = compiled.pipeline(topology)?;
+        let discards = compiled.discards();
         let writes_memory = draws.writes_memory;
         let building = (self.building.as_ref())
             .expect("an encoder holds its command buffer's recording until it ends");
@@ -1709,6 +1710,11 @@ impl RenderCommandEncoder {
             if bind {
                 core.device
                     .cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, pipeline);
+                // A discarding pipeline's one dynamic state of its own, which a bind of any other
+                // pipeline leaves undefined.
+                if discards {
+                    core.device.cmd_set_rasterizer_discard_enable(command, true);
+                }
             }
             self.record_state(topology, restart);
         }

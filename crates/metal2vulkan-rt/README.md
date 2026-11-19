@@ -1550,9 +1550,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content and the topology class
   (line or triangle) of the draws it serves. It takes as dynamic state the viewport, scissor, cull
   mode, front face, primitive topology within its class, primitive restart, depth test, write and
-  compare, stencil test, operations, masks and reference, depth bias and blend constants. Vertex
-  buffer strides are the descriptor's, so the content's, and baked. It renders dynamically into
-  its attachments' formats, with no render pass.
+  compare, stencil test, operations, masks and reference, depth bias and blend constants, and a
+  state without rasterization its discard, which keeps its attachment formats and that state in
+  the pipeline. Vertex buffer strides are the descriptor's, so the content's, and baked. It
+  renders dynamically into its attachments' formats, with no render pass.
 - Every `[[stage_in]]` attribute is fetched by fixed-function vertex input, the form native
   Vulkan uses, with no second form: the vertex descriptor's formats, offsets, strides and steps
   are the `VkPipeline`'s vertex input state. Of Metal's vertex descriptor:

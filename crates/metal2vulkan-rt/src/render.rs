@@ -769,6 +769,12 @@ impl RenderCompiled {
         Ok(compiled)
     }
 
+    /// Whether the content's `VkPipeline`s discard every primitive (Metal's rasterization
+    /// disabled): a dynamic state each bind sets.
+    pub(crate) fn discards(&self) -> bool {
+        self.fixed.discard
+    }
+
     /// The `VkPipeline` of the content for draws of `topology`'s class, a line or triangle one, or
     /// for a post-tessellation vertex function's content the patch one, which the encoder draws
     /// alone with it: the line class's made by its first draw, which waits for it, a first-use
@@ -859,8 +865,17 @@ impl RenderCompiled {
         // Where the device reads attachments through textures, every pipeline takes the feedback
         // loop's enable as dynamic state too: a state is made before any draw binds its textures.
         let feedback = core.feedback.is_some();
+        // A state without rasterization takes its discard as dynamic state, which the encoder sets
+        // at each bind: a static discard would leave the fragment shader and output state out of
+        // the pipeline, its attachment formats and the dynamic depth, stencil and blend state above
+        // with them, which every draw records and its pass renders into.
         let states: Vec<vk::DynamicState> = (DYNAMIC.iter().copied())
             .chain(feedback.then_some(vk::DynamicState::ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT))
+            .chain(
+                fixed
+                    .discard
+                    .then_some(vk::DynamicState::RASTERIZER_DISCARD_ENABLE),
+            )
             .collect();
         let dynamic_states = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&states);
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
@@ -876,11 +891,9 @@ impl RenderCompiled {
             .rasterization_state(&rasterization)
             .multisample_state(&multisample)
             .depth_stencil_state(&depth_stencil)
+            .color_blend_state(&blend)
             .dynamic_state(&dynamic_states)
             .layout(core.layout);
-        if !fixed.discard {
-            info = info.color_blend_state(&blend);
-        }
         if topology == vk::PrimitiveTopology::PATCH_LIST {
             info = info.tessellation_state(&tessellation);
         }
