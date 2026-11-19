@@ -166,12 +166,14 @@ in its memory.
   places in a spilled block is still its second copy, so `did_modify_range` and a GPU write keep
   Metal's two-copy rule.
 - Every `VkDeviceMemory` the runtime holds counts against the device's `maxMemoryAllocationCount`:
-  each block (texture blocks among them), each texture's own allocation, the staging region (from
-  the first texture copy on), the staging buffer of a copy larger than the region while it runs, the
-  parameter ring's blocks and the zero source. One more past it is `Limit::MemoryAllocations`,
-  refused before the driver is called; `Gauges::blocks` counts those live. The limit is about 4.29
-  billion on RADV, NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD
-  Graphics 630, and 4,096 at Vulkan's minimum.
+  each block (texture blocks among them), each imported block, each texture's own allocation, the
+  staging region (from the first texture copy on), the staging buffer of a copy larger than the
+  region while it runs, the parameter ring's blocks and the zero source. Vulkan leaves an
+  allocation past the count undefined and does not promise `VK_ERROR_TOO_MANY_OBJECTS` for it, so
+  the runtime counts its own: one more past it is `Limit::MemoryAllocations`, refused before the
+  driver is called; `Gauges::blocks` counts those live. The limit is about 4.29 billion on RADV,
+  NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD Graphics 630, and
+  4,096, Vulkan's minimum, on Mesa's Mac driver.
 - A block's bytes are undefined, new or taken again: the runtime zeroes nothing ahead of need,
   and nothing the driver or the memory type does counts. A buffer reads zero where
   `Device::new_buffer` zeroes its range (below), as Metal zeroes a buffer from
@@ -365,6 +367,12 @@ imported memory must be made for its handle, which the runtime does not do.
   still fault the device.
 - An app buffer too large for the consumer's map budget is copied, on drivers whose dma-buf query
   offers a non-host-visible type first.
+- rt caps a buffer at 2 GiB (`MAX_BUFFER_LENGTH`), where the M3's Metal allows 38.88 GiB
+  (`maxBufferLength`, 41,747,087,360 bytes), about twenty times as much: shaders reach a buffer's
+  bytes by 32-bit offsets from its bind address, which bought 4.3 to 6.6% on AMD cards and more on
+  the RTX 3090 in a probe of constant reads, where a 64-bit sum without them was 8.9% slower on the
+  RX 7900 XTX, and lifting the cap would put 64-bit offset arithmetic on every buffer access. A
+  longer buffer is `Refusal::BufferTooLong`.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
   block that is not a multiple of 4, or of the index size, is refused (`Refusal::ArgumentPlace`).
   Metal's offset rules keep both at that multiple of the buffer's start, so only a buffer that
