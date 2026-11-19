@@ -47,7 +47,8 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// ([`Device::import_dma_buf`](crate::Device::import_dma_buf)) through the fd's, and the
 /// exports' ([`Device::new_exported_block`](crate::Device::new_exported_block)): the fd's and
 /// the dma-buf's again, an NT handle's, and the foreign queue family a dma-buf's ownership
-/// transfers name.
+/// transfers name, and the DRM format modifier, through which a dma-buf's surface lies in place
+/// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)).
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
@@ -59,6 +60,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::ext::external_memory_dma_buf::NAME,
     ash::khr::external_memory_win32::NAME,
     ash::ext::queue_family_foreign::NAME,
+    ash::ext::image_drm_format_modifier::NAME,
 ];
 
 /// The device extensions of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`

@@ -39,7 +39,7 @@ const MAKE_BELOW: u64 = ALLOCATION_LEN / 2;
 /// A block's length, and its first byte's offset in its allocation, are multiples of this, or of
 /// the device's `bufferImageGranularity` where that is larger: no block shares a page of that
 /// granularity with another, so a block of buffers lies beside a block of optimal images.
-const GRANULE: u64 = 64 << 10;
+pub(crate) const GRANULE: u64 = 64 << 10;
 
 /// A block's first byte lies at a multiple of its length rounded up to a power of two, up to this
 /// much, in its allocation: an image placed in a block at an offset its alignment allows from the
@@ -1547,6 +1547,59 @@ pub(crate) unsafe fn export(
         own: Some(Own::Export(handle)),
     };
     Ok((memory, needs.size))
+}
+
+/// Makes an opaque handle's surface allocation in place ([`crate::surface`]): `len` bytes rounded
+/// up to 64 KiB of memory type `index`, exportable as `handle` and dedicated to nothing, counted
+/// against the device's allocations ([`allocate`]), and its numbers. It holds no buffer: the
+/// surface's plane images are bound in it, and nothing reaches it through a buffer (its block's
+/// buffer is null, and its address 0). Counted as an export.
+///
+/// Err: [`Limit::BlockLen`] past the device's longest allocation; [`Limit::MemoryAllocations`];
+/// [`Limit::BlockIds`]; [`Error::Vulkan`] where the allocation fails.
+///
+/// # Safety
+///
+/// Every image bound in it is made for `handle`, and none requires an allocation of its own.
+pub(crate) unsafe fn export_surface(
+    core: &Core,
+    len: u64,
+    index: u32,
+    handle: crate::ExportHandle,
+) -> Result<Memory, Error> {
+    let device = &core.device;
+    let len = round(len, GRANULE, core.max_block_len)?;
+    let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(handle.vk());
+    let info = vk::MemoryAllocateInfo::default()
+        .allocation_size(len)
+        .memory_type_index(index)
+        .push_next(&mut export);
+    // SAFETY: the caller's; the type is the images'.
+    let memory = unsafe { allocate(device, &core.counters, core.max_allocations, &info) }?;
+    let (id, allocation) = match core.pool.own_numbers() {
+        Ok(numbers) => numbers,
+        Err(error) => {
+            // SAFETY: nothing is bound to the memory.
+            unsafe { device.free_memory(memory, None) };
+            core.counters.fall(Gauge::Blocks);
+            return Err(error);
+        }
+    };
+    core.counters.rise(Gauge::Exports);
+    Ok(Memory {
+        id,
+        class: MemoryClass::Private,
+        len,
+        allocation,
+        memory,
+        base: 0,
+        buffer: vk::Buffer::null(),
+        address: 0,
+        mapping: None,
+        device_local: core.device_local & (1 << index) != 0,
+        spilled: false,
+        own: Some(Own::Export(handle)),
+    })
 }
 
 /// Frees an imported or exported block given back: its buffer, then its memory, then runs an

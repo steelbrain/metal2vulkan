@@ -51,6 +51,7 @@ mod sampler;
 mod shadow;
 mod staging;
 mod submit;
+mod surface;
 #[cfg(test)]
 mod tests;
 mod texture;
@@ -129,6 +130,9 @@ pub use render_encoder::{
     IndexBuffer, RenderCommandEncoder, ScissorRect, Viewport, VisibilityResultMode,
 };
 pub use sampler::SamplerState;
+pub use surface::{
+    PlaneLayout, PlaneSpec, Surface, SurfaceCopy, SurfaceExport, SurfaceForm, SurfaceSpec,
+};
 pub use texture::{
     BytesPlace, HeapRange, Region, SizeAndAlign, StorageMode, Texture, TextureDescriptor,
 };

@@ -176,6 +176,20 @@ pub enum Refusal {
         /// The block named.
         block: BlockId,
     },
+    /// A surface ([`Device::new_exported_surface`](crate::Device::new_exported_surface)) of no
+    /// plane or of more than four, or whose pitch or start multiple is 0, or whose multiples and
+    /// texels have no common multiple in 64 bits. Metal has no counterpart.
+    ///
+    /// Basis: ours (a DRM format has at most four memory planes, and a layout needs a nonzero
+    /// multiple).
+    SurfacePlanes {
+        /// The planes asked for.
+        planes: usize,
+        /// The pitch multiple asked for.
+        pitch_multiple: u64,
+        /// The start multiple asked for.
+        start_multiple: u64,
+    },
     /// A changed range that leaves its buffer ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
     ///
     /// Basis: ours (the copy of such a range would write past the buffer's device copy).
@@ -1019,6 +1033,18 @@ pub enum Gap {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
+    /// A surface plane in place ([`Device::new_exported_surface`](crate::Device::new_exported_surface))
+    /// whose texture's uses ask an image usage its linear tiling lacks (storage, for one): the
+    /// device's linear image does not hold that usage. A plane whose tiling lacks sampling,
+    /// rendering or either copy takes the copy form instead.
+    ///
+    /// Basis: device (the image format query of the plane's tiling).
+    SurfaceUsage {
+        /// The plane's pixel format.
+        pixel_format: PixelFormat,
+        /// The `VkImageUsageFlags` bits the tiling lacks.
+        missing: u32,
+    },
     /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) or
     /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
     /// whose bytes no copy command in the floor addresses, though Metal takes them: an image's
@@ -1269,6 +1295,11 @@ pub enum TextureViewKind {
     /// Another pixel format Metal takes that the texture's image does not list: the device holds
     /// it in no viewed form of the image format's compatibility class.
     PixelFormat,
+    /// Another pixel format Metal takes that a surface plane's image in place does not list
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)): the device's
+    /// linear image does not hold that format. None was counted: reims's pl8rt boot makes 0
+    /// views of another format over its surface textures.
+    SurfacePixelFormat,
     /// Another texture type, but a 2D view of one slice of a 2D array.
     TextureType,
     /// Some of the slices of a texture that is not a 1D or 2D array: a cube's faces, or a cube
@@ -1578,6 +1609,15 @@ impl fmt::Display for Refusal {
                 f,
                 "an acquire or a release of block {}, which is not exported",
                 block.get()
+            ),
+            Refusal::SurfacePlanes {
+                planes,
+                pitch_multiple,
+                start_multiple,
+            } => write!(
+                f,
+                "a surface of {planes} planes, pitch multiple {pitch_multiple} and start multiple \
+                 {start_multiple}"
             ),
             Refusal::ZeroRangeShared { block } => write!(
                 f,
@@ -1905,6 +1945,14 @@ impl fmt::Display for Gap {
             Gap::HeapTexture { pixel_format } => write!(
                 f,
                 "a heap texture of {pixel_format:?} is not placed in this heap on this device"
+            ),
+            Gap::SurfaceUsage {
+                pixel_format,
+                missing,
+            } => write!(
+                f,
+                "a surface plane of {pixel_format:?} in place lacks image usage {missing:#x} on \
+                 this device"
             ),
             Gap::BufferCopyAlignment {
                 pixel_format,

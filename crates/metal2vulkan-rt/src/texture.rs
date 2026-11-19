@@ -423,6 +423,9 @@ enum Under {
     Heap { _block: Arc<Block> },
     /// The buffer a texture over a buffer lies over: its block, or its device copy.
     Buffer { _buffer: Buffer },
+    /// A surface plane's image in place ([`Device::new_exported_surface`]): the opaque
+    /// handle's allocation it is bound in, or none for a dma-buf's plane on its own import.
+    Surface { _block: Option<Arc<Block>> },
 }
 
 impl Image {
@@ -469,10 +472,16 @@ impl Image {
     /// buffer are aliases that interpret their bytes alike (Vulkan's memory aliasing); `transfer`
     /// for any other image.
     pub(crate) fn copy_layout(&self, transfer: vk::ImageLayout) -> vk::ImageLayout {
-        match self.first {
-            vk::ImageLayout::PREINITIALIZED => self.home,
-            _ => transfer,
+        match self.first == vk::ImageLayout::PREINITIALIZED || self.surface() {
+            true => self.home,
+            false => transfer,
         }
+    }
+
+    /// Whether the image is a surface plane's in place ([`Device::new_exported_surface`]), which
+    /// stays in the general layout through every copy, as the other API reads its bytes linearly.
+    pub(crate) fn surface(&self) -> bool {
+        matches!(self._under, Some(Under::Surface { .. }))
     }
 
     /// Whether its textures read it as an attachment through the attachment feedback loop: it has
@@ -561,6 +570,9 @@ pub(crate) enum Backing {
     /// The consumer's swapchain's ([`Device::new_drawable_texture`]): neither the image nor its
     /// memory is the runtime's to free.
     Drawable,
+    /// A surface plane's own dedicated import of the surface's dma-buf
+    /// ([`Device::new_exported_surface`]), counted in the surface imports gauge.
+    Import(vk::DeviceMemory),
 }
 
 /// The unit of a copy between an image and bytes or another image: the aspect, an element's
@@ -1397,14 +1409,7 @@ fn check_over(
             pixel_format: d.pixel_format,
         })
     };
-    let one = d.mipmap_level_count == 1 && d.sample_count == 1 && d.array_length == 1;
-    if d.texture_type != TextureType::Type2D || !one {
-        return Err(gap());
-    }
-    let unit = (plan.unit)
-        .filter(|unit| unit.aspect == vk::ImageAspectFlags::COLOR && unit.block == [1, 1])
-        .ok_or_else(gap)?;
-    let texel = u64::from(unit.bytes);
+    let texel = over_texel(d, plan)?;
     let row = u64::from(d.width) * texel;
     let end = u64::from(d.height - 1)
         .checked_mul(bytes_per_row)
@@ -1437,6 +1442,26 @@ fn check_over(
     let (linear, optimal) = core.format_features(plan.format);
     let features = linear.contains(optimal & kept_features(plan.usage));
     Ok(!own && !spilled && extent && features)
+}
+
+/// The bytes of a texel of a texture over a buffer that the runtime makes: 2D of one level,
+/// sample and slice, of a color format of one texel an element.
+///
+/// Err: [`Gap::TextureOverBuffer`] for any other.
+fn over_texel(d: &TextureDescriptor, plan: &Plan) -> Result<u64, Error> {
+    let gap = || {
+        Error::Unsupported(Gap::TextureOverBuffer {
+            pixel_format: d.pixel_format,
+        })
+    };
+    let one = d.mipmap_level_count == 1 && d.sample_count == 1 && d.array_length == 1;
+    if d.texture_type != TextureType::Type2D || !one {
+        return Err(gap());
+    }
+    let unit = (plan.unit)
+        .filter(|unit| unit.aspect == vk::ImageAspectFlags::COLOR && unit.block == [1, 1])
+        .ok_or_else(gap)?;
+    Ok(u64::from(unit.bytes))
 }
 
 /// The format features an image of `usage` is used by, which a linear image is to keep where the
@@ -2356,7 +2381,8 @@ impl Made {
                     core.counters.fall_by(Gauge::SpilledBytes, spilled);
                 }
                 Some(Backing::Placed(place)) => core.places.release(core, place),
-                Some(Backing::InBlock | Backing::Drawable) | None => {}
+                // A surface's plane images are made by `crate::surface`, never here.
+                Some(Backing::InBlock | Backing::Drawable | Backing::Import(_)) | None => {}
             }
         }
     }
@@ -2964,6 +2990,7 @@ impl Texture {
             false if image.view_formats.contains(&plan.format) => {
                 Some(image.usage & plan.supported)
             }
+            false if image.surface() => return gap(TextureViewKind::SurfacePixelFormat),
             false => return gap(TextureViewKind::PixelFormat),
         };
         let usable = views_usage.unwrap_or(image.usage);
@@ -3958,5 +3985,178 @@ impl crate::kept::Handle for Texture {
         // caller keeps the object alive past its last use.
         let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
         std::mem::ManuallyDrop::new(Texture { inner })
+    }
+}
+
+/// A surface plane's image in place, made and bound by `crate::surface`, for
+/// [`Device::surface_texture`]: its backing, its memory's bytes, its usage and view-format list,
+/// and the opaque handle's allocation it is bound in.
+pub(crate) struct SurfaceImage {
+    pub(crate) image: vk::Image,
+    pub(crate) backing: Backing,
+    pub(crate) bytes: u64,
+    pub(crate) usage: vk::ImageUsageFlags,
+    pub(crate) view_formats: Vec<vk::Format>,
+    pub(crate) block: Option<Arc<Block>>,
+}
+
+/// Destroys a surface plane's image not wrapped in a texture, and frees its own import.
+///
+/// # Safety
+///
+/// Nothing uses the image or its memory.
+pub(crate) unsafe fn discard_surface_image(core: &Core, made: SurfaceImage) {
+    // SAFETY: the caller's contract.
+    unsafe { core.device.destroy_image(made.image, None) };
+    if let Backing::Import(memory) = made.backing {
+        // SAFETY: the image bound to it is destroyed.
+        unsafe { core.device.free_memory(memory, None) };
+        core.counters.fall(Gauge::Blocks);
+        core.counters.fall(Gauge::SurfaceImports);
+    }
+}
+
+impl Device {
+    /// A surface plane's texture of `d`, checked as [`Buffer::new_texture`] checks a texture
+    /// over a buffer: its image format, the image usage its uses ask, its view formats and its
+    /// texel's bytes.
+    pub(crate) fn plane_plan(
+        &self,
+        d: &TextureDescriptor,
+    ) -> Result<crate::surface::PlanePlan, Error> {
+        let (_, plan, _) = self.prepare(d)?;
+        let texel = over_texel(d, &plan)?;
+        Ok(crate::surface::PlanePlan {
+            format: plan.format,
+            usage: plan.linear_usage(),
+            view_formats: plan.view_formats.clone(),
+            texel,
+        })
+    }
+
+    /// The texture of a surface plane's image in place, at `index` as for [`Device::new_texture`]:
+    /// its home layout general, from undefined in the next upload, which the surface's make
+    /// submits and waits for. The texture holds the image, which its drop frees with its memory.
+    ///
+    /// Err: [`Refusal::TextureIndex`]; [`Gap::SurfaceUsage`] for a usage the texture's uses ask
+    /// that the image lacks; [`Error::Vulkan`] where a view cannot be made; what the texture's
+    /// index takes.
+    pub(crate) fn surface_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        index: Option<u32>,
+        made: SurfaceImage,
+    ) -> Result<Texture, Error> {
+        let core = self.core();
+        let d = *descriptor;
+        let checked = self.prepare(&d).and_then(|(shape, plan, usage)| {
+            let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
+            if reached != index.is_some() {
+                return Err(Error::Refused(Refusal::TextureIndex { index }));
+            }
+            let missing = plan.linear_usage() & !made.usage;
+            if !missing.is_empty() {
+                return Err(Error::Unsupported(Gap::SurfaceUsage {
+                    pixel_format: d.pixel_format,
+                    missing: missing.as_raw(),
+                }));
+            }
+            Ok((shape, plan))
+        });
+        let (shape, plan) = match checked {
+            Ok(checked) => checked,
+            Err(error) => {
+                // SAFETY: nothing uses the image or its memory.
+                unsafe { discard_surface_image(core, made) };
+                return Err(error);
+            }
+        };
+        let mut views = Made::default();
+        // SAFETY: the image is the device's and bound, of the plan's format, with the plan's
+        // usage and more.
+        let made_views = unsafe { views.views(&core.device, made.image, &shape, &plan) };
+        let (sampled, storage) = match made_views {
+            Ok(made_views) => made_views,
+            Err(error) => {
+                // SAFETY: nothing else holds the views; `views` holds no image. Nothing uses the
+                // image or its memory.
+                unsafe {
+                    views.destroy(core);
+                    discard_surface_image(core, made);
+                }
+                return Err(error);
+            }
+        };
+        core.counters.rise(Gauge::Textures);
+        let home = vk::ImageLayout::GENERAL;
+        let image = Arc::new(Image {
+            core: Arc::clone(core),
+            image: made.image,
+            backing: made.backing,
+            bytes: made.bytes,
+            sampled,
+            storage,
+            home,
+            attachment_reads: false,
+            shadowing: None,
+            shadow: false,
+            aspects: plan.aspects,
+            format: plan.format,
+            usage: made.usage,
+            view_formats: made.view_formats,
+            first: vk::ImageLayout::UNDEFINED,
+            homed: AtomicBool::new(false),
+            drawable: None,
+            _under: Some(Under::Surface { _block: made.block }),
+        });
+        // The texture's elements of set 1, written as it takes its index; a refusal frees the
+        // image as `image` drops.
+        let index = match index {
+            Some(index) => {
+                let sampled = sampled.map(|view| (view, home));
+                // SAFETY: the texture's views are live; its image is in its home layout whenever
+                // work uses it, the waited upload of its make going first.
+                let owner = unsafe {
+                    (core.arrays).place_texture(
+                        &core.device,
+                        &core.counters,
+                        index,
+                        (sampled, storage),
+                        false,
+                    )
+                }?;
+                Some((index, owner))
+            }
+            None => None,
+        };
+        let inner = TextureInner {
+            device: self.clone(),
+            descriptor: d,
+            image,
+            format: plan.format,
+            views_usage: None,
+            unit: plan.unit,
+            index,
+            word: plan.word,
+            id: core.ids.take(),
+            heap: None,
+            named: None,
+            view: None,
+            emulation: plan.emulation,
+            attachments: Mutex::new(Vec::new()),
+            shadow: None,
+        };
+        let texture = Texture {
+            inner: Arc::new(inner),
+        };
+        core.work.home(core, &texture.inner.image)?;
+        Ok(texture)
+    }
+}
+
+impl Texture {
+    /// The texture's image, for an upload to hold.
+    pub(crate) fn held_image(&self) -> Arc<Image> {
+        Arc::clone(&self.inner.image)
     }
 }

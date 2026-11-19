@@ -79,10 +79,14 @@ pub(crate) enum Metric {
     ExternalAcquires,
     /// [`Metrics::external_releases`].
     ExternalReleases,
+    /// [`Metrics::surfaces_in_place`].
+    SurfacesInPlace,
+    /// [`Metrics::surfaces_copied`].
+    SurfacesCopied,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::ExternalReleases as usize + 1;
+const METRICS: usize = Metric::SurfacesCopied as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -113,6 +117,8 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::WaitsBehindCounter,
     Metric::ExternalAcquires,
     Metric::ExternalReleases,
+    Metric::SurfacesInPlace,
+    Metric::SurfacesCopied,
 ];
 
 // Each metric of the order is at its own index.
@@ -208,6 +214,8 @@ pub(crate) enum Gauge {
     Imports,
     /// [`Gauges::exports`].
     Exports,
+    /// [`Gauges::surface_imports`].
+    SurfaceImports,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -284,6 +292,8 @@ struct Atomics {
     waits_behind_counter: AtomicU64,
     external_acquires: AtomicU64,
     external_releases: AtomicU64,
+    surfaces_in_place: AtomicU64,
+    surfaces_copied: AtomicU64,
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
     capture_wait_nanos: AtomicU64,
@@ -331,6 +341,7 @@ struct Atomics {
     timestamp_pools: AtomicU64,
     imports: AtomicU64,
     exports: AtomicU64,
+    surface_imports: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -399,6 +410,8 @@ impl Counters {
             Metric::WaitsBehindCounter => &a.waits_behind_counter,
             Metric::ExternalAcquires => &a.external_acquires,
             Metric::ExternalReleases => &a.external_releases,
+            Metric::SurfacesInPlace => &a.surfaces_in_place,
+            Metric::SurfacesCopied => &a.surfaces_copied,
         }
     }
 
@@ -704,6 +717,7 @@ impl Counters {
             Gauge::TimestampPools => &a.timestamp_pools,
             Gauge::Imports => &a.imports,
             Gauge::Exports => &a.exports,
+            Gauge::SurfaceImports => &a.surface_imports,
         }
     }
 
@@ -769,6 +783,8 @@ impl Counters {
             waits_behind_counter: a.waits_behind_counter.load(Relaxed),
             external_acquires: a.external_acquires.load(Relaxed),
             external_releases: a.external_releases.load(Relaxed),
+            surfaces_in_place: a.surfaces_in_place.load(Relaxed),
+            surfaces_copied: a.surfaces_copied.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
             capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
             capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
@@ -833,6 +849,7 @@ impl Counters {
             timestamp_pools: a.timestamp_pools.load(Relaxed),
             imports: a.imports.load(Relaxed),
             exports: a.exports.load(Relaxed),
+            surface_imports: a.surface_imports.load(Relaxed),
         }
     }
 }
@@ -1082,6 +1099,14 @@ pub struct Metrics {
     /// one buffer barrier each, in the command buffer's work, also counted in
     /// [`barriers`](Self::barriers).
     pub external_releases: u64,
+    /// Surfaces made in place
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),
+    /// [`SurfaceForm::InPlace`](crate::SurfaceForm::InPlace)).
+    pub surfaces_in_place: u64,
+    /// Surfaces made in the copy form
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),
+    /// [`SurfaceForm::Copy`](crate::SurfaceForm::Copy)).
+    pub surfaces_copied: u64,
 }
 
 /// A thread's slot in [`Gauges::threads`], given back as it drops.
@@ -1252,6 +1277,13 @@ pub struct Gauges {
     /// freed: each is also one of [`blocks`](Self::blocks).
     pub imports: u64,
     /// Exported blocks ([`Device::new_exported_block`](crate::Device::new_exported_block)) whose
-    /// memory is not yet freed: each is also one of [`blocks`](Self::blocks).
+    /// memory is not yet freed, an opaque handle's surface in place among them
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)): each is also one
+    /// of [`blocks`](Self::blocks).
     pub exports: u64,
+    /// A dma-buf surface's plane imports in place
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), each its own
+    /// dedicated import of the surface's dma-buf, whose memory is not yet freed: each is also one
+    /// of [`blocks`](Self::blocks).
+    pub surface_imports: u64,
 }

@@ -154,6 +154,12 @@ unsafe fn free_backing(core: &Core, backing: Backing) {
             core.counters.fall(Gauge::Blocks);
             core.counters.fall_by(Gauge::SpilledBytes, spilled);
         }
+        Backing::Import(memory) => {
+            // SAFETY: the caller's contract.
+            unsafe { core.device.free_memory(memory, None) };
+            core.counters.fall(Gauge::Blocks);
+            core.counters.fall(Gauge::SurfaceImports);
+        }
         Backing::Placed(place) => core.places.release(core, place),
         Backing::InBlock | Backing::Drawable => {}
     }

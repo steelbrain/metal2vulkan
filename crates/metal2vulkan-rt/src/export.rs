@@ -100,7 +100,10 @@ pub(crate) struct Exports {
     /// Whether the device exports each handle, by its place in [`ExportHandle::ALL`].
     offered: [bool; 3],
     /// Whether `VK_EXT_queue_family_foreign` is enabled, which a dma-buf's export needs.
-    foreign: bool,
+    pub(crate) foreign: bool,
+    /// Whether `VK_EXT_image_drm_format_modifier` is enabled, which a dma-buf's surface in place
+    /// needs ([`Device::new_exported_surface`]).
+    pub(crate) modifiers: bool,
     /// `VK_KHR_external_memory_fd`, where it is enabled.
     #[cfg(unix)]
     fd: Option<ash::khr::external_memory_fd::Device>,
@@ -153,6 +156,7 @@ impl Exports {
         Exports {
             offered,
             foreign: enabled(ash::ext::queue_family_foreign::NAME),
+            modifiers: enabled(ash::ext::image_drm_format_modifier::NAME),
             #[cfg(unix)]
             fd: enabled(ash::khr::external_memory_fd::NAME)
                 .then(|| ash::khr::external_memory_fd::Device::new(instance, device)),
@@ -299,9 +303,15 @@ impl Block {
 }
 
 impl Exports {
+    /// `VK_KHR_external_memory_fd`, where it is enabled.
+    #[cfg(unix)]
+    pub(crate) fn fds(&self) -> Option<&ash::khr::external_memory_fd::Device> {
+        self.fd.as_ref()
+    }
+
     /// A new fd of `memory`, exported as `handle`.
     #[cfg(unix)]
-    fn handle(
+    pub(crate) fn handle(
         &self,
         memory: vk::DeviceMemory,
         handle: ExportHandle,
@@ -319,7 +329,7 @@ impl Exports {
 
     /// A new NT handle of `memory`, exported as `handle`.
     #[cfg(windows)]
-    fn handle(
+    pub(crate) fn handle(
         &self,
         memory: vk::DeviceMemory,
         handle: ExportHandle,

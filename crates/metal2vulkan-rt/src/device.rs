@@ -147,8 +147,8 @@ fn role(core: &Arc<Core>) -> Role {
 
 /// The device itself: what the runtime's threads and every block hold.
 pub(crate) struct Core {
-    instance: Instance,
-    physical: vk::PhysicalDevice,
+    pub(crate) instance: Instance,
+    pub(crate) physical: vk::PhysicalDevice,
     pub(crate) device: ash::Device,
     /// The family of the runtime's queues, which ownership transfers name as the device's own.
     pub(crate) family: u32,

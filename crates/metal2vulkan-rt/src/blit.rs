@@ -41,6 +41,7 @@ use crate::hazard::Access;
 use crate::memory::Own;
 use crate::over;
 use crate::record::{memory_barrier, Reach};
+use crate::surface::Surface;
 use crate::texture::{place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
@@ -876,6 +877,61 @@ impl BlitCommandEncoder {
         // SAFETY: the command buffer records outside any render pass and keeps the buffer, so its
         // block, until it retires; the barrier spans the block's own allocation, its buffer's,
         // and a dma-buf's foreign family is enabled (`Device::new_exported_block`).
+        unsafe { core.device.cmd_pipeline_barrier2(command, &dependency) };
+        building.count(Metric::Barriers);
+        building.count(Metric::ExternalReleases);
+        Ok(())
+    }
+
+    /// No Metal counterpart: releases `surface`
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)) to the other API,
+    /// which reads what this command buffer's commands wrote into its planes once the command
+    /// buffer has completed: a video encoder that reads the pictures a pass rendered, for one. The consumer calls it after the
+    /// encoder's last command that writes the planes, and has the other API read the surface
+    /// after its own wait on the command buffer's completion.
+    ///
+    /// In place, the call records each plane's image's release from the runtime's queue family to
+    /// the other API's (`VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle,
+    /// `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf), the general layout kept, after every command
+    /// before it: one barrier of the planes, counted in
+    /// [`Metrics::external_releases`](crate::Metrics::external_releases). In the copy form it is
+    /// the block's release ([`release_to_external`](Self::release_to_external)), the planes'
+    /// images copied back into the block first. The contract is the block's: from the call until
+    /// the consumer's next write into the surface through the runtime, the consumer encodes no
+    /// read of its planes.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's surface; [`Error::Vulkan`] where the
+    /// command buffer cannot record.
+    pub fn release_surface_to_external(&mut self, surface: &Surface) -> Result<(), Error> {
+        if let Some(buffer) = surface.copied() {
+            return self.release_to_external(buffer);
+        }
+        let (core, building) = self.parts();
+        if !surface.is_of(core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        for texture in surface.planes() {
+            building.keep_texture(texture);
+        }
+        let command = building.release_command()?;
+        let family = surface.handle().family();
+        let releases: Vec<vk::ImageMemoryBarrier2<'static>> = (surface.planes().iter())
+            .map(|texture| {
+                vk::ImageMemoryBarrier2::default()
+                    .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                    .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+                    .old_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .src_queue_family_index(core.family)
+                    .dst_queue_family_index(family)
+                    .image(texture.image())
+                    .subresource_range(texture.whole())
+            })
+            .collect();
+        let dependency = vk::DependencyInfo::default().image_memory_barriers(&releases);
+        // SAFETY: the command buffer records outside any render pass and keeps the planes until it
+        // retires; each image is in its home layout, general, between commands, and a dma-buf's
+        // foreign family is enabled.
         unsafe { core.device.cmd_pipeline_barrier2(command, &dependency) };
         building.count(Metric::Barriers);
         building.count(Metric::ExternalReleases);
