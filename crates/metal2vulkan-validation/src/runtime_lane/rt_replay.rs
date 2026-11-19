@@ -1118,7 +1118,9 @@ fn a_private_buffer_reads_back_through_a_copy() {
 
 /// A Private texture the program cleared to red in a render pass and shows at present 0: the play
 /// listing present 0 (`Player::checking_presents`) reads it back through a copy, which the CPU's
-/// read of a Private texture is not, and checks its 16 red texels.
+/// read of a Private texture is not, and checks its 16 red texels. The old runtime's play of the
+/// stream gives the same digest: both read the shown region as the same tight rows of texels, so
+/// a pitch or a row's padding cannot read as a picture that differs.
 #[test]
 fn a_private_shown_texture_is_checked_through_a_copy() {
     let dir = ScratchDir::new("rt-replay-private-shown").unwrap();
@@ -1164,16 +1166,34 @@ fn a_private_shown_texture_is_checked_through_a_copy() {
     });
     let cache = ScratchCache::new().unwrap();
     let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
-    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
     let player = Player::new(&mut backend).checking_presents([0]);
-    let (report, ended) = player.play(&mut reader);
-    let lines = report.lines();
+    let (rt, ended) = player.play(&mut reader);
+    let lines = rt.lines();
     ended.unwrap_or_else(|error| panic!("the play ended: {error}: {lines:?}"));
+    let mut old = None;
+    on_device_with(at_plan, |device| {
+        let mut backend = OldRuntime::new(device.clone(), gpu::TEST_DEVICE);
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let player = Player::new(&mut backend).checking_presents([0]);
+        let (report, ended) = player.play(&mut reader);
+        let lines = report.lines();
+        ended.unwrap_or_else(|error| panic!("the old play ended: {error}: {lines:?}"));
+        old = Some(report);
+    });
+    let old = old.expect("an old runtime's device");
+    let checked = |report: &Report| -> Vec<(u64, u64, [u8; 32])> {
+        (report.checks.iter())
+            .map(|check| (check.object, check.frame, check.sha256))
+            .collect()
+    };
     let red: [u8; 32] = Sha256::digest([255u8, 0, 0, 255].repeat(16)).into();
-    let checked: Vec<(u64, u64, [u8; 32])> = (report.checks.iter())
-        .map(|check| (check.object, check.frame, check.sha256))
-        .collect();
-    assert_eq!(checked, [(3, 0, red)], "{lines:?}");
+    assert_eq!(checked(&rt), [(3, 0, red)], "{lines:?}");
+    assert_eq!(
+        checked(&old),
+        checked(&rt),
+        "both runtimes' digest of one picture"
+    );
 }
 
 /// A two-copy stream's Managed buffer #3 of 4 bytes, its header's flags `flags`: the program
