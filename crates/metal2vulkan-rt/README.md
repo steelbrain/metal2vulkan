@@ -2062,6 +2062,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
     value the function reads as RootTableAddress"). The translator test
     `a_texture_of_an_argument_buffer_a_pointer_member_reaches_is_refused_under_the_identity_domains`
     and the device test `argument_tier` assert it;
+  - a pointer the function loads from memory or makes from an integer, whose plan reads the root
+    table as the pointer indexing above does ("an encoder value the function reads as
+    RootTableAddress"): no test yet, and refused until a recorded stream or a guest's boot meets
+    it;
   - a sample, gather or comparison of an argument buffer's texture, and a depth texture of one
     both compared and sampled without comparison: no test yet;
   - an argument buffer's sampler, and an array of samplers: no test yet;
