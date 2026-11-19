@@ -114,9 +114,9 @@ command buffer's before the command buffer can complete. Then every block is fre
 down, or where a call still held one as it returned, in that call, which runs no consumer code
 there. Every gauge reads zero only once the `VkDevice` is destroyed, so a consumer whose last
 handle dropped in a handler waits for that before it drops its instance or exits. A physical device and a device each hold their instance. No thread of the runtime outlives its device, and nothing relies on a
-static destructor or an `atexit` handler: the consumer drops every handle, or calls
-`Device::quiesce`, before the process exits, since a driver may unmap device memory inside
-`exit()`.
+static destructor or an `atexit` handler: the consumer drops every handle before the process
+exits, or, where a handle is still out, calls `Device::quiesce` and ends with `_exit` (Quiesce and
+exit).
 
 A device the consumer dropped is never handed out again: only `Device::new` makes a `Device`, and
 the runtime's threads hold the device's core, never a handle. A call that configures what has
@@ -1095,9 +1095,9 @@ made, with no lock, and never rewritten for layouts.
 
 ### Quiesce and exit
 
-`Device::quiesce(timeout)` is for a process that exits with the device alive. With every wait
-bounded by the timeout, it stops the submit thread (ready work is submitted, held work ends
-`NotRun`) and the block-maker, waits for the GPU to complete what was submitted, lets the
+`Device::quiesce(timeout)` is for a process that must end while a handle of the device is still
+out. With every wait bounded by the timeout, it stops the submit thread (ready work is submitted,
+held work ends `NotRun`) and the block-maker, waits for the GPU to complete what was submitted, lets the
 completion thread retire it and end, and then runs `BlockMappings::unmap` on the calling thread for
 every allocation still mapped. It frees nothing: every block's memory and mapping stays valid until
 the process ends. After it, no runtime thread touches a block; later calls that need a thread
@@ -1107,27 +1107,18 @@ returns at once. After a false answer a runtime thread can still be in the drive
 thread in `vkWaitSemaphores` with no timeout where the GPU did not go idle, which on NVIDIA's
 driver lasts until a later submission that after quiesce the runtime never makes, or in its
 retirement calls once a handler that held it returns, and the reaper or the block-maker in a
-pipeline creation or a memory call that outlasted the timeout), so a process that gets false ends
-without running exit handlers (`_exit`): a known gap on NVIDIA. Quiesce leaves such a thread
+pipeline creation or a memory call that outlasted the timeout). Quiesce leaves such a thread
 running and keeps its handle: the device's last handle joins it, with no deadline, before it
 destroys anything the thread can reach, so a drop after a false answer waits for that thread.
 
-The consumer quiesces before it calls `exit()`. Quiesce can also run in an `atexit` handler, on
-whichever thread calls `exit()`: it joins a thread only once that thread has ended, reads no
-thread-local that `exit()` tears down, and takes no lock a consumer's thread can hold. Such a
-handler is a fallback, not the contract: `exit()` runs handlers in the reverse order of their
-registration, so it runs before the driver's own exit teardown only where it was registered after
-the driver loaded, and no driver promises when it registers. On NVIDIA's driver (an RTX 2080 and
-an RTX 3090), a handler registered after `Device::new` exited cleanly in 50 runs of 50; one
-registered before `Instance::new` crashed in 50 of 50. The handler parks the consumer's own threads
-that touch blocks first.
-
-Those runs made a device and ran nothing on it. A device that ran a program's work does not exit
-cleanly with the device alive on NVIDIA's driver, even after quiesce answered true: on an RTX 3090
-(driver 620.70.06), 3 of 9 of a consumer's power-offs ended in a segmentation fault inside `exit()`,
-in a thread of the driver's own reading near a null pointer while the driver's exit handler waited
-on a lock, with every runtime thread already ended; an RTX 2080 exited cleanly in 4 of 4. On NVIDIA
-the consumer drops the device's last handle before it exits, or ends with `_exit`: a known gap.
+The consumer drops the device's last handle before the process exits. A process that cannot,
+because a handle is still out, quiesces and ends with `_exit`, whatever quiesce answered: `exit()`
+with a live device is supported on no device. The evidence: on an RTX 3090 (driver 620.70.06), 3 of
+9 of a consumer's power-offs that called `exit()` after quiesce answered true ended in a
+segmentation fault inside `exit()`, in a thread of the driver's own reading near a null pointer
+while the driver's exit handler waited on a lock, with every runtime thread already ended (an RTX
+2080: 0 of 4). A device that ran nothing exited cleanly from an `atexit` handler in 50 runs of 50
+on both cards, which says nothing of a device that ran work.
 
 ### Known gaps
 

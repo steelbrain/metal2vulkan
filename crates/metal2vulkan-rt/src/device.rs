@@ -56,8 +56,9 @@ use std::time::{Duration, Instant};
 /// handler or a listener, the reaper runs the teardown once the handler returns, and the consumer
 /// waits for the gauges to read zero before it drops its instance or exits. No thread of the
 /// runtime outlives the teardown, and nothing relies on a static destructor or an `atexit`
-/// handler: the consumer drops every handle, or calls [`quiesce`](Device::quiesce), before the
-/// process exits (a driver may unmap device memory inside `exit()`).
+/// handler: the consumer drops every handle before the process exits, or, where a handle is still
+/// out, calls [`quiesce`](Device::quiesce) and ends with `_exit`. `exit()` with a live device is
+/// supported on no device.
 #[derive(Clone)]
 pub struct Device {
     shared: Arc<Shared>,
@@ -732,8 +733,8 @@ impl Device {
         Ok(Block::claim(core, info, block))
     }
 
-    /// No Metal counterpart: stops the runtime's threads and its GPU work, for a process about to
-    /// exit with the device still alive. True once the GPU went idle and every thread ended
+    /// No Metal counterpart: stops the runtime's threads and its GPU work, for a process that must
+    /// end while a handle of the device is still out. True once the GPU went idle and every thread ended
     /// within `timeout`; false where the timeout passed first, or the call ran in a handler or a
     /// listener (the submit thread, which runs the scheduled handlers, and the completion thread,
     /// which runs the completed handlers and listeners, cannot wait for themselves).
@@ -755,11 +756,10 @@ impl Device {
     /// that need a runtime thread return [`Error::Quiesced`]: taking a block, a command buffer,
     /// an enqueue or commit, a zeroed Private buffer, and a listener.
     ///
-    /// The consumer calls it before `exit()`. It can also run in an `atexit` handler on whichever
-    /// thread calls `exit()`: it joins a thread only once that thread has ended, reads no
-    /// thread-local that `exit()` tears down, and takes no lock a consumer's thread can hold. Such
-    /// a handler runs before the driver's own exit teardown only where it was registered after the
-    /// driver loaded, after `Device::new`. A second call returns at once, with the first call's
+    /// The consumer then ends the process with `_exit`, whatever it answered: `exit()` with a live
+    /// device is supported on no device (a driver's own exit teardown can fault after work ran;
+    /// the crate's README, "Quiesce and exit"). It joins a thread only once that thread has ended
+    /// and takes no lock a consumer's thread can hold. A second call returns at once, with the first call's
     /// answer, or false while the first is still running.
     pub fn quiesce(&self, timeout: Duration) -> bool {
         let threads = self.shared.take_threads();
