@@ -573,11 +573,10 @@ class HarnessBudgetTests(unittest.TestCase):
         self.assertEqual(chosen, ["frame", "listed"])
         self.assertEqual(chosen, failed)
 
-    def test_a_frames_latency_row_takes_its_workload_s_limit_and_its_commit_to_complete_is_shown(self):
+    def test_a_frames_latency_row_takes_its_workload_s_limit(self):
         ceilings = {"a": {"frame": 2.0}}
         times = {"frame": (100.0, 150.0), f"frame{results.FROM_IDLE}": (100.0, 230.0),
-                 "frame_5cb": (100.0, 102.0), f"frame_5cb{results.FROM_IDLE}": (100.0, 110.0),
-                 "frame/commit_to_complete": (100.0, 900.0)}
+                 "frame_5cb": (100.0, 102.0), f"frame_5cb{results.FROM_IDLE}": (100.0, 110.0)}
         records = {f"harness-{runtime}/{row}": pair[i]
                    for row, pair in times.items() for i, runtime in enumerate(("old", "new"))}
         lines = [f"M2V-MATRIX time {key} {value:.3f}" for key, value in records.items()]
@@ -589,9 +588,7 @@ class HarnessBudgetTests(unittest.TestCase):
                              ["harness budget frame_5cb_from_idle", "harness budget frame_from_idle"])
             self.assertIn("past its ceiling 2.0 with its allowance, 2.060", problems[1])
             self.assertEqual(parked, [
-                "harness budget frame: new 150.0 us over old 100.0 us is 1.500, its ceiling 2.0",
-                "harness budget frame/commit_to_complete: new 900.0 us over old 100.0 us is 9.000: shown, not "
-                f"judged: {results.SHOWN_ROWS['/commit_to_complete']}"])
+                "harness budget frame: new 150.0 us over old 100.0 us is 1.500, its ceiling 2.0"])
             self.assertEqual([row for row, *_ in results.over_rows("a", recs(time=records))],
                              ["frame_5cb_from_idle", "frame_from_idle"])
             # The leg re-times the rows it fails, the latency rows against their workloads' limits.

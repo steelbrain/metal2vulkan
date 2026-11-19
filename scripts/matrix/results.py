@@ -555,12 +555,6 @@ HARNESS_GPU_FLOORS = read_floors((Path(__file__).resolve().parent / "gpu-floors.
 #: name (the harness's `FROM_IDLE`): `frame_from_idle` beside `frame`, whose time is the frames'
 #: throughput. Each of the two takes the ceiling and the floor its workload's row has (listed_row).
 FROM_IDLE = "_from_idle"
-#: Rows shown with the ratio of their times and never judged, by the end of their names, each for
-#: its reason (harness_budget, over_rows).
-SHOWN_ROWS = {
-    "/commit_to_complete": "a frames workload's last command buffer's commit-to-complete time, beside "
-                           "its throughput",
-}
 
 
 def listed_row(row):
@@ -823,11 +817,6 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
             problems.append(f"harness budget {row}: new ran at size {new_size}, old at {old_size}, so its "
                             "times measure different work")
             continue
-        why = next((why for end, why in SHOWN_ROWS.items() if row.endswith(end)), None)
-        if why:
-            parked.append(f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is {new / old:.3f}: "
-                          f"shown, not judged: {why}")
-            continue
         limit = row_limit(leg_id, row)
         gated, named = instruction_gate(leg_id, row, records)
         problems += gated
@@ -906,7 +895,7 @@ def over_rows(leg_id, records):
     (EXACT against the stored count, LENIENT against the old runtime's whole count), the ratio
     new over old (the median of the re-timed pairs where the row was re-timed, of the FIRST_RUNS
     processes' medians for a creation row's first sample). A row its re-timed pairs bring within
-    is not over; a shown row (SHOWN_FIRST, SHOWN_ROWS) is never judged, so never over."""
+    is not over; a shown row (SHOWN_FIRST) is never judged, so never over."""
     times, counted = records["time"], records["instructions"]
     out = []
     for key in sorted(times):
@@ -921,8 +910,7 @@ def over_rows(leg_id, records):
                 out.append((row, "count", own / stored, HARNESS_BUDGET))
             if own > old_i:
                 out.append((row, "count", own / old_i, 1.0))
-        if (first_row(row) and any(row.endswith(end) for end in SHOWN_FIRST)) or any(
-                row.endswith(end) for end in SHOWN_ROWS):
+        if first_row(row) and any(row.endswith(end) for end in SHOWN_FIRST):
             continue
         if first_row(row):
             samples = first_samples(times, row)
