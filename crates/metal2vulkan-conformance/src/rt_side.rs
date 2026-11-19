@@ -47,6 +47,7 @@ mod compute;
 mod events;
 mod render;
 mod states;
+mod tables;
 mod work;
 
 /// How long a wait for a command buffer waits before the side records that it never returned:
@@ -1419,6 +1420,15 @@ impl Side for RtSide<'_> {
         self.mesh_target(width, height)
     }
 
+    fn visible_function_table(
+        &mut self,
+        caller: Handle,
+        functions: Handle,
+        spec: &crate::visible_tables::TableSpec<'_>,
+    ) -> Answer<crate::visible_tables::TableOutcome> {
+        self.table(caller, functions, spec)
+    }
+
     fn empty_command_buffers(&mut self) -> Answer<EmptyCommandBuffers> {
         let of_rt = |error: rt::Error| Failure::of_rt(&error);
         let order: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -1517,7 +1527,7 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 11] = [
+    const CALLS: [(&str, &str); 13] = [
         (
             "heap_buffer_size_and_align",
             crate::cases::device_queries::HEAP_BUFFERS,
@@ -1553,6 +1563,8 @@ mod answered {
         ),
         ("queue_slots", crate::cases::command_queues::QUEUE_SLOTS),
         ("fragment_fill", "rgb10a2-srgb-stores-f"),
+        ("visible_function_table", "visible-tables-compute-size-0"),
+        ("visible_function_table", "visible-tables-stage-vertex"),
     ];
 
     /// The calls `value` records as unavailable, wherever in it they sit.
