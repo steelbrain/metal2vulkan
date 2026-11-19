@@ -1044,18 +1044,11 @@ impl crate::kept::Handle for RenderPipelineState {
     /// The state itself: it holds no handle of the device.
     type Kept = RenderPipelineState;
 
-    fn address(&self) -> usize {
-        Arc::as_ptr(&self.inner) as *const () as usize
+    fn object(&self) -> &RenderPipelineState {
+        self
     }
 
-    fn kept(&self) -> RenderPipelineState {
-        self.clone()
-    }
-
-    unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<RenderPipelineState> {
-        // SAFETY: the pointer is a live `Arc`'s; the handle made of it is never dropped, and the
-        // caller keeps the object alive past its last use.
-        let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        std::mem::ManuallyDrop::new(RenderPipelineState { inner })
+    fn address_of(object: &RenderPipelineState) -> usize {
+        Arc::as_ptr(&object.inner) as *const () as usize
     }
 }

@@ -3,9 +3,9 @@
 //! command buffer retires. The first use of an object in a recording takes its one reference, of
 //! the object alone ([`Handle::Kept`]): nothing a command buffer keeps counts as a handle of the
 //! device, so the consumer's last handle is the device's last whatever work is in flight.
-//! Every later use, and every binding slot an encoder fills with it, borrows the consumer's
-//! handle ([`Lent`]) and changes no count. The lists and their address sets keep their capacity from
-//! one recording of a queue to the next, up to [`KEPT_BOUND`] objects each, so a recording past
+//! Every later use, and every binding slot an encoder fills with it, borrows the object alone
+//! ([`Lent`]), one word as the list keeps it, and changes no count. The lists and their address
+//! sets keep their capacity from one recording of a queue to the next, up to [`KEPT_BOUND`] objects each, so a recording past
 //! the first allocates for its objects only where it uses more than any before it did, or more
 //! than the bound. They live in one allocation that moves whole between the queue and its command
 //! buffers ([`Objects`]), so a command buffer allocates and frees none of it.
@@ -24,59 +24,67 @@ use std::sync::Arc;
 /// A handle to a shared object: its `Arc`, and, where the object is one that holds its device
 /// for the consumer (a buffer, a texture, a sampler state), a handle of the device beside it.
 pub(crate) trait Handle {
-    /// What a command buffer keeps of the object: its `Arc` alone, which holds no handle of the
-    /// device.
-    type Kept;
+    /// The object alone, which holds no handle of the device: what a command buffer keeps of
+    /// it, and what an encoder borrows.
+    type Kept: Clone;
 
-    /// The object's address: its `Arc`'s pointer, the same for every handle to it, and no other
+    /// The object, as the handle holds it.
+    fn object(&self) -> &Self::Kept;
+
+    /// `object`'s address: its `Arc`'s pointer, the same for every handle to it, and no other
     /// object's while it lives.
-    fn address(&self) -> usize;
+    fn address_of(object: &Self::Kept) -> usize;
+
+    /// The object's address ([`address_of`](Self::address_of)).
+    fn address(&self) -> usize {
+        Self::address_of(self.object())
+    }
 
     /// The object as a command buffer keeps it: one more count of its `Arc`, none of the device.
-    fn kept(&self) -> Self::Kept;
-
-    /// Another handle to the object, made of the same pointers, that took no count: dropping it
-    /// would give back what it never took, so it is never dropped.
-    ///
-    /// # Safety
-    ///
-    /// The object, and its device where the handle holds one, live past the handle's last use.
-    unsafe fn uncounted(&self) -> ManuallyDrop<Self>
-    where
-        Self: Sized;
+    fn kept(&self) -> Self::Kept {
+        self.object().clone()
+    }
 }
 
-/// A handle borrowed from what a recording keeps: the same object, which this copy neither
-/// retains nor releases. A command buffer keeps the object until it retires, and holds a handle
-/// of its device until its commit; an encoder's tables, which hold its borrows, end with the
-/// encoder, before its command buffer can commit.
-pub(crate) struct Lent<T: Handle>(ManuallyDrop<T>);
+/// An object borrowed from what a recording keeps: the object alone, as the list keeps it
+/// ([`Handle::Kept`]), which this copy neither retains nor releases. A command buffer keeps the
+/// object until it retires, and an encoder's tables, which hold its borrows, end with the encoder,
+/// before its command buffer can commit.
+pub(crate) struct Lent<T: Handle>(ManuallyDrop<T::Kept>);
 
 impl<T: Handle> Lent<T> {
-    /// A borrow of `object`.
+    /// A borrow of `handle`'s object.
     ///
     /// # Safety
     ///
-    /// The recording the borrow is used in keeps `object` until after the borrow's last use, and
-    /// holds a handle of the object's device past it.
-    unsafe fn of(object: &T) -> Lent<T> {
-        // SAFETY: the caller keeps the object and its device alive past the borrow's last use.
-        Lent(unsafe { object.uncounted() })
+    /// The recording the borrow is used in keeps the object until after the borrow's last use.
+    unsafe fn of(handle: &T) -> Lent<T> {
+        // SAFETY: a copy of the object that takes no count and is never dropped, so it gives
+        // back none; the caller keeps the object alive past the borrow's last use.
+        Lent(ManuallyDrop::new(unsafe {
+            std::ptr::read(handle.object())
+        }))
+    }
+
+    /// The object's address ([`Handle::address_of`]).
+    pub(crate) fn address(&self) -> usize {
+        T::address_of(&self.0)
     }
 }
 
 impl<T: Handle> Deref for Lent<T> {
-    type Target = T;
+    type Target = T::Kept;
 
-    fn deref(&self) -> &T {
+    fn deref(&self) -> &T::Kept {
         &self.0
     }
 }
 
 impl<T: Handle> Clone for Lent<T> {
     fn clone(&self) -> Lent<T> {
-        // SAFETY: the same object as `self`, which the recording keeps as long.
-        unsafe { Lent::of(&self.0) }
+        // SAFETY: the same object as `self`, uncounted as `self` is, which the recording keeps as
+        // long.
+        Lent(unsafe { std::ptr::read(&self.0) })
     }
 }
 
@@ -145,8 +153,8 @@ impl<T: Handle> Kept<T> {
         if self.addresses.insert(object.address()) {
             self.list.push(object.kept());
         }
-        // SAFETY: the list keeps `object` now, until it is cleared, and the recording holds its
-        // device until its commit, past which the caller uses no borrow.
+        // SAFETY: the list keeps the object now, until it is cleared, past which the caller uses
+        // no borrow.
         unsafe { Lent::of(object) }
     }
 

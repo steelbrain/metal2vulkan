@@ -3,7 +3,6 @@
 //! count; clearing releases every object, and frees a list grown past the bound.
 
 use crate::kept::{Handle, Kept, KEPT_BOUND};
-use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 /// A handle of an object and of its device, as the runtime's buffers, textures and sampler
@@ -17,20 +16,12 @@ struct Probe {
 impl Handle for Probe {
     type Kept = Arc<u32>;
 
-    fn address(&self) -> usize {
-        Arc::as_ptr(&self.inner) as usize
+    fn object(&self) -> &Arc<u32> {
+        &self.inner
     }
 
-    fn kept(&self) -> Arc<u32> {
-        Arc::clone(&self.inner)
-    }
-
-    unsafe fn uncounted(&self) -> ManuallyDrop<Probe> {
-        // SAFETY: as the runtime's handles do.
-        let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        // SAFETY: as above.
-        let device = unsafe { Arc::from_raw(Arc::as_ptr(&self.device)) };
-        ManuallyDrop::new(Probe { inner, device })
+    fn address_of(object: &Arc<u32>) -> usize {
+        Arc::as_ptr(object) as usize
     }
 }
 
@@ -70,10 +61,7 @@ fn a_recording_keeps_an_object_once_and_its_borrows_change_no_count() {
         2,
         "1,000 uses and 1,000 borrows' copies change no count"
     );
-    assert!(borrows
-        .iter()
-        .chain(&copies)
-        .all(|borrow| *borrow.inner == 1));
+    assert!(borrows.iter().chain(&copies).all(|borrow| **borrow == 1));
     assert!(kept.hold(&b), "another object is kept");
     assert_eq!(kept.iter().map(|kept| **kept).collect::<Vec<_>>(), [1, 2]);
     assert_eq!(

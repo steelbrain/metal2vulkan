@@ -30,7 +30,7 @@
 //! `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported` too). The tracking is
 //! by buffer: a write of any of a buffer's bytes makes every such texture over it stale.
 
-use crate::buffer::{Buffer, BufferObject};
+use crate::buffer::BufferObject;
 use crate::copy_out;
 use crate::counters::{Counters, Metric};
 use crate::device::lock;
@@ -585,7 +585,11 @@ impl ManagedOvers {
 /// The copies back owed to readers of `buffer`'s device copy over `range` (all of it where
 /// `None`), where it has textures over it in images of their own; with `pending`, a reader
 /// recorded after the writes, also those of writes not yet submitted.
-pub(crate) fn backs(buffer: &Buffer, range: Option<(u64, u64)>, pending: bool) -> Vec<Back> {
+pub(crate) fn backs(
+    buffer: &impl BufferObject,
+    range: Option<(u64, u64)>,
+    pending: bool,
+) -> Vec<Back> {
     let mut backs = Vec::new();
     if let Some(overs) = buffer.managed_overs() {
         overs.backs(range, pending, &mut backs);

@@ -144,6 +144,16 @@ pub(crate) struct SamplerInner {
     uses: [Option<SamplerDesc>; 3],
 }
 
+impl SamplerInner {
+    /// [`SamplerState::gpu_resource_id`], of the state itself.
+    pub(crate) fn gpu_resource_id(&self) -> ResourceId {
+        ResourceId {
+            index: self.index,
+            word: self.word,
+        }
+    }
+}
+
 impl Drop for SamplerInner {
     fn drop(&mut self) {
         let core = &self.core;
@@ -405,10 +415,7 @@ impl SamplerState {
 
     /// `gpuResourceID`: its index and the translator's `SamplerWord` of its descriptor.
     pub fn gpu_resource_id(&self) -> ResourceId {
-        ResourceId {
-            index: self.inner.index,
-            word: self.inner.word,
-        }
+        self.inner.gpu_resource_id()
     }
 
     /// The descriptor it was made with.
@@ -420,20 +427,11 @@ impl SamplerState {
 impl crate::kept::Handle for SamplerState {
     type Kept = Arc<SamplerInner>;
 
-    fn address(&self) -> usize {
-        Arc::as_ptr(&self.inner) as *const () as usize
+    fn object(&self) -> &Arc<SamplerInner> {
+        &self.inner
     }
 
-    fn kept(&self) -> Arc<SamplerInner> {
-        Arc::clone(&self.inner)
-    }
-
-    unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<SamplerState> {
-        // SAFETY: the pointers are live `Arc`s'; the handle made of them is never dropped, and
-        // the caller keeps the state and the device alive past its last use.
-        let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        // SAFETY: as above.
-        let device = std::mem::ManuallyDrop::into_inner(unsafe { self.device.uncounted() });
-        std::mem::ManuallyDrop::new(SamplerState { inner, device })
+    fn address_of(object: &Arc<SamplerInner>) -> usize {
+        Arc::as_ptr(object) as *const () as usize
     }
 }

@@ -4072,21 +4072,12 @@ pub(crate) struct OverCopy {
 impl crate::kept::Handle for Texture {
     type Kept = Arc<TextureInner>;
 
-    fn address(&self) -> usize {
-        Arc::as_ptr(&self.inner) as *const () as usize
+    fn object(&self) -> &Arc<TextureInner> {
+        &self.inner
     }
 
-    fn kept(&self) -> Arc<TextureInner> {
-        Arc::clone(&self.inner)
-    }
-
-    unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<Texture> {
-        // SAFETY: the pointers are live `Arc`s'; the handle made of them is never dropped, and
-        // the caller keeps the texture and the device alive past its last use.
-        let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        // SAFETY: as above.
-        let device = std::mem::ManuallyDrop::into_inner(unsafe { self.device.uncounted() });
-        std::mem::ManuallyDrop::new(Texture { inner, device })
+    fn address_of(object: &Arc<TextureInner>) -> usize {
+        Arc::as_ptr(object) as *const () as usize
     }
 }
 

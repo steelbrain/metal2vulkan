@@ -511,7 +511,7 @@ impl ComputeCommandEncoder {
             return Err(Error::Refused(Refusal::TextureArgumentIndex { index }));
         }
         let held = &self.textures[index as usize];
-        if held.as_deref().map(Handle::address) == texture.map(Handle::address) {
+        if held.as_ref().map(Lent::address) == texture.map(Handle::address) {
             return Ok(());
         }
         let lent = match texture {
@@ -546,7 +546,7 @@ impl ComputeCommandEncoder {
             return Err(Error::Refused(Refusal::SamplerArgumentIndex { index }));
         }
         let held = &self.samplers[index as usize];
-        if held.as_deref().map(Handle::address) == sampler.map(Handle::address) {
+        if held.as_ref().map(Lent::address) == sampler.map(Handle::address) {
             return Ok(());
         }
         let lent = match sampler {

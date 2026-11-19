@@ -460,21 +460,12 @@ impl Device {
 impl crate::kept::Handle for Buffer {
     type Kept = Arc<BufferInner>;
 
-    fn address(&self) -> usize {
-        Arc::as_ptr(&self.inner) as *const () as usize
+    fn object(&self) -> &Arc<BufferInner> {
+        &self.inner
     }
 
-    fn kept(&self) -> Arc<BufferInner> {
-        Arc::clone(&self.inner)
-    }
-
-    unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<Buffer> {
-        // SAFETY: the pointers are live `Arc`s'; the handle made of them is never dropped, and
-        // the caller keeps the buffer and the device alive past its last use.
-        let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        // SAFETY: as above.
-        let device = std::mem::ManuallyDrop::into_inner(unsafe { self.device.uncounted() });
-        std::mem::ManuallyDrop::new(Buffer { inner, device })
+    fn address_of(object: &Arc<BufferInner>) -> usize {
+        Arc::as_ptr(object) as *const () as usize
     }
 }
 

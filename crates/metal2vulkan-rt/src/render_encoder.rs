@@ -71,7 +71,7 @@
 //! are the device's ([`PrecisionNote::DeviceDepthBias`]); a state that tests or writes depth
 //! carries [`PrecisionNote::DepthDenormals`].
 
-use crate::buffer::{Buffer, BufferObject};
+use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Face, Tests};
@@ -89,7 +89,7 @@ use crate::render::{Draws, RenderPipelineState, FRAGMENT, VERTEX};
 use crate::ring::{Placed, CHUNK};
 use crate::sampler::SamplerState;
 use crate::shadow::{self, Area, Held};
-use crate::texture::{Texture, TextureObject};
+use crate::texture::{Texture, TextureInner, TextureObject};
 use ash::vk;
 use metal2vulkan::bind::alpha_test_code;
 use metal2vulkan::metal::format::integer_channels_word;
@@ -327,7 +327,7 @@ struct AttachmentReads {
     moves: Vec<Move>,
     /// Without the feedback loop: each texture that reads a shadow, and what the draw reads
     /// through it.
-    shadow_reads: Vec<(Texture, Vec<Area>)>,
+    shadow_reads: Vec<(Arc<TextureInner>, Vec<Area>)>,
     /// Their slots: function and slot.
     shadow_slots: Vec<(usize, u32)>,
 }
@@ -363,7 +363,7 @@ impl Tables {
     }
 
     /// The buffer bound at `slot`, where a buffer is.
-    fn buffer(&self, slot: u32) -> Option<&Buffer> {
+    fn buffer(&self, slot: u32) -> Option<&Arc<BufferInner>> {
         match self.buffers.get(slot as usize) {
             Some(Bound::Buffer { buffer, .. }) => Some(buffer),
             _ => None,
@@ -371,7 +371,7 @@ impl Tables {
     }
 
     /// The texture bound at `slot`, where one is.
-    fn texture(&self, slot: u32) -> Option<&Texture> {
+    fn texture(&self, slot: u32) -> Option<&Arc<TextureInner>> {
         self.textures.get(slot as usize)?.as_deref()
     }
 
@@ -831,7 +831,7 @@ impl RenderCommandEncoder {
             return Err(Error::Refused(Refusal::TextureArgumentIndex { index }));
         }
         let held = &self.tables[table].textures[index as usize];
-        if held.as_deref().map(Handle::address) == texture.map(Handle::address) {
+        if held.as_ref().map(Lent::address) == texture.map(Handle::address) {
             return Ok(());
         }
         let lent = match texture {
@@ -926,7 +926,7 @@ impl RenderCommandEncoder {
             return Err(Error::Refused(Refusal::SamplerArgumentIndex { index }));
         }
         let held = &self.tables[table].samplers[index as usize];
-        if held.as_deref().map(Handle::address) == sampler.map(Handle::address) {
+        if held.as_ref().map(Lent::address) == sampler.map(Handle::address) {
             return Ok(());
         }
         let lent = match sampler {
@@ -1320,7 +1320,7 @@ impl RenderCommandEncoder {
     /// Err: [`Gap::Draw`] of [`DrawKind::AttachmentRead`] for a texture with no view of a shadow;
     /// [`Error::Vulkan`] where a shadow or a view cannot be made or the command buffer cannot
     /// record; [`Error::Quiesced`].
-    fn shadow_copies(&mut self, reads: &[(Texture, Vec<Area>)]) -> Result<(), Error> {
+    fn shadow_copies(&mut self, reads: &[(Arc<TextureInner>, Vec<Area>)]) -> Result<(), Error> {
         // Every shadow first: a failure leaves what each holds as it was.
         let mut places = Vec::with_capacity(reads.len());
         for (texture, _) in reads {

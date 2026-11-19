@@ -923,20 +923,6 @@ impl Device {
         &self.shared.core
     }
 
-    /// Another handle of the device, made of the same pointer, that took no count, for an
-    /// object's borrowed handle (`crate::kept::Lent`): dropping it would give back a count it
-    /// never took, so it is never dropped.
-    ///
-    /// # Safety
-    ///
-    /// Another handle of the device lives past this one's last use.
-    pub(crate) unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<Device> {
-        // SAFETY: the pointer is a live `Arc`'s, which the caller keeps alive past the handle's
-        // last use; the handle is never dropped.
-        let shared = unsafe { Arc::from_raw(Arc::as_ptr(&self.shared)) };
-        std::mem::ManuallyDrop::new(Device { shared })
-    }
-
     /// Gives up this handle where it is not the last, which ends nothing; the last comes back,
     /// for the caller to drop once it holds no lock, which ends the device on its thread. A call
     /// that holds a handle while another thread may drop the consumer's last one gives its own up

@@ -1340,7 +1340,7 @@ impl Building {
     /// A command writes `texture`: where it is over a Managed buffer's device copy in an image of
     /// its own, it owes its copy back to the readers recorded after the command, and from the
     /// segment's submission to every later reader (`crate::over::ManagedOvers`).
-    pub(crate) fn wrote_texture_managed(&mut self, texture: &Texture) {
+    pub(crate) fn wrote_texture_managed(&mut self, texture: &impl TextureObject) {
         let Some(buffer) = texture.managed_over() else {
             return;
         };
@@ -1354,7 +1354,7 @@ impl Building {
 
     /// A command writes `buffer`: where it is a Managed buffer with textures over its device copy,
     /// each owes its copy in from the next submission (`crate::over::ManagedOvers`).
-    pub(crate) fn wrote_managed(&mut self, buffer: &Buffer) {
+    pub(crate) fn wrote_managed(&mut self, buffer: &impl BufferObject) {
         if buffer.managed_overs().is_none() {
             return;
         }
