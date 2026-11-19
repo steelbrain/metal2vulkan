@@ -40,6 +40,25 @@
 //   ./cross_queue_fence_held_update control untracked
 //
 // Measuring runs keep `MTL_DEBUG_LAYER` OUT of the environment.
+//
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1, three runs of each case, plain and under
+// MTL_DEBUG_LAYER=1 alike, which reported nothing; `produce` ran about 29 ms; every command buffer
+// ended Completed with no error):
+//   control, untracked (jobs m3-max-52188, m3-max-52194): `w`'s GPU start 0.3 to 1 us after
+//     `u`'s GPU end; Y held all 4096 words.
+//   control-nofence, untracked (job m3-max-52188): `w` ran beside `u`, starting 4 us after it;
+//     Y held none. With tracked buffers (job m3-max-52186) Metal ran `w` after `u` even with no
+//     fence, as it tracks their writes.
+//   shared-event, event, behind-shared-event, enqueue, tracked and untracked (jobs m3-max-52186,
+//     m3-max-52188): in every run `w` completed 0.2 to 3.5 ms after its commit, before the
+//     release, Y holding none of the words, `u` still Committed (status 2); `u` ran once
+//     released.
+//   empty-waiter, untracked (job m3-max-52194): `w`'s GPU span covered `u`'s, starting within
+//     0.05 ms of `u`'s start and ending 0.1 ms after its end; its completed handler ran 0.11 to
+//     0.16 ms after `u`'s GPU end.
+// So a fence wait waits for an update of another queue submitted before it, a wait with no work
+// after it included, and not for an update in a command buffer Metal holds before it runs, at an
+// event wait, behind one held so, or behind one enqueued and not committed.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
