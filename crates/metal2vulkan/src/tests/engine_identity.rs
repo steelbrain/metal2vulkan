@@ -61,6 +61,10 @@
 //!   argument buffer (`engine/icb_replay_encode`) is refused as
 //!   `Unsupported{GpuEncodedIndirectCommands}`, not implemented: the feature it uses, not the
 //!   domains' generic refusal.
+//! - A kernel that reads the compute encoder's stage-in region (`engine/kernel_stage_in`'s
+//!   `stage_in_region_short`: `[[grid_origin]]` and `[[grid_size]]`, with no `[[stage_in]]`)
+//!   reads it from its pushed field (`PushField::StageInRegion`), with no descriptor; it passes
+//!   L3 and, on the CPU interpreter, every thread stores the region's origin and size.
 //! - A kernel's emulated-simdgroup variant (`engine/gsm2_simd_products`'s `simd_float_products`)
 //!   opens every barrier of its exchanges under a branch on `1 < N`, which the default domains do
 //!   not; on the CPU interpreter a threadgroup of one thread passes no barrier, and threadgroups of
@@ -638,6 +642,77 @@ fn a_gpu_encoding_kernel_is_refused_as_gpu_encoded_commands_under_the_identity_d
             }
             other => panic!("{stem}: {other:?}"),
         }
+    }
+}
+
+/// A kernel that reads the stage-in region (`stage_in_region_short`: `out[t] = (origin.xy,
+/// size.xy)` as `ushort`s) reads it from its pushed `StageInRegion` field, two `uvec4`s of the
+/// origin and the size as the binder writes them, beside its output's address and the dispatch's
+/// region, with no descriptor; every thread of the grid stores the region's origin and size.
+#[test]
+fn the_stage_in_region_is_read_from_its_pushed_field() {
+    let Some(bc) = assemble("kernel_stage_in") else {
+        return;
+    };
+    const ENTRY: &str = "stage_in_region_short";
+    const GROUP: u32 = 4;
+    const GROUPS: u32 = 2;
+    const ORIGIN: [u32; 3] = [3, 5, 7];
+    const SIZE: [u32; 3] = [11, 13, 1];
+    let threads = (GROUP * GROUPS) as usize;
+    let mut region_in = Vec::new();
+    for v in [ORIGIN, SIZE] {
+        for word in v.into_iter().chain([0]) {
+            region_in.extend_from_slice(&word.to_le_bytes());
+        }
+    }
+    let lane = |x: u32| u16::try_from(x).expect("a ushort");
+    let value = [ORIGIN[0], ORIGIN[1], SIZE[0], SIZE[1]].map(lane);
+    let mut expected: Vec<u8> = (0..threads)
+        .flat_map(|_| value.iter().flat_map(|half| half.to_le_bytes()))
+        .collect();
+    // One spare element past the grid, which the kernel must not write.
+    expected.extend_from_slice(&[0; 8]);
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, plan, module) =
+            compile_kept(&bc, ENTRY, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(a.interface.descriptors.is_empty(), "{stem}");
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+        let region = region_bytes([0; 3], [GROUP * GROUPS, 1, 1], [GROUP, 1, 1]).expect("packs");
+        let mut read = BTreeSet::new();
+        for f in &plan.push.fields {
+            let PushLoc::Push { offset } = f.loc else {
+                panic!("{stem}: {f:?} spilled");
+            };
+            let o = offset as usize;
+            match f.field {
+                PushField::SlotGuestBase(s) if s == slot(0) => {
+                    push[o..o + 8].copy_from_slice(&OUT.to_le_bytes())
+                }
+                PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
+                PushField::StageInRegion => push[o..o + 32].copy_from_slice(&region_in),
+                _ => panic!("{stem}: unexpected push field {f:?}"),
+            }
+            read.insert(f.field);
+        }
+        assert!(read.contains(&PushField::StageInRegion), "{stem}: {read:?}");
+        let res = Resources {
+            buffers: vec![Buffer {
+                slot: None,
+                address: Some(OUT),
+                bytes: vec![0u8; expected.len()],
+            }],
+            push,
+            spec: local_size(GROUP),
+        };
+        let cfg = Config {
+            workgroups: [GROUPS, 1, 1],
+            ..Config::default()
+        };
+        let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(got.buffers[0], expected, "{stem}: out");
     }
 }
 

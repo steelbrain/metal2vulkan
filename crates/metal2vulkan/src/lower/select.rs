@@ -1922,7 +1922,9 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// function, that reaches memory only through its buffer slots' device addresses, its textures'
 /// and runtime samplers' resource IDs and its constexpr samplers' pushed indices, with no
 /// descriptor and no state of a bound texture or sampler but its resource ID's
-/// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). Its fields past the push window are a
+/// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). The values it reads of the encoder are
+/// pushed: the dispatch's region, a storage texture's integer channel widths and the compute
+/// encoder's stage-in region (`PushField::StageInRegion`). Its fields past the push window are a
 /// parameter block, whose address the window holds.
 fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
     let fields = plan.push.fields.iter().all(|f| match (f.field, f.loc) {
@@ -1933,6 +1935,7 @@ fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
                 | PushField::DispatchRegion
                 | PushField::TextureIntegerChannels(_)
                 | PushField::ConstexprSampler(_)
+                | PushField::StageInRegion
         ),
     });
     let addressed = plan
