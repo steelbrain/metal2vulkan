@@ -152,6 +152,39 @@ impl AddressMap {
             counted((12 - offset % 8) % 8),
         )
     }
+
+    /// The first 8-byte word of `bytes` at a multiple of 8 from the target's start (`bytes` starts
+    /// `offset` bytes into the target) whose value lies in the live range of an object `noted`
+    /// holds, at any level: the word's offset in the target, its value and that object.
+    pub fn noted_word(
+        &self,
+        bytes: &[u8],
+        offset: u64,
+        noted: impl Fn(u64) -> bool,
+    ) -> Option<(u64, u64, u64)> {
+        let first = ((8 - offset % 8) % 8) as usize;
+        (first..bytes.len().saturating_sub(7))
+            .step_by(8)
+            .find_map(|at| {
+                let value = u64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));
+                let object = self.holders(value).find(|&object| noted(object))?;
+                Some((offset + at as u64, value, object))
+            })
+    }
+
+    /// The objects whose live ranges hold `value`, outermost first.
+    fn holders(&self, value: u64) -> impl Iterator<Item = u64> + '_ {
+        let mut level = Some(&self.top);
+        std::iter::from_fn(move || {
+            let (_, range) = level?.range(..=value).next_back()?;
+            if value >= range.end {
+                level = None;
+                return None;
+            }
+            level = Some(&range.inner);
+            Some(range.object)
+        })
+    }
 }
 
 /// The start of the range of `level` that holds `[start, end)` whole, if one does.

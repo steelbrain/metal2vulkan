@@ -207,6 +207,20 @@ and the (name id, value) answer pairs.
   lies in a live range (`address_looking_words`), and apart from them the 8-byte values at 4 past
   a multiple of 8 that do (`misaligned_address_words`). Both are the stream's, the same on every
   play on either runtime.
+- **The escape note.** `m2v.bufferEscaped` (receiver: a buffer; arguments: `[kind]`) says the
+  program may hold the buffer's address in memory from then on; the whole buffer escapes. Its
+  kind is 0 for a `gpuAddress` read of the buffer or of a texture over it, 1 for an argument
+  encoder's write of its address or of a texture-over-it's resource ID, 2 for a `gpuResourceID`
+  read of a texture or view over it, and 3 for a residency set's add. The recorder writes it once
+  in the buffer's life, at the first escape, in stream order: after the `m2v.write` records of
+  the commits before it and before those of every commit after it. The buffer is a no-copy one,
+  never Managed. Once a buffer's note is read, a written word that looks like an address (above)
+  whose value lies in that buffer's recorded range stops the play, naming its target and offset,
+  its value, the buffer and the note's kind (`PlayError::NotedWord`): the word may be the
+  buffer's address, which the play would have to move, and that move is not built. A note of a
+  kind past 3, or of an object no call made, is an invalid stream. A stream recorded before the
+  recorder wrote the note holds none, and the report's `addresses` line says it predates the note
+  (section 10).
 - **Resource IDs.** A descriptor's resource index places its object at that ID, as Metal places it
   whether or not the index is forced: a texture descriptor's and a render pipeline's
   `resourceIndex` (`[index, forced]`), a sampler's (an index), and a view's `resourceIndex:`
@@ -704,9 +718,10 @@ stream may differ from what the program did` first where the stream's header lac
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
 `device NAME runtime old|rt snapshots yes|no`, then
 `addresses address_looking_words=N misaligned_address_words=N address_arguments=N
-relocated_words=N differing_ids=N: written words play as recorded; the stream predates the escape
-note` (the census of the written words that look like addresses, at a multiple of 8 and 4 past
-one, which play as the stream holds them; the address arguments and those moved; and the objects
+relocated_words=N differing_ids=N: written words play as recorded; NOTES` (the census of the
+written words that look like addresses, at a multiple of 8 and 4 past one, which play as the
+stream holds them; the address arguments and those moved; `NOTES` `the stream predates the escape
+note` where it holds no `m2v.bufferEscaped` record, else `escape notes N`; and the objects
 whose ID differs from the recording's, those of the compute pipeline states' typed gap and of
 the skipped objects aside: any such object makes the play an error, as a word that names it
 names something else in the play),

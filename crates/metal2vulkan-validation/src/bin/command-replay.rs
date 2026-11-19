@@ -477,10 +477,13 @@ fn run<B: Backend>(
     let differing_ids = (played.ids.len() as u64).saturating_sub(unread_ids);
     let stream = &played.total.stream;
     let fixed = |key: &str| stream.get(key).copied().unwrap_or(0);
+    let notes = match played.escape_notes {
+        0 => "the stream predates the escape note".to_owned(),
+        notes => format!("escape notes {notes}"),
+    };
     report.line(&format!(
         "addresses address_looking_words={} misaligned_address_words={} address_arguments={} \
-         relocated_words={} differing_ids={differing_ids}: written words play as recorded; the \
-         stream predates the escape note",
+         relocated_words={} differing_ids={differing_ids}: written words play as recorded; {notes}",
         fixed("address_looking_words"),
         fixed("misaligned_address_words"),
         fixed("address_arguments"),

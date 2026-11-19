@@ -186,6 +186,17 @@ pub enum PlayError {
     },
     /// The stream contradicts itself (an object it never made, a wait nothing can meet).
     Invalid(String),
+    /// A written word at byte `offset` of `target` (an object, or the encoder of `set*Bytes` data)
+    /// whose value lies in the recorded range of `buffer`, which the stream noted escaped
+    /// (`m2v.bufferEscaped`, its `kind`): the word may be the buffer's address, and moving it is not
+    /// built.
+    NotedWord {
+        target: u64,
+        offset: u64,
+        value: u64,
+        buffer: u64,
+        kind: u64,
+    },
     /// Object `object` has a recorded range at `recorded`, and the backend, which makes such
     /// objects at their recorded addresses (`Backend::places_at_recorded`), could not: its runtime
     /// refused the address (`why`), or made it at `made`. No other placement is tried.
@@ -204,6 +215,17 @@ impl fmt::Display for PlayError {
             PlayError::Refused { selector, why } => write!(f, "refused {selector}: {why}"),
             PlayError::Runtime { selector, error } => write!(f, "{selector}: {error}"),
             PlayError::Invalid(why) => write!(f, "invalid stream: {why}"),
+            PlayError::NotedWord {
+                target,
+                offset,
+                value,
+                buffer,
+                kind,
+            } => write!(
+                f,
+                "#{target} +{offset}: the word {value:#x} lies in #{buffer}'s recorded range, \
+                 which the stream noted escaped (kind {kind}); moving it is not built"
+            ),
             PlayError::Unpinned {
                 object,
                 recorded,
@@ -304,6 +326,9 @@ pub struct Report {
     /// The live recorded ranges a newer one met in part, which the address map ended
     /// (`AddressMap::insert`).
     pub parted: u64,
+    /// The escape notes the stream holds (`m2v.bufferEscaped`): none in a stream recorded before
+    /// the recorder wrote them.
+    pub escape_notes: u64,
     /// On a backend that makes objects at their recorded addresses
     /// (`Backend::places_at_recorded`), the objects with a recorded range it made there, every
     /// one of them (another stops the play); `None` on a backend the address map moves address
@@ -858,6 +883,9 @@ fn placement_offset(selector: &str) -> Option<usize> {
 pub struct Player<'b, B: Backend> {
     backend: &'b mut B,
     addresses: AddressMap,
+    /// The live buffers the stream noted escaped (`m2v.bufferEscaped`), with the note's kind: a
+    /// written word whose value lies in one's range stops the play (section 5).
+    escaped: HashMap<u64, u64>,
     kinds: HashMap<u64, Kind>,
     /// Each live object's device and the number of objects made before it.
     owner: HashMap<u64, (u64, u64)>,
@@ -1091,6 +1119,7 @@ impl<'b, B: Backend> Player<'b, B> {
         Player {
             backend,
             addresses: AddressMap::default(),
+            escaped: HashMap::new(),
             kinds: HashMap::new(),
             owner: HashMap::new(),
             made_count: 0,
@@ -1360,6 +1389,7 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         match &*call.selector {
             "m2v.write" => self.write(stream, &call),
+            "m2v.bufferEscaped" => self.escape(&call),
             "m2v.check" => {
                 let recorded = call.answer("sha256").and_then(Value::as_list);
                 let objects = call.args.iter().enumerate().map(|(at, object)| {
@@ -1601,7 +1631,7 @@ impl<'b, B: Backend> Player<'b, B> {
             args.iter().map(addresses).sum::<u64>();
         if sets_bytes(&call.selector) {
             if let Some(Value::Bytes(data)) = args.first() {
-                self.census(data, 0);
+                self.census(call.receiver, data, 0)?;
             }
         }
         let resolved = self.placed(Call { args, ..call });
@@ -1678,7 +1708,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 unreachable!("a piece's bytes");
             };
             if censused {
-                self.census(data, at);
+                self.census(upload.target, data, at)?;
             }
             *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         }
@@ -1792,18 +1822,54 @@ impl<'b, B: Backend> Player<'b, B> {
     /// where the target answered a `gpuAddress`, and its bytes.
     fn put(&mut self, target: u64, offset: u64, data: Vec<u8>) -> Result<(), PlayError> {
         if self.addresses.holds(target) {
-            self.census(&data, offset);
+            self.census(target, &data, offset)?;
         }
         *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         self.write_bytes(target, offset, &data)
     }
 
-    /// Count the address-looking words of `data`, which starts `offset` bytes into its target
-    /// (`AddressMap::census`), and move none.
-    fn census(&mut self, data: &[u8], offset: u64) {
+    /// Count the address-looking words of `data`, which starts `offset` bytes into `target`
+    /// (`AddressMap::census`), and move none; one whose value lies in the range of a buffer the
+    /// stream noted escaped stops the play (`PlayError::NotedWord`).
+    fn census(&mut self, target: u64, data: &[u8], offset: u64) -> Result<(), PlayError> {
         let (aligned, misaligned) = self.addresses.census(data, offset);
         *self.fixed.entry(ADDRESS_LOOKING_WORDS).or_default() += aligned;
         *self.fixed.entry(MISALIGNED_WORDS).or_default() += misaligned;
+        if aligned == 0 || self.escaped.is_empty() {
+            return Ok(());
+        }
+        let noted = |object| self.escaped.contains_key(&object);
+        match self.addresses.noted_word(data, offset, noted) {
+            Some((offset, value, buffer)) => Err(PlayError::NotedWord {
+                target,
+                offset,
+                value,
+                buffer,
+                kind: self.escaped[&buffer],
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// `m2v.bufferEscaped`: the program may hold its receiver's address in memory, from then on
+    /// (`docs/REPLAY-STREAM.md`, section 5). Its one argument is the kind of escape, 0 to 3.
+    fn escape(&mut self, call: &Call) -> Result<(), PlayError> {
+        let buffer = call.receiver;
+        if !self.kinds.contains_key(&buffer) {
+            return Err(invalid(format!(
+                "m2v.bufferEscaped of #{buffer}, made by no call"
+            )));
+        }
+        match call.args.as_slice() {
+            [kind] if kind.as_uint().is_some_and(|kind| kind <= 3) => {
+                self.escaped.insert(buffer, kind.as_uint().expect("a kind"));
+                self.report.escape_notes += 1;
+                Ok(())
+            }
+            _ => Err(invalid(format!(
+                "m2v.bufferEscaped of #{buffer}: its argument is a kind from 0 to 3"
+            ))),
+        }
     }
 
     /// Read `object` and record its checksum; the readback's own work is no command buffer's.
@@ -1925,7 +1991,7 @@ impl<'b, B: Backend> Player<'b, B> {
             let before = self.blob(stream, &around.before)?;
             sized(&around, &before)?;
             if self.addresses.holds(around.buffer) {
-                self.census(&before, around.location);
+                self.census(around.buffer, &before, around.location)?;
             }
             *self.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
             self.write_bytes(staging, at, &before)?;
@@ -2056,6 +2122,7 @@ impl<'b, B: Backend> Player<'b, B> {
     fn drop_object(&mut self, object: u64) -> Result<(), PlayError> {
         self.encoders.remove(&object);
         self.addresses.remove(object);
+        self.escaped.remove(&object);
         self.owner.remove(&object);
         self.compared.remove(&object);
         self.outside.remove(&object);

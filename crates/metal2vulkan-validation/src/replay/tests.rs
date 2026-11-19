@@ -781,6 +781,61 @@ fn a_typed_address_argument_moves_with_its_object() {
     assert_eq!(report.total.stream["address_looking_words"], 0);
 }
 
+/// Once the stream notes a buffer escaped (`m2v.bufferEscaped`), a written word whose value lies in
+/// its recorded range stops the play, naming the word, its target, the buffer and the note's kind;
+/// the same word into a buffer with no note played as written before it. A note of a kind past 3,
+/// or of an object no call made, is an invalid stream.
+#[test]
+fn a_word_into_a_buffer_noted_escaped_stops_the_play() {
+    let mut kept = Kept::default();
+    let noted = BLOCK;
+    let plain = BLOCK + 0x1_0000;
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let length = [Value::Uint(0x100), Value::Uint(0)];
+        let made = "newBufferWithLength:options:";
+        w.call(made, 1, 2, &length, &addressed(noted, 0x100))?;
+        w.call(made, 1, 3, &length, &addressed(plain, 0x100))?;
+        w.call(made, 1, 4, &length, &addressed(BLOCK + 0x2_0000, 0x100))?;
+        let into = |target: u64, offset: u64, word: u64| {
+            let pair = [
+                Value::Uint(offset),
+                Value::Bytes(word.to_le_bytes().to_vec()),
+            ];
+            (target, pair)
+        };
+        let (target, pair) = into(4, 8, plain + 8);
+        w.call("m2v.write", target, 0, &pair, &[])?;
+        w.call("m2v.bufferEscaped", 2, 0, &[Value::Uint(1)], &[])?;
+        let (target, pair) = into(4, 16, noted + 0x10);
+        w.call("m2v.write", target, 0, &pair, &[])
+    });
+    match ended {
+        Err(PlayError::NotedWord {
+            target: 4,
+            offset: 16,
+            value,
+            buffer: 2,
+            kind: 1,
+        }) if value == noted + 0x10 => {}
+        other => panic!("the play went on past a word into a noted buffer: {other:?}"),
+    }
+    assert_eq!(kept.writes, [(4, 8, (plain + 8).to_le_bytes().to_vec())]);
+    assert_eq!(report.escape_notes, 1);
+
+    for (receiver, kind) in [(2, 4), (9, 0)] {
+        let (_, ended) = played(&mut Kept::default(), |w| {
+            w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+            let length = [Value::Uint(0x100), Value::Uint(0)];
+            let made = "newBufferWithLength:options:";
+            w.call(made, 1, 2, &length, &addressed(noted, 0x100))?;
+            let note = [Value::Uint(kind)];
+            w.call("m2v.bufferEscaped", receiver, 0, &note, &[])
+        });
+        assert!(matches!(ended, Err(PlayError::Invalid(_))), "{ended:?}");
+    }
+}
+
 /// A copy from the guest's RAM lands each piece at its byte, as recorded: into a block, a word that
 /// looks like an address is counted at a multiple of 8 and apart 4 past one; into a buffer of no
 /// address, it is not counted. A copy of another form (one the platform refused, recorded before
