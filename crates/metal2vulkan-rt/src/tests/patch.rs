@@ -140,6 +140,8 @@ attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(none) }
         v.layouts.insert(1, tints);
         d.vertex_descriptor = Some(v);
         let mut t = TessellationDescriptor::default();
+        // Metal's default step is constant: every patch would read the first patch's factors.
+        t.factor_step_function = TessellationFactorStepFunction::PerPatch;
         t.partition_mode = TessellationPartitionMode::FractionalOdd;
         t.max_tessellation_factor = 64;
         t.output_winding_order = Winding::CounterClockwise;
