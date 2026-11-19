@@ -593,7 +593,8 @@ impl Device {
             .map(|(plane, plan)| u64::from(plane.descriptor.width) * plan.texel)
             .max()
             .unwrap_or(0);
-        let too_long = || Error::Limit(Limit::BlockLen { len: u64::MAX });
+        let max = self.core().max_block_len;
+        let too_long = || Error::Limit(Limit::BlockLen { len: u64::MAX, max });
         let pitch = row
             .checked_next_multiple_of(multiple)
             .ok_or_else(too_long)?;
@@ -801,7 +802,8 @@ impl Device {
             destroy(device, vec![implicit]);
             chosen.push((usage, list));
         }
-        let too_long = || Error::Limit(Limit::BlockLen { len: u64::MAX });
+        let max = self.core().max_block_len;
+        let too_long = || Error::Limit(Limit::BlockLen { len: u64::MAX, max });
         let pitch = pitch
             .checked_next_multiple_of(multiple)
             .ok_or_else(too_long)?;
