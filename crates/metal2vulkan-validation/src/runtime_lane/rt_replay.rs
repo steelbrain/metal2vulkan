@@ -1116,6 +1116,66 @@ fn a_private_buffer_reads_back_through_a_copy() {
     assert_eq!(bytes, vec![0x5a; 16]);
 }
 
+/// A Private texture the program cleared to red in a render pass and shows at present 0: the play
+/// listing present 0 (`Player::checking_presents`) reads it back through a copy, which the CPU's
+/// read of a Private texture is not, and checks its 16 red texels.
+#[test]
+fn a_private_shown_texture_is_checked_through_a_copy() {
+    let dir = ScratchDir::new("rt-replay-private-shown").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // RGBA8Unorm, 4 by 4, shader-read and render-target, Private.
+        let target = uints(&[
+            ("textureType", 2),
+            ("pixelFormat", 70),
+            ("width", 4),
+            ("height", 4),
+            ("usage", 5),
+            ("storageMode", 2),
+        ]);
+        w.call("newTextureWithDescriptor:", 1, 3, &[target], &[])?;
+        w.call("MTLRenderPassDescriptor.new", 0, 4, &[], &[])?;
+        let pass = uints(&[("renderTargetWidth", 4), ("renderTargetHeight", 4)]);
+        w.call("m2v.setPass", 4, 0, &[pass], &[])?;
+        // MTLLoadActionClear, MTLStoreActionStore.
+        let Value::Map(mut color) = uints(&[("level", 0), ("loadAction", 2), ("storeAction", 1)])
+        else {
+            unreachable!("a map");
+        };
+        color.push(("texture".into(), Value::Object(3)));
+        let red = [("red", 1.0), ("green", 0.0), ("blue", 0.0), ("alpha", 1.0)]
+            .map(|(key, value)| (key.into(), Value::F64(value)));
+        color.push(("clearColor".into(), Value::Map(red.to_vec())));
+        let args = [Value::Uint(0), Value::Map(color)];
+        w.call("m2v.setColorAttachment", 4, 0, &args, &[])?;
+        w.call("commandBuffer", 2, 5, &[], &[])?;
+        w.call(
+            "renderCommandEncoderWithDescriptor:",
+            5,
+            6,
+            &[Value::Object(4)],
+            &[],
+        )?;
+        w.call("endEncoding", 6, 0, &[], &[])?;
+        w.call("commit", 5, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 5, 0, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Object(3)], &[])
+    });
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let player = Player::new(&mut backend).checking_presents([0]);
+    let (report, ended) = player.play(&mut reader);
+    let lines = report.lines();
+    ended.unwrap_or_else(|error| panic!("the play ended: {error}: {lines:?}"));
+    let red: [u8; 32] = Sha256::digest([255u8, 0, 0, 255].repeat(16)).into();
+    let checked: Vec<(u64, u64, [u8; 32])> = (report.checks.iter())
+        .map(|check| (check.object, check.frame, check.sha256))
+        .collect();
+    assert_eq!(checked, [(3, 0, red)], "{lines:?}");
+}
+
 /// A two-copy stream's Managed buffer #3 of 4 bytes, its header's flags `flags`: the program
 /// writes 5s into its CPU copy and announces them; a fill of 9s reaches the GPU's copy, and a
 /// synchronize reads it back, which the program's check of #3 sees; the program then puts its 5s

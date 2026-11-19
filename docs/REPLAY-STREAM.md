@@ -396,7 +396,9 @@ and the (name id, value) answer pairs.
   device's display shows a guest present, with or without a window. It ends a frame: the player
   waits for what can complete and closes the frame's counters; it reads nothing.
 - `m2v.check` (arguments: objects) asks the player to read those objects there and report their
-  checksums. Its optional answer `sha256` is a list of the recording's own, one per object.
+  checksums. Its optional answer `sha256` is a list of the recording's own, one per object. A
+  Private buffer or texture, which the CPU does not reach, is read through a copy into a Shared
+  buffer of the player's own.
 
 ## 9. Descriptors and libraries
 

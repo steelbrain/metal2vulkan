@@ -1023,6 +1023,51 @@ impl NewRuntime {
         copied
     }
 
+    /// The texels of `texture`, a Private texture, which the CPU does not reach: a blit copies
+    /// its first level's first slice into a Shared buffer of the play's own, laid out as
+    /// `texture_bytes` reads a texture the CPU reaches, on the play's read queue (`reads`), and
+    /// the read waits for it, as the old runtime's play reads every texture.
+    fn private_texture_bytes(&mut self, texture: &rt::Texture) -> Result<Vec<u8>, rt::Error> {
+        let d = texture.descriptor();
+        let raw = u64::from(d.pixel_format.as_raw());
+        let query = rt::TextureLevelQuery::plane_2d(raw, d.width.into(), d.height.into());
+        let level = self.device.texture_level_info(&query);
+        let length = level.bytes_per_image;
+        if length == 0 {
+            return Ok(Vec::new());
+        }
+        let queue = match &self.reads {
+            Some(queue) => queue.clone(),
+            None => (self.reads.insert(self.device.new_command_queue(1)?)).clone(),
+        };
+        let block = self.device.take_block(rt::MemoryClass::Shared, length)?;
+        let copied = (|| {
+            let into = self.device.new_buffer(block.id, 0, length, None)?;
+            let command_buffer = queue.command_buffer()?;
+            let mut blit = command_buffer.blit_command_encoder()?;
+            let from = rt::TexturePlace {
+                slice: 0,
+                level: 0,
+                origin: [0; 3],
+            };
+            let layout = rt::BufferLayout {
+                offset: 0,
+                bytes_per_row: level.bytes_per_row,
+                bytes_per_image: level.bytes_per_image,
+            };
+            blit.copy_from_texture_to_buffer(texture, from, [d.width, d.height, 1], &into, layout)?;
+            blit.end_encoding();
+            command_buffer.commit()?;
+            command_buffer.wait_until_completed()?;
+            let contents = into.contents().expect("a Shared buffer is mapped");
+            // SAFETY: the mapping holds `length` bytes, and the copy into them completed.
+            let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), length as usize) };
+            Ok(bytes.to_vec())
+        })();
+        self.device.release_block(block)?;
+        copied
+    }
+
     /// Commits `command_buffer`, of `queue` and the stream's `id` (0 for one of the play's own), as
     /// the next commit, in flight until its completed handler runs (`InFlight::retired`).
     fn commit(
@@ -2504,7 +2549,12 @@ impl Backend for NewRuntime {
             why: why.into(),
         };
         if let Some(Object::Texture(texture)) = self.objects.get(&object) {
-            return texture_bytes(&self.device, texture).map_err(|error| PlayError::Runtime {
+            let texture = texture.clone();
+            let bytes = match texture.descriptor().storage_mode {
+                rt::StorageMode::Private => self.private_texture_bytes(&texture),
+                _ => texture_bytes(&self.device, &texture),
+            };
+            return bytes.map_err(|error| PlayError::Runtime {
                 selector: "m2v.check".into(),
                 error: error.to_string(),
             });
