@@ -19,8 +19,14 @@ pub const VERSION: u32 = 2;
 /// the last write before it that carries each 4 KiB chunk of the range holds the bytes the
 /// program's CPU copy held there, the GPU's that it read back included.
 pub const FLAG_ANNOUNCED_BYTES_RECORDED: u32 = 1;
+/// Header flag bit 1 (sections 1 and 6 of `docs/REPLAY-STREAM.md`): at each command buffer's
+/// completion, the stream holds every chunk that the command buffer's work could store to as the
+/// GPU left it, before any later CPU write, on each of the four late routes by which a recorder
+/// learns of a completion (a signalled event, a final status read, a refused hook and a released
+/// command buffer).
+pub const FLAG_COMPLETION_BYTES_RECORDED: u32 = 2;
 /// The header flags this crate reads.
-const FLAGS: u32 = FLAG_ANNOUNCED_BYTES_RECORDED;
+const FLAGS: u32 = FLAG_ANNOUNCED_BYTES_RECORDED | FLAG_COMPLETION_BYTES_RECORDED;
 const HEADER_LEN: u64 = 16;
 
 const KIND_NAME: u8 = 1;

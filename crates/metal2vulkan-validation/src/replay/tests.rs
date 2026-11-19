@@ -211,10 +211,13 @@ fn header_flags_are_read_alike_in_every_segment() {
         StreamReader::open(&[first.clone(), other], None),
         Err(StreamError::Flags(_, 0))
     ));
-    let unknown = segment("o.m2vr", mark | 2);
+    let fixed = mark | super::FLAG_COMPLETION_BYTES_RECORDED;
+    let completed = segment("c.m2vr", fixed);
+    assert_eq!(StreamReader::open(&[completed], None).unwrap().flags(), 3);
+    let unknown = segment("o.m2vr", fixed | 4);
     assert!(matches!(
         StreamReader::open(&[unknown], None),
-        Err(StreamError::Flags(_, 3))
+        Err(StreamError::Flags(_, 7))
     ));
 }
 

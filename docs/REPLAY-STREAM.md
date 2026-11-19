@@ -19,10 +19,12 @@ hold guest data and is never committed. Tests write their own streams.
   and a u32 of flags. Fixed-width values are little-endian.
 - **Flags.** Bytes 12-15 are the flags, a little-endian u32, the same in every segment's header.
   Bit 0, `ANNOUNCED_BYTES_RECORDED` (`FLAG_ANNOUNCED_BYTES_RECORDED`), says the stream keeps the
-  announce invariant of section 6; streams recorded before it carry flags 0. Other bits are 0. The
-  version stays 2: a reader that checks only the magic and the version reads a stream with the bit
-  as before. This crate's reader refuses a segment whose flags hold another bit or differ from the
-  first segment's.
+  announce invariant of section 6; streams recorded before it carry flags 0. Bit 1,
+  `COMPLETION_BYTES_RECORDED` (`FLAG_COMPLETION_BYTES_RECORDED`, value 2), says it keeps the
+  completion invariant of section 6; a stream recorded after the recorder's completion fix reads
+  flags 3. Other bits are 0. The version stays 2: a reader that checks only the magic and the
+  version reads a stream with either bit as before. This crate's reader refuses a segment whose
+  flags hold another bit or differ from the first segment's.
 - **Record:** a kind (u8), the payload's length (varint), the payload. Varints are unsigned LEB128
   of at most 10 bytes; signed values are zigzag-encoded.
 - **Append-only.** A recorder only appends whole records and flushes at least at every commit. A
@@ -219,19 +221,25 @@ and the (name id, value) answer pairs.
 - **The comparison point** is the bytes as last recorded. When a command buffer completes, the
   4 KiB chunks wholly inside ranges only the GPU writes (attachments, blit destinations) take the
   GPU's bytes as the stream's without a write: the player's own run writes them again.
-- **Writes at a completion.** A recorder may also record what a command buffer's GPU work stored in
-  memory the CPU shares. When the command buffer completes, each chunk that work could have stored
-  to is compared with the comparison point, and each one that differs is an `m2v.write` after the
-  command buffer's `commit` record, holding the bytes the run left. The chunks compared are those a
-  blit wrote only part of, and everything the command buffer's compute and render encoders reach:
-  each buffer, texture and heap they bind or use, and what an indirect command buffer they execute
-  binds, except a resource `useResources:usage:` names for reading alone. A `Managed` buffer is
-  compared only on a device that keeps one copy of it; where there are two, the GPU never writes
-  the CPU's copy. A player waits before each write (section 10), so it puts back what its own run
+- **The completion invariant.** In a stream whose header has bit 1 set, at each command buffer's
+  completion the stream holds every chunk that the command buffer's work could store to as the GPU
+  left it, before any later CPU write, on each of the four late routes by which a recorder learns
+  of a completion: a signalled event, a final status read, a refused hook and a released command
+  buffer. Each such chunk that differs from the comparison point is an `m2v.write` after the
+  command buffer's `commit` record, holding the bytes the run left. The chunks are those a blit
+  wrote only part of, and everything the command buffer's compute and render encoders reach: each
+  buffer, texture and heap they bind or use, and what an indirect command buffer they execute
+  binds, except a resource `useResources:usage:` names for reading alone. A `Managed` buffer
+  counts only on a device that keeps one copy of it; where there are two, the GPU never writes the
+  CPU's copy. A player waits before each write (section 10), so it puts back what its own run
   wrote and changes nothing. The write moves the comparison point: when the CPU later restores the
   earlier bytes (a program resetting counters a kernel adds to), the restore differs from it and is
-  recorded before the next commit that reaches those bytes. A stream without these writes misses
-  such a restore. The header has no bit for them, and a player reads both kinds alike.
+  recorded before the next commit that reaches those bytes.
+- **A stream without bit 1** was recorded before the recorder's completion fix and keeps no such
+  invariant: where a completion's bytes are missing, a CPU write that restores the bytes last
+  recorded is missing too, and the play runs the next command buffer from its own run's bytes
+  where the recording device ran it from the restored ones. Such a stream may differ from what the
+  program did, and every report the player writes of it says so on its first line (section 10).
 - **No half-written bytes.** Before capturing, a recorder waits for every earlier command buffer
   that can run: one not held on an event wait that a later record satisfies. The bytes may then
   include final bytes the GPU wrote; the player puts them back at the same point, after its own
@@ -422,6 +430,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
 `until-frame F`. `command-replay dump --stream FILE` prints the call records as text, and
 `command-replay shapes --stream FILE` each selector's argument shapes, with no data.
 
+- **Streams recorded before the completion fix.** Where the stream's header lacks bit 1 (section
+  6), the report's first line is, by itself, `recorded before the recorder's completion fix: the
+  stream may differ from what the program did`, so no table taken from the report loses it.
 - It relocates (section 5) and plays the host's plumbing as the plain calls it stands for
   (section 4).
 - **Managed buffers** (the new runtime) play in the form the recording device kept them: its
@@ -617,7 +628,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
   vertex and base instance), fences and memory barriers (their stages are the runtime's to
   order).
 
-`report.txt` holds one line per item: `device NAME runtime old|rt snapshots yes|no` first, then
+`report.txt` holds one line per item: the line `recorded before the recorder's completion fix: the
+stream may differ from what the program did` first where the stream's header lacks bit 1 (section
+6), then `device NAME runtime old|rt snapshots yes|no`, then
 `relocation relocated_words=N misaligned_address_words=N address_arguments=N unrelocated_writes=N
 differing_ids=N` (the play's address words relocated and those left at 4 past a multiple of 8,
 the address arguments beside which a data word that only looks like an address stands out, the

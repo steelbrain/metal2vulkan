@@ -9,7 +9,10 @@
 //! recording device kept Managed buffers where the stream has no `m2v.deviceIdentity` record (one
 //! copy: unified memory; two copies: a GPU copy; with neither, a Managed buffer stops the play),
 //! and `--until-frame` stopping the play after frame `F`'s present (frames counted from 0), and
-//! writes `DIR/report.txt`: `device NAME runtime old|rt snapshots yes|no`, each frame's `frame`
+//! writes `DIR/report.txt`: first, where the stream's header lacks
+//! `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's completion fix: the
+//! stream may differ from what the program did` by itself, then
+//! `device NAME runtime old|rt snapshots yes|no`, each frame's `frame`
 //! and `end` lines as the frame ends (flushed, so a play that never ends leaves the frames it
 //! finished), `relocation ...` (the
 //! words relocated, the address arguments, the writes into objects with no recorded range, and
@@ -40,7 +43,7 @@ use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
     segments, Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player, StreamError,
-    StreamReader, Value,
+    StreamReader, Value, FLAG_COMPLETION_BYTES_RECORDED,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -180,6 +183,11 @@ fn shapes(options: &BTreeMap<String, String>) -> i32 {
     }
 }
 
+/// The line by itself at the top of every report of a stream whose header lacks
+/// `FLAG_COMPLETION_BYTES_RECORDED`, so that no table relayed from the report loses it.
+const BEFORE_COMPLETION_FIX: &str =
+    "recorded before the recorder's completion fix: the stream may differ from what the program did";
+
 /// The report file, written as the play goes.
 struct ReportFile {
     file: std::fs::File,
@@ -205,17 +213,20 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
-    let device_type = match DeviceType::parse(&options["device-type"]) {
-        Ok(device_type) => device_type,
-        Err(why) => {
-            report.line(&format!("error device-type: {why}"));
-            return 2;
-        }
-    };
     let mut reader = match reader(options) {
         Ok(reader) => reader,
         Err(error) => {
             report.line(&format!("error {error}"));
+            return 2;
+        }
+    };
+    if reader.flags() & FLAG_COMPLETION_BYTES_RECORDED == 0 {
+        report.line(BEFORE_COMPLETION_FIX);
+    }
+    let device_type = match DeviceType::parse(&options["device-type"]) {
+        Ok(device_type) => device_type,
+        Err(why) => {
+            report.line(&format!("error device-type: {why}"));
             return 2;
         }
     };

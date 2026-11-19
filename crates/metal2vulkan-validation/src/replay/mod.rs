@@ -20,6 +20,7 @@ pub use player::{
 };
 pub use stream::{
     segments, Call, StreamError, StreamReader, StreamWriter, FLAG_ANNOUNCED_BYTES_RECORDED,
+    FLAG_COMPLETION_BYTES_RECORDED,
 };
 pub use value::{Hash, Name, Value};
 
