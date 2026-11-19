@@ -271,7 +271,7 @@ impl NewRuntime {
                 start_multiple,
                 planes: &specs,
             };
-            self.device.new_exported_surface(spec)
+            self.device.new_exported_surface(&spec)
         };
         let read = rt::TextureUsage::SHADER_READ;
         let made = match make(read | rt::TextureUsage::SHADER_WRITE) {
