@@ -40,7 +40,7 @@ fn a_push_of_the_bytes_a_command_buffer_holds_records_nothing() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
     use crate::device::lock;
-    use crate::submit::{GROUP_RUN, IN_FLIGHT};
+    use crate::submit::{GROUP_RUN, IN_FLIGHT, UNSEEN_JOINS};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
@@ -1446,6 +1446,43 @@ pub(crate) mod on_device {
                 assert_eq!(all, AHEAD + 3, "{name}: member by member");
             });
             drop((probe, buffer, arena, queue, device));
+        });
+    }
+
+    /// At most `UNSEEN_JOINS` command buffers join a group while none of their queue's retires:
+    /// behind three running submissions, on a queue whose command buffers ran 1 ms, that many
+    /// fills and two more go as two groups, the first as the next fill finds it full, before the
+    /// busy work ends, the second once it ends.
+    #[test]
+    fn every_device_joins_at_most_unseen_joins_to_a_group_while_none_retires() {
+        each_device("command_group_unseen", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let fills = UNSEEN_JOINS as u32 + 2;
+            behind_busy(name, &device, &queue, |busy, before, _| {
+                let probe = queue.command_buffer().expect("a command buffer");
+                probe.queue().ran(1_000_000);
+                drop(probe);
+                let held: Vec<CommandBuffer> = (1..=fills)
+                    .map(|word| queue_fill(&queue, &buffer, word))
+                    .collect();
+                for command_buffer in &held {
+                    within(name, || {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    });
+                }
+                let sent = || device.counters().metrics().submissions - before;
+                within(name, || sent() >= AHEAD + 1);
+                assert_eq!(sent(), AHEAD + 1, "{name}: sent behind the busy work");
+                busy.open();
+                for command_buffer in &held {
+                    finished(name, command_buffer);
+                }
+                assert_eq!(word(&buffer), fills, "{name}");
+                assert_eq!(sent(), AHEAD + 2, "{name}: two groups");
+            });
+            drop((buffer, arena, queue, device));
         });
     }
 

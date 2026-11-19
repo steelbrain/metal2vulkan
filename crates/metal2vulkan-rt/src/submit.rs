@@ -14,7 +14,7 @@
 //! bound is tested again as the group goes, with the expected run as it then stands (a completion
 //! between a join and the send may have raised it): a group past it goes member by member, one
 //! `vkQueueSubmit2` each, only the last signalling. At most [`UNSEEN_JOINS`] command buffers join
-//! a group while none of the queue's completes, so command buffers that turn long all at once join
+//! a group while none of the queue's retires, so command buffers that turn long all at once join
 //! no more than that many on the estimate of the short ones before them. A segment that
 //! signals an event ends its group, which goes at once; one that waits on a semaphore leads a new
 //! group, the one held going first. A group is one submission with one signal of the progress
@@ -63,16 +63,18 @@ pub(crate) const GROUP: usize = 16;
 /// The most expected GPU run, in nanoseconds, of the command buffers one group holds, summed: 16
 /// ms, the old runtime's bound and the owner's line for an intolerable wait. Each command buffer's
 /// expected run is its queue's (`QueueInner::expected_run`), from the GPU times of the queue's
-/// command buffers as they retire. A job of command buffers each within amdgpu's job timeout may
-/// pass it summed: on a Radeon 780M a replay's frame of 5,114 dispatches, 29 GB written in 35 s,
-/// lost the device to a ring timeout of one submission.
+/// command buffers as they retire. Command buffers each within the driver's job timeout may pass
+/// it summed in one job.
 pub(crate) const GROUP_RUN: u64 = 16_000_000;
 
-/// The most command buffers that join one group while none of their queue's completes: they join
-/// on an expected run no completion has updated, so a program whose command buffers turn long all
-/// at once puts at most this many of them in one job before the estimate rises. The planner rules
-/// it from the replay streams' largest GPU time over this many consecutive command buffers.
-pub(crate) const UNSEEN_JOINS: usize = GROUP;
+/// The most command buffers that join one group while none of their queue's retires with its GPU
+/// times: they join on an expected run no completion has updated, so a program whose command
+/// buffers turn long all at once puts at most this many of them in one job before the estimate
+/// rises. Four, the old runtime's bound on a group: the most GPU time summed over consecutive
+/// command buffers of one queue in a replay stream on an RTX 3090 was 385.1 ms over four, within
+/// a quarter of amdgpu's default job timeout of 2,000 ms, and 1,536.6 ms over sixteen, past it
+/// (job m3-max-49358).
+pub(crate) const UNSEEN_JOINS: usize = 4;
 
 /// The submissions of a queue not yet seen complete at which its command buffers are held in a
 /// group. Three, not two: with two, the GPU idles between a group's end and the next
