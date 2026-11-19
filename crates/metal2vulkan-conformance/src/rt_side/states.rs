@@ -4,7 +4,7 @@
 //! target of the mesh family's format.
 
 use super::{keep, waited_for, RtSide, QUEUE_COMMAND_BUFFERS, WAIT};
-use crate::case::{Answer, FragmentFill, FragmentFilled, Handle, StageInput};
+use crate::case::{Answer, FragmentFill, FragmentFilled, Handle, Side, StageInput};
 use crate::pipeline_limits::{floored, ComputeLimitsSpec, ComputeStateLimits, Creation};
 use crate::transcript::{Negative, Value};
 use metal2vulkan_rt as rt;
@@ -184,7 +184,7 @@ impl RtSide<'_> {
                 "the blit of the target into a buffer did not complete",
             ));
         }
-        crate::case::Side::read_buffer(self, back, 0, length as usize)
+        self.read_buffer(back, 0, length as usize)
     }
 
     /// [`crate::case::Side::render_target`]: a Shared 2D render target of the mesh family's
