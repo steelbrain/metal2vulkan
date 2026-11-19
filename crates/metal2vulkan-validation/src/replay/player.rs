@@ -1731,9 +1731,8 @@ impl<'b, B: Backend> Player<'b, B> {
             return Ok(());
         };
         let dir = dump.dir.clone();
-        let completed: Vec<u64> = dump.completed.drain(..).collect();
         let mut buffers = Vec::new();
-        for command_buffer in completed {
+        while let Some(command_buffer) = dump.completed.pop() {
             dump.encoders.retain(|_, of| *of != command_buffer);
             let named = dump.named.remove(&command_buffer).unwrap_or_default();
             buffers.extend(named.into_iter().map(|object| (command_buffer, object)));
