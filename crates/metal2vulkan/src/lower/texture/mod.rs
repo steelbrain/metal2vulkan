@@ -1265,6 +1265,14 @@ pub fn declare(
                 e.insert(heap_array(mb, plan.stage, i.class, i.image)?);
             }
         }
+        // And each class a fetched color attachment is read through (`fragment::color`'s
+        // `PushField::FetchedColor`).
+        for &class in plan.families.fragment.texture_fetches.values() {
+            if let std::collections::btree_map::Entry::Vacant(e) = d.heap.entry(class) {
+                let decl = crate::lower::fragment::texture_decl(class);
+                e.insert(heap_array(mb, plan.stage, class, decl)?);
+            }
+        }
     }
     let slots = (plan.families.texture.slots.iter()).filter(|_| !plan.families.access.identity);
     for (index, s) in slots {

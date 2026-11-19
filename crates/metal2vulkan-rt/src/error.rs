@@ -1295,6 +1295,13 @@ pub enum DrawKind {
     /// storage view or over a buffer in place, or of an image two attachments of the pass render.
     /// Metal reads a render target through a texture.
     AttachmentRead,
+    /// A draw through a pipeline state whose fragment function reads a colour attachment
+    /// (`[[color(n)]]`, framebuffer fetch) whose texture the draw cannot read it through: one that
+    /// is no 2D texture (a 2D multisample texture in a multisampled pass) whose first level and
+    /// slice the pass renders, that no shader reaches (made with no index), or that a device
+    /// reads no attachment through, as `AttachmentRead` says. Metal reads the attachment at the
+    /// fragment's pixel.
+    FetchedAttachment,
     /// A draw at a base instance other than 0 through a pipeline state that steps a vertex layout
     /// per instance at a rate above 1, on a device that does not report
     /// `supportsNonZeroFirstInstance`: Vulkan's divisor takes `firstInstance` 0 alone there

@@ -2452,6 +2452,44 @@ pub(crate) fn signed_colors_written(
         .collect()
 }
 
+/// The colors the specialized fragment entry `spec` reads (`[[color(n)]]`) that a render pipeline
+/// whose color attachments are `colors` gives a signed-integer pixel format, under the identity
+/// domains on a device that orders framebuffer fetch in neither form, where an integer read
+/// fetches the attachment's own view through an `int` image (`lower::fragment::color`'s
+/// `texture_class`); none elsewhere, where it reads the attachment's bits through a `uint` input
+/// attachment.
+fn signed_colors_fetched(
+    spec: &air::Entry,
+    colors: &[Option<ColorAttachmentDescriptor>],
+    p: &DeviceProfile,
+) -> BTreeSet<u32> {
+    use crate::pipeline::sym::SampledType;
+    let textured =
+        crate::lower::access::identity(p) && crate::lower::fragment::fetch::fetch_unordered(p);
+    if !textured || !matches!(spec.ep.stage, AbiStage::Fragment { .. }) {
+        return BTreeSet::new();
+    }
+    spec.ep
+        .params
+        .iter()
+        .filter_map(|param| match param.role {
+            ParamRole::ColorInput {
+                index: AbiInt::Const(a),
+                ..
+            } => Some(a),
+            _ => None,
+        })
+        .filter(|a| {
+            colors
+                .get(*a as usize)
+                .copied()
+                .flatten()
+                .and_then(|c| crate::metal::format::sampled_type(c.pixel_format))
+                == Some(SampledType::Sint)
+        })
+        .collect()
+}
+
 /// The colors the specialized fragment entry `spec` writes (either dual-source index) that a
 /// render pipeline whose color attachments are `colors` has no attachment for
 /// (`LoweringInputs::unattached_colors`), but color 0 under alpha to coverage
@@ -2823,6 +2861,11 @@ fn lower_inputs(
             let mut out = fragment_inputs(d, variant, p);
             out.color_group = d.color_group.cloned();
             out.signed_color_attachments = signed_colors_written(spec, d.color_attachments);
+            out.signed_color_attachments.extend(signed_colors_fetched(
+                spec,
+                d.color_attachments,
+                p,
+            ));
             out.unattached_colors =
                 unattached_colors_written(spec, d.color_attachments, d.alpha_to_coverage);
             out.framebuffer_fetch = fetch_inputs(spec, d, variant, p);

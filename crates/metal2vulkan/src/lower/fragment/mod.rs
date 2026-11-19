@@ -70,6 +70,8 @@ mod snapshot;
 mod stencil;
 mod word_input;
 
+pub(crate) use color::texture_decl;
+
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -203,6 +205,11 @@ pub struct FragmentPlan {
     pub helper_queries: bool,
     /// Every used color input (framebuffer fetch), in parameter order.
     pub colors: Vec<ColorInput>,
+    /// The color attachments the function reads through the set-1 sampled-texture array's element
+    /// the consumer pushes for each (`PushField::FetchedColor`), under the identity domains on a
+    /// device that orders fetch in neither form (`color`), by index: the class of the element's
+    /// image, whose array the texture family declares (`texture::declare`).
+    pub texture_fetches: BTreeMap<u32, crate::pipeline::sym::ImageHandleClass>,
     /// The function is in a raster order group: its body runs inside this interlock mode's
     /// critical section, called from the entry [`wrap_entry`] builds.
     pub interlock: Option<ExecMode>,
@@ -537,6 +544,7 @@ pub fn declare(
         (&fp.fetch, &fp.input_blends, &fp.word_merges),
         (&fp.rotated_blends, &fp.logic_inputs),
         fp.fetch_sample.is_some(),
+        &fp.texture_fetches,
     )?;
     for (&color, sc) in &fp.fetch {
         if sc.shadowed {

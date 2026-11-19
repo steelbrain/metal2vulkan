@@ -235,7 +235,8 @@ struct Facts {
     held: bool,
     /// The fixed-function vertex buffers the vertex descriptor reads: binding, buffer, offset.
     vertex: Vec<(u32, vk::Buffer, u64)>,
-    /// A texture the draw reads is of an image the pass renders.
+    /// A texture the draw reads is of an image the pass renders, or the fragment function reads
+    /// a colour attachment (`Draws::fetched`).
     attachments: bool,
     /// A buffer the draw reaches has a device copy, or a texture it writes is over one.
     managed: bool,
@@ -295,12 +296,13 @@ impl Facts {
                 }));
             }
         }
-        self.attachments = (draws.textures.iter()).any(|&(table, slot, _)| {
-            tables[table].texture(slot).is_some_and(|texture| {
-                let hazard = texture.hazard_id();
-                pass.targets().any(|t| t.texture.hazard_id() == hazard)
-            })
-        });
+        self.attachments = !draws.fetched.is_empty()
+            || (draws.textures.iter()).any(|&(table, slot, _)| {
+                tables[table].texture(slot).is_some_and(|texture| {
+                    let hazard = texture.hazard_id();
+                    pass.targets().any(|t| t.texture.hazard_id() == hazard)
+                })
+            });
         let copied = |buffer: &Arc<BufferInner>| buffer.held().1.is_some();
         self.managed = (draws.buffers.iter())
             .any(|&(table, slot, _)| tables[table].buffer(slot).is_some_and(copied))
@@ -1730,6 +1732,20 @@ impl RenderCommandEncoder {
         if !self.facts.held {
             self.facts.find(draws, &self.tables, &self.pass)?;
         }
+        // Metal orders a colour attachment's read (`[[color(n)]]`) after every earlier fragment of
+        // the pass, with no barrier from the program: after a draw of the pass, a draw that reads
+        // one pays the barrier a memory barrier owes, through the feedback loop, and without it
+        // copies what it reads into the shadow again.
+        if !draws.fetched.is_empty() && self.drew {
+            self.owed = true;
+            let fetched: Vec<u32> = (draws.fetched.iter())
+                .filter_map(|&color| self.pass.colors.get(color as usize)?.as_ref())
+                .map(|target| target.texture.hazard_id())
+                .collect();
+            for shadowed in (self.shadowed.iter_mut()).filter(|s| fetched.contains(&s.hazard)) {
+                shadowed.held.clear();
+            }
+        }
         let reads = match self.facts.attachments {
             true => Some(self.attachment_reads(draws)?),
             false => None,
@@ -1819,8 +1835,7 @@ impl RenderCommandEncoder {
                 fill_push(
                     (&mut self.push, &mut self.blocks),
                     (&self.tables, self.facts.nil, factors, self.alpha_test),
-                    &self.moved,
-                    &self.shadow_slots,
+                    (&self.moved, &self.shadow_slots, &self.pass),
                     state,
                 );
                 // Each spilled function's block into the ring, and its address into the range.
@@ -1940,7 +1955,12 @@ impl RenderCommandEncoder {
     /// loop, one that reaches the attachment reads the image's shadow, into which the draw copies
     /// what it reads first, and one that reaches neither reads its image at home.
     ///
-    /// Err: [`Gap::Draw`] of [`DrawKind::AttachmentRead`] for a read the device cannot make.
+    /// A colour attachment the fragment function reads (`Draws::fetched`) is read so through its
+    /// texture, at the fragment's own pixel.
+    ///
+    /// Err: [`Gap::Draw`] of [`DrawKind::AttachmentRead`] for a read the device cannot make, and of
+    /// [`DrawKind::FetchedAttachment`] for a colour attachment the fragment function cannot read
+    /// through its texture.
     fn attachment_reads(&self, draws: &Draws) -> Result<AttachmentReads, Error> {
         let core = &*self.core;
         let drawn = self.drawn();
@@ -1988,6 +2008,57 @@ impl RenderCommandEncoder {
                 continue;
             }
             found.reads |= reaches;
+            if !moved {
+                found.moves.push(Move {
+                    moved: Moved {
+                        hazard,
+                        image: a.image,
+                        whole: texture.whole(),
+                        home: a.home,
+                    },
+                    rendered: target.range(),
+                    from: target.layout,
+                });
+            }
+        }
+        // Each colour attachment the fragment function reads (`[[color(n)]]`), through its
+        // texture's second element at the fragment's own pixel: a 2D texture (a 2D multisample
+        // one in a multisampled pass) whose first level and layer the pass renders, which a shader
+        // reaches and the device reads attachments through.
+        for &color in &draws.fetched {
+            let fetched = || {
+                Err(Error::Unsupported(Gap::Draw {
+                    kind: DrawKind::FetchedAttachment,
+                }))
+            };
+            let Some(target) = (self.pass.colors.get(color as usize)).and_then(Option::as_ref)
+            else {
+                return fetched();
+            };
+            let texture = &target.texture;
+            let a = &target.attachment;
+            let shaped = matches!(
+                texture.descriptor().texture_type,
+                crate::TextureType::Type2D | crate::TextureType::Type2DMultisample
+            );
+            let readable = core.attachment_reads
+                && shaped
+                && texture.attachment_reads()
+                && texture.base() == [a.level, a.layer]
+                && texture.second_resource_id().index != 0;
+            if !readable {
+                return fetched();
+            }
+            if core.feedback.is_none() {
+                found
+                    .shadow_reads
+                    .push((texture.object().clone(), texture.read_areas(Some(drawn))));
+                continue;
+            }
+            found.reads = true;
+            let hazard = texture.hazard_id();
+            let moved = (self.moved.iter()).any(|m| m.hazard == hazard)
+                || (found.moves.iter()).any(|m| m.moved.hazard == hazard);
             if !moved {
                 found.moves.push(Move {
                     moved: Moved {
@@ -2370,12 +2441,12 @@ fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, b
 /// in the ring), from the `tables`, a buffer argument bound to nothing taking `nil`, the nil
 /// buffer's address, and length 0, a checked load's zero range at `zero`: a texture whose image
 /// the pass `moved` to the feedback layout reads through its second element in that layout, and
-/// one in `shadow_slots`, which reads a shadow, through its second element, the shadow's.
+/// one in `shadow_slots`, which reads a shadow, through its second element, the shadow's; a colour
+/// attachment of `pass` the fragment function reads is read through its texture's second element.
 fn fill_push(
     (push, blocks): (&mut Vec<u8>, &mut [Vec<u8>; 2]),
     (tables, (nil, zero), factors, alpha_test): (&[Tables; 2], (u64, u64), u64, u32),
-    moved: &[Moved],
-    shadow_slots: &[(usize, u32)],
+    (moved, shadow_slots, pass): (&[Moved], &[(usize, u32)], &Pass),
     state: &RenderPipelineState,
 ) {
     let draws = &state.inner.compiled.draws;
@@ -2435,6 +2506,14 @@ fn fill_push(
             }
             FieldValue::AlphaTestReference => {
                 bytes[at..at + 4].copy_from_slice(&alpha_test.to_le_bytes());
+            }
+            // The pass's attachment's texture's second element, which the draw's attachment reads
+            // checked (`attachment_reads`).
+            FieldValue::FetchedColor(color) => {
+                let index = (pass.colors.get(color as usize))
+                    .and_then(Option::as_ref)
+                    .map_or(0, |target| target.texture.second_resource_id().index);
+                bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
             }
             // A render content has no dispatch or stage-in region (`render::draws`).
             FieldValue::DispatchRegion | FieldValue::StageInRegion => {}

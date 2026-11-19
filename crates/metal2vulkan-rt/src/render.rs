@@ -116,6 +116,11 @@ pub(crate) struct Draws {
     /// (`StageModule::own_pixel_textures`), sorted: what a draw copies of an attachment it reads
     /// through one on a device without the attachment feedback loop (`crate::shadow`).
     pub(crate) own_pixel: Vec<u32>,
+    /// The colour attachments the fragment function reads at its own pixel (`[[color(n)]]`)
+    /// through the element a draw pushes for each (`PushField::FetchedColor`), sorted: each an
+    /// attachment read of the pass through its texture's second element, ordered after every
+    /// earlier draw of the pass (`crate::render_encoder`).
+    pub(crate) fetched: Vec<u32>,
     /// Each fixed-function vertex binding: its binding and the vertex buffer index it reads.
     pub(crate) bindings: Vec<(u32, u32)>,
     /// Whether a function reads through an address that is not one of its slots.
@@ -373,6 +378,10 @@ fn draws(
             // content's own descriptor, whose projection link checked. A stride set per bind is
             // refused at its push field below.
             RuntimeFact::VertexFetch { .. } | RuntimeFact::VertexBufferStride { .. } => {}
+            // A colour attachment the fragment function reads, through the element its push field
+            // names (`FieldValue::FetchedColor`); one read through an input attachment or a storage
+            // image is a descriptor, which the translator refuses under the identity domains.
+            RuntimeFact::FramebufferFetch { .. } => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one a draw does
             // not supply.
             _ => return Err(draw_input()),
@@ -408,6 +417,7 @@ fn draws(
     }
     let mut constexprs = Vec::new();
     let mut fields = Vec::new();
+    let mut fetched = Vec::new();
     let mut push_len = 0;
     let mut blocks = [None; 2];
     for placement in &translated.push {
@@ -497,6 +507,12 @@ fn draws(
                 // The encoder's reference, which a fragment function under the private alpha test
                 // compares its color 0's alpha with.
                 PushField::AlphaTestReference => FieldValue::AlphaTestReference,
+                // The element a fragment function reads a colour attachment through, which the
+                // draw pushes for the pass's attachment there.
+                PushField::FetchedColor { color, .. } if at == FRAGMENT => {
+                    fetched.push(color);
+                    FieldValue::FetchedColor(color)
+                }
                 _ => return Err(draw_input()),
             };
             fields.push((offset, at, value));
@@ -521,11 +537,14 @@ fn draws(
         .collect();
     own_pixel.sort_unstable();
     own_pixel.dedup();
+    fetched.sort_unstable();
+    fetched.dedup();
     let draws = Draws {
         buffers,
         textures,
         storage_reads,
         own_pixel,
+        fetched,
         bindings,
         reads_unbound: translated.reads_unbound_resources,
         writes_unbound: translated.writes_unbound_resources,

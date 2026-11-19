@@ -216,9 +216,47 @@ use crate::pipeline::rotated_blend::{alpha_in_red_blend, rotated_blend, RotatedB
 use crate::pipeline::stage_io::{
     CoverageLoop, Interpolation, IoNumeric, IoRole, Sampling, StageBuiltin, StageIo,
 };
-use crate::pipeline::sym::{ResourceKind, SampledType, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, SampledType, Stage};
 use crate::pipeline::vertex::{VertexInputState, VertexStride};
 use crate::vk;
+
+/// Whether the fragment stage `fs` reads a color attachment of render inputs `r` through the
+/// sampled-texture array's element the consumer pushes for it (`PushField::FetchedColor`, the
+/// identity domains' form on a device that orders fetch in neither form), each such attachment
+/// checked as an input attachment of it is: the pipeline has it, its view holds Metal's channels
+/// (no rotated, two-plane YCbCr or extended-range format, whose texels the view does not hold as
+/// Metal's), and its format's numeric class is the one the stage reads, else Metal's pipeline
+/// error.
+fn textured_fetches(r: &RenderLinkInputs, fs: Option<&StageInterface>) -> Result<bool, Error> {
+    let mut any = false;
+    for placed in fs.into_iter().flat_map(|f| &f.push.fields) {
+        let PushField::FetchedColor { color, texels } = placed.field else {
+            continue;
+        };
+        any = true;
+        let invalid = || {
+            Error::InvalidDescriptor(DescriptorError::ColorAttachment {
+                index: color,
+                metal: MetalAnswer::NilWithError,
+            })
+        };
+        let attachment =
+            (r.color_attachments.get(color as usize).copied().flatten()).ok_or_else(invalid)?;
+        let pf = attachment.pixel_format;
+        if metal::format::rotated_channels(pf)
+            || metal::format::ycbcr_renders(pf)
+            || metal::format::ycbcr_pass_refused(pf)
+            || ExtendedRange::of(pf).is_some()
+        {
+            let refused = Unsupported::not_implemented(Feature::Format);
+            return Err(refused.at_attachment(Attachment::Color(color)).into());
+        }
+        if sampled_type(pf).unwrap_or(SampledType::Float) != texels {
+            return Err(invalid());
+        }
+    }
+    Ok(any)
+}
 
 /// The sample-count flag of a raster sample count.
 fn samples(count: u32) -> Result<vk::SampleCountFlags, Error> {
@@ -662,13 +700,14 @@ pub fn graphics_state(
             });
         }
     }
+    let textured = textured_fetches(r, fs)?;
     let rasterization_samples = samples(r.raster_sample_count)?;
     // A fetched attachment is read (and, in the storage form, written) at the invocation's own
     // sample by a stage compiled for a multisampled pipeline, and at the pixel by one compiled
     // for one sample (see the module docs): a stage compiled for the other kind declares an image
     // of the wrong sample count.
     if let Some(fs) = fs {
-        let fetches = !input_attachments.is_empty() || !storage.is_empty();
+        let fetches = !input_attachments.is_empty() || !storage.is_empty() || textured;
         if fetches && fs.io.multisampled != (r.raster_sample_count > 1) {
             return Err(Error::NeedsInput(RuntimeInput::Multisampled));
         }

@@ -1354,7 +1354,8 @@ impl Parameters {
                 // A compute content has none of these (`pipeline::interface`).
                 FieldValue::Word(_)
                 | FieldValue::TessellationFactors
-                | FieldValue::AlphaTestReference => {}
+                | FieldValue::AlphaTestReference
+                | FieldValue::FetchedColor(_) => {}
             }
         }
         self.block_address = (interface.block_len > 0).then_some(interface.block_address);

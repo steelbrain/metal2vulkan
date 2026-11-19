@@ -600,6 +600,11 @@ pub(crate) enum FieldValue {
     /// 8-bit unorm code a fragment function under the private alpha test compares its color 0's
     /// alpha with (`metal2vulkan::bind::alpha_test_code`), Metal's 1 until the encoder sets it.
     AlphaTestReference,
+    /// A `u32`: the index of the sampled-texture array element through which the fragment
+    /// function reads colour attachment `n` of the pass (`PushField::FetchedColor`), the
+    /// attachment's texture's second element: its view in the feedback layout, or of its image's
+    /// shadow on a device without the attachment feedback loop (`crate::render_encoder`).
+    FetchedColor(u32),
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the

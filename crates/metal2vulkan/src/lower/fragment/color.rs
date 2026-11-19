@@ -81,15 +81,22 @@ use crate::lower::arith::legal::{form_on, refuse_int64_interface};
 use crate::lower::arith::{extended_range, narrow, ops, Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
+use crate::lower::stage_io;
+use crate::lower::texture::{ImageDecl, TexelClass};
 use crate::metal::format::ExtendedRange;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
+use crate::pipeline::lower_inputs::StorageImageClass;
+use crate::pipeline::sym::{
+    ImageAccess, ImageDim, ImageHandleClass, PushField, ResourceKind, ResourceSlot, SampledType,
+    Stage, StorageFormatClass,
+};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, Value as SValue};
 use crate::spirv::ir::{
-    Constant, Dim, ImageType, ImageUsage, MemAccess, StorageClass, TexelMemory, Type as SType,
+    Constant, Dim, ImageOperands, ImageType, ImageUsage, MemAccess, StorageClass, TexelMemory,
+    Type as SType,
 };
 
 use super::not_lowered;
@@ -191,6 +198,16 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
         }
         cx.precision.insert(PrecisionNote::UnorderedFetchWithinDraw);
     }
+    // Under the identity domains on such a device no descriptor holds the attachment: the function
+    // reads it through the sampled-texture array's element the consumer pushes for it
+    // (`PushField::FetchedColor`), a view of the attachment's own texels, so an extended-range
+    // attachment's view holds no raw codes to decode there.
+    let textured =
+        crate::lower::access::identity(cx.profile) && super::fetch::fetch_unordered(cx.profile);
+    if textured && extended.is_some() {
+        let refused = Unsupported::not_implemented(Feature::Format);
+        return Err(refused.at_attachment(Attachment::Color(color)).into());
+    }
     // The input attachment of an image holding Metal's channels rotated (`ARGB8Unorm` in
     // `R8G8B8A8_UNORM`) reads them in the image's order: a color input of one is not modelled.
     // The function's own blend over it rotates the texel it reads (`input_blend::rotated_texel`),
@@ -223,7 +240,19 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
             .is_some_and(super::RotatedInputBlend::reads)
         || cx.families.fragment.logic_inputs.contains_key(&color);
     if !known.iter().any(|c| c.color == color) && !blended {
-        cx.descriptors.input_attachments = cx.descriptors.input_attachments.saturating_add(1);
+        match textured {
+            true => {
+                let class = texture_class(cx, color, form);
+                cx.families.fragment.texture_fetches.insert(color, class);
+                let texels = class.sampled_type;
+                cx.push.insert(PushField::FetchedColor { color, texels });
+                cx.families.fragment.fetch_coord = Some(stage_io::frag_coord(cx));
+            }
+            false => {
+                cx.descriptors.input_attachments =
+                    cx.descriptors.input_attachments.saturating_add(1);
+            }
+        }
         cx.facts.insert(RuntimeFact::FramebufferFetch { color });
     }
     // An extended-range attachment's input reads its raw texels, decoded to the tile value, a
@@ -315,6 +344,58 @@ fn unordered(cx: &SelectCx<'_>, color: u32) -> Error {
     .into()
 }
 
+/// The set-1 class of the element a color input of `form` reads attachment `color` through under
+/// the identity domains (`PushField::FetchedColor`): a sampled 2D image, multisampled in a
+/// multisampled pipeline, of `float` texels for a float read and of the attachment's own integer
+/// class for an integer one (`int` for a signed-integer attachment,
+/// `LoweringInputs::signed_color_attachments`), which the element's view of the attachment's format
+/// takes (`VUID-vkCmdDraw-format-07753`).
+fn texture_class(cx: &SelectCx<'_>, color: u32, form: Form) -> ImageHandleClass {
+    let sampled_type = match (
+        form.is_float(),
+        cx.inputs.signed_color_attachments.contains(&color),
+    ) {
+        (true, _) => SampledType::Float,
+        (false, true) => SampledType::Sint,
+        (false, false) => SampledType::Uint,
+    };
+    ImageHandleClass {
+        dim: ImageDim::D2,
+        arrayed: false,
+        multisampled: cx.inputs.multisampled,
+        sampled_type,
+        depth_compare: false,
+        access: ImageAccess::Sampled,
+        format: StorageFormatClass::NotStorage,
+    }
+}
+
+/// The image declaration of a fetched color's element of `class` ([`texture_class`]).
+pub(crate) fn texture_decl(class: ImageHandleClass) -> ImageDecl {
+    ImageDecl {
+        dim: Dim::D2,
+        arrayed: false,
+        multisampled: class.multisampled,
+        depth: false,
+        usage: ImageUsage::Sampled,
+        format: crate::spv::ImageFormat::Unknown,
+        texel: match class.sampled_type {
+            SampledType::Float => TexelClass::Float,
+            SampledType::Sint => TexelClass::Sint,
+            _ => TexelClass::Uint,
+        },
+        cube_as_array: false,
+        class: StorageImageClass::Identity,
+        level_views: None,
+        extended: None,
+        x_channel: false,
+        in_place: false,
+        planes_sampler: None,
+        rows: false,
+        parts: None,
+    }
+}
+
 /// How many uses the body makes of the planned color inputs.
 pub(super) fn uses(cx: &SelectCx<'_>, colors: &[ColorInput]) -> u64 {
     let mut uses = 0u64;
@@ -366,7 +447,8 @@ pub(super) const ALPHA_IN_RED_WORDS: u64 = 16;
 /// word the function merges into the texel's (`word_input`), of `uint` texels; and that of every
 /// attachment held with its channels rotated whose blend the function computes over it
 /// (`rotated`, `input_blend`), of `float` texels; and that of every attachment whose private logic
-/// operation the function computes over it (`logic`).
+/// operation the function computes over it (`logic`). A color read through a pushed texture
+/// (`textured`) declares nothing here.
 pub(super) fn declare(
     mb: &mut ModuleBuilder,
     colors: &[ColorInput],
@@ -380,10 +462,13 @@ pub(super) fn declare(
         &BTreeMap<u32, super::LogicInput>,
     ),
     multisampled: bool,
+    textured: &BTreeMap<u32, ImageHandleClass>,
 ) -> BResult<BTreeMap<u32, GlobalId>> {
     let mut out = BTreeMap::new();
     for c in colors {
-        if out.contains_key(&c.color) {
+        // A color read through a pushed texture has no declaration of its own: its class's array
+        // is the texture family's (`texture::declare`).
+        if out.contains_key(&c.color) || textured.contains_key(&c.color) {
             continue;
         }
         if let Some(sc) = storage.get(&c.color) {
@@ -514,6 +599,16 @@ pub(super) fn input_texel(
     fb: &mut FunctionBuilder<'_>,
     color: u32,
 ) -> BResult<SValue> {
+    if let Some(class) = cx
+        .plan
+        .families
+        .fragment
+        .texture_fetches
+        .get(&color)
+        .copied()
+    {
+        return pushed_texel(cx, fb, color, class);
+    }
     let Some(g) = cx.decl.families.fragment.attachments.get(&color).copied() else {
         return Err(cx.fail(format!("input attachment {color} is not declared")));
     };
@@ -528,4 +623,45 @@ pub(super) fn input_texel(
     let origin = fb.module().const_value(origin)?;
     let ops = super::fetch::operands(cx, fb)?;
     fb.read(img, origin, &ops, TexelMemory::PRIVATE)
+}
+
+/// The texel of color `color` read through the sampled-texture array's element the consumer pushes
+/// for it (`PushField::FetchedColor`), an element of `class`: a fetch at level 0 of the integer
+/// part of the invocation's `FragCoord`, its own pixel, and at its `SampleId` for a per-sample
+/// function. The element is uniform over the draw.
+fn pushed_texel(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    color: u32,
+    class: ImageHandleClass,
+) -> BResult<SValue> {
+    let Some(g) = cx.decl.families.texture.heap.get(&class).copied() else {
+        return Err(cx.fail(format!(
+            "the array of fetched color {color} is not declared"
+        )));
+    };
+    let texels = class.sampled_type;
+    let element = cx.push_field(fb, PushField::FetchedColor { color, texels })?;
+    let base = fb.module().global_value(g)?;
+    let p = fb.access_chain(base, &[element])?;
+    let img = fb.load(p, MemAccess::default())?;
+    let coord = super::fetch::pixel(cx, fb)?;
+    let ops = match super::fetch::sample(cx, fb)? {
+        Some(sample) => ImageOperands {
+            sample: Some(sample),
+            ..ImageOperands::default()
+        },
+        None => {
+            let u32_ = fb.module().ty(SType::Int {
+                width: 32,
+                signed: false,
+            })?;
+            let zero = fb.module().constant(Constant::Null { ty: u32_ })?;
+            ImageOperands {
+                lod: Some(fb.module().const_value(zero)?),
+                ..ImageOperands::default()
+            }
+        }
+    };
+    fb.fetch(img, coord, &ops)
 }

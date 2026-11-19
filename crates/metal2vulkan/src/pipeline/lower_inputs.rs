@@ -74,7 +74,10 @@ pub struct LoweringInputs {
     /// The color attachments a fragment function writes that its render pipeline gives a
     /// signed-integer pixel format (`MTLRenderPipelineColorAttachmentDescriptor.pixelFormat`). A
     /// 32-bit integer color output to one is declared `int`, because Vulkan writes a signed-integer
-    /// attachment only from a signed output; every other integer output is declared `uint`.
+    /// attachment only from a signed output; every other integer output is declared `uint`. Under
+    /// the identity domains on a device that orders framebuffer fetch in neither form it also
+    /// holds the signed-integer attachments the function reads (`[[color(n)]]`), whose integer
+    /// read fetches the attachment's own view through an `int` image (`PushField::FetchedColor`).
     /// `Device::compile_render_pipeline` sets it for a `Function` fragment stage, and a fragment
     /// compiled on its own for such a pipeline compiles under the same set; any other function
     /// compiles as without it.
