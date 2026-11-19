@@ -7,6 +7,8 @@
 //!   which the stream checks green, and nothing is skipped.
 //! - A draw of points after it, which the runtime does not build, is skipped and counted, and the
 //!   report says the play is no verdict past it: its gap, frame and call.
+//! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
+//!   gap, and a dispatch of it is skipped, and the play goes on.
 //! - A Managed buffer of a stream recorded with two copies keeps both on any device (the player's
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
@@ -159,6 +161,12 @@ fn floats(values: &[f32]) -> Value {
 /// function's module declares that function as its one entry, so each function's module is the
 /// fixture with its entry lists cut to that function's, assembled in `dir`.
 fn render_library(dir: &ScratchDir) -> Vec<u8> {
+    library(dir, &[("colored_vertex", 0, 1), ("colored_fragment", 1, 2)])
+}
+
+/// A metallib of `functions` of the runtime examples, each `(name, type code, list)`: `list` 0 the
+/// kernels', 1 the vertex functions', 2 the fragment functions'.
+fn library(dir: &ScratchDir, functions: &[(&'static str, u8, usize)]) -> Vec<u8> {
     let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
     let text = std::fs::read_to_string(ll).unwrap();
     let lists = ["!air.kernel = ", "!air.vertex = ", "!air.fragment = "];
@@ -185,10 +193,10 @@ fn render_library(dir: &ScratchDir) -> Vec<u8> {
             tags: Vec::new(),
         }
     };
-    metallib(&[
-        function("colored_vertex", 0, lists[1]),
-        function("colored_fragment", 1, lists[2]),
-    ])
+    let made: Vec<MtlbFunction> = (functions.iter())
+        .map(|&(name, type_code, list)| function(name, type_code, lists[list]))
+        .collect();
+    metallib(&made)
 }
 
 /// A stream of a draw into a pass, its target copied to a buffer that the stream checks green
@@ -359,6 +367,48 @@ fn a_render_state_the_runtime_does_not_build_is_counted_by_its_gap() {
     let (report, lines) = play("state-gap", &path);
     assert_eq!(report.total.executed["skipped_render_states"], 1);
     let line = "skipped render states RenderPipeline { kind: Multisample } 1, the first #6: ";
+    assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
+}
+
+#[test]
+fn a_compute_state_the_runtime_does_not_build_is_counted_and_its_dispatch_skipped() {
+    let dir = ScratchDir::new("rt-replay-compute-gap").unwrap();
+    let path = written(&dir, |w| {
+        let library = w.blob(&library(&dir, &[("scale_and_offset", 2, 0)]))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call(
+            "newLibraryWithData:error:",
+            1,
+            3,
+            &[Value::Blob(library)],
+            &[],
+        )?;
+        let kernel = [Value::Str("scale_and_offset".into())];
+        w.call("newFunctionWithName:", 3, 4, &kernel, &[])?;
+        // A state for indirect command buffers, which the runtime refuses.
+        let state = Value::Map(vec![
+            ("function".into(), Value::Object(4)),
+            ("supportIndirectCommandBuffers".into(), Value::Bool(true)),
+        ]);
+        let made = "newComputePipelineStateWithDescriptor:options:reflection:error:";
+        let options = [state, Value::Uint(0), Value::Nil];
+        w.call(made, 1, 5, &options, &[])?;
+        w.call("commandBuffer", 2, 6, &[], &[])?;
+        w.call("computeCommandEncoder", 6, 7, &[], &[])?;
+        w.call("setComputePipelineState:", 7, 0, &[Value::Object(5)], &[])?;
+        let size = |n| uints(&[("width", n), ("height", 1), ("depth", 1)]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, 7, 0, &[size(1), size(1)], &[])?;
+        w.call("endEncoding", 7, 0, &[], &[])?;
+        w.call("commit", 6, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 6, 0, &[], &[])
+    });
+    let (report, lines) = play("compute-gap", &path);
+    let executed = &report.total.executed;
+    assert_eq!(executed["skipped_compute_states"], 1, "{executed:?}");
+    assert_eq!(executed["skipped_dispatches"], 1, "{executed:?}");
+    let line = "skipped compute states IndirectCommandBuffers 1, the first #5: ";
     assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
 }
 

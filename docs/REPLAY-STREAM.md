@@ -572,7 +572,8 @@ counted from 0), completes the work committed so far, reports as at the stream's
   - objects: libraries from source, and whatever a call makes of a skipped object
     (`skipped_objects`);
   - render pipeline states the runtime answers with a typed gap or the translator refuses
-    (`skipped_render_states`);
+    (`skipped_render_states`), and compute pipeline states the same way
+    (`skipped_compute_states`), whose dispatches are skipped (`skipped_dispatches`);
   - parallel render encoders, and render encoders of a pass the runtime does not build
     (`skipped_encoders`): a pass whose setter records leave in it what the runtime's render pass
     descriptor does not hold (a resolve texture, a depth plane other than 0, store action
@@ -700,6 +701,7 @@ function by name, was made before), its `skipped render states GAP N, the first 
 typed gap a render pipeline state met (`GAP` the runtime's gap as Rust prints it for debugging, such
 as `RenderPipeline { kind: DepthAttachment }`, or `Translation` where the translator refused it, `N`
 the states skipped, `ID` the first one's object and `WHY` the runtime's answer), its
+`skipped compute states GAP N, the first #ID: WHY` the same for compute pipeline states, its
 `skipped render commands GAP N, the first at frame F, call C` for each typed gap a render command
 met, a draw the runtime does not build among them (`GAP` the runtime's gap as Rust prints it for
 debugging, such as `Draw { kind: Points }`, `N` the commands skipped, `F`

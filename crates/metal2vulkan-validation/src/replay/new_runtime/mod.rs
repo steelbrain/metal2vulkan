@@ -44,7 +44,9 @@ struct Skips {
     /// the gap (`Translation` for the translator's refusals): how many, and the first one's object
     /// id and the runtime's answer.
     render_states: BTreeMap<String, (u64, u64, String)>,
-    /// Dispatches that bind a skipped object.
+    /// Compute pipeline states the same way, by the gap.
+    compute_states: BTreeMap<String, (u64, u64, String)>,
+    /// Dispatches that bind a skipped object, a skipped compute pipeline state among them.
     dispatches: u64,
     /// Draws whose pipeline state, or a buffer or texture bound to either stage, is a skipped
     /// object.
@@ -82,12 +84,36 @@ impl Skips {
         self.render_states.values().map(|&(count, ..)| count).sum()
     }
 
+    /// The compute pipeline states skipped, of every gap.
+    fn compute_state_count(&self) -> u64 {
+        self.compute_states.values().map(|&(count, ..)| count).sum()
+    }
+
+    /// Whether a pipeline state the runtime answered `error` for is skipped: counted in `states`
+    /// by its gap where the runtime answers a typed gap or the translator refuses it
+    /// (`Translation`); any other error is not.
+    fn skipped_state(
+        states: &mut BTreeMap<String, (u64, u64, String)>,
+        call: &Call,
+        error: &rt::Error,
+    ) -> bool {
+        let gap = match error {
+            rt::Error::Unsupported(gap) => format!("{gap:?}"),
+            rt::Error::Translation(_) => "Translation".to_owned(),
+            _ => return false,
+        };
+        let kind = states.entry(gap);
+        kind.or_insert((0, call.result, error.to_string())).0 += 1;
+        true
+    }
+
     /// Everything skipped, in one count (`Backend::skips`).
     fn total(&self) -> u64 {
         let Skips {
             encoders,
             objects,
             render_states: _,
+            compute_states: _,
             dispatches,
             draws,
             render_commands: _,
@@ -110,7 +136,10 @@ impl Skips {
             calls,
             resource_ids,
         ];
-        counted.into_iter().sum::<u64>() + self.render_state_count() + self.render_command_count()
+        counted.into_iter().sum::<u64>()
+            + self.render_state_count()
+            + self.compute_state_count()
+            + self.render_command_count()
     }
 }
 
@@ -1090,13 +1119,11 @@ impl NewRuntime {
     /// own, the same words at one index.
     fn compute_pipeline_state(
         &mut self,
-        call: &Call,
         descriptor: &rt::ComputePipelineDescriptor,
-    ) -> Result<rt::ComputePipelineState, PlayError> {
+    ) -> Result<rt::ComputePipelineState, rt::Error> {
         self.numbered(|device, ids| {
             device.new_compute_pipeline_state(descriptor, |samplers| ids(samplers))
         })
-        .map_err(failed(call))
     }
 
     /// The pipeline state `make` makes on the device with `ids`, which gives each numbered
@@ -1152,20 +1179,28 @@ impl NewRuntime {
         made
     }
 
-    /// A compute pipeline state of `descriptor`, of `kernel`'s, timed and counted (`creations`).
+    /// A compute pipeline state of `descriptor`, of `kernel`'s, timed and counted (`creations`);
+    /// skipped and counted where the runtime answers a typed gap or the translator refuses it
+    /// (`compute_states`), so that the play goes on and its dispatches are skipped.
     fn timed_state(
         &mut self,
         call: &Call,
         descriptor: &rt::ComputePipelineDescriptor,
         kernel: Kernel,
-    ) -> Result<rt::ComputePipelineState, PlayError> {
+    ) -> Result<Option<(Object, Made)>, PlayError> {
         let began = std::time::Instant::now();
-        let state = self.compute_pipeline_state(call, descriptor)?;
+        let state = match self.compute_pipeline_state(descriptor) {
+            Ok(state) => state,
+            Err(error) if Skips::skipped_state(&mut self.skips.compute_states, call, &error) => {
+                return unaddressed(Object::Skipped);
+            }
+            Err(error) => return Err(failed(call)(error)),
+        };
         self.creations.push(Creation {
             nanos: u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX),
             new_kernel: self.kernels.insert(kernel),
         });
-        Ok(state)
+        unaddressed(Object::ComputePipeline(state))
     }
 
     /// `newComputePipelineStateWithDescriptor:options:reflection:error:`'s descriptor, and its
@@ -1328,13 +1363,11 @@ impl NewRuntime {
                 let d = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(
                     function.descriptor,
                 ));
-                let state = self.timed_state(call, &d, function.kernel)?;
-                unaddressed(Object::ComputePipeline(state))
+                self.timed_state(call, &d, function.kernel)
             }
             "newComputePipelineStateWithDescriptor:options:reflection:error:" => {
                 let (d, kernel) = self.compute_pipeline(call)?;
-                let state = self.timed_state(call, &d, kernel)?;
-                unaddressed(Object::ComputePipeline(state))
+                self.timed_state(call, &d, kernel)
             }
             "newRenderPipelineStateWithDescriptor:error:" => self.render_pipeline_state(call),
             "newDepthStencilStateWithDescriptor:" => {
@@ -2151,6 +2184,7 @@ impl Backend for NewRuntime {
             ("skipped_encoders", self.skips.encoders),
             ("skipped_objects", self.skips.objects),
             ("skipped_render_states", self.skips.render_state_count()),
+            ("skipped_compute_states", self.skips.compute_state_count()),
             ("skipped_dispatches", self.skips.dispatches),
             ("skipped_draws", self.skips.draws),
             ("skipped_render_commands", self.skips.render_command_count()),
@@ -2237,6 +2271,11 @@ impl Backend for NewRuntime {
         for (gap, (count, at, why)) in &self.skips.render_states {
             lines.push(format!(
                 "skipped render states {gap} {count}, the first #{at}: {why}"
+            ));
+        }
+        for (gap, (count, at, why)) in &self.skips.compute_states {
+            lines.push(format!(
+                "skipped compute states {gap} {count}, the first #{at}: {why}"
             ));
         }
         for (gap, (count, frame, at)) in &self.skips.render_commands {

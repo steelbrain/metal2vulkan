@@ -13,7 +13,7 @@
 use super::super::args::{arg, data, index, list, metal, refuse, uint, Fields};
 use super::super::translator::{self, attachment_keys, LINKED_KEYS, PASS_KEYS};
 use super::encoders::first;
-use super::{failed, unaddressed, NewRuntime, Object};
+use super::{failed, unaddressed, NewRuntime, Object, Skips};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
@@ -133,13 +133,7 @@ impl NewRuntime {
         });
         match made {
             Ok(state) => unaddressed(Object::RenderPipeline(state)),
-            Err(error @ (rt::Error::Unsupported(_) | rt::Error::Translation(_))) => {
-                let gap = match &error {
-                    rt::Error::Unsupported(gap) => format!("{gap:?}"),
-                    _ => "Translation".to_owned(),
-                };
-                let kind = self.skips.render_states.entry(gap);
-                kind.or_insert((0, call.result, error.to_string())).0 += 1;
+            Err(error) if Skips::skipped_state(&mut self.skips.render_states, call, &error) => {
                 unaddressed(Object::Skipped)
             }
             Err(error) => Err(failed(call)(error)),
