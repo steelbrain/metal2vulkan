@@ -444,8 +444,8 @@ between, `external_writes_done` comes first, as above.
   less 2^31; an access adds its 32-bit offset plus 2^31 to that word, zero-extended, which is the
   offset read as signed in one 32-bit add. In a probe of one particle kernel that form was within
   0.7% of a zero-extended offset (inexact below the bind address) on the RX 7900 XTX and two
-  Radeon 780Ms at the kernel's grid, and on the XTX and one 780M at four times it, where the
-  sign-extended offset it replaced was 6.8 to 9.5% slower. In an earlier probe of constant reads,
+  Radeon 780Ms, at the kernel's grid and at four times it, where the sign-extended offset it
+  replaced was 6.8 to 9.5% slower. In an earlier probe of constant reads,
   32-bit offsets bought 4.3 to 6.6% on AMD cards and more on the RTX 3090, where a 64-bit sum was
   8.9% slower on the RX 7900 XTX. A longer buffer is `Refusal::BufferTooLong`.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
