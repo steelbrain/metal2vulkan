@@ -53,7 +53,7 @@ fn the_granule_is_the_sparse_alignment_where_the_sparse_buffer_takes_every_coher
 #[cfg(all(target_os = "linux", any(m2v_gpu, m2v_cpu_icd)))]
 mod on_device {
     use crate::buffer::BufferObject;
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device, finished, on_each_device};
     use crate::tests::compute::on_device::{add, WORDS};
     use crate::tests::import::on_device::{memfd, releasing, udmabuf, wait_until};
     use crate::{
@@ -339,13 +339,15 @@ mod on_device {
     /// blocks of one dma-buf each, in three rounds of the three: the median of each arm, and the
     /// difference from none per live import, printed. The runtime adds nothing to its own
     /// submissions for a live block over several dma-bufs; what a driver pays for each live
-    /// import of memory, it pays for each chunk.
+    /// import of memory, it pays for each chunk. On an instance without the validation layer,
+    /// whose own cost would be the count.
     #[test]
     fn every_device_times_submissions_beside_live_dma_bufs() {
         const IMPORTS: usize = 40;
         const SUBMITS: usize = 400;
         const ROUNDS: usize = 3;
-        each_device("dma_bufs_submit_cost", |name, _, device| {
+        let instance = crate::tests::validation::bare(&[]);
+        on_each_device("dma_bufs_submit_cost", &instance, |name, _, device| {
             let Some(granule) = device.dma_buf_granule() else {
                 println!("dma_bufs: {name}: no granule; not timed");
                 return;
