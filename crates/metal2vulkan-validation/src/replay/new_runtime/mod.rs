@@ -1742,6 +1742,7 @@ impl NewRuntime {
         [levels, slices]: [Range<u32>; 2],
         swizzle: rt::TextureSwizzleChannels,
     ) -> Result<Option<(Object, Made)>, PlayError> {
+        self.surface_view(call, format)?;
         let parent = *texture.descriptor();
         // A substitute's descriptor: the view's own, at its first level.
         let mut own = parent;

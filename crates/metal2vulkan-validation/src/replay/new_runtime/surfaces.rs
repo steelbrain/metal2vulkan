@@ -5,14 +5,17 @@
 //! the texture's own index. A plane is the receiver buffer, which stands for the surface's pages,
 //! the plane's index, and its first byte and row pitch there; a shape is a texture's width, height
 //! and bytes a texel, so a texture of another pixel format of the same bytes a texel is a view of
-//! the same shape, and whether shaders may write it. A shape is made with shader read,
-//! render-target and pixel-format-view usage, and shader write (a storage view) only for a texture
-//! whose usage has shader write or shader atomic (a storage image's operation), or is Metal's
-//! unknown, with shader atomic where the texture declares it; a shape shaders may write serves a later texture of
-//! its extent that does not declare it, and a texture that declares it over a plane whose shape of
-//! its extent has none is another shape of the plane. Textures over the same pages at another byte
-//! or pitch are another plane, and nothing moves between two planes but through the buffer, at the
-//! recorded copies.
+//! the same shape, and whether shaders may write it. A plain shape, of a texture whose usage has
+//! neither shader write nor shader atomic (a storage image's operation) and is not Metal's unknown,
+//! is made with shader read and render-target usage alone, so it views as its own format and that
+//! format's sRGB sibling; a texture or view of another format over it is refused, counted. A shape
+//! shaders may write is made with the usage Metal gives a texture whose use it does not know, with
+//! shader atomic where the texture declares it, and views as every format of its bytes a texel; it
+//! serves a later texture of its extent that does not declare it, and a texture that declares it
+//! over a plane whose shape of its extent has none is another shape of the plane. Textures that
+//! declare pixel-format-view usage over a plain shape are counted. Textures over the same pages at
+//! another byte or pitch are another plane, and nothing moves between two planes but through the
+//! buffer, at the recorded copies.
 //!
 //! The shapes hold the texels; the receiver buffer holds the pages' bytes as the stream wrote
 //! them. Every shape is current over its whole extent, by the product's three rules:
@@ -277,6 +280,10 @@ struct Counts {
     bytes: u64,
     /// Textures of a format that reads across a surface's planes, skipped.
     across_planes: u64,
+    /// Textures and views refused over a plain shape for a format neither its own nor that
+    /// format's sRGB sibling, and textures over a plain shape that declare pixel-format-view usage.
+    format_refusals: u64,
+    plain_format_views: u64,
 }
 
 impl Surfaces {
@@ -429,7 +436,7 @@ impl Surfaces {
     }
 
     /// The executed counters.
-    pub(super) fn counted(&self) -> [(&'static str, u64); 22] {
+    pub(super) fn counted(&self) -> [(&'static str, u64); 24] {
         let c = &self.counts;
         [
             ("surface_external_writes", c.external_writes),
@@ -453,6 +460,8 @@ impl Surfaces {
             ("surface_copies_in", c.copies_in),
             ("surface_copies_out", c.copies_out),
             ("surface_bytes", c.bytes),
+            ("surface_format_refusals", c.format_refusals),
+            ("surface_plain_format_views", c.plain_format_views),
             ("skipped_surfaces_across_planes", c.across_planes),
         ]
     }
@@ -467,7 +476,8 @@ impl Surfaces {
              argument buffer with no use named unseen, not counted); {} dirty shapes written back ({} bytes); {} CPU writes, \
              {} external writes refilling {} shapes ({} bytes, {} ns of GPU time, the longest \
              command buffer {} ns), {} copies from the guest's RAM into a shape and {} back, {} \
-             bytes in all; {} across planes skipped",
+             bytes in all; {} refused for a format a plain shape does not view as, {} declaring \
+             pixel-format-view usage over a plain shape; {} across planes skipped",
             c.views,
             c.made,
             c.found,
@@ -490,6 +500,8 @@ impl Surfaces {
             c.copies_in,
             c.copies_out,
             c.bytes,
+            c.format_refusals,
+            c.plain_format_views,
             c.across_planes,
         )
     }
@@ -560,6 +572,9 @@ impl NewRuntime {
             storage: writes,
         };
         let (entry, shape) = self.surface_entry(call, buffer, span, shape, &d)?;
+        if !shape.storage && d.usage.contains(rt::TextureUsage::PIXEL_FORMAT_VIEW) {
+            self.surfaces.counts.plain_format_views += 1;
+        }
         let (levels, slices) = (0..d.mipmap_level_count, whole_slices(&d));
         let make = |index| {
             let (levels, slices) = (levels.clone(), slices.clone());
@@ -610,6 +625,9 @@ impl NewRuntime {
         for shape in [wider, shape] {
             if let Some(entry) = self.surfaces.entry(&span, shape) {
                 let texture = entry.texture.clone();
+                if !shape.storage {
+                    self.surface_plain_format(call, &texture, descriptor.pixel_format)?;
+                }
                 self.surfaces.counts.found += 1;
                 return Ok((texture, shape));
             }
@@ -622,11 +640,10 @@ impl NewRuntime {
             self.surfaces.counts.order += 1;
         }
         let mut d = *descriptor;
-        d.usage = rt::TextureUsage::SHADER_READ
-            | rt::TextureUsage::RENDER_TARGET
-            | rt::TextureUsage::PIXEL_FORMAT_VIEW;
+        d.usage = rt::TextureUsage::SHADER_READ | rt::TextureUsage::RENDER_TARGET;
         if shape.storage {
-            d.usage |= rt::TextureUsage::SHADER_WRITE;
+            // The usage Metal gives a texture whose use it does not know.
+            d.usage |= rt::TextureUsage::SHADER_WRITE | rt::TextureUsage::PIXEL_FORMAT_VIEW;
         }
         if descriptor.usage.contains(rt::TextureUsage::SHADER_ATOMIC) {
             d.usage |= rt::TextureUsage::SHADER_ATOMIC;
@@ -673,6 +690,43 @@ impl NewRuntime {
         }
         surfaces.sweep(span.buffer);
         Ok((texture, shape))
+    }
+
+    /// Refused, counted, where a texture or view of `format` would view plain shape `texture`,
+    /// which views as its own format and that format's sRGB sibling alone.
+    fn surface_plain_format(
+        &mut self,
+        call: &Call,
+        texture: &rt::Texture,
+        format: rt::PixelFormat,
+    ) -> Result<(), PlayError> {
+        let own = texture.descriptor().pixel_format;
+        if metal2vulkan::metal::format::views_without_usage(own, format) {
+            return Ok(());
+        }
+        self.surfaces.counts.format_refusals += 1;
+        let why = format!("a plain surface shape of {own:?} viewed as {format:?}");
+        Err(refuse(call, why))
+    }
+
+    /// Before `call` makes a view of `format` of the texture it is sent to: refused, counted,
+    /// where that is a surface texture of a plain shape that does not view as `format`.
+    pub(super) fn surface_view(
+        &mut self,
+        call: &Call,
+        format: rt::PixelFormat,
+    ) -> Result<(), PlayError> {
+        let Some(&(span, shape)) = self.surfaces.views.get(&call.receiver) else {
+            return Ok(());
+        };
+        let Some(entry) = (!shape.storage)
+            .then(|| self.surfaces.entry(&span, shape))
+            .flatten()
+        else {
+            return Ok(());
+        };
+        let texture = entry.texture.clone();
+        self.surface_plain_format(call, &texture, format)
     }
 
     /// The queue of the play's own that fills and refills go on.

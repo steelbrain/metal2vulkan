@@ -739,13 +739,17 @@ counted from 0), completes the work committed so far, reports as at the stream's
   A texture over a surface's plane (section 7) plays as the product's per-shape form makes it: one
   texture of the runtime's made for views (`Device::new_texture_for_views`) for each plane (the
   receiver buffer, the plane, its offset and row pitch) and shape (width, height and bytes a
-  texel, and whether shaders may write it), with shader read, render-target and pixel-format-view
-  usage, and shader write only where the texture it is made for declares shader write or shader
-  atomic (a storage image's operation), or Metal's unknown usage (shader atomic too where the
-  texture declares it), and each recorded surface texture, and each view of one, a view of it at the texture's
-  own index, so a texture of another format of the same bytes a texel shares its texels. A shape
-  shaders may write serves a later texture of its extent that does not declare it; a texture that
-  declares it over a plane whose shape of its extent has none is another shape of the plane. Textures over the same pages at
+  texel, and whether shaders may write it), and each recorded surface texture, and each view of
+  one, a view of it at the texture's own index. A plain shape, made for a texture whose usage has
+  neither shader write nor shader atomic (a storage image's operation) and is not Metal's unknown,
+  takes shader read and render-target usage alone, so it views as its own format and that format's
+  sRGB sibling; a texture or view of another format over it is refused
+  (`surface_format_refusals`), and textures over it that declare pixel-format-view usage are
+  counted (`surface_plain_format_views`). A shape shaders may write takes the usage Metal gives a
+  texture whose use it does not know (shader atomic too where the texture declares it), so a
+  texture of another format of the same bytes a texel shares its texels; it serves a later texture
+  of its extent that does not declare it, and a texture that declares it over a plane whose shape
+  of its extent has none is another shape of the plane. Textures over the same pages at
   another offset or pitch are another plane: nothing moves between two planes but through the
   buffer, at the recorded copies. The receiver buffer holds the pages' bytes as the stream writes
   them, and every shape is current over its whole extent, by the product's three rules:
@@ -783,8 +787,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
   `surface_overlap_copies`, `surface_overlap_bytes`, `surface_straddled`,
   `surface_unordered_writes`, `surface_usage_writes`, `surface_declared_writes`,
   `surface_cpu_writes`, `surface_external_writes`, `surface_refills`, `surface_refill_bytes`,
-  `surface_refill_gpu_nanos`, `surface_copies_in`, `surface_copies_out`, `surface_bytes`) are the player's work, among its executed counters; `surface_refill_gpu_nanos`
-  is the GPU time of the refills' command buffers, counted in the frame whose end first sees each
+  `surface_refill_gpu_nanos`, `surface_copies_in`, `surface_copies_out`, `surface_bytes`,
+  `surface_format_refusals`, `surface_plain_format_views`) are the player's work, among its
+  executed counters; `surface_refill_gpu_nanos` is the GPU time of the refills' command buffers, counted in the frame whose end first sees each
   complete. The report's `surfaces` line gives them with the longest refill command buffer. A
   check of a texture reads its first level and slice as the old runtime's backend lays them out.
 

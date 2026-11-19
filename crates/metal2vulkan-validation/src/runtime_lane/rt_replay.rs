@@ -1027,6 +1027,73 @@ fn textures_over_one_surface_share_its_texels() {
     assert_eq!(receivers, [(6, true)], "{lines:?}");
 }
 
+/// Textures over plane 0 of one surface (#2), 2 by 2, none declaring shader write: #3,
+/// RGBA8Unorm, makes a plain shape, and #4, its sRGB sibling, is a view of it; then `last`, a
+/// texture of BGRA8Unorm over the plane or a view of #3 as BGRA8Unorm, is refused and counted:
+/// a plain shape views as its own format and that format's sRGB sibling alone.
+#[test]
+fn a_plain_surface_shape_views_as_its_format_and_its_srgb_sibling_alone() {
+    let dir = ScratchDir::new("rt-replay-plain-shape").unwrap();
+    let texture = |format, usage| {
+        uints(&[
+            ("textureType", 2),
+            ("pixelFormat", format),
+            ("width", 2),
+            ("height", 2),
+            ("usage", usage),
+            ("storageMode", 0),
+        ])
+    };
+    let plane = Value::Map(vec![
+        ("plane".into(), Value::Uint(0)),
+        ("offset".into(), Value::Uint(0)),
+        ("bytesPerRow".into(), Value::Uint(8)),
+        ("planar".into(), Value::Bool(false)),
+        ("facts".into(), Value::Nil),
+    ]);
+    let surface = "newTextureWithDescriptor:iosurface:plane:";
+    let stream = |view: bool| {
+        written(&dir, |w| {
+            w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+            let pages = [Value::Uint(16), Value::Uint(0)];
+            w.call("newBufferWithLength:options:", 1, 2, &pages, &[])?;
+            w.call(surface, 2, 3, &[texture(70, 1), plane.clone()], &[])?;
+            w.call(surface, 2, 4, &[texture(71, 5), plane.clone()], &[])?;
+            match view {
+                true => w.call(
+                    "newTextureViewWithPixelFormat:",
+                    3,
+                    5,
+                    &[Value::Uint(80)],
+                    &[],
+                ),
+                false => w.call(surface, 2, 5, &[texture(80, 1), plane.clone()], &[]),
+            }
+        })
+    };
+    for view in [false, true] {
+        let cache = ScratchCache::new().unwrap();
+        let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+        let mut reader = StreamReader::open(&[stream(view)], None).unwrap();
+        let (report, ended) = Player::new(&mut backend).play(&mut reader);
+        match ended {
+            Err(PlayError::Refused { why, .. }) => {
+                assert!(why.starts_with("a plain surface shape of "), "{why}");
+            }
+            other => panic!("a plain shape viewed as another format (view {view}): {other:?}"),
+        }
+        let executed = &report.total.executed;
+        let counted = |key: &str| executed.get(key).copied().unwrap_or(0);
+        let counts = [
+            "surface_shapes",
+            "surface_shapes_found",
+            "surface_format_refusals",
+        ]
+        .map(counted);
+        assert_eq!(counts, [1, 1, 1], "{executed:?}");
+    }
+}
+
 /// A stream of a placement at an index a held commit owes: command buffer #6 of queue #2 waits for
 /// event #4 to reach 1, binds sampler state #5 (the default descriptor, index 16) and is
 /// committed; #5 is released and sampler state #8 made at index 16 with `descriptor`; only then
