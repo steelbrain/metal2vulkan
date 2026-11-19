@@ -23,7 +23,7 @@ mod on_device {
         IndexClass, Library, NumberedSampler, PixelFormat, ReadWriteTextureTier, Region,
         StageSource, TextureDescriptor, TextureType, TextureUsage,
     };
-    use ash::vk;
+    use metal2vulkan::vk;
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
 
     /// The texture's side: 16 texels, one threadgroup of 4 by 4, and a read-back of 256 bytes.
