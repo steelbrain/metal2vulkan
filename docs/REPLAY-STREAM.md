@@ -923,7 +923,9 @@ guest's RAM, which a backend stages and copies (the recording's plumbing, the pl
 `count` reading the runtime's
 counters, and `player` what of the wall time is left, the player's own work; then `gpu_busy`, the
 union of the GPU intervals of the command buffers the frame waited for, where the runtime gives
-them, which runs beside the rest; and the backend's gauges then, as they stand, never as growth:
+them, which runs beside the rest, then `gpu_longest` and `gpu_longest_cb`, the longest of those
+intervals, one command buffer's, and that command buffer's stream id (the first of equal ones; 0
+and 0 where the runtime gives none); and the backend's gauges then, as they stand, never as growth:
 the new runtime's live
 blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes, Managed buffers'
 spilled bytes (`managed_spilled_bytes`: the bytes of those whose GPU copy the player placed in a

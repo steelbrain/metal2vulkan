@@ -2474,7 +2474,51 @@ fn a_frame_end_counts_overlapping_gpu_intervals_once() {
     let line = lines.iter().find(|line| line.starts_with("end 0 "));
     let line = line.expect("an end line");
     assert!(line.contains(" times stream="), "{line}");
-    assert!(line.contains(" gpu_busy=400 live"), "{line}");
+    assert!(
+        line.contains(" gpu_busy=400 gpu_longest=200 gpu_longest_cb=3 live"),
+        "{line}"
+    );
+}
+
+/// A frame's end names the longest GPU interval of one command buffer it waited for, and that
+/// command buffer; a frame that waited for none names 0 and 0.
+#[test]
+fn a_frame_end_names_its_longest_command_buffer() {
+    let mut kept = Kept {
+        gpu: HashMap::from([(3, (100, 300)), (4, (150, 600)), (5, (1000, 1100))]),
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        for command_buffer in [3, 4, 5] {
+            w.call("commandBuffer", 2, command_buffer, &[], &[])?;
+            w.call("commit", command_buffer, 0, &[], &[])?;
+        }
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        Ok(())
+    });
+    ended.unwrap();
+    let longest: Vec<_> = (report.ends.iter())
+        .map(|end| (end.times.gpu_longest, end.times.gpu_longest_cb))
+        .collect();
+    assert_eq!(longest, [(450, 4), (0, 0)]);
+    let lines = report.lines();
+    let line = |at: usize| {
+        let prefix = format!("end {at} ");
+        lines.iter().find(|line| line.starts_with(&prefix)).cloned()
+    };
+    let first = line(0).expect("frame 0's end line");
+    assert!(
+        first.contains(" gpu_longest=450 gpu_longest_cb=4 live"),
+        "{first}"
+    );
+    let second = line(1).expect("frame 1's end line");
+    assert!(
+        second.contains(" gpu_longest=0 gpu_longest_cb=0 live"),
+        "{second}"
+    );
 }
 
 /// On a backend that takes no snapshots, or with a player that takes none, a dispatch an

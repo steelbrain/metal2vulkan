@@ -578,6 +578,10 @@ pub struct Times {
     /// The union of the GPU intervals of the command buffers the frame waited for
     /// (`Backend::gpu_interval`); 0 where the backend gives none.
     pub gpu_busy: u64,
+    /// The longest of those intervals, one command buffer's, and that command buffer's stream id,
+    /// the first of equal ones; 0 and 0 where the backend gives none.
+    pub gpu_longest: u64,
+    pub gpu_longest_cb: u64,
 }
 
 impl Times {
@@ -769,7 +773,7 @@ impl Report {
             lines.push(format!(
                 "end {at} wall_nanos={}{resident} times stream={} write={} read={} wait={} \
                  resource={} resource_max={} pipeline={} pipeline_max={} other={} upload={} \
-                 count={} player={} gpu_busy={} live{live}",
+                 count={} player={} gpu_busy={} gpu_longest={} gpu_longest_cb={} live{live}",
                 end.wall_nanos,
                 t.stream,
                 t.write,
@@ -784,6 +788,8 @@ impl Report {
                 t.count,
                 t.player(end.wall_nanos),
                 t.gpu_busy,
+                t.gpu_longest,
+                t.gpu_longest_cb,
             ));
         }
         lines
@@ -2594,6 +2600,11 @@ impl<'b, B: Backend> Player<'b, B> {
             self.backend.wait(*id)?;
             self.times.wait += since(began);
             if let Some(interval) = self.backend.gpu_interval(*id) {
+                let nanos = interval.1.saturating_sub(interval.0);
+                if nanos > self.times.gpu_longest {
+                    self.times.gpu_longest = nanos;
+                    self.times.gpu_longest_cb = *id;
+                }
                 self.intervals.push(interval);
             }
             let pending = self.pending.remove(id).expect("a pending command buffer");
