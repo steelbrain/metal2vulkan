@@ -2511,6 +2511,8 @@ impl Backend for NewRuntime {
             ("takes_from_free_ranges", metrics.takes_from_free_ranges),
             ("block_zero_fills", metrics.block_zero_fills),
             ("block_zero_fill_bytes", metrics.block_zero_fill_bytes),
+            ("texture_clears", metrics.texture_clears),
+            ("texture_clear_bytes", metrics.texture_clear_bytes),
             ("pipelines_created", metrics.pipelines_created),
             ("first_use_waits", metrics.first_use_waits),
             ("first_use_wait_nanos", metrics.first_use_wait_nanos),

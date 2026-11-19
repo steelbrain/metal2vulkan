@@ -273,6 +273,8 @@ struct Atomics {
     zeroed_take_bytes: AtomicU64,
     block_zero_fills: AtomicU64,
     block_zero_fill_bytes: AtomicU64,
+    texture_clears: AtomicU64,
+    texture_clear_bytes: AtomicU64,
     cache_bytes_written: AtomicU64,
     pipelines_created: AtomicU64,
     first_use_waits: AtomicU64,
@@ -632,6 +634,14 @@ impl Counters {
         a.block_zero_fill_bytes.fetch_add(bytes, Relaxed);
     }
 
+    /// A new texture's image of `bytes` of memory zeroed in its move home
+    /// ([`Metrics::texture_clears`]).
+    pub(crate) fn texture_cleared(&self, bytes: u64) {
+        let a = &self.atomics;
+        a.texture_clears.fetch_add(1, Relaxed);
+        a.texture_clear_bytes.fetch_add(bytes, Relaxed);
+    }
+
     /// `bytes` more of Managed buffers' bytes a commit copied ([`Metrics::managed_bytes_captured`]).
     pub(crate) fn captured(&self, bytes: u64) {
         self.atomics
@@ -796,6 +806,8 @@ impl Counters {
             zeroed_take_bytes: a.zeroed_take_bytes.load(Relaxed),
             block_zero_fills: a.block_zero_fills.load(Relaxed),
             block_zero_fill_bytes: a.block_zero_fill_bytes.load(Relaxed),
+            texture_clears: a.texture_clears.load(Relaxed),
+            texture_clear_bytes: a.texture_clear_bytes.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
             first_use_waits: a.first_use_waits.load(Relaxed),
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
@@ -949,7 +961,8 @@ pub struct Metrics {
     /// that stands for a copy of what its pass cleared, one for each acquire of an exported
     /// block ([`external_acquires`](Self::external_acquires)), and one for each release of one
     /// ([`external_releases`](Self::external_releases)). Any other draw takes none. An upload
-    /// adds one where it moves new textures' images to their home layouts, and two around each
+    /// adds one where it moves new textures' images to their home layouts, one more after the
+    /// zeroing of those it zeroes ([`texture_clears`](Self::texture_clears)), and two around each
     /// copy between a texture's image and the staging region or a named buffer
     /// (`replaceRegion` and `getBytes`).
     pub barriers: u64,
@@ -980,6 +993,15 @@ pub struct Metrics {
     pub block_zero_fills: u64,
     /// The bytes of those fills.
     pub block_zero_fill_bytes: u64,
+    /// New textures' images zeroed in their moves home, as a texture the runtime places reads
+    /// zero until written ([`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_texture_for_views`](crate::Device::new_texture_for_views) and
+    /// [`Device::new_managed_texture`](crate::Device::new_managed_texture)): each image's one
+    /// clear of every subresource, or its copies from the zero source where its format takes no
+    /// clear.
+    pub texture_clears: u64,
+    /// The bytes of memory of those images.
+    pub texture_clear_bytes: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,

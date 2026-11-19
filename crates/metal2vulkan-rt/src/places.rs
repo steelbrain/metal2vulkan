@@ -8,7 +8,8 @@
 //! is longer. A place is free again once its resource is freed, after every command buffer and
 //! upload that used it retired. One empty block of the block length is kept for the next place;
 //! another block that empties goes back to the pool, whose free ranges its bytes join.
-//! Nothing zeroes a texture's bytes, as Metal leaves a new texture's contents undefined.
+//! A place's bytes are what its last resource left; a new texture's move home zeroes its image
+//! ([`crate::texture::Zero`]).
 //!
 //! An image in a texture block is optimal. The `VkBuffer` of the block's allocation, which spans
 //! it, aliases the images (Vulkan's memory aliasing), and nothing records through it in a texture
@@ -42,6 +43,14 @@ pub(crate) struct Place {
     block: BlockId,
     pub(crate) offset: u64,
     len: u64,
+}
+
+impl Place {
+    /// For the device tests: the block it is in.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn block(&self) -> BlockId {
+        self.block
+    }
 }
 
 impl Places {

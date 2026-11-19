@@ -218,9 +218,8 @@ in its memory.
   `BlockInfo::zeroed` (below): the runtime zeroes nothing ahead of need. A buffer reads zero where
   `Device::new_buffer` zeroes its range (below), as Metal zeroes a buffer from
   `newBufferWithLength:options:`, and Metal owes zeros for that call's buffers alone: not for a
-  heap's memory or a texture's, whose bytes are undefined, as Metal is silent on them. The
-  consumer passes `zero_from` for a buffer Metal zeroes, or zeroes the range at its own carve,
-  once.
+  heap's memory, whose bytes are undefined, as Metal is silent on them. The consumer passes
+  `zero_from` for a buffer Metal zeroes, or zeroes the range at its own carve, once.
 - Where the device lists `VK_EXT_zero_initialize_device_memory` and reports
   `zeroInitializeDeviceMemory` (`floor::Capabilities::zero_initialize_memory`), every allocation of
   the pool, of either class, is made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` and reads
@@ -238,6 +237,18 @@ in its memory.
   not exposed for writing since the take. The runtime zeroes what it is asked to on every device
   (`Device::new_buffer`'s `zero_from`, `Device::zero_block_range`, a Managed buffer's device
   copy), so the consumer's path is one: zero unless `zeroed`.
+- A texture the runtime places reads zero until written: `Device::new_texture`'s,
+  `new_texture_for_views`'s and `new_managed_texture`'s. The upload of the next submission
+  clears every subresource of its image once, ahead of every command buffer committed after the
+  call: a colour clear, a depth-stencil clear, or copies from the zero source for a
+  block-compressed format, which no clear writes. This is the runtime's choice, not Metal's rule:
+  Metal does not say what a new texture holds (`newTextureWithDescriptor:` is "Allocate a new
+  texture with privately owned storage."). The runtime chose zero because programs read
+  textures they never wrote, an Apple M3 Max answered zero for new Shared and Managed textures,
+  and the memory's last bytes would follow process history. `Metrics::texture_clears` and
+  `texture_clear_bytes` count the clears. A texture in a heap's memory, over a buffer, of a
+  surface's plane, or a drawable's is not cleared: it reads its memory's bytes, or the
+  swapchain's. A view reads its parent's image.
 - `Device::zero_block_range(block, offset, length)` zeroes a range of a Private block the
   consumer holds, where it places a buffer Metal zeroes: by a GPU fill in the upload, ahead of
   every command buffer committed after the call, as a zeroed Private buffer's fill is. The
@@ -747,17 +758,17 @@ made, with no lock, and never rewritten for layouts.
 ## Textures
 
 - `Device::new_texture(descriptor, index)` is `newTextureWithDescriptor:` at `index`: an
-  optimal-tiling image of the descriptor in device-local memory, its contents undefined, as Metal's
-  are. The image is placed in a texture block: a Private block the device takes from its pool, at
-  the first place with room at the image's alignment, so a texture makes no allocation. It has an
-  allocation of its own only where the device requires one for it (`requiresDedicatedAllocation`;
-  preferring one is no reason), where it is larger than a Private block (64 MiB), or where the
-  blocks' memory type does not serve it. A place is free again once the image is freed; one empty
-  texture block is kept, and another that empties goes back to the pool. `index` is given exactly
-  where shaders reach the texture, shader-read or shader-write usage (`Refusal::TextureIndex`
-  otherwise), from a live `IndexClass::Texture` grant, whatever the usage. `TextureUsage` with no
-  bits is Metal's unknown
-  usage: shader read and write, render target and pixel-format view.
+  optimal-tiling image of the descriptor in device-local memory, which reads zero until written
+  (Memory blocks and buffers, above). The image is placed in a texture block: a Private block the
+  device takes from its pool, at the first place with room at the image's alignment, so a texture
+  makes no allocation. It has an allocation of its own only where the device requires one for it
+  (`requiresDedicatedAllocation`; preferring one is no reason), where it is larger than a Private
+  block (64 MiB), or where the blocks' memory type does not serve it. A place is free again once
+  the image is freed; one empty texture block is kept, and another that empties goes back to the
+  pool. `index` is given exactly where shaders reach the texture, shader-read or shader-write
+  usage (`Refusal::TextureIndex` otherwise), from a live `IndexClass::Texture` grant, whatever
+  the usage. `TextureUsage` with no bits is Metal's unknown usage: shader read and write, render
+  target and pixel-format view.
 - The image's usage is the descriptor's plus transfer source and destination. Its home layout is
   general where it has a storage element, shader-read-only where shaders only read it, and the
   attachment layout where only render passes use it. Its elements of set 1 are written before the

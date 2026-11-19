@@ -34,9 +34,7 @@
 //! [`crate::cases::textures`] uses: a 16 by 16 `Shared` texture read fresh, written whole by
 //! `replaceRegion:`, and read back, both reads into a destination that already holds [`BEFORE`] so
 //! a byte the copy did not write is a recorded value rather than a zero nobody can tell from a
-//! written one. On `metal2vulkan-rt`'s run the fresh read is unchecked: a new texture there reads
-//! what its memory last held, where Metal's texture-making calls are silent
-//! ([`crate::replay::new_texture_contents`]).
+//! written one.
 //!
 //! ## What each sweep can tell apart, measured
 //!
@@ -600,12 +598,6 @@ impl Case for FootprintCase {
         if self.shared_texture_buffers {
             named.push(crate::replay::shared_memory_notice());
         }
-        // Each round trip's fresh read, on the new runtime: a new texture there reads what its
-        // memory last held, where Metal's texture-making calls are silent. The write and the read
-        // back still compare exactly.
-        named.extend(self.round_trips.iter().map(|format| {
-            crate::replay::new_texture_contents(&format!("{}/{}", format.name(), site::FRESH))
-        }));
         named
     }
 

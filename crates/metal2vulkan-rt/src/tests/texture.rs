@@ -29,6 +29,10 @@
 //! - Under a device cfg, `replace_region` reads its bytes in place through `HostBytes::from_raw`,
 //!   from memory no slice covers, and copies the region's bytes once: `bytes_copied` grows by the
 //!   region's rows alone, not the padding between them, and the texture reads them back.
+//! - The zero source's copies over a block-compressed image write each element of every level,
+//!   layer and slice once, each within the zero source. Under a device cfg, a new texture reads
+//!   zero in every subresource in the place another texture wrote and gave back, Shared and
+//!   Private, colour, depth and block-compressed, and each counts one clear of its image's bytes.
 
 use crate::arrays::Grants;
 use crate::error::{Error, Refusal};
@@ -43,6 +47,65 @@ fn refused<T>(result: Result<T, Error>) -> Refusal {
         Err(Error::Refused(refusal)) => refusal,
         Err(other) => panic!("not a refusal: {other}"),
         Ok(_) => panic!("not a refusal: it was made"),
+    }
+}
+
+/// The zero source's copies ([`crate::fill::zero_regions`]) over a block-compressed image write
+/// each element of every level, layer and 3D slice once, each copy within the zero source and
+/// its extent whole elements or reaching the level's edge: in bands of whole rows where a row fits
+/// the zero source, and in runs along each row where one does not (a level of 16-byte blocks
+/// 32,768 texels wide, as BC7's).
+#[test]
+fn the_zero_source_s_copies_write_every_element_once() {
+    use crate::fill::{zero_regions, ZEROS};
+    use crate::texture::CopyUnit;
+    use std::collections::HashMap;
+    let unit = CopyUnit {
+        aspect: vk::ImageAspectFlags::COLOR,
+        bytes: 16,
+        block: [4, 4],
+    };
+    for (extent, levels, layers, volume) in [
+        ([64, 64, 1], 7, 1, false),
+        ([32_768, 8, 1], 1, 2, false),
+        ([20, 12, 3], 3, 1, true),
+        ([2048, 2048, 1], 12, 1, false),
+    ] {
+        let regions = zero_regions(unit, extent, levels, layers, volume);
+        let mut written: HashMap<[u32; 5], u32> = HashMap::new();
+        for region in &regions {
+            let level = region.image_subresource.mip_level;
+            let [w, h, _] = extent.map(|axis| (axis >> level).max(1));
+            let [x, y, z] = [
+                region.image_offset.x,
+                region.image_offset.y,
+                region.image_offset.z,
+            ]
+            .map(|at| at as u32);
+            let (width, height) = (region.image_extent.width, region.image_extent.height);
+            assert!(width % 4 == 0 || x + width == w, "{extent:?}: {region:?}");
+            assert!(height % 4 == 0 || y + height == h, "{extent:?}: {region:?}");
+            let (across, down) = (width.div_ceil(4), height.div_ceil(4));
+            assert!(
+                u64::from(across * down) * 16 <= ZEROS,
+                "{extent:?}: {region:?}"
+            );
+            for row in 0..down {
+                for element in 0..across {
+                    let layer = region.image_subresource.base_array_layer;
+                    let key = [level, layer, z, x / 4 + element, y / 4 + row];
+                    *written.entry(key).or_default() += 1;
+                }
+            }
+        }
+        let elements: u32 = (0..levels)
+            .map(|level| {
+                let [w, h, d] = extent.map(|axis| (axis >> level).max(1));
+                w.div_ceil(4) * h.div_ceil(4) * layers * if volume { d } else { 1 }
+            })
+            .sum();
+        assert_eq!(written.len(), elements as usize, "{extent:?}");
+        assert!(written.values().all(|&count| count == 1), "{extent:?}");
     }
 }
 
@@ -603,6 +666,195 @@ mod on_device {
             }
             println!("host_bytes: {name}: {copied} bytes copied of the caller's {LEN}");
         });
+    }
+
+    /// A texture the runtime places reads zero until written, in the place another texture
+    /// wrote and gave back: a mipmapped colour texture, an array, a 3D texture, a depth texture
+    /// and a block-compressed one where the device makes it, each new texture Shared and Private.
+    /// The written texture reads its bytes back first, in every subresource, and the new one
+    /// takes its place; the device counts one clear for each new texture, of its image's bytes.
+    #[test]
+    fn every_device_reads_zero_from_a_new_texture_where_another_was_written() {
+        use crate::tests::command::on_device::within;
+        use crate::texture::TextureObject;
+        const OLD: u8 = 0xa5;
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(
+            !devices.is_empty(),
+            "the loader lists no device of this cfg's kind"
+        );
+        for (name, physical) in devices {
+            let device = Device::new(&physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let counters = device.counters();
+            let grant = device
+                .grant_indices(IndexClass::Texture, 4096, 2)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // Format, type, extent, levels, slices, an element's bytes and the texels across it.
+            let shapes = [
+                (
+                    PixelFormat::RGBA8Unorm,
+                    TextureType::Type2D,
+                    [64, 64, 1],
+                    4,
+                    1,
+                    4,
+                    1,
+                ),
+                (
+                    PixelFormat::RGBA16Float,
+                    TextureType::Type2DArray,
+                    [16, 16, 1],
+                    1,
+                    3,
+                    8,
+                    1,
+                ),
+                (
+                    PixelFormat::R32Float,
+                    TextureType::Type3D,
+                    [8, 8, 4],
+                    1,
+                    1,
+                    4,
+                    1,
+                ),
+                (
+                    PixelFormat::Depth16Unorm,
+                    TextureType::Type2D,
+                    [32, 32, 1],
+                    1,
+                    1,
+                    2,
+                    1,
+                ),
+                (
+                    PixelFormat::BC1RGBA,
+                    TextureType::Type2D,
+                    [64, 64, 1],
+                    3,
+                    1,
+                    8,
+                    4,
+                ),
+            ];
+            let mut cleared = 0;
+            for (format, texture_type, extent, levels, slices, unit, block) in shapes {
+                let mut d = descriptor(texture_type, format, extent);
+                d.mipmap_level_count = levels;
+                d.array_length = if texture_type == TextureType::Type2DArray {
+                    slices
+                } else {
+                    1
+                };
+                // Each level's region, its rows' bytes and its rows, and its depth.
+                let level = |level: u32| {
+                    let [w, h, z] = extent.map(|axis| (axis >> level).max(1));
+                    let region = Region {
+                        origin: [0; 3],
+                        size: [w, h, 1],
+                    };
+                    let row = w.div_ceil(block) as usize * unit;
+                    (region, row, h.div_ceil(block) as usize, z)
+                };
+                // Each image of each level and slice of `texture`, as its image holds it.
+                let images = |texture: &Texture| {
+                    let mut images = Vec::new();
+                    for at in 0..levels {
+                        let (region, row, rows, depth) = level(at);
+                        for slice in 0..slices {
+                            for z in 0..depth {
+                                let mut bytes = vec![0x5a; row * rows];
+                                let mut region = region;
+                                region.origin[2] = z;
+                                texture
+                                    .image_bytes(&mut bytes, row as u64, region, at, slice)
+                                    .unwrap_or_else(|error| {
+                                        panic!("{name}: {format:?} level {at}: {error}")
+                                    });
+                                images.push(bytes);
+                            }
+                        }
+                    }
+                    images
+                };
+                for storage in [StorageMode::Shared, StorageMode::Private] {
+                    let textures = counters.gauges().textures;
+                    let mut written = d;
+                    written.storage_mode = StorageMode::Shared;
+                    let old = match device.new_texture(&written, Some(4096)) {
+                        Ok(texture) => texture,
+                        Err(Error::Unsupported(Gap::TextureFormat { .. })) => {
+                            println!("{name}: no {format:?} texture on this device");
+                            break;
+                        }
+                        Err(error) => panic!("{name}: {format:?}: {error}"),
+                    };
+                    for at in 0..levels {
+                        let (mut region, row, rows, depth) = level(at);
+                        region.size[2] = depth;
+                        let bytes = vec![OLD; row * rows * depth as usize];
+                        for slice in 0..slices {
+                            old.replace_region(
+                                region,
+                                at,
+                                slice,
+                                crate::HostBytes::from(&bytes[..]),
+                                row as u64,
+                                (row * rows) as u64,
+                            )
+                            .unwrap_or_else(|error| panic!("{name}: {format:?}: {error}"));
+                        }
+                    }
+                    for image in images(&old) {
+                        assert!(image.iter().all(|&byte| byte == OLD), "{name}: {format:?}");
+                    }
+                    let place = old.place();
+                    drop(old);
+                    within("the written texture's place freed", || {
+                        counters.gauges().textures == textures
+                    });
+                    let before = counters.metrics();
+                    d.storage_mode = storage;
+                    let new = (device.new_texture(&d, Some(4097)))
+                        .unwrap_or_else(|error| panic!("{name}: {format:?}: {error}"));
+                    assert_eq!(
+                        new.place(),
+                        place,
+                        "{name}: {format:?} {storage:?}: its place"
+                    );
+                    for (at, image) in images(&new).iter().enumerate() {
+                        assert!(
+                            image.iter().all(|&byte| byte == 0),
+                            "{name}: {format:?} {storage:?}: image {at} reads {:02x?}",
+                            &image[..image.len().min(16)]
+                        );
+                    }
+                    let after = counters.metrics();
+                    assert_eq!(
+                        (
+                            after.texture_clears - before.texture_clears,
+                            after.texture_clear_bytes - before.texture_clear_bytes,
+                        ),
+                        (1, new.image_size()),
+                        "{name}: {format:?} {storage:?}: the clears"
+                    );
+                    cleared += 1;
+                    // Its place is free again before the next written texture takes one.
+                    drop(new);
+                    within("the new texture's place freed", || {
+                        counters.gauges().textures == textures
+                    });
+                }
+            }
+            device
+                .release_indices(grant)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!(
+                "texture zeros: {name}: {cleared} new textures read zero where another was written"
+            );
+        }
     }
 }
 

@@ -462,33 +462,6 @@ pub fn without_compression(site: &str) -> crate::allowance::Allowance {
     )
 }
 
-/// The slug of `docs/API.md`'s accepted difference that says what a new texture reads on
-/// `metal2vulkan-rt` ([`new_texture_contents`]).
-pub const NEW_TEXTURE_CONTENTS: &str =
-    "the-new-runtime-s-new-textures-read-what-their-memory-last-held";
-
-/// The declaration a case needs at `site`, what a **new texture** reads before anything writes
-/// it, on `metal2vulkan-rt`'s run.
-///
-/// **What it rests on**, the accepted difference [`NEW_TEXTURE_CONTENTS`] names: Metal's two
-/// texture-making sentences are silent on a new texture's contents; the page for
-/// `newBufferWithLength:options:` promises zeros; an Apple M3 Max on macOS 27.0.1 read zero from new
-/// `Shared` and `Managed` textures; and the new runtime reads what the texture's memory last held,
-/// so the site moves with what the process made and released before the case.
-///
-/// **It loosens that site alone, and only on the new runtime.** The site is unchecked under
-/// [`Justification::NewRuntimeAccepted`], which holds nowhere on the old runtime's run, so the old
-/// runtime's answers there still compare exactly. A case names it at a texture's fresh read and
-/// never at a buffer's, whose zeros Metal promises: the written site, the statuses and every
-/// buffer row compare exactly on both runtimes.
-pub fn new_texture_contents(site: &str) -> crate::allowance::Allowance {
-    crate::allowance::Allowance::new(
-        format!("case/{site}/*"),
-        crate::allowance::Loosening::Unchecked,
-        Justification::new_runtime_accepted(NEW_TEXTURE_CONTENTS),
-    )
-}
-
 /// The declaration a case needs where its kernel reaches a texture or a sampler through an
 /// **argument buffer**: `set-past-layout-support`, which the runtime announces where it makes a
 /// descriptor set layout its driver's `vkGetDescriptorSetLayoutSupport` refuses though the driver

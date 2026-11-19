@@ -4,9 +4,7 @@
 //! One case a format. Each one makes an 8 by 8 `Shared` 2D texture of its format, read by shaders,
 //! at a row pitch one texel wider than its rows, then asks three things of it:
 //!
-//! - what a **fresh** texture reads (`get_bytes`), which Metal answers as zero, and which
-//!   `metal2vulkan-rt`'s run leaves unchecked: there a new texture reads what its memory last
-//!   held, where Metal's texture-making calls are silent ([`crate::replay::new_texture_contents`]);
+//! - what a **fresh** texture reads (`get_bytes`), which Metal answers as zero;
 //! - what it reads back after `replace_region` wrote the case's pattern over its whole level 0;
 //! - whether the **bytes between the rows** stayed as they were.
 //!
@@ -284,15 +282,6 @@ impl Case for TextureRoundTrip {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // The fresh read alone, on the new runtime: a new texture there reads what its memory
-        // last held, where Metal's texture-making calls are silent. Replayed on lavapipe, four of
-        // these rows read zero each alone in a process, and an earlier case's bytes after the
-        // suite's other cases. The written read and the gaps between the rows still compare
-        // exactly.
-        vec![crate::replay::new_texture_contents("fresh")]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

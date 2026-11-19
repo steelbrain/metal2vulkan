@@ -40,7 +40,7 @@ use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, Chunk, CopyIn, Modified, Named, CAPTURE_LEN};
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Pending, Segment};
 use crate::complete;
-use crate::counters::{Counters, Gauge, Metric, Site};
+use crate::counters::{Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
@@ -50,7 +50,7 @@ use crate::over::{self, Leans};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
 use crate::staging::{At, Oldest, Region, Stage, Staging, REGION_LEN};
-use crate::texture::{Image, OverCopy, TextureInner, TextureObject};
+use crate::texture::{Homing, Image, OverCopy, TextureInner, TextureObject, Zeroing};
 use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
@@ -298,22 +298,36 @@ impl Upload {
                     > UPLOAD_BYTES)
     }
 
-    /// Records `moves`, images' moves from undefined to their home layouts
-    /// ([`Image::homing`]), in one barrier, counted in `counters`; the upload holds each image.
-    fn home(
-        &self,
-        device: &ash::Device,
-        counters: &Counters,
-        moves: &[vk::ImageMemoryBarrier2<'_>],
-    ) {
-        if moves.is_empty() {
+    /// Records `homes`, images' moves from undefined to their home layouts
+    /// ([`Image::homing`]): in one barrier, and where any is zeroed, its zeroing after that
+    /// barrier and its move home in a second, each counted in `core`'s counters; the upload holds
+    /// each image.
+    fn home(&self, core: &Core, homes: &[Homing]) {
+        if homes.is_empty() {
             return;
         }
-        let dependency = vk::DependencyInfo::default().image_memory_barriers(moves);
-        // SAFETY: the upload's command buffer is recording, under the work lock; each image is
-        // the device's and held by the upload.
-        unsafe { device.cmd_pipeline_barrier2(self.command, &dependency) };
-        counters.count(Metric::Barriers);
+        let device = &core.device;
+        let barrier = |moves: &[vk::ImageMemoryBarrier2<'static>]| {
+            let dependency = vk::DependencyInfo::default().image_memory_barriers(moves);
+            // SAFETY: the upload's command buffer is recording, under the work lock; each image
+            // is the device's and held by the upload.
+            unsafe { device.cmd_pipeline_barrier2(self.command, &dependency) };
+            core.counters.count(Metric::Barriers);
+        };
+        let firsts: Vec<_> = homes.iter().map(|home| home.first).collect();
+        barrier(firsts.as_slice());
+        let zeroings: Vec<&Zeroing> = homes.iter().filter_map(|home| home.zero.as_ref()).collect();
+        if zeroings.is_empty() {
+            return;
+        }
+        for zeroing in &zeroings {
+            // SAFETY: as above, outside any render pass; the first barrier moved the image to
+            // the transfer destination layout.
+            unsafe { zeroing.record(device, self.command, core.filler.zeros()) };
+            core.counters.texture_cleared(zeroing.bytes);
+        }
+        let moves: Vec<_> = zeroings.iter().map(|zeroing| zeroing.home).collect();
+        barrier(moves.as_slice());
     }
 }
 
@@ -903,13 +917,13 @@ impl Work {
             None => Upload::begin(core)?,
         };
         let upload = state.upload.insert(upload);
-        let moves: Vec<vk::ImageMemoryBarrier2<'static>> = (held.iter())
+        let homes: Vec<Homing> = (held.iter())
             .filter_map(|item| match item {
                 Held::Texture(image) => image.homing(),
                 _ => None,
             })
             .collect();
-        upload.home(device, &core.counters, &moves);
+        upload.home(core, &homes);
         record(device, upload.command);
         upload.entries += 1;
         upload.staging += staging;
@@ -1305,13 +1319,7 @@ impl WorkState {
     /// home layouts of the textures made since the last that still live, which it holds from
     /// then; its spans of the staging region are free once `value` completes. `released` starts
     /// again for the next upload.
-    fn take_upload(
-        &mut self,
-        device: &ash::Device,
-        counters: &Counters,
-        released: &AtomicU64,
-        value: u64,
-    ) -> Option<Upload> {
+    fn take_upload(&mut self, core: &Core, released: &AtomicU64, value: u64) -> Option<Upload> {
         let mut upload = self.upload.take()?;
         released.store(0, Ordering::Relaxed);
         if let Some(region) = &mut self.region {
@@ -1325,16 +1333,16 @@ impl WorkState {
             }
         }
         self.prune_at = HOMES_PRUNE;
-        let mut moves = Vec::new();
+        let mut homes = Vec::new();
         for image in self.homes.drain(..).filter_map(|home| home.upgrade()) {
             // One the upload copied to or from was moved before its copy, and is held.
-            if let Some(barrier) = image.homing() {
-                moves.push(barrier);
+            if let Some(homing) = image.homing() {
+                homes.push(homing);
                 upload.held.push(Held::Texture(image));
             }
         }
-        if !moves.is_empty() {
-            upload.home(device, counters, &moves);
+        if !homes.is_empty() {
+            upload.home(core, &homes);
             upload.entries += 1;
         }
         Some(upload)
@@ -1690,8 +1698,7 @@ impl WorkState {
     fn close(
         &mut self,
         index: usize,
-        device: &ash::Device,
-        counters: &Counters,
+        core: &Core,
         released: &AtomicU64,
     ) -> Option<(u64, Option<Upload>, Batch)> {
         let fifo = &mut self.fifos[index];
@@ -1724,11 +1731,7 @@ impl WorkState {
             }
         }
         self.flush = false;
-        Some((
-            value,
-            self.take_upload(device, counters, released, value),
-            batch,
-        ))
+        Some((value, self.take_upload(core, released, value), batch))
     }
 
     /// The first FIFO whose group goes at the end of a pass: unless its queue has [`IN_FLIGHT`]
@@ -1987,9 +1990,7 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
             Step::Staged => continue,
             Step::Goes(index) => index,
         };
-        let Some((value, upload, batch)) =
-            state.close(index, &core.device, &core.counters, &work.released)
-        else {
+        let Some((value, upload, batch)) = state.close(index, core, &work.released) else {
             continue;
         };
         drop(state);
@@ -2002,8 +2003,7 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
     }
     if state.flush && !sent {
         let value = state.progress + 1;
-        if let Some(upload) = state.take_upload(&core.device, &core.counters, &work.released, value)
-        {
+        if let Some(upload) = state.take_upload(core, &work.released, value) {
             state.flush = false;
             state.progress = value;
             drop(state);

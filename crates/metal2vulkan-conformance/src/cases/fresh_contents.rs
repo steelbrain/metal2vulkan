@@ -47,16 +47,6 @@
 //! compression. The `written` site, the statuses and every `Shared` and `Managed` row still compare
 //! exactly there.
 //!
-//! **On `metal2vulkan-rt`'s run, the `fresh` site of every texture row and every pattern row is
-//! declared too** ([`crate::replay::new_texture_contents`]), of every storage mode: Metal's two
-//! texture-making sentences are silent on a new texture's contents, and the new runtime reads what
-//! the texture's memory last held, so the site moves with what the process made and released
-//! before the row. Replayed on lavapipe, the `Shared` and `Managed` rows read the released
-//! texture's [`OLD`] or an earlier case's bytes, and which of them did moved from run to run, each
-//! row alone in a process included. The buffer rows and the texture-over-buffer rows read a
-//! buffer's memory, whose zeros Metal promises, and name no such declaration; the `written` site
-//! and the statuses compare exactly on both runtimes.
-//!
 //! Every row names one notice, and it belongs to the venue rather than to any row: the declaration
 //! [`crate::replay::shared_memory_notice`] carries, the notice a device without unified memory
 //! announces for the `Shared` buffer each row reads its answer back through.
@@ -1106,14 +1096,7 @@ impl Case for FreshTexture {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // A new texture of every storage mode, on the new runtime, reads what its memory last
-        // held, where Metal's texture-making calls are silent (the module docs). Replayed on
-        // lavapipe: the Shared and Managed rows read the released texture's `OLD`, or an earlier
-        // case's bytes, and which rows do moves from run to run.
-        let mut allowances = vec![
-            shared_memory_notice(),
-            crate::replay::new_texture_contents("fresh"),
-        ];
+        let mut allowances = vec![shared_memory_notice()];
         // A new `Private` texture on a device that presents no texture compression holds what
         // its memory held (the module docs). Expected, not yet run: no such venue replayed it.
         if self.row.storage == Storage::Private {
@@ -1403,9 +1386,6 @@ impl Case for FreshPattern {
         // canonical encoding, so every value still compares exactly.
         let mut allowances = vec![
             shared_memory_notice(),
-            // A new texture on the new runtime reads what its memory last held, where Metal's
-            // texture-making calls are silent (the module docs).
-            crate::replay::new_texture_contents("fresh"),
             // A new `Private` texture on a device that presents no texture compression holds
             // what its memory held, never the pattern (the module docs). Expected, not yet run.
             crate::replay::without_compression("fresh"),
@@ -2118,10 +2098,8 @@ mod tests {
     /// [`crate::replay::without_compression`], justifies nothing there.
     ///
     /// Every row names [`shared_memory_notice`], which is the venue's memory model and not the
-    /// row's; every texture row and every pattern row names the new runtime's declaration at its
-    /// `fresh` site ([`crate::replay::new_texture_contents`]), and no buffer row or texture over a
-    /// buffer does, whose zeros Metal promises; every `Private` texture row and every pattern row
-    /// names the value declaration at its `fresh` site, and no `Shared` or `Managed` row does;
+    /// row's; every `Private` texture row and every pattern row names the value declaration at its
+    /// `fresh` site, and no `Shared` or `Managed` row, buffer row or texture over a buffer does;
     /// **only** the three pattern rows whose read blits out of a texture Metal keeps compressed in
     /// a format whose canonical encoding the device's copy may keep apart from Metal's
     /// (`BGRA10_XR`, its sRGB twin, `RGB9E5Float`; the notes lavapipe announced) name a further
@@ -2135,7 +2113,6 @@ mod tests {
     fn a_row_loosens_the_notices_site_and_a_private_texture_s_fresh_site() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
         let fresh = crate::replay::without_compression("fresh");
-        let silent = crate::replay::new_texture_contents("fresh");
         let [zeroed, _] = zeroed_depth_pattern();
         let shared = metal2vulkan_runtime::Degradation::SharedInSystemMemory
             .code()
@@ -2144,10 +2121,7 @@ mod tests {
             let allowances = case.allowances();
             for allowance in &allowances {
                 assert!(
-                    allowance.path == notices
-                        || *allowance == fresh
-                        || *allowance == silent
-                        || *allowance == zeroed,
+                    allowance.path == notices || *allowance == fresh || *allowance == zeroed,
                     "{}: {allowance:?}",
                     case.name()
                 );
@@ -2168,7 +2142,7 @@ mod tests {
             let allowances = FreshTexture { row }.allowances();
             assert_eq!(
                 allowances.len(),
-                2 + usize::from(private) + 3 * usize::from(depth) + usize::from(compressed),
+                1 + usize::from(private) + 3 * usize::from(depth) + usize::from(compressed),
                 "{}",
                 row.case
             );
@@ -2181,7 +2155,6 @@ mod tests {
                 row.case
             );
             assert_eq!(allowances.contains(&fresh), private, "{}", row.case);
-            assert!(allowances.contains(&silent), "{}", row.case);
             assert_eq!(allowances.contains(&zeroed), depth, "{}", row.case);
         }
         // Everything else is held to Metal exactly, the venue's own notice apart.
@@ -2208,12 +2181,11 @@ mod tests {
             let allowances = FreshPattern { row }.allowances();
             assert_eq!(
                 allowances.len(),
-                3 + usize::from(kept) + 2 * usize::from(depth),
+                2 + usize::from(kept) + 2 * usize::from(depth),
                 "{}",
                 row.case
             );
             assert!(allowances.contains(&fresh), "{}", row.case);
-            assert!(allowances.contains(&silent), "{}", row.case);
             assert_eq!(allowances.contains(&zeroed), depth, "{}", row.case);
         }
     }

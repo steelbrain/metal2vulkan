@@ -11,6 +11,13 @@
 //! buffer committed after [`Device::new_texture`] returns, or ahead of its first copy; nothing
 //! holds it until then, so a texture released first is freed at once.
 //!
+//! A texture the runtime places (a new texture of [`Device::new_texture`],
+//! [`Device::new_texture_for_views`] or [`Device::new_managed_texture`]) reads zero until written:
+//! that upload clears every subresource of its image between the move from undefined and the
+//! move home ([`Zero`]). Metal does not say what a new texture holds. The runtime's choice is
+//! zero, as an Apple M3 Max answered for new Shared and Managed textures, because programs read
+//! textures they never wrote, and the memory's last bytes would follow process history.
+//!
 //! Shaders under the translator's identity domains read a texture through its view alone, so a
 //! texture is made only where its view gives Metal's values: its format directly, or through the
 //! view's component mapping. A storage element is written only where the device stores the format
@@ -377,6 +384,9 @@ pub(crate) struct Image {
     first: vk::ImageLayout,
     /// An upload recorded its move from `first` to `home`. Read and set under the work lock.
     homed: AtomicBool,
+    /// How the move home zeroes it, for an image the runtime places for a texture of its own
+    /// (`Source::Plain` and `Source::Managed`); `None` for every other image.
+    zero: Option<Zero>,
     /// A drawable's image ([`Device::new_drawable_texture`]): whose turn it is between the
     /// consumer's acquires and presents. `None` for every other image.
     drawable: Option<Drawable>,
@@ -431,11 +441,129 @@ enum Under {
     Surface { _block: Option<Arc<Block>> },
 }
 
+/// How a new image the runtime places reads zero until written: the commands its move home
+/// records between the move from undefined and the move to its home layout, which write every
+/// texel of every subresource.
+#[derive(Clone, Copy)]
+pub(crate) enum Zero {
+    /// A colour clear (`vkCmdClearColorImage`) of every level and layer, to zero.
+    Color,
+    /// A depth-stencil clear (`vkCmdClearDepthStencilImage`) of every aspect, level and layer,
+    /// to depth 0 and stencil 0.
+    DepthStencil,
+    /// Copies from the zero source ([`crate::fill::zero_regions`]) for a single-sampled format no
+    /// clear writes: a block-compressed one, or one of texel blocks wider than a texel
+    /// (`VUID-vkCmdClearColorImage-image-00007`, `-01545`).
+    Copy {
+        unit: CopyUnit,
+        extent: [u32; 3],
+        levels: u32,
+        layers: u32,
+        volume: bool,
+    },
+}
+
+impl Zero {
+    /// The zeroing of an image of `plan`, of `levels` and of `shape`.
+    fn of(plan: &Plan, levels: u32, shape: &Shape) -> Zero {
+        if plan
+            .aspects
+            .intersects(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
+        {
+            return Zero::DepthStencil;
+        }
+        match plan.unit {
+            Some(unit) if unit.block != [1, 1] => Zero::Copy {
+                unit,
+                extent: shape.extent,
+                levels,
+                layers: shape.layers,
+                volume: shape.image_type == vk::ImageType::TYPE_3D,
+            },
+            _ => Zero::Color,
+        }
+    }
+}
+
+/// A new image's move home, as an upload records it ([`Image::homing`]).
+pub(crate) struct Homing {
+    /// The move from the layout the image is made in: to its home layout, or to the transfer
+    /// destination layout where the image is zeroed first.
+    pub(crate) first: vk::ImageMemoryBarrier2<'static>,
+    /// Where the image is zeroed: its zeroing, its memory's bytes, and its move home after it.
+    pub(crate) zero: Option<Zeroing>,
+}
+
+/// A new image's zeroing in its move home ([`Homing`]).
+pub(crate) struct Zeroing {
+    pub(crate) image: vk::Image,
+    pub(crate) aspects: vk::ImageAspectFlags,
+    pub(crate) zero: Zero,
+    pub(crate) bytes: u64,
+    /// The move from the transfer destination layout to the image's home layout, after the
+    /// zeroing's writes.
+    pub(crate) home: vk::ImageMemoryBarrier2<'static>,
+}
+
+impl Zeroing {
+    /// Records the zeroing into `command`: the clear of every subresource, or the copies from the
+    /// zero source `zeros` that write every texel.
+    ///
+    /// # Safety
+    ///
+    /// `command` is recording, outside a render pass; the image is the device's, live until the
+    /// command completes, and in the transfer destination layout (its move [`Homing::first`]
+    /// recorded); `zeros` is the device's zero source.
+    pub(crate) unsafe fn record(
+        &self,
+        device: &ash::Device,
+        command: vk::CommandBuffer,
+        zeros: vk::Buffer,
+    ) {
+        let layout = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+        let range = [whole(self.aspects)];
+        // SAFETY: the caller's contract. Every image the runtime makes has transfer-destination
+        // usage, which its format query checked.
+        unsafe {
+            match self.zero {
+                Zero::Color => device.cmd_clear_color_image(
+                    command,
+                    self.image,
+                    layout,
+                    &vk::ClearColorValue::default(),
+                    &range,
+                ),
+                Zero::DepthStencil => device.cmd_clear_depth_stencil_image(
+                    command,
+                    self.image,
+                    layout,
+                    &vk::ClearDepthStencilValue::default(),
+                    &range,
+                ),
+                Zero::Copy {
+                    unit,
+                    extent,
+                    levels,
+                    layers,
+                    volume,
+                } => device.cmd_copy_buffer_to_image(
+                    command,
+                    zeros,
+                    self.image,
+                    layout,
+                    &crate::fill::zero_regions(unit, extent, levels, layers, volume),
+                ),
+            }
+        }
+    }
+}
+
 impl Image {
     /// The image's move from the layout it is made in to its home layout, where no upload has
     /// recorded it yet: recorded once, by the upload that is to hold the image (a drawable's once
-    /// for each acquire, [`Work::home`](crate::submit::Work::home)). Under the work lock.
-    pub(crate) fn homing(&self) -> Option<vk::ImageMemoryBarrier2<'static>> {
+    /// for each acquire, [`Work::home`](crate::submit::Work::home)), with its zeroing between
+    /// two moves where it has one ([`Zero`]). Under the work lock.
+    pub(crate) fn homing(&self) -> Option<Homing> {
         if self.homed.swap(true, Ordering::Relaxed) {
             return None;
         }
@@ -448,19 +576,50 @@ impl Image {
             true => vk::ImageLayout::PRESENT_SRC_KHR,
             false => self.first,
         };
-        Some(
-            vk::ImageMemoryBarrier2::default()
+        let every = vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE;
+        let barrier = vk::ImageMemoryBarrier2::default()
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(self.image)
+            .subresource_range(whole(self.aspects));
+        let Some(zero) = self.zero else {
+            return Some(Homing {
+                first: barrier
+                    .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                    .src_access_mask(vk::AccessFlags2::NONE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                    .dst_access_mask(every)
+                    .old_layout(first)
+                    .new_layout(self.home),
+                zero: None,
+            });
+        };
+        // Cleared or copied over in the transfer destination layout, then moved home: the
+        // clears and copies are transfers (`VK_PIPELINE_STAGE_2_CLEAR_BIT` is in
+        // `ALL_TRANSFER`).
+        let transfer = vk::ImageLayout::TRANSFER_DST_OPTIMAL;
+        Some(Homing {
+            first: barrier
                 .src_stage_mask(vk::PipelineStageFlags2::NONE)
                 .src_access_mask(vk::AccessFlags2::NONE)
-                .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
                 .old_layout(first)
-                .new_layout(self.home)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(self.image)
-                .subresource_range(whole(self.aspects)),
-        )
+                .new_layout(transfer),
+            zero: Some(Zeroing {
+                image: self.image,
+                aspects: self.aspects,
+                zero,
+                bytes: self.bytes,
+                home: barrier
+                    .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                    .dst_access_mask(every)
+                    .old_layout(transfer)
+                    .new_layout(self.home),
+            }),
+        })
     }
 
     /// Its move home is owed, recorded by the next upload that holds it ([`homing`](Self::homing)):
@@ -532,6 +691,7 @@ impl Image {
             view_formats: plan.view_formats.clone(),
             first: vk::ImageLayout::UNDEFINED,
             homed: AtomicBool::new(false),
+            zero: None,
             drawable: None,
             _under: None,
         });
@@ -675,7 +835,8 @@ impl Drop for TextureInner {
 
 impl Device {
     /// `newTextureWithDescriptor:`, at `index`: an optimal image of the descriptor in device-local
-    /// memory, placed in a texture block ([`Texture`]), its contents undefined, as Metal's are.
+    /// memory, placed in a texture block ([`Texture`]), which reads zero until written: the
+    /// runtime's choice, where Metal does not say what a new texture holds (the module docs).
     /// `index` is given exactly where shaders reach the texture (shader-read or shader-write
     /// usage), and is then an index of a live [`IndexClass::Texture`](crate::IndexClass::Texture)
     /// grant, whatever the usage. The texture's elements of set 1 are written before the call
@@ -1016,6 +1177,7 @@ impl Device {
             first: vk::ImageLayout::UNDEFINED,
             // No move home until the consumer acquires it.
             homed: AtomicBool::new(true),
+            zero: None,
             drawable: Some(Drawable {
                 turn: Mutex::new(Turn::New),
                 from_present: AtomicBool::new(false),
@@ -1118,6 +1280,9 @@ impl Device {
             }
         };
         let (mut named, mut first, mut home) = (named, first, home);
+        // A texture the runtime places reads zero until written ([`Zero`]): not one in a heap's
+        // memory or over a buffer's bytes.
+        let placed = matches!(source, Source::Plain | Source::Managed(..));
         let (bind, mut block) = match source {
             Source::Plain | Source::Managed(..) => (Bind::Pooled, None),
             Source::Heap(block, heap, offset) => {
@@ -1176,6 +1341,7 @@ impl Device {
         }
         let (image, backing, bytes, sampled, storage) = made?;
         core.counters.rise(Gauge::Textures);
+        let zero = placed.then(|| Zero::of(&plan, d.mipmap_level_count, &shape));
         let attachment_reads =
             plan.attachment_reads && home == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         // On a device without the feedback loop, a draw reads such an image through its shadow.
@@ -1202,6 +1368,7 @@ impl Device {
             view_formats: plan.view_formats.clone(),
             first,
             homed: AtomicBool::new(false),
+            zero,
             drawable: None,
             _under: block,
         });
@@ -3944,6 +4111,16 @@ pub(crate) trait TextureObject {
         self.object().image.bytes
     }
 
+    /// For the device tests: the texture block its image is placed in and the offset there;
+    /// `None` for an image of no place.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    fn place(&self) -> Option<(BlockId, u64)> {
+        match &self.object().image.backing {
+            Backing::Placed(place) => Some((place.block(), place.offset)),
+            _ => None,
+        }
+    }
+
     /// `gpuResourceID`: its index (0 for a texture no shader reaches) and the translator's
     /// `TextureWord` of its pixel format and swizzle.
     fn gpu_resource_id(&self) -> ResourceId {
@@ -4208,6 +4385,7 @@ impl Device {
             view_formats: made.view_formats,
             first: vk::ImageLayout::UNDEFINED,
             homed: AtomicBool::new(false),
+            zero: None,
             drawable: None,
             _under: Some(Under::Surface { _block: made.block }),
         });
