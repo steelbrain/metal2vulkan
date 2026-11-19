@@ -35,6 +35,53 @@ use ash::vk;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
+/// For the device tests: ends an in-place make's step `name` on this thread ([`steps`]).
+macro_rules! step {
+    ($name:literal) => {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        steps::mark($name);
+    };
+}
+
+/// For the device tests: the steps of the latest surface make on this thread, each its name and
+/// the nanoseconds of [`host_time`] since the step before it, in order. A step taken more than once
+/// (one per plane) is listed each time.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) mod steps {
+    use crate::times::host_time;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static STEPS: RefCell<(u64, Vec<(&'static str, u64)>)> =
+            const { RefCell::new((0, Vec::new())) };
+    }
+
+    /// Starts a make's steps.
+    pub(crate) fn begin() {
+        STEPS.with(|steps| {
+            let mut steps = steps.borrow_mut();
+            steps.0 = host_time();
+            steps.1.clear();
+        });
+    }
+
+    /// Ends the step `name`.
+    pub(crate) fn mark(name: &'static str) {
+        STEPS.with(|steps| {
+            let mut steps = steps.borrow_mut();
+            let now = host_time();
+            let took = now.saturating_sub(steps.0);
+            steps.0 = now;
+            steps.1.push((name, took));
+        });
+    }
+
+    /// The latest make's steps.
+    pub(crate) fn taken() -> Vec<(&'static str, u64)> {
+        STEPS.with(|steps| steps.borrow().1.clone())
+    }
+}
+
 /// The most planes a surface has: a DRM format's memory planes.
 pub(crate) const MAX_PLANES: usize = 4;
 
@@ -614,6 +661,8 @@ impl Device {
         &self,
         spec: &SurfaceSpec<'_>,
     ) -> Result<(Surface, SurfaceExport), Error> {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        steps::begin();
         let core = self.core();
         if core.closed() {
             return Err(Error::Quiesced);
@@ -648,6 +697,7 @@ impl Device {
             pitch_multiple: spec.pitch_multiple,
             start_multiple: spec.start_multiple,
         }))?;
+        step!("plans");
         let in_place = match handle {
             ExportHandle::DmaBuf if !core.exports.modifiers => Ok(Err(SurfaceCopy::NoModifier)),
             #[cfg(unix)]
@@ -673,9 +723,11 @@ impl Device {
                 }
             }
         }
+        step!("textures");
         // The images move to the general layout in the next submission, which the make does not
         // wait for: the consumer waits for it on its own thread (`Surface::wait_until_ready`).
         let ready = Some(core.work.ready_point());
+        step!("ready point");
         core.counters.count(Metric::SurfacesInPlace);
         let view = View {
             unit,
@@ -775,6 +827,7 @@ impl Device {
                     return Err(error);
                 }
             };
+            step!("queries");
             // SAFETY: the query accepted the image; the handle's extensions are enabled.
             let image = unsafe {
                 make_image(
@@ -795,6 +848,7 @@ impl Device {
                     });
                 }
             }
+            step!("images");
         }
         let shapes: Vec<PlaneShape> = (made.iter())
             .map(|m| PlaneShape {
@@ -820,6 +874,7 @@ impl Device {
         };
         let reach = (made.iter().zip(&starts)).map(|(m, &start)| start + m.needs.size);
         let len = reach.fold(end, u64::max);
+        step!("layout");
         // SAFETY: each image's handle is the allocation's, and none requires an allocation of
         // its own.
         let memory = match unsafe { memory::export_surface(core, len, index, spec.handle) } {
@@ -831,6 +886,7 @@ impl Device {
         };
         let raw = memory.device_memory();
         let block = Arc::new(memory::Block::new(memory, Arc::clone(core)));
+        step!("allocate");
         for at in 0..made.len() {
             let (image, start) = (made[at].image, starts[at]);
             // SAFETY: the allocation holds the image's size from its start, at its alignment, in a
@@ -843,6 +899,7 @@ impl Device {
                 });
             }
         }
+        step!("bind");
         let fd = match core.exports.handle(raw, spec.handle) {
             Ok(fd) => fd,
             Err(error) => {
@@ -850,6 +907,7 @@ impl Device {
                 return Err(error);
             }
         };
+        step!("export");
         let export = Export {
             handle: fd,
             size: block.memory.len,
@@ -910,6 +968,7 @@ impl Device {
                 Ok(found) => found,
                 Err(reason) => return Ok(Err(reason)),
             };
+            step!("queries");
             // SAFETY: the query accepted the image; the extensions are enabled.
             let implicit = unsafe {
                 make_image(
@@ -924,6 +983,7 @@ impl Device {
             pitch = pitch.max(implicit.layout.row_pitch);
             destroy(device, vec![implicit]);
             chosen.push((usage, list));
+            step!("images");
         }
         let max = self.core().max_block_len;
         let too_long = || Error::Limit(Limit::BlockLen { len: u64::MAX, max });
@@ -953,6 +1013,7 @@ impl Device {
                 )
             };
             let refused = vk::Result::ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT;
+            step!("images");
             match stated {
                 Ok(image) => made.push(image),
                 Err(result) if result == refused => {
@@ -1020,6 +1081,7 @@ impl Device {
             .memory_type_index(index)
             .push_next(&mut export)
             .push_next(&mut flags);
+        step!("layout");
         // SAFETY: an exportable allocation of a type every image takes, bound to nothing.
         let block = match unsafe {
             memory::allocate(device, &core.counters, core.max_allocations, &info, None)
@@ -1030,6 +1092,7 @@ impl Device {
                 return Err(error);
             }
         };
+        step!("allocate");
         let free_block = || {
             // SAFETY: nothing is bound to the allocation; the imports and the handles hold the
             // payload ("freeing ... releases that memory object's reference" alone).
@@ -1067,6 +1130,7 @@ impl Device {
                 Ok(fd) => fd,
                 Err(error) => return undo(imported, made, error),
             };
+            step!("export");
             let mut properties = vk::MemoryFdPropertiesKHR::default();
             // SAFETY: the fd is a dma-buf the device exported.
             let types = unsafe {
@@ -1114,10 +1178,12 @@ impl Device {
             let _ = fd.into_raw_fd();
             core.counters.rise(Gauge::SurfaceImports);
             imported.push(memory);
+            step!("import");
             // SAFETY: the memory is the image's dedicated import, of its size and a type it lists.
             if let Err(result) = unsafe { device.bind_image_memory(image, memory, 0) } {
                 return undo(imported, made, vulkan("vkBindImageMemory")(result));
             }
+            step!("bind");
         }
         let handle = match core.exports.handle(block, spec.handle) {
             Ok(fd) => fd,
@@ -1129,6 +1195,7 @@ impl Device {
             Err(error) => return undo(imported, made, error),
         };
         free_block();
+        step!("export");
         for (m, (memory, size)) in made.into_iter().zip(imported.into_iter().zip(sizes)) {
             images.push(SurfaceImage {
                 image: m.image,

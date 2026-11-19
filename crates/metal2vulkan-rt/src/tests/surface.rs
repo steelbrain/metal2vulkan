@@ -1219,6 +1219,102 @@ mod on_device {
         });
     }
 
+    /// The in-place make split by step ([`crate::surface::steps`]), with no validation layer, on a
+    /// fresh device for each row the device exports and each 4K picture (P010: R16 at 3840x2160
+    /// and RG16 at 1920x1080; NV12: R8 and RG8 alike): the first make, then the median and the
+    /// longest of the next ten, each make followed by its ready wait. It writes no zero: the
+    /// memory's bytes are undefined. Printed only.
+    #[test]
+    fn every_device_splits_a_4k_surface_make_by_step() {
+        let instance = crate::tests::validation::bare(&[]);
+        let p010 = [
+            (PixelFormat::R16Unorm, 3840, 2160),
+            (PixelFormat::RG16Unorm, 1920, 1080),
+        ];
+        let nv12 = [
+            (PixelFormat::R8Unorm, 3840, 2160),
+            (PixelFormat::RG8Unorm, 1920, 1080),
+        ];
+        let ms = |nanos: u64| nanos as f64 / 1e6;
+        for (name, physical) in &devices_of_the_cfgs_kind(&instance) {
+            for (handle, pitch_multiple, start_multiple) in BUSY_ROWS {
+                for (picture, planes) in [("P010 4K", p010), ("NV12 4K", nv12)] {
+                    let label = format!("{name}: {handle:?} x{pitch_multiple} {picture}");
+                    let device = Device::new(physical, Default::default())
+                        .unwrap_or_else(|error| panic!("{label}: {error}"));
+                    if !device.core().exports.offers(handle) {
+                        println!("surface-steps: {label}: not exported");
+                        break;
+                    }
+                    let specs = planes.map(|(format, width, height)| {
+                        let mut descriptor =
+                            TextureDescriptor::new(TextureType::Type2D, format, width, height);
+                        descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+                        PlaneSpec {
+                            descriptor,
+                            index: None,
+                            rows_below: 0,
+                        }
+                    });
+                    let spec = SurfaceSpec {
+                        handle,
+                        pitch_multiple,
+                        start_multiple,
+                        planes: &specs,
+                    };
+                    let mut makes: Vec<Vec<(&str, u64)>> = Vec::new();
+                    let mut kept = Vec::new();
+                    let mut form = None;
+                    for _ in 0..11 {
+                        let began = crate::host_time();
+                        let (surface, export) = (device.new_exported_surface(&spec))
+                            .unwrap_or_else(|error| panic!("{label}: {error}"));
+                        let made = crate::host_time() - began;
+                        let mut steps = crate::surface::steps::taken();
+                        steps.push(("make", made));
+                        let began = crate::host_time();
+                        (surface.wait_until_ready())
+                            .unwrap_or_else(|error| panic!("{label}: the ready wait: {error}"));
+                        steps.push(("ready wait", crate::host_time() - began));
+                        form = Some(export.form);
+                        makes.push(steps);
+                        kept.push((surface, export));
+                    }
+                    // Each step's nanoseconds in each make, its planes' steps summed.
+                    let mut names: Vec<&str> = Vec::new();
+                    for &(step, _) in makes.iter().flatten() {
+                        if !names.contains(&step) {
+                            names.push(step);
+                        }
+                    }
+                    let of = |make: &[(&str, u64)], step: &str| -> u64 {
+                        (make.iter())
+                            .filter(|(n, _)| *n == step)
+                            .map(|(_, t)| t)
+                            .sum()
+                    };
+                    let columns: Vec<String> = (names.iter())
+                        .map(|&step| {
+                            let first = of(&makes[0], step);
+                            let mut next: Vec<u64> =
+                                makes[1..].iter().map(|make| of(make, step)).collect();
+                            next.sort_unstable();
+                            let median = (next[4] + next[5]) / 2;
+                            let max = next[9];
+                            format!("{step} {:.3}/{:.3}/{:.3}", ms(first), ms(median), ms(max))
+                        })
+                        .collect();
+                    println!(
+                        "surface-steps: {label}: form {form:?}; ms first/median/max of the next \
+                         ten: {}",
+                        columns.join(", ")
+                    );
+                    drop(kept);
+                }
+            }
+        }
+    }
+
     /// The channels of a plane's format.
     fn plane_channels(plane: &Plane) -> u32 {
         match plane.format {
