@@ -740,22 +740,26 @@ impl ComputeCommandEncoder {
         self.building().owe();
     }
 
-    /// `updateFence:`: encoders that wait on `fence` after this one see what this encoder and the
-    /// ones before it wrote. It records nothing ([`Fence`]): its barrier at the end already
-    /// reaches them.
+    /// `updateFence:`: encoders that wait on `fence` after this one, of any queue, see what this
+    /// encoder and the ones before it wrote. It records nothing ([`Fence`]): its barrier at the
+    /// end already reaches every command submitted after it.
     ///
-    /// Err: [`Refusal::OtherDevice`] for another device's fence; [`Gap::FenceOtherQueue`] for a
-    /// fence another queue used first.
+    /// Err: [`Refusal::OtherDevice`] for another device's fence.
     pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        fence.used_on(&self.core, self.command_buffer.queue())
+        fence.check(&self.core)?;
+        self.building().fences().update(fence);
+        Ok(())
     }
 
-    /// `waitForFence:`: this encoder sees what the encoders up to `fence`'s last update wrote. It
-    /// records nothing ([`Fence`]): the barrier before its first dispatch already orders them.
+    /// `waitForFence:`: this encoder sees what the encoders up to each update of `fence`
+    /// submitted before it wrote, of any queue. It records nothing ([`Fence`]): the barrier at the
+    /// end of each already orders them.
     ///
     /// Err: as [`update_fence`](Self::update_fence).
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        fence.used_on(&self.core, self.command_buffer.queue())
+        fence.check(&self.core)?;
+        self.building().fences().wait(fence);
+        Ok(())
     }
 
     /// `dispatchThreadgroups:threadsPerThreadgroup:`.

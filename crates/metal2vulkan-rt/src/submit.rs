@@ -6,11 +6,13 @@
 //! not seen complete, each of its command buffers goes at once, alone. While that many run, the
 //! ones committed meanwhile are held in one group of at most [`GROUP`], which goes when it fills,
 //! when a completion leaves fewer running (the completion thread wakes the thread as it retires),
-//! when the host is to wait for one of them ([`Work::send`]), or at teardown. The driver runs a
-//! submission's command buffers as one kernel job, which a job timeout ends as a whole (Linux's
-//! amdgpu ends a job past its timeout and resets the ring), so a command buffer joins the group
-//! only while the group's expected GPU runs, summed, stay within [`GROUP_RUN`]; one whose queue
-//! has no run yet, or whose run is past the bound, goes alone, the group held going first. The
+//! when the host is to wait for one of them ([`Work::send`]), when a command buffer of another
+//! queue that waits on a fence one of them updates is to go (`crate::fence`), or at teardown. The
+//! driver runs a submission's command buffers as one kernel job, which a job timeout ends as a
+//! whole (Linux's amdgpu ends a job past its timeout and resets the ring), so a command buffer
+//! joins the group only while the group's expected GPU runs, summed, stay within [`GROUP_RUN`];
+//! one whose queue has no run yet, or whose run is past the bound, goes alone, the group held
+//! going first. The
 //! bound is tested again as the group goes, with the expected run as it then stands (a completion
 //! between a join and the send may have raised it): a group past it goes member by member, one
 //! `vkQueueSubmit2` each, only the last signalling. At most [`UNSEEN_JOINS`] command buffers join
@@ -1432,6 +1434,27 @@ impl WorkState {
         best.map(|(index, _)| index)
     }
 
+    /// The FIFO, other than the one at `index`, whose held group holds a command buffer, finished
+    /// or its queue's head, that updates a fence the head at `index` waits on.
+    fn updater_held(&self, index: usize) -> Option<usize> {
+        let head = |fifo: &Fifo| (fifo.entries.front()).and_then(|entry| entry.pending.as_ref());
+        let waiter = &head(&self.fifos[index])?.gpu.fences;
+        if !waiter.waits() {
+            return None;
+        }
+        (0..self.fifos.len()).find(|&other| {
+            let fifo = &self.fifos[other];
+            other != index
+                && fifo.group.as_ref().is_some_and(|group| {
+                    (group.finished.iter())
+                        .any(|(_, pending, _)| pending.gpu.fences.updates_for(waiter))
+                        || (group.partial
+                            && head(fifo)
+                                .is_some_and(|pending| pending.gpu.fences.updates_for(waiter)))
+                })
+        })
+    }
+
     /// Forgets the submissions seen complete by `completed`, and the FIFOs left with nothing.
     fn settle(&mut self, completed: u64) {
         self.fifos.retain_mut(|fifo| {
@@ -1472,6 +1495,20 @@ impl WorkState {
             }
             return Step::Staged;
         }
+        // A command buffer that waits on a fence goes after each command buffer of another queue
+        // held in a group that updates it, which Metal would have submitted at its commit
+        // (`crate::fence`): that group goes first, as a host wait for it would send it.
+        if let Some(other) = self.updater_held(index) {
+            let fifo = &mut self.fifos[other];
+            if let Some(group) = &fifo.group {
+                fifo.send_through = fifo.send_through.max(group.first);
+            }
+            return Step::Goes(other);
+        }
+        let fifo = &mut self.fifos[index];
+        let Some(entry) = fifo.entries.front_mut() else {
+            return Step::Idle;
+        };
         let Some(pending) = entry.pending.as_mut() else {
             return Step::Idle;
         };
@@ -1694,10 +1731,14 @@ impl WorkState {
             }) = fifo.entries.front_mut()
             {
                 pending.value = value;
+                pending.gpu.fences.submitted(value);
             }
         }
-        for (_, pending, _) in &mut batch.finished {
+        for (_, pending, error) in &mut batch.finished {
             pending.value = value;
+            if error.is_none() {
+                pending.gpu.fences.submitted(value);
+            }
         }
         if let Some(region) = &mut self.changes.region {
             for &number in &batch.spans {
@@ -1760,8 +1801,12 @@ impl Fifo {
                 group.finished.push((cb, pending, error));
             }
             None => {
+                // Behind its queue's work, and, where it waits on a fence, behind the last
+                // submission that updates it, as Metal's fence wait holds a command buffer with no
+                // work too (`crate::fence`).
                 let in_flight = self.in_flight.back().copied().unwrap_or(0);
-                pending.value = pending.value.max(in_flight).max(self.behind);
+                let waited = pending.gpu.fences.waited_through();
+                pending.value = pending.value.max(in_flight).max(self.behind).max(waited);
                 self.behind = pending.value;
                 ended.push((cb, pending, error));
             }

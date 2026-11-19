@@ -13785,7 +13785,6 @@ variant	metal2vulkan-rt::Gap::BufferCopyAlignment	BufferCopyAlignment { pixel_fo
 variant	metal2vulkan-rt::Gap::CubeArrayTexture	CubeArrayTexture
 variant	metal2vulkan-rt::Gap::CubicSampler	CubicSampler
 variant	metal2vulkan-rt::Gap::Draw	Draw { kind: DrawKind }
-variant	metal2vulkan-rt::Gap::FenceOtherQueue	FenceOtherQueue
 variant	metal2vulkan-rt::Gap::FillAlignment	FillAlignment { start: u64, end: u64 }
 variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::HeapTexture	HeapTexture { pixel_format: PixelFormat }

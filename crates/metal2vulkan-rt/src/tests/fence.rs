@@ -1,18 +1,23 @@
 //! Fences, under a device cfg on every device of the cfg's kind: an encoder waiting on a fence
 //! after another command buffer's encoder updated it sees that command buffer's writes, and the
 //! fence calls of a compute and a blit encoder record no device work (the same submissions,
-//! barriers, bytes copied and passes as the same work without them). A fence keeps the first queue
-//! that uses it: a use on another queue is `Gap::FenceOtherQueue`.
+//! barriers, bytes copied and passes as the same work without them). Across queues: a fence any
+//! queue's encoders update and wait on is taken; a wait on another queue goes after an update the
+//! submit thread holds in a group, a wait with nothing for the GPU completes after it, and so does
+//! a wait held at an event while an update committed after it is held so; a wait does not wait
+//! for an update held at an event wait or behind an uncommitted enqueue, as on an M3 Max.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::blit::on_device::settled;
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{behind_busy, each_device, finished, within, word};
     use crate::{
-        BufferLayout, CommandBuffer, CommandQueue, Device, DispatchType, Error, Fence, Gap,
-        MemoryClass, Metrics, PixelFormat, TextureDescriptor, TexturePlace, TextureType,
-        TextureUsage,
+        Buffer, BufferLayout, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
+        DispatchType, Fence, MemoryClass, Metrics, PixelFormat, SharedEvent, TextureDescriptor,
+        TexturePlace, TextureType, TextureUsage,
     };
+    use std::thread;
+    use std::time::Duration;
 
     /// `command_buffer` committed and complete with no error.
     fn run(name: &str, command_buffer: &CommandBuffer) {
@@ -119,8 +124,8 @@ mod on_device {
         });
     }
 
-    /// A fence `queue` used first refuses another queue's encoders; one another queue used first
-    /// is that queue's.
+    /// A fence `queue` used first is taken by another queue's encoders, a compute encoder's wait
+    /// and a blit encoder's update, and so is one another queue used first.
     fn other_queue(name: &str, device: &Device, queue: &CommandQueue) {
         let fence = device.new_fence();
         let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -132,26 +137,202 @@ mod on_device {
         let command_buffer = second.command_buffer().expect("a command buffer");
         let mut compute =
             (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
-        assert!(
-            matches!(
-                compute.wait_for_fence(&fence),
-                Err(Error::Unsupported(Gap::FenceOtherQueue))
-            ),
-            "{name}: a compute encoder of a second queue"
-        );
+        compute
+            .wait_for_fence(&fence)
+            .expect("a compute encoder of a second queue waits");
         compute.end_encoding();
         let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
-        assert!(
-            matches!(
-                blit.update_fence(&fence),
-                Err(Error::Unsupported(Gap::FenceOtherQueue))
-            ),
-            "{name}: a blit encoder of a second queue"
-        );
+        blit.update_fence(&fence)
+            .expect("a blit encoder of a second queue updates");
         let own = device.new_fence();
         blit.update_fence(&own)
             .expect("a fence the second queue used first");
         blit.end_encoding();
         run(name, &command_buffer);
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+        blit.wait_for_fence(&own)
+            .expect("the first queue waits on the second's fence");
+        blit.end_encoding();
+        run(name, &command_buffer);
+    }
+
+    /// Two buffers in one Shared block: what queue A writes, filled with 0 from the host, and
+    /// where queue B copies it, filled with 0x11.
+    fn written_and_copy(device: &Device) -> (Buffer, Buffer) {
+        let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
+        let written = (device.new_buffer(block.id, 0, 64, None)).expect("a buffer");
+        let copy = (device.new_buffer(block.id, 256, 64, None)).expect("a buffer");
+        for (buffer, value) in [(&written, 0), (&copy, 0x11)] {
+            let contents = buffer.contents().expect("a Shared buffer");
+            // SAFETY: no command buffer uses the buffer yet, and it is 64 bytes long.
+            unsafe { contents.as_ptr().write_bytes(value, 64) };
+        }
+        (written, copy)
+    }
+
+    /// On `queue`: fills `written` with 0x5a and updates `fence`, committed.
+    fn update(queue: &CommandQueue, written: &Buffer, fence: &Fence) -> CommandBuffer {
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+        blit.fill_buffer(written, 0..64, 0x5a).expect("a fill");
+        blit.update_fence(fence).expect("an update");
+        blit.end_encoding();
+        command_buffer.commit().expect("a commit");
+        command_buffer
+    }
+
+    /// On `queue`: waits for `event`'s value 1 where one is given, then on `fence`, then copies
+    /// `written` into `copy`, not yet committed.
+    fn wait(
+        queue: &CommandQueue,
+        written: &Buffer,
+        copy: &Buffer,
+        fence: &Fence,
+        event: Option<&SharedEvent>,
+    ) -> CommandBuffer {
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        if let Some(event) = event {
+            (command_buffer.encode_wait_for_event(event.as_event(), 1)).expect("an event wait");
+        }
+        let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+        blit.wait_for_fence(fence).expect("a wait");
+        (blit.copy_from_buffer_to_buffer(written, 0, copy, 0, 64)).expect("a copy");
+        blit.end_encoding();
+        command_buffer
+    }
+
+    /// Waits until `command_buffer` joined a submission or a group: it is no longer committed.
+    fn staged(name: &str, command_buffer: &CommandBuffer) {
+        within(name, || {
+            command_buffer.status() != CommandBufferStatus::Committed
+        });
+    }
+
+    /// An update on queue A that the submit thread holds in a group, behind as many busy
+    /// submissions of A as it keeps in flight, which wait for the host, as Metal would have
+    /// submitted it at its commit: (1) a wait on queue B committed after it reads its write; (2)
+    /// a wait of B held at a shared event's value, committed before it and released once it is
+    /// in the group, reads it too, as Metal evaluates a wait at its submission; (3) a wait of B
+    /// with nothing for the GPU does not complete before the busy work is let go, and completes
+    /// after the update. Each wait's own queue has nothing in flight, so without the fence its
+    /// submission would go first.
+    #[test]
+    fn every_device_orders_a_wait_on_another_queue_after_an_update_held_in_a_group() {
+        each_device("fence_queues", |name, _, device| {
+            let a = device.new_command_queue(8).expect("a queue");
+            let b = device.new_command_queue(8).expect("a queue");
+            let (written, copy) = written_and_copy(&device);
+            let fence = device.new_fence();
+            behind_busy(name, &device, &a, |busy, _, _| {
+                let updater = update(&a, &written, &fence);
+                staged(name, &updater);
+                let waiter = wait(&b, &written, &copy, &fence, None);
+                waiter.commit().expect("a commit");
+                staged(name, &waiter);
+                busy.open();
+                finished(name, &waiter);
+                finished(name, &updater);
+            });
+            assert_eq!(
+                word(&copy),
+                0x5a5a_5a5a,
+                "{name}: (1) the wait reads the update's fill"
+            );
+            let (written, copy) = written_and_copy(&device);
+            let fence = device.new_fence();
+            let event = device.new_shared_event().expect("a shared event");
+            behind_busy(name, &device, &a, |busy, _, _| {
+                let waiter = wait(&b, &written, &copy, &fence, Some(&event));
+                waiter.commit().expect("a commit");
+                let updater = update(&a, &written, &fence);
+                staged(name, &updater);
+                event.set_signaled_value(1);
+                staged(name, &waiter);
+                busy.open();
+                finished(name, &waiter);
+                finished(name, &updater);
+            });
+            assert_eq!(
+                word(&copy),
+                0x5a5a_5a5a,
+                "{name}: (2) the wait released after the update joined a group reads its fill"
+            );
+            let (written, _) = written_and_copy(&device);
+            let fence = device.new_fence();
+            behind_busy(name, &device, &a, |busy, _, _| {
+                let updater = update(&a, &written, &fence);
+                staged(name, &updater);
+                let waiter = b.command_buffer().expect("a command buffer");
+                let mut compute =
+                    (waiter.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+                compute.wait_for_fence(&fence).expect("a wait");
+                compute.end_encoding();
+                waiter.commit().expect("a commit");
+                thread::sleep(Duration::from_millis(50));
+                assert_ne!(
+                    waiter.status(),
+                    CommandBufferStatus::Completed,
+                    "{name}: (3) a wait with nothing for the GPU, before the update ran"
+                );
+                busy.open();
+                finished(name, &waiter);
+                assert_eq!(
+                    updater.status(),
+                    CommandBufferStatus::Completed,
+                    "{name}: (3) the update completed before the wait"
+                );
+                finished(name, &updater);
+            });
+        });
+    }
+
+    /// An update on queue A held at a shared event's wait, or behind a command buffer of A
+    /// enqueued and not committed, is not waited for by a wait on queue B committed after it: the
+    /// wait completes while the update is held, without its write, as on an M3 Max (probe
+    /// `cross_queue_fence_held_update.m` in the conformance crate), and the update runs once let
+    /// go.
+    #[test]
+    fn every_device_runs_a_wait_on_another_queue_before_an_update_held_at_an_event_or_an_enqueue() {
+        each_device("fence_held", |name, _, device| {
+            let a = device.new_command_queue(8).expect("a queue");
+            let b = device.new_command_queue(8).expect("a queue");
+            let event = device.new_shared_event().expect("a shared event");
+            let enqueued = a.command_buffer().expect("a command buffer");
+            for at_event in [true, false] {
+                let (written, copy) = written_and_copy(&device);
+                let fence = device.new_fence();
+                let updater = a.command_buffer().expect("a command buffer");
+                match at_event {
+                    true => {
+                        (updater.encode_wait_for_event(event.as_event(), 1)).expect("an event wait")
+                    }
+                    false => enqueued.enqueue().expect("an enqueue"),
+                }
+                let mut blit = updater.blit_command_encoder().expect("an encoder");
+                blit.fill_buffer(&written, 0..64, 0x5a).expect("a fill");
+                blit.update_fence(&fence).expect("an update");
+                blit.end_encoding();
+                updater.commit().expect("a commit");
+                let waiter = wait(&b, &written, &copy, &fence, None);
+                run(name, &waiter);
+                assert_eq!(
+                    (updater.status(), word(&copy)),
+                    (CommandBufferStatus::Committed, 0),
+                    "{name}: at an event {at_event}: the wait ran, the update held"
+                );
+                match at_event {
+                    true => event.set_signaled_value(1),
+                    false => enqueued.commit().expect("a commit"),
+                }
+                finished(name, &updater);
+                assert_eq!(
+                    word(&written),
+                    0x5a5a_5a5a,
+                    "{name}: the update ran once let go"
+                );
+            }
+            finished(name, &enqueued);
+        });
     }
 }

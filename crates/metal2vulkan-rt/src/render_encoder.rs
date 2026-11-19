@@ -1462,23 +1462,27 @@ impl RenderCommandEncoder {
         })
     }
 
-    /// `updateFence:afterStages:`: encoders that wait on `fence` after this one see what this
-    /// encoder and the ones before it wrote. It records nothing ([`Fence`]): the pass's second
-    /// barrier, recorded or owed, already reaches them.
+    /// `updateFence:afterStages:`: encoders that wait on `fence` after this one, of any queue,
+    /// see what this encoder and the ones before it wrote. It records nothing ([`Fence`]): the
+    /// pass's second barrier, recorded or owed, already reaches every command submitted after it.
     ///
-    /// Err: [`Refusal::OtherDevice`] for another device's fence; [`Gap::FenceOtherQueue`] for a
-    /// fence another queue used first.
+    /// Err: [`Refusal::OtherDevice`] for another device's fence.
     pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        fence.used_on(&self.core, self.command_buffer.queue())
+        fence.check(&self.core)?;
+        self.building().fences().update(fence);
+        Ok(())
     }
 
-    /// `waitForFence:beforeStages:`: this encoder sees what the encoders up to `fence`'s last
-    /// update wrote. It records nothing ([`Fence`]): everything before the pass is ordered before
-    /// it, by its first barrier or the one that ends each earlier command buffer.
+    /// `waitForFence:beforeStages:`: this encoder sees what the encoders up to each update of
+    /// `fence` submitted before it wrote, of any queue. It records nothing ([`Fence`]):
+    /// everything submitted before the pass is ordered before it, by its first barrier or the one
+    /// that ends each earlier segment.
     ///
     /// Err: as [`update_fence`](Self::update_fence).
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
-        fence.used_on(&self.core, self.command_buffer.queue())
+        fence.check(&self.core)?;
+        self.building().fences().wait(fence);
+        Ok(())
     }
 
     /// `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` (the shorter forms are

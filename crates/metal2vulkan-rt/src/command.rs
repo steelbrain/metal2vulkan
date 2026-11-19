@@ -7,6 +7,7 @@ use crate::counters::{Metric, Tally};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::event::{Event, EventInner};
+use crate::fence::Fences;
 use crate::hazard::{Access, Hazards};
 use crate::kept::{Lent, Objects};
 use crate::memory::Block;
@@ -220,6 +221,9 @@ pub(crate) struct Gpu {
     /// The images of released textures whose copies back the commands make, kept until the
     /// command buffer retires.
     pub(crate) images: Vec<Arc<Image>>,
+    /// The fences its encoders wait on and update: the submit thread orders it after another
+    /// queue's command buffer it holds that updates one it waits on (`crate::fence`).
+    pub(crate) fences: Fences,
 }
 
 impl Gpu {
@@ -335,6 +339,7 @@ impl CommandBuffer {
                             ring: Writes::default(),
                             managed: false,
                             images: Vec::new(),
+                            fences: Fences::default(),
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -991,6 +996,11 @@ impl Building {
         if reach.reaches_indirect() {
             self.args_unordered = false;
         }
+    }
+
+    /// The fences the encoders wait on and update.
+    pub(crate) fn fences(&mut self) -> &mut Fences {
+        &mut self.gpu.fences
     }
 
     /// A dispatch wrote memory the host may read: the segment's end barrier reaches the host.

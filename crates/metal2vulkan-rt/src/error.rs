@@ -1060,12 +1060,6 @@ pub enum Gap {
         /// What the pipeline asks for.
         kind: RenderPipelineKind,
     },
-    /// A [`Fence`](crate::Fence) updated or waited on by an encoder of a queue other than the first
-    /// that used it: the runtime orders the encoders of one queue, so a fence would order nothing
-    /// across two. Metal's fence orders the encoders of one queue; `MTLEvent` orders queues.
-    ///
-    /// Basis: ours (a fence is built for one queue; the replay streams use each on one queue).
-    FenceOtherQueue,
     /// A draw or dispatch whose function declares `access::read_write` at texture slot `slot` and
     /// reads it, where the texture bound there has a swizzle other than each channel's own (a view made
     /// with one, [`Texture::new_texture_view_with_swizzle`](crate::Texture::new_texture_view_with_swizzle)):
@@ -1925,7 +1919,6 @@ impl fmt::Display for Gap {
                 f,
                 "a fill of {start}..{end}, not whole 4-byte words, is not built"
             ),
-            Gap::FenceOtherQueue => f.write_str("a fence used on a second queue is not built"),
             Gap::SwizzledReadWrite { slot } => write!(
                 f,
                 "a read_write texture slot {slot} bound to a swizzled texture is not built"

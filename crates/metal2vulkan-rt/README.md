@@ -1083,11 +1083,21 @@ made, with no lock, and never rewritten for layouts.
   listener on the completion thread when the value is reached, at a signal in the middle of a
   command buffer as well as at its end; `wait_until_signaled_value` wakes then too.
 - `Fence` is `MTLFence`, and `update_fence` and `wait_for_fence` on compute and blit encoders are
-  `updateFence:` and `waitForFence:`. They record nothing: a command buffer's encoders run in
-  their order and a queue's command buffers in their commit order, and each encoder's writes reach
-  the commands after it through the barrier at its end or at its segment's end, so a wait after an
-  update already sees them. Work with no fence between it is ordered as well, where Metal may run
-  it at once. A fence keeps the first queue whose encoder uses it.
+  `updateFence:` and `waitForFence:`, on one queue or across queues. They record nothing: every
+  queue's command buffers go to the device's one `VkQueue`, and each encoder's writes reach every
+  command submitted after it through the barrier at its end or at its segment's end, so a wait
+  sees every update submitted before it. A command buffer the submit thread holds in a group while
+  its queue's submissions run is submitted before a command buffer of another queue that waits on
+  a fence it updates, as Metal would have submitted it at its commit. Metal evaluates a wait at
+  its kernel submission against the updates already submitted: an update in a command buffer held
+  at an event wait, or behind one held so or enqueued and not committed, is not waited for, and a
+  waiter on another queue runs at once, without its writes, as on an M3 Max (the conformance
+  crate's `probes/cross_queue_fence_held_update.m`, jobs m3-max-52186 and m3-max-52188, untracked
+  buffers). A waiter with nothing for the GPU (an encoder that only waits) completes no sooner
+  than the last submission that updates its fence, as Metal's does (job m3-max-52194); its GPU
+  times are one time, as for any command buffer with nothing for the GPU, where Metal reports a
+  span over the update's run. Work with no fence between it is ordered as well, where Metal may
+  run it at once.
 - `CommandQueue::abandon` ends every command buffer of the queue held at an event wait or not yet
   scheduled with `NotRun` and runs its handlers, as a Mac drops a dead process's held work, each
   retiring in the queue's order. Segments already submitted still complete, and so does a group
@@ -1253,9 +1263,6 @@ on both cards, which says nothing of a device that ran work.
   and Metal leaves a resource ID that names no live resource of the access undefined; here it can
   fault as a bad address does, with the same consequences. An index within an array that no live
   object owns reads its null descriptor or default sampler, with no fault.
-- A fence orders the encoders of one queue: an encoder of another queue that updates or waits on
-  it is refused (`Gap::FenceOtherQueue`), as Metal's fence orders one queue and `MTLEvent` orders
-  queues.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
   dispatch past it is split into dispatches of at most that many, each told its first

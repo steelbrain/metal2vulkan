@@ -1462,7 +1462,7 @@ pub(crate) mod on_device {
     /// where it did not, and waited for. First a command buffer of the queue with no commands of
     /// its own runs and retires, so the queue's expected GPU run is known and the command buffers
     /// held behind the busy work may join one group (`submit::GROUP_RUN`).
-    fn behind_busy(
+    pub(crate) fn behind_busy(
         name: &str,
         device: &Device,
         queue: &CommandQueue,
