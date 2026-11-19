@@ -1303,7 +1303,7 @@ fn a_resource_id_s_high_word_is_checked_against_the_documented_word() {
     ];
     assert_eq!(report.ids, ids);
     let lines = report.lines();
-    let line = "id #4 0x7 0x200000000007 word 0x10800";
+    let line = "id #4 0x7 0x2000000000007 word 0x10800";
     assert!(lines.contains(&line.to_owned()), "{lines:?}");
 }
 
