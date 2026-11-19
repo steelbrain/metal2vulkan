@@ -2584,13 +2584,14 @@ pub(crate) mod on_device {
 
     /// A drop after a late quiesce joins the thread the quiesce left running before anything that
     /// thread can reach goes (the device, the instance, a queue): the shape of a process that ends
-    /// with a runtime thread still running. With the submit thread held in a scheduled handler, a
-    /// quiesce with no time to wait answers false at once and leaves that thread running, its
-    /// slot of `Gauges::threads` held (its thread id, where the OS gives one). The device's last
-    /// handle, dropped on another thread, has not returned half a second later, the blocks live,
-    /// and the thread holds its slot; once the handler lets it go, the drop returns, every gauge
-    /// reads zero and no thread of the device's holds a slot. Under the validation layer, as
-    /// every device test.
+    /// with a runtime thread still running. With the completion thread held in a completed
+    /// handler (the command buffer retired, so its work holds no device handle and the test's are
+    /// the last), a quiesce with no time to wait answers false at once and leaves that thread
+    /// running, its slot of `Gauges::threads` held (its thread id, where the OS gives one). The
+    /// device's last handle, dropped on another thread, has not returned half a second later, the
+    /// blocks live, and the thread holds its slot; once the handler lets it go, the drop returns,
+    /// every gauge reads zero and no thread of the device's holds a slot. Under the validation
+    /// layer, as every device test.
     #[test]
     fn every_device_dropped_after_a_late_quiesce_joins_the_late_thread_first() {
         each_device("late_quiesce_drop", |name, _, device| {
@@ -2611,7 +2612,7 @@ pub(crate) mod on_device {
             let (release, gate) = mpsc::channel::<()>();
             let (entered, inside) = mpsc::channel::<()>();
             command_buffer
-                .add_scheduled_handler(move |_| {
+                .add_completed_handler(move |_| {
                     let _ = entered.send(());
                     let _ = gate.recv();
                 })
@@ -2619,7 +2620,7 @@ pub(crate) mod on_device {
             command_buffer.commit().expect("a commit");
             inside
                 .recv_timeout(PATIENCE)
-                .expect("the handler holds the submit thread");
+                .expect("the handler holds the completion thread");
             assert!(
                 !device.quiesce(Duration::ZERO),
                 "{name}: no time to wait, an answer at once"
