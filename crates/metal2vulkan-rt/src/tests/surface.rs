@@ -700,3 +700,103 @@ mod on_device {
         }
     }
 }
+
+/// Each copy-form reason the layout's verdicts give, by construction from synthetic answers: the
+/// ones no lab device produces (`Tiling`, `Dedicated`, `MemoryType`) among them.
+mod verdicts {
+    use crate::surface::{opaque_pitch, opaque_starts, tiling_verdict, type_of, PlaneShape};
+    use crate::SurfaceCopy;
+    use ash::vk::{ExternalMemoryFeatureFlags as F, ImageUsageFlags as U};
+
+    const IN_PLACE: U = U::from_raw(
+        U::SAMPLED.as_raw()
+            | U::COLOR_ATTACHMENT.as_raw()
+            | U::TRANSFER_SRC.as_raw()
+            | U::TRANSFER_DST.as_raw(),
+    );
+
+    const SHAPE: PlaneShape = PlaneShape {
+        row_pitch: 2048,
+        offset: 0,
+        size: 2048 * 1080,
+        alignment: 256,
+        requires: false,
+    };
+
+    #[test]
+    fn a_tiling_without_a_usage_or_the_handle_takes_the_copy_form() {
+        let both = F::EXPORTABLE | F::IMPORTABLE;
+        let tiling = Err(SurfaceCopy::Tiling { plane: 1 });
+        assert_eq!(
+            tiling_verdict(1, IN_PLACE & !U::COLOR_ATTACHMENT, both),
+            tiling
+        );
+        assert_eq!(tiling_verdict(1, IN_PLACE, F::EXPORTABLE), tiling);
+        assert_eq!(tiling_verdict(1, IN_PLACE, F::IMPORTABLE), tiling);
+        assert_eq!(
+            tiling_verdict(1, IN_PLACE, both | F::DEDICATED_ONLY),
+            Err(SurfaceCopy::Dedicated { plane: 1 })
+        );
+        assert_eq!(tiling_verdict(1, IN_PLACE | U::STORAGE, both), Ok(()));
+    }
+
+    #[test]
+    fn an_opaque_layout_takes_the_copy_form_where_its_images_do_not_hold_it() {
+        let required = PlaneShape {
+            requires: true,
+            ..SHAPE
+        };
+        assert_eq!(
+            opaque_pitch(&[SHAPE, required], 4),
+            Err(SurfaceCopy::Dedicated { plane: 1 })
+        );
+        let other = PlaneShape {
+            row_pitch: 1920,
+            ..SHAPE
+        };
+        assert_eq!(
+            opaque_pitch(&[SHAPE, other], 4),
+            Err(SurfaceCopy::Pitch { plane: 1 })
+        );
+        assert_eq!(
+            opaque_pitch(&[SHAPE, SHAPE], 4096),
+            Err(SurfaceCopy::Pitch { plane: 0 })
+        );
+        assert_eq!(opaque_pitch(&[SHAPE, SHAPE], 256), Ok(2048));
+
+        let below = 2048 * 1080;
+        assert_eq!(opaque_starts(&[SHAPE, SHAPE], &[0, below]), Ok(()));
+        let offset = PlaneShape {
+            offset: 64,
+            ..SHAPE
+        };
+        assert_eq!(
+            opaque_starts(&[SHAPE, offset], &[0, below]),
+            Err(SurfaceCopy::Start { plane: 1 })
+        );
+        let aligned = PlaneShape {
+            alignment: 1 << 16,
+            ..SHAPE
+        };
+        assert_eq!(
+            opaque_starts(&[SHAPE, aligned], &[0, below]),
+            Err(SurfaceCopy::Start { plane: 1 })
+        );
+        let padded = PlaneShape {
+            size: below + 256,
+            ..SHAPE
+        };
+        assert_eq!(
+            opaque_starts(&[padded, SHAPE], &[0, below]),
+            Err(SurfaceCopy::Start { plane: 1 })
+        );
+    }
+
+    #[test]
+    fn planes_of_no_common_memory_type_take_the_copy_form() {
+        assert_eq!(type_of(&[0b0011, 0b1100], 0, 0b1111), None);
+        assert_eq!(type_of(&[0b0111, 0b0110], 2, 0b0001), Some(2));
+        assert_eq!(type_of(&[0b0110, 0b1110], 0, 0b0100), Some(2));
+        assert_eq!(type_of(&[0b1010, 0b1110], 0, 0b0001), Some(1));
+    }
+}

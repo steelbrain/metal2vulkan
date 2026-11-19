@@ -321,15 +321,77 @@ impl Query<'_> {
                 }
             }
         };
-        let both =
-            vk::ExternalMemoryFeatureFlags::EXPORTABLE | vk::ExternalMemoryFeatureFlags::IMPORTABLE;
-        if !features.contains(both) {
-            return Ok(Err(SurfaceCopy::Tiling { plane: at }));
+        Ok(tiling_verdict(at, offered, features).map(|()| (offered, list)))
+    }
+}
+
+/// Whether plane `at`'s tiling holds it in place, from the query's answers: the usage it offers,
+/// and the external memory features of an image of that usage. `Tiling` where it lacks one of
+/// [`IN_PLACE_USAGE`] or is not both exportable and importable; `Dedicated` where it is exported
+/// only in an allocation of its own.
+pub(crate) fn tiling_verdict(
+    at: usize,
+    offered: vk::ImageUsageFlags,
+    features: vk::ExternalMemoryFeatureFlags,
+) -> Result<(), SurfaceCopy> {
+    let both =
+        vk::ExternalMemoryFeatureFlags::EXPORTABLE | vk::ExternalMemoryFeatureFlags::IMPORTABLE;
+    if !offered.contains(IN_PLACE_USAGE) || !features.contains(both) {
+        return Err(SurfaceCopy::Tiling { plane: at });
+    }
+    if features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY) {
+        return Err(SurfaceCopy::Dedicated { plane: at });
+    }
+    Ok(())
+}
+
+/// What an opaque handle's layout reads of a plane's `LINEAR` image: its pitch and offset, its
+/// requirement's size and alignment, and whether it requires an allocation of its own.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlaneShape {
+    pub(crate) row_pitch: u64,
+    pub(crate) offset: u64,
+    pub(crate) size: u64,
+    pub(crate) alignment: u64,
+    pub(crate) requires: bool,
+}
+
+/// An opaque handle's one pitch: the first image's, where every image takes it, it is a multiple
+/// of `multiple`, and none requires an allocation of its own (`Dedicated`); else `Pitch`.
+pub(crate) fn opaque_pitch(shapes: &[PlaneShape], multiple: u64) -> Result<u64, SurfaceCopy> {
+    let pitch = shapes.first().map_or(0, |shape| shape.row_pitch);
+    for (at, shape) in shapes.iter().enumerate() {
+        if shape.requires {
+            return Err(SurfaceCopy::Dedicated { plane: at });
         }
-        if features.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY) {
-            return Ok(Err(SurfaceCopy::Dedicated { plane: at }));
+        if shape.row_pitch != pitch || !pitch.is_multiple_of(multiple) {
+            return Err(SurfaceCopy::Pitch { plane: at });
         }
-        Ok(Ok((offered, list)))
+    }
+    Ok(pitch)
+}
+
+/// Whether an opaque handle's images lie at `starts`: each at its image's offset 0, on its
+/// alignment, past the plane before's requirement; else `Start`.
+pub(crate) fn opaque_starts(shapes: &[PlaneShape], starts: &[u64]) -> Result<(), SurfaceCopy> {
+    for (at, (shape, &start)) in shapes.iter().zip(starts).enumerate() {
+        let clear = at == 0 || starts[at - 1] + shapes[at - 1].size <= start;
+        if shape.offset != 0 || !start.is_multiple_of(shape.alignment.max(1)) || !clear {
+            return Err(SurfaceCopy::Start { plane: at });
+        }
+    }
+    Ok(())
+}
+
+/// The memory type every plane's image takes, from each image's type `bits`: `private` where they
+/// all take it, else the lowest of `device_local`'s, else the lowest; `None` where none.
+pub(crate) fn type_of(bits: &[u32], private: u32, device_local: u32) -> Option<u32> {
+    let bits = bits.iter().fold(u32::MAX, |all, b| all & b);
+    match (bits, bits & device_local) {
+        (0, _) => None,
+        (bits, _) if bits & (1 << private) != 0 => Some(private),
+        (_, 0) => Some(bits.trailing_zeros()),
+        (_, local) => Some(local.trailing_zeros()),
     }
 }
 
@@ -438,17 +500,11 @@ unsafe fn make_image(
     })
 }
 
-/// The memory type every plane's image takes: the Private type where they all take it, else the
-/// lowest device-local one, else the lowest; `None` where none.
+/// The memory type every plane's image takes ([`type_of`]).
 fn common_type(core: &Core, made: &[Made]) -> Option<u32> {
-    let bits = (made.iter()).fold(u32::MAX, |all, m| all & m.needs.memory_type_bits);
+    let bits: Vec<u32> = made.iter().map(|m| m.needs.memory_type_bits).collect();
     let private = core.memory_type(crate::MemoryClass::Private);
-    match (bits, bits & core.device_local) {
-        (0, _) => None,
-        (bits, _) if bits & (1 << private) != 0 => Some(private),
-        (_, 0) => Some(bits.trailing_zeros()),
-        (_, local) => Some(local.trailing_zeros()),
-    }
+    type_of(&bits, private, core.device_local)
 }
 
 /// What the in-place forms make: each plane's image, bound, and the export.
@@ -676,25 +732,24 @@ impl Device {
                 }
             }
         }
-        let pitch = made[0].layout.row_pitch;
-        for at in 0..made.len() {
-            if made[at].requires {
-                return copy(made, SurfaceCopy::Dedicated { plane: at });
-            }
-            if made[at].layout.row_pitch != pitch || !pitch.is_multiple_of(multiple) {
-                return copy(made, SurfaceCopy::Pitch { plane: at });
-            }
-        }
+        let shapes: Vec<PlaneShape> = (made.iter())
+            .map(|m| PlaneShape {
+                row_pitch: m.layout.row_pitch,
+                offset: m.layout.offset,
+                size: m.needs.size,
+                alignment: m.needs.alignment,
+                requires: m.requires,
+            })
+            .collect();
+        let pitch = match opaque_pitch(&shapes, multiple) {
+            Ok(pitch) => pitch,
+            Err(reason) => return copy(made, reason),
+        };
         let Some((starts, end)) = lay(spec, plans, pitch) else {
             return copy(made, SurfaceCopy::Start { plane: 0 });
         };
-        for at in 0..made.len() {
-            let start = starts[at];
-            let clear = at == 0 || starts[at - 1] + made[at - 1].needs.size <= start;
-            let aligned = start.is_multiple_of(made[at].needs.alignment);
-            if made[at].layout.offset != 0 || !aligned || !clear {
-                return copy(made, SurfaceCopy::Start { plane: at });
-            }
+        if let Err(reason) = opaque_starts(&shapes, &starts) {
+            return copy(made, reason);
         }
         let Some(index) = common_type(core, &made) else {
             return copy(made, SurfaceCopy::MemoryType);
