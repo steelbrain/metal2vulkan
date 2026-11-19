@@ -170,11 +170,14 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   static there: no constant or binder decides one. So far they lower a kernel that reaches memory
   through its buffer slots and reads, writes, sizes or tests for nil its texture slots and its
   argument buffers' textures, and samples its texture slots through its runtime sampler slots
-  and its constexpr samplers. Any other function is refused as `Unsupported{IdentityDomains}`:
-  one that samples through an argument buffer's sampler or an array of samplers or samples an
-  argument buffer's texture, emulates a sampler's anisotropy or bicubic filter, uses a texture buffer, a slot's levels or swizzle, a
-  two-plane, extended-range or sRGB-twin form, reads an argument buffer's texture through another
-  numeric type or as raw texels, or uses any other state of a texture or sampler beyond its ID.
+  and its constexpr samplers. Any other function is refused as `Unsupported{IdentityDomains}`,
+  whose symbol names the first such form the function holds: one that samples through an
+  argument buffer's sampler or an array of samplers or samples an argument buffer's texture,
+  emulates a sampler's anisotropy or bicubic filter, uses a texture buffer, a slot's levels or
+  swizzle, a two-plane, extended-range or sRGB-twin form, reads an argument buffer's texture
+  through another numeric type or as raw texels, reads the texture of an argument buffer that a
+  pointer another argument buffer holds reaches (it reads the root table, `RootTableAddress`), or
+  uses any other state of a texture or sampler beyond its ID.
   An argument buffer's texture reads the element at its ID's index masked to its low 16 bits,
   so a bad ID reads an element of the arrays ([RESOURCE-ID.md](RESOURCE-ID.md)); the change that
   first lowers an argument buffer's sampler masks its index the same way.

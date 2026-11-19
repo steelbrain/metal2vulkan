@@ -743,6 +743,50 @@ fn a_bicubic_kernel_is_refused_under_the_identity_domains() {
     }
 }
 
+/// What the identity domains' refusal of argument buffers tier 2's pointer-indexed form names, the
+/// first form of the gate `ab_indexed` holds (`lower::select`'s `identity_refusal`): the texture
+/// handle a pointer member's argument buffer holds is read through the root table, whose address
+/// the identity domains do not push.
+const POINTER_INDEXED_FORM: &str = "an encoder value the function reads as RootTableAddress";
+
+/// Argument buffers tier 2's forms under the identity domains (`engine/ab_tier2`): a kernel that
+/// copies a texture member from one argument buffer to another (`ab_copy`) and one that reads a
+/// texel through an argument buffer's texture (`ab_read`) are lowered, and one that reads the
+/// texture of an argument buffer a pointer member of the bound one reaches (`ab_indexed`) is
+/// refused as `Unsupported{IdentityDomains}`, not implemented, naming the form the gate refuses
+/// ([`POINTER_INDEXED_FORM`]), where the default domains compile it.
+#[test]
+fn a_texture_of_an_argument_buffer_a_pointer_member_reaches_is_refused_under_the_identity_domains()
+{
+    let Some(bc) = assemble("ab_tier2") else {
+        return;
+    };
+    for stem in PROFILES {
+        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        compile(&bc, "ab_indexed", &default)
+            .unwrap_or_else(|e| panic!("{stem}: ab_indexed: default domains: {e}"));
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        for entry in ["ab_copy", "ab_read"] {
+            compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {entry}: {e}"));
+        }
+        match compile(&bc, "ab_indexed", &p) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::IdentityDomains, Needs::NotImplemented),
+                    "{stem}"
+                );
+                assert_eq!(
+                    u.symbol.map(|form| form.to_string()).as_deref(),
+                    Some(POINTER_INDEXED_FORM),
+                    "{stem}"
+                );
+            }
+            other => panic!("{stem}: {other:?}"),
+        }
+    }
+}
+
 /// Under the identity domains a kernel that encodes indirect commands is refused for that feature,
 /// `Unsupported{GpuEncodedIndirectCommands}`, not implemented, on every profile.
 #[test]

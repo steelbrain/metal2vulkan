@@ -1930,11 +1930,36 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// variant or the de-indexed and private list forms pull; and the render encoder's alpha test
 /// reference code a fragment function under the private alpha test compares with
 /// (`PushField::AlphaTestReference`). Its fields past the push window are a parameter block, whose
-/// address the window holds.
+/// address the window holds. Its refusal names the first form the plan holds that they do not
+/// lower ([`identity_refusal`]).
 fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
-    let fields = plan.push.fields.iter().all(|f| match (f.field, f.loc) {
-        (PushField::ArgumentTableAddress, loc) => matches!(loc, PushLoc::Push { .. }),
-        (field, _) => matches!(
+    match identity_refusal(plan, p) {
+        None => Ok(()),
+        Some(form) => Err(Unsupported::not_implemented(Feature::IdentityDomains)
+            .naming(DiagName::new(form))
+            .into()),
+    }
+}
+
+/// The first form plan `plan` on profile `p` holds that the identity domains do not lower yet, as
+/// a Metal program reaches it, which [`identity_admits`]'s refusal names (diagnostics only);
+/// `None` where it holds none.
+fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
+    let stage = match plan.stage {
+        Stage::Kernel => true,
+        Stage::Vertex | Stage::Fragment => p.push_window() == PushWindow::Floor,
+        _ => false,
+    };
+    if !stage {
+        return Some(
+            "a function of a stage other than a kernel's, or a vertex or fragment function off \
+             the floor's push window"
+                .to_owned(),
+        );
+    }
+    let field = plan.push.fields.iter().find(|f| match (f.field, f.loc) {
+        (PushField::ArgumentTableAddress, loc) => !matches!(loc, PushLoc::Push { .. }),
+        (field, _) => !matches!(
             field,
             PushField::SlotGuestBase(_)
                 | PushField::DispatchRegion
@@ -1945,23 +1970,48 @@ fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
                 | PushField::AlphaTestReference
         ),
     });
-    let addressed = plan
-        .slots
-        .iter()
-        .flatten()
-        .all(|c| c.form == BufferForm::Psb);
+    if let Some(f) = field {
+        return Some(format!(
+            "an encoder value the function reads as {:?}",
+            f.field
+        ));
+    }
+    if (plan.slots.iter().flatten()).any(|c| c.form != BufferForm::Psb) {
+        return Some("a buffer argument not reached through its device address".to_owned());
+    }
     let t = &plan.families.texture;
     // An argument buffer's texture is the element its resource ID's index names in its class's
     // array (`access::handle::emit_identity_handle`), with no other class to read it through and
     // nothing from a handle-table entry but its word's out-of-bounds alpha.
-    let groups = t.heap.values().all(|h| {
-        h.decl.as_ref().and_then(texture::identity_class) == h.class
-            && h.plain.is_none()
-            && h.raw.is_none()
-            && h.cross.is_empty()
-    });
+    for h in t.heap.values() {
+        if h.decl.as_ref().and_then(texture::identity_class) != h.class {
+            return Some(
+                "an argument buffer's texture of a type the identity arrays hold no element of"
+                    .to_owned(),
+            );
+        }
+        if h.plain.is_some() {
+            return Some(
+                "an argument buffer's depth texture both compared and sampled without comparison"
+                    .to_owned(),
+            );
+        }
+        if h.raw.is_some() {
+            return Some(
+                "an argument buffer's texture read as the raw texels of an extended-range member"
+                    .to_owned(),
+            );
+        }
+        if !h.cross.is_empty() {
+            return Some(
+                "an argument buffer's texture read through another numeric type than its own"
+                    .to_owned(),
+            );
+        }
+    }
+    let lookup = plan.families.access.lookup();
     let entry = matches!(
-        plan.families.access.lookup(),
+        lookup,
         crate::memory::handles::Lookup::Element
             | crate::memory::handles::Lookup::Flagged {
                 class: false,
@@ -1971,45 +2021,74 @@ fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
                 ..
             }
     );
-    let textures = groups
-        && entry
-        && t.heap_raw.is_empty()
-        && !t.heap_half
-        && t.slots.values().all(|s| s.identity_lowered());
+    if !entry {
+        return Some(format!(
+            "a texture handle that reads its table entry beyond its element ({lookup:?})"
+        ));
+    }
+    if !t.heap_raw.is_empty() {
+        return Some(
+            "a read of an argument buffer's texture that decodes an extended-range member"
+                .to_owned(),
+        );
+    }
+    if t.heap_half {
+        return Some(
+            "a sample or gather of an argument buffer's color texture with a half result"
+                .to_owned(),
+        );
+    }
+    if let Some(s) = t.slots.values().find(|s| !s.identity_lowered()) {
+        return Some(format!(
+            "texture argument {:?}: a type the identity arrays hold no element of, or state of \
+             the bound texture beyond its resource ID",
+            s.slot
+        ));
+    }
     // Samples only of a texture slot through a runtime sampler slot or a constexpr sampler
     // (`sampler::IdentitySampling`), a runtime sampler's word read from its resource ID: no
     // argument buffer's sampler, array of samplers, bicubic filter or specialization of a slot's
     // state.
     let sampled = &plan.families.sampler;
-    let sampling = sampled
-        .combined
-        .iter()
-        .all(|k| sampled.identity.contains_key(k))
-        && sampled.decls.is_empty()
-        && sampled.heap.is_empty()
-        && sampled.heap_samplers.is_empty()
-        && sampled.arrays.is_empty()
-        && sampled.heap_arrays.is_empty()
-        && sampled.bicubic.is_empty()
-        && sampled.bicubic_routines.is_empty()
-        && !sampled.cubic_reach
-        && sampled.slots.values().all(|r| !r.min_level && !r.emulated);
-    let stage = match plan.stage {
-        Stage::Kernel => true,
-        Stage::Vertex | Stage::Fragment => p.push_window() == PushWindow::Floor,
-        _ => false,
-    };
-    if stage
-        && fields
-        && addressed
-        && textures
-        && sampling
-        && !plan.facts.iter().any(identity_unsourced)
-        && plan.descriptors.descriptors() == 0
-    {
-        return Ok(());
+    let refused = [
+        (
+            !(sampled.combined.iter()).all(|k| sampled.identity.contains_key(k))
+                || !sampled.decls.is_empty(),
+            "a texture argument sampled through a sampler the identity sampling does not take",
+        ),
+        (
+            !sampled.heap.is_empty(),
+            "a sample, gather or comparison of an argument buffer's texture",
+        ),
+        (
+            !sampled.heap_samplers.is_empty() || sampled.cubic_reach,
+            "an argument buffer's sampler",
+        ),
+        (
+            !sampled.arrays.is_empty() || !sampled.heap_arrays.is_empty(),
+            "an array of samplers",
+        ),
+        (
+            !sampled.bicubic.is_empty() || !sampled.bicubic_routines.is_empty(),
+            "a bicubic filter",
+        ),
+        (
+            (sampled.slots.values()).any(|r| r.min_level || r.emulated),
+            "a sampler argument whose minimum level or emulated filter the function specializes",
+        ),
+    ];
+    if let Some((_, form)) = refused.iter().find(|(refused, _)| *refused) {
+        return Some((*form).to_owned());
     }
-    Err(Unsupported::not_implemented(Feature::IdentityDomains).into())
+    if let Some(f) = plan.facts.iter().find(|f| identity_unsourced(f)) {
+        return Some(format!(
+            "state of a bound texture or sampler beyond its resource ID ({f:?})"
+        ));
+    }
+    if plan.descriptors.descriptors() != 0 {
+        return Some("a resource bound through a descriptor".to_owned());
+    }
+    None
 }
 
 /// The words the predicated walk of `plan` adds for the constructs of its structured tree
