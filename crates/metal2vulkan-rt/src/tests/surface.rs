@@ -778,15 +778,36 @@ mod on_device {
             layout,
         } = *round;
         let counters = device.counters();
-        let total = other.import.len;
         let at_layout = (
             [layout[0].offset, layout[1].offset],
             [layout[0].row_pitch; 2],
         );
-        let (_theirs_block, theirs) = shared(&other.device, total);
-        let (_whole_block, whole) = shared(device, total);
+        let (_theirs_block, theirs) = shared(&other.device, other.import.len);
         let (_mine_block, mine) = shared(device, packed(planes).2);
         let (offsets, pitches, _) = packed(planes);
+
+        // Picture 4, written before the buffer's make: its own acquire reads it.
+        fill(&theirs, |out| lay_picture(4, planes, layout, out));
+        other.write(label, &theirs);
+        (surface.external_writes_done())
+            .unwrap_or_else(|error| panic!("{label}: the acquire: {error}"));
+        let (gauges, acquires) = (counters.gauges(), counters.metrics().external_acquires);
+        let buffer =
+            (surface.buffer()).unwrap_or_else(|error| panic!("{label}: the buffer: {error}"));
+        // In place the export's size; in the copy form the block's length, which holds the planes.
+        let total = buffer.length();
+        let end = layout[1].offset + layout[1].row_pitch * u64::from(planes[1].height);
+        assert!(
+            total <= other.import.len && total >= end,
+            "{label}: the buffer's length {total}"
+        );
+        if in_place {
+            assert_eq!(
+                total, other.import.len,
+                "{label}: the buffer spans the export"
+            );
+        }
+        let (_whole_block, whole) = shared(device, total);
         let read_whole = |buffer: &crate::Buffer| {
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
@@ -797,15 +818,6 @@ mod on_device {
             finished(label, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{label}");
         };
-
-        // Picture 4, written before the buffer's make: its own acquire reads it.
-        fill(&theirs, |out| lay_picture(4, planes, layout, out));
-        other.write(label, &theirs);
-        (surface.external_writes_done())
-            .unwrap_or_else(|error| panic!("{label}: the acquire: {error}"));
-        let (gauges, acquires) = (counters.gauges(), counters.metrics().external_acquires);
-        let buffer =
-            (surface.buffer()).unwrap_or_else(|error| panic!("{label}: the buffer: {error}"));
         let made = counters.gauges();
         assert_eq!(
             made.surface_buffers,
@@ -823,11 +835,6 @@ mod on_device {
             counters.metrics().external_acquires,
             acquires + u64::from(in_place),
             "{label}: the buffer's acquire at its make"
-        );
-        assert_eq!(
-            buffer.length(),
-            total,
-            "{label}: the buffer spans the export"
         );
         assert!(
             buffer.contents().is_none(),

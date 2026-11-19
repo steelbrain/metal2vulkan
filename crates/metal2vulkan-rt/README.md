@@ -588,8 +588,10 @@ and `Metrics::external_releases`. From a release until the consumer's next write
 through the runtime, the consumer encodes no read of its planes.
 
 **The surface's buffer.** `Surface::buffer()` answers a buffer over the surface's own memory, the
-counterpart of an IOSurface-backed buffer: of the export's size, its bytes at the layout the
-`SurfaceExport` states (plane `i`'s row `y` at `planes[i].offset + y * planes[i].row_pitch`).
+counterpart of an IOSurface-backed buffer: from the memory's first byte, its bytes at the layout
+the `SurfaceExport` states (plane `i`'s row `y` at `planes[i].offset + y * planes[i].row_pitch`).
+In place it spans the export's size; in the copy form, its block's length, which holds every
+plane and which the export's size passes where the driver's allocation is larger.
 Every call answers the same buffer. It is Private, its `contents` `None`: the host reads it
 through a copy into a Shared buffer. In place it is made at the first call, never at the
 surface's make. Of an opaque handle it is a buffer bound at the first byte of the one allocation

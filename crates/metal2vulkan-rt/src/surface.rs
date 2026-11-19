@@ -1171,9 +1171,11 @@ impl Surface {
     /// An IOSurface-backed buffer's counterpart (`MTLBuffer.h` speaks of a buffer "backed by an
     /// IOSurface"; `MTLDevice.h` makes a plane's texture from one,
     /// `newTextureWithDescriptor:iosurface:plane:`, and no buffer): a buffer over the surface's
-    /// own memory, of the export's size ([`Export::size`]), whose bytes lie at the layout the
-    /// [`SurfaceExport`] states: plane `i`'s row `y` at `planes[i].offset + y *
-    /// planes[i].row_pitch`. Private: its `contents` is `None`, and the host reads its bytes
+    /// own memory from its first byte, whose bytes lie at the layout the [`SurfaceExport`]
+    /// states: plane `i`'s row `y` at `planes[i].offset + y * planes[i].row_pitch`. In place it
+    /// spans the export's size ([`Export::size`]); in the copy form, its block's length, which
+    /// holds every plane and which the export's size passes where the driver's allocation is
+    /// larger. Private: its `contents` is `None`, and the host reads its bytes
     /// through a copy into a Shared buffer, where Metal's host reads an IOSurface's bytes through
     /// the surface's own mapping. Every call answers the same buffer.
     ///
