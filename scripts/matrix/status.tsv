@@ -9,8 +9,6 @@
 # A row with no open record or gap reads NEW in the first round it is over and UNOWNED after.
 # An open record leaves when its row is within its limit again; a gap carries its row's ceiling.
 card      | row                              | status | who                                | since      | note
-10de:1e87 | create_64MiB/first_take          | gap    | the planner's ruling of 2026-11-18 | -          | the same NVIDIA large Shared allocation as the 3090's
-10de:2204 | create_64MiB/first_take          | gap    | the planner's ruling of 2026-11-18 | -          | -
 8086:a7a0 | create_state/first               | gap    | the planner's ruling of 2026-11-18 | -          | the meter's artifact
 1002:15bf | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | -
 1002:1900 | create_64MiB/first_take          | open   | memory2                            | 5f2494bfc5 | -

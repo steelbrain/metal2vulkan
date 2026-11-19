@@ -498,12 +498,6 @@ HARNESS_CEILINGS = {
     # against old's import of fresh pages, the same zeroing by another hand.
     "1002:15bf": {"create_64MiB/next_take": 1.05},
     "1002:1900": {"create_64MiB/next_take": 1.05},
-    # Ruled by the planner on the rows' measured medians, 1.876 and 2.252: old imports fresh
-    # anonymous pages for a Shared buffer of 64 MiB, a form chosen by a run-time check; rt
-    # allocates and zeroes (on the 2080, a 10.0 ms vkAllocateMemory and a 2.5 ms memset against
-    # old's 6.7 ms import; on the 3090, 15.4 to 17.4 ms and 2.6 ms against 6.4 to 8.2 ms).
-    "10de:1e87": {"create_64MiB/first_take": 1.88},
-    "10de:2204": {"create_64MiB/first_take": 2.26},
     # Ruled by the planner on the row's measured median, 1.877: old carves the buffer from a
     # Private block it already holds, and rt takes a new block. rt's own costs inside the row, its
     # first GPU zero fill's recording and the first GPU use of the new block, are open, and their
@@ -629,6 +623,47 @@ FIRST_KEEP = (r"s#^M2V-MATRIX time harness-\([a-z]*\)/\(create_[A-Za-z0-9_]*/[a-
 def first_row(row):
     """Whether ROW is a creation row's first sample, judged by the median of FIRST_RUNS."""
     return row.startswith(HARNESS_CREATES) and "/" in row
+
+
+#: The creation rows a ruling judges on the new runtime's own part, per GPU leg: each row's first
+#: sample less the driver's part, the time inside the driver's calls the same process recorded for
+#: it (a row of its own, recorded by the new runtime alone), against the old runtime's whole first
+#: sample, each the median of FIRST_RUNS processes (own_part); the row's limit is row_limit's. The
+#: driver's part and the whole ratio are shown beside it, with the gap the ruling named; an own part
+#: past the limit fails the leg, as a regression of the new runtime's own.
+#:
+#: Ruled by the planner on 2026-11-18 for NVIDIA's legs: old imports fresh anonymous pages for a
+#: Shared buffer of 64 MiB, a form chosen by a run-time check, and rt allocates and zeroes. Most of
+#: rt's first take is NVIDIA's `vkAllocateMemory` (5f2494bfc5: 9902 of the 2080's 12521 us, and
+#: 14164 of 17013 us and 10013 of 15066 us on the 3090's two legs; 954 to 1061 us on RADV). The
+#: driver's part is rt's `vkAllocateMemory` time on the harness's thread
+#: (`first_allocation_total`); rt counts no `vkMapMemory` time, so its map stays in the own part.
+OWN_PART_GATES = {
+    card: {"create_64MiB/first_take": ("create_64MiB/first_allocation_total",
+                                       "NVIDIA's large Shared allocation (the planner's ruling of 2026-11-18)")}
+    for card in ("10de:1e87", "10de:2204")
+}
+
+
+def own_part(leg_id, times, row):
+    """ROW's own-part gate on LEG_ID (OWN_PART_GATES): None where it has none, else (the median of
+    FIRST_RUNS processes' own parts, each its new first sample less the driver's part it recorded,
+    the median of the driver's parts, the gap's name), the first two None unless every process
+    recorded both."""
+    gate = OWN_PART_GATES.get(card_of(leg_id), {}).get(row)
+    if gate is None:
+        return None
+    driver_row, gap = gate
+
+    def news(of):
+        values = [times.get(f"{HARNESS_NEW}{of}")]
+        values += [times.get(f"{HARNESS_FIRST}{of}/{n}/new") for n in range(2, FIRST_RUNS + 1)]
+        return None if any(value is None for value in values) else values
+
+    whole, driver = news(row), news(driver_row)
+    if whole is None or driver is None:
+        return None, None, gap
+    return statistics.median(w - d for w, d in zip(whole, driver)), statistics.median(driver), gap
 
 
 def first_samples(times, row):
@@ -847,6 +882,21 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
             old, new = (statistics.median(values) for values in samples)
             line = (f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us over old "
                     f"{old:.1f} us is {new / old:.3f}")
+            gate = own_part(leg_id, times, row)
+            if gate is not None:
+                own, driver, gap = gate
+                if own is None:
+                    problems.append(f"{line}: judged on the new runtime's own part ({gap}), which needs "
+                                    "the driver's part from every process")
+                    continue
+                line = (f"harness budget {row}: median of {FIRST_RUNS} processes, the new runtime's own "
+                        f"part {own:.1f} us over old's whole {old:.1f} us is {own / old:.3f}; the "
+                        f"driver's part {driver:.1f} us, new {new:.1f} us whole is {new / old:.3f}: {gap}")
+                if own / old > limit:
+                    problems.append(f"{line}, {past_limit(leg_id, row)}: a regression of its own")
+                else:
+                    parked.append(line)
+                continue
             if new / old > limit:
                 problems.append(f"{line}, {past_limit(leg_id, row)}")
             elif listed_row(row) in ceilings:
@@ -892,7 +942,9 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
 def over_rows(leg_id, records):
     """Every harness row of a leg's RECORDS past its limit on LEG_ID as harness_budget judges it,
     each `(row, kind, ratio, limit)`, in row order: kind `GPU time` for a row judged on its GPU
-    time (gpu_judged), `host time` for one judged on its time, `count` for the instructions gate
+    time (gpu_judged), `host time` for one judged on its time, `own part` for a creation row judged
+    on the new runtime's own part (OWN_PART_GATES, its ratio that part over old's whole), `count`
+    for the instructions gate
     (EXACT against the stored count, LENIENT against the old runtime's whole count), the ratio
     new over old (the median of the re-timed pairs where the row was re-timed, of the FIRST_RUNS
     processes' medians for a creation row's first sample). A row its re-timed pairs bring within
@@ -919,6 +971,9 @@ def over_rows(leg_id, records):
                 continue
             old, new = (statistics.median(values) for values in samples)
             kind, ratio, limit = "host time", new / old, row_limit(leg_id, row)
+            gate = own_part(leg_id, times, row)
+            if gate is not None and gate[0] is not None:
+                kind, ratio = "own part", gate[0] / old
         else:
             gpu = gpu_judged(times, row)
             prefix = HARNESS_GPU if gpu else "harness-"

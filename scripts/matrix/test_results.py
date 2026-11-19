@@ -464,6 +464,51 @@ class HarnessBudgetTests(unittest.TestCase):
         # The later processes' samples are parked records: the budget judges them.
         self.assertTrue(f"{results.HARNESS_FIRST}{row}/2/new".startswith(results.PARKED_RECORDS))
 
+    def test_a_gated_first_take_is_judged_on_the_new_runtime_s_own_part_against_old_s_whole(self):
+        row, driver = "create_64MiB/first_take", "create_64MiB/first_allocation_total"
+
+        def processes(olds, news, drivers):
+            out = {f"harness-old/{row}": olds[0], f"harness-new/{row}": news[0]}
+            if drivers[0] is not None:
+                out[f"harness-new/{driver}"] = drivers[0]
+            for n, (old, new, part) in enumerate(zip(olds[1:], news[1:], drivers[1:]), 2):
+                out[f"{results.HARNESS_FIRST}{row}/{n}/old"] = old
+                out[f"{results.HARNESS_FIRST}{row}/{n}/new"] = new
+                if part is not None:
+                    out[f"{results.HARNESS_FIRST}{driver}/{n}/new"] = part
+            return out
+
+        gates = {"10de:1e87": {row: (driver, "a gap")}}
+        olds = [5000.0, 5100.0, 4900.0, 5050.0, 4950.0]
+        news = [12000.0, 12500.0, 11900.0, 12100.0, 12300.0]
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}), \
+                mock.patch.object(results, "OWN_PART_GATES", gates):
+            # The whole is 2.4 times old's; the own part, each process's less its driver's part,
+            # is within, and the line shows both and names the gap.
+            parts = [9500.0, 10000.0, 9400.0, 9600.0, 9800.0]
+            self.assertEqual(self.budget("10de:1e87", processes(olds, news, parts)), ([], [
+                f"harness budget {row}: median of 5 processes, the new runtime's own part 2500.0 us over "
+                "old's whole 5000.0 us is 0.500; the driver's part 9600.0 us, new 12100.0 us whole is "
+                "2.420: a gap"]))
+            # The extra leg on another node is its card's.
+            self.assertEqual(self.budget("10de:1e87@node-b", processes(olds, news, parts))[0], [])
+            # An own part past the limit is a regression of its own.
+            small = [5000.0, 5500.0, 4900.0, 5200.0, 5300.0]
+            problems, parked = self.budget("10de:1e87", processes(olds, news, small))
+            self.assertEqual(parked, [])
+            self.assertEqual(len(problems), 1)
+            self.assertIn("own part 7000.0 us over old's whole 5000.0 us is 1.400", problems[0])
+            self.assertTrue(problems[0].endswith("past 1.03: a regression of its own"), problems[0])
+            # A process without its driver's part leaves nothing to judge the gate on.
+            missing = processes(olds, news, parts[:2] + [None] + parts[3:])
+            problems, _ = self.budget("10de:1e87", missing)
+            self.assertEqual(problems, [
+                f"harness budget {row}: median of 5 processes, new 12100.0 us over old 5000.0 us is 2.420: "
+                "judged on the new runtime's own part (a gap), which needs the driver's part from every "
+                "process"])
+            # Another card's row is judged whole.
+            self.assertEqual(len(self.budget("1002:744c", processes(olds, news, parts))[0]), 1)
+
     def test_a_creation_call_alone_is_shown_beside_its_first_use_and_never_judged(self):
         row = "create_state/first_call"
         times = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 5000.0}
@@ -874,6 +919,23 @@ class OverTableTests(unittest.TestCase):
             ("alu", "host time", 1.085, 1.03), (row, "host time", 1.2, 1.03),
             ("frame", "count", 1.25, 1.03), ("frame", "count", 1.25, 1.0),
             ("sampling", "GPU time", 1.5, 1.03)])
+
+    def test_a_gated_first_take_is_listed_by_its_own_part_alone(self):
+        row, driver = "create_64MiB/first_take", "create_64MiB/first_allocation_total"
+        gates = {"a:0001": {row: (driver, "a gap")}}
+
+        def over(part):
+            times = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 3000.0, f"harness-new/{driver}": part}
+            for n in range(2, results.FIRST_RUNS + 1):
+                times[f"{results.HARNESS_FIRST}{row}/{n}/old"] = 1000.0
+                times[f"{results.HARNESS_FIRST}{row}/{n}/new"] = 3000.0
+                times[f"{results.HARNESS_FIRST}{driver}/{n}/new"] = part
+            with mock.patch.object(results, "OWN_PART_GATES", gates):
+                return [(r, kind, round(ratio, 3)) for r, kind, ratio, _ in
+                        results.over_rows("a:0001", recs(time=times))]
+
+        self.assertEqual(over(2500.0), [])
+        self.assertEqual(over(1500.0), [(row, "own part", 1.5)])
 
     def test_a_listed_row_reads_its_status_and_an_unlisted_one_new_then_unowned(self):
         entries = [("a:0001", "frame", "open", "core", "abc1234", "-"),

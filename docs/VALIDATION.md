@@ -300,7 +300,8 @@ never pushed. `scripts/matrix/matrix show SHA` prints a note's verdicts, one lin
 CONTRIBUTING.md says how to run it.
 
 Both end with one table: every harness row over its limit on every leg (the harness budget
-below), with its kind (GPU time, host time, or count for the instructions gate), its ratio and
+below), with its kind (GPU time, host time, own part for a creation row judged on the new runtime's own
+part, or count for the instructions gate), its ratio and
 limit, the frozen arm's verdict on it (`VOID`, `stands`, `rebased` or `no base`), and its
 status, from `scripts/matrix/status.tsv` by card and row: an open record, with its owner and its
 age in rounds; a known gap, with the place it was ruled; or, for a row with neither, `NEW` in the
@@ -442,7 +443,13 @@ A listed row fails its leg past its ceiling times 1.03, the noise allowance pari
 within that is named on the leg's line. A fix lowers its row's ceiling to the ratio it reaches,
 and a row within 1.03 leaves the list. A creation row's first sample is judged by the ratio of
 the medians of its five rounds, the new runtime's over the old's; a first sample alone is
-never past its limit. A compute pipeline state row's `/first` is its creation and one dispatch
+never past its limit. Where a ruling names the driver's part of a row on a GPU
+(`OWN_PART_GATES` in `scripts/matrix/results.py`: NVIDIA's `create_64MiB/first_take`, whose
+driver's part is the new runtime's `vkAllocateMemory` time in the same process,
+`/first_allocation_total`), the row is judged on the new runtime's own part, each process's
+first sample less its driver's part, against the old runtime's whole first sample, with the
+driver's part, the whole ratio and the gap's name shown beside it; an own part past the row's
+limit fails the leg as a regression. A compute pipeline state row's `/first` is its creation and one dispatch
 through to completion, one threadgroup of 64 by 1 by 1, the replay streams' commonest compute
 dispatch size (24% of their dispatches), since Metal compiles at the creation and a runtime may
 compile at the first dispatch instead, for the dispatch's size, as the old runtime does; its
