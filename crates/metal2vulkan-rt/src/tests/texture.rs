@@ -593,8 +593,9 @@ mod on_device {
             (texture.get_bytes(&mut read, ROW as u64, 0, region, 0, 0))
                 .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
             for row in 0..ROWS {
-                for at in row * ROW..row * ROW + USED {
-                    assert_eq!(read[at], byte(at), "{name}: byte {at}");
+                let start = row * ROW;
+                for (at, &got) in (start..).zip(&read[start..start + USED]) {
+                    assert_eq!(got, byte(at), "{name}: byte {at}");
                 }
             }
             println!("host_bytes: {name}: {copied} bytes copied of the caller's {LEN}");

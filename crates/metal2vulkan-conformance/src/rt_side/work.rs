@@ -687,7 +687,7 @@ impl Run<'_> {
                     region_of(region)?,
                     level,
                     slice,
-                    bytes.into(),
+                    bytes.as_slice().into(),
                     *bytes_per_row,
                     *bytes_per_image,
                 ))
