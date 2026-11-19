@@ -3650,6 +3650,47 @@ fn a_cpu_venue_is_told_apart_by_its_hosts_vector_set() {
     assert!(host.starts_with(arch), "{host}");
 }
 
+/// A refused row covers the refusal it names and no other: the same case refused at the same site
+/// for another reason is a new gap, and the row's own refusal is no longer held, so a listed
+/// refusal never stands for a different one.
+#[test]
+fn a_ledger_row_covers_only_the_refusal_it_names() {
+    use crate::known_gaps::{against, Expectation, Expects, KnownGap, EVERY_VENUE};
+    let case = WordsCase::new("words", 2);
+    let recording = recording_of(&case, case.transcript(words(&[1, 2]), "Completed", &[]), 3);
+    let refused_by = |why: &str| {
+        let mut side = StubSide::new(Vec::new())
+            .refusing("dispatch", Failure::named("Error::Unsupported", why));
+        replay_against(&case, &mut side, &recording).unwrap()
+    };
+    let one = refused_by("a draw with Points is not built");
+    let found = against(std::slice::from_ref(&one), &[]);
+    let [Expectation::Unlisted { site, answer, .. }] = found.as_slice() else {
+        panic!("{found:?}");
+    };
+    let listed = vec![KnownGap {
+        case: "words".to_owned(),
+        venue: EVERY_VENUE.to_owned(),
+        expects: Expects::Refused,
+        site: site.clone(),
+        answer: answer.clone(),
+        waiting_on: "the stub refuses the dispatch, which is the point of the stub".to_owned(),
+    }];
+    assert_eq!(against(std::slice::from_ref(&one), &listed), Vec::new());
+
+    // The same site refused for another reason: the row covers neither the new refusal nor its
+    // own, which the run no longer holds.
+    let other = refused_by("a render pass with NoAttachment is not built");
+    let found = against(std::slice::from_ref(&other), &listed);
+    assert!(
+        matches!(
+            found.as_slice(),
+            [Expectation::Unlisted { site: at, .. }, Expectation::NoLongerHeld { .. }] if at == site
+        ),
+        "{found:?}"
+    );
+}
+
 /// The ledger is an expectation held in both directions, and it changes no verdict.
 #[test]
 fn the_ledger_fails_on_a_new_refusal_and_on_one_that_is_gone() {
