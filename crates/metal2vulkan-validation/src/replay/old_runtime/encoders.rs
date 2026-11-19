@@ -634,6 +634,8 @@ impl OldRuntime {
                 Ok(())
             }
             "setTriangleFillMode:" => self.render(id).set_triangle_fill_mode(raw(call, 0)?),
+            // Apple's private line width, which the old runtime draws as Metal does.
+            "setLineWidth:" => self.render(id).set_line_width(float(call, 0)?),
             "setDepthClipMode:" | "setDepthClipModeSPI:" => {
                 self.render(id).set_depth_clip_mode(raw(call, 0)?)
             }

@@ -27,8 +27,9 @@
 //!   fragment samplers bound with LOD clamps; the depth and stencil store actions an encoder sets
 //!   store a depth-only and a stencil-only pass's clears.
 //! - The render encoder's setters each show their effect in a pass of their own where a draw
-//!   shows it (bytes, viewports, scissor rectangles, culling and winding, lines, a base instance
-//!   and a negative base vertex); the rest play before a draw that still covers its target.
+//!   shows it (bytes, viewports, scissor rectangles, culling and winding, lines, a line's width,
+//!   a base instance and a negative base vertex); the rest play before a draw that still covers
+//!   its target.
 //!
 //! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
 //! their own beside the stream's.
@@ -1280,6 +1281,8 @@ fn f32_bytes(values: &[f32]) -> Value {
 /// - a triangle counter-clockwise in Metal's clip space, culled at its back: dropped under the
 ///   clockwise winding (Metal's default, set) and drawn under the counter-clockwise one;
 /// - lines (`setTriangleFillMode:`) of a triangle whose edges lie outside the target: nothing;
+/// - a line 3 wide (Apple's `setLineWidth:`) across the target through row 1's centres: rows 0
+///   to 2, where a line 1 wide draws row 1 alone;
 /// - base instance 1 (`drawPrimitives:...:baseInstance:`) of `cof_device`: the buffer's second
 ///   element, the whole target, where its first lies outside;
 /// - base vertex -3 (`drawIndexedPrimitives:...:baseVertex:baseInstance:`) of indices 3, 4 and 5:
@@ -1302,6 +1305,8 @@ fn render_encoder_setters_play_with_their_effects() {
     let whole = [-1.0f32, -1.0, 4.0, 4.0];
     let outside = [5.0f32, 5.0, 1.0, 1.0];
     let around = [-3.0f32, -3.0, 9.0, 9.0];
+    // A leg 2 long from the left edge at clip y 0.25, row 1's centres in a 4-row target.
+    let across = [-1.0f32, 0.25, 2.0, 0.0];
     let bytes = |values: [f32; 4]| vec![f32_bytes(&values), Value::Uint(16), Value::Uint(0)];
     let triangle = vec![Value::Uint(3), Value::Uint(0), Value::Uint(3)];
     let range = |at: u64| uints(&[("location", at), ("length", 1)]);
@@ -1426,6 +1431,16 @@ fn render_encoder_setters_play_with_their_effects() {
             ],
             (draw, triangle.clone()),
             texels(|_, _| false),
+        ),
+        (
+            constant,
+            vec![
+                (set_bytes, bytes(across)),
+                ("setLineWidth:", vec![Value::F64(3.0)]),
+            ],
+            // MTLPrimitiveTypeLine, vertices 0 and 1: the triangle's first leg.
+            (draw, vec![Value::Uint(1), Value::Uint(0), Value::Uint(2)]),
+            texels(|_, y| y < 3),
         ),
         (
             device,
