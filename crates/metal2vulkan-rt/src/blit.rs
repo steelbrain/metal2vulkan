@@ -894,8 +894,10 @@ impl BlitCommandEncoder {
     ///
     /// In place, the call records each plane's image's release from the runtime's queue family to
     /// the other API's (`VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle,
-    /// `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf), the general layout kept, after every command
-    /// before it: one barrier of the planes, counted in
+    /// `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf), the general layout kept, and the surface's
+    /// buffer's where [`Surface::buffer`] has made it, its textures over it in images of their own
+    /// copied back into it first, after every command before it: one barrier of the planes and
+    /// the buffer, counted in
     /// [`Metrics::external_releases`](crate::Metrics::external_releases). In the copy form it is
     /// the block's release ([`release_to_external`](Self::release_to_external)), the planes'
     /// images copied back into the block first. The contract is the block's: from the call until
@@ -915,8 +917,32 @@ impl BlitCommandEncoder {
         for texture in surface.planes() {
             building.keep_texture(texture);
         }
+        let buffer = surface.made_buffer();
+        let overs: Vec<(u32, Access)> = (buffer.iter())
+            .map(|buffer| (buffer.id(), Access::Write))
+            .collect();
+        if let Some(buffer) = &buffer {
+            building.keep(buffer);
+            // The textures over the buffer go back to it first, as before a write of it.
+            building.overs_before(&overs, false)?;
+        }
         let command = building.release_command()?;
+        if buffer.is_some() {
+            building.overs_after(&overs, false);
+        }
         let family = surface.handle().family();
+        let buffers: Vec<vk::BufferMemoryBarrier2<'static>> = (buffer.iter())
+            .map(|buffer| {
+                vk::BufferMemoryBarrier2::default()
+                    .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                    .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+                    .src_queue_family_index(core.family)
+                    .dst_queue_family_index(family)
+                    .buffer(buffer.device_range().0)
+                    .offset(0)
+                    .size(vk::WHOLE_SIZE)
+            })
+            .collect();
         let releases: Vec<vk::ImageMemoryBarrier2<'static>> = (surface.planes().iter())
             .map(|texture| {
                 vk::ImageMemoryBarrier2::default()
@@ -930,10 +956,12 @@ impl BlitCommandEncoder {
                     .subresource_range(texture.whole())
             })
             .collect();
-        let dependency = vk::DependencyInfo::default().image_memory_barriers(&releases);
-        // SAFETY: the command buffer records outside any render pass and keeps the planes until it
-        // retires; each image is in its home layout, general, between commands, and a dma-buf's
-        // foreign family is enabled.
+        let dependency = vk::DependencyInfo::default()
+            .image_memory_barriers(&releases)
+            .buffer_memory_barriers(&buffers);
+        // SAFETY: the command buffer records outside any render pass and keeps the planes and the
+        // buffer until it retires; each image is in its home layout, general, between commands,
+        // the buffer spans the surface's memory, and a dma-buf's foreign family is enabled.
         unsafe { core.device.cmd_pipeline_barrier2(command, &dependency) };
         building.count(Metric::Barriers);
         building.count(Metric::ExternalReleases);

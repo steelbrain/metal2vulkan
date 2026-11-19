@@ -165,13 +165,23 @@ impl Ids {
 /// A heap's id in the hazard sets, which every resource placed in the heap takes there in place
 /// of its own: Metal tracks a heap's resources as one ("tracking is done at the granularity of the
 /// heap", `MTLHeap.h`'s `hazardTrackingMode`), so a write through any of them orders every later
-/// use of any other, whether or not their bytes meet. Its id goes back once no resource holds it.
+/// use of any other, whether or not their bytes meet. An exported surface's planes in place and
+/// its buffer take one alike ([`HeapId::unit`]). Its id goes back once no resource holds it.
 pub(crate) struct HeapId {
     core: Arc<Core>,
     id: u32,
 }
 
 impl HeapId {
+    /// A new id that resources over one memory take as one: an exported surface's planes in
+    /// place and its buffer ([`crate::Surface::buffer`]).
+    pub(crate) fn unit(core: &Arc<Core>) -> Arc<HeapId> {
+        Arc::new(HeapId {
+            core: Arc::clone(core),
+            id: core.ids.take(),
+        })
+    }
+
     /// The id.
     pub(crate) fn get(&self) -> u32 {
         self.id

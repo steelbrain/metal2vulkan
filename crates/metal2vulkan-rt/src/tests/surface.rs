@@ -10,8 +10,18 @@
 //! textures by a blit into a Shared buffer whose bytes the host compares (a consumer's CPU read of
 //! a decoded picture); rt copies a picture into the planes and releases them, and the second
 //! device reads it through the handle (the encode round); rt clears each plane in a render pass,
-//! reads it, and releases it to the second device's read (the render round). The memory type the
-//! export names, with its flags, and the make's wall time per surface are printed.
+//! reads it, and releases it to the second device's read (the render round). Then the buffer
+//! round: the surface's buffer, made at its first call and counted in the surface gauges (none in
+//! the copy form, whose buffer is its block's), reads two pictures the second device wrote (the
+//! first through the buffer's own acquire at its make, the second through the next
+//! `external_writes_done`), and a negative control of the layout (the same bytes read one byte
+//! off) finds them wrong; a picture blitted into the buffer is read through the planes, and
+//! released, through the handle. On the 1080p picture, where `llvm-as` assembles the examples'
+//! library, a kernel writes a picture through the buffer and the encoder's next kernel reads
+//! plane 0 through a view: its texels exact, and in place one barrier more than a control whose
+//! first kernel writes a buffer of its own, the ordering a resource outside the surface's unit
+//! would not take. The memory type the export names, with its flags, the make's wall time per
+//! surface, and whether the device's buffers import a dma-buf are printed.
 //!
 //! The second device stands in for the other API, as in the export tests: a device of another
 //! instance cannot run under the validation layer.
@@ -22,12 +32,14 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, within};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        BufferLayout, ClearColor, CommandQueue, Device, ExportHandle, LoadAction, MemoryClass,
-        PixelFormat, PlaneLayout, PlaneSpec, RenderPassDescriptor, Surface, SurfaceCopy,
-        SurfaceExport, SurfaceForm, SurfaceSpec, TextureDescriptor, TexturePlace, TextureType,
-        TextureUsage,
+        BufferLayout, ClearColor, CommandQueue, ComputePipelineDescriptor, ComputePipelineState,
+        Device, DispatchType, ExportHandle, FunctionDescriptor, IndexClass, Library, LoadAction,
+        MemoryClass, PixelFormat, PlaneLayout, PlaneSpec, RenderPassDescriptor, StageSource,
+        Surface, SurfaceCopy, SurfaceExport, SurfaceForm, SurfaceSpec, TextureDescriptor,
+        TexturePlace, TextureType, TextureUsage,
     };
     use ash::vk;
+    use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
     use std::time::Instant;
 
     /// A plane of a picture: its format, size and texel bytes.
@@ -464,6 +476,12 @@ mod on_device {
                 (raw.instance).get_physical_device_memory_properties(raw.physical_device)
             };
             let mut in_place_pitch = [None; 2];
+            #[cfg(unix)]
+            println!(
+                "surface: {name}: dma-buf buffer import offered: {}",
+                device.core().imports.dma_buf.is_some()
+            );
+            let kernels = kernels(name, &device);
             for row in &ROWS {
                 let handle = row.handle;
                 let foreign = device
@@ -703,8 +721,23 @@ mod on_device {
                             );
                         }
                     }
+                    let in_place = form == SurfaceForm::InPlace;
+                    let round = Round {
+                        label: &label,
+                        device: &device,
+                        queue: &queue,
+                        surface: &surface,
+                        in_place,
+                        planes,
+                        layout: &layout,
+                    };
+                    let buffer = buffer_round(&round, &other);
+                    if let (0, Some(kernels)) = (at, &kernels) {
+                        compute_round(&round, &buffer, kernels);
+                    }
+                    drop(buffer);
                     println!(
-                        "surface: {label}: three pictures, the encode round and the render round exact"
+                        "surface: {label}: three pictures, the encode round, the render round and the buffer round exact"
                     );
                     drop(other);
                     drop(surface);
@@ -713,9 +746,323 @@ mod on_device {
             drop(queue);
             within("the surfaces' frees", || {
                 let gauges = counters.gauges();
-                gauges.surface_imports == 0 && gauges.exports == 0
+                gauges.surface_imports == 0 && gauges.exports == 0 && gauges.surface_buffers == 0
             });
         });
+    }
+
+    /// A surface of a row and a picture, as the buffer round and the compute round take it.
+    #[derive(Clone, Copy)]
+    struct Round<'a> {
+        label: &'a str,
+        device: &'a Device,
+        queue: &'a CommandQueue,
+        surface: &'a Surface,
+        /// The surface took the form in place.
+        in_place: bool,
+        planes: &'a [Plane; 2],
+        layout: &'a [PlaneLayout],
+    }
+
+    /// The buffer round on the surface, which the other API holds released: its buffer reads two
+    /// pictures the other API wrote, one off its layout is wrong, and a picture blitted into it
+    /// is read through the planes and through the handle. The buffer.
+    fn buffer_round(round: &Round<'_>, other: &Other) -> crate::Buffer {
+        let Round {
+            label,
+            device,
+            queue,
+            surface,
+            in_place,
+            planes,
+            layout,
+        } = *round;
+        let counters = device.counters();
+        let total = other.import.len;
+        let at_layout = (
+            [layout[0].offset, layout[1].offset],
+            [layout[0].row_pitch; 2],
+        );
+        let (_theirs_block, theirs) = shared(&other.device, total);
+        let (_whole_block, whole) = shared(device, total);
+        let (_mine_block, mine) = shared(device, packed(planes).2);
+        let (offsets, pitches, _) = packed(planes);
+        let read_whole = |buffer: &crate::Buffer| {
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            (encoder.copy_from_buffer_to_buffer(buffer, 0, &whole, 0, total))
+                .unwrap_or_else(|error| panic!("{label}: the buffer's read: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(label, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{label}");
+        };
+
+        // Picture 4, written before the buffer's make: its own acquire reads it.
+        fill(&theirs, |out| lay_picture(4, planes, layout, out));
+        other.write(label, &theirs);
+        (surface.external_writes_done())
+            .unwrap_or_else(|error| panic!("{label}: the acquire: {error}"));
+        let (gauges, acquires) = (counters.gauges(), counters.metrics().external_acquires);
+        let buffer =
+            (surface.buffer()).unwrap_or_else(|error| panic!("{label}: the buffer: {error}"));
+        let made = counters.gauges();
+        assert_eq!(
+            made.surface_buffers,
+            gauges.surface_buffers + u64::from(in_place),
+            "{label}: the buffer in place counted"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            made.surface_imports,
+            gauges.surface_imports
+                + u64::from(in_place && surface.handle() == ExportHandle::DmaBuf),
+            "{label}: a dma-buf's buffer's import counted"
+        );
+        assert_eq!(
+            counters.metrics().external_acquires,
+            acquires + u64::from(in_place),
+            "{label}: the buffer's acquire at its make"
+        );
+        assert_eq!(
+            buffer.length(),
+            total,
+            "{label}: the buffer spans the export"
+        );
+        assert!(
+            buffer.contents().is_none(),
+            "{label}: the buffer is Private"
+        );
+        let again =
+            (surface.buffer()).unwrap_or_else(|error| panic!("{label}: the buffer: {error}"));
+        assert_eq!(again.id(), buffer.id(), "{label}: one buffer");
+        assert_eq!(
+            counters.gauges().surface_buffers,
+            made.surface_buffers,
+            "{label}: made once"
+        );
+        drop(again);
+        read_whole(&buffer);
+        assert_eq!(
+            wrong(4, planes, at_layout, bytes_of(&whole)),
+            None,
+            "{label}: picture 4 read through the buffer"
+        );
+        // The negative control of the layout: the same bytes one byte off are wrong.
+        let off = ([at_layout.0[0] + 1, at_layout.0[1]], at_layout.1);
+        assert!(
+            wrong(4, planes, off, bytes_of(&whole)).is_some(),
+            "{label}: the check finds a wrong offset"
+        );
+
+        // Picture 5, acquired with the planes.
+        fill(&theirs, |out| lay_picture(5, planes, layout, out));
+        other.write(label, &theirs);
+        (surface.external_writes_done())
+            .unwrap_or_else(|error| panic!("{label}: the acquire: {error}"));
+        read_whole(&buffer);
+        assert_eq!(
+            wrong(5, planes, at_layout, bytes_of(&whole)),
+            None,
+            "{label}: picture 5 read through the buffer"
+        );
+
+        // Picture 6, blitted into the buffer, read through the planes in the same encoder, then
+        // released and read through the handle.
+        fill(&whole, |out| lay_picture(6, planes, layout, out));
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+        (encoder.copy_from_buffer_to_buffer(&whole, 0, &buffer, 0, total))
+            .unwrap_or_else(|error| panic!("{label}: the buffer's write: {error}"));
+        for (i, (texture, plane)) in surface.planes().iter().zip(planes).enumerate() {
+            let at = BufferLayout {
+                offset: offsets[i],
+                bytes_per_row: pitches[i],
+                bytes_per_image: 0,
+            };
+            (encoder.copy_from_texture_to_buffer(
+                texture,
+                TexturePlace::default(),
+                [plane.width, plane.height, 1],
+                &mine,
+                at,
+            ))
+            .unwrap_or_else(|error| panic!("{label}: the planes' read: {error}"));
+        }
+        (encoder.release_surface_to_external(surface))
+            .unwrap_or_else(|error| panic!("{label}: the release: {error}"));
+        encoder.end_encoding();
+        command_buffer.commit().expect("a commit");
+        finished(label, &command_buffer);
+        assert_eq!(command_buffer.error(), None, "{label}");
+        assert_eq!(
+            wrong(6, planes, (offsets, pitches), bytes_of(&mine)),
+            None,
+            "{label}: picture 6 written through the buffer, read through the planes"
+        );
+        other.read(label, &theirs);
+        assert_eq!(
+            wrong(6, planes, at_layout, bytes_of(&theirs)),
+            None,
+            "{label}: picture 6 written through the buffer, read through the handle"
+        );
+        println!("surface: {label}: the buffer round exact (in place: {in_place})");
+        buffer
+    }
+
+    /// The examples' kernels: `add` (`o = a + b`) and `invert_texels`, or None where `llvm-as` is
+    /// missing.
+    fn kernels(
+        name: &str,
+        device: &Device,
+    ) -> Option<(ComputePipelineState, ComputePipelineState)> {
+        let ll = fixtures_dir().join("examples/runtime_examples.ll");
+        let library = match llvm_assemble(&ll) {
+            Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: the surface's compute round: {why}");
+                return None;
+            }
+            Err(error) => panic!("{}: {error:?}", ll.display()),
+        };
+        let function = library.function("invert_texels").expect("the function");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        let invert = (device
+            .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers))
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
+        Some((crate::tests::compute::on_device::add(device), invert))
+    }
+
+    /// The compute round on the 1080p picture: `add` writes picture 7 through the surface's
+    /// buffer, and the encoder's next dispatch reads plane 0 through a view (`invert_texels`, into
+    /// a texture of its own): every texel the inverse of picture 7's luma, and the planes read
+    /// picture 7. In place, the pair takes one barrier more than a control whose `add` writes a
+    /// buffer of its own, the ordering of the buffer's write before the plane's read.
+    fn compute_round(
+        round: &Round<'_>,
+        buffer: &crate::Buffer,
+        (add, invert): &(ComputePipelineState, ComputePipelineState),
+    ) {
+        let Round {
+            label,
+            device,
+            queue,
+            surface,
+            in_place,
+            planes,
+            layout,
+        } = *round;
+        let counters = device.counters();
+        // The surface is the runtime's again (the other API wrote nothing since its release).
+        (surface.external_writes_done())
+            .unwrap_or_else(|error| panic!("{label}: the acquire: {error}"));
+        let total = buffer.length();
+        let words = u32::try_from(total / 4).expect("words");
+        let (_zeros_block, zeros) = shared(device, total);
+        let (_pattern_block, pattern) = shared(device, total);
+        let (_elsewhere_block, elsewhere) = shared(device, total);
+        fill(&zeros, |out| out.fill(0));
+        fill(&pattern, |out| {
+            out.fill(0);
+            lay_picture(7, planes, layout, out);
+        });
+        let first = IndexClass::Texture.range().start;
+        let _grant = (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
+        let [width, height] = [planes[0].width, planes[0].height];
+        let view = (surface.planes()[0].new_texture_view(
+            planes[0].format,
+            TextureType::Type2D,
+            0..1,
+            0..1,
+            Some(first),
+        ))
+        .unwrap_or_else(|error| panic!("{label}: the plane's view: {error}"));
+        let mut d =
+            TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, width, height);
+        d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+        let out = (device.new_texture(&d, Some(first + 1)))
+            .unwrap_or_else(|error| panic!("{label}: the output: {error}"));
+        let pair = |target: &crate::Buffer| -> u64 {
+            let before = counters.metrics().barriers;
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            let done = |result: Result<(), crate::Error>| {
+                result.unwrap_or_else(|error| panic!("{label}: {error}"))
+            };
+            done(encoder.set_compute_pipeline_state(add));
+            done(encoder.set_buffer(Some(&zeros), 0, 0));
+            done(encoder.set_buffer(Some(&pattern), 0, 1));
+            done(encoder.set_buffer(Some(target), 0, 2));
+            done(encoder.dispatch_threads([words, 1, 1], [64, 1, 1]));
+            done(encoder.set_compute_pipeline_state(invert));
+            done(encoder.set_texture(Some(&view), 0));
+            done(encoder.set_texture(Some(&out), 1));
+            done(encoder.dispatch_threads([width, height, 1], [8, 8, 1]));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(label, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{label}");
+            counters.metrics().barriers - before
+        };
+        // The first control takes the textures' and the acquire's uploads; the second is the one
+        // compared, after the ordered pair's texels are read.
+        pair(&elsewhere);
+        let ordered = pair(buffer);
+        let (_texels_block, texels) = shared(device, u64::from(width) * u64::from(height) * 4);
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+        let at = BufferLayout {
+            offset: 0,
+            bytes_per_row: u64::from(width) * 4,
+            bytes_per_image: 0,
+        };
+        (encoder.copy_from_texture_to_buffer(
+            &out,
+            TexturePlace::default(),
+            [width, height, 1],
+            &texels,
+            at,
+        ))
+        .unwrap_or_else(|error| panic!("{label}: the output's read: {error}"));
+        encoder.end_encoding();
+        command_buffer.commit().expect("a commit");
+        finished(label, &command_buffer);
+        assert_eq!(command_buffer.error(), None, "{label}");
+        let bytes = bytes_of(&texels);
+        for y in 0..height {
+            for x in 0..width {
+                let at = ((y * width + x) * 4) as usize;
+                let expected = [255 - byte(7, 0, y, u64::from(x)), 255, 255, 255];
+                assert_eq!(
+                    bytes[at..at + 4],
+                    expected,
+                    "{label}: texel ({x}, {y}) of the plane a kernel read after a kernel wrote the buffer"
+                );
+            }
+        }
+        let (_mine_block, mine) = shared(device, packed(planes).2);
+        rt_read(label, queue, surface, planes, &mine);
+        let (offsets, pitches, _) = packed(planes);
+        assert_eq!(
+            wrong(7, planes, (offsets, pitches), bytes_of(&mine)),
+            None,
+            "{label}: picture 7 written by a kernel through the buffer, read through the planes"
+        );
+        let control = pair(&elsewhere);
+        if in_place {
+            assert_eq!(
+                ordered,
+                control + 1,
+                "{label}: one barrier orders the buffer's write before the plane's read"
+            );
+        }
+        println!(
+            "surface: {label}: the compute round exact, barriers {ordered} against the control's {control}"
+        );
+        drop((view, out));
     }
 
     /// The channels of a plane's format.

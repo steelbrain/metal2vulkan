@@ -429,8 +429,8 @@ impl Device {
     }
 
     /// A new buffer's handle, counted in [`Gauges::buffers`](crate::Gauges::buffers), placed in
-    /// `heap` where it has one.
-    fn buffer(
+    /// `heap` where it has one: a heap's, or an exported surface's ([`crate::Surface::buffer`]).
+    pub(crate) fn buffer(
         &self,
         block: Arc<Block>,
         offset: u64,
@@ -625,7 +625,8 @@ pub(crate) trait BufferObject {
     }
 
     /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a
-    /// heap ([`Device::new_heap_buffer`]), its own elsewhere.
+    /// heap ([`Device::new_heap_buffer`]), its surface's for an exported surface's buffer in place
+    /// ([`crate::Surface::buffer`]), its own elsewhere.
     fn tracked_id(&self) -> u32 {
         let inner = self.object();
         (inner.heap.as_ref()).map_or(inner.id, |heap| heap.get())

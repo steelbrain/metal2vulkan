@@ -587,6 +587,34 @@ block's release, the planes' images copied back first. Both count in `Metrics::e
 and `Metrics::external_releases`. From a release until the consumer's next write into the surface
 through the runtime, the consumer encodes no read of its planes.
 
+**The surface's buffer.** `Surface::buffer()` answers a buffer over the surface's own memory, the
+counterpart of an IOSurface-backed buffer: of the export's size, its bytes at the layout the
+`SurfaceExport` states (plane `i`'s row `y` at `planes[i].offset + y * planes[i].row_pitch`).
+Every call answers the same buffer. It is Private, its `contents` `None`: the host reads it
+through a copy into a Shared buffer. In place it is made at the first call, never at the
+surface's make. Of an opaque handle it is a buffer bound at the first byte of the one allocation
+the planes are bound in, which is made with device addresses for it. Of a dma-buf it is a buffer
+on one more import of the dma-buf, into the memory type the planes' imports took. The surface
+keeps its own fd of the dma-buf for that import. The call imports only where the device's buffers
+import a dma-buf (`vkGetPhysicalDeviceExternalBufferProperties`) and the fd's query and the
+buffer's requirements list that type. Either form counts in `Gauges::surface_buffers`, and a
+dma-buf's also in `Gauges::surface_imports`. The first call records the buffer's acquire from the
+other API's queue family. From then on, `external_writes_done` acquires the buffer with the planes
+and `release_surface_to_external` releases it with them, writing back first the copies of the
+textures the consumer made over it. In the copy form the buffer is the block's, which the planes
+are textures over.
+
+Vulkan's memory aliasing makes the buffer and the planes in place aliases that read each other's
+writes: a buffer and linear images in the general layout are host-accessible, and two
+host-accessible aliases interpret the memory alike. A dma-buf's buffer and planes are distinct
+imports of one payload, which an fd's import allows. The section names aliases through export and
+import across instances and APIs, and rt takes imports in one instance as those aliases. The
+planes already do so, each on an import of its own. The surface, its planes and their views, and
+its buffer are one resource in rt's ordering of reads and writes, as a heap's resources are. A
+kernel's write through the buffer is ordered before the next kernel's read through a plane, by
+the global memory barrier rt records between them. `Surface::buffer`'s doc comment quotes the
+sections.
+
 ### Known gaps of memory blocks
 
 - An exported surface takes the copy form, its planes copied at each acquire and release, in

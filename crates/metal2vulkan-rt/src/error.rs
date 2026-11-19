@@ -45,6 +45,10 @@ pub enum Error {
     NoSuchBlock(BlockId),
     /// The runtime could not start one of its threads. Metal has no counterpart.
     Thread(io::Error),
+    /// [`Surface::buffer`](crate::Surface::buffer) of a dma-buf surface: the host gave no
+    /// duplicate of the runtime's own fd of the surface's dma-buf, which the buffer's import
+    /// takes, as where the process holds as many open fds as it may. Metal has no counterpart.
+    Fd(io::Error),
     /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state): the
     /// translator made no pipeline of the kernel: a typed refusal of what it does not translate,
     /// a descriptor Metal refuses, or a translation past its 20-second budget.
@@ -1430,7 +1434,8 @@ pub enum Limit {
     },
     /// An import of a handle the device does not take
     /// ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
-    /// [`Device::import_host_memory`](crate::Device::import_host_memory)): it does not list the
+    /// [`Device::import_host_memory`](crate::Device::import_host_memory), and a dma-buf surface's
+    /// buffer, [`Surface::buffer`](crate::Surface::buffer)): it does not list the
     /// handle's extensions (`VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` for a
     /// dma-buf, `VK_EXT_external_memory_host` for host memory), or its buffers do not import the
     /// handle (`vkGetPhysicalDeviceExternalBufferProperties`). Metal's counterpart,
@@ -1489,14 +1494,18 @@ pub enum Limit {
     /// without `VK_EXT_queue_family_foreign`, whose ownership transfers with another driver have
     /// no queue family to name (`VUID-VkBufferMemoryBarrier2-srcQueueFamilyIndex-09099`), or a
     /// buffer exporting the handle whose memory requirements do not list the device's Private
-    /// memory type, the one type an export is made in. Metal has no counterpart.
+    /// memory type, the one type an export is made in. Also an exported surface's buffer in place
+    /// ([`Surface::buffer`](crate::Surface::buffer)) whose memory requirements (and, for a
+    /// dma-buf, the fd's memory type query) do not list the type the surface's memory is in, ask
+    /// more than its length, or require an allocation of its own. Metal has no counterpart.
     ///
     /// Basis: device (its extensions and the buffer's memory requirements).
     ExportType {
         /// The handle asked for.
         handle: ExportHandle,
-        /// The types the buffer's memory requirements list, one bit each; `None` for a dma-buf
-        /// on a device without the foreign queue family, refused before a buffer is made.
+        /// The types the buffer's memory requirements list (for a surface's dma-buf, those the
+        /// fd's query offers too), one bit each; `None` for a dma-buf on a device without the
+        /// foreign queue family, refused before a buffer is made.
         listed: Option<u32>,
     },
     /// A multisample texture of a sample count the device does not make for its format, type and
@@ -1552,6 +1561,7 @@ impl fmt::Display for Error {
                 write!(f, "block {} is not one the consumer holds", block.get())
             }
             Error::Thread(error) => write!(f, "a runtime thread did not start: {error}"),
+            Error::Fd(error) => write!(f, "no duplicate of a dma-buf's fd: {error}"),
             Error::Quiesced => f.write_str("the device is quiesced"),
             Error::Translation(error) => write!(f, "the translator made no pipeline: {error}"),
             Error::Unsupported(gap) => write!(f, "{gap}"),
@@ -2079,7 +2089,7 @@ impl fmt::Display for Limit {
                 listed: Some(listed),
             } => write!(
                 f,
-                "a buffer exporting {handle:?} lists types {listed:#x}, not the Private type"
+                "a buffer of {handle:?} lists types {listed:#x}, not the type its memory is in"
             ),
             Limit::TextureSamples {
                 sample_count,
@@ -2098,7 +2108,7 @@ impl std::error::Error for Error {
             Error::Loader(error) => Some(error),
             Error::BelowFloor(below) => Some(below),
             Error::Vulkan { result, .. } => Some(result),
-            Error::Thread(error) => Some(error),
+            Error::Thread(error) | Error::Fd(error) => Some(error),
             Error::Translation(error) => Some(error),
             Error::NoDirectDriverLoading
             | Error::Refused(_)

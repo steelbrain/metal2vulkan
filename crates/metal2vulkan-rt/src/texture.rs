@@ -4089,8 +4089,9 @@ pub(crate) trait TextureObject {
     }
 
     /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a
-    /// heap ([`Device::new_heap_texture`]), its buffer's there for one in place over a buffer, and
-    /// [`hazard_id`](Self::hazard_id) elsewhere.
+    /// heap ([`Device::new_heap_texture`]), its surface's for an exported surface's plane in place
+    /// and its views ([`crate::Surface::buffer`]), its buffer's there for one in place over a
+    /// buffer, and [`hazard_id`](Self::hazard_id) elsewhere.
     fn tracked_id(&self) -> u32 {
         match (&self.object().heap, &self.object().named) {
             (Some(heap), _) => heap.get(),
@@ -4391,6 +4392,7 @@ impl Device {
     /// The texture of a surface plane's image in place, at `index` as for [`Device::new_texture`]:
     /// its home layout general, from undefined in the next upload, which the surface's make
     /// submits and waits for. The texture holds the image, which its drop frees with its memory.
+    /// It takes `unit`'s id in the hazard sets, the surface's ([`HeapId::unit`]).
     ///
     /// Err: [`Refusal::TextureIndex`]; [`Gap::SurfaceUsage`] for a usage the texture's uses ask
     /// that the image lacks; [`Error::Vulkan`] where a view cannot be made; what the texture's
@@ -4400,6 +4402,7 @@ impl Device {
         descriptor: &TextureDescriptor,
         index: Option<u32>,
         made: SurfaceImage,
+        unit: Arc<HeapId>,
     ) -> Result<Texture, Error> {
         let core = self.core();
         let d = *descriptor;
@@ -4495,7 +4498,7 @@ impl Device {
             index,
             word: plan.word,
             id: core.ids.take(),
-            heap: None,
+            heap: Some(unit),
             named: None,
             view: None,
             emulation: plan.emulation,

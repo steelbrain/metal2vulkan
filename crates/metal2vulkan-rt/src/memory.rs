@@ -304,6 +304,13 @@ pub(crate) enum Own {
     Import,
     /// A dedicated allocation the consumer shares by a handle of this kind ([`export`]).
     Export(crate::ExportHandle),
+    /// An exported surface's buffer ([`crate::Surface::buffer`]): on one more import of its
+    /// dma-buf, an allocation of its own (`import`), or on the opaque handle's one allocation,
+    /// which the block under it holds and frees ([`surface_view`]).
+    Surface {
+        /// Its memory is an import of its own, freed with it.
+        import: bool,
+    },
 }
 
 impl Memory {
@@ -390,6 +397,9 @@ pub(crate) struct Block {
     /// An import's release, which runs once its memory is freed: behind a lock, as the block is
     /// shared between threads and the release is only `Send`.
     release: Mutex<Option<Release>>,
+    /// The block whose allocation this block's buffer is bound in ([`surface_view`]): given back
+    /// after this one, so the block-maker thread destroys the buffer before it frees the memory.
+    _under: Option<Arc<Block>>,
 }
 
 impl Block {
@@ -398,6 +408,7 @@ impl Block {
             memory,
             core,
             release: Mutex::new(None),
+            _under: None,
         }
     }
 
@@ -407,6 +418,17 @@ impl Block {
             memory,
             core,
             release: Mutex::new(release),
+            _under: None,
+        }
+    }
+
+    /// A surface's buffer on the allocation `under` holds ([`surface_view`]).
+    fn over(memory: Memory, core: Arc<Core>, under: Arc<Block>) -> Block {
+        Block {
+            memory,
+            core,
+            release: Mutex::new(None),
+            _under: Some(under),
         }
     }
 }
@@ -1451,7 +1473,10 @@ impl ImportFailed {
 /// for (counted against the device's allocations, [`allocate`]), bound to the buffer at its first
 /// byte, the buffer's address, and its numbers: the block's, and its allocation's, which no hook
 /// is told of. `mapping` is the host address of its bytes, where the consumer imported them by
-/// address. Shared, as Metal's no-copy buffers are; never zeroed.
+/// address. `own` is [`Own::Import`] for the consumer's import, Shared as Metal's no-copy buffers
+/// are, counted in the imports gauge; or [`Own::Surface`] for a dma-buf surface's buffer
+/// ([`crate::Surface::buffer`]), Private as an export is, counted in the surface gauges. Never
+/// zeroed.
 ///
 /// # Safety
 ///
@@ -1461,6 +1486,7 @@ pub(crate) unsafe fn import(
     info: &vk::MemoryAllocateInfo<'_>,
     handle: vk::ExternalMemoryHandleTypeFlags,
     mapping: Option<Mapping>,
+    own: Own,
 ) -> Result<Memory, ImportFailed> {
     let device = &core.device;
     let len = info.allocation_size;
@@ -1508,10 +1534,21 @@ pub(crate) unsafe fn import(
     let address = vk::BufferDeviceAddressInfo::default().buffer(buffer);
     // SAFETY: the buffer has device-address usage and is bound.
     let address = unsafe { device.get_buffer_device_address(&address) };
-    core.counters.rise(Gauge::Imports);
+    let class = match own {
+        Own::Import => {
+            core.counters.rise(Gauge::Imports);
+            MemoryClass::Shared
+        }
+        _ => {
+            core.counters.rise(Gauge::SurfaceBuffers);
+            #[cfg(unix)]
+            core.counters.rise(Gauge::SurfaceImports);
+            MemoryClass::Private
+        }
+    };
     Ok(Memory {
         id,
-        class: MemoryClass::Shared,
+        class,
         len,
         allocation,
         memory,
@@ -1521,7 +1558,7 @@ pub(crate) unsafe fn import(
         mapping,
         device_local: core.device_local & (1 << info.memory_type_index) != 0,
         spilled: false,
-        own: Some(Own::Import),
+        own: Some(own),
         zeroed: false,
     })
 }
@@ -1634,10 +1671,11 @@ pub(crate) unsafe fn export(
 }
 
 /// Makes an opaque handle's surface allocation in place ([`crate::surface`]): `len` bytes rounded
-/// up to 64 KiB of memory type `index`, exportable as `handle` and dedicated to nothing, counted
-/// against the device's allocations ([`allocate`]), and its numbers. It holds no buffer: the
-/// surface's plane images are bound in it, and nothing reaches it through a buffer (its block's
-/// buffer is null, and its address 0). Counted as an export.
+/// up to 64 KiB of memory type `index`, exportable as `handle`, dedicated to nothing and with
+/// device addresses, counted against the device's allocations ([`allocate`]), and its numbers. It
+/// holds no buffer: the surface's plane images are bound in it, and its block's buffer is null
+/// and its address 0. The surface's buffer, where the consumer asks for one, is bound in it later
+/// ([`surface_view`]). Counted as an export.
 ///
 /// Err: [`Limit::BlockLen`] past the device's longest allocation; [`Limit::MemoryAllocations`];
 /// [`Limit::BlockIds`]; [`Error::Vulkan`] where the allocation fails.
@@ -1654,10 +1692,15 @@ pub(crate) unsafe fn export_surface(
     let device = &core.device;
     let len = round(len, GRANULE, core.max_block_len)?;
     let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(handle.vk());
+    // A buffer bound in it later takes a device address
+    // (`VUID-vkBindBufferMemory-bufferDeviceAddress-03339`).
+    let mut flags =
+        vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
     let info = vk::MemoryAllocateInfo::default()
         .allocation_size(len)
         .memory_type_index(index)
-        .push_next(&mut export);
+        .push_next(&mut export)
+        .push_next(&mut flags);
     // SAFETY: the caller's; the type is the images'.
     let memory = unsafe { allocate(device, &core.counters, core.max_allocations, &info, None) }?;
     let (id, allocation) = match core.pool.own_numbers() {
@@ -1687,22 +1730,127 @@ pub(crate) unsafe fn export_surface(
     })
 }
 
+/// Makes an opaque surface's buffer ([`crate::Surface::buffer`]) on its allocation, which `under`
+/// holds: a buffer of the allocation's length that names `handle`, bound at its first byte, its
+/// address, and its numbers, which no hook is told of. Private and never mapped, as the
+/// allocation is; it frees no memory, and holds `under` until it is given back, which then goes
+/// back after it. Counted in the surface buffers gauge.
+///
+/// Err: [`Limit::ExportType`] where the buffer's memory requirements do not list the
+/// allocation's type `index`, ask more than its length or require an allocation of its own;
+/// [`Limit::BlockIds`]; [`Error::Vulkan`] where the buffer or its binding fails.
+///
+/// # Safety
+///
+/// `under` is an opaque surface's allocation ([`export_surface`]) of type `index`, exportable as
+/// `handle`.
+pub(crate) unsafe fn surface_view(
+    core: &Arc<Core>,
+    under: &Arc<Block>,
+    handle: crate::ExportHandle,
+    index: u32,
+) -> Result<Block, Error> {
+    let device = &core.device;
+    let len = under.memory.len;
+    let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle.vk());
+    let info = vk::BufferCreateInfo::default()
+        .size(len)
+        .usage(floor::BUFFER_USAGE)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .push_next(&mut external);
+    // SAFETY: `len` is the allocation's, at most `maxBufferSize` (`export_surface` rounds it), and
+    // the device's buffers export `handle` (`crate::Device::new_exported_surface` checked it).
+    let buffer =
+        unsafe { device.create_buffer(&info, None) }.map_err(Error::vulkan("vkCreateBuffer"))?;
+    let destroy = || {
+        // SAFETY: nothing uses the buffer.
+        unsafe { device.destroy_buffer(buffer, None) }
+    };
+    let mut dedicated = vk::MemoryDedicatedRequirements::default();
+    let mut needs = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+    let of = vk::BufferMemoryRequirementsInfo2::default().buffer(buffer);
+    // SAFETY: the buffer is live.
+    unsafe { device.get_buffer_memory_requirements2(&of, &mut needs) };
+    let needs = needs.memory_requirements;
+    // A buffer that requires an allocation of its own is bound in no other
+    // (`VUID-vkBindBufferMemory-buffer-01444`).
+    if needs.memory_type_bits & (1 << index) == 0
+        || needs.size > len
+        || dedicated.requires_dedicated_allocation != vk::FALSE
+    {
+        destroy();
+        return Err(Error::Limit(Limit::ExportType {
+            handle,
+            listed: Some(needs.memory_type_bits),
+        }));
+    }
+    // SAFETY: the allocation is of a type the buffer lists, at least its size, dedicated to
+    // nothing, made with device addresses and exportable as a handle the buffer names
+    // (`VUID-vkBindBufferMemory-memory-02726`); an offset of 0 meets every alignment.
+    if let Err(result) = unsafe { device.bind_buffer_memory(buffer, under.memory.memory, 0) } {
+        destroy();
+        return Err(Error::Vulkan {
+            call: "vkBindBufferMemory",
+            result,
+        });
+    }
+    let (id, allocation) = match core.pool.own_numbers() {
+        Ok(numbers) => numbers,
+        Err(error) => {
+            destroy();
+            return Err(error);
+        }
+    };
+    let address = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+    // SAFETY: the buffer has device-address usage and is bound.
+    let address = unsafe { device.get_buffer_device_address(&address) };
+    core.counters.rise(Gauge::SurfaceBuffers);
+    let memory = Memory {
+        id,
+        class: MemoryClass::Private,
+        len,
+        allocation,
+        memory: under.memory.memory,
+        base: 0,
+        buffer,
+        address,
+        mapping: None,
+        device_local: under.memory.device_local,
+        spilled: false,
+        own: Some(Own::Surface { import: false }),
+        zeroed: false,
+    };
+    Ok(Block::over(memory, Arc::clone(core), Arc::clone(under)))
+}
+
 /// Frees an imported or exported block given back: its buffer, then its memory, then runs an
-/// import's release, as the bytes are the consumer's alone again. The submissions made during
-/// the `vkFreeMemory` are counted.
+/// import's release, as the bytes are the consumer's alone again; of a surface's buffer on the
+/// opaque handle's allocation, the buffer alone. The submissions made during the `vkFreeMemory`
+/// are counted.
 fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
     // SAFETY: no GPU work that uses the block is pending (a command buffer or upload that uses it
     // holds it until it retires), and no buffer of it is left.
     unsafe { core.device.destroy_buffer(memory.buffer, None) };
+    // A surface's buffer on the opaque handle's allocation frees no memory: the block under it,
+    // given back after it, does.
+    if memory.own == Some(Own::Surface { import: false }) {
+        core.counters.fall(Gauge::SurfaceBuffers);
+        return;
+    }
     core.pool.freeing.store(true, Relaxed);
     // SAFETY: as above; nothing else is bound to the memory.
     unsafe { core.device.free_memory(memory.memory, None) };
     core.pool.freeing.store(false, Relaxed);
     core.counters.fall(Gauge::Blocks);
-    core.counters.fall(match memory.own {
-        Some(Own::Export(_)) => Gauge::Exports,
-        _ => Gauge::Imports,
-    });
+    match memory.own {
+        Some(Own::Export(_)) => core.counters.fall(Gauge::Exports),
+        Some(Own::Surface { .. }) => {
+            core.counters.fall(Gauge::SurfaceBuffers);
+            #[cfg(unix)]
+            core.counters.fall(Gauge::SurfaceImports);
+        }
+        _ => core.counters.fall(Gauge::Imports),
+    }
     if let Some(release) = release {
         release();
     }

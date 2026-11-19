@@ -219,6 +219,8 @@ pub(crate) enum Gauge {
     /// [`Gauges::surface_imports`]: a Unix host's alone, as the dma-buf is.
     #[cfg(unix)]
     SurfaceImports,
+    /// [`Gauges::surface_buffers`].
+    SurfaceBuffers,
 }
 
 /// A site that allocates on the consumer's threads, inside its calls, counted on its own in
@@ -380,6 +382,7 @@ struct Atomics {
     imports: AtomicU64,
     exports: AtomicU64,
     surface_imports: AtomicU64,
+    surface_buffers: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -790,6 +793,7 @@ impl Counters {
             Gauge::Exports => &a.exports,
             #[cfg(unix)]
             Gauge::SurfaceImports => &a.surface_imports,
+            Gauge::SurfaceBuffers => &a.surface_buffers,
         }
     }
 
@@ -945,6 +949,7 @@ impl Counters {
             imports: a.imports.load(Relaxed),
             exports: a.exports.load(Relaxed),
             surface_imports: a.surface_imports.load(Relaxed),
+            surface_buffers: a.surface_buffers.load(Relaxed),
         }
     }
 }
@@ -1245,12 +1250,15 @@ pub struct Metrics {
     /// counter runs ahead of its wait.
     pub waits_behind_counter: u64,
     /// Acquires of another API's writes into exported blocks recorded
-    /// ([`Block::external_writes_done`](crate::Block::external_writes_done)): one buffer
-    /// barrier each, in the upload, also counted in [`barriers`](Self::barriers).
+    /// ([`Block::external_writes_done`](crate::Block::external_writes_done)) and into exported
+    /// surfaces ([`Surface::external_writes_done`](crate::Surface::external_writes_done), and an
+    /// in-place surface's buffer at the [`Surface::buffer`](crate::Surface::buffer) call that
+    /// makes it): one barrier each, in the upload, also counted in [`barriers`](Self::barriers).
     pub external_acquires: u64,
-    /// Releases of exported blocks to another API recorded
-    /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external)):
-    /// one buffer barrier each, in the command buffer's work, also counted in
+    /// Releases of exported blocks and surfaces to another API recorded
+    /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external),
+    /// [`BlitCommandEncoder::release_surface_to_external`](crate::BlitCommandEncoder::release_surface_to_external)):
+    /// one barrier each, in the command buffer's work, also counted in
     /// [`barriers`](Self::barriers).
     pub external_releases: u64,
     /// Surfaces made in place
@@ -1460,6 +1468,12 @@ pub struct Gauges {
     /// A dma-buf surface's plane imports in place
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), each its own
     /// dedicated import of the surface's dma-buf, whose memory is not yet freed: each is also one
-    /// of [`blocks`](Self::blocks). Always 0 on a host without dma-bufs (Windows).
+    /// of [`blocks`](Self::blocks), a dma-buf surface's buffer among them. Always 0 on a host
+    /// without dma-bufs (Windows).
     pub surface_imports: u64,
+    /// Surfaces' buffers in place ([`Surface::buffer`](crate::Surface::buffer)) not yet freed:
+    /// an opaque handle's, a buffer on the surface's one allocation, and a dma-buf's, on one more
+    /// import of the dma-buf, which is also one of [`surface_imports`](Self::surface_imports) and
+    /// of [`blocks`](Self::blocks). A copy form's buffer is its block's, and not counted here.
+    pub surface_buffers: u64,
 }

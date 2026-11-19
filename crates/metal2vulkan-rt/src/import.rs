@@ -15,7 +15,7 @@ use crate::block::Block;
 use crate::device::{Core, Device};
 use crate::error::{Error, Limit};
 use crate::floor;
-use crate::memory::{self, ImportFailed, Mapping, Release};
+use crate::memory::{self, ImportFailed, Mapping, Own, Release};
 use ash::vk;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -219,7 +219,7 @@ impl Device {
             .push_next(&mut import)
             .push_next(&mut flags);
         // SAFETY: an import of the dma-buf into a type its query offered and its buffers can use.
-        match unsafe { memory::import(core, &info, handle.vk(), None) } {
+        match unsafe { memory::import(core, &info, handle.vk(), None, Own::Import) } {
             Ok(memory) => Ok((claim(core, memory, release), index)),
             Err(ImportFailed::Before(error)) => {
                 // Nothing was imported, so the fd is still ours: closed, where it is still the
@@ -333,10 +333,84 @@ impl Device {
             .push_next(&mut flags);
         // SAFETY: an import of the caller's memory, at the device's alignment, into a type its
         // query offered and its buffers can use.
-        let memory =
-            unsafe { memory::import(core, &info, handle.vk(), Some(Mapping::new(pointer))) }
-                .map_err(ImportFailed::error)?;
+        let memory = unsafe {
+            memory::import(
+                core,
+                &info,
+                handle.vk(),
+                Some(Mapping::new(pointer)),
+                Own::Import,
+            )
+        }
+        .map_err(ImportFailed::error)?;
         Ok((claim(core, memory, release), index))
+    }
+}
+
+/// Makes a dma-buf surface's buffer ([`crate::Surface::buffer`]): one more import of the
+/// surface's dma-buf, of its `len` bytes, through a duplicate of `fd`, the runtime's own fd of it,
+/// into memory type `index`, the one the planes' imports took, with device addresses, bound to a
+/// buffer at its first byte. Private, never mapped; counted in the surface gauges. Vulkan lets one
+/// payload be imported many times ("multiple times into a given Vulkan instance. In all cases,
+/// each import operation must create a distinct `VkDeviceMemory` object"). The import attempts no
+/// other type, as the dma-buf rule attempts nothing it is not sure of: where the fd's query or
+/// the buffer's memory requirements do not take `index`, or the requirements ask more than `len`,
+/// it refuses before any allocation. `fd` stays the runtime's whatever the answer.
+///
+/// Err: [`Limit::NoImport`] where the device's buffers import no dma-buf; [`Limit::ExportType`]
+/// where the type or the length is refused; [`Error::Fd`]; [`Limit::MemoryAllocations`];
+/// [`Limit::BlockIds`]; [`Error::Vulkan`] where the query or the import fails.
+#[cfg(unix)]
+pub(crate) fn surface_import(
+    core: &Arc<Core>,
+    fd: &std::os::fd::OwnedFd,
+    len: u64,
+    index: u32,
+) -> Result<memory::Block, Error> {
+    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+    let handle = ImportHandle::DmaBuf;
+    let Some(fds) = &core.imports.dma_buf else {
+        return Err(Error::Limit(Limit::NoImport { handle }));
+    };
+    let mut properties = vk::MemoryFdPropertiesKHR::default();
+    // SAFETY: the extensions are enabled; `fd` is open, and the query takes no ownership.
+    unsafe { fds.get_memory_fd_properties(handle.vk(), fd.as_raw_fd(), &mut properties) }
+        .map_err(Error::vulkan("vkGetMemoryFdPropertiesKHR"))?;
+    let needs = memory::import_requirements(core, len, handle.vk());
+    let takes = properties.memory_type_bits & needs.memory_type_bits;
+    if takes & (1 << index) == 0 || needs.size > len {
+        return Err(Error::Limit(Limit::ExportType {
+            handle: crate::ExportHandle::DmaBuf,
+            listed: Some(takes),
+        }));
+    }
+    let raw = fd.try_clone().map_err(Error::Fd)?.into_raw_fd();
+    let identity = identity(raw);
+    let mut import = vk::ImportMemoryFdInfoKHR::default()
+        .handle_type(handle.vk())
+        .fd(raw);
+    let mut flags =
+        vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+    let info = vk::MemoryAllocateInfo::default()
+        .allocation_size(len)
+        .memory_type_index(index)
+        .push_next(&mut import)
+        .push_next(&mut flags);
+    let own = Own::Surface { import: true };
+    // SAFETY: an import of the dma-buf into a type its query offered, its buffers list and its
+    // planes' imports took, of at least the buffer's size.
+    match unsafe { memory::import(core, &info, handle.vk(), None, own) } {
+        Ok(memory) => Ok(memory::Block::new(memory, Arc::clone(core))),
+        Err(ImportFailed::Before(error)) => {
+            // Nothing was imported, so the duplicate is still ours: closed, where it is still
+            // the dma-buf.
+            if identity.is_some() && identity == self::identity(raw) {
+                // SAFETY: `raw` is open and names the dma-buf, and no one else owns it.
+                drop(unsafe { OwnedFd::from_raw_fd(raw) });
+            }
+            Err(error)
+        }
+        Err(ImportFailed::After(error)) => Err(error),
     }
 }
 

@@ -19,18 +19,19 @@
 //! Both forms lay the planes alike: one pitch for every plane, and each plane at an exact start.
 
 use crate::block::Block;
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferObject};
 #[cfg(unix)]
 use crate::counters::Gauge;
 use crate::counters::Metric;
-use crate::device::{Core, Device};
+use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::export::{Export, ExportHandle};
+use crate::hazard::HeapId;
 use crate::memory;
 use crate::submit::Held;
 use crate::texture::{Backing, SurfaceImage, Texture, TextureDescriptor, TextureObject};
 use ash::vk;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// The most planes a surface has: a DRM format's memory planes.
 const MAX_PLANES: usize = 4;
@@ -152,8 +153,40 @@ pub struct Surface {
     device: Device,
     handle: ExportHandle,
     planes: Vec<Texture>,
-    /// The copy form's block and its buffer; `None` in place.
-    copy: Option<(Block, Buffer)>,
+    kind: Kind,
+}
+
+/// The surface's form, and what its buffer is ([`Surface::buffer`]).
+enum Kind {
+    /// In place: the buffer's memory, and the buffer once it is made.
+    InPlace(View),
+    /// The copy form's block and its buffer, the surface's buffer.
+    Copy(Block, Buffer),
+}
+
+/// An in-place surface's buffer: made at its first call, on the surface's own memory.
+struct View {
+    /// The surface's id in the hazard sets, which its planes and its buffer take as one
+    /// ([`HeapId::unit`]).
+    unit: Arc<HeapId>,
+    /// The memory's length, the export's size.
+    len: u64,
+    state: Mutex<ViewState>,
+}
+
+/// What an in-place surface's buffer is made on, until it is made.
+enum ViewState {
+    Source(Source),
+    Made(Buffer),
+}
+
+/// The memory an in-place surface's buffer is made on.
+enum Source {
+    /// The opaque handle's one allocation, which the planes are bound in, and its memory type.
+    Opaque(Arc<memory::Block>, u32),
+    /// The runtime's own fd of the dma-buf, and the memory type the planes' imports took.
+    #[cfg(unix)]
+    DmaBuf(std::os::fd::OwnedFd, u32),
 }
 
 impl std::fmt::Debug for Surface {
@@ -161,7 +194,7 @@ impl std::fmt::Debug for Surface {
         f.debug_struct("Surface")
             .field("handle", &self.handle)
             .field("planes", &self.planes.len())
-            .field("in_place", &self.copy.is_none())
+            .field("in_place", &matches!(self.kind, Kind::InPlace(_)))
             .finish()
     }
 }
@@ -512,11 +545,13 @@ fn common_type(core: &Core, made: &[Made]) -> Option<u32> {
     type_of(&bits, private, core.device_local)
 }
 
-/// What the in-place forms make: each plane's image, bound, and the export.
+/// What the in-place forms make: each plane's image, bound, the export, and what the surface's
+/// buffer is made on.
 struct InPlace {
     images: Vec<SurfaceImage>,
     export: Export,
     planes: Vec<PlaneLayout>,
+    source: Source,
 }
 
 /// Destroys images not yet bound or wrapped.
@@ -609,10 +644,11 @@ impl Device {
             Ok(made) => made,
             Err(reason) => return self.copy_form(spec, &plans, multiple, reason),
         };
+        let unit = HeapId::unit(core);
         let mut planes = Vec::with_capacity(count);
         let mut images = made.images.into_iter();
         for (plane, image) in spec.planes.iter().zip(images.by_ref()) {
-            match self.surface_texture(&plane.descriptor, plane.index, image) {
+            match self.surface_texture(&plane.descriptor, plane.index, image, Arc::clone(&unit)) {
                 Ok(texture) => planes.push(texture),
                 Err(error) => {
                     for image in images {
@@ -627,11 +663,16 @@ impl Device {
         let value = core.work.flush();
         core.done.wait(core, value)?;
         core.counters.count(Metric::SurfacesInPlace);
+        let view = View {
+            unit,
+            len: made.export.size,
+            state: Mutex::new(ViewState::Source(made.source)),
+        };
         let surface = Surface {
             device: self.clone(),
             handle,
             planes,
-            copy: None,
+            kind: Kind::InPlace(view),
         };
         let export = SurfaceExport {
             export: made.export,
@@ -678,7 +719,7 @@ impl Device {
             device: self.clone(),
             handle: spec.handle,
             planes,
-            copy: Some((block, buffer)),
+            kind: Kind::Copy(block, buffer),
         };
         let export = SurfaceExport {
             export,
@@ -798,6 +839,7 @@ impl Device {
             size: block.memory.len,
             memory_type: index,
         };
+        let source = Source::Opaque(Arc::clone(&block), index);
         let images = (made.into_iter())
             .map(|m| SurfaceImage {
                 image: m.image,
@@ -818,6 +860,7 @@ impl Device {
             images,
             export,
             planes,
+            source,
         }))
     }
 
@@ -978,6 +1021,7 @@ impl Device {
         };
         let mut images = Vec::with_capacity(made.len());
         let mut imported: Vec<vk::DeviceMemory> = Vec::with_capacity(made.len());
+        let mut first_type = None;
         let undo = |imported: Vec<vk::DeviceMemory>,
                     made: Vec<Made>,
                     error: Error|
@@ -1022,6 +1066,7 @@ impl Device {
                 0 => bits.trailing_zeros(),
                 _ => index,
             };
+            first_type = first_type.or(Some(import_type));
             let mut import = vk::ImportMemoryFdInfoKHR::default()
                 .handle_type(spec.handle.vk())
                 .fd(fd.as_raw_fd());
@@ -1052,6 +1097,11 @@ impl Device {
             Ok(fd) => fd,
             Err(error) => return undo(imported, made, error),
         };
+        // The runtime's own fd, which the surface's buffer's import duplicates.
+        let spare = match core.exports.handle(block, spec.handle) {
+            Ok(fd) => fd,
+            Err(error) => return undo(imported, made, error),
+        };
         free_block();
         for (m, (memory, size)) in made.into_iter().zip(imported.into_iter().zip(sizes)) {
             images.push(SurfaceImage {
@@ -1078,6 +1128,7 @@ impl Device {
             images,
             export,
             planes,
+            source: Source::DmaBuf(spare, first_type.unwrap_or(index)),
         }))
     }
 }
@@ -1095,12 +1146,131 @@ impl Surface {
 
     /// The copy form's buffer, over the whole block; `None` in place.
     pub(crate) fn copied(&self) -> Option<&Buffer> {
-        self.copy.as_ref().map(|(_, buffer)| buffer)
+        match &self.kind {
+            Kind::Copy(_, buffer) => Some(buffer),
+            Kind::InPlace(_) => None,
+        }
+    }
+
+    /// The buffer in place, where [`buffer`](Self::buffer) has made it.
+    pub(crate) fn made_buffer(&self) -> Option<Buffer> {
+        match &self.kind {
+            Kind::InPlace(view) => match &*lock(&view.state) {
+                ViewState::Made(buffer) => Some(buffer.clone()),
+                ViewState::Source(_) => None,
+            },
+            Kind::Copy(..) => None,
+        }
     }
 
     /// Whether the surface is `core`'s.
     pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
         Arc::ptr_eq(self.device.core(), core)
+    }
+
+    /// An IOSurface-backed buffer's counterpart (`MTLBuffer.h` speaks of a buffer "backed by an
+    /// IOSurface"; `MTLDevice.h` makes a plane's texture from one,
+    /// `newTextureWithDescriptor:iosurface:plane:`, and no buffer): a buffer over the surface's
+    /// own memory, of the export's size ([`Export::size`]), whose bytes lie at the layout the
+    /// [`SurfaceExport`] states: plane `i`'s row `y` at `planes[i].offset + y *
+    /// planes[i].row_pitch`. Private: its `contents` is `None`, and the host reads its bytes
+    /// through a copy into a Shared buffer, where Metal's host reads an IOSurface's bytes through
+    /// the surface's own mapping. Every call answers the same buffer.
+    ///
+    /// **Form.** In place, the buffer is made at the first call, never at the surface's make: of
+    /// an opaque handle, a buffer bound at the first byte of the one allocation the planes are
+    /// bound in; of a dma-buf, a buffer on one more import of the surface's dma-buf, into the
+    /// memory type the planes' imports took, which the call attempts only where the fd's query
+    /// and the buffer's memory requirements list that type. Either counts in
+    /// [`Gauges::surface_buffers`](crate::Gauges::surface_buffers) while it lives, a dma-buf's
+    /// also in [`Gauges::surface_imports`](crate::Gauges::surface_imports). The first call also
+    /// records the buffer's acquire from the other API's queue family, as
+    /// [`external_writes_done`](Self::external_writes_done) records the planes', into the upload
+    /// that goes ahead of every command buffer committed after it, counted in
+    /// [`Metrics::external_acquires`](crate::Metrics::external_acquires); from then each
+    /// [`external_writes_done`](Self::external_writes_done) acquires the buffer with the planes,
+    /// and each [`release_surface_to_external`](crate::BlitCommandEncoder::release_surface_to_external)
+    /// releases it with them. In the copy form the buffer is the block's, which the planes are
+    /// textures over, so the planes' copies carry the bytes between them.
+    ///
+    /// **Order.** The surface, its planes (and their views) and its buffer are one resource in
+    /// the runtime's ordering of reads and writes, as a heap's resources are: a write through the
+    /// buffer is ordered before a later read through a plane, and the reverse, as two uses of one
+    /// texture are.
+    ///
+    /// **Basis.** Vulkan makes the buffer and the planes aliases of the surface's memory
+    /// (section 12.11, Memory Aliasing): "A range of a VkDeviceMemory allocation is aliased if it
+    /// is bound to multiple resources simultaneously, as described below, via vkBindImageMemory,
+    /// vkBindBufferMemory, vkBindAccelerationStructureMemoryNV, vkBindTensorMemoryARM, via sparse
+    /// memory bindings, or by binding the memory to resources in multiple Vulkan instances or
+    /// external APIs using external memory handle export and import mechanisms." The planes in
+    /// place are linear images in the general layout, and "Buffers, linear tensors, and linear
+    /// image subresources are considered host-accessible subresources when they are in any of
+    /// these layouts: VK_IMAGE_LAYOUT_PREINITIALIZED, VK_IMAGE_LAYOUT_GENERAL,
+    /// VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT", and "If two aliases are both host-accessible, then
+    /// they interpret the contents of the memory in consistent ways, and data written to one alias
+    /// can be read by the other alias." A dma-buf's buffer and planes are distinct imports of one
+    /// payload in one instance, which the fd import allows ("multiple times into a given Vulkan
+    /// instance. In all cases, each import operation must create a distinct VkDeviceMemory
+    /// object"); the section names aliases through export and import "in multiple Vulkan
+    /// instances or external APIs" ("Aliases created by binding the same memory to resources in
+    /// multiple Vulkan instances or external APIs using external memory handle export and import
+    /// mechanisms interpret the contents of the memory in consistent ways, and data written to one
+    /// alias can be read by the other alias"), and the runtime takes imports in one instance as
+    /// those aliases, as its planes, each on an import of its own, already do. The order is the
+    /// section's: "Use of an overlapping range by two aliases must be separated by a memory
+    /// dependency using the appropriate access types if at least one of those uses performs
+    /// writes"; the runtime's are global memory barriers, which reach every alias.
+    ///
+    /// Err: in place, at the call that makes the buffer: [`Refusal::InScheduledHandler`] in a
+    /// scheduled handler; [`Error::Quiesced`]; [`Limit::ExportType`] where the buffer's memory
+    /// requirements (and for a dma-buf the fd's query) do not list the surface memory's type, ask
+    /// more than its length, or require an allocation of its own;
+    /// [`Limit::NoImport`](crate::Limit::NoImport) for a dma-buf on a device whose buffers import
+    /// none; [`Error::Fd`]; [`Limit::MemoryAllocations`]; [`Limit::BlockIds`]; [`Error::Vulkan`]
+    /// where the buffer, its import, its binding or the upload's command buffer cannot be made.
+    /// A refused call makes nothing, and a later call tries again.
+    pub fn buffer(&self) -> Result<Buffer, Error> {
+        let view = match &self.kind {
+            Kind::Copy(_, buffer) => return Ok(buffer.clone()),
+            Kind::InPlace(view) => view,
+        };
+        let mut state = lock(&view.state);
+        let source = match &*state {
+            ViewState::Made(buffer) => return Ok(buffer.clone()),
+            ViewState::Source(source) => source,
+        };
+        crate::command::not_in_scheduled_handler()?;
+        let core = self.device.core();
+        if core.closed() {
+            return Err(Error::Quiesced);
+        }
+        let block = match source {
+            Source::Opaque(under, index) => {
+                // SAFETY: the allocation is the opaque handle's surface allocation, of type
+                // `index`, exportable as the surface's handle.
+                unsafe { memory::surface_view(core, under, self.handle, *index) }?
+            }
+            #[cfg(unix)]
+            Source::DmaBuf(fd, index) => crate::import::surface_import(core, fd, view.len, *index)?,
+        };
+        let block = Arc::new(block);
+        let (raw, _) = block.memory.range(0);
+        let acquire = [acquire(self.handle.family(), core.family, raw)];
+        let held = [Held::Block(Arc::clone(&block))];
+        core.work.upload(core, None, held, |device, command| {
+            let dependency = vk::DependencyInfo::default().buffer_memory_barriers(&acquire);
+            // SAFETY: the upload's command buffer is recording, under the work lock; the buffer
+            // spans the surface's memory, which the upload holds, and a dma-buf's foreign family
+            // is enabled.
+            unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
+        })?;
+        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::ExternalAcquires);
+        let unit = Some(Arc::clone(&view.unit));
+        let buffer = self.device.buffer(block, 0, view.len, None, None, unit);
+        *state = ViewState::Made(buffer.clone());
+        Ok(buffer)
     }
 
     /// No Metal counterpart: the other API's writes into this surface are done, and the
@@ -1111,8 +1281,9 @@ impl Surface {
     ///
     /// In place, the call records each plane's image's acquire from the other API's queue
     /// family (`VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf, `VK_QUEUE_FAMILY_EXTERNAL` for an
-    /// opaque handle), the general layout kept, into the upload that goes ahead of every command
-    /// buffer committed after it: one barrier of the planes, counted in
+    /// opaque handle), the general layout kept, and the surface's buffer's where
+    /// [`buffer`](Self::buffer) has made it, into the upload that goes ahead of every command
+    /// buffer committed after it: one barrier of the planes and the buffer, counted in
     /// [`Metrics::external_acquires`](crate::Metrics::external_acquires). In the copy form it is
     /// the block's acquire, and the submissions copy the bytes into the planes' images. The
     /// contract is the block's.
@@ -1120,7 +1291,7 @@ impl Surface {
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`]; and
     /// [`Error::Vulkan`] where the upload's command buffer cannot be made.
     pub fn external_writes_done(&self) -> Result<(), Error> {
-        if let Some((block, _)) = &self.copy {
+        if let Kind::Copy(block, _) = &self.kind {
             return block.external_writes_done();
         }
         crate::command::not_in_scheduled_handler()?;
@@ -1143,17 +1314,38 @@ impl Surface {
                     .subresource_range(texture.whole())
             })
             .collect();
-        let held = std::array::from_fn::<_, MAX_PLANES, _>(|at| {
-            Held::Texture(Arc::clone(&images[at % images.len()]))
+        let buffer = self.made_buffer();
+        let buffers: Vec<vk::BufferMemoryBarrier2<'static>> = (buffer.iter())
+            .map(|buffer| acquire(family, core.family, buffer.device_range().0))
+            .collect();
+        let held = std::array::from_fn::<_, { MAX_PLANES + 1 }, _>(|at| match &buffer {
+            Some(buffer) if at == MAX_PLANES => Held::Block(Arc::clone(buffer.held().0)),
+            _ => Held::Texture(Arc::clone(&images[at % images.len()])),
         });
         core.work.upload(core, None, held, |device, command| {
-            let dependency = vk::DependencyInfo::default().image_memory_barriers(&acquires);
+            let dependency = vk::DependencyInfo::default()
+                .image_memory_barriers(&acquires)
+                .buffer_memory_barriers(&buffers);
             // SAFETY: the upload's command buffer is recording, under the work lock; it holds the
-            // images, which are in the general layout, and a dma-buf's foreign family is enabled.
+            // images, which are in the general layout, and the buffer's memory, and a dma-buf's
+            // foreign family is enabled.
             unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
         })?;
         core.counters.count(Metric::Barriers);
         core.counters.count(Metric::ExternalAcquires);
         Ok(())
     }
+}
+
+/// The acquire of a surface's buffer `buffer` from the other API's queue family `from` to the
+/// runtime's `to`, made visible to every later command.
+fn acquire(from: u32, to: u32, buffer: vk::Buffer) -> vk::BufferMemoryBarrier2<'static> {
+    vk::BufferMemoryBarrier2::default()
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
+        .src_queue_family_index(from)
+        .dst_queue_family_index(to)
+        .buffer(buffer)
+        .offset(0)
+        .size(vk::WHOLE_SIZE)
 }

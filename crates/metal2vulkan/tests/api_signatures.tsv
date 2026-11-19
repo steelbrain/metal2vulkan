@@ -2348,6 +2348,7 @@ field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.stage_entries	pub stage_entries: u64
 field	metal2vulkan-rt::Gauges.stage_entry_bytes	pub stage_entry_bytes: u64
 field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
+field	metal2vulkan-rt::Gauges.surface_buffers	pub surface_buffers: u64
 field	metal2vulkan-rt::Gauges.surface_imports	pub surface_imports: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::Gauges.textures_copied_over	pub textures_copied_over: u64
@@ -9801,6 +9802,7 @@ method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&sel
 method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
 method	metal2vulkan-rt::SharedEvent::signaled_value	pub fn signaled_value(&self) -> u64
 method	metal2vulkan-rt::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> Result<bool, Error>
+method	metal2vulkan-rt::Surface::buffer	pub fn buffer(&self) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Surface::external_writes_done	pub fn external_writes_done(&self) -> Result<(), Error>
 method	metal2vulkan-rt::Surface::handle	pub fn handle(&self) -> ExportHandle
 method	metal2vulkan-rt::Surface::planes	pub fn planes(&self) -> &[Texture]
@@ -13829,6 +13831,7 @@ variant	metal2vulkan-rt::DrawKind::Viewport	Viewport
 variant	metal2vulkan-rt::DrawKind::Viewports	Viewports
 variant	metal2vulkan-rt::DrawKind::VisibilityResults	VisibilityResults
 variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)
+variant	metal2vulkan-rt::Error::Fd	Fd(io::Error)
 variant	metal2vulkan-rt::Error::Limit	Limit(Limit)
 variant	metal2vulkan-rt::Error::Loader	Loader(ash::LoadingError)
 variant	metal2vulkan-rt::Error::NoDirectDriverLoading	NoDirectDriverLoading
