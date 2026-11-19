@@ -364,8 +364,10 @@ pub enum Refusal {
         index: u32,
     },
     /// A texture whose usage shaders reach (read or write) made without an index, or one of no
-    /// such usage made with one ([`Device::new_texture`](crate::Device::new_texture)). Metal has
-    /// no counterpart: Metal gives every texture a resource ID itself.
+    /// such usage made with one ([`Device::new_texture`](crate::Device::new_texture)). A texture
+    /// shaders reach only through its views is made without one
+    /// ([`Device::new_texture_for_views`](crate::Device::new_texture_for_views)). Metal has no
+    /// counterpart: Metal gives every texture a resource ID itself.
     ///
     /// Basis: ours (an index is an element of set 1's texture arrays, which only shaders read).
     TextureIndex {

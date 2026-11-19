@@ -678,7 +678,23 @@ impl Device {
         descriptor: &TextureDescriptor,
         index: Option<u32>,
     ) -> Result<Texture, Error> {
-        self.texture(descriptor, index, Source::Plain)
+        self.texture(descriptor, Reach::Index(index), Source::Plain)
+    }
+
+    /// No Metal counterpart of its own: a texture as [`Device::new_texture`] makes it, of any
+    /// usage, with no index of its own. Shaders reach it only through its views
+    /// ([`Texture::new_texture_view`]), each with an index and elements of set 1 of its own, as
+    /// each Metal texture has a `gpuResourceID` of its own. It is the one image under textures
+    /// the consumer makes as its views: the textures Metal makes over one IOSurface plane
+    /// (`newTextureWithDescriptor:iosurface:plane:`), for one. Copies, uploads and readbacks reach
+    /// it as they reach any texture. Where Metal gives every texture an index, this one has none:
+    /// its [`Texture::gpu_resource_id`] answers index 0, and a slot that binds it reads Metal's
+    /// nil texture.
+    ///
+    /// Err: as [`Device::new_texture`], but for [`Refusal::TextureIndex`] and
+    /// [`Refusal::IndicesNotGranted`].
+    pub fn new_texture_for_views(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error> {
+        self.texture(descriptor, Reach::Views, Source::Plain)
     }
 
     /// `heapTextureSizeAndAlignWithDescriptor:`: the bytes and alignment a texture of
@@ -810,7 +826,11 @@ impl Device {
                 pixel_format: descriptor.pixel_format,
             }));
         }
-        self.texture(descriptor, index, Source::Heap(block, heap, offset))
+        self.texture(
+            descriptor,
+            Reach::Index(index),
+            Source::Heap(block, heap, offset),
+        )
     }
 
     /// `newTextureWithDescriptor:` with `MTLStorageModeManaged`, at `index`: as
@@ -842,7 +862,7 @@ impl Device {
         }
         let mut d = *descriptor;
         d.storage_mode = StorageMode::Managed;
-        self.texture(&d, index, Source::Managed(bytes, places))
+        self.texture(&d, Reach::Index(index), Source::Managed(bytes, places))
     }
 
     /// A descriptor's checks, as Metal makes them, and what its texture is made of: the shape,
@@ -1009,19 +1029,23 @@ impl Device {
         })
     }
 
-    /// A texture of `descriptor` at `index`, its image made as `source` says.
+    /// A texture of `descriptor`, reached as `reach` says, its image made as `source` says.
     fn texture(
         &self,
         descriptor: &TextureDescriptor,
-        index: Option<u32>,
+        reach: Reach,
         source: Source<'_>,
     ) -> Result<Texture, Error> {
         let d = *descriptor;
         let (shape, plan, usage) = self.prepare(&d)?;
         let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
-        if reached != index.is_some() {
-            return Err(Error::Refused(Refusal::TextureIndex { index }));
-        }
+        let index = match reach {
+            Reach::Index(index) if reached != index.is_some() => {
+                return Err(Error::Refused(Refusal::TextureIndex { index }));
+            }
+            Reach::Index(index) => index,
+            Reach::Views => None,
+        };
         let core = self.core();
         let (named, first, home) = match &source {
             Source::Plain | Source::Heap(..) => (None, vk::ImageLayout::UNDEFINED, plan.home),
@@ -1994,6 +2018,14 @@ unsafe fn make(
         unsafe { made.destroy(core) };
     }
     objects
+}
+
+/// Where shaders reach a texture the device makes.
+enum Reach {
+    /// At its own index, given exactly where its usage reaches shaders.
+    Index(Option<u32>),
+    /// Through its views alone ([`Device::new_texture_for_views`]): no index of its own.
+    Views,
 }
 
 /// What a texture's image is made from.
@@ -3835,7 +3867,7 @@ impl Buffer {
             },
         };
         let over = Source::Over(self, offset, bytes_per_row);
-        self.device().texture(&d, index, over)
+        self.device().texture(&d, Reach::Index(index), over)
     }
 }
 

@@ -11,7 +11,9 @@
 //! texture with no storage view empties the storage element an earlier one wrote, and once the
 //! last placed goes, the index samples zero. The rule holds at a constexpr sampler's index, and
 //! over a texture and a sampler state the program released while a command buffer that used
-//! them is still pending.
+//! them is still pending. A texture made for its views has no index of its own: `sample_down`
+//! samples and writes it through views at their own indices, twins and a view of a view among
+//! them, while a texture shaders reach made without an index is still refused.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
@@ -457,6 +459,112 @@ mod on_device {
             let (got, want) = (texels(&written, SIDE / 2), means());
             assert!(near(&got, &want), "{name}: {got:?} {want:?}");
             drop((queue, down, sampler, source, written));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    /// Two textures reached only through their views (`Device::new_texture_for_views`), of
+    /// Metal's unknown usage, each the one image under textures a consumer makes as its views:
+    /// neither takes an index or a descriptor slot, and each answers index 0. The source's views
+    /// at 4,096 and 4,097 (twins) and a view of the second at 4,098, and the target's at 1 and 2,
+    /// each answer their own. The source's bytes go in through the source itself, and the target's
+    /// come back through the target itself. One dispatch of `sample_down` samples the view at
+    /// 4,096 and writes the target's view at 1; with the target zeroed through itself, a second
+    /// samples the view of a view at 4,098 and writes the target's view at 2. Each time the target
+    /// holds the linear filter's mean of the source. A texture of shader usage that
+    /// `Device::new_texture` makes without an index, and a view of the source without one, are
+    /// still `Refusal::TextureIndex`.
+    #[test]
+    fn every_device_samples_and_writes_a_texture_through_its_views() {
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("sampling_through_views", |name, _, device| {
+            let counters = device.counters();
+            let grants = [
+                (IndexClass::Texture, 4096, 4),
+                (IndexClass::Texture, 1, 4),
+                (IndexClass::Sampler, 1, 1),
+            ]
+            .map(|(class, first, count)| {
+                (device.grant_indices(class, first, count))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let format = PixelFormat::RGBA16Float;
+            let for_views = |side| {
+                let mut d = TextureDescriptor::new(TextureType::Type2D, format, side, side);
+                // No bits: Metal's unknown usage.
+                d.usage = TextureUsage::empty();
+                (device.new_texture_for_views(&d)).unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            let slots = counters.gauges().descriptor_slots;
+            let (source, target) = (for_views(SIDE), for_views(SIDE / 2));
+            assert_eq!(counters.gauges().descriptor_slots, slots, "{name}: slots");
+            let view = |texture: &Texture, index| {
+                (texture.new_texture_view(format, TextureType::Type2D, 0..1, 0..1, Some(index)))
+                    .unwrap_or_else(|error| panic!("{name}: a view at {index}: {error}"))
+            };
+            let (first, twin) = (view(&source, 4096), view(&source, 4097));
+            let of_twin = view(&twin, 4098);
+            let (written, written_twin) = (view(&target, 1), view(&target, 2));
+            let views = [
+                &source,
+                &target,
+                &first,
+                &twin,
+                &of_twin,
+                &written,
+                &written_twin,
+            ];
+            assert_eq!(
+                views.map(|texture| texture.gpu_resource_id().index),
+                [0, 0, 4096, 4097, 4098, 1, 2],
+                "{name}: the indices"
+            );
+            fill(name, &source);
+            let sampler = linear(name, &device, 1);
+            let down = down_state(name, &device, &library);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let want = means();
+            sample_down(name, &queue, (&down, &sampler), [&first, &written]);
+            let got = texels(&target, SIDE / 2);
+            assert!(near(&got, &want), "{name}: 4096 into 1: {got:?} {want:?}");
+            let half_side = SIDE / 2;
+            let zeros = vec![0u8; (half_side * half_side * 8) as usize];
+            let whole = Region {
+                origin: [0; 3],
+                size: [half_side, half_side, 1],
+            };
+            let (row, image) = (u64::from(half_side * 8), zeros.len() as u64);
+            (target.replace_region(whole, 0, 0, &zeros, row, image))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let got = texels(&target, half_side);
+            assert!(got.iter().all(|&v| v == 0.0), "{name}: zeroed {got:?}");
+            sample_down(name, &queue, (&down, &sampler), [&of_twin, &written_twin]);
+            let got = texels(&target, half_side);
+            assert!(near(&got, &want), "{name}: 4098 into 2: {got:?} {want:?}");
+
+            // A texture made with an index of its own, and a view, still take one where shaders
+            // reach them.
+            let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
+            d.usage = TextureUsage::SHADER_READ;
+            let unindexed = [
+                device.new_texture(&d, None).map(drop),
+                (source.new_texture_view(format, TextureType::Type2D, 0..1, 0..1, None)).map(drop),
+            ];
+            for result in unindexed {
+                assert!(
+                    matches!(
+                        result,
+                        Err(Error::Refused(Refusal::TextureIndex { index: None }))
+                    ),
+                    "{name}: {result:?}"
+                );
+            }
+            drop((queue, down, sampler, first, twin, of_twin));
+            drop((written, written_twin, source, target));
             for grant in grants {
                 (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             }

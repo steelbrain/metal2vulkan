@@ -676,6 +676,16 @@ made, with no lock, and never rewritten for layouts.
   view is a view of the first parent. Refused, as Metal's validation stops them: an empty range of
   levels or slices, or one past the parent's (`Refusal::TextureViewRange`), and another pixel format
   of a texture made without `PixelFormatView` usage (`Refusal::TextureViewFormat`).
+- `Device::new_texture_for_views(descriptor)` has no Metal counterpart of its own: a texture as
+  `new_texture` makes it, of any usage, with no index. Shaders reach it only through its views,
+  each at an index of its own, which a view of a texture shaders reach takes as above. It is the
+  one image under textures the consumer makes as its views: the textures Metal makes over one
+  IOSurface plane (`newTextureWithDescriptor:iosurface:plane:`), each with a `gpuResourceID` of
+  its own, are its views at their own indices, two such textures two views. Copies,
+  `replace_region` and `get_bytes` reach it as they reach any texture. What differs: Metal gives
+  every texture an index, and this one has none, so its `gpu_resource_id` answers index 0 and a
+  slot that binds it reads Metal's nil texture. `new_texture` still refuses a texture shaders
+  reach made without an index (`Refusal::TextureIndex`).
 - `Device::pixel_format_info(raw)` is `MTLPixelFormatGetInfoForDevice` (Apple SPI): Metal's
   description of a raw pixel format value, its name, Apple's flags word, cast class and four
   words (a block's bytes and extent for a format of blocks), as an Apple M3 Max answers it under

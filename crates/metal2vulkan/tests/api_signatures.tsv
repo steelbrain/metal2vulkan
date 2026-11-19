@@ -9605,6 +9605,7 @@ method	metal2vulkan-rt::Device::new_managed_texture	pub fn new_managed_texture(&
 method	metal2vulkan-rt::Device::new_sampler_state	pub fn new_sampler_state(&self, descriptor: &SamplerDescriptor, index: u32) -> Result<SamplerState, Error>
 method	metal2vulkan-rt::Device::new_shared_event	pub fn new_shared_event(&self) -> Result<SharedEvent, Error>
 method	metal2vulkan-rt::Device::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>) -> Result<Texture, Error>
+method	metal2vulkan-rt::Device::new_texture_for_views	pub fn new_texture_for_views(&self, descriptor: &TextureDescriptor) -> Result<Texture, Error>
 method	metal2vulkan-rt::Device::pixel_format_info	pub fn pixel_format_info(&self, raw: u64) -> PixelFormatInfo
 method	metal2vulkan-rt::Device::quiesce	pub fn quiesce(&self, timeout: Duration) -> bool
 method	metal2vulkan-rt::Device::raw	pub fn raw(&self) -> RawDevice<'_>
