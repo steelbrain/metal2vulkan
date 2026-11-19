@@ -627,7 +627,13 @@ HARNESS_CEILINGS = {
     # rt at ac1896537f: a submit of 603 us inside an allocation of 661 us on the 3090, 579 us inside
     # 647 us on the 2080, against a median submit of 2 to 3 us. The hold is one allocation per
     # block made, about as long as the take would spend allocating on its own thread.
-    "10de:1e87": {"create_private_16MiB/first_take": 1.40},
+    "10de:1e87": {"create_private_16MiB/first_take": 1.40,
+                  # Ruled by the planner on 2026-11-19 on the rows' medians in the alternated run
+                  # m3-max-51634, the higher of base and head: a known gap, the driver's allocation
+                  # of host-visible system memory, about 12.5 ms for 64 MiB where the old runtime's
+                  # import of its own pages takes about 5.8 (m3-max-48212); only a driver-owned form
+                  # at that cost reopens it. The 3090 takes the line from its own rows.
+                  "create_64MiB/first_take": 2.30, "create_64MiB/device_first": 2.14},
     "10de:2204": {"create_private_16MiB/first_take": 1.40},
     # 8086:3e9b's zero_products has none: the row runs level with old, the new runtime about 1%
     # ahead (m3-max-47846). A grid-edge test that decodes and compares the position ahead of the
