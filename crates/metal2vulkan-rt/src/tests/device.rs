@@ -243,7 +243,8 @@ fn every_device_joins_its_cache_directory_s_removal_at_teardown() {
 
 /// The consumer's extensions: the instance and every device of the cfg's kind enable each one they
 /// offer, once, after the floor's (and the instance's after the portability listing, where the
-/// loader offers it), and pass over the rest. `VK_EXT_swapchain_maintenance1` goes
+/// loader offers it), and pass over the rest; with the tests' own driver, each one the loader or
+/// that driver offers, then direct driver loading. `VK_EXT_swapchain_maintenance1` goes
 /// with its feature structure, and only where the instance has its dependency.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
@@ -267,8 +268,24 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
     ]);
     let (entry, vk_instance) = instance.raw();
     // SAFETY: the loader is loaded.
-    let offered = unsafe { entry.enumerate_instance_extension_properties(None) }
+    let mut offered = unsafe { entry.enumerate_instance_extension_properties(None) }
         .expect("the instance extensions");
+    // Where the tests give the loader a driver of their own, its extensions count too: the
+    // loader does not ask such a driver for them.
+    let direct = crate::tests::validation::direct_driver();
+    if let Some(driver) = direct {
+        // SAFETY: the driver's library stays loaded for the process.
+        let own = unsafe {
+            ash::Entry::from_static_fn(ash::StaticFn {
+                get_instance_proc_addr: driver,
+            })
+        };
+        // SAFETY: the driver is loaded.
+        offered.extend(
+            unsafe { own.enumerate_instance_extension_properties(None) }
+                .expect("the driver's instance extensions"),
+        );
+    }
     let offers = |name: &CStr| {
         offered
             .iter()
@@ -281,6 +298,9 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
             .copied()
             .filter(|&name| offers(name)),
     );
+    if direct.is_some() {
+        expected.push(ash::lunarg::direct_driver_loading::NAME);
+    }
     let enabled: Vec<&CStr> = instance.extensions().iter().map(|n| n.as_c_str()).collect();
     assert_eq!(enabled, expected, "the instance's extensions");
     let maintenance = enabled.contains(&ash::ext::surface_maintenance1::NAME);

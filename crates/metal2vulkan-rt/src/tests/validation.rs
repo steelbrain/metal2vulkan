@@ -111,7 +111,7 @@ pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
 /// `vk_icdGetInstanceProcAddr` (a driver built for the loader exports it), else its
 /// `vkGetInstanceProcAddr`. None where the variable is unset. A library that does not load, or
 /// exports neither, fails the test.
-fn direct_driver() -> Option<ash::vk::PFN_vkGetInstanceProcAddr> {
+pub(crate) fn direct_driver() -> Option<ash::vk::PFN_vkGetInstanceProcAddr> {
     static DRIVER: std::sync::OnceLock<Option<ash::vk::PFN_vkGetInstanceProcAddr>> =
         std::sync::OnceLock::new();
     *DRIVER.get_or_init(|| {
