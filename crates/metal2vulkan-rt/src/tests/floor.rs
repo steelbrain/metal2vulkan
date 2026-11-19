@@ -227,7 +227,7 @@ fn the_translator_sees_only_what_device_creation_enables() {
     use metal2vulkan::device::{VkExtension, VkFeature};
     let mut device = at_the_floor();
     device.features.core.geometry_shader = vk::TRUE;
-    device.features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
+    device.features.vulkan12.shader_output_layer = vk::TRUE;
     device.features.vulkan13.robust_image_access = vk::TRUE;
     device.features.robustness2.robust_buffer_access2 = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
@@ -267,7 +267,7 @@ fn the_translator_sees_only_what_device_creation_enables() {
     assert!(enables.features.contains(&VkFeature::NullDescriptor));
     for reported in [
         VkFeature::GeometryShader,
-        VkFeature::SamplerMirrorClampToEdge,
+        VkFeature::ShaderOutputLayer,
         VkFeature::RobustBufferAccess2,
         VkFeature::RobustBufferAccess,
     ] {
@@ -283,7 +283,7 @@ fn a_device_at_the_floor_is_above_it() {
     // Features beyond the floor are not enabled.
     device.features.core.geometry_shader = vk::TRUE;
     device.features.vulkan11.storage_input_output16 = vk::TRUE;
-    device.features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
+    device.features.vulkan12.shader_output_layer = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
     assert!(!capabilities.float16);
     assert!(!capabilities.storage_read_without_format);
@@ -315,7 +315,7 @@ fn a_device_at_the_floor_is_above_it() {
     }
     assert_eq!(enabled.core.geometry_shader, vk::FALSE);
     assert_eq!(enabled.vulkan11.storage_input_output16, vk::FALSE);
-    assert_eq!(enabled.vulkan12.sampler_mirror_clamp_to_edge, vk::FALSE);
+    assert_eq!(enabled.vulkan12.shader_output_layer, vk::FALSE);
     assert_eq!(enabled.vulkan13.robust_image_access, vk::TRUE);
     assert_eq!(enabled.core.independent_blend, vk::TRUE);
     assert_eq!(enabled.core.fragment_stores_and_atomics, vk::TRUE);
