@@ -376,16 +376,19 @@ pub(crate) struct Image {
 /// A drawable's image's turn, between the consumer's acquires and presents.
 struct Drawable {
     turn: Mutex<Turn>,
-    /// A command buffer that presents the image was committed: its move home after the next
-    /// acquire starts in the present layout, which keeps its texels; before the first, it starts
-    /// undefined, as a swapchain's new image is.
-    presented: AtomicBool,
+    /// The move home the last acquire owes starts in the present layout, which keeps the texels:
+    /// the acquire followed a committed present. Else it starts undefined, as a swapchain's new
+    /// image is. Decided at the acquire, as the submit thread records the move after the commit
+    /// of the command buffer that presents the image again.
+    from_present: AtomicBool,
 }
 
 /// Whose a drawable's image is.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Turn {
-    /// The presentation engine's: never acquired, or presented since its last acquire.
+    /// The presentation engine's, never acquired by the runtime.
+    New,
+    /// The presentation engine's, presented since its last acquire.
     Engine,
     /// The runtime's, acquired: in its home layout from the next upload on.
     Acquired,
@@ -421,12 +424,12 @@ impl Image {
         if self.homed.swap(true, Ordering::Relaxed) {
             return None;
         }
-        // A drawable's image moves home at each acquire: from the present layout once presented.
+        // A drawable's image moves home at each acquire: from the present layout after a present.
         // The consumer waited for the acquire's fence, so the presentation engine's reads are
         // done and nothing earlier needs waiting for.
-        let presented = (self.drawable.as_ref())
-            .is_some_and(|drawable| drawable.presented.load(Ordering::Relaxed));
-        let first = match presented {
+        let from_present = (self.drawable.as_ref())
+            .is_some_and(|drawable| drawable.from_present.load(Ordering::Relaxed));
+        let first = match from_present {
             true => vk::ImageLayout::PRESENT_SRC_KHR,
             false => self.first,
         };
@@ -960,8 +963,8 @@ impl Device {
             // No move home until the consumer acquires it.
             homed: AtomicBool::new(true),
             drawable: Some(Drawable {
-                turn: Mutex::new(Turn::Engine),
-                presented: AtomicBool::new(false),
+                turn: Mutex::new(Turn::New),
+                from_present: AtomicBool::new(false),
             }),
             _under: None,
         });
@@ -3348,17 +3351,25 @@ impl Texture {
     pub unsafe fn drawable_acquired(&self) -> Result<(), Error> {
         let image = &self.inner.image;
         let drawable = (image.drawable.as_ref()).ok_or(Error::Refused(Refusal::NotDrawable))?;
-        {
+        let before = {
             let mut turn = lock(&drawable.turn);
-            if *turn != Turn::Engine {
-                return Err(Error::Refused(Refusal::DrawableAcquired));
-            }
+            let before = *turn;
+            let from_present = match before {
+                Turn::New => false,
+                Turn::Engine => true,
+                Turn::Acquired | Turn::Presenting => {
+                    return Err(Error::Refused(Refusal::DrawableAcquired))
+                }
+            };
+            // Before the move is owed: the submit thread reads it as it records the move.
+            drawable.from_present.store(from_present, Ordering::Relaxed);
             *turn = Turn::Acquired;
-        }
+            before
+        };
         let core = self.inner.device.core();
         let homed = core.work.home(core, image);
         if homed.is_err() {
-            *lock(&drawable.turn) = Turn::Engine;
+            *lock(&drawable.turn) = before;
         }
         homed
     }
@@ -3390,7 +3401,6 @@ impl Texture {
     /// engine's once that command buffer has run, in the present layout.
     pub(crate) fn presented(&self) {
         if let Some(drawable) = &self.inner.image.drawable {
-            drawable.presented.store(true, Ordering::Relaxed);
             *lock(&drawable.turn) = Turn::Engine;
         }
     }
