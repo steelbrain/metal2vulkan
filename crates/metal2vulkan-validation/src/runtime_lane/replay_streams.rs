@@ -991,7 +991,8 @@ fn a_view_s_swizzle_is_what_a_kernel_samples() {
             args.extend(index.map(Value::Uint));
             w.call(selector, 7, view, &args, &[])?;
         }
-        for (buffer, at) in [(10, OUTPUT), (11, OUTPUT + 0x1000)] {
+        // A granule apart: each buffer is made at its recorded address, which a pin's span holds.
+        for (buffer, at) in [(10, OUTPUT), (11, OUTPUT + (32 << 10))] {
             let length = [Value::Uint(256), Value::Uint(0)];
             let at = addressed(at, 256);
             w.call("newBufferWithLength:options:", 1, buffer, &length, &at)?;
