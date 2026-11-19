@@ -560,6 +560,19 @@ fn texture_class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
     (usage.is_empty() || usage.intersects(reached)).then_some(rt::IndexClass::Texture)
 }
 
+/// How long the device has, once the backend ends or drops, to finish its GPU work and stop its
+/// threads.
+const QUIESCE: std::time::Duration = std::time::Duration::from_secs(30);
+
+impl Drop for NewRuntime {
+    /// The device's quiesce on every way out of a play, an error's and a panic's included: no
+    /// runtime thread runs on into the process's `exit()`, where the driver tears itself down
+    /// beside it. After [`NewRuntime::end`]'s quiesce, this one answers at once.
+    fn drop(&mut self) {
+        self.device.quiesce(QUIESCE);
+    }
+}
+
 impl NewRuntime {
     /// The backend on `device`, of `device_type`: every texture and sampler index granted to it,
     /// and each wait for a command buffer bounded under the hang protocol (`gpu::wait`).
@@ -626,14 +639,14 @@ impl NewRuntime {
     }
 
     /// Ends the play's device before the process exits, as the runtime's contract asks of a
-    /// consumer (`rt::Device`): quiesces it within `timeout` (a committed command buffer waiting
+    /// consumer (`rt::Device`): quiesces it within 30 seconds (a committed command buffer waiting
     /// on an event no played record signals ends unrun), drops every handle the backend holds, the
     /// device's last among them, and reads the gauges once it is torn down. Err names the gauges
-    /// not at zero: a handle or a resource that outlived the play, or a quiesce past `timeout`
-    /// whose threads run on into `exit()`.
-    pub fn end(self, timeout: std::time::Duration) -> Result<(), String> {
+    /// not at zero: a handle or a resource that outlived the play, or a quiesce past those 30
+    /// seconds whose threads run on into `exit()`.
+    pub fn end(self) -> Result<(), String> {
         let counters = self.device.counters();
-        let idle = self.device.quiesce(timeout);
+        let idle = self.device.quiesce(QUIESCE);
         drop(self);
         let gauges = counters.gauges();
         match (idle, gauges == rt::Gauges::default()) {

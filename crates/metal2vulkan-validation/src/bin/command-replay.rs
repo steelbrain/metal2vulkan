@@ -60,10 +60,6 @@ const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device
                      command-replay dump \
                      --stream FILE\n       command-replay shapes --stream FILE";
 
-/// How long the new runtime's device has, once the play ends, to finish its GPU work and stop its
-/// threads before the process exits.
-const TEARDOWN: std::time::Duration = std::time::Duration::from_secs(30);
-
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
@@ -389,7 +385,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             let code = run(&mut backend, &mut reader, &mut report, snapshots, until);
             // The device ends here, not in `exit()`, where the driver's own exit teardown would
             // run beside the runtime's threads.
-            match backend.end(TEARDOWN) {
+            match backend.end() {
                 Ok(()) => code,
                 Err(error) => {
                     report.line(&format!("error teardown: {error}"));

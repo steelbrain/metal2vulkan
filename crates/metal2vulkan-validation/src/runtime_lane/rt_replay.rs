@@ -906,7 +906,7 @@ fn a_play_that_ends_with_a_command_buffer_held_ends_its_device() {
         ended.contains("still wait on events at the stream's end"),
         "{ended}"
     );
-    backend.end(std::time::Duration::from_secs(10)).unwrap();
+    backend.end().unwrap();
 }
 
 #[test]
