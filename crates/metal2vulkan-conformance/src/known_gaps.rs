@@ -210,16 +210,22 @@ pub enum ConsumerObject {
     /// the runtime builds no reflection and acts on no option, and its consumer builds reflection
     /// from the library's AIR. An option outside the named ones is not this object.
     PipelineReflection,
+    /// `MTLTexture`'s `parentTexture`, `parentRelativeLevel`, `parentRelativeSlice` and
+    /// `shareable`: the runtime's view keeps the texture whose image it reads and no getter, and
+    /// its consumer keeps the texture it made a view of and what it shared. A view's own shape and
+    /// swizzle are the runtime's, and not this.
+    TextureViewParents,
 }
 
 impl ConsumerObject {
     /// Every object, in the order the count line names them.
-    pub const ALL: [ConsumerObject; 5] = [
+    pub const ALL: [ConsumerObject; 6] = [
         ConsumerObject::RenderPassDescriptor,
         ConsumerObject::Heap,
         ConsumerObject::DispatchType,
         ConsumerObject::TextureDescriptorFields,
         ConsumerObject::PipelineReflection,
+        ConsumerObject::TextureViewParents,
     ];
 
     /// The name a row states in its parentheses.
@@ -235,6 +241,9 @@ impl ConsumerObject {
                 "MTLComputePipelineReflection, MTLRenderPipelineReflection, \
                  MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo, \
                  MTLPipelineOptionBufferTypeInfo, MTLPipelineOptionBindingInfo"
+            }
+            ConsumerObject::TextureViewParents => {
+                "parentTexture, parentRelativeLevel, parentRelativeSlice, shareable"
             }
         }
     }

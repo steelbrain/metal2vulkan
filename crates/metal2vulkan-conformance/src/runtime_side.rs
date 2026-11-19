@@ -76,7 +76,7 @@ use crate::sparse_query::{
     TileSize,
 };
 use crate::texture_query::{HeapTextureQuery, SizeAndAlign, Storage};
-use crate::texture_views::{SharedHandleFacts, ViewCall, ViewFacts, ViewRequest};
+use crate::texture_views::{SharedHandleFacts, ViewCall, ViewFacts, ViewParent, ViewRequest};
 use crate::tile_descriptors::{
     DescriptorSpec as TileDescriptorSpec, SuppliedLists as TileSuppliedLists, TileDescriptorFacts,
     AWAY as TILE_AWAY,
@@ -6085,12 +6085,14 @@ impl Side for RuntimeSide<'_> {
         let texture = self.held_texture(texture)?;
         let answered = texture.parent_texture().map(Texture::object_id);
         Ok(ViewFacts {
-            has_parent: answered.is_some(),
-            expected_parent: answered.is_some() && answered == of_parent,
-            parent_relative_level: texture.parent_relative_level(),
-            parent_relative_slice: texture.parent_relative_slice(),
+            parent: Ok(ViewParent {
+                has_parent: answered.is_some(),
+                expected_parent: answered.is_some() && answered == of_parent,
+                parent_relative_level: texture.parent_relative_level(),
+                parent_relative_slice: texture.parent_relative_slice(),
+                shareable: texture.is_shareable(),
+            }),
             swizzle: crate::texture_views::swizzle_raw(texture.swizzle()),
-            shareable: texture.is_shareable(),
             texture_type: u64::from(texture.texture_type().as_raw()),
             pixel_format: u64::from(texture.pixel_format().as_raw()),
             mipmap_level_count: texture.mipmap_level_count(),

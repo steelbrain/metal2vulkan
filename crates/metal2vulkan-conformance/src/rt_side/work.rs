@@ -28,7 +28,7 @@ fn of_rt(error: rt::Error) -> Failure {
 }
 
 /// `value` as the runtime's `u32`, which Metal's `NSUInteger` arguments are narrowed to.
-fn narrow(value: u64, what: &str) -> Answer<u32> {
+pub(super) fn narrow(value: u64, what: &str) -> Answer<u32> {
     u32::try_from(value).map_err(|_| {
         Failure::named(
             "PastU32",

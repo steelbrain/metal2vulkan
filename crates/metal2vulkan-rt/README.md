@@ -10,7 +10,7 @@ device against the floor below.
 
 ## What the consumer implements
 
-Five of Metal's objects and getters have no counterpart here by design. The consumer implements
+Six of Metal's objects and getters have no counterpart here by design. The consumer implements
 them over this crate's items:
 
 - `MTLRenderPassDescriptor`'s read-back of its own fields. `RenderPassDescriptor` is a value the
@@ -28,6 +28,10 @@ them over this crate's items:
   `MTLPipelineOptionBindingInfo`. rt builds no pipeline reflection and acts on no
   `MTLPipelineOption`; its consumer builds reflection from the library's AIR. An option not
   named here is not the consumer's by this line.
+- `MTLTexture`'s `parentTexture`, `parentRelativeLevel`, `parentRelativeSlice` and `shareable`.
+  `Texture::new_texture_view` keeps the texture whose image the view reads and no getter, and no
+  texture here is shareable; the consumer keeps the texture it made a view of and what it shared.
+  A view's descriptor (its type, format, levels, slices and combined swizzle) is this crate's.
 
 ## Instance and device
 

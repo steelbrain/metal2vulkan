@@ -7985,6 +7985,77 @@ fn every_object_of_the_consumer_s_own_is_named_in_rt_s_readme() {
     }
 }
 
+/// A view's facts record the parent's five sites and the view's own five apart: a side whose
+/// consumer keeps the parent records its failure at the parent's sites alone, and its answers at
+/// the shape and swizzle sites, which stay compared against Metal.
+#[test]
+fn a_view_s_own_facts_are_recorded_apart_from_its_parent_s() {
+    use crate::case::Failure;
+    use crate::texture_views::{ViewFacts, ViewParent};
+    use crate::transcript::{Observed, Value};
+    let failure = Failure::named("TheConsumers", "the consumer keeps the parent");
+    let mut facts = ViewFacts {
+        parent: Err(failure.clone()),
+        swizzle: [2, 3, 4, 5],
+        texture_type: 3,
+        pixel_format: 70,
+        mipmap_level_count: 2,
+        array_length: 4,
+    };
+    let at = |facts: &ViewFacts, site: &str| {
+        let node = facts.node("view");
+        (node.child(site))
+            .unwrap_or_else(|| panic!("no site {site}"))
+            .observed
+            .clone()
+    };
+    let parent_sites = [
+        "has_parent",
+        "expected_parent",
+        "parent_relative_level",
+        "parent_relative_slice",
+        "shareable",
+    ];
+    for site in parent_sites {
+        assert_eq!(
+            at(&facts, site),
+            Observed::value(failure.recorded()),
+            "{site}"
+        );
+    }
+    for (site, value) in [
+        ("texture_type", 3),
+        ("pixel_format", 70),
+        ("mipmap_level_count", 2),
+        ("array_length", 4),
+    ] {
+        assert_eq!(
+            at(&facts, site),
+            Observed::value(Value::Uint(value)),
+            "{site}"
+        );
+    }
+    let swizzle = at(&facts, "swizzle");
+    assert_ne!(swizzle, Observed::value(failure.recorded()), "the swizzle");
+    facts.parent = Ok(ViewParent {
+        has_parent: true,
+        expected_parent: true,
+        parent_relative_level: 1,
+        parent_relative_slice: 2,
+        shareable: false,
+    });
+    assert_eq!(at(&facts, "has_parent"), Observed::value(Value::Bool(true)));
+    assert_eq!(
+        at(&facts, "parent_relative_slice"),
+        Observed::value(Value::Uint(2))
+    );
+    assert_eq!(
+        at(&facts, "swizzle"),
+        swizzle,
+        "the swizzle, whatever the parent"
+    );
+}
+
 /// A pipeline creation's reflection and options are the consumer's own only under the options the
 /// reason names: every word of the three named bits is, and a word with any other bit is the call's,
 /// unavailable, so an option the planner has not ruled on is never counted the consumer's.

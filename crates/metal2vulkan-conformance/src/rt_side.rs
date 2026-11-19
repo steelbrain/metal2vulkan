@@ -872,6 +872,69 @@ impl Side for RtSide<'_> {
             .map_err(|error| Failure::of_rt(&error))
     }
 
+    /// The runtime's two view creators: `newTextureViewWithPixelFormat:` is the four-argument call
+    /// over the whole texture the request names, and the swizzle's two selectors, whose
+    /// `MTLTextureViewDescriptor` holds exactly the five values, are its swizzled call. A view a
+    /// shader reaches takes the next texture index, as the texture it is made of did.
+    fn texture_view(
+        &mut self,
+        of: Handle,
+        request: &crate::texture_views::ViewRequest,
+    ) -> Answer<Handle> {
+        use crate::texture_views::ViewCall;
+        let texture = self.held_texture(of)?;
+        let range = |first: u64, count: u64, what: &str| -> Answer<std::ops::Range<u32>> {
+            let first = work::narrow(first, what)?;
+            Ok(first..first + work::narrow(count, what)?)
+        };
+        let levels = range(request.first_level, request.level_count, "a level")?;
+        let slices = range(request.first_slice, request.slice_count, "a slice")?;
+        let index = self.on.texture_index(texture.descriptor().usage);
+        let (format, texture_type) = (request.format, request.texture_type);
+        let view = match request.call {
+            ViewCall::PixelFormat | ViewCall::LevelsSlices => {
+                texture.new_texture_view(format, texture_type, levels, slices, index)
+            }
+            ViewCall::Swizzled | ViewCall::Descriptor => texture.new_texture_view_with_swizzle(
+                format,
+                texture_type,
+                levels,
+                slices,
+                request.swizzle,
+                index,
+            ),
+        }
+        .map_err(|error| Failure::of_rt(&error))?;
+        Ok(keep(&mut self.textures, view))
+    }
+
+    /// The view's shape and swizzle, read of its descriptor; its parent's facts are the
+    /// consumer's own
+    /// ([`ConsumerObject::TextureViewParents`](crate::known_gaps::ConsumerObject::TextureViewParents)):
+    /// the runtime's view keeps the texture whose image it reads and no getter, and makes no
+    /// shareable texture.
+    fn texture_view_facts(
+        &mut self,
+        texture: Handle,
+        parent: Option<Handle>,
+    ) -> Answer<crate::texture_views::ViewFacts> {
+        let _ = parent;
+        let d = self.held_texture(texture)?.descriptor();
+        Ok(crate::texture_views::ViewFacts {
+            parent: Err(Failure::named(
+                "TheConsumers",
+                "metal2vulkan-rt keeps no parentTexture, parentRelativeLevel, \
+                 parentRelativeSlice or shareable: its consumer keeps the texture it made a view \
+                 of and what it shared",
+            )),
+            swizzle: crate::texture_views::swizzle_raw(d.swizzle),
+            texture_type: u64::from(d.texture_type.as_raw()),
+            pixel_format: u64::from(d.pixel_format.as_raw()),
+            mipmap_level_count: u64::from(d.mipmap_level_count),
+            array_length: u64::from(d.array_length),
+        })
+    }
+
     fn dispatch(
         &mut self,
         pipeline: Handle,

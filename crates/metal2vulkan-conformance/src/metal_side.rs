@@ -80,7 +80,7 @@ use crate::sparse_query::{
     TileSize,
 };
 use crate::texture_query::{HeapTextureQuery, SizeAndAlign, Storage};
-use crate::texture_views::{SharedHandleFacts, ViewCall, ViewFacts, ViewRequest};
+use crate::texture_views::{SharedHandleFacts, ViewCall, ViewFacts, ViewParent, ViewRequest};
 use crate::tile_descriptors::{
     DescriptorSpec as TileDescriptorSpec, SuppliedLists as TileSuppliedLists, TileDescriptorFacts,
     AWAY as TILE_AWAY,
@@ -6828,12 +6828,14 @@ impl Side for MetalSide {
             .as_ref()
             .map(|parent| &**parent as *const ProtocolObject<dyn MTLTexture>);
         Ok(ViewFacts {
-            has_parent: answered_ptr.is_some(),
-            expected_parent: answered_ptr.is_some() && answered_ptr == of_parent,
-            parent_relative_level: texture.parentRelativeLevel() as u64,
-            parent_relative_slice: texture.parentRelativeSlice() as u64,
+            parent: Ok(ViewParent {
+                has_parent: answered_ptr.is_some(),
+                expected_parent: answered_ptr.is_some() && answered_ptr == of_parent,
+                parent_relative_level: texture.parentRelativeLevel() as u64,
+                parent_relative_slice: texture.parentRelativeSlice() as u64,
+                shareable: texture.isShareable(),
+            }),
             swizzle: raw_swizzle(texture.swizzle()),
-            shareable: texture.isShareable(),
             texture_type: texture.textureType().0 as u64,
             pixel_format: texture.pixelFormat().0 as u64,
             mipmap_level_count: texture.mipmapLevelCount() as u64,
