@@ -1560,7 +1560,7 @@ fn read_descriptor(
     let fragment: Option<Retained<ProtocolObject<dyn MTLFunction>>> = descriptor.fragmentFunction();
     let layout: Option<Retained<MTLVertexDescriptor>> = descriptor.vertexDescriptor();
     RenderDescriptorFacts {
-        label: descriptor.label().map(|label| label.to_string()),
+        label: Ok(descriptor.label().map(|label| label.to_string())),
         vertex_function: vertex.map(|held| held.name().to_string()),
         fragment_function: fragment.map(|held| held.name().to_string()),
         vertex_descriptor: layout.as_ref().map_or_else(
@@ -1593,7 +1593,7 @@ fn read_descriptor(
         // `len` and not `count`: the two are one Objective-C selector, and `count` is a selector
         // `objc2-metal` binds on other types, so the coverage derivation would read it as a Metal
         // call on the element type a preloaded-library getter answers.
-        binary_archives: archives.map_or(0, |held| held.len() as u64),
+        binary_archives: Ok(archives.map_or(0, |held| held.len() as u64)),
         supplied: supplied.then(|| read_supplied(descriptor)),
         support_adding_vertex_binary_functions: descriptor.supportAddingVertexBinaryFunctions(),
         support_adding_fragment_binary_functions: descriptor.supportAddingFragmentBinaryFunctions(),
@@ -1718,7 +1718,7 @@ fn read_compute_descriptor(
     let kernel: Option<Retained<ProtocolObject<dyn MTLFunction>>> = descriptor.computeFunction();
     let required = descriptor.requiredThreadsPerThreadgroup();
     ComputeDescriptorFacts {
-        label: descriptor.label().map(|label| label.to_string()),
+        label: Ok(descriptor.label().map(|label| label.to_string())),
         compute_function: kernel.map(|held| held.name().to_string()),
         threadgroup_size_is_multiple_of_execution_width: descriptor
             .threadGroupSizeIsMultipleOfThreadExecutionWidth(),
@@ -1728,7 +1728,7 @@ fn read_compute_descriptor(
         // `len` and not `count`: the two are one Objective-C selector, and `count` is a selector
         // `objc2-metal` binds on other types, so the coverage derivation would read it as a Metal
         // call on the element type the getter answers.
-        binary_archives: archives.map_or(0, |held| held.len() as u64),
+        binary_archives: Ok(archives.map_or(0, |held| held.len() as u64)),
         supplied: supplied.then(|| read_compute_supplied(descriptor)),
         support_adding_binary_functions: descriptor.supportAddingBinaryFunctions(),
         max_call_stack_depth: descriptor.maxCallStackDepth() as u64,

@@ -65,6 +65,7 @@
 //! label — the label is set only where the case states one — and the default shape reads the nil
 //! Metal's own `init` left.
 
+use crate::case::field;
 use crate::transcript::{Node, NodeName, Observed, Value};
 use metal2vulkan::metal;
 
@@ -502,10 +503,10 @@ pub struct LinkedCounts {
 
 /// What a render pipeline descriptor answers of itself. Each field is one Metal getter's answer,
 /// an enumeration by its raw ordinal so an ordinal neither side names still compares.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderDescriptorFacts {
     /// `label`; `None` is Metal's nil.
-    pub label: Option<String>,
+    pub label: crate::case::Field<Option<String>>,
     /// `vertexFunction`'s own `name`; `None` where the descriptor holds none.
     pub vertex_function: Option<String>,
     /// `fragmentFunction`'s own `name`.
@@ -544,7 +545,7 @@ pub struct RenderDescriptorFacts {
     pub fragment_buffers: Vec<u32>,
     pub support_indirect_command_buffers: bool,
     /// `binaryArchives`' length; a nil list is 0.
-    pub binary_archives: u64,
+    pub binary_archives: crate::case::Field<u64>,
     /// The four per-stage lists of supplied objects, which [`Shape::Reset`] does not read
     /// ([`SuppliedLists`] says why).
     pub supplied: Option<SuppliedLists>,
@@ -672,7 +673,7 @@ impl RenderDescriptorFacts {
     pub fn node(&self, name: impl Into<NodeName>) -> Node {
         let value = |value: Value| Observed::value(value);
         let mut node = Node::branch(name, Vec::new())
-            .with(Node::leaf("label", value(optional(&self.label))))
+            .with(Node::leaf("label", field(&self.label, optional)))
             .with(Node::leaf(
                 "vertex_function",
                 value(optional(&self.vertex_function)),
@@ -804,7 +805,7 @@ impl RenderDescriptorFacts {
             ))
             .with(Node::leaf(
                 "binary_archives",
-                value(Value::Uint(self.binary_archives)),
+                field(&self.binary_archives, |count| Value::Uint(*count)),
             ))
             .with(Node::leaf(
                 "support_adding_vertex_binary_functions",

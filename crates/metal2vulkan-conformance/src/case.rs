@@ -438,6 +438,23 @@ pub enum StageInRegion {
 /// What a side answered a call with.
 pub type Answer<T> = Result<T, Failure>;
 
+/// One getter's answer inside a call that answers many (a descriptor's or a function's facts),
+/// which a side answers or refuses on its own.
+///
+/// A field a side cannot answer is the same typed refusal a whole call is ([`Failure`], recorded
+/// by [`Failure::recorded`] at the field's own site), so the comparison reads it as a refusal at
+/// that site and the known-gaps ledger holds it exactly as it holds a call's: an unlisted field
+/// refusal fails the run as an unlisted call refusal does. The fields beside it still compare.
+pub type Field<T> = Answer<T>;
+
+/// The site of one [`Field`]: what `observed` records of its answer, or its refusal.
+pub fn field<T>(field: &Field<T>, observed: impl FnOnce(&T) -> Value) -> Observed {
+    match field {
+        Ok(answer) => Observed::value(observed(answer)),
+        Err(failure) => Observed::value(failure.recorded()),
+    }
+}
+
 /// A call that did not answer: the typed error as the transcript records it, and whether it is the
 /// venue's honest gap rather than ours.
 ///

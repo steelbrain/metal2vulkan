@@ -56,6 +56,7 @@ pub mod compute_descriptors;
 pub mod compute_pass;
 pub mod cost;
 pub mod coverage;
+mod descriptor_reads;
 pub mod device;
 pub mod device_queries;
 pub mod diff;

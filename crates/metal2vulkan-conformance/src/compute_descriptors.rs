@@ -69,6 +69,7 @@
 //! label is set only where the shape states one — and the default shape reads the nil Metal's own
 //! `init` left.
 
+use crate::case::field;
 use crate::render_descriptors::{optional, ordinal, LinkedCounts, Shape};
 use crate::transcript::{Node, NodeName, Observed, Value};
 use metal2vulkan::metal;
@@ -195,10 +196,10 @@ pub struct SuppliedLists {
 
 /// What a compute pipeline descriptor answers of itself. Each field is one Metal getter's answer,
 /// an enumeration by its raw ordinal so an ordinal neither side names still compares.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ComputeDescriptorFacts {
     /// `label`; `None` is Metal's nil.
-    pub label: Option<String>,
+    pub label: crate::case::Field<Option<String>>,
     /// `computeFunction`'s own `name`; `None` where the descriptor holds none.
     pub compute_function: Option<String>,
     pub threadgroup_size_is_multiple_of_execution_width: bool,
@@ -207,7 +208,7 @@ pub struct ComputeDescriptorFacts {
     pub buffers: Vec<u32>,
     pub support_indirect_command_buffers: bool,
     /// `binaryArchives`' length; a nil list is 0.
-    pub binary_archives: u64,
+    pub binary_archives: crate::case::Field<u64>,
     /// The three lists of supplied objects, which [`Shape::Reset`] does not read
     /// ([`SuppliedLists`] says why).
     pub supplied: Option<SuppliedLists>,
@@ -222,7 +223,7 @@ impl ComputeDescriptorFacts {
     pub fn node(&self, name: impl Into<NodeName>) -> Node {
         let value = Observed::value;
         let mut node = Node::branch(name, Vec::new())
-            .with(Node::leaf("label", value(optional(&self.label))))
+            .with(Node::leaf("label", field(&self.label, optional)))
             .with(Node::leaf(
                 "compute_function",
                 value(optional(&self.compute_function)),
@@ -252,7 +253,7 @@ impl ComputeDescriptorFacts {
             ))
             .with(Node::leaf(
                 "binary_archives",
-                value(Value::Uint(self.binary_archives)),
+                field(&self.binary_archives, |count| Value::Uint(*count)),
             ))
             .with(Node::leaf(
                 "support_adding_binary_functions",

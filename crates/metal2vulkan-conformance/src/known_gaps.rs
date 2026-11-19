@@ -215,17 +215,21 @@ pub enum ConsumerObject {
     /// its consumer keeps the texture it made a view of and what it shared. A view's own shape and
     /// swizzle are the runtime's, and not this.
     TextureViewParents,
+    /// The `label` of an object or a descriptor: the runtime keeps no label on anything, and its
+    /// consumer keeps the label it set.
+    Label,
 }
 
 impl ConsumerObject {
     /// Every object, in the order the count line names them.
-    pub const ALL: [ConsumerObject; 6] = [
+    pub const ALL: [ConsumerObject; 7] = [
         ConsumerObject::RenderPassDescriptor,
         ConsumerObject::Heap,
         ConsumerObject::DispatchType,
         ConsumerObject::TextureDescriptorFields,
         ConsumerObject::PipelineReflection,
         ConsumerObject::TextureViewParents,
+        ConsumerObject::Label,
     ];
 
     /// The name a row states in its parentheses.
@@ -245,6 +249,7 @@ impl ConsumerObject {
             ConsumerObject::TextureViewParents => {
                 "parentTexture, parentRelativeLevel, parentRelativeSlice, shareable"
             }
+            ConsumerObject::Label => "label",
         }
     }
 

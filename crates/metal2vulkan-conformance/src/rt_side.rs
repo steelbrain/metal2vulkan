@@ -44,6 +44,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 mod compute;
+mod descriptors;
 mod events;
 mod render;
 mod states;
@@ -1470,6 +1471,22 @@ impl Side for RtSide<'_> {
         spec: &crate::pipeline_facts::ComputeStateSpec<'_>,
     ) -> Answer<Handle> {
         self.described_compute(library, spec)
+    }
+
+    fn render_descriptor_facts(
+        &mut self,
+        library: Handle,
+        spec: &crate::render_descriptors::DescriptorSpec<'_>,
+    ) -> Answer<crate::render_descriptors::RenderDescriptorFacts> {
+        self.render_descriptor(library, spec)
+    }
+
+    fn compute_descriptor_facts(
+        &mut self,
+        library: Handle,
+        spec: &crate::compute_descriptors::DescriptorSpec<'_>,
+    ) -> Answer<crate::compute_descriptors::ComputeDescriptorFacts> {
+        self.compute_descriptor(library, spec)
     }
 
     fn queue_slots(
