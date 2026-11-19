@@ -2492,6 +2492,62 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A quiesce past its deadline joins every runtime thread before it returns, so nothing a
+    /// live thread can reach (the device, the instance, a queue) is destroyed before that thread
+    /// is joined: with the submit thread held in a scheduled handler past a zero deadline, the
+    /// call returns only after the handler let it go, answers false, and by then none of the
+    /// device's four threads holds a slot of `Gauges::threads` (its thread ids, where the OS
+    /// gives them). The command buffer ends, and the device then tears down.
+    #[test]
+    fn every_device_joins_each_thread_past_a_quiesce_deadline_before_destroying_what_it_reaches() {
+        each_device("quiesce_joins", |name, _, device| {
+            let counters = device.counters();
+            let four: Vec<u64> = (counters.gauges().threads.iter())
+                .copied()
+                .filter(|&id| id != 0)
+                .collect();
+            let alive = || {
+                let now = counters.gauges().threads;
+                four.iter().filter(|id| now.contains(id)).count()
+            };
+            let mut arena = Arena::new(&device);
+            let a = arena.buffer();
+            let queue = queue(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill(&command_buffer, &a, 5);
+            let (release, gate) = mpsc::channel::<()>();
+            let (entered, inside) = mpsc::channel::<()>();
+            command_buffer
+                .add_scheduled_handler(move |_| {
+                    let _ = entered.send(());
+                    let _ = gate.recv();
+                })
+                .expect("a handler");
+            command_buffer.commit().expect("a commit");
+            inside
+                .recv_timeout(PATIENCE)
+                .expect("the handler holds the submit thread");
+            let quiescing = device.clone();
+            let quiesced = thread::spawn(move || quiescing.quiesce(Duration::ZERO));
+            // The stop began, past its zero deadline, while the handler holds the submit thread.
+            within("the quiesce's stop", || {
+                matches!(queue.command_buffer(), Err(Error::Quiesced))
+            });
+            release.send(()).expect("the handler waits");
+            let idle = quiesced.join().expect("the quiescing thread");
+            assert!(!idle, "{name}: the submit thread ended past the deadline");
+            assert_eq!(
+                alive(),
+                0,
+                "{name}: every thread joined before quiesce returned: {:?}",
+                counters.gauges().threads
+            );
+            finished(name, &command_buffer);
+            drop((a, arena, queue, command_buffer, device));
+            within("the teardown", || counters.gauges() == Gauges::default());
+        });
+    }
+
     /// In a scheduled handler, on the submit thread: the command buffer reads Scheduled with its
     /// kernel times set; each call that may wait for that thread is refused, on every device and
     /// whatever the runtime holds, and answers as before once the handler has returned; what the

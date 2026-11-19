@@ -1056,23 +1056,23 @@ made, with no lock, and never rewritten for layouts.
 
 ### Quiesce and exit
 
-`Device::quiesce(timeout)` is for a process that exits with the device alive. With every wait
-bounded by the timeout, it stops the submit thread (ready work is submitted, held work ends
-`NotRun`) and the block-maker, waits for the GPU to complete what was submitted, lets the
-completion thread retire it and end, and then runs `BlockMappings::unmap` on the calling thread for
-every allocation still mapped. It frees nothing: every block's memory and mapping stays valid until
-the process ends. After it, no runtime thread touches a block; later calls that need a thread
-return `Error::Quiesced`. It answers true once the GPU went idle and every thread ended in time,
-and false at once in a handler or a listener, whose thread cannot wait for itself. A second call
-returns at once. After a false answer a runtime thread can still be in the driver (the completion
-thread in `vkWaitSemaphores` with no timeout where the GPU did not go idle, which on NVIDIA's
-driver lasts until a later submission that after quiesce the runtime never makes, or in its
-retirement calls once a handler that held it returns, and the reaper or the block-maker in a
-pipeline creation or a memory call that outlasted the timeout), so a process that gets false ends
-without running exit handlers (`_exit`): a known gap on NVIDIA.
+`Device::quiesce(timeout)` is for a process that exits with the device alive. It stops the submit
+thread (ready work is submitted, held work ends `NotRun`) and the block-maker, waits for the GPU to
+complete what was submitted, lets the completion thread retire it and end, stops the reaper, and
+then runs `BlockMappings::unmap` on the calling thread for every allocation still mapped. It frees
+nothing: every block's memory and mapping stays valid until the process ends. After it, no runtime
+thread touches a block; later calls that need a thread return `Error::Quiesced`. It answers true
+once the GPU went idle and every thread ended within the timeout, and false at once in a handler
+or a listener, whose thread cannot wait for itself. A second call returns at once. The timeout
+bounds only the answer: every runtime thread is joined before the call returns, past the timeout
+too, and so before the device's last handle can destroy the device and the instance, which a
+thread still in the driver would reach. A thread that never returns from a driver call keeps
+quiesce, and the device's drop, from returning: on NVIDIA's driver, where the GPU faulted, the
+completion thread's `vkWaitSemaphores` with no timeout does not return until a later submission,
+which after quiesce the runtime never makes; a known gap on NVIDIA.
 
 The consumer quiesces before it calls `exit()`. Quiesce can also run in an `atexit` handler, on
-whichever thread calls `exit()`: it joins a thread only once that thread has ended, reads no
+whichever thread calls `exit()`: it waits for each thread to end and joins it, reads no
 thread-local that `exit()` tears down, and takes no lock a consumer's thread can hold. Such a
 handler is a fallback, not the contract: `exit()` runs handlers in the reverse order of their
 registration, so it runs before the driver's own exit teardown only where it was registered after
