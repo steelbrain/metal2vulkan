@@ -766,8 +766,8 @@ impl Pool {
         }
     }
 
-    /// Sets the class's idle gauges: its idle allocations' bytes, and when the oldest idle one
-    /// the idle rule weighs became idle.
+    /// Sets the class's idle gauges: its idle allocations' bytes, when the oldest idle one the
+    /// idle rule weighs became idle, and its reserve's bytes.
     fn settle(&self, state: &mut State, class: MemoryClass) {
         let index = class.index();
         let idle: u64 = (state.allocations[index].iter())
@@ -781,8 +781,10 @@ impl Pool {
             self.counters.fall_by(class.idle_gauge(), was - idle);
         }
         state.idle_bytes[index] = idle;
-        let oldest = state.aging(class).first().map_or(0, |&(since, _)| since);
+        let (weighed, reserve) = state.aging(class);
+        let oldest = weighed.first().map_or(0, |&(since, _)| since);
         (self.counters).idle_since(class == MemoryClass::Shared, oldest);
+        (self.counters).reserve_bytes(class == MemoryClass::Shared, reserve);
     }
 
     /// The idle rule for `class` at `now` ([`host_time`](crate::host_time)): its next allocation
@@ -794,7 +796,7 @@ impl Pool {
         if let Some(retiring) = (allocations.iter()).find(|allocation| allocation.retiring) {
             return Rule::Free(retiring.memory);
         }
-        match state.aging(class).first() {
+        match state.aging(class).0.first() {
             Some(&(since, memory)) => {
                 idle_due(since, now).map_or(Rule::Free(memory), Rule::KeepUntil)
             }
@@ -898,34 +900,42 @@ impl State {
     }
 
     /// The class's idle allocations the idle rule weighs, as when each became idle and its memory,
-    /// the oldest first. The newest idle allocations with free bytes that the class's free bytes
-    /// need to reach [`MAKE_BELOW`] are its reserve, made ahead of need: the rule neither weighs
-    /// nor frees them.
-    fn aging(&self, class: MemoryClass) -> Vec<(u64, vk::DeviceMemory)> {
+    /// the oldest first, and the bytes of its reserve. The newest idle allocations with free bytes
+    /// that the class's free bytes need to reach [`MAKE_BELOW`] are its reserve, made ahead of
+    /// need: the rule neither weighs nor frees them.
+    fn aging(&self, class: MemoryClass) -> (Vec<(u64, vk::DeviceMemory)>, u64) {
         let allocations = &self.allocations[class.index()];
         let mut free: u64 = (allocations.iter())
             .filter(|allocation| allocation.live > 0 && !allocation.retiring)
             .map(|allocation| allocation.free.bytes())
             .sum();
-        let mut idle: Vec<(u64, vk::DeviceMemory, u64)> = (allocations.iter())
+        let mut idle: Vec<(u64, vk::DeviceMemory, u64, u64)> = (allocations.iter())
             .filter(|allocation| allocation.live == 0 && !allocation.retiring)
             .map(|allocation| {
                 let bytes = allocation.free.bytes();
-                (allocation.idle_since, allocation.memory, bytes)
+                (
+                    allocation.idle_since,
+                    allocation.memory,
+                    bytes,
+                    allocation.len,
+                )
             })
             .collect();
         idle.sort_unstable_by_key(|&(since, ..)| std::cmp::Reverse(since));
-        idle.retain(|&(.., bytes)| {
+        let mut reserved = 0;
+        idle.retain(|&(_, _, bytes, len)| {
             let reserve = free < MAKE_BELOW && bytes > 0;
             if reserve {
                 free += bytes;
+                reserved += len;
             }
             !reserve
         });
         idle.reverse();
-        idle.into_iter()
-            .map(|(since, memory, _)| (since, memory))
-            .collect()
+        let weighed: Vec<(u64, vk::DeviceMemory)> = (idle.into_iter())
+            .map(|(since, memory, ..)| (since, memory))
+            .collect();
+        (weighed, reserved)
     }
 
     /// The next step of zeroing the kept Shared blocks: the newest kept block not zeroed to its
@@ -1450,6 +1460,7 @@ pub(crate) fn free_all(core: &mut Core, blocks: Vec<Memory>) {
         core.counters
             .fall_by(class.idle_gauge(), idle[class.index()]);
         (core.counters).idle_since(class == MemoryClass::Shared, 0);
+        (core.counters).reserve_bytes(class == MemoryClass::Shared, 0);
     }
     for memory in &retired {
         retire(core, memory);

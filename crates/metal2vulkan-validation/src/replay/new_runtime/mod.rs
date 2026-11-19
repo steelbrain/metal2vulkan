@@ -2208,6 +2208,8 @@ impl Backend for NewRuntime {
             ("private_idle_bytes", gauges.private_idle_bytes),
             ("shared_idle_age_nanos", gauges.shared_idle_age_nanos),
             ("private_idle_age_nanos", gauges.private_idle_age_nanos),
+            ("shared_reserve_bytes", gauges.shared_reserve_bytes),
+            ("private_reserve_bytes", gauges.private_reserve_bytes),
             ("capture_bytes", gauges.capture_bytes),
             ("staging_bytes", gauges.staging_bytes),
             ("stage_entries", gauges.stage_entries),

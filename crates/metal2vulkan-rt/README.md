@@ -207,7 +207,8 @@ in its memory.
   counts idle allocations taken again, by how long they were idle. `Gauges::shared_idle_bytes` and
   `Gauges::private_idle_bytes` count the idle bytes, the reserve's included, and
   `Gauges::shared_idle_age_nanos` and `Gauges::private_idle_age_nanos` the age of the oldest idle
-  allocation the rule will free. Once the last handle is gone the block's
+  allocation the rule will free; `Gauges::shared_reserve_bytes` and `Gauges::private_reserve_bytes`
+  count the reserve's bytes. Once the last handle is gone the block's
   number names nothing
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's
   teardown frees every block still claimed, after the consumer's `BlockMappings::unmap` returned

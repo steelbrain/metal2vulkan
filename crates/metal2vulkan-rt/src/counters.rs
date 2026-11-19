@@ -303,6 +303,10 @@ struct Atomics {
     shared_idle_since: AtomicU64,
     /// As [`shared_idle_since`](Self::shared_idle_since), of Private allocations.
     private_idle_since: AtomicU64,
+    /// The bytes of the Shared reserve's allocations ([`Gauges::shared_reserve_bytes`]).
+    shared_reserve_bytes: AtomicU64,
+    /// As [`shared_reserve_bytes`](Self::shared_reserve_bytes), of Private allocations.
+    private_reserve_bytes: AtomicU64,
     capture_bytes: AtomicU64,
     staging_bytes: AtomicU64,
     stage_entries: AtomicU64,
@@ -430,6 +434,18 @@ impl Counters {
             &a.private_idle_since
         };
         atomic.store(since, Relaxed);
+    }
+
+    /// The bytes of the reserve of a class (Shared where `shared`): its idle allocations the idle
+    /// rule does not weigh ([`Gauges::shared_reserve_bytes`]).
+    pub(crate) fn reserve_bytes(&self, shared: bool, bytes: u64) {
+        let a = &self.atomics;
+        let atomic = if shared {
+            &a.shared_reserve_bytes
+        } else {
+            &a.private_reserve_bytes
+        };
+        atomic.store(bytes, Relaxed);
     }
 
     /// A `vkAllocateMemory` that took `nanos` nanoseconds, on the block-maker thread where
@@ -722,6 +738,8 @@ impl Counters {
             private_idle_bytes: a.private_idle_bytes.load(Relaxed),
             shared_idle_age_nanos: age(&a.shared_idle_since),
             private_idle_age_nanos: age(&a.private_idle_since),
+            shared_reserve_bytes: a.shared_reserve_bytes.load(Relaxed),
+            private_reserve_bytes: a.private_reserve_bytes.load(Relaxed),
             capture_bytes: a.capture_bytes.load(Relaxed),
             staging_bytes: a.staging_bytes.load(Relaxed),
             stage_entries: a.stage_entries.load(Relaxed),
@@ -1081,6 +1099,12 @@ pub struct Gauges {
     pub shared_idle_age_nanos: u64,
     /// As [`shared_idle_age_nanos`](Self::shared_idle_age_nanos), of Private allocations.
     pub private_idle_age_nanos: u64,
+    /// Bytes of the Shared reserve: the idle allocations made ahead of need that the idle rule
+    /// does not free, which keep the class's free bytes at 8 MiB or more. Counted in
+    /// [`shared_idle_bytes`](Self::shared_idle_bytes) too.
+    pub shared_reserve_bytes: u64,
+    /// As [`shared_reserve_bytes`](Self::shared_reserve_bytes), of Private allocations.
+    pub private_reserve_bytes: u64,
     /// Bytes of staging for Managed buffers' captures: the capture ring, once a commit made it, and
     /// the staging blocks of overflows that command buffers not yet retired hold.
     pub capture_bytes: u64,
