@@ -1,8 +1,10 @@
 //! What a command buffer keeps of the objects its encoders use: each buffer, texture, sampler
 //! state and pipeline state once, as Metal's command buffer retains each object once, until the
-//! command buffer retires. The first use of an object in a recording takes its one reference;
-//! every later use, and every binding slot an encoder fills with it, borrows the kept one
-//! ([`Lent`]) and changes no count. The lists and their address sets keep their capacity from
+//! command buffer retires. The first use of an object in a recording takes its one reference, of
+//! the object alone ([`Handle::Kept`]): nothing a command buffer keeps counts as a handle of the
+//! device, so the consumer's last handle is the device's last whatever work is in flight.
+//! Every later use, and every binding slot an encoder fills with it, borrows the consumer's
+//! handle ([`Lent`]) and changes no count. The lists and their address sets keep their capacity from
 //! one recording of a queue to the next, up to [`KEPT_BOUND`] objects each, so a recording past
 //! the first allocates for its objects only where it uses more than any before it did, or more
 //! than the bound. They live in one allocation that moves whole between the queue and its command
@@ -19,24 +21,35 @@ use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-/// A handle to a shared object that is one `Arc` and nothing else.
-pub(crate) trait Handle: Clone {
+/// A handle to a shared object: its `Arc`, and, where the object is one that holds its device
+/// for the consumer (a buffer, a texture, a sampler state), a handle of the device beside it.
+pub(crate) trait Handle {
+    /// What a command buffer keeps of the object: its `Arc` alone, which holds no handle of the
+    /// device.
+    type Kept;
+
     /// The object's address: its `Arc`'s pointer, the same for every handle to it, and no other
     /// object's while it lives.
     fn address(&self) -> usize;
 
-    /// Another handle to the object, made of the same pointer, that took no count: dropping it
-    /// would give back one it never took, so it is never dropped.
+    /// The object as a command buffer keeps it: one more count of its `Arc`, none of the device.
+    fn kept(&self) -> Self::Kept;
+
+    /// Another handle to the object, made of the same pointers, that took no count: dropping it
+    /// would give back what it never took, so it is never dropped.
     ///
     /// # Safety
     ///
-    /// The object lives past the handle's last use.
-    unsafe fn uncounted(&self) -> ManuallyDrop<Self>;
+    /// The object, and its device where the handle holds one, live past the handle's last use.
+    unsafe fn uncounted(&self) -> ManuallyDrop<Self>
+    where
+        Self: Sized;
 }
 
 /// A handle borrowed from what a recording keeps: the same object, which this copy neither
-/// retains nor releases. A command buffer keeps the object until it retires, and an encoder's
-/// tables, which hold its borrows, end with the encoder, before its command buffer can commit.
+/// retains nor releases. A command buffer keeps the object until it retires, and holds a handle
+/// of its device until its commit; an encoder's tables, which hold its borrows, end with the
+/// encoder, before its command buffer can commit.
 pub(crate) struct Lent<T: Handle>(ManuallyDrop<T>);
 
 impl<T: Handle> Lent<T> {
@@ -44,9 +57,10 @@ impl<T: Handle> Lent<T> {
     ///
     /// # Safety
     ///
-    /// The recording the borrow is used in keeps `object` until after the borrow's last use.
+    /// The recording the borrow is used in keeps `object` until after the borrow's last use, and
+    /// holds a handle of the object's device past it.
     unsafe fn of(object: &T) -> Lent<T> {
-        // SAFETY: the caller keeps the object alive past the borrow's last use.
+        // SAFETY: the caller keeps the object and its device alive past the borrow's last use.
         Lent(unsafe { object.uncounted() })
     }
 }
@@ -107,7 +121,7 @@ pub(crate) const KEPT_BOUND: usize = 128;
 
 /// The objects of one kind a recording keeps, each once, in the order first used.
 pub(crate) struct Kept<T: Handle> {
-    list: Vec<T>,
+    list: Vec<T::Kept>,
     addresses: HashSet<usize, BuildHasherDefault<AddressHasher>>,
 }
 
@@ -125,13 +139,14 @@ impl<T: Handle> Kept<T> {
     ///
     /// # Safety
     ///
-    /// The borrow is used only while this list keeps its objects: before it is cleared.
+    /// The borrow is used only while this list keeps its objects, before it is cleared, and while
+    /// the recording holds a handle of the object's device: before its commit.
     pub(crate) unsafe fn keep(&mut self, object: &T) -> Lent<T> {
         if self.addresses.insert(object.address()) {
-            self.list.push(object.clone());
+            self.list.push(object.kept());
         }
-        // SAFETY: the list keeps `object` now, until it is cleared, past which the caller uses no
-        // borrow.
+        // SAFETY: the list keeps `object` now, until it is cleared, and the recording holds its
+        // device until its commit, past which the caller uses no borrow.
         unsafe { Lent::of(object) }
     }
 
@@ -139,18 +154,18 @@ impl<T: Handle> Kept<T> {
     pub(crate) fn hold(&mut self, object: &T) -> bool {
         let first = self.addresses.insert(object.address());
         if first {
-            self.list.push(object.clone());
+            self.list.push(object.kept());
         }
         first
     }
 
     /// The objects kept, in the order first used.
-    pub(crate) fn iter(&self) -> std::slice::Iter<'_, T> {
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, T::Kept> {
         self.list.iter()
     }
 
     /// The objects kept, as a slice.
-    pub(crate) fn as_slice(&self) -> &[T] {
+    pub(crate) fn as_slice(&self) -> &[T::Kept] {
         &self.list
     }
 

@@ -30,13 +30,13 @@
 //! `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported` too). The tracking is
 //! by buffer: a write of any of a buffer's bytes makes every such texture over it stale.
 
-use crate::buffer::Buffer;
+use crate::buffer::BufferObject;
 use crate::copy_out;
 use crate::counters::{Counters, Metric};
 use crate::device::lock;
 use crate::hazard::Access;
 use crate::record::{memory_barrier, Reach};
-use crate::texture::{Image, OverCopy, Texture};
+use crate::texture::{Image, OverCopy, TextureInner, TextureObject};
 use ash::vk;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
@@ -58,7 +58,7 @@ pub(crate) struct Overs {
 
 /// A texture over a buffer in an image of its own that a segment used.
 struct Used {
-    texture: Texture,
+    texture: Arc<TextureInner>,
     /// Its buffer's id.
     buffer: u32,
     /// Its first use in the segment came before any write of the buffer in it: the image holds
@@ -119,7 +119,7 @@ impl Overs {
     pub(crate) fn before(
         &mut self,
         accesses: &[(u32, Access)],
-        kept: &[Texture],
+        kept: &[Arc<TextureInner>],
         unbound: bool,
     ) -> Copies {
         let mut copies = Copies::default();
@@ -222,7 +222,7 @@ impl Overs {
     }
 
     /// Of an ended segment: the textures whose images the leading copy fills.
-    pub(crate) fn leaning(&self) -> impl Iterator<Item = &Texture> {
+    pub(crate) fn leaning(&self) -> impl Iterator<Item = &Arc<TextureInner>> {
         self.used.iter().map(|used| &used.texture)
     }
 }
@@ -585,7 +585,11 @@ impl ManagedOvers {
 /// The copies back owed to readers of `buffer`'s device copy over `range` (all of it where
 /// `None`), where it has textures over it in images of their own; with `pending`, a reader
 /// recorded after the writes, also those of writes not yet submitted.
-pub(crate) fn backs(buffer: &Buffer, range: Option<(u64, u64)>, pending: bool) -> Vec<Back> {
+pub(crate) fn backs(
+    buffer: &impl BufferObject,
+    range: Option<(u64, u64)>,
+    pending: bool,
+) -> Vec<Back> {
     let mut backs = Vec::new();
     if let Some(overs) = buffer.managed_overs() {
         overs.backs(range, pending, &mut backs);

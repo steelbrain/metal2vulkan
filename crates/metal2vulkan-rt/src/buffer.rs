@@ -48,15 +48,18 @@ pub(crate) fn heap_buffer_size_and_align(length: u64) -> SizeAndAlign {
 /// `MTLBuffer`: `length` bytes at `offset` in a block the consumer took, with no `VkBuffer` or
 /// memory of its own. Shaders reach it by its device address.
 ///
-/// A cheap handle: clones share one buffer. The buffer holds its block and the device, so a
-/// released block stays alive until its last buffer is gone.
+/// A cheap handle: clones share one buffer. A handle holds the buffer and the device; the buffer
+/// holds its block, so a released block stays alive until its last buffer is gone. What a command
+/// buffer keeps of it is the buffer alone, which holds no handle of the device.
 #[derive(Clone)]
 pub struct Buffer {
-    inner: Arc<Inner>,
+    inner: Arc<BufferInner>,
+    device: Device,
 }
 
-struct Inner {
-    device: Device,
+/// The buffer itself: what a handle, a command buffer that uses it and a texture over it hold.
+pub(crate) struct BufferInner {
+    core: Arc<Core>,
     /// Its resource id, for the hazard sets.
     id: u32,
     /// The heap the consumer placed it in ([`Device::new_heap_buffer`]), whose id its uses take in
@@ -112,9 +115,9 @@ impl Drop for DeviceCopy {
     }
 }
 
-impl Drop for Inner {
+impl Drop for BufferInner {
     fn drop(&mut self) {
-        let core = self.device.core();
+        let core = &self.core;
         core.ids.give_back(self.id);
         core.counters.fall(Gauge::Buffers);
     }
@@ -438,8 +441,8 @@ impl Device {
     ) -> Buffer {
         self.core().counters.rise(Gauge::Buffers);
         Buffer {
-            inner: Arc::new(Inner {
-                device: self.clone(),
+            inner: Arc::new(BufferInner {
+                core: Arc::clone(self.core()),
                 id: self.core().ids.take(),
                 heap,
                 block,
@@ -449,20 +452,29 @@ impl Device {
                 copy,
                 overs: Arc::default(),
             }),
+            device: self.clone(),
         }
     }
 }
 
 impl crate::kept::Handle for Buffer {
+    type Kept = Arc<BufferInner>;
+
     fn address(&self) -> usize {
         Arc::as_ptr(&self.inner) as *const () as usize
     }
 
+    fn kept(&self) -> Arc<BufferInner> {
+        Arc::clone(&self.inner)
+    }
+
     unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<Buffer> {
-        // SAFETY: the pointer is a live `Arc`'s; the handle made of it is never dropped, and the
-        // caller keeps the object alive past its last use.
+        // SAFETY: the pointers are live `Arc`s'; the handle made of them is never dropped, and
+        // the caller keeps the buffer and the device alive past its last use.
         let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        std::mem::ManuallyDrop::new(Buffer { inner })
+        // SAFETY: as above.
+        let device = std::mem::ManuallyDrop::into_inner(unsafe { self.device.uncounted() });
+        std::mem::ManuallyDrop::new(Buffer { inner, device })
     }
 }
 
@@ -470,10 +482,7 @@ impl Buffer {
     /// `gpuAddress`: the block's device address plus the buffer's offset; of a Managed buffer with
     /// a device copy, the copy block's device address plus the copy's offset.
     pub fn gpu_address(&self) -> u64 {
-        match &self.inner.copy {
-            Some(copy) => copy.block.memory.address + copy.offset(),
-            None => self.inner.block.memory.address + self.inner.offset,
-        }
+        BufferObject::gpu_address(self)
     }
 
     /// `didModifyRange:`: the consumer changed `length` bytes from `start` of the buffer's bytes.
@@ -497,7 +506,55 @@ impl Buffer {
     /// memory would take the device past its count and [`Error::Vulkan`] where the ring cannot be
     /// made.
     pub fn did_modify_range(&self, start: u64, length: u64) -> Result<(), Error> {
-        let inner = &self.inner;
+        BufferObject::did_modify_range(self, start, length)
+    }
+
+    /// `length`.
+    pub fn length(&self) -> u64 {
+        BufferObject::length(self)
+    }
+
+    /// `contents`: the block's mapping plus the buffer's offset in a Shared block; `None` in a
+    /// Private one, where Metal answers `NULL`.
+    pub fn contents(&self) -> Option<NonNull<u8>> {
+        BufferObject::contents(self)
+    }
+
+    /// No Metal counterpart: the block the buffer is in.
+    pub fn block(&self) -> BlockId {
+        self.inner.block.memory.id
+    }
+
+    /// No Metal counterpart: the buffer's offset in its block.
+    pub fn offset(&self) -> u64 {
+        self.inner.offset
+    }
+
+    /// The device it was made on.
+    pub(crate) fn device(&self) -> &Device {
+        &self.device
+    }
+}
+
+/// What the runtime reads of a buffer, through the consumer's handle ([`Buffer`]) or through the
+/// buffer as a command buffer, a texture over it or the submit thread keeps it
+/// ([`BufferInner`]), which holds no handle of the device.
+pub(crate) trait BufferObject {
+    /// The buffer itself.
+    fn object(&self) -> &Arc<BufferInner>;
+
+    /// [`Buffer::gpu_address`].
+    fn gpu_address(&self) -> u64 {
+        let inner = self.object();
+        match &inner.copy {
+            Some(copy) => copy.block.memory.address + copy.offset(),
+            None => inner.block.memory.address + inner.offset,
+        }
+    }
+
+    /// [`Buffer::did_modify_range`].
+    fn did_modify_range(&self, start: u64, length: u64) -> Result<(), Error> {
+        let inner = self.object();
         let end = (start.checked_add(length))
             .filter(|&end| end <= inner.length)
             .ok_or(Error::Refused(Refusal::ModifiedRange {
@@ -519,78 +576,79 @@ impl Buffer {
             offset: inner.offset,
             overs: &inner.overs,
         };
-        let core = inner.device.core();
+        let core = &inner.core;
         core.work.modify(core, named, start, end)
     }
 
-    /// `length`.
-    pub fn length(&self) -> u64 {
-        self.inner.length
+    /// [`Buffer::length`].
+    fn length(&self) -> u64 {
+        self.object().length
     }
 
-    /// `contents`: the block's mapping plus the buffer's offset in a Shared block; `None` in a
-    /// Private one, where Metal answers `NULL`.
-    pub fn contents(&self) -> Option<NonNull<u8>> {
-        self.inner.contents.map(Mapping::get)
-    }
-
-    /// No Metal counterpart: the block the buffer is in.
-    pub fn block(&self) -> BlockId {
-        self.inner.block.memory.id
-    }
-
-    /// No Metal counterpart: the buffer's offset in its block.
-    pub fn offset(&self) -> u64 {
-        self.inner.offset
+    /// [`Buffer::contents`].
+    fn contents(&self) -> Option<NonNull<u8>> {
+        self.object().contents.map(Mapping::get)
     }
 
     /// Whether shaders reach the buffer in Shared memory, which the host reads.
-    pub(crate) fn is_shared(&self) -> bool {
-        self.inner.copy.is_none() && self.inner.block.memory.class == MemoryClass::Shared
+    fn is_shared(&self) -> bool {
+        let inner = self.object();
+        inner.copy.is_none() && inner.block.memory.class == MemoryClass::Shared
     }
 
     /// Its textures over its device copy in images of their own, where it is a Managed buffer
     /// with a device copy and has one (`crate::over::ManagedOvers`).
-    pub(crate) fn managed_overs(&self) -> Option<&ManagedOvers> {
-        (self.inner.copy.is_some() && self.inner.overs.any()).then_some(&*self.inner.overs)
+    fn managed_overs(&self) -> Option<&ManagedOvers> {
+        let inner = self.object();
+        (inner.copy.is_some() && inner.overs.any()).then_some(&*inner.overs)
     }
 
     /// Its textures over it in images of their own, as it keeps them.
-    pub(crate) fn over_entries(&self) -> &ManagedOvers {
-        &self.inner.overs
-    }
-
-    /// The device it was made on.
-    pub(crate) fn device(&self) -> &Device {
-        &self.inner.device
+    fn over_entries(&self) -> &ManagedOvers {
+        &self.object().overs
     }
 
     /// The block, and a Managed buffer's device copy, for a command buffer to keep.
-    pub(crate) fn held(&self) -> (&Arc<Block>, Option<&Arc<DeviceCopy>>) {
-        (&self.inner.block, self.inner.copy.as_ref())
+    fn held(&self) -> (&Arc<Block>, Option<&Arc<DeviceCopy>>) {
+        let inner = self.object();
+        (&inner.block, inner.copy.as_ref())
     }
 
     /// The `VkBuffer` shaders reach the buffer through and the buffer's offset in it.
-    pub(crate) fn device_range(&self) -> (vk::Buffer, u64) {
-        match &self.inner.copy {
+    fn device_range(&self) -> (vk::Buffer, u64) {
+        let inner = self.object();
+        match &inner.copy {
             Some(copy) => copy.range(0),
-            None => self.inner.block.memory.range(self.inner.offset),
+            None => inner.block.memory.range(inner.offset),
         }
     }
 
     /// Its own resource id, whatever heap it is in.
-    pub(crate) fn id(&self) -> u32 {
-        self.inner.id
+    fn id(&self) -> u32 {
+        self.object().id
     }
 
     /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a
     /// heap ([`Device::new_heap_buffer`]), its own elsewhere.
-    pub(crate) fn tracked_id(&self) -> u32 {
-        (self.inner.heap.as_ref()).map_or(self.inner.id, |heap| heap.get())
+    fn tracked_id(&self) -> u32 {
+        let inner = self.object();
+        (inner.heap.as_ref()).map_or(inner.id, |heap| heap.get())
     }
 
-    /// Whether `other` is the device this buffer was made on.
-    pub(crate) fn is_of(&self, core: &Arc<crate::device::Core>) -> bool {
-        Arc::ptr_eq(self.inner.device.core(), core)
+    /// Whether `core` is the device this buffer was made on.
+    fn is_of(&self, core: &Arc<Core>) -> bool {
+        Arc::ptr_eq(&self.object().core, core)
+    }
+}
+
+impl BufferObject for Buffer {
+    fn object(&self) -> &Arc<BufferInner> {
+        &self.inner
+    }
+}
+
+impl BufferObject for Arc<BufferInner> {
+    fn object(&self) -> &Arc<BufferInner> {
+        self
     }
 }

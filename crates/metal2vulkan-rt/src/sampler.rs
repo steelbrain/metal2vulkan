@@ -120,17 +120,20 @@ pub(crate) fn canonical(mut desc: SamplerDesc) -> SamplerDesc {
 
 /// `MTLSamplerState`: a sampler descriptor's device samplers at an index of the sampler arrays.
 ///
-/// A cheap handle: clones share one state. The state holds the device. Once its last handle is
-/// gone, and with it the last command buffer that used it, its elements read the arrays' defaults
-/// again and its index is free, where it still owns the index; a device sampler no other state
-/// holds goes to the reaper.
+/// A cheap handle: clones share one state. A handle holds the state and the device; what a
+/// command buffer keeps of it is the state alone, which holds no handle of the device. Once its
+/// last handle is gone, and with it the last command buffer that used it, its elements read the
+/// arrays' defaults again and its index is free, where it still owns the index; a device sampler
+/// no other state holds goes to the reaper.
 #[derive(Clone)]
 pub struct SamplerState {
     inner: Arc<SamplerInner>,
+    device: Device,
 }
 
-struct SamplerInner {
-    device: Device,
+/// The state itself: what a handle and a command buffer that uses it hold.
+pub(crate) struct SamplerInner {
+    core: Arc<Core>,
     descriptor: SamplerDescriptor,
     index: u32,
     /// Its owner word at the index.
@@ -143,7 +146,7 @@ struct SamplerInner {
 
 impl Drop for SamplerInner {
     fn drop(&mut self) {
-        let core = self.device.core();
+        let core = &self.core;
         // SAFETY: no work that reads its elements is pending: each command buffer that used the
         // state held it until it retired.
         unsafe {
@@ -369,13 +372,14 @@ impl Device {
         core.counters.rise(Gauge::Samplers);
         Ok(SamplerState {
             inner: Arc::new(SamplerInner {
-                device: self.clone(),
+                core: Arc::clone(core),
                 descriptor: *descriptor,
                 index,
                 owner,
                 word: SamplerWord::of(descriptor).0,
                 uses,
             }),
+            device: self.clone(),
         })
     }
 }
@@ -396,7 +400,7 @@ fn make(core: &Core, desc: &SamplerDesc) -> Result<vk::Sampler, Error> {
 impl SamplerState {
     /// Whether `core` is the device this state was made on.
     pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
-        Arc::ptr_eq(self.inner.device.core(), core)
+        Arc::ptr_eq(&self.inner.core, core)
     }
 
     /// `gpuResourceID`: its index and the translator's `SamplerWord` of its descriptor.
@@ -414,14 +418,22 @@ impl SamplerState {
 }
 
 impl crate::kept::Handle for SamplerState {
+    type Kept = Arc<SamplerInner>;
+
     fn address(&self) -> usize {
         Arc::as_ptr(&self.inner) as *const () as usize
     }
 
+    fn kept(&self) -> Arc<SamplerInner> {
+        Arc::clone(&self.inner)
+    }
+
     unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<SamplerState> {
-        // SAFETY: the pointer is a live `Arc`'s; the handle made of it is never dropped, and the
-        // caller keeps the object alive past its last use.
+        // SAFETY: the pointers are live `Arc`s'; the handle made of them is never dropped, and
+        // the caller keeps the state and the device alive past its last use.
         let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        std::mem::ManuallyDrop::new(SamplerState { inner })
+        // SAFETY: as above.
+        let device = std::mem::ManuallyDrop::into_inner(unsafe { self.device.uncounted() });
+        std::mem::ManuallyDrop::new(SamplerState { inner, device })
     }
 }

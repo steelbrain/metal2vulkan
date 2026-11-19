@@ -1612,8 +1612,15 @@ impl Drop for Compiled {
 }
 
 impl crate::kept::Handle for ComputePipelineState {
+    /// The state itself: it holds no handle of the device.
+    type Kept = ComputePipelineState;
+
     fn address(&self) -> usize {
         Arc::as_ptr(&self.inner) as *const () as usize
+    }
+
+    fn kept(&self) -> ComputePipelineState {
+        self.clone()
     }
 
     unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<ComputePipelineState> {

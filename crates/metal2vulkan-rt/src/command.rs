@@ -1,7 +1,7 @@
 //! Command buffers: recorded at once into segments that event waits and signals split, and their
 //! states from creation to retirement.
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::capture::CopyIn;
 use crate::counters::{Metric, Tally};
 use crate::device::{lock, Core, Device};
@@ -18,7 +18,7 @@ use crate::record::{self, Reach, Recorder};
 use crate::render::RenderPipelineState;
 use crate::ring::{Placed, Writes};
 use crate::sampler::SamplerState;
-use crate::texture::{Image, OverCopy, Texture};
+use crate::texture::{Image, OverCopy, Texture, TextureInner, TextureObject};
 use crate::times::{self, Pair, Times};
 use ash::vk;
 use std::sync::atomic::Ordering;
@@ -261,10 +261,10 @@ pub(crate) struct Segment {
     pub(crate) overs: Overs,
     /// The Managed buffers with textures over their device copies that its commands wrote: each
     /// such texture owes its copy in from the next submission (`crate::over::ManagedOvers`).
-    pub(crate) managed_written: Vec<Buffer>,
+    pub(crate) managed_written: Vec<Arc<BufferInner>>,
     /// The textures over a Managed buffer's device copy in an image of their own that its
     /// commands wrote: its submission settles their copies back (`crate::over::ManagedOvers`).
-    pub(crate) managed_wrote: Vec<Texture>,
+    pub(crate) managed_wrote: Vec<Arc<TextureInner>>,
     /// Of the first segment: what the command buffer's commit captured of Managed buffers'
     /// changed ranges (`crate::capture`). Each copy-in goes ahead of the segment's commands, after
     /// its waits, and is kept until the command buffer retires.
@@ -1313,7 +1313,7 @@ impl Building {
         let wrote = &mut self.last().managed_wrote;
         let first = !wrote.iter().any(|kept| kept.id() == texture.id());
         if first {
-            wrote.push(texture.clone());
+            wrote.push(Arc::clone(texture.object()));
         }
         buffer.over_entries().pend(texture.id(), first);
     }
@@ -1326,7 +1326,7 @@ impl Building {
         }
         let written = &mut self.last().managed_written;
         if !written.iter().any(|kept| kept.id() == buffer.id()) {
-            written.push(buffer.clone());
+            written.push(Arc::clone(buffer.object()));
         }
     }
 

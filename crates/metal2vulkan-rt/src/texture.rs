@@ -30,7 +30,7 @@
 //! ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)).
 
 use crate::arrays::{Owner, ResourceId};
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
@@ -180,17 +180,20 @@ pub struct Region {
 /// (`requiresDedicatedAllocation`), where it is larger than a block, or where the blocks' memory
 /// type does not serve it.
 ///
-/// A cheap handle: clones share one texture. The texture holds the device. Once its last handle
-/// is gone, and with it the last command buffer that used it, its elements of set 1 read null
-/// again and its index is free; the reaper frees its image once the last upload that moves or
-/// copies it has retired too.
+/// A cheap handle: clones share one texture. A handle holds the texture and the device; what a
+/// command buffer keeps of it is the texture alone, which holds no handle of the device. Once its
+/// last handle is gone, and with it the last command buffer that used it, its elements of set 1
+/// read null again and its index is free; the reaper frees its image once the last upload that
+/// moves or copies it has retired too.
 #[derive(Clone)]
 pub struct Texture {
     inner: Arc<TextureInner>,
+    device: Device,
 }
 
-struct TextureInner {
-    device: Device,
+/// The texture itself: what a handle, a command buffer that uses it and a view of it hold.
+pub(crate) struct TextureInner {
+    core: Arc<Core>,
     descriptor: TextureDescriptor,
     image: Arc<Image>,
     /// The format of its views: the image's, or a view's own.
@@ -288,7 +291,7 @@ pub(crate) struct Attachment {
 /// A texture's bytes in a buffer, which [`Texture::replace_region`] and [`Texture::get_bytes`]
 /// write and read there.
 struct Named {
-    buffer: Buffer,
+    buffer: Arc<BufferInner>,
     /// A place for each level and slice, in order.
     places: Vec<BytesPlace>,
     form: Form,
@@ -311,7 +314,7 @@ enum Form {
 struct View {
     /// The texture whose image the view reads, which the view keeps: the first in its chain of
     /// parents with an image of its own.
-    parent: Texture,
+    parent: Arc<TextureInner>,
     /// The view's first level and array layer in the image.
     base: [u32; 2],
     /// The swizzle its texels are sampled and read through: the one it was made with over its
@@ -613,7 +616,7 @@ pub(crate) struct Shape {
 
 impl Drop for TextureInner {
     fn drop(&mut self) {
-        let core = self.device.core();
+        let core = &self.core;
         let attachments =
             (self.attachments.get_mut()).unwrap_or_else(std::sync::PoisonError::into_inner);
         if !attachments.is_empty() {
@@ -1034,7 +1037,7 @@ impl Device {
             None => None,
         };
         let inner = TextureInner {
-            device: self.clone(),
+            core: Arc::clone(core),
             descriptor: d,
             image,
             format: plan.format,
@@ -1052,6 +1055,7 @@ impl Device {
         };
         Ok(Texture {
             inner: Arc::new(inner),
+            device: self.clone(),
         })
     }
 
@@ -1083,7 +1087,7 @@ impl Device {
             Source::Managed(bytes, places) => {
                 check_places(&d, plan.unit, bytes, places)?;
                 let named = Named {
-                    buffer: (*bytes).clone(),
+                    buffer: Arc::clone(bytes.object()),
                     places: places.to_vec(),
                     form: Form::Managed,
                 };
@@ -1093,7 +1097,7 @@ impl Device {
                 let in_place =
                     check_over(core, &d, &shape, &plan, buffer, *offset, *bytes_per_row)?;
                 let named = Named {
-                    buffer: (*buffer).clone(),
+                    buffer: Arc::clone(buffer.object()),
                     places: vec![BytesPlace {
                         offset: *offset,
                         bytes_per_row: *bytes_per_row,
@@ -1217,7 +1221,7 @@ impl Device {
             None => None,
         };
         let inner = TextureInner {
-            device: self.clone(),
+            core: Arc::clone(core),
             descriptor: d,
             image,
             format: plan.format,
@@ -1244,6 +1248,7 @@ impl Device {
         }
         let texture = Texture {
             inner: Arc::new(inner),
+            device: self.clone(),
         };
         core.work.home(core, &texture.inner.image)?;
         // Over a Managed buffer's device copy, its buffer keeps what Metal's Managed events owe it
@@ -2673,7 +2678,7 @@ impl TextureInner {
         region: Region,
         level: u32,
         slice: u32,
-    ) -> Result<Option<(Transfer, &Buffer, BytesPlace, u64)>, Error> {
+    ) -> Result<Option<(Transfer, &Arc<BufferInner>, BytesPlace, u64)>, Error> {
         let refused = || Error::Refused(Refusal::ManagedTextureBytes { level, slice });
         let named = self.named.as_ref().ok_or_else(refused)?;
         let (bytes, places) = (&named.buffer, &named.places);
@@ -2701,7 +2706,7 @@ impl TextureInner {
     }
 
     /// The buffer a texture over a buffer lies over ([`Buffer::new_texture`]).
-    fn over(&self) -> Option<&Buffer> {
+    fn over(&self) -> Option<&Arc<BufferInner>> {
         (self.named.as_ref())
             .filter(|named| named.form != Form::Managed)
             .map(|named| &named.buffer)
@@ -2832,17 +2837,6 @@ impl TextureInner {
 }
 
 impl Texture {
-    /// Its resource id in the encoders' hazard sets: a view's is its parent's, so the hazards
-    /// between them are one texture's.
-    pub(crate) fn id(&self) -> u32 {
-        self.inner.id
-    }
-
-    /// Where the texture starts in its image: a view's first level and array layer.
-    pub(crate) fn base(&self) -> [u32; 2] {
-        self.inner.base()
-    }
-
     /// `newTextureViewWithPixelFormat:textureType:levels:slices:`: a texture over `levels` and
     /// `slices` of this one's image, of `texture_type`, at `index`, with elements of set 1 of its
     /// own and no copy; `newTextureViewWithPixelFormat:` is the call with the texture's own type,
@@ -2981,7 +2975,7 @@ impl Texture {
         // A view takes its descriptor's checks but the swizzle's with its usage, which Metal
         // makes of a texture's own descriptor alone.
         let (shape, usage) = checked(&d)?;
-        let mut plan = form(inner.device.core(), &d, usage)?;
+        let mut plan = form(&inner.core, &d, usage)?;
         // Another format is built where the image lists it; its views take the image's usage
         // that the format's features hold.
         let image = &inner.image;
@@ -3002,7 +2996,7 @@ impl Texture {
         if reached != index.is_some() {
             return Err(Error::Refused(Refusal::TextureIndex { index }));
         }
-        let core = inner.device.core();
+        let core = &inner.core;
         let [level, layer] = inner.base();
         let base = [level + levels.start, layer + slices.start];
         let range = |aspect_mask| vk::ImageSubresourceRange {
@@ -3075,8 +3069,8 @@ impl Texture {
             None => None,
         };
         let parent = match &inner.view {
-            Some(view) => view.parent.clone(),
-            None => self.clone(),
+            Some(view) => Arc::clone(&view.parent),
+            None => Arc::clone(&self.inner),
         };
         // A view names the parent's bytes of its own levels and slices: a Managed texture's, or a
         // texture over a buffer's.
@@ -3091,7 +3085,7 @@ impl Texture {
             }
         });
         let view = TextureInner {
-            device: inner.device.clone(),
+            core: Arc::clone(&inner.core),
             descriptor: TextureDescriptor {
                 swizzle: swizzle.unwrap_or(p.swizzle),
                 ..d
@@ -3117,298 +3111,8 @@ impl Texture {
         };
         Ok(Texture {
             inner: Arc::new(view),
+            device: self.device.clone(),
         })
-    }
-
-    /// Whether `core` is the device this texture was made on.
-    pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
-        Arc::ptr_eq(self.inner.device.core(), core)
-    }
-
-    /// Its image.
-    pub(crate) fn image(&self) -> vk::Image {
-        self.inner.image.image
-    }
-
-    /// Whether it reaches `level` and `layer` of its image: a view reaches its own levels and
-    /// slices alone.
-    pub(crate) fn reaches(&self, level: u32, layer: u32) -> bool {
-        let d = &self.inner.descriptor;
-        let [first_level, first_layer] = self.inner.base();
-        (first_level..first_level + d.mipmap_level_count).contains(&level)
-            && (first_layer..first_layer + slices(d)).contains(&layer)
-    }
-
-    /// Whether a draw may read an attachment of its own pass through it ([`Image`]'s
-    /// `attachment_reads`): its image in the feedback layout, or, on a device without the
-    /// attachment feedback loop, its view of its image's shadow.
-    pub(crate) fn attachment_reads(&self) -> bool {
-        let image = &self.inner.image;
-        image.attachment_reads && (image.looped() || self.inner.shadow.is_some())
-    }
-
-    /// Its resource id while a draw reads an attachment through it: its second element's, at its
-    /// index plus [`TEXTURES`](crate::floor::TEXTURES), with its own word. Nil for a
-    /// texture no shader reaches.
-    pub(crate) fn second_resource_id(&self) -> ResourceId {
-        match self.inner.index {
-            Some((index, _)) => ResourceId {
-                index: index + crate::floor::TEXTURES,
-                word: self.inner.word,
-            },
-            None => ResourceId::default(),
-        }
-    }
-
-    /// Its image's shadow, and its own view of it at its second element, each made where it has
-    /// none yet (`crate::shadow`): what a draw reads an attachment through on a device without
-    /// the attachment feedback loop. The element is written where the texture still owns its
-    /// index. `None` for a texture with no view of a shadow.
-    ///
-    /// Err: [`Error::Vulkan`] where the shadow or the view cannot be made; [`Error::Quiesced`].
-    pub(crate) fn shadow(&self) -> Result<Option<vk::Image>, Error> {
-        let (Some(at), Some(index)) = (&self.inner.shadow, self.inner.index) else {
-            return Ok(None);
-        };
-        let Some(shadow) = self.inner.image.shadow()? else {
-            return Ok(None);
-        };
-        let mut view = lock(&at.view);
-        if view.is_none() {
-            let core = self.inner.device.core();
-            // SAFETY: the shadow is bound, of the image's format, levels and layers, which hold
-            // the sampled view's range, and of the sampled usage.
-            let made = unsafe {
-                image_view(
-                    &core.device,
-                    shadow,
-                    at.view_type,
-                    self.inner.format,
-                    at.components,
-                    at.range,
-                    (self.inner.views_usage).map(|_| vk::ImageUsageFlags::SAMPLED),
-                )
-            }?;
-            *view = Some(made);
-            // SAFETY: the set has the second elements (the device reads attachments); the view
-            // lives until the texture's elements are vacated, and the shadow is at home,
-            // shader-read-only, whenever work reads it.
-            unsafe { (core.arrays).place_shadow(&core.device, index, made) };
-        }
-        Ok(Some(shadow))
-    }
-
-    /// The format its image's shadow is made in, the image's; `None` for an image of no shadow.
-    pub(crate) fn shadow_format(&self) -> Option<vk::Format> {
-        (self.inner.image.shadowing.as_ref()).map(|shadowing| shadowing.made.2.format)
-    }
-
-    /// What a draw reads of its image through it (`crate::shadow`): with `own_pixel`, the draw's
-    /// scissor (per axis `[first, end)`), the rectangle a fragment function that reads only at its
-    /// own pixel reads of its first level and layer; else every level and layer it reaches.
-    pub(crate) fn read_areas(&self, own_pixel: Option<[[u32; 2]; 2]>) -> Vec<Area> {
-        let d = &self.inner.descriptor;
-        let [level, layer] = self.inner.base();
-        match own_pixel {
-            Some(scissor) => vec![shadow::own_pixel(
-                level,
-                layer,
-                [d.width, d.height],
-                scissor,
-            )],
-            None => {
-                let root = match &self.inner.view {
-                    Some(view) => &view.parent.inner.descriptor,
-                    None => d,
-                };
-                let size = [root.width, root.height];
-                shadow::whole(level, d.mipmap_level_count, layer, slices(d), size)
-            }
-        }
-    }
-
-    /// The bytes of a texel of its image, which its copies move; 0 where no copy is built.
-    pub(crate) fn texel_bytes(&self) -> u64 {
-        self.inner.unit.map_or(0, |unit| u64::from(unit.bytes))
-    }
-
-    /// Every level and layer of its image, every aspect.
-    pub(crate) fn whole(&self) -> vk::ImageSubresourceRange {
-        let root = match &self.inner.view {
-            Some(view) => &view.parent.inner.descriptor,
-            None => &self.inner.descriptor,
-        };
-        vk::ImageSubresourceRange {
-            aspect_mask: self.inner.image.aspects,
-            base_mip_level: 0,
-            level_count: root.mipmap_level_count,
-            base_array_layer: 0,
-            layer_count: slices(root),
-        }
-    }
-
-    /// Its image's format.
-    pub(crate) fn format(&self) -> vk::Format {
-        self.inner.format
-    }
-
-    /// The format its image is made in, which a blit of the image filters by: a view in another
-    /// format's differs from [`format`](Self::format).
-    pub(crate) fn image_format(&self) -> vk::Format {
-        self.inner.image.format
-    }
-
-    /// A layout change of its levels `levels`, counted from its first, over each of its slices,
-    /// from `old` to `new`, `None` naming its home layout, with no scopes yet
-    /// ([`BlitCommandEncoder::generate_mipmaps`](crate::BlitCommandEncoder::generate_mipmaps)).
-    pub(crate) fn levels_barrier(
-        &self,
-        levels: Range<u32>,
-        old: Option<vk::ImageLayout>,
-        new: Option<vk::ImageLayout>,
-    ) -> vk::ImageMemoryBarrier2<'static> {
-        self.inner.levels_barrier(levels, old, new)
-    }
-
-    /// How its image holds its pixel format.
-    pub(crate) fn emulation(&self) -> FormatEmulation {
-        self.inner.emulation
-    }
-
-    /// `level` and `slice` of the texture as a render pass attachment: the image view of that
-    /// one level and layer of its image, every aspect, with the identity swizzle, made at the
-    /// first pass that renders into it and kept with the texture.
-    ///
-    /// Err: [`Refusal::AttachmentUsage`] for a texture made without `RenderTarget` usage;
-    /// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`] for one but a 2D texture, a 2D
-    /// array, a cube, a cube array or a 2D multisample texture or array; [`Refusal::AttachmentPlace`] for a level or slice past the texture's;
-    /// [`Error::Vulkan`] where the view cannot be made.
-    pub(crate) fn attachment(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
-        let d = &self.inner.descriptor;
-        if !d.usage.is_empty() && !d.usage.contains(TextureUsage::RENDER_TARGET) {
-            return Err(Error::Refused(Refusal::AttachmentUsage {
-                pixel_format: d.pixel_format,
-            }));
-        }
-        let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
-        match d.texture_type {
-            TextureType::Type2D
-            | TextureType::Type2DArray
-            | TextureType::Cube
-            | TextureType::CubeArray
-            | TextureType::Type2DMultisample
-            | TextureType::Type2DMultisampleArray => {}
-            _ => return gap(RenderPassKind::TextureType),
-        }
-        if level >= d.mipmap_level_count || slice >= slices(d) {
-            return Err(Error::Refused(Refusal::AttachmentPlace { level, slice }));
-        }
-        let [first_level, first_layer] = self.inner.base();
-        let (level_in_image, layer) = (first_level + level, first_layer + slice);
-        let image = &self.inner.image;
-        // A view of another format than the image's renders where the format's features hold an
-        // attachment.
-        let renders =
-            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
-        let looped = vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
-        let usage = match self.inner.views_usage {
-            None => None,
-            Some(usage) if usage.intersects(renders) => Some(usage & (renders | looped)),
-            Some(_) => {
-                return Err(Error::Unsupported(Gap::TextureFormat {
-                    pixel_format: d.pixel_format,
-                }))
-            }
-        };
-        let mut views = lock(&self.inner.attachments);
-        let kept = (views.iter())
-            .find(|a| a.level == level_in_image && a.layer == layer)
-            .map(|a| a.view);
-        let view = match kept {
-            Some(view) => view,
-            None => {
-                let core = self.inner.device.core();
-                let range = vk::ImageSubresourceRange {
-                    aspect_mask: image.aspects,
-                    base_mip_level: level_in_image,
-                    level_count: 1,
-                    base_array_layer: layer,
-                    layer_count: 1,
-                };
-                // SAFETY: the image is bound, of the texture's format, holds the level and layer
-                // (the texture's own, which lie in its image), and has the attachment usage its
-                // render target usage gave it.
-                let view = unsafe {
-                    image_view(
-                        &core.device,
-                        image.image,
-                        vk::ImageViewType::TYPE_2D,
-                        self.inner.format,
-                        vk::ComponentMapping::default(),
-                        range,
-                        usage,
-                    )
-                }?;
-                core.counters.rise(Gauge::AttachmentViews);
-                views.push(AttachmentView {
-                    level: level_in_image,
-                    layer,
-                    view,
-                });
-                view
-            }
-        };
-        Ok(Attachment {
-            view,
-            image: image.image,
-            level: level_in_image,
-            layer,
-            aspects: image.aspects,
-            home: image.home,
-            extent: [(d.width >> level).max(1), (d.height >> level).max(1)],
-            format: self.inner.format,
-            samples: vk::SampleCountFlags::from_raw(d.sample_count),
-        })
-    }
-
-    /// The unit its copies move; `None` where no copy is built.
-    pub(crate) fn unit(&self) -> Option<CopyUnit> {
-        self.inner.unit
-    }
-
-    /// A Managed texture's named bytes ([`Device::new_managed_texture`]): the buffer and its
-    /// places, one for each level and, within it, each slice. `None` for any other texture.
-    pub(crate) fn named_bytes(&self) -> Option<(&Buffer, &[BytesPlace])> {
-        let named = (self.inner.named.as_ref()).filter(|named| named.form == Form::Managed)?;
-        Some((&named.buffer, &named.places))
-    }
-
-    /// The layout a copy names the texture's image in, for its role's transfer `layout`
-    /// ([`Image::copy_layout`]): general for a texture over a buffer in place, `layout` for any
-    /// other.
-    pub(crate) fn copy_layout(&self, layout: vk::ImageLayout) -> vk::ImageLayout {
-        self.inner.image.copy_layout(layout)
-    }
-
-    /// The barrier that moves `placed` from home to the copy layout of the transfer `layout` for
-    /// a copy's `access`, after every earlier command's writes.
-    pub(crate) fn away(
-        &self,
-        placed: &Placed,
-        layout: vk::ImageLayout,
-        access: vk::AccessFlags2,
-    ) -> vk::ImageMemoryBarrier2<'static> {
-        self.inner.away(placed, layout, access)
-    }
-
-    /// The barrier that moves `placed` back home from the copy layout of the transfer `layout`
-    /// once a copy has run, its writes visible to every later command.
-    pub(crate) fn back(
-        &self,
-        placed: &Placed,
-        layout: vk::ImageLayout,
-    ) -> vk::ImageMemoryBarrier2<'static> {
-        self.inner.back(placed, layout)
     }
 
     /// No Metal counterpart: the runtime's part of `CAMetalLayer`'s `nextDrawable`, for a
@@ -3449,7 +3153,7 @@ impl Texture {
             *turn = Turn::Acquired;
             before
         };
-        let core = self.inner.device.core();
+        let core = &self.inner.core;
         let homed = core.work.home(core, image);
         if homed.is_err() {
             *lock(&drawable.turn) = before;
@@ -3457,176 +3161,15 @@ impl Texture {
         homed
     }
 
-    /// A command buffer presents the drawable: it is the runtime's, acquired, from now presented
-    /// by that command buffer.
-    ///
-    /// Err: [`Refusal::NotDrawable`]; [`Refusal::DrawableNotAcquired`].
-    pub(crate) fn present_turn(&self) -> Result<(), Error> {
-        let drawable =
-            (self.inner.image.drawable.as_ref()).ok_or(Error::Refused(Refusal::NotDrawable))?;
-        let mut turn = lock(&drawable.turn);
-        if *turn != Turn::Acquired {
-            return Err(Error::Refused(Refusal::DrawableNotAcquired));
-        }
-        *turn = Turn::Presenting;
-        Ok(())
-    }
-
-    /// The command buffer that presents the drawable was dropped uncommitted: it is acquired
-    /// again, for another present.
-    pub(crate) fn unpresent(&self) {
-        if let Some(drawable) = &self.inner.image.drawable {
-            *lock(&drawable.turn) = Turn::Acquired;
-        }
-    }
-
-    /// The command buffer that presents the drawable is committed: the image is the presentation
-    /// engine's once that command buffer has run, in the present layout.
-    pub(crate) fn presented(&self) {
-        if let Some(drawable) = &self.inner.image.drawable {
-            *lock(&drawable.turn) = Turn::Engine;
-        }
-    }
-
-    /// The move of its whole image from home to the present layout, after every earlier command's
-    /// writes. It delays nothing after it: the present's semaphore wait and its own visibility
-    /// operations order the presentation engine's reads (Vulkan's note on `VkPresentInfoKHR`).
-    pub(crate) fn present_barrier(&self) -> vk::ImageMemoryBarrier2<'static> {
-        let image = &self.inner.image;
-        vk::ImageMemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::NONE)
-            .dst_access_mask(vk::AccessFlags2::NONE)
-            .old_layout(image.home)
-            .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(image.image)
-            .subresource_range(whole(image.aspects))
-    }
-
     /// `gpuResourceID`: its index (0 for a texture no shader reaches) and the translator's
     /// `TextureWord` of its pixel format and swizzle.
     pub fn gpu_resource_id(&self) -> ResourceId {
-        ResourceId {
-            index: self.inner.index.map_or(0, |(index, _)| index),
-            word: self.inner.word,
-        }
-    }
-
-    /// Its id as bytes, which a pass's attachments and the copies over buffers name it by: a
-    /// texture over a buffer in place's is the buffer's, as the two are the same bytes and a use
-    /// of either is a use of both.
-    pub(crate) fn hazard_id(&self) -> u32 {
-        match &self.inner.named {
-            Some(named) if named.form == Form::InPlace => named.buffer.id(),
-            _ => self.inner.id,
-        }
-    }
-
-    /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a
-    /// heap ([`Device::new_heap_texture`]), its buffer's there for one in place over a buffer, and
-    /// [`hazard_id`](Self::hazard_id) elsewhere.
-    pub(crate) fn tracked_id(&self) -> u32 {
-        match (&self.inner.heap, &self.inner.named) {
-            (Some(heap), _) => heap.get(),
-            (None, Some(named)) if named.form == Form::InPlace => named.buffer.tracked_id(),
-            _ => self.inner.id,
-        }
-    }
-
-    /// Where it is made for shader writes (`ShaderWrite`, or Metal's unknown usage) but has no
-    /// storage element, which shaders write it and read it as storage through
-    /// (`Arrays::place_texture`): its pixel format, which [`Gap::StorageElement`] names.
-    pub(crate) fn unstored(&self) -> Option<PixelFormat> {
-        let d = &self.inner.descriptor;
-        let written = d.usage.is_empty() || d.usage.contains(TextureUsage::SHADER_WRITE);
-        let storage = match &self.inner.view {
-            Some(view) => view.views.storage,
-            None => self.inner.image.storage,
-        };
-        (written && storage.is_none()).then_some(d.pixel_format)
-    }
-
-    /// Whether it reads through a swizzle other than each channel's own.
-    pub(crate) fn swizzled(&self) -> bool {
-        self.inner.reads() != TextureSwizzleChannels::DEFAULT
-    }
-
-    /// Whether the host reads the GPU's writes to it with no copy: a texture in place over a
-    /// Shared buffer.
-    pub(crate) fn host_reads(&self) -> bool {
-        match &self.inner.named {
-            Some(named) => named.form == Form::InPlace && named.buffer.is_shared(),
-            None => false,
-        }
-    }
-
-    /// Of a texture over a buffer of no device copy in an image of its own, which the submissions
-    /// copy into and back by the Shared rules (`crate::over`): the buffer and the copy.
-    pub(crate) fn copied_shared(&self) -> Option<(&Buffer, OverCopy)> {
-        self.copied_over()
-            .filter(|(buffer, _)| buffer.held().1.is_none())
-    }
-
-    /// Of a texture over a Managed buffer's device copy in an image of its own, which Metal's
-    /// Managed events owe copies (`crate::over::ManagedOvers`): the buffer.
-    pub(crate) fn managed_over(&self) -> Option<&Buffer> {
-        let named = (self.inner.named.as_ref()).filter(|named| named.form == Form::Copied)?;
-        named.buffer.held().1.map(|_| &named.buffer)
-    }
-
-    /// Of a texture over a buffer in an image of its own (`crate::over`): the buffer, and the
-    /// copy between the bytes shaders reach of it and the image.
-    pub(crate) fn copied_over(&self) -> Option<(&Buffer, OverCopy)> {
-        let inner = &self.inner;
-        let named = (inner.named.as_ref()).filter(|named| named.form == Form::Copied)?;
-        let unit = inner.unit?;
-        let place = named.places[0];
-        let d = &inner.descriptor;
-        let (buffer, at) = named.buffer.device_range();
-        let (block, device_copy) = named.buffer.held();
-        let region = vk::BufferImageCopy {
-            buffer_offset: at + place.offset,
-            buffer_row_length: u32::try_from(place.bytes_per_row / u64::from(unit.bytes)).ok()?,
-            buffer_image_height: 0,
-            image_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: unit.aspect,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            image_offset: vk::Offset3D::default(),
-            image_extent: vk::Extent3D {
-                width: d.width,
-                height: d.height,
-                depth: 1,
-            },
-        };
-        let copy = OverCopy {
-            image: inner.image.image,
-            home: inner.image.home,
-            aspects: inner.image.aspects,
-            buffer,
-            region,
-            unit,
-            bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
-            shared: named.buffer.is_shared(),
-            imported: device_copy.is_none() && block.memory.own == Some(memory::Own::Import),
-        };
-        Some((&named.buffer, copy))
-    }
-
-    /// For the device tests: the bytes its image's memory requirements name.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn image_size(&self) -> u64 {
-        self.inner.image.bytes
+        TextureObject::gpu_resource_id(self)
     }
 
     /// `textureType`, `pixelFormat`, `width` and the rest, as made.
     pub fn descriptor(&self) -> &TextureDescriptor {
-        &self.inner.descriptor
+        TextureObject::descriptor(self)
     }
 
     /// No Metal counterpart: the static note of a read, sample or gather of its texels, where its
@@ -3707,7 +3250,7 @@ impl Texture {
             let span = (height - 1) * place.bytes_per_row + width * texel;
             return buffer.did_modify_range(start, span);
         }
-        let core = inner.device.core();
+        let core = &inner.core;
         let stage = core.work.stage(core, copy.len(), false)?;
         let host = stage.host().as_ptr();
         for (from, to, len) in copy.runs() {
@@ -3778,7 +3321,7 @@ impl Texture {
         let image_height = u32::try_from(image_height).map_err(|_| refused())?;
         let (buffer, at) = bytes.device_range();
         let region = copy.buffer_image_copy(at + start, row_length, image_height);
-        let core = inner.device.core();
+        let core = &inner.core;
         core.work.upload(
             core,
             None,
@@ -3850,8 +3393,8 @@ impl Texture {
         slice: u32,
     ) -> Result<(), Error> {
         let len = bytes.len() as u64;
-        let core = self.inner.device.core();
-        let queue = self.inner.device.new_command_queue(1)?;
+        let core = &self.inner.core;
+        let queue = self.device.new_command_queue(1)?;
         let command_buffer = queue.command_buffer()?;
         command_buffer.record_for_test(&[], |_, _| {})?;
         command_buffer.commit()?;
@@ -3869,7 +3412,7 @@ impl Texture {
     /// and waiting for it.
     fn read_image(&self, bytes: &mut [u8], copy: &Transfer) -> Result<(), Error> {
         let inner = &self.inner;
-        let core = inner.device.core();
+        let core = &inner.core;
         let stage = core.work.stage(core, copy.len(), true)?;
         core.work.upload(
             core,
@@ -3894,6 +3437,496 @@ impl Texture {
             core.work.unread(number);
         }
         waited
+    }
+}
+
+/// What the runtime reads of a texture, through the consumer's handle ([`Texture`]) or through
+/// the texture as a command buffer, a view of it or the submit thread keeps it
+/// ([`TextureInner`]), which holds no handle of the device.
+pub(crate) trait TextureObject {
+    /// The texture itself.
+    fn object(&self) -> &Arc<TextureInner>;
+
+    /// Its resource id in the encoders' hazard sets: a view's is its parent's, so the hazards
+    /// between them are one texture's.
+    fn id(&self) -> u32 {
+        self.object().id
+    }
+
+    /// Where the texture starts in its image: a view's first level and array layer.
+    fn base(&self) -> [u32; 2] {
+        TextureInner::base(self.object())
+    }
+
+    /// Whether `core` is the device this texture was made on.
+    fn is_of(&self, core: &Arc<Core>) -> bool {
+        Arc::ptr_eq(&self.object().core, core)
+    }
+
+    /// Its image.
+    fn image(&self) -> vk::Image {
+        self.object().image.image
+    }
+
+    /// Whether it reaches `level` and `layer` of its image: a view reaches its own levels and
+    /// slices alone.
+    fn reaches(&self, level: u32, layer: u32) -> bool {
+        let d = &self.object().descriptor;
+        let [first_level, first_layer] = TextureInner::base(self.object());
+        (first_level..first_level + d.mipmap_level_count).contains(&level)
+            && (first_layer..first_layer + slices(d)).contains(&layer)
+    }
+
+    /// Whether a draw may read an attachment of its own pass through it ([`Image`]'s
+    /// `attachment_reads`): its image in the feedback layout, or, on a device without the
+    /// attachment feedback loop, its view of its image's shadow.
+    fn attachment_reads(&self) -> bool {
+        let image = &self.object().image;
+        image.attachment_reads && (image.looped() || self.object().shadow.is_some())
+    }
+
+    /// Its resource id while a draw reads an attachment through it: its second element's, at its
+    /// index plus [`TEXTURES`](crate::floor::TEXTURES), with its own word. Nil for a
+    /// texture no shader reaches.
+    fn second_resource_id(&self) -> ResourceId {
+        match self.object().index {
+            Some((index, _)) => ResourceId {
+                index: index + crate::floor::TEXTURES,
+                word: self.object().word,
+            },
+            None => ResourceId::default(),
+        }
+    }
+
+    /// Its image's shadow, and its own view of it at its second element, each made where it has
+    /// none yet (`crate::shadow`): what a draw reads an attachment through on a device without
+    /// the attachment feedback loop. The element is written where the texture still owns its
+    /// index. `None` for a texture with no view of a shadow.
+    ///
+    /// Err: [`Error::Vulkan`] where the shadow or the view cannot be made; [`Error::Quiesced`].
+    fn shadow(&self) -> Result<Option<vk::Image>, Error> {
+        let (Some(at), Some(index)) = (&self.object().shadow, self.object().index) else {
+            return Ok(None);
+        };
+        let Some(shadow) = self.object().image.shadow()? else {
+            return Ok(None);
+        };
+        let mut view = lock(&at.view);
+        if view.is_none() {
+            let core = &self.object().core;
+            // SAFETY: the shadow is bound, of the image's format, levels and layers, which hold
+            // the sampled view's range, and of the sampled usage.
+            let made = unsafe {
+                image_view(
+                    &core.device,
+                    shadow,
+                    at.view_type,
+                    self.object().format,
+                    at.components,
+                    at.range,
+                    (self.object().views_usage).map(|_| vk::ImageUsageFlags::SAMPLED),
+                )
+            }?;
+            *view = Some(made);
+            // SAFETY: the set has the second elements (the device reads attachments); the view
+            // lives until the texture's elements are vacated, and the shadow is at home,
+            // shader-read-only, whenever work reads it.
+            unsafe { (core.arrays).place_shadow(&core.device, index, made) };
+        }
+        Ok(Some(shadow))
+    }
+
+    /// The format its image's shadow is made in, the image's; `None` for an image of no shadow.
+    fn shadow_format(&self) -> Option<vk::Format> {
+        (self.object().image.shadowing.as_ref()).map(|shadowing| shadowing.made.2.format)
+    }
+
+    /// What a draw reads of its image through it (`crate::shadow`): with `own_pixel`, the draw's
+    /// scissor (per axis `[first, end)`), the rectangle a fragment function that reads only at its
+    /// own pixel reads of its first level and layer; else every level and layer it reaches.
+    fn read_areas(&self, own_pixel: Option<[[u32; 2]; 2]>) -> Vec<Area> {
+        let d = &self.object().descriptor;
+        let [level, layer] = TextureInner::base(self.object());
+        match own_pixel {
+            Some(scissor) => vec![shadow::own_pixel(
+                level,
+                layer,
+                [d.width, d.height],
+                scissor,
+            )],
+            None => {
+                let root = match &self.object().view {
+                    Some(view) => &view.parent.descriptor,
+                    None => d,
+                };
+                let size = [root.width, root.height];
+                shadow::whole(level, d.mipmap_level_count, layer, slices(d), size)
+            }
+        }
+    }
+
+    /// The bytes of a texel of its image, which its copies move; 0 where no copy is built.
+    fn texel_bytes(&self) -> u64 {
+        self.object().unit.map_or(0, |unit| u64::from(unit.bytes))
+    }
+
+    /// Every level and layer of its image, every aspect.
+    fn whole(&self) -> vk::ImageSubresourceRange {
+        let root = match &self.object().view {
+            Some(view) => &view.parent.descriptor,
+            None => &self.object().descriptor,
+        };
+        vk::ImageSubresourceRange {
+            aspect_mask: self.object().image.aspects,
+            base_mip_level: 0,
+            level_count: root.mipmap_level_count,
+            base_array_layer: 0,
+            layer_count: slices(root),
+        }
+    }
+
+    /// Its image's format.
+    fn format(&self) -> vk::Format {
+        self.object().format
+    }
+
+    /// The format its image is made in, which a blit of the image filters by: a view in another
+    /// format's differs from [`format`](Self::format).
+    fn image_format(&self) -> vk::Format {
+        self.object().image.format
+    }
+
+    /// A layout change of its levels `levels`, counted from its first, over each of its slices,
+    /// from `old` to `new`, `None` naming its home layout, with no scopes yet
+    /// ([`BlitCommandEncoder::generate_mipmaps`](crate::BlitCommandEncoder::generate_mipmaps)).
+    fn levels_barrier(
+        &self,
+        levels: Range<u32>,
+        old: Option<vk::ImageLayout>,
+        new: Option<vk::ImageLayout>,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        TextureInner::levels_barrier(self.object(), levels, old, new)
+    }
+
+    /// How its image holds its pixel format.
+    fn emulation(&self) -> FormatEmulation {
+        self.object().emulation
+    }
+
+    /// `level` and `slice` of the texture as a render pass attachment: the image view of that
+    /// one level and layer of its image, every aspect, with the identity swizzle, made at the
+    /// first pass that renders into it and kept with the texture.
+    ///
+    /// Err: [`Refusal::AttachmentUsage`] for a texture made without `RenderTarget` usage;
+    /// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`] for one but a 2D texture, a 2D
+    /// array, a cube, a cube array or a 2D multisample texture or array; [`Refusal::AttachmentPlace`] for a level or slice past the texture's;
+    /// [`Error::Vulkan`] where the view cannot be made.
+    fn attachment(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
+        let d = &self.object().descriptor;
+        if !d.usage.is_empty() && !d.usage.contains(TextureUsage::RENDER_TARGET) {
+            return Err(Error::Refused(Refusal::AttachmentUsage {
+                pixel_format: d.pixel_format,
+            }));
+        }
+        let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
+        match d.texture_type {
+            TextureType::Type2D
+            | TextureType::Type2DArray
+            | TextureType::Cube
+            | TextureType::CubeArray
+            | TextureType::Type2DMultisample
+            | TextureType::Type2DMultisampleArray => {}
+            _ => return gap(RenderPassKind::TextureType),
+        }
+        if level >= d.mipmap_level_count || slice >= slices(d) {
+            return Err(Error::Refused(Refusal::AttachmentPlace { level, slice }));
+        }
+        let [first_level, first_layer] = TextureInner::base(self.object());
+        let (level_in_image, layer) = (first_level + level, first_layer + slice);
+        let image = &self.object().image;
+        // A view of another format than the image's renders where the format's features hold an
+        // attachment.
+        let renders =
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+        let looped = vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        let usage = match self.object().views_usage {
+            None => None,
+            Some(usage) if usage.intersects(renders) => Some(usage & (renders | looped)),
+            Some(_) => {
+                return Err(Error::Unsupported(Gap::TextureFormat {
+                    pixel_format: d.pixel_format,
+                }))
+            }
+        };
+        let mut views = lock(&self.object().attachments);
+        let kept = (views.iter())
+            .find(|a| a.level == level_in_image && a.layer == layer)
+            .map(|a| a.view);
+        let view = match kept {
+            Some(view) => view,
+            None => {
+                let core = &self.object().core;
+                let range = vk::ImageSubresourceRange {
+                    aspect_mask: image.aspects,
+                    base_mip_level: level_in_image,
+                    level_count: 1,
+                    base_array_layer: layer,
+                    layer_count: 1,
+                };
+                // SAFETY: the image is bound, of the texture's format, holds the level and layer
+                // (the texture's own, which lie in its image), and has the attachment usage its
+                // render target usage gave it.
+                let view = unsafe {
+                    image_view(
+                        &core.device,
+                        image.image,
+                        vk::ImageViewType::TYPE_2D,
+                        self.object().format,
+                        vk::ComponentMapping::default(),
+                        range,
+                        usage,
+                    )
+                }?;
+                core.counters.rise(Gauge::AttachmentViews);
+                views.push(AttachmentView {
+                    level: level_in_image,
+                    layer,
+                    view,
+                });
+                view
+            }
+        };
+        Ok(Attachment {
+            view,
+            image: image.image,
+            level: level_in_image,
+            layer,
+            aspects: image.aspects,
+            home: image.home,
+            extent: [(d.width >> level).max(1), (d.height >> level).max(1)],
+            format: self.object().format,
+            samples: vk::SampleCountFlags::from_raw(d.sample_count),
+        })
+    }
+
+    /// The unit its copies move; `None` where no copy is built.
+    fn unit(&self) -> Option<CopyUnit> {
+        self.object().unit
+    }
+
+    /// A Managed texture's named bytes ([`Device::new_managed_texture`]): the buffer and its
+    /// places, one for each level and, within it, each slice. `None` for any other texture.
+    fn named_bytes(&self) -> Option<(&Arc<BufferInner>, &[BytesPlace])> {
+        let named = (self.object().named.as_ref()).filter(|named| named.form == Form::Managed)?;
+        Some((&named.buffer, &named.places))
+    }
+
+    /// The layout a copy names the texture's image in, for its role's transfer `layout`
+    /// ([`Image::copy_layout`]): general for a texture over a buffer in place, `layout` for any
+    /// other.
+    fn copy_layout(&self, layout: vk::ImageLayout) -> vk::ImageLayout {
+        self.object().image.copy_layout(layout)
+    }
+
+    /// The barrier that moves `placed` from home to the copy layout of the transfer `layout` for
+    /// a copy's `access`, after every earlier command's writes.
+    fn away(
+        &self,
+        placed: &Placed,
+        layout: vk::ImageLayout,
+        access: vk::AccessFlags2,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        TextureInner::away(self.object(), placed, layout, access)
+    }
+
+    /// The barrier that moves `placed` back home from the copy layout of the transfer `layout`
+    /// once a copy has run, its writes visible to every later command.
+    fn back(&self, placed: &Placed, layout: vk::ImageLayout) -> vk::ImageMemoryBarrier2<'static> {
+        TextureInner::back(self.object(), placed, layout)
+    }
+
+    /// A command buffer presents the drawable: it is the runtime's, acquired, from now presented
+    /// by that command buffer.
+    ///
+    /// Err: [`Refusal::NotDrawable`]; [`Refusal::DrawableNotAcquired`].
+    fn present_turn(&self) -> Result<(), Error> {
+        let drawable =
+            (self.object().image.drawable.as_ref()).ok_or(Error::Refused(Refusal::NotDrawable))?;
+        let mut turn = lock(&drawable.turn);
+        if *turn != Turn::Acquired {
+            return Err(Error::Refused(Refusal::DrawableNotAcquired));
+        }
+        *turn = Turn::Presenting;
+        Ok(())
+    }
+
+    /// The command buffer that presents the drawable was dropped uncommitted: it is acquired
+    /// again, for another present.
+    fn unpresent(&self) {
+        if let Some(drawable) = &self.object().image.drawable {
+            *lock(&drawable.turn) = Turn::Acquired;
+        }
+    }
+
+    /// The command buffer that presents the drawable is committed: the image is the presentation
+    /// engine's once that command buffer has run, in the present layout.
+    fn presented(&self) {
+        if let Some(drawable) = &self.object().image.drawable {
+            *lock(&drawable.turn) = Turn::Engine;
+        }
+    }
+
+    /// The move of its whole image from home to the present layout, after every earlier command's
+    /// writes. It delays nothing after it: the present's semaphore wait and its own visibility
+    /// operations order the presentation engine's reads (Vulkan's note on `VkPresentInfoKHR`).
+    fn present_barrier(&self) -> vk::ImageMemoryBarrier2<'static> {
+        let image = &self.object().image;
+        vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::NONE)
+            .old_layout(image.home)
+            .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image.image)
+            .subresource_range(whole(image.aspects))
+    }
+
+    /// Its id as bytes, which a pass's attachments and the copies over buffers name it by: a
+    /// texture over a buffer in place's is the buffer's, as the two are the same bytes and a use
+    /// of either is a use of both.
+    fn hazard_id(&self) -> u32 {
+        match &self.object().named {
+            Some(named) if named.form == Form::InPlace => named.buffer.id(),
+            _ => self.object().id,
+        }
+    }
+
+    /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a
+    /// heap ([`Device::new_heap_texture`]), its buffer's there for one in place over a buffer, and
+    /// [`hazard_id`](Self::hazard_id) elsewhere.
+    fn tracked_id(&self) -> u32 {
+        match (&self.object().heap, &self.object().named) {
+            (Some(heap), _) => heap.get(),
+            (None, Some(named)) if named.form == Form::InPlace => named.buffer.tracked_id(),
+            _ => self.object().id,
+        }
+    }
+
+    /// Where it is made for shader writes (`ShaderWrite`, or Metal's unknown usage) but has no
+    /// storage element, which shaders write it and read it as storage through
+    /// (`Arrays::place_texture`): its pixel format, which [`Gap::StorageElement`] names.
+    fn unstored(&self) -> Option<PixelFormat> {
+        let d = &self.object().descriptor;
+        let written = d.usage.is_empty() || d.usage.contains(TextureUsage::SHADER_WRITE);
+        let storage = match &self.object().view {
+            Some(view) => view.views.storage,
+            None => self.object().image.storage,
+        };
+        (written && storage.is_none()).then_some(d.pixel_format)
+    }
+
+    /// Whether it reads through a swizzle other than each channel's own.
+    fn swizzled(&self) -> bool {
+        TextureInner::reads(self.object()) != TextureSwizzleChannels::DEFAULT
+    }
+
+    /// Whether the host reads the GPU's writes to it with no copy: a texture in place over a
+    /// Shared buffer.
+    fn host_reads(&self) -> bool {
+        match &self.object().named {
+            Some(named) => named.form == Form::InPlace && named.buffer.is_shared(),
+            None => false,
+        }
+    }
+
+    /// Of a texture over a buffer of no device copy in an image of its own, which the submissions
+    /// copy into and back by the Shared rules (`crate::over`): the buffer and the copy.
+    fn copied_shared(&self) -> Option<(&Arc<BufferInner>, OverCopy)> {
+        self.copied_over()
+            .filter(|(buffer, _)| buffer.held().1.is_none())
+    }
+
+    /// Of a texture over a Managed buffer's device copy in an image of its own, which Metal's
+    /// Managed events owe copies (`crate::over::ManagedOvers`): the buffer.
+    fn managed_over(&self) -> Option<&Arc<BufferInner>> {
+        let named = (self.object().named.as_ref()).filter(|named| named.form == Form::Copied)?;
+        named.buffer.held().1.map(|_| &named.buffer)
+    }
+
+    /// Of a texture over a buffer in an image of its own (`crate::over`): the buffer, and the
+    /// copy between the bytes shaders reach of it and the image.
+    fn copied_over(&self) -> Option<(&Arc<BufferInner>, OverCopy)> {
+        let inner = &self.object();
+        let named = (inner.named.as_ref()).filter(|named| named.form == Form::Copied)?;
+        let unit = inner.unit?;
+        let place = named.places[0];
+        let d = &inner.descriptor;
+        let (buffer, at) = named.buffer.device_range();
+        let (block, device_copy) = named.buffer.held();
+        let region = vk::BufferImageCopy {
+            buffer_offset: at + place.offset,
+            buffer_row_length: u32::try_from(place.bytes_per_row / u64::from(unit.bytes)).ok()?,
+            buffer_image_height: 0,
+            image_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: unit.aspect,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image_offset: vk::Offset3D::default(),
+            image_extent: vk::Extent3D {
+                width: d.width,
+                height: d.height,
+                depth: 1,
+            },
+        };
+        let copy = OverCopy {
+            image: inner.image.image,
+            home: inner.image.home,
+            aspects: inner.image.aspects,
+            buffer,
+            region,
+            unit,
+            bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
+            shared: named.buffer.is_shared(),
+            imported: device_copy.is_none() && block.memory.own == Some(memory::Own::Import),
+        };
+        Some((&named.buffer, copy))
+    }
+
+    /// For the device tests: the bytes its image's memory requirements name.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    fn image_size(&self) -> u64 {
+        self.object().image.bytes
+    }
+
+    /// `gpuResourceID`: its index (0 for a texture no shader reaches) and the translator's
+    /// `TextureWord` of its pixel format and swizzle.
+    fn gpu_resource_id(&self) -> ResourceId {
+        ResourceId {
+            index: self.object().index.map_or(0, |(index, _)| index),
+            word: self.object().word,
+        }
+    }
+
+    /// `textureType`, `pixelFormat`, `width` and the rest, as made.
+    fn descriptor(&self) -> &TextureDescriptor {
+        &self.object().descriptor
+    }
+}
+
+impl TextureObject for Texture {
+    fn object(&self) -> &Arc<TextureInner> {
+        &self.inner
+    }
+}
+
+impl TextureObject for Arc<TextureInner> {
+    fn object(&self) -> &Arc<TextureInner> {
+        self
     }
 }
 
@@ -3976,15 +4009,23 @@ pub(crate) struct OverCopy {
 }
 
 impl crate::kept::Handle for Texture {
+    type Kept = Arc<TextureInner>;
+
     fn address(&self) -> usize {
         Arc::as_ptr(&self.inner) as *const () as usize
     }
 
+    fn kept(&self) -> Arc<TextureInner> {
+        Arc::clone(&self.inner)
+    }
+
     unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<Texture> {
-        // SAFETY: the pointer is a live `Arc`'s; the handle made of it is never dropped, and the
-        // caller keeps the object alive past its last use.
+        // SAFETY: the pointers are live `Arc`s'; the handle made of them is never dropped, and
+        // the caller keeps the texture and the device alive past its last use.
         let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
-        std::mem::ManuallyDrop::new(Texture { inner })
+        // SAFETY: as above.
+        let device = std::mem::ManuallyDrop::into_inner(unsafe { self.device.uncounted() });
+        std::mem::ManuallyDrop::new(Texture { inner, device })
     }
 }
 

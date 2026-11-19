@@ -14,10 +14,10 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct DepthStencilState {
     inner: Arc<Inner>,
+    device: Device,
 }
 
 struct Inner {
-    device: Device,
     descriptor: DepthStencilDescriptor,
     tests: Tests,
 }
@@ -89,7 +89,6 @@ impl Device {
     ) -> DepthStencilState {
         DepthStencilState {
             inner: Arc::new(Inner {
-                device: self.clone(),
                 descriptor: *descriptor,
                 tests: Tests::of(descriptor),
             }),
@@ -125,6 +124,6 @@ impl DepthStencilState {
 
     /// Whether `core` is the device this state was made on.
     pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
-        Arc::ptr_eq(self.inner.device.core(), core)
+        Arc::ptr_eq(self.device.core(), core)
     }
 }

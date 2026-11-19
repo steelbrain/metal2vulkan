@@ -1041,8 +1041,15 @@ impl Drop for RenderCompiled {
 }
 
 impl crate::kept::Handle for RenderPipelineState {
+    /// The state itself: it holds no handle of the device.
+    type Kept = RenderPipelineState;
+
     fn address(&self) -> usize {
         Arc::as_ptr(&self.inner) as *const () as usize
+    }
+
+    fn kept(&self) -> RenderPipelineState {
+        self.clone()
     }
 
     unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<RenderPipelineState> {

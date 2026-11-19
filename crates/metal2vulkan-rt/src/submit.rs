@@ -36,7 +36,7 @@
 //! ([`crate::capture`]): its copy-ins go ahead of its first segment's commands, after that
 //! segment's waits, in the same submission.
 
-use crate::buffer::{Buffer, DeviceCopy};
+use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, Chunk, CopyIn, Modified, Named, CAPTURE_LEN};
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Pending, Segment};
 use crate::complete;
@@ -50,7 +50,7 @@ use crate::over::{self, Leans};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
 use crate::staging::{At, Oldest, Region, Stage, Staging, REGION_LEN};
-use crate::texture::{Image, OverCopy, Texture};
+use crate::texture::{Image, OverCopy, TextureInner, TextureObject};
 use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
@@ -348,10 +348,10 @@ struct Batch {
     backs: Vec<over::Back>,
     /// The Managed buffers its segments wrote whose textures over their device copies owe their
     /// copies in once it is submitted.
-    written: Vec<Buffer>,
+    written: Vec<Arc<BufferInner>>,
     /// The textures over a Managed buffer's device copy its segments wrote, one for each segment
     /// that wrote one, whose copies back its submission settles.
-    wrote: Vec<Texture>,
+    wrote: Vec<Arc<TextureInner>>,
     /// The capture ring's spans its command buffers' copy-ins read, free once it completes.
     spans: Vec<u64>,
 }
