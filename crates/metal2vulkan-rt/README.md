@@ -105,24 +105,39 @@ waits for it. `Gauges::threads` holds the OS id of each of these threads while i
 can tell the runtime's own work from the threads a driver starts for itself.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
+Nothing the runtime keeps for itself counts as a handle of the device: what a command buffer keeps
+until it retires of the buffers, textures and sampler states it used is the object alone, without
+the device's handle, so the consumer's last drop is the device's last whatever work is in flight.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
 `CommandBufferError::NotRun`; the completion thread retires the rest as the GPU completes it and
 runs the handlers; the threads are joined and the GPU goes idle; `BlockMappings::unmap` runs for
 each of the pool's allocations the consumer mapped. Teardown runs on the thread that drops the
 last handle, or,
 where that is a handler (scheduled or completed) or a listener, on the reaper once the handler
-returns. The reaper, which nothing joins, joins every other thread before anything of the device
-goes; where its own reference is the runtime's last, it frees the blocks and destroys the
-`VkDevice` on its own thread, then ends, touching nothing of the device after. A call that holds a
+returns. The reaper joins every other thread before anything of the device goes; where its own
+reference is the runtime's last, it frees the blocks and destroys the `VkDevice` on its own
+thread, then ends, touching nothing of the device after. A call that holds a
 handle of its own gives it up before another thread can drop the last: `commit` gives up the
 command buffer's before the command buffer can complete. Then every block is freed and the
 `VkDevice` destroyed, once the runtime's last internal reference is gone: on the thread that tore
 down, or where a call still held one as it returned, in that call, which runs no consumer code
-there. Every gauge reads zero only once the `VkDevice` is destroyed, so a consumer whose last
-handle dropped in a handler waits for that before it drops its instance or exits. A physical device and a device each hold their instance. No thread of the runtime outlives its device, and nothing relies on a
-static destructor or an `atexit` handler: the consumer drops every handle before the process
-exits, or, where a handle is still out, calls `Device::quiesce` and ends with `_exit` (Quiesce and
-exit).
+there. A last handle dropped on the consumer's thread, with no object made from the device still
+held, tears the device down in that drop: every gauge reads zero as it returns. A physical device
+and a device each hold their instance. Nothing relies on a static destructor or an `atexit`
+handler: the consumer drops every handle before the process exits, or, where a handle is still
+out, calls `Device::quiesce` and ends with `_exit` (Quiesce and exit).
+
+`Instance::wait_until_devices_torn_down(timeout)` waits for the teardowns that run on the reaper.
+It answers true once every device made from the instance has destroyed its `VkDevice`, dropped
+everything it held and had the thread that tore it down joined; at once where nothing is pending;
+false once the timeout passes first, and at once on a runtime thread (in a handler or a
+listener). A consumer whose last handle may drop in a handler or a listener calls it before it
+drops the instance or exits. The gauges are no such signal: they read zero once the `VkDevice` is
+destroyed, before the instance's handle and the cache store the device held are dropped, and
+before the thread that tore it down ends. After a false answer the consumer reads the device's
+`Counters`, which it took before its drops: `Gauges::handles_out` is 1 while a handle of the device
+is still out (its own, or one a handler or a listener holds) and 0 once the last has dropped; with
+0, a thread in `Gauges::threads` is the teardown still running there.
 
 A device the consumer dropped is never handed out again: only `Device::new` makes a `Device`, and
 the runtime's threads hold the device's core, never a handle. A call that configures what has
@@ -137,8 +152,9 @@ and a call that needs a runtime thread after `Device::quiesce` (`Error::Quiesced
 cumulative counts (submissions, passes, barriers, bytes copied, pipelines created, blocks made,
 first-use waits, kernels lowered, kernels read from the cache directory, upload waits, pushes,
 and the draws and dispatches whose push bytes the command buffer already held);
-`gauges()` are live counts per kind of resource, every one zero after teardown. They are relaxed
-atomics, always on. What an encoder's commands count arrives when the encoder ends.
+`gauges()` are live counts per kind of resource, every one zero after teardown, and
+`handles_out`, 1 while a handle of the device is out (Teardown). They are relaxed atomics, always
+on. What an encoder's commands count arrives when the encoder ends.
 
 ## Memory blocks and buffers
 
@@ -1214,13 +1230,18 @@ every allocation still mapped. It frees nothing: every block's memory and mappin
 the process ends. After it, no runtime thread touches a block; later calls that need a thread
 return `Error::Quiesced`. It answers true once the GPU went idle and every thread ended in time,
 and false at once in a handler or a listener, whose thread cannot wait for itself. A second call
-returns at once. After a false answer a runtime thread can still be in the driver (the completion
+returns at once, with the first call's answer, or false while the first still runs. After a true
+answer, the last handle dropped on the consumer's thread tears the device down in that drop:
+every gauge reads zero as it returns. After a false answer a runtime thread can still be in the driver (the completion
 thread in `vkWaitSemaphores` with no timeout where the GPU did not go idle, which on NVIDIA's
 driver lasts until a later submission that after quiesce the runtime never makes, or in its
 retirement calls once a handler that held it returns, and the reaper or the block-maker in a
 pipeline creation or a memory call that outlasted the timeout). Quiesce leaves such a thread
 running and keeps its handle: the device's last handle joins it, with no deadline, before it
 destroys anything the thread can reach, so a drop after a false answer waits for that thread.
+After a false answer the consumer keeps the device and ends with `_exit`, or drops its last handle
+on its own thread, which joins with no deadline; a handle still held by a handler is then freed
+only by the process's end, as the reaper that would tear the device down may have ended.
 
 The consumer drops the device's last handle before the process exits. A process that cannot,
 because a handle is still out, quiesces and ends with `_exit`, whatever quiesce answered: `exit()`
@@ -1228,8 +1249,7 @@ with a live device is supported on no device. The evidence: on an RTX 3090 (driv
 9 of a consumer's power-offs that called `exit()` after quiesce answered true ended in a
 segmentation fault inside `exit()`, in a thread of the driver's own reading near a null pointer
 while the driver's exit handler waited on a lock, with every runtime thread already ended (an RTX
-2080: 0 of 4). A device that ran nothing exited cleanly from an `atexit` handler in 50 runs of 50
-on both cards, which says nothing of a device that ran work.
+2080: 0 of 4).
 
 ### Known gaps
 

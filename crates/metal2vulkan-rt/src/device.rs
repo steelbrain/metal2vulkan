@@ -852,8 +852,7 @@ impl Device {
     /// this thread for every allocation still mapped. After it, no runtime thread touches a block,
     /// unless the call answered false. A thread past the timeout ends alone: the completion
     /// thread once the GPU completed what was submitted and it retired that, running its
-    /// completed handlers, so what the work held, the device among it, goes once the device's
-    /// last handle has dropped. Such a thread is not joined here; the device's last handle joins
+    /// completed handlers, so what the work held goes then. Such a thread is not joined here; the device's last handle joins
     /// it, with no deadline, before it destroys anything the thread can reach.
     ///
     /// It frees nothing: every allocation's memory and mapping stays valid until the process ends,
@@ -864,8 +863,12 @@ impl Device {
     /// The consumer then ends the process with `_exit`, whatever it answered: `exit()` with a live
     /// device is supported on no device (a driver's own exit teardown can fault after work ran;
     /// the crate's README, "Quiesce and exit"). It joins a thread only once that thread has ended
-    /// and takes no lock a consumer's thread can hold. A second call returns at once, with the first call's
-    /// answer, or false while the first is still running.
+    /// and takes no lock a consumer's thread can hold. A second call returns at once, with the
+    /// first call's answer, or false while the first is still running. After a true answer, the
+    /// last handle dropped on the consumer's thread tears the device down in that drop. After a
+    /// false answer, the consumer keeps the device and ends with `_exit`, or drops its last
+    /// handle on its own thread, which joins with no deadline; a handle a handler still holds is
+    /// then freed only by the process's end.
     pub fn quiesce(&self, timeout: Duration) -> bool {
         let threads = self.shared.take_threads();
         let deadline = Instant::now().checked_add(timeout);

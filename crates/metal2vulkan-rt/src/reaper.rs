@@ -1,6 +1,6 @@
 //! The reaper thread: it makes the device's `VkPipelineCache` from its blob first, then frees
-//! what the runtime's other threads give up, one object at a time, runs a teardown that starts on
-//! the completion thread, writes the lowerings the pipeline states hand it to the store, lowers
+//! what the runtime's other threads give up, one object at a time, runs a teardown that starts in
+//! a handler or a listener, writes the lowerings the pipeline states hand it to the store, lowers
 //! the pipeline states' variants an encoding call waits for (`pipeline::Later`), and looks at the
 //! pipeline cache once creation is quiet, writing its blob or replacing it past its bound
 //! (`crate::cache`). No driver free runs on the completion thread, so no completion waits behind

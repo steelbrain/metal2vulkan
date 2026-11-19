@@ -1,6 +1,7 @@
-//! The instance, the device and its counters: that the handles cross threads, and, under a device
-//! cfg, that every device of the cfg's kind opens, presents on the queue its family offers, is torn
-//! down with its gauges at zero, and enables the consumer's extensions and features it offers.
+//! The instance, the device and its counters: that the handles cross threads, that an object's
+//! handle is two words, and, under a device cfg, that every device of the cfg's kind opens,
+//! presents on the queue its family offers, is torn down with its gauges at zero, and enables the
+//! consumer's extensions and features it offers.
 
 use crate::{
     BlockId, BlockInfo, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
@@ -28,6 +29,19 @@ fn the_handles_cross_threads() {
     send_sync::<CommandBufferError>();
     send_sync::<Event>();
     send_sync::<SharedEvent>();
+}
+
+/// A buffer's, a texture's and a sampler state's handle is two words, the object and the device,
+/// as an event's and a queue's are: what a command buffer keeps of them is the object alone.
+#[test]
+fn an_object_handle_is_the_object_and_the_device() {
+    use crate::{SamplerState, Texture};
+    let two = 2 * std::mem::size_of::<usize>();
+    assert_eq!(std::mem::size_of::<Buffer>(), two);
+    assert_eq!(std::mem::size_of::<Texture>(), two);
+    assert_eq!(std::mem::size_of::<SamplerState>(), two);
+    assert_eq!(std::mem::size_of::<Event>(), two);
+    assert_eq!(std::mem::size_of::<CommandQueue>(), two);
 }
 
 #[test]

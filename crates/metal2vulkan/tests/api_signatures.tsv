@@ -2322,6 +2322,7 @@ field	metal2vulkan-rt::Gauges.descriptor_slots	pub descriptor_slots: u64
 field	metal2vulkan-rt::Gauges.device_samplers	pub device_samplers: u64
 field	metal2vulkan-rt::Gauges.events	pub events: u64
 field	metal2vulkan-rt::Gauges.exports	pub exports: u64
+field	metal2vulkan-rt::Gauges.handles_out	pub handles_out: u64
 field	metal2vulkan-rt::Gauges.imports	pub imports: u64
 field	metal2vulkan-rt::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
@@ -9695,6 +9696,7 @@ method	metal2vulkan-rt::Instance::extensions	pub fn extensions(&self) -> &[CStri
 method	metal2vulkan-rt::Instance::new	pub fn new(extensions: &[&CStr]) -> Result<Instance, Error>
 method	metal2vulkan-rt::Instance::physical_devices	pub fn physical_devices(&self) -> Result<Vec<PhysicalDevice>, Error>
 method	metal2vulkan-rt::Instance::raw	pub fn raw(&self) -> (&ash::Entry, &ash::Instance)
+method	metal2vulkan-rt::Instance::wait_until_devices_torn_down	pub fn wait_until_devices_torn_down(&self, timeout: Duration) -> bool
 method	metal2vulkan-rt::Instance::with_drivers	pub unsafe fn with_drivers(loader: Option<&Path>, extensions: &[&CStr], drivers: &[vk::PFN_vkGetInstanceProcAddr]) -> Result<Instance, Error>
 method	metal2vulkan-rt::Library::bytes	pub fn bytes(&self) -> &[u8]
 method	metal2vulkan-rt::Library::content_hash	pub fn content_hash(&self) -> &Hash256
@@ -12432,6 +12434,7 @@ trait-impl	metal2vulkan-rt::Block impl Drop	impl Drop for Block
 trait-impl	metal2vulkan-rt::Block impl fmt::Debug	impl fmt::Debug for Block
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Send	unsafe impl Send for BlockInfo
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Sync	unsafe impl Sync for BlockInfo
+trait-impl	metal2vulkan-rt::Buffer impl BufferObject	impl BufferObject for Buffer
 trait-impl	metal2vulkan-rt::Buffer impl crate::kept::Handle	impl crate::kept::Handle for Buffer
 trait-impl	metal2vulkan-rt::ClearColor impl Default	impl Default for ClearColor
 trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for ComputeCommandEncoder
@@ -12452,6 +12455,7 @@ trait-impl	metal2vulkan-rt::SamplerDescriptor impl Default	impl Default for Samp
 trait-impl	metal2vulkan-rt::SamplerState impl crate::kept::Handle	impl crate::kept::Handle for SamplerState
 trait-impl	metal2vulkan-rt::StencilDescriptor impl Default	impl Default for StencilDescriptor
 trait-impl	metal2vulkan-rt::Surface impl std::fmt::Debug	impl std::fmt::Debug for Surface
+trait-impl	metal2vulkan-rt::Texture impl TextureObject	impl TextureObject for Texture
 trait-impl	metal2vulkan-rt::Texture impl crate::kept::Handle	impl crate::kept::Handle for Texture
 trait-impl	metal2vulkan-rt::TextureSwizzleChannels impl Default	impl Default for TextureSwizzleChannels
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
