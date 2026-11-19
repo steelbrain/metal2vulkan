@@ -970,8 +970,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             .shader_subgroup_uniform_control_flow
             == vk::TRUE,
         attachment_reads,
-        zero_initialize_memory: listed(ZERO_INITIALIZE_DEVICE_MEMORY)
-            && features.zero_initialize.zero_initialize_device_memory == vk::TRUE,
+        zero_initialize_memory: features.zero_initialize.zero_initialize_device_memory == vk::TRUE,
         feedback_loop,
         features,
         extensions: DEVICE_EXTENSIONS

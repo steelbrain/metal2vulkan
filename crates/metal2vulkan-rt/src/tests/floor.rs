@@ -1181,7 +1181,7 @@ fn a_set_layout_the_device_does_not_support_is_named() {
 #[test]
 fn the_optional_features_decide_the_capabilities() {
     type Set = fn(&mut Features);
-    let cases: [(Set, &str); 7] = [
+    let cases: [(Set, &str); 8] = [
         (|f| f.vulkan12.shader_float16 = vk::TRUE, "float16"),
         (
             |f| f.core.shader_storage_image_read_without_format = vk::TRUE,
@@ -1207,6 +1207,10 @@ fn the_optional_features_decide_the_capabilities() {
             },
             "subgroup_uniform_control_flow",
         ),
+        (
+            |f| f.zero_initialize.zero_initialize_device_memory = vk::TRUE,
+            "zero_initialize_memory",
+        ),
     ];
     assert_eq!(
         cases.len(),
@@ -1230,6 +1234,10 @@ fn the_optional_features_decide_the_capabilities() {
             (
                 "subgroup_uniform_control_flow",
                 capabilities.subgroup_uniform_control_flow,
+            ),
+            (
+                "zero_initialize_memory",
+                capabilities.zero_initialize_memory,
             ),
         ];
         for (name, value) in answers {
