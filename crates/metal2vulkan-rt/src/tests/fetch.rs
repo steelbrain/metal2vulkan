@@ -45,9 +45,9 @@ mod on_device {
         fragment: &str,
         format: PixelFormat,
     ) -> Option<RenderPipelineDescriptor> {
-        let examples: Library = examples()?;
+        let vertex: Library = examples()?;
         let engine = library(&engine_dir().join(format!("{fixture}.ll")))?;
-        let mut d = descriptor(&examples, "colored_fragment", format);
+        let mut d = descriptor(&vertex, "colored_fragment", format);
         d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
             (engine.function(fragment)).expect("the function"),
         )));
@@ -336,15 +336,18 @@ mod on_device {
                     let (surface, export) = (device.new_exported_surface(&spec))
                         .unwrap_or_else(|error| panic!("{label}: {error}"));
                     let plane = &surface.planes()[0];
+                    // In place, the plane's image took the feedback usage where it reads through
+                    // the loop; in the copy form the plane is a texture over a buffer.
                     let in_place = export.form == SurfaceForm::InPlace;
-                    let looped = in_place && plane.looped();
+                    let looped = plane.looped();
+                    let readable = reads && plane.attachment_reads();
                     println!(
-                        "fetch-surface: {label}: form {:?}, pitch {}, the feedback usage {}, \
-                         read through {}",
+                        "fetch-surface: {label}: form {:?}, pitch {}, the feedback usage in place \
+                         {}, read through {}",
                         export.form,
                         export.planes[0].row_pitch,
-                        looped,
-                        match (plane.attachment_reads(), looped) {
+                        in_place && looped,
+                        match (readable, looped) {
                             (false, _) => "nothing (refused)",
                             (true, true) => "the feedback loop",
                             (true, false) => "its shadow",
@@ -355,9 +358,14 @@ mod on_device {
                     }
                     let mut counts = Vec::new();
                     for draws in DRAWS {
-                        let (drew, counted) =
-                            pass_of((&label, &device, &queue), &state, plane, clear, draws);
-                        if !reads {
+                        let (drew, counted) = pass_of(
+                            (label.as_str(), &device, &queue),
+                            &state,
+                            plane,
+                            clear,
+                            draws,
+                        );
+                        if !readable {
                             assert!(
                                 matches!(
                                     drew,
@@ -365,7 +373,7 @@ mod on_device {
                                         kind: DrawKind::FetchedAttachment
                                     }))
                                 ),
-                                "{label}: a device without the attachment reads: {drew:?}"
+                                "{label}: a plane the draw cannot read through: {drew:?}"
                             );
                             break;
                         }
@@ -384,7 +392,7 @@ mod on_device {
                         );
                         counts.push(counted);
                     }
-                    if !reads {
+                    if !readable {
                         continue;
                     }
                     let draws = DRAWS[1];
