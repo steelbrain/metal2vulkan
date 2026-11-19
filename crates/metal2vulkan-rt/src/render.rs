@@ -455,8 +455,8 @@ fn draws(
 fn refuse(d: &RenderPipelineDescriptor) -> Result<(), Error> {
     let kind = if d.support_indirect_command_buffers {
         return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
-    } else if d.raster_sample_count != 1 {
-        RenderPipelineKind::Multisample
+    } else if !(d.raster_sample_count.is_power_of_two() && d.raster_sample_count <= 64) {
+        RenderPipelineKind::SampleCount
     } else if d.max_vertex_amplification_count != 1 {
         RenderPipelineKind::VertexAmplification
     } else {
@@ -738,8 +738,9 @@ impl RenderCompiled {
     }
 
     /// Whether the content's `VkPipeline`s render into `pass`'s attachments: its colour formats are
-    /// the pass's colour attachments', by index, an absent one where the pass has none, and its
-    /// depth and stencil formats the pass's depth and stencil attachments', or none without one.
+    /// the pass's colour attachments', by index, an absent one where the pass has none, its
+    /// depth and stencil formats the pass's depth and stencil attachments', or none without one,
+    /// and its raster sample count the attachments'.
     pub(crate) fn renders_into(&self, pass: &Pass) -> bool {
         let fixed = &self.fixed;
         let format = |t: Option<&crate::pass::Target>| {
@@ -749,6 +750,7 @@ impl RenderCompiled {
             && (fixed.colors.iter().zip(&pass.colors)).all(|(&f, t)| f == format(t.as_ref()))
             && fixed.depth == format(pass.depth.as_ref())
             && fixed.stencil == format(pass.stencil.as_ref())
+            && fixed.samples == pass.samples
     }
 
     /// A `VkPipeline` of the content for draws of the class of `topology`, a list topology, made

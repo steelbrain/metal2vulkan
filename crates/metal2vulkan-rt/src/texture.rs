@@ -264,6 +264,8 @@ pub(crate) struct Attachment {
     pub(crate) extent: [u32; 2],
     /// The image's format, the view's.
     pub(crate) format: vk::Format,
+    /// The image's samples, one bit (`VkSampleCountFlags`).
+    pub(crate) samples: vk::SampleCountFlags,
 }
 
 /// A texture's bytes in a buffer, which [`Texture::replace_region`] and [`Texture::get_bytes`]
@@ -2935,9 +2937,8 @@ impl Texture {
     /// first pass that renders into it and kept with the texture.
     ///
     /// Err: [`Refusal::AttachmentUsage`] for a texture made without `RenderTarget` usage;
-    /// [`Gap::RenderPass`] of [`RenderPassKind::Multisample`] for one of more than one sample,
-    /// of [`RenderPassKind::TextureType`] for one but a 2D texture, a 2D array, a cube or a cube
-    /// array; [`Refusal::AttachmentPlace`] for a level or slice past the texture's;
+    /// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`] for one but a 2D texture, a 2D
+    /// array, a cube, a cube array or a 2D multisample texture or array; [`Refusal::AttachmentPlace`] for a level or slice past the texture's;
     /// [`Error::Vulkan`] where the view cannot be made.
     pub(crate) fn attachment(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
         let d = &self.inner.descriptor;
@@ -2948,14 +2949,12 @@ impl Texture {
         }
         let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
         match d.texture_type {
-            TextureType::Type2DMultisample | TextureType::Type2DMultisampleArray => {
-                return gap(RenderPassKind::Multisample)
-            }
-            _ if d.sample_count > 1 => return gap(RenderPassKind::Multisample),
             TextureType::Type2D
             | TextureType::Type2DArray
             | TextureType::Cube
-            | TextureType::CubeArray => {}
+            | TextureType::CubeArray
+            | TextureType::Type2DMultisample
+            | TextureType::Type2DMultisampleArray => {}
             _ => return gap(RenderPassKind::TextureType),
         }
         if level >= d.mipmap_level_count || slice >= slices(d) {
@@ -3025,6 +3024,7 @@ impl Texture {
             home: image.home,
             extent: [(d.width >> level).max(1), (d.height >> level).max(1)],
             format: self.inner.format,
+            samples: vk::SampleCountFlags::from_raw(d.sample_count),
         })
     }
 

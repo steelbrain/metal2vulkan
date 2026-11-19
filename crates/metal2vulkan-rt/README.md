@@ -1587,7 +1587,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: depth and
   stencil attachment formats that differ, as of separate depth and stencil textures
   (`DepthStencilFormats`: Vulkan's pipeline takes one format for both,
-  `VUID-VkGraphicsPipelineCreateInfo-renderPass-06589`), more than one sample, vertex amplification, a post-tessellation vertex function (the translation states one;
+  `VUID-VkGraphicsPipelineCreateInfo-renderPass-06589`), a `rasterSampleCount` that is not a
+  power of two from 1 to 64 (`SampleCount`: Vulkan's rasterization takes one of its sample
+  count bits), vertex amplification, a post-tessellation vertex function (the translation states one;
   a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
   stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
   fragment function's stencil output, alpha to one, constant data the binder supplies, a
@@ -1618,7 +1620,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - `RenderPassDescriptor` is `MTLRenderPassDescriptor`: eight color attachments
   (`MAX_COLOR_ATTACHMENTS`), a depth and a stencil attachment, `renderTargetWidth` and
   `renderTargetHeight`. Each attachment is one level and slice of its texture: a 2D texture, a 2D
-  array, a cube or a cube array, of one sample and `RenderTarget` usage. The texture keeps an
+  array, a cube or a cube array, or a 2D multisample texture or array, of `RenderTarget` usage;
+  every attachment of a pass has one sample count, and a draw's pipeline state that count as its
+  `rasterSampleCount` (`DrawKind::AttachmentFormats` otherwise). The device's counts are
+  `Device::supports_texture_sample_count`'s. A multisample attachment is stored as its samples:
+  a shader reads them through `texture2d_ms` or `depth2d_ms`. The texture keeps an
   image view of that level and layer with the identity swizzle, made at the first pass that
   renders into it and freed with the texture (`Gauges::attachment_views`).
 - Load actions are one to one: `Load`, `Clear` and `DontCare` are Vulkan's load operations of
@@ -1792,8 +1798,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   that are not one texture's same level and slice (`DepthStencilViews`: Vulkan's rendering takes
   one view for both), a `Clear` load of a depth attachment whose clear depth is outside `[0, 1]`
   or NaN (`ClearDepth`: Vulkan clears no such depth without `VK_EXT_depth_range_unrestricted`,
-  `VUID-VkClearDepthStencilValue-depth-00022`, which the floor does not require), an attachment
-  of more than one sample, a resolve, a 1D or 3D texture's attachment, the
+  `VUID-VkClearDepthStencilValue-depth-00022`, which the floor does not require), attachments of
+  two sample counts (`SampleCounts`: Vulkan renders one count into every attachment of a pass,
+  `VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857`), a resolve (`Resolve`: a
+  resolve texture, or a store action that resolves), a 1D or 3D texture's attachment, the
   `CustomSampleDepthStore` store action, a clear of a format only a shader clears (extended
   range, bfloat, YCbCr), and a pass with no attachment. The descriptor has no field for a
   visibility result buffer, a rasterization rate map, tile sizes, imageblock and threadgroup

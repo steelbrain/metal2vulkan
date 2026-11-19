@@ -220,12 +220,12 @@ mod on_device {
         };
         let plain = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
         let mut samples = plain.clone();
-        samples.raster_sample_count = 4;
+        samples.raster_sample_count = 3;
         let mut separate = plain.clone();
         separate.depth_format = Some(PixelFormat::Depth32Float);
         separate.stencil_format = Some(PixelFormat::Stencil8);
         let cases = [
-            ("four samples", samples, RenderPipelineKind::Multisample),
+            ("three samples", samples, RenderPipelineKind::SampleCount),
             (
                 "separate depth and stencil formats",
                 separate,

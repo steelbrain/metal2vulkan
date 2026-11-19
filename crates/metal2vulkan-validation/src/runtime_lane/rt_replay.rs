@@ -436,20 +436,20 @@ fn a_render_state_the_runtime_does_not_build_is_counted_by_its_gap() {
         w.call("newFunctionWithName:", 3, 4, &vertex, &[])?;
         let fragment = [Value::Str("colored_fragment".into())];
         w.call("newFunctionWithName:", 3, 5, &fragment, &[])?;
-        // Colour 0 RGBA8Unorm (the short descriptor's key) rasterized at 4 samples, which the
-        // runtime refuses.
+        // Colour 0 RGBA8Unorm (the short descriptor's key) rasterized at 3 samples, which no
+        // Vulkan sample count is: the runtime refuses it.
         let pipeline = Value::Map(vec![
             ("vertex".into(), Value::Object(4)),
             ("fragment".into(), Value::Object(5)),
             ("color0PixelFormat".into(), Value::Uint(70)),
-            ("rasterSampleCount".into(), Value::Uint(4)),
+            ("rasterSampleCount".into(), Value::Uint(3)),
         ]);
         let made = "newRenderPipelineStateWithDescriptor:error:";
         w.call(made, 1, 6, &[pipeline], &[])
     });
     let (report, lines) = play("state-gap", &path);
     assert_eq!(report.total.executed["skipped_render_states"], 1);
-    let line = "skipped render states RenderPipeline { kind: Multisample } 1, the first #6: ";
+    let line = "skipped render states RenderPipeline { kind: SampleCount } 1, the first #6: ";
     assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
 }
 

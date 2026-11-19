@@ -572,6 +572,22 @@ impl Device {
         self.shared.core.unified_memory
     }
 
+    /// `supportsTextureSampleCount:`: whether `count` is a sample count the device renders into a
+    /// colour and a depth attachment (its `framebufferColorSampleCounts` and
+    /// `framebufferDepthSampleCounts`, of which Vulkan requires 1 and 4) that an Apple GPU takes:
+    /// 1, 2 or 4 (Apple9's "Maximum sample count in render passes with MSAA" is 4). A count Vulkan
+    /// has no bit for (0, 3, above 64) is not. A texture's own format may take fewer
+    /// ([`Limit::TextureSamples`](crate::Limit::TextureSamples)).
+    pub fn supports_texture_sample_count(&self, count: u32) -> bool {
+        let counts = self
+            .shared
+            .core
+            .translator
+            .metal_properties()
+            .raster_sample_counts;
+        count.is_power_of_two() && count <= 64 && counts.as_raw() & count != 0
+    }
+
     /// No Metal counterpart: the device extensions enabled: the floor's first, then each of the
     /// consumer's ([`DeviceOptions::extensions`]) the device offers with its features.
     pub fn extensions(&self) -> &[CString] {

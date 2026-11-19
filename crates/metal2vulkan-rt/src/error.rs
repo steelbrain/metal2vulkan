@@ -1007,8 +1007,9 @@ pub enum RenderPipelineKind {
     /// (VUID-VkGraphicsPipelineCreateInfo-renderPass-06589), as its rendering takes one view for
     /// both ([`RenderPassKind::DepthStencilViews`]).
     DepthStencilFormats,
-    /// More than one sample (`rasterSampleCount`).
-    Multisample,
+    /// A `rasterSampleCount` that is not a power of two from 1 to 64: Vulkan's rasterization
+    /// takes one of its sample count bits (`VkSampleCountFlagBits`).
+    SampleCount,
     /// Vertex amplification (`maxVertexAmplificationCount` above 1).
     VertexAmplification,
     /// A post-tessellation vertex function. A descriptor's tessellation state with any other
@@ -1059,8 +1060,10 @@ pub enum DrawKind {
     /// A viewport Vulkan's is not: a negative width (Metal mirrors the draw), a depth range past
     /// `[0, 1]`, or bounds past the device's viewport limits.
     Viewport,
-    /// A pipeline state whose colour or stencil formats are not its pass's attachments': Metal's
-    /// validation stops most such draws, and plain Metal zeroes or drops the colours.
+    /// A pipeline state whose colour or stencil formats are not its pass's attachments', or
+    /// whose `rasterSampleCount` is not their sample count: Metal's validation stops most such
+    /// draws, and plain Metal zeroes or drops the colours. Vulkan draws no other count
+    /// (VUID-vkCmdDraw-multisampledRenderToSingleSampled-07285).
     AttachmentFormats,
     /// A draw that binds a texture whose image the pass renders, where neither the attachment
     /// feedback loop nor a copy into the image's shadow reads it: on a device without the
@@ -1089,8 +1092,9 @@ pub enum RenderPassKind {
     /// Vulkan clears no such depth without `VK_EXT_depth_range_unrestricted`
     /// (VUID-VkClearDepthStencilValue-depth-00022), which the floor does not require.
     ClearDepth,
-    /// An attachment of more than one sample.
-    Multisample,
+    /// Attachments of two sample counts: Vulkan renders one count into every attachment of a
+    /// pass (VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857).
+    SampleCounts,
     /// A resolve texture, or a store action that resolves.
     Resolve,
     /// An attachment of a texture type but a 2D texture, a 2D array, a cube or a cube array: a 1D

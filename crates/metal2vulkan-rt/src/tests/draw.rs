@@ -26,6 +26,12 @@
 //!     a pass without a depth attachment, is the formats' gap, and a depth test is its own.
 //!   - a fragment function samples a texture through its constexpr sampler at the index the
 //!     consumer gave it: each pixel reads its own texel.
+//!   - four samples (the owned fixture `engine/psc_sample_coverage.ll`'s `psc_read_samples`): a
+//!     triangle drawn by a state of `rasterSampleCount` 4 into a 4-sample target covers, per
+//!     sample as a kernel reads them, every pixel on one side of its edge, none on the other and,
+//!     on it, Metal's 4x positions below it where the device takes Vulkan's standard locations;
+//!     a 1-sample state in the pass is the formats' gap, and a pass of a 4-sample and a 1-sample
+//!     attachment `RenderPassKind::SampleCounts`.
 //!   - a vertex function that reads `[[base_instance]]` (the owned fixture
 //!     `engine/icb_merged_draws.ll`'s `icb_merged_vertex`) draws, and every pixel it covers reads
 //!     the draw's base instance and its instance ID from it.
@@ -2212,6 +2218,149 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             encoder.end_encoding();
             run(name, &command_buffer);
             println!("{name}: each draw refused by kind");
+        });
+    }
+    /// Four samples: a white triangle over the lower-left half of a `SIDE` square
+    /// `Type2DMultisample` `RGBA8Unorm` target of 4 samples, cleared to black, through a state of
+    /// `rasterSampleCount` 4, stored, then each pixel's samples read by `psc_read_samples`
+    /// (`texture2d_ms` read, one bit a sample above half white). Every pixel above the diagonal is
+    /// all four samples, every pixel below it none, and each on it the samples Metal's 4x
+    /// positions put below the edge, (0.125, 0.625) and (0.625, 0.875): samples 2 and 3, where
+    /// the device takes Vulkan's standard locations (`standardSampleLocations`), which are Metal's.
+    /// A state of one sample drawn in the pass is `DrawKind::AttachmentFormats`, and a pass of a
+    /// 4-sample and a 1-sample attachment `RenderPassKind::SampleCounts`.
+    #[test]
+    fn every_device_draws_four_samples_where_metal_places_them() {
+        let (Some(library), Some(kernels)) = (
+            examples(),
+            library(&engine_dir().join("psc_sample_coverage.ll")),
+        ) else {
+            return;
+        };
+        let mut d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        d.raster_sample_count = 4;
+        let one = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("draw_four_samples", |name, _, device| {
+            assert!(
+                device.supports_texture_sample_count(4),
+                "{name}: Vulkan requires 4"
+            );
+            assert!(
+                device.supports_texture_sample_count(1),
+                "{name}: Vulkan requires 1"
+            );
+            for count in [0, 3, 8, 16] {
+                assert!(
+                    !device.supports_texture_sample_count(count),
+                    "{name}: {count}"
+                );
+            }
+            (device.grant_indices(IndexClass::Texture, 1, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let four = state(name, &device, &d);
+            let single = state(name, &device, &one);
+            let function = kernels.function("psc_read_samples").expect("the kernel");
+            let kernel = (device.new_compute_pipeline_state(
+                &crate::ComputePipelineDescriptor::new(StageSource::Function(
+                    FunctionDescriptor::new(function),
+                )),
+                |samplers| Ok(vec![0; samplers.len()]),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut td = TextureDescriptor::new(
+                TextureType::Type2DMultisample,
+                PixelFormat::RGBA8Unorm,
+                SIDE,
+                SIDE,
+            );
+            td.sample_count = 4;
+            td.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+            td.storage_mode = StorageMode::Private;
+            let samples = (device.new_texture(&td, Some(1)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut buffers = Buffers::new(&device);
+            let positions = buffers.of(&device, &floats(&[-1.0, -1.0, 1.0, -1.0, -1.0, 1.0]));
+            let colors = buffers.of(&device, &floats(&WHITE.repeat(3)));
+            let out = buffers.of(&device, &[0xffu8; 16 * SIDE as usize * 4]);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut p = pass(&samples, None);
+            p.color_attachments[0].store_action = crate::StoreAction::Store;
+            let mut encoder = (command_buffer.render_command_encoder(&p))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            // A state of one sample does not draw into four.
+            draw(encoder.set_render_pipeline_state(&single));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            match encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0) {
+                Err(Error::Unsupported(Gap::Draw {
+                    kind: DrawKind::AttachmentFormats,
+                })) => {}
+                other => panic!("{name}: a state of one sample: {other:?}"),
+            }
+            draw(encoder.set_render_pipeline_state(&four));
+            encoder.set_cull_mode(CullMode::None);
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            encoder.end_encoding();
+            let mut compute = (command_buffer.compute_command_encoder(crate::DispatchType::Serial))
+                .expect("an encoder");
+            compute
+                .set_compute_pipeline_state(&kernel)
+                .expect("the state");
+            compute.set_texture(Some(&samples), 0).expect("a texture");
+            compute.set_buffer(Some(&out), 0, 1).expect("a buffer");
+            (compute.dispatch_threadgroups([1, 1, 1], [SIDE, SIDE, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            compute.end_encoding();
+            run(name, &command_buffer);
+            let contents = out.contents().expect("a Shared buffer");
+            // SAFETY: the buffer holds 16 rows of `SIDE` words at 16 words a row, which the
+            // finished dispatch wrote and whose writes reach the host.
+            let words = unsafe {
+                std::slice::from_raw_parts(contents.as_ptr().cast::<u32>(), 16 * SIDE as usize)
+            };
+            let raw = device.raw();
+            // SAFETY: the physical device is the device's own.
+            let limits = unsafe {
+                raw.instance
+                    .get_physical_device_properties(raw.physical_device)
+            }
+            .limits;
+            let standard = limits.standard_sample_locations == ash::vk::TRUE;
+            for y in 0..SIDE {
+                for x in 0..SIDE {
+                    let got = words[(y * 16 + x) as usize];
+                    let expected = match x.cmp(&y) {
+                        std::cmp::Ordering::Less => 0b1111,
+                        std::cmp::Ordering::Greater => 0,
+                        std::cmp::Ordering::Equal if standard => 0b1100,
+                        std::cmp::Ordering::Equal => continue,
+                    };
+                    assert_eq!(got, expected, "{name}: pixel ({x}, {y})'s samples");
+                }
+            }
+
+            // A pass of a 4-sample and a 1-sample attachment.
+            let flat = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let mut mixed = pass(&samples, None);
+            mixed.color_attachments[1].texture = Some(flat.clone());
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            match command_buffer.render_command_encoder(&mixed) {
+                Err(Error::Unsupported(Gap::RenderPass {
+                    kind: crate::RenderPassKind::SampleCounts,
+                })) => {}
+                Err(error) => panic!("{name}: two sample counts: {error}"),
+                Ok(_) => panic!("{name}: two sample counts made a pass"),
+            }
+            drop((samples, flat));
+            println!(
+                "{name}: four samples drawn and read per sample (standard locations {standard})"
+            );
         });
     }
 }

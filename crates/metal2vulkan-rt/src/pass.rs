@@ -328,6 +328,8 @@ pub(crate) struct Pass {
     pub(crate) depth: Option<Target>,
     pub(crate) stencil: Option<Target>,
     pub(crate) area: [u32; 2],
+    /// Every attachment's samples, one bit: the pass refuses attachments of two counts.
+    pub(crate) samples: vk::SampleCountFlags,
 }
 
 impl Pass {
@@ -494,7 +496,17 @@ impl Pass {
             depth,
             stencil,
             area: [u32::MAX; 2],
+            samples: vk::SampleCountFlags::empty(),
         };
+        // Vulkan renders one sample count into every attachment of a pass
+        // (VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857).
+        for target in pass.targets() {
+            let samples = target.attachment.samples;
+            if !pass.samples.is_empty() && pass.samples != samples {
+                return Err(gap(RenderPassKind::SampleCounts));
+            }
+            pass.samples = samples;
+        }
         pass.area = pass.targets().fold(pass.area, |area, t| {
             let extent = t.attachment.extent;
             [area[0].min(extent[0]), area[1].min(extent[1])]
