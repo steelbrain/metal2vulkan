@@ -239,6 +239,9 @@ struct Counts {
     /// Shapes made, each filled at its making, and textures made of a shape the plane held.
     made: u64,
     found: u64,
+    /// Shapes shaders may write made over a plane that held a shape of their extent shaders may
+    /// not write (the order case).
+    order: u64,
     /// Shapes no texture views that went past the four kept, or at a write of another shape of
     /// their plane.
     dropped: u64,
@@ -426,7 +429,7 @@ impl Surfaces {
     }
 
     /// The executed counters.
-    pub(super) fn counted(&self) -> [(&'static str, u64); 21] {
+    pub(super) fn counted(&self) -> [(&'static str, u64); 22] {
         let c = &self.counts;
         [
             ("surface_external_writes", c.external_writes),
@@ -436,6 +439,7 @@ impl Surfaces {
             ("surface_textures", c.views),
             ("surface_shapes", c.made),
             ("surface_shapes_found", c.found),
+            ("surface_order_shapes", c.order),
             ("surface_shapes_dropped", c.dropped),
             ("surface_written_back", c.written_back),
             ("surface_written_back_bytes", c.written_back_bytes),
@@ -458,7 +462,7 @@ impl Surfaces {
         let c = &self.counts;
         format!(
             "surfaces {} textures and views of {} shapes, each filled at its making ({} made again \
-             as views, {} dropped); {} overlap copies ({} bytes), {} straddled texels, {} \
+             as views, {} order-case shapes, {} dropped); {} overlap copies ({} bytes), {} straddled texels, {} \
              unordered writes, {} usage writes and {} declared slot writes (writes through an \
              argument buffer with no use named unseen, not counted); {} dirty shapes written back ({} bytes); {} CPU writes, \
              {} external writes refilling {} shapes ({} bytes, {} ns of GPU time, the longest \
@@ -467,6 +471,7 @@ impl Surfaces {
             c.views,
             c.made,
             c.found,
+            c.order,
             c.dropped,
             c.overlap_copies,
             c.overlap_bytes,
@@ -608,6 +613,13 @@ impl NewRuntime {
                 self.surfaces.counts.found += 1;
                 return Ok((texture, shape));
             }
+        }
+        let narrower = Shape {
+            storage: false,
+            ..shape
+        };
+        if shape.storage && self.surfaces.entry(&span, narrower).is_some() {
+            self.surfaces.counts.order += 1;
         }
         let mut d = *descriptor;
         d.usage = rt::TextureUsage::SHADER_READ

@@ -778,12 +778,12 @@ counted from 0), completes the work committed so far, reports as at the stream's
   in a command buffer of the backend's own committed then. Another call that names a receiver
   buffer as a buffer is refused, and a texture of a format that reads across a surface's two planes
   (a two-plane YCbCr or XR10 format) is skipped (`skipped_surfaces_across_planes`). The counts
-  (`surface_textures`, `surface_shapes`, `surface_shapes_found`, `surface_shapes_dropped`,
-  `surface_written_back`, `surface_written_back_bytes`, `surface_overlap_copies`,
-  `surface_overlap_bytes`, `surface_straddled`, `surface_unordered_writes`,
-  `surface_usage_writes`, `surface_declared_writes`, `surface_cpu_writes`, `surface_external_writes`, `surface_refills`,
-  `surface_refill_bytes`, `surface_refill_gpu_nanos`, `surface_copies_in`, `surface_copies_out`,
-  `surface_bytes`) are the player's work, among its executed counters; `surface_refill_gpu_nanos`
+  (`surface_textures`, `surface_shapes`, `surface_shapes_found`, `surface_order_shapes`,
+  `surface_shapes_dropped`, `surface_written_back`, `surface_written_back_bytes`,
+  `surface_overlap_copies`, `surface_overlap_bytes`, `surface_straddled`,
+  `surface_unordered_writes`, `surface_usage_writes`, `surface_declared_writes`,
+  `surface_cpu_writes`, `surface_external_writes`, `surface_refills`, `surface_refill_bytes`,
+  `surface_refill_gpu_nanos`, `surface_copies_in`, `surface_copies_out`, `surface_bytes`) are the player's work, among its executed counters; `surface_refill_gpu_nanos`
   is the GPU time of the refills' command buffers, counted in the frame whose end first sees each
   complete. The report's `surfaces` line gives them with the longest refill command buffer. A
   check of a texture reads its first level and slice as the old runtime's backend lays them out.
