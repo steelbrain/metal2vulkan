@@ -187,6 +187,42 @@ fn unknown_kinds_and_versions_are_refused() {
     ));
 }
 
+/// A stream's recording range is its sidecar's where it has one, else the row of the table that
+/// names its first segment's file name and length, else the whole stream; a sidecar that reads as
+/// neither form is an error.
+#[test]
+fn a_recording_range_comes_from_the_sidecar_then_the_table() {
+    use super::range::{recording_range, sidecar, RangeSource, RecordingRange};
+    let dir = ScratchDir::new("replay-range").unwrap();
+    let first = dir.path().join("s.0000.m2vr");
+    let mut writer = StreamWriter::new(File::create(&first).unwrap()).unwrap();
+    writer.call("commit", 1, 0, &[], &[]).unwrap();
+    writer.finish().unwrap();
+    let length = std::fs::metadata(&first).unwrap().len();
+    let table = [("x", "s.0000.m2vr", length, RecordingRange::LastFrame(7))];
+    let other = [("x", "s.0000.m2vr", length + 1, RecordingRange::LastFrame(7))];
+    let found = |table: &[super::range::RangeRow]| recording_range(&first, table).unwrap();
+    assert_eq!(
+        found(&table),
+        (RecordingRange::LastFrame(7), RangeSource::Table("x"))
+    );
+    assert_eq!(
+        found(&other),
+        (RecordingRange::Whole, RangeSource::Unstated)
+    );
+    assert_eq!(sidecar(&first), dir.path().join("s.range"));
+    std::fs::write(sidecar(&first), "whole\n").unwrap();
+    assert_eq!(found(&table), (RecordingRange::Whole, RangeSource::Sidecar));
+    std::fs::write(sidecar(&first), "last-frame 3\n").unwrap();
+    assert_eq!(
+        found(&table),
+        (RecordingRange::LastFrame(3), RangeSource::Sidecar)
+    );
+    std::fs::write(sidecar(&first), "frames 3\n").unwrap();
+    let why = recording_range(&first, &table).unwrap_err();
+    assert!(why.ends_with("is neither last-frame F nor whole"), "{why}");
+}
+
 /// The header's flags, the same in every segment, are the stream's; a segment with another bit,
 /// or with flags unlike the first segment's, is refused.
 #[test]

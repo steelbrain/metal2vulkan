@@ -37,6 +37,10 @@ hold guest data and is never committed. Tests write their own streams.
 - **An unknown record kind** is an error naming the kind and its offset.
 - The recorder's statistics file is written apart from the stream and can trail it by up to 5 s;
   the stream is the record.
+- **The recording range sidecar.** `NAME.range` beside the first segment (`NAME.0000.m2vr`, or
+  `NAME.range` beside a stream of one file `NAME.m2vr`) states how far the recording is sound: one
+  line, `last-frame F` (through frame `F`'s present, frames counted from 0) or `whole`. A player
+  ends its play there by default (section 10).
 
 | kind | record | payload |
 |---|---|---|
@@ -420,8 +424,8 @@ and the (name id, value) answer pairs.
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
-[--until-frame F]` plays a stream (its first segment) on one device through the old runtime (the
-default) or the new one (`rt`), and writes `DIR/report.txt`. It writes each frame's `frame` and
+[--until-frame F] [--past-range yes|no]` plays a stream (its first segment) on one device through
+the old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. It writes each frame's `frame` and
 `end` lines as the frame ends, flushed, so a play that never ends leaves every frame it finished.
 With `--snapshots no` it takes no `m2v.privateBytes` snapshot on either runtime: each such dispatch
 plays as it is, counted on the `unsnapshotted` line, so two runtimes' plays do the same work and
@@ -430,6 +434,16 @@ counted from 0), completes the work committed so far, reports as at the stream's
 `until-frame F`. `command-replay dump --stream FILE` prints the call records as text, and
 `command-replay shapes --stream FILE` each selector's argument shapes, with no data.
 
+- **The recording range.** A play ends at the stream's recording range by default: through the
+  frame its sidecar (section 1) states, else the frame the player's table `RECORDED_RANGES`
+  states for it (the streams recorded before sidecars, found by their first segment's file name
+  and byte length), else the whole stream. `--past-range yes` plays past it, to the stream's end
+  or to `--until-frame F`; without it, `--until-frame F` stops the play at the earlier of `F` and
+  the range. The
+  report's `range` line says which range the play used, where it came from, and whether the play
+  ends there or `--past-range yes` takes it past; a play that ends at the range says
+  `until-frame F` as `--until-frame` does. A sidecar that reads as neither `last-frame F` nor
+  `whole` is an error.
 - **Streams recorded before the completion fix.** Where the stream's header lacks bit 1 (section
   6), the report's first line is, by itself, `recorded before the recorder's completion fix: the
   stream may differ from what the program did`, so no table taken from the report loses it.
@@ -630,7 +644,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
 
 `report.txt` holds one line per item: the line `recorded before the recorder's completion fix: the
 stream may differ from what the program did` first where the stream's header lacks bit 1 (section
-6), then `device NAME runtime old|rt snapshots yes|no`, then
+6), then `range last-frame F (SOURCE); the play ends there`, `range last-frame F (SOURCE);
+--past-range yes plays past it` or `range whole (SOURCE)`, where `SOURCE` is `the stream's
+sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
+`device NAME runtime old|rt snapshots yes|no`, then
 `relocation relocated_words=N misaligned_address_words=N address_arguments=N unrelocated_writes=N
 differing_ids=N` (the play's address words relocated and those left at 4 past a multiple of 8,
 the address arguments beside which a data word that only looks like an address stands out, the

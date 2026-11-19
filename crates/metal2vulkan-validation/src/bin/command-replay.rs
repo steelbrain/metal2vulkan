@@ -3,21 +3,25 @@
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
-//! [--until-frame F]` plays the stream whose first segment is `FILE` through the old runtime (the
-//! default) or the new one (`rt`), with `--snapshots no` taking no `m2v.privateBytes` snapshot on
-//! either (so two runtimes' plays do the same work), `--managed` telling the new runtime how the
-//! recording device kept Managed buffers where the stream has no `m2v.deviceIdentity` record (one
-//! copy: unified memory; two copies: a GPU copy; with neither, a Managed buffer stops the play),
-//! and `--until-frame` stopping the play after frame `F`'s present (frames counted from 0), and
-//! writes `DIR/report.txt`: first, where the stream's header lacks
+//! [--until-frame F] [--past-range yes|no]` plays the stream whose first segment is `FILE` through
+//! the old runtime (the default) or the new one (`rt`), with `--snapshots no` taking no
+//! `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), `--managed`
+//! telling the new runtime how the recording device kept Managed buffers where the stream has no
+//! `m2v.deviceIdentity` record (one copy: unified memory; two copies: a GPU copy; with neither, a
+//! Managed buffer stops the play), and `--until-frame` stopping the play after frame `F`'s present
+//! (frames counted from 0). The play ends at the stream's recording range (its sidecar's, else
+//! its row of `RECORDED_RANGES`, else the whole stream) unless `--past-range yes` takes it past.
+//! It writes `DIR/report.txt`: first, where the stream's header lacks
 //! `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's completion fix: the
-//! stream may differ from what the program did` by itself, then
+//! stream may differ from what the program did` by itself, then `range ...` (the recording range,
+//! where it came from, and whether the play ends there), then
 //! `device NAME runtime old|rt snapshots yes|no`, each frame's `frame`
 //! and `end` lines as the frame ends (flushed, so a play that never ends leaves the frames it
 //! finished), `relocation ...` (the
 //! words relocated, the address arguments, the writes into objects with no recorded range, and
 //! the objects whose ID differs from the recording's), the player's other report lines, the
-//! backend's own lines, `until-frame F` where the play stopped there, `cut SEGMENT OFFSET` where
+//! backend's own lines, `until-frame F` where the play stopped there (at `--until-frame` or at the
+//! recording range), `cut SEGMENT OFFSET` where
 //! the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
@@ -26,7 +30,7 @@
 //! skipped anything (`F` and `C` the first skip's frame and stream position); a play that ends
 //! where an object's ID differs, the compute pipeline states' typed gap aside, ends `ids: played
 //! to the end; ...`. The exit status is 0 for `ok`, 1 for a play that stopped, 2 for a harness
-//! failure (a bad command line, no device, an unreadable stream) and 3 for `ids`.
+//! failure (a bad command line, no device, an unreadable stream or sidecar) and 3 for `ids`.
 //!
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
 //! then `cut SEGMENT OFFSET` where the last segment ends in a record cut short.
@@ -42,8 +46,9 @@ use metal2vulkan_runtime::{DeviceOptions, ShaderCacheOptions};
 use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
-    segments, Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player, StreamError,
-    StreamReader, Value, FLAG_COMPLETION_BYTES_RECORDED,
+    recording_range, segments, Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player,
+    RangeSource, RecordingRange, StreamError, StreamReader, Value, FLAG_COMPLETION_BYTES_RECORDED,
+    RECORDED_RANGES,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -51,7 +56,8 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
-                     [--managed one-copy|two-copy] [--until-frame F]\n       command-replay dump \
+                     [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no]\n       \
+                     command-replay dump \
                      --stream FILE\n       command-replay shapes --stream FILE";
 
 fn main() {
@@ -188,6 +194,25 @@ fn shapes(options: &BTreeMap<String, String>) -> i32 {
 const BEFORE_COMPLETION_FIX: &str =
     "recorded before the recorder's completion fix: the stream may differ from what the program did";
 
+/// The report's `range` line: the recording range the play used, where it came from, and whether
+/// the play ends there or `--past-range yes` takes it past.
+fn range_line(range: RecordingRange, source: RangeSource, past: bool) -> String {
+    let source = match source {
+        RangeSource::Sidecar => "the stream's sidecar".to_owned(),
+        RangeSource::Table(label) => format!("the player's table, stream {label}"),
+        RangeSource::Unstated => "no sidecar and no table row".to_owned(),
+    };
+    match (range, past) {
+        (RecordingRange::Whole, _) => format!("range whole ({source})"),
+        (RecordingRange::LastFrame(last), false) => {
+            format!("range last-frame {last} ({source}); the play ends there")
+        }
+        (RecordingRange::LastFrame(last), true) => {
+            format!("range last-frame {last} ({source}); --past-range yes plays past it")
+        }
+    }
+}
+
 /// The report file, written as the play goes.
 struct ReportFile {
     file: std::fs::File,
@@ -223,6 +248,23 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
     if reader.flags() & FLAG_COMPLETION_BYTES_RECORDED == 0 {
         report.line(BEFORE_COMPLETION_FIX);
     }
+    let (range, source) = match recording_range(&PathBuf::from(&options["stream"]), RECORDED_RANGES)
+    {
+        Ok(found) => found,
+        Err(why) => {
+            report.line(&format!("error range: {why}"));
+            return 2;
+        }
+    };
+    let past = match options.get("past-range").map(String::as_str) {
+        None | Some("no") => false,
+        Some("yes") => true,
+        Some(other) => {
+            report.line(&format!("error past-range: {other} is neither yes nor no"));
+            return 2;
+        }
+    };
+    report.line(&range_line(range, source, past));
     let device_type = match DeviceType::parse(&options["device-type"]) {
         Ok(device_type) => device_type,
         Err(why) => {
@@ -259,6 +301,13 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             ));
             return 2;
         }
+    };
+    // The play ends at the recording range unless --past-range yes takes it past.
+    let until = match (range, past) {
+        (RecordingRange::LastFrame(last), false) => {
+            Some(until.map_or(last, |until| until.min(last)))
+        }
+        _ => until,
     };
     // The first line says which mode ran: a timing table never comes from a snapshotting play
     // unnoticed.

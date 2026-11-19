@@ -6,6 +6,7 @@ mod args;
 mod new_runtime;
 mod old_runtime;
 mod player;
+mod range;
 mod stream;
 mod texwrites;
 mod translator;
@@ -18,6 +19,7 @@ pub use player::{
     Backend, Check, Counters, Counts, End, HeldBuffer, IdDiffers, Made, PlayError, Player,
     PrivateBytes, Relaid, Report, TextureWrites,
 };
+pub use range::{recording_range, sidecar, RangeRow, RangeSource, RecordingRange, RECORDED_RANGES};
 pub use stream::{
     segments, Call, StreamError, StreamReader, StreamWriter, FLAG_ANNOUNCED_BYTES_RECORDED,
     FLAG_COMPLETION_BYTES_RECORDED,

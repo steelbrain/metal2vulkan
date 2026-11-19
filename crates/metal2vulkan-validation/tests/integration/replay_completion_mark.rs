@@ -42,11 +42,11 @@ fn a_report_of_a_stream_without_the_completion_bit_begins_with_the_line() {
     let before = report(&dir, FLAG_ANNOUNCED_BYTES_RECORDED);
     let lines = before.lines().collect::<Vec<_>>();
     assert_eq!(lines.first(), Some(&MARK), "{before}");
-    assert!(lines[1].starts_with("error device-type: "), "{before}");
+    assert!(lines[1].starts_with("range "), "{before}");
     let fixed = report(
         &dir,
         FLAG_ANNOUNCED_BYTES_RECORDED | FLAG_COMPLETION_BYTES_RECORDED,
     );
-    assert!(fixed.starts_with("error device-type: "), "{fixed}");
+    assert!(fixed.starts_with("range "), "{fixed}");
     assert!(!fixed.contains(MARK), "{fixed}");
 }
