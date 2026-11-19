@@ -38,8 +38,8 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 815 |
 | of the reachable, not exercised | 163 |
 | share of the reachable exercised | 83% |
-| of those exercised, no case reaching it loosens anything | 571 |
-| of those exercised, a case reaching it loosens some site | 244 |
+| of those exercised, no case reaching it loosens anything | 561 |
+| of those exercised, a case reaching it loosens some site | 254 |
 | case modules | 172 |
 | committed recordings | 1297 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
@@ -536,11 +536,11 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1213 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 14 |
-| tolerances in all | 15 |
+| modules that loosen a measured value | 15 |
+| tolerances in all | 16 |
 | modules declaring a notice (loosening no value) | 138 |
 | loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
-| justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression`, `NewRuntimeNotice` |
+| justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression`, `NewRuntimeNotice`, `NewRuntimeAccepted` |
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 130 |
 | `Side` methods the Metal leg reaches an SDK item through | 125 |
@@ -608,7 +608,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `extended_range_targets` | 22 | 22 | every field | 130 |
 | `extended_range_two_planes` | 2 | 2 | every field | 34 |
 | `extended_swizzles` | 15 | 15 | every field | 61 |
-| `fence_orders` | 6 | 6 | every field | 27 |
+| `fence_orders` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 27 |
 | `fetch_ordered` | 4 | 4 | every field | 124 |
 | `format_copies` | 16 | 16 | every field | 48 |
 | `format_footprints` | 6 | 6 | every field | 21 |

@@ -107,7 +107,7 @@ impl Case for FenceOrderCase {
             allowances.push(Allowance::new(
                 "case/order/y/words-written",
                 Loosening::AnyOf(vec![Value::Uint(0), Value::Uint(WORDS)]),
-                Justification::new_runtime_accepted(SEEN_ACROSS_QUEUES),
+                Justification::NewRuntimeAccepted(SEEN_ACROSS_QUEUES.to_owned()),
             ));
         }
         allowances
