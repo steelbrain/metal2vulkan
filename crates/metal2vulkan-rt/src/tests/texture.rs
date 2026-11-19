@@ -559,6 +559,8 @@ mod on_device {
         each_device("host_bytes", |name, _, device| {
             let mut d = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [8, 4, 1]);
             d.storage_mode = StorageMode::Shared;
+            // No shader usage, so no index: a shader-read texture takes one.
+            d.usage = TextureUsage::empty();
             let texture =
                 (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
             let region = Region {
