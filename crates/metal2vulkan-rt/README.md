@@ -542,8 +542,7 @@ The layout is one rule in both forms. The planes share one pitch, a multiple of 
 and of every plane's texel. Plane 0 is at offset 0; each next plane starts at the first multiple
 of `start_multiple` and of its texel at or past the previous plane's start plus its rows and its
 `rows_below` at the pitch. A start multiple of 1 with no rows below puts each plane directly below
-the one before, at the same pitch: NVIDIA's opaque fd route (NV12 or P010) asks `pitch_multiple:
-4, start_multiple: 1` and `rows_below: 0`. A VA-API import asks `pitch_multiple: 256,
+the one before, at the same pitch. A VA-API import asks `pitch_multiple: 256,
 start_multiple: 256`, each plane holding the coded picture's rows: the luma's `rows_below` is its
 height rounded up to 16 less its height, the chroma's half that rounded height less its own (8 and
 4 at 1080p, none at 720p and 2160p). The layout is linear: a dma-buf's import names
@@ -569,7 +568,13 @@ writes reach with no copy. What a consumer passes to get it, by handle:
   in an allocation of its own. The pitch is the driver's own for each plane's `LINEAR` image: the
   planes' pitches must be equal and a multiple of `pitch_multiple` and of the texels, and each
   start a multiple of its image's alignment, past the plane before's requirement. The images are
-  bound in one exportable allocation that holds no buffer, counted in `Gauges::exports`.
+  bound in one exportable allocation that holds no buffer, counted in `Gauges::exports`. Measured
+  for NV12 and P010 at 1080p and 2160p: the RTX 3090 (NVIDIA 620.70.06) lays a `LINEAR` image's
+  rows at the row rounded up to 128 bytes, at an alignment of 128, so those surfaces are in place
+  at a pitch multiple of 1 or 4 with a start multiple of 1, and at multiples of 256 the 1080p NV12
+  surface is copied (`SurfaceCopy::Pitch`: its rows are 1,920 bytes) while the 2160p and P010
+  ones are in place. The Radeon 780M and RX 550 (RADV, Mesa 26.2.6) round rows up to 256, at an
+  alignment of 256, and take every one of them in place at either.
 
 Storage joins an image's usage where its tiling offers it; a usage a plane's texture asks that its
 tiling lacks is `Gap::SurfaceUsage`. A plane given no index whose usage reaches shaders is reached
@@ -636,15 +641,19 @@ over it. It is not built yet: every call is `Gap::D3d11Surface`.
 ### Known gaps of memory blocks
 
 - An exported surface takes the copy form, its planes copied at each acquire and release, in
-  three cases the build found:
+  three cases the build found. A copy form's planes are textures over a buffer in the exported
+  block, which is Private, so the CPU's `replace_region` and `get_bytes` on them are refused
+  (`Refusal::TextureBytesPrivate`):
   - A dma-buf surface on a device without `VK_EXT_image_drm_format_modifier`, or whose
     `DRM_FORMAT_MOD_LINEAR` entry lacks a plane's format or one of its four usages
     (`SurfaceCopy::NoModifier`, `SurfaceCopy::Tiling`): the device offers no in-place form for it.
     On the Radeon RX 550 (Polaris 12) the driver lists no modifier extension, and its plain
     `LINEAR` images refuse the dma-buf handle.
-  - A dma-buf surface on NVIDIA (`SurfaceCopy::Start`): on the RTX 3090 the driver refuses a
-    linear image of the second plane at its start in the shared dma-buf. No consumer path uses
-    it; the opaque fd surface of NVIDIA's route is in place on the RTX 3090.
+  - A two-plane dma-buf surface on NVIDIA (`SurfaceCopy::Start`): on the RTX 3090 the driver
+    makes a `DRM_FORMAT_MOD_LINEAR` image stated at a nonzero offset (32 and 256 measured) but
+    lays it at offset 0, which `vkGetImageSubresourceLayout` reports, so the second plane's image
+    does not lie at its start. The opaque fd surface of the same planes is in place where its
+    pitch multiple divides the driver's pitch (above).
   - A layout the device cannot meet (`SurfaceCopy::Pitch`, `SurfaceCopy::Start`): a pitch or
     start the consumer asks that the driver's linear images do not take. A pitch multiple of
     4,096 takes `SurfaceCopy::Pitch` on every device measured: the Radeon 780M, the RTX 3090,
