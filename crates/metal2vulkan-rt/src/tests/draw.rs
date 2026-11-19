@@ -2037,7 +2037,12 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
     }
 
     /// A shader-read render target of `format`, `SIDE` a side and `levels` levels, at `index`.
-    fn readable(device: &Device, format: PixelFormat, levels: u32, index: u32) -> Texture {
+    pub(crate) fn readable(
+        device: &Device,
+        format: PixelFormat,
+        levels: u32,
+        index: u32,
+    ) -> Texture {
         let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
         d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
         d.storage_mode = StorageMode::Shared;
@@ -2166,6 +2171,12 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                     shadows.shadows > 0,
                     !looped,
                     "{name} {case}: the target's shadow, live with it"
+                );
+                // Through the loop, both reading draws count; through a copy, neither.
+                assert_eq!(
+                    after.attachment_loop_reads - before.attachment_loop_reads,
+                    if looped { 2 } else { 0 },
+                    "{name} {case}: draws that read an attachment through the loop"
                 );
                 println!(
                     "{name} {case}: attachment_read_copies {}, attachment_read_copy_bytes {}; \

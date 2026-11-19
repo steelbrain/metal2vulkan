@@ -79,6 +79,8 @@ pub(crate) enum Metric {
     SurfacesCopied,
     /// [`Metrics::texture_clear_barriers`].
     TextureClearBarriers,
+    /// [`Metrics::attachment_loop_reads`].
+    AttachmentLoopReads,
     /// [`Metrics::sparse_binds`].
     SparseBinds,
     /// [`Metrics::resolves`].
@@ -117,6 +119,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::SurfacesInPlace,
     Metric::SurfacesCopied,
     Metric::TextureClearBarriers,
+    Metric::AttachmentLoopReads,
     Metric::SparseBinds,
     Metric::Resolves,
 ];
@@ -315,6 +318,7 @@ struct Atomics {
     over_copy_bytes_imported: AtomicU64,
     attachment_read_copies: AtomicU64,
     attachment_read_copy_bytes: AtomicU64,
+    attachment_loop_reads: AtomicU64,
     allocations_freed: AtomicU64,
     submissions_during_frees: AtomicU64,
     idle_frees_by_age: [AtomicU64; FREE_AGES_MS.len() + 1],
@@ -448,6 +452,7 @@ impl Counters {
             Metric::SurfacesInPlace => &a.surfaces_in_place,
             Metric::SurfacesCopied => &a.surfaces_copied,
             Metric::TextureClearBarriers => &a.texture_clear_barriers,
+            Metric::AttachmentLoopReads => &a.attachment_loop_reads,
             Metric::SparseBinds => &a.sparse_binds,
             Metric::Resolves => &a.resolves,
         }
@@ -866,6 +871,7 @@ impl Counters {
             over_copy_bytes_imported: a.over_copy_bytes_imported.load(Relaxed),
             attachment_read_copies: a.attachment_read_copies.load(Relaxed),
             attachment_read_copy_bytes: a.attachment_read_copy_bytes.load(Relaxed),
+            attachment_loop_reads: a.attachment_loop_reads.load(Relaxed),
             allocations_freed: a.allocations_freed.load(Relaxed),
             submissions_during_frees: a.submissions_during_frees.load(Relaxed),
             idle_frees_by_age: std::array::from_fn(|at| a.idle_frees_by_age[at].load(Relaxed)),
@@ -1186,6 +1192,14 @@ pub struct Metrics {
     pub attachment_read_copies: u64,
     /// The bytes of those copies, which count in [`bytes_copied`](Self::bytes_copied) too.
     pub attachment_read_copy_bytes: u64,
+    /// Draws that read an attachment of their own pass through the attachment feedback loop, a
+    /// fragment function's colour read (`[[color(n)]]`) or a texture argument over the
+    /// attachment: each with the image in the feedback layout, after the barrier that moved it
+    /// there or the barrier an earlier draw owed it, counted in [`barriers`](Self::barriers). A
+    /// count, no bytes. Metal records no barrier for such a draw. On a device without the loop
+    /// such a draw reads the image's shadow instead, its copies in
+    /// [`attachment_read_copies`](Self::attachment_read_copies).
+    pub attachment_loop_reads: u64,
     /// Copies between a texture over a buffer the device's linear image does not hold in place
     /// and its image of its own ([`Buffer::new_texture`](crate::Buffer::new_texture)): the
     /// buffer's bytes into the image, in the upload that leads a submission or after a command

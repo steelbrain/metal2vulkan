@@ -257,11 +257,16 @@ impl std::fmt::Debug for Surface {
     }
 }
 
-/// A plane's checked texture: its image format, the image usage its uses ask, the formats its
-/// views may take and its texel's bytes.
+/// A plane's checked texture: its image format, the image usage its uses ask, whether its image
+/// asks the feedback usage, the formats its views may take and its texel's bytes.
+#[derive(Clone)]
 pub(crate) struct PlanePlan {
     pub(crate) format: vk::Format,
     pub(crate) usage: vk::ImageUsageFlags,
+    /// A draw may read an attachment of its own pass through the texture, on a device with the
+    /// attachment feedback loop: its image takes the feedback usage where the handle's query
+    /// offers it with the rest ([`Query::plane`]), else a draw reads it through its shadow.
+    pub(crate) looped: bool,
     pub(crate) view_formats: Vec<vk::Format>,
     pub(crate) texel: u64,
 }
@@ -363,9 +368,11 @@ impl Query<'_> {
     }
 
     /// The plane's image in place: its usage, every bit of `IN_PLACE_USAGE`, storage and the
-    /// plan's usage that the query offers, and its view-format list, the plan's formats the
-    /// tiling samples (none where the query refuses it), and the export features; `Err` with the
-    /// copy form's reason, or the gap of a usage the plan asks that the tiling lacks.
+    /// plan's usage that the query offers, with the feedback usage where the plan asks it and the
+    /// query offers it with the rest and the export features alike, and its view-format list, the
+    /// plan's formats the tiling samples (none where the query refuses it), and the export
+    /// features; `Err` with the copy form's reason, or the gap of a usage the plan asks that the
+    /// tiling lacks.
     fn plane(
         &self,
         at: usize,
@@ -417,7 +424,15 @@ impl Query<'_> {
                 }
             }
         };
-        Ok(tiling_verdict(at, offered, features).map(|()| (offered, list)))
+        if let Err(reason) = tiling_verdict(at, offered, features) {
+            return Ok(Err(reason));
+        }
+        let looped = offered | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        let keeps = |features| tiling_verdict(at, looped, features).is_ok();
+        if plan.looped && self.external(plan.format, looped, &list).is_some_and(keeps) {
+            return Ok(Ok((looped, list)));
+        }
+        Ok(Ok((offered, list)))
     }
 }
 
@@ -698,13 +713,29 @@ impl Device {
             start_multiple: spec.start_multiple,
         }))?;
         step!("plans");
-        let in_place = match handle {
+        let in_place = |plans: &[PlanePlan]| match handle {
             ExportHandle::DmaBuf if !core.exports.modifiers => Ok(Err(SurfaceCopy::NoModifier)),
             #[cfg(unix)]
-            ExportHandle::DmaBuf => self.dma_buf_in_place(spec, &plans, multiple),
-            _ => self.opaque_in_place(spec, &plans, multiple),
-        }?;
-        let made = match in_place {
+            ExportHandle::DmaBuf => self.dma_buf_in_place(spec, plans, multiple),
+            _ => self.opaque_in_place(spec, plans, multiple),
+        };
+        let mut in_place_made = in_place(&plans)?;
+        // Where the images with the feedback usage do not hold the layout, the images without it
+        // may: a draw then reads such a plane as an attachment of its own pass through its shadow.
+        let laid = matches!(
+            in_place_made,
+            Ok(_) | Err(SurfaceCopy::Tiling { .. } | SurfaceCopy::NoModifier)
+        );
+        if !laid && plans.iter().any(|plan| plan.looped) {
+            let plain: Vec<PlanePlan> = (plans.iter())
+                .map(|plan| PlanePlan {
+                    looped: false,
+                    ..plan.clone()
+                })
+                .collect();
+            in_place_made = in_place(&plain)?;
+        }
+        let made = match in_place_made {
             Ok(made) => made,
             Err(reason) => return self.copy_form(spec, &plans, multiple, reason),
         };

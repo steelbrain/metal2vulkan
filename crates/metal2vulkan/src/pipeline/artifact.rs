@@ -2356,7 +2356,10 @@ pub enum PrecisionNote {
     /// dependency on itself, by region, from the color writes of the draws before to the input
     /// attachment reads of a draw that fetches (and from those reads to the color writes of the
     /// draws after): a fetch reads what every earlier draw stored at its pixel, Metal's answer.
-    /// Vulkan orders nothing between the overlapping fragments of one draw
+    /// Under the identity domains it reads the attachment's texture at its own pixel instead
+    /// ([`PushField::FetchedColor`](crate::pipeline::PushField::FetchedColor)), and the
+    /// consumer orders each fetching draw after the earlier draws of its pass by a barrier between
+    /// them. Vulkan orders nothing between the overlapping fragments of one draw
     /// (`GraphicsState::rasterization_order_attachment_access` false), where Metal orders them in
     /// primitive order: a fragment that covers a pixel an earlier fragment of its own draw
     /// covered may read the texel from before that fragment's write, and its own write may land

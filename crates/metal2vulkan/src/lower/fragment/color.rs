@@ -95,8 +95,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, Value as SValue};
 use crate::spirv::ir::{
-    Constant, Dim, ImageOperands, ImageType, ImageUsage, MemAccess, StorageClass, TexelMemory,
-    Type as SType,
+    Constant, ConvOp, Dim, ImageOperands, ImageType, ImageUsage, MemAccess, StorageClass,
+    TexelMemory, Type as SType,
 };
 
 use super::not_lowered;
@@ -628,7 +628,8 @@ pub(super) fn input_texel(
 /// The texel of color `color` read through the sampled-texture array's element the consumer pushes
 /// for it (`PushField::FetchedColor`), an element of `class`: a fetch at level 0 of the integer
 /// part of the invocation's `FragCoord`, its own pixel, and at its `SampleId` for a per-sample
-/// function. The element is uniform over the draw.
+/// function, a signed-integer texel's bits as the `uint`s the input attachment form reads. The
+/// element is uniform over the draw.
 fn pushed_texel(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -663,5 +664,14 @@ fn pushed_texel(
             }
         }
     };
-    fb.fetch(img, coord, &ops)
+    let texel = fb.fetch(img, coord, &ops)?;
+    if class.sampled_type != SampledType::Sint {
+        return Ok(texel);
+    }
+    let u32_ = fb.module().ty(SType::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let uvec4 = fb.module().ty(SType::Vector { elem: u32_, len: 4 })?;
+    fb.convert(ConvOp::Bitcast, texel, uvec4)
 }

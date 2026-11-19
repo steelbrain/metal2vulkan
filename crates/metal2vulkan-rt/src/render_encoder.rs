@@ -1997,7 +1997,7 @@ impl RenderCommandEncoder {
                     kind: DrawKind::AttachmentRead,
                 }));
             }
-            if core.feedback.is_none() {
+            if !texture.looped() {
                 // What the slot reads: at the fragment's own pixel, or all its texture reaches.
                 let own = (table == FRAGMENT && draws.own_pixel.binary_search(&slot).is_ok())
                     .then_some(drawn);
@@ -2024,7 +2024,8 @@ impl RenderCommandEncoder {
         // Each colour attachment the fragment function reads (`[[color(n)]]`), through its
         // texture's second element at the fragment's own pixel: a 2D texture (a 2D multisample
         // one in a multisampled pass) whose first level and layer the pass renders, which a shader
-        // reaches and the device reads attachments through.
+        // reaches and the device reads attachments through, and whose image no other attachment
+        // of the pass shares (a surface's planes share one hazard id).
         for &color in &draws.fetched {
             let fetched = || {
                 Err(Error::Unsupported(Gap::Draw {
@@ -2037,6 +2038,7 @@ impl RenderCommandEncoder {
             };
             let texture = &target.texture;
             let a = &target.attachment;
+            let hazard = texture.hazard_id();
             let shaped = matches!(
                 texture.descriptor().texture_type,
                 crate::TextureType::Type2D | crate::TextureType::Type2DMultisample
@@ -2045,18 +2047,22 @@ impl RenderCommandEncoder {
                 && shaped
                 && texture.attachment_reads()
                 && texture.base() == [a.level, a.layer]
-                && texture.second_resource_id().index != 0;
+                && texture.second_resource_id().index != 0
+                && (self.pass.targets())
+                    .filter(|t| t.texture.hazard_id() == hazard)
+                    .count()
+                    == 1;
             if !readable {
                 return fetched();
             }
-            if core.feedback.is_none() {
-                found
-                    .shadow_reads
-                    .push((texture.object().clone(), texture.read_areas(Some(drawn))));
+            if !texture.looped() {
+                found.shadow_reads.push((
+                    TextureObject::object(texture).clone(),
+                    texture.read_areas(Some(drawn)),
+                ));
                 continue;
             }
             found.reads = true;
-            let hazard = texture.hazard_id();
             let moved = (self.moved.iter()).any(|m| m.hazard == hazard)
                 || (found.moves.iter()).any(|m| m.moved.hazard == hazard);
             if !moved {
@@ -2102,6 +2108,11 @@ impl RenderCommandEncoder {
                 }
                 self.shadow_slots = found.shadow_slots;
                 self.push_filled = false;
+                if found.reads {
+                    (self.building.as_mut())
+                        .expect("an encoder holds its command buffer's recording until it ends")
+                        .count(Metric::AttachmentLoopReads);
+                }
                 found.reads
             }
             None => {

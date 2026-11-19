@@ -226,6 +226,14 @@ impl Device {
         if usage.is_empty() || !imports(usage) {
             return Err(Error::Limit(Limit::NoImport { handle }));
         }
+        // With the feedback usage where the plane asks it and the import offers it with the
+        // rest, so a draw reads it as an attachment of its own pass through the loop; else
+        // through its shadow.
+        let looped = usage | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        let usage = match plan.looped && imports(looped) {
+            true => looped,
+            false => usage,
+        };
         let missing = plan.usage & !usage;
         if !missing.is_empty() {
             return Err(Error::Unsupported(Gap::SurfaceUsage {

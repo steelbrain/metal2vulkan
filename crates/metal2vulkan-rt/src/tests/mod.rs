@@ -16,6 +16,7 @@ mod dma_bufs;
 mod draw;
 mod export;
 mod fence;
+mod fetch;
 mod floor;
 mod hazard;
 mod heap;

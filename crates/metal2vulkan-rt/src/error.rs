@@ -1237,8 +1237,6 @@ pub enum RenderPipelineKind {
     /// Stages the translator synthesizes beside the functions' but a tessellation's: geometry
     /// stages, lines drawn as bands of triangles, a rate map's fan-out, or mesh records.
     SynthesizedStages,
-    /// A fragment function that reads its colour attachments (framebuffer fetch).
-    FramebufferFetch,
     /// A fragment function that reaches the render pass's imageblock.
     Imageblock,
     /// A fragment function's stencil output applied by the shader.
@@ -1298,9 +1296,10 @@ pub enum DrawKind {
     /// A draw through a pipeline state whose fragment function reads a colour attachment
     /// (`[[color(n)]]`, framebuffer fetch) whose texture the draw cannot read it through: one that
     /// is no 2D texture (a 2D multisample texture in a multisampled pass) whose first level and
-    /// slice the pass renders, that no shader reaches (made with no index), or that a device
-    /// reads no attachment through, as `AttachmentRead` says. Metal reads the attachment at the
-    /// fragment's pixel.
+    /// slice the pass renders, that no shader reaches (made with no index), whose image another
+    /// attachment of the pass shares (two planes of one surface), or that the device reads no
+    /// attachment through, as `AttachmentRead` says, a drawable's texture among them. Metal
+    /// reads the attachment at the fragment's pixel.
     FetchedAttachment,
     /// A draw at a base instance other than 0 through a pipeline state that steps a vertex layout
     /// per instance at a rate above 1, on a device that does not report

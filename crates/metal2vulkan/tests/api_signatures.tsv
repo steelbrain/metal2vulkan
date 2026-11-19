@@ -2371,6 +2371,7 @@ field	metal2vulkan-rt::Metrics.allocation_map_refusals	pub allocation_map_refusa
 field	metal2vulkan-rt::Metrics.allocations_freed	pub allocations_freed: u64
 field	metal2vulkan-rt::Metrics.allocations_mapped	pub allocations_mapped: u64
 field	metal2vulkan-rt::Metrics.allocations_mapped_on_takes	pub allocations_mapped_on_takes: u64
+field	metal2vulkan-rt::Metrics.attachment_loop_reads	pub attachment_loop_reads: u64
 field	metal2vulkan-rt::Metrics.attachment_read_copies	pub attachment_read_copies: u64
 field	metal2vulkan-rt::Metrics.attachment_read_copy_bytes	pub attachment_read_copy_bytes: u64
 field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
@@ -13839,6 +13840,7 @@ variant	metal2vulkan-rt::DrawKind::AttachmentRead	AttachmentRead
 variant	metal2vulkan-rt::DrawKind::DepthBiasClamp	DepthBiasClamp
 variant	metal2vulkan-rt::DrawKind::DepthClamp	DepthClamp
 variant	metal2vulkan-rt::DrawKind::DividedBaseInstance	DividedBaseInstance
+variant	metal2vulkan-rt::DrawKind::FetchedAttachment	FetchedAttachment
 variant	metal2vulkan-rt::DrawKind::FillMode	FillMode
 variant	metal2vulkan-rt::DrawKind::LineWidth	LineWidth
 variant	metal2vulkan-rt::DrawKind::PatchIndexBuffer	PatchIndexBuffer
@@ -14102,7 +14104,6 @@ variant	metal2vulkan-rt::RenderPipelineKind::DepthStencilFormats	DepthStencilFor
 variant	metal2vulkan-rt::RenderPipelineKind::DeviceFeature	DeviceFeature
 variant	metal2vulkan-rt::RenderPipelineKind::DrawInput	DrawInput
 variant	metal2vulkan-rt::RenderPipelineKind::DynamicState	DynamicState
-variant	metal2vulkan-rt::RenderPipelineKind::FramebufferFetch	FramebufferFetch
 variant	metal2vulkan-rt::RenderPipelineKind::Imageblock	Imageblock
 variant	metal2vulkan-rt::RenderPipelineKind::SampleCount	SampleCount
 variant	metal2vulkan-rt::RenderPipelineKind::ShaderStencil	ShaderStencil
@@ -17005,6 +17006,7 @@ variant	metal2vulkan::pipeline::PushField::ControlPointIndexOffset	ControlPointI
 variant	metal2vulkan::pipeline::PushField::DepthClampRange	DepthClampRange
 variant	metal2vulkan::pipeline::PushField::DispatchRegion	DispatchRegion
 variant	metal2vulkan::pipeline::PushField::ExecutionStatusAddress	ExecutionStatusAddress
+variant	metal2vulkan::pipeline::PushField::FetchedColor	FetchedColor { color: u32, texels: SampledType }
 variant	metal2vulkan::pipeline::PushField::HalfBlendColor	HalfBlendColor
 variant	metal2vulkan::pipeline::PushField::IndexCapacity	IndexCapacity
 variant	metal2vulkan::pipeline::PushField::InstanceCount	InstanceCount(SlotRef)

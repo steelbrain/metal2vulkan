@@ -1975,6 +1975,127 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
     }
 }
 
+/// Under the identity domains on a device that orders framebuffer fetch in neither form (rt's
+/// profile), a color read takes no input attachment and no descriptor: the fragment fetches the
+/// sampled-texture array's element pushed for the attachment (`PushField::FetchedColor`), in the
+/// attachment's own numeric class (an unsigned read of a signed-integer attachment as `int`, which
+/// the element's view takes), noted `UnorderedFetchWithinDraw`. A read of another class than the
+/// attachment's is Metal's pipeline error, at link.
+#[test]
+fn an_identity_fetch_reads_its_attachments_pushed_texture_in_the_attachments_class() {
+    use crate::device::requirements::VkFeature;
+    use crate::device::{HandleDomain, PointerDomain};
+    use crate::error::MetalAnswer;
+    use crate::pipeline::sym::{PushField, SampledType, Stage};
+    use crate::pipeline::{PrecisionNote, RenderPipeline};
+    let (Some(io), Some(fetch), Some(count)) = (
+        fixture("stage_io"),
+        fixture("fragment_fetch"),
+        fixture("exf_fetch_count"),
+    ) else {
+        return;
+    };
+    let function = |bytes: &[u8], name: &str| {
+        StageSource::Function(FunctionDescriptor::new(
+            (Library::from_air(bytes).expect("library").function(name)).expect(name),
+        ))
+    };
+    let pipeline = |fragment: StageSource, format: metal::PixelFormat| {
+        let mut d = RenderPipelineDescriptor::new(function(&io, "stage_io_vertex_position"));
+        d.fragment = Some(fragment);
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
+        d
+    };
+    let mut without = description("lavapipe");
+    for f in [
+        VkFeature::RasterizationOrderColorAttachmentAccess,
+        VkFeature::FragmentShaderPixelInterlock,
+    ] {
+        without.features.remove(&f);
+    }
+    let mut policy = DevicePolicy::default();
+    policy.pointer_domain = PointerDomain::Identity;
+    policy.handle_domain = HandleDomain::Identity;
+    let dev = Device::from_queries(without, policy).expect("device");
+    let compile =
+        |d: &RenderPipelineDescriptor| dev.compile_render_pipeline(d, &Budget::standard());
+    let fetched = |pipe: &RenderPipeline| -> Vec<PushField> {
+        (pipe.interface.push.iter())
+            .filter(|p| p.stage == Stage::Fragment)
+            .flat_map(|p| p.fields.iter().map(|f| f.field))
+            .filter(|f| matches!(f, PushField::FetchedColor { .. }))
+            .collect()
+    };
+    for (fragment, format, texels) in [
+        (
+            "fetch_scalar",
+            metal::PixelFormat::R32Float,
+            SampledType::Float,
+        ),
+        (
+            "exf_fetch_count",
+            metal::PixelFormat::RGBA32Uint,
+            SampledType::Uint,
+        ),
+        (
+            "exf_fetch_count",
+            metal::PixelFormat::RGBA32Sint,
+            SampledType::Sint,
+        ),
+    ] {
+        let bytes = match fragment {
+            "fetch_scalar" => &fetch,
+            _ => &count,
+        };
+        let pipe = compile(&pipeline(function(bytes, fragment), format))
+            .unwrap_or_else(|e| panic!("{fragment} {format:?}: {e:?}"));
+        assert_eq!(
+            fetched(&pipe),
+            [PushField::FetchedColor { color: 0, texels }],
+            "{fragment} {format:?}: the element pushed for attachment 0, of its class"
+        );
+        assert!(
+            pipe.graphics.input_attachments.is_empty(),
+            "{fragment} {format:?}"
+        );
+        assert!(
+            pipe.graphics.storage_attachments.is_empty(),
+            "{fragment} {format:?}"
+        );
+        assert!(!pipe.graphics.rasterization_order_attachment_access);
+        assert!(
+            (pipe.layout.sets.iter())
+                .filter(|s| s.set == 0)
+                .all(|s| s.bindings.is_empty()),
+            "{fragment} {format:?}: no descriptor in set 0"
+        );
+        let fragment_stage = (pipe.stages.iter())
+            .find(|s| s.stage == vk::ShaderStage::FRAGMENT)
+            .expect("a fragment stage");
+        assert!(fragment_stage
+            .precision_notes
+            .contains(&PrecisionNote::UnorderedFetchWithinDraw));
+        for s in &pipe.stages {
+            l3(&s.spirv, &pipe.requirements, &dev);
+        }
+    }
+    for (fragment, format) in [
+        ("fetch_scalar", metal::PixelFormat::R32Uint),
+        ("exf_fetch_count", metal::PixelFormat::RGBA32Float),
+    ] {
+        let bytes = match fragment {
+            "fetch_scalar" => &fetch,
+            _ => &count,
+        };
+        match compile(&pipeline(function(bytes, fragment), format)) {
+            Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment { index, metal })) => {
+                assert_eq!((index, metal), (0, MetalAnswer::NilWithError), "{fragment}")
+            }
+            other => panic!("{fragment} {format:?}: {:?}", other.map(|_| ())),
+        }
+    }
+}
+
 /// The SPIR-V `OpTypeImage`s of `words` as `(dim, arrayed, ms)` operand triples, and whether a
 /// variable is decorated `BuiltIn SampleId`.
 fn images_and_sample_id(words: &[u32]) -> (Vec<(u32, u32, u32)>, bool) {

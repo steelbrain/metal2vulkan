@@ -605,6 +605,19 @@ list; a view of another format it does not list is `Gap::TextureView` of
 images move out of the undefined layout into the general one in the runtime's next submission,
 and stay in it through every copy.
 
+A plane whose texture's usage holds both `ShaderRead` and `RenderTarget` takes, on a device with
+the attachment feedback loop, the feedback usage beside the rest where the handle's image format
+query (`vkGetPhysicalDeviceImageFormatProperties2` of the plane's format in the handle's tiling,
+external as the handle, with the feedback usage added) offers it with the same export features,
+and the layout checks above then run on the images with it. A draw reads such a plane as an
+attachment of its own pass through the loop, as it reads a texture of an image of its own (Render
+encoders): the pass moves the plane's image from the general layout to the feedback layout and
+back. Where the query refuses the feedback usage, or the images with it do not hold the layout
+and the images without it do, the plane takes none, and a draw reads it through its shadow, the
+counted copy a device without the loop takes (Known gaps of render encoders). The image stays a
+linear image on the surface's own memory, at the pitch and starts the export states. A Direct3D
+11 plane asks its import's query the same.
+
 **The ready point.** That move may discard what the memory holds, so the other API writes an
 in-place surface's memory only once it has completed: before the other API's first write, the
 consumer calls `Surface::wait_until_ready()` on its own thread, which returns once the move's
@@ -2338,7 +2351,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   count bits), vertex amplification, a post-tessellation vertex function's per-instance factor
   step function or enabled factor scale (`Tessellation`;
   a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
-  stages the translator synthesizes beside the functions' and a tessellation's, framebuffer fetch, an imageblock, a
+  stages the translator synthesizes beside the functions' and a tessellation's, an imageblock, a
   fragment function's stencil output, constant data the binder supplies, a
   specialization other than the sample and amplification counts, dynamic state beyond Vulkan
   1.3's (a vertex buffer layout whose stride is set per bind among it), a
@@ -2521,8 +2534,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   pass reads the image's textures through their second elements (Set 1), a texture that reaches
   no rendered level among them. Every render pipeline takes the feedback loop's enable as dynamic
   state, which the encoder sets at its first draw and where it changes: colour for a draw that
-  reads an attachment, none otherwise, so a pass of no such draw sets it once.
-- Through a copy, on a device without the feedback loop, the draw reads the image's shadow: an
+  reads an attachment, none otherwise, so a pass of no such draw sets it once. Each draw that
+  reads an attachment through the loop, through a texture or by a fetch (below), counts in
+  `Metrics::attachment_loop_reads`, its barriers in `Metrics::barriers`.
+- Through a copy, on a device without the feedback loop, and for a surface plane whose image took
+  no feedback usage (Exported surfaces), the draw reads the image's shadow: an
   image of the same format, extent, levels and layers, made at the first draw that reads the
   image and freed with it (`Gauges::shadows` and `shadow_bytes`). A texture that reaches the
   attachment's level and layer reads the shadow through its second element; one that reaches
@@ -2538,6 +2554,17 @@ or does not check is rebuilt from the generations' names, with young counted ful
   render area, the shadow's level and layer is cleared to the pass's clear colour between the
   same barriers instead of copied (the shadow is of the attachment's format, so the clear writes
   the texels the pass's did); a draw of the pass before it, of any pipeline, leaves the copy.
+- A fragment function's read of a colour attachment (`[[color(n)]]`, framebuffer fetch) reads the
+  attachment's texture at the fragment's own pixel, through its second element, whose index the
+  draw pushes (`PushField::FetchedColor`): in the feedback layout, or through the image's shadow,
+  copied at the draw's scissor a pixel wider each way, as above. Metal orders the read after every
+  earlier fragment of the pass at the pixel, with no barrier from the program, so a fetching draw
+  after a draw of the pass pays the barrier `memory_barrier` owes (the rendering ends, one global
+  barrier, and it begins again), and through a copy copies what it reads into the shadow again: a
+  pass of N fetching draws records N - 1 such barriers, or N - 1 copies. The texture is a 2D
+  texture (a 2D multisample one in a multisampled pass) whose first level and slice the pass
+  renders, made with an index, of a shader-read colour render target's image: a texture of its
+  own image, or a surface plane's (Exported surfaces).
 - `memory_barrier` after a draw of the encoder that wrote memory ends the rendering, records one
   barrier and begins the rendering again, loading what it stored. After draws that only rendered,
   in a pass that moved an image to the feedback layout, the barrier is owed to the next draw that
@@ -2594,6 +2621,23 @@ or does not check is rebuilt from the generations' names, with young counted ful
   through the image's shadow, the counted copy a device without the feedback loop takes, first,
   and then, where the device has the feedback loop, unified image layouts and a `LINEAR` image
   with the feedback usage, the loop on the attachment in the general layout.
+- A fetch (`[[color(n)]]`) orders the fragments of earlier draws before it, not the fragments of
+  its own draw that cover the same pixel, which Metal orders in primitive order: a fragment may
+  read the texel from before an earlier fragment of its draw wrote it
+  (`PrecisionNote::UnorderedFetchWithinDraw`). Exact for a draw whose primitives do not overlap
+  at a pixel. A fetch of an attachment the draw cannot read through is `Gap::Draw` of
+  `FetchedAttachment`: a drawable's texture (its image has no feedback usage and no second
+  element; no boot or replay stream fetched one), a texture made with no index, one that is no 2D
+  texture at its first level and slice, a texture of an image another attachment of the pass
+  shares (two planes of one surface), and every attachment on a device without the attachment
+  reads.
+- A surface plane whose texture's usage holds `ShaderRead` and `RenderTarget`, where the handle's
+  image format query (`vkGetPhysicalDeviceImageFormatProperties2`: the plane's format, the
+  handle's linear tiling, external as the handle, with the feedback usage added) refuses the
+  feedback usage, or where the images with it do not hold the export's layout, is read as an
+  attachment of its own pass through its shadow, the copy a device without the feedback loop
+  takes, which Metal does not make (`Metrics::attachment_read_copies` and
+  `attachment_read_copy_bytes`, in `bytes_copied` too).
 - A draw that reaches an attachment of its own pass through an argument buffer's texture is not
   seen: it reads through the texture's own element, in its home layout, while the pass may have
   moved the image to the feedback layout, or, without the feedback loop, while the pass renders

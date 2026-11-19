@@ -613,11 +613,6 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
         RenderPipelineKind::Tessellation
     } else if synthesized {
         RenderPipelineKind::SynthesizedStages
-    } else if !g.input_attachments.is_empty()
-        || !g.storage_attachments.is_empty()
-        || g.rasterization_order_attachment_access
-    {
-        RenderPipelineKind::FramebufferFetch
     } else if g.fragment_imageblock.is_some() {
         RenderPipelineKind::Imageblock
     } else if g.shadow_stencil.is_some() {

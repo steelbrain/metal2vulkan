@@ -1531,6 +1531,36 @@ impl Plan {
         self.usage & !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT
     }
 
+    /// Whether a draw may read an attachment of its own pass through a texture of the plan, where
+    /// its image takes the feedback usage or a shadow: a shader-read colour render target of no
+    /// storage view, on a device that reads attachments.
+    fn reads_attachments(&self, core: &Core) -> bool {
+        let render =
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+        core.attachment_reads
+            && self.usage.contains(vk::ImageUsageFlags::SAMPLED)
+            && self.usage.intersects(render)
+            && !self.storage
+            && self.aspects == vk::ImageAspectFlags::COLOR
+    }
+
+    /// Whether the device makes the shadow of an image of the plan over `shape`: its image format
+    /// query of an optimal image of the plan's format, flags and view formats, with the shadow's
+    /// usage.
+    fn shadow_offered(&self, core: &Core, shape: &Shape) -> bool {
+        let mut list = self.format_list();
+        let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(self.format)
+            .ty(shape.image_type)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(SHADOW_USAGE)
+            .flags(self.flags(shape));
+        if !self.view_formats.is_empty() {
+            info = info.push_next(&mut list);
+        }
+        core.image_format_properties(&info).is_some()
+    }
+
     /// The plan of the image's shadow (`crate::shadow`): its format, samples and aspects, with
     /// the shadow's usage and no view of its own.
     fn shadow(&self) -> Plan {
@@ -1948,18 +1978,10 @@ fn plan(
         true => vk::ImageCreateFlags::CUBE_COMPATIBLE,
         false => vk::ImageCreateFlags::empty(),
     };
-    let read = plan.usage.contains(vk::ImageUsageFlags::SAMPLED);
-    let render = plan.usage.intersects(
-        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-    );
     // A draw may read an attachment of its own pass through such a texture
     // (`crate::render_encoder`), where the device reads attachments: in the feedback layout where
     // it has the attachment feedback loop, else through a copy into the image's shadow.
-    let mut attachment_reads = core.attachment_reads
-        && read
-        && render
-        && !plan.storage
-        && plan.aspects == vk::ImageAspectFlags::COLOR;
+    let mut attachment_reads = plan.reads_attachments(core);
     let looped = attachment_reads && core.feedback.is_some();
     let mut image_usage = plan.usage;
     if looped {
@@ -3801,6 +3823,13 @@ pub(crate) trait TextureObject {
         image.attachment_reads && (image.looped() || self.object().shadow.is_some())
     }
 
+    /// Whether a draw reads an attachment of its own pass through it in the feedback layout
+    /// ([`Image`]'s `looped`), where its image has the feedback usage; else through its view of
+    /// the image's shadow.
+    fn looped(&self) -> bool {
+        self.object().image.looped()
+    }
+
     /// Its resource id while a draw reads an attachment through it: its second element's, at its
     /// index plus [`TEXTURES`](crate::floor::TEXTURES), with its own word. Nil for a
     /// texture no shader reaches.
@@ -4415,6 +4444,7 @@ impl Device {
         Ok(crate::surface::PlanePlan {
             format: plan.format,
             usage: plan.linear_usage(),
+            looped: plan.reads_attachments(self.core()) && self.core().feedback.is_some(),
             view_formats: plan.view_formats.clone(),
             texel,
         })
@@ -4484,6 +4514,21 @@ impl Device {
         // A view of the image's format as the texture's takes the image's usage that its own
         // format's features hold, as a texture view of another format does.
         let views_usage = (made.format != plan.format).then_some(made.usage & plan.supported);
+        // A draw may read an attachment of its own pass through it as through a texture of its
+        // own image: in the feedback layout where the plane's image took the feedback usage
+        // (`crate::surface`), else through a copy into its shadow.
+        let looped = made
+            .usage
+            .contains(vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT);
+        let shadowing = (!looped
+            && plan.reads_attachments(core)
+            && plan.shadow_offered(core, &shape))
+        .then(|| {
+            Box::new(Shadowing {
+                made: (d, shape, plan.shadow()),
+                shadow: Mutex::new(None),
+            })
+        });
         let image = Arc::new(Image {
             core: Arc::clone(core),
             image: made.image,
@@ -4492,8 +4537,8 @@ impl Device {
             sampled,
             storage,
             home,
-            attachment_reads: false,
-            shadowing: None,
+            attachment_reads: looped || shadowing.is_some(),
+            shadowing,
             shadow: false,
             aspects: plan.aspects,
             format: made.format,
@@ -4510,6 +4555,7 @@ impl Device {
             drawable: None,
             _under: Some(Under::Surface { _block: made.block }),
         });
+        let shadow = ShadowView::of(&image, &plan, index, shape.view_type, whole);
         // The texture's elements of set 1, written as it takes its index; a refusal frees the
         // image as `image` drops.
         let index = match index {
@@ -4524,7 +4570,7 @@ impl Device {
                         &core.counters,
                         index,
                         (sampled, storage),
-                        false,
+                        image.looped(),
                     )
                 }?;
                 Some((index, owner))
@@ -4546,7 +4592,7 @@ impl Device {
             view: None,
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
-            shadow: None,
+            shadow,
         };
         let texture = Texture {
             inner: Arc::new(inner),
