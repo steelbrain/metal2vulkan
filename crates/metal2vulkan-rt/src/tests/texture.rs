@@ -957,6 +957,7 @@ mod on_device {
     #[test]
     fn every_device_counts_one_zeroing_barrier_for_an_upload_that_clears_two_textures() {
         use crate::tests::command::on_device::{finished, within};
+        use crate::texture::TextureObject;
         const SIDE: u32 = 64;
         const ROW: u64 = SIDE as u64 * 4;
         let instance = crate::tests::validation::instance(&[]);
@@ -993,7 +994,7 @@ mod on_device {
                     texture
                 })
                 .collect();
-            let places: Vec<_> = written.iter().map(Texture::place).collect();
+            let places: Vec<_> = written.iter().map(TextureObject::place).collect();
             drop(written);
             within("the written textures' places freed", || {
                 counters.gauges().textures == textures
