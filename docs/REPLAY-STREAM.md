@@ -780,7 +780,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   the backend makes an ordinary texture of the same descriptor in its place, so that the IDs and
   addresses the program wrote name a live texture, and counts it: a tiled texture over a buffer
   (`substituted_tiled_textures`), and a texture over a buffer or a view the runtime answers with
-  a typed gap (`substituted_gap_textures`). A substitute is the recording's artefact, never the
+  a typed gap (`substituted_gap_textures`), and the report's
+  `substituted textures KIND N, the first #ID` line counts each kind (`KIND` `Tiled`, or the
+  runtime's gap as Rust prints it for debugging, such as `TextureView { kind: TextureType }`; `ID`
+  the first one's object). A substitute is the recording's artefact, never the
   runtime's, and its texels are not the program's: `substitutes_read` counts the substitutes, and
   the views of one, that a call other than the making of a view named (a binding, an attachment,
   a blit, a descriptor's field, a call on it), and the report's `substitutes read` line gives the
@@ -978,7 +981,10 @@ the play stopped, the stopping call is the next), the new runtime's backend's
 making's wall time, and whether no state of another specialization of the kernel, a library's
 function by name, was made before), its `skipped render states GAP N, the first #ID: WHY` for each
 typed gap a render pipeline state met (`GAP` the runtime's gap as Rust prints it for debugging, such
-as `RenderPipeline { kind: DepthAttachment }`, or `Translation` where the translator refused it, `N`
+as `RenderPipeline { kind: DepthAttachment }`, or `Translation(KIND)` where the translator refused
+it: `Unsupported(FEATURE)` with the refused feature as Rust prints it for debugging, such as
+`Unsupported(Lowering(Tessellation))`, `LimitExceeded(LIMIT)` and `Internal(KIND)` the same, or
+the error's variant alone, such as `InvalidDescriptor`, never a symbol or a location; `N`
 the states skipped, `ID` the first one's object and `WHY` the runtime's answer), its
 `skipped compute states GAP N, the first #ID: WHY` the same for compute pipeline states, its
 `skipped render commands GAP N, the first at frame F, call C` for each typed gap a render command

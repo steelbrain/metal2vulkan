@@ -19,6 +19,8 @@ pub(super) mod places;
 mod render;
 pub(super) mod second;
 mod surfaces;
+#[cfg(test)]
+mod tests;
 pub(super) mod unwritten;
 
 pub use judged::judged_records;
@@ -54,8 +56,8 @@ struct Skips {
     /// Objects it does not build: libraries from source.
     objects: u64,
     /// Render pipeline states the runtime answers with a typed gap or the translator refuses, by
-    /// the gap (`Translation` for the translator's refusals): how many, and the first one's object
-    /// id and the runtime's answer.
+    /// the gap (`Translation(KIND)` for the translator's refusals, `translation_kind`): how many,
+    /// and the first one's object id and the runtime's answer.
     render_states: BTreeMap<String, (u64, u64, String)>,
     /// Compute pipeline states the same way, by the gap.
     compute_states: BTreeMap<String, (u64, u64, String)>,
@@ -104,8 +106,8 @@ impl Skips {
     }
 
     /// Whether a pipeline state the runtime answered `error` for is skipped: counted in `states`
-    /// by its gap where the runtime answers a typed gap or the translator refuses it
-    /// (`Translation`); any other error is not.
+    /// by its gap where the runtime answers a typed gap or the translator refuses it (by the
+    /// refusal's kind, `translation_kind`); any other error is not.
     fn skipped_state(
         states: &mut BTreeMap<String, (u64, u64, String)>,
         call: &Call,
@@ -113,7 +115,7 @@ impl Skips {
     ) -> bool {
         let gap = match error {
             rt::Error::Unsupported(gap) => format!("{gap:?}"),
-            rt::Error::Translation(_) => "Translation".to_owned(),
+            rt::Error::Translation(refused) => translation_kind(refused),
             _ => return false,
         };
         let kind = states.entry(gap);
@@ -158,6 +160,35 @@ impl Skips {
     }
 }
 
+/// A translator refusal's kind, as the report keys it: `Translation(Unsupported(FEATURE))` with
+/// the refused feature as Rust prints it for debugging, `Translation(LimitExceeded(LIMIT))` and
+/// `Translation(Internal(KIND))` the same, and the error's variant alone for the rest. Never a
+/// symbol or a location: those name the program's functions.
+fn translation_kind(refused: &metal2vulkan::error::Error) -> String {
+    use metal2vulkan::error::Error as Refused;
+    let kind = match refused {
+        Refused::Unsupported(unsupported) => format!("Unsupported({:?})", unsupported.feature),
+        Refused::LimitExceeded(limit) => format!("LimitExceeded({limit:?})"),
+        Refused::Internal(internal) => format!("Internal({:?})", internal.kind),
+        Refused::NeedsInput(_) => "NeedsInput".to_owned(),
+        Refused::InvalidInput(_) => "InvalidInput".to_owned(),
+        Refused::InvalidDescriptor(_) => "InvalidDescriptor".to_owned(),
+        Refused::Budget(_) => "Budget".to_owned(),
+        Refused::Cancelled => "Cancelled".to_owned(),
+        _ => "Other".to_owned(),
+    };
+    format!("Translation({kind})")
+}
+
+/// What a substitute stands in for.
+#[derive(Clone, Copy)]
+enum Substituted {
+    /// A tiled texture over a buffer.
+    Tiled,
+    /// A texture over a buffer or a view the runtime answers with this gap.
+    Gap(rt::Gap),
+}
+
 /// Textures the play made in place of what the runtime cannot make: an ordinary texture of the
 /// same descriptor, so that the IDs and addresses the program wrote name a live texture. The
 /// recording's artefact, never the runtime's. Its texels are not the program's: a command that
@@ -168,6 +199,9 @@ struct Substitutes {
     tiled: u64,
     /// Textures over a buffer and views the runtime answers with a typed gap.
     gaps: u64,
+    /// The substitutes by kind, `Tiled` or the runtime's gap as Rust prints it for debugging: how
+    /// many, and the first one's object.
+    kinds: BTreeMap<String, (u64, u64)>,
     /// Each live substitute, and the views of one, and whether a command named it yet.
     live: HashMap<u64, bool>,
     /// The substitutes a command named: how many, and the first few.
@@ -176,6 +210,29 @@ struct Substitutes {
 }
 
 impl Substitutes {
+    /// Notes substitute `object`, made in place of `kind`.
+    fn made(&mut self, kind: Substituted, object: u64) {
+        let kind = match kind {
+            Substituted::Tiled => {
+                self.tiled += 1;
+                "Tiled".to_owned()
+            }
+            Substituted::Gap(gap) => {
+                self.gaps += 1;
+                format!("{gap:?}")
+            }
+        };
+        self.kinds.entry(kind).or_insert((0, object)).0 += 1;
+        self.live.insert(object, false);
+    }
+
+    /// A `substituted textures KIND N, the first #ID` line for each kind made.
+    fn lines(&self) -> impl Iterator<Item = String> + '_ {
+        (self.kinds.iter()).map(|(kind, (count, first))| {
+            format!("substituted textures {kind} {count}, the first #{first}")
+        })
+    }
+
     /// Notes the substitutes among `named`, which a command names.
     fn named(&mut self, named: &[u64]) {
         for object in named {
@@ -1728,17 +1785,16 @@ impl NewRuntime {
         }
     }
 
-    /// An ordinary texture of `descriptor` in place of one the runtime cannot make, counted in
-    /// `count` (`Substitutes`).
+    /// An ordinary texture of `descriptor` in place of one the runtime cannot make, counted by
+    /// `kind` (`Substitutes`).
     fn substitute(
         &mut self,
         call: &Call,
         descriptor: &rt::TextureDescriptor,
-        count: fn(&mut Substitutes) -> &mut u64,
+        kind: Substituted,
     ) -> Result<Option<(Object, Made)>, PlayError> {
         let texture = self.new_texture(call, descriptor, None, false)?;
-        *count(&mut self.substitutes) += 1;
-        self.substitutes.live.insert(call.result, false);
+        self.substitutes.made(kind, call.result);
         unaddressed(Object::Texture(texture))
     }
 
@@ -1751,20 +1807,25 @@ impl NewRuntime {
         descriptor: &rt::TextureDescriptor,
         make: impl Fn(Option<u32>) -> Result<rt::Texture, rt::Error>,
     ) -> Result<Option<(Object, Made)>, PlayError> {
-        let gap = std::cell::Cell::new(false);
+        let gap = std::cell::Cell::new(None);
         let noted = |index| {
             let made = make(index);
-            gap.set(matches!(made, Err(rt::Error::Unsupported(_))));
+            gap.set(match &made {
+                Err(rt::Error::Unsupported(answered)) => Some(*answered),
+                _ => None,
+            });
             made
         };
         let made = match texture_class(usage) {
             Some(class) => self.place(call, class, None, |index| noted(Some(index))),
             None => noted(None).map_err(failed(call)),
         };
-        match made {
-            Ok(texture) => unaddressed(Object::Texture(texture)),
-            Err(_) if gap.get() => self.substitute(call, descriptor, |s| &mut s.gaps),
-            Err(error) => Err(error),
+        match (made, gap.get()) {
+            (Ok(texture), _) => unaddressed(Object::Texture(texture)),
+            (Err(_), Some(answered)) => {
+                self.substitute(call, descriptor, Substituted::Gap(answered))
+            }
+            (Err(error), None) => Err(error),
         }
     }
 
@@ -1975,7 +2036,7 @@ impl NewRuntime {
             }
             "newTiledTextureWithDescriptor:offset:bytesPerRow:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
-                self.substitute(call, &descriptor, |s| &mut s.tiled)
+                self.substitute(call, &descriptor, Substituted::Tiled)
             }
             "newTextureWithDescriptor:iosurface:plane:" => self.surface_texture(call, buffer),
             "m2v.externalWriteDone" => self.external_write_done(call),
@@ -2719,6 +2780,7 @@ impl Backend for NewRuntime {
             ));
         }
         lines.push(self.surfaces.line());
+        lines.extend(self.substitutes.lines());
         let first: String = (self.substitutes.first_read.iter())
             .map(|object| format!(" #{object}"))
             .collect();
