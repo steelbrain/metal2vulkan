@@ -163,15 +163,15 @@ mod on_device {
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             let mut now: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8).collect();
             write(&buffer, &now);
-            let held = || device.counters().gauges().textures_copied_over;
-            let before = held();
+            let copied_over = || device.counters().gauges().textures_copied_over;
+            let before = copied_over();
             let texture = (buffer.new_texture(&descriptor(), None, 0, pitch))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(
                 texture.copied_over().is_some(),
                 "{name}: an image of its own"
             );
-            assert_eq!(held(), before + 1, "{name}: the gauge counts it");
+            assert_eq!(copied_over(), before + 1, "{name}: the gauge counts it");
             let scratch = plain(name, &device, &texels(0));
             let queue = device.new_command_queue(4).expect("a queue");
             for round in 0..3 {
