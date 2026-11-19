@@ -95,7 +95,9 @@ runs the handlers; the threads are joined and the GPU goes idle; `BlockMappings:
 each of the pool's allocations the consumer mapped. Teardown runs on the thread that drops the
 last handle, or,
 where that is a handler (scheduled or completed) or a listener, on the reaper once the handler
-returns. A call that holds a
+returns. The reaper, which nothing joins, joins every other thread before anything of the device
+goes; where its own reference is the runtime's last, it frees the blocks and destroys the
+`VkDevice` on its own thread, then ends, touching nothing of the device after. A call that holds a
 handle of its own gives it up before another thread can drop the last: `commit` gives up the
 command buffer's before the command buffer can complete. Then every block is freed and the
 `VkDevice` destroyed, once the runtime's last internal reference is gone: on the thread that tore
