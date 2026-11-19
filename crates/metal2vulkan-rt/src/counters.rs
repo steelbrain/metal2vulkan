@@ -216,7 +216,8 @@ pub(crate) enum Gauge {
     Imports,
     /// [`Gauges::exports`].
     Exports,
-    /// [`Gauges::surface_imports`].
+    /// [`Gauges::surface_imports`]: a Unix host's alone, as the dma-buf is.
+    #[cfg(unix)]
     SurfaceImports,
 }
 
@@ -721,6 +722,7 @@ impl Counters {
             Gauge::TimestampPools => &a.timestamp_pools,
             Gauge::Imports => &a.imports,
             Gauge::Exports => &a.exports,
+            #[cfg(unix)]
             Gauge::SurfaceImports => &a.surface_imports,
         }
     }
@@ -1298,6 +1300,6 @@ pub struct Gauges {
     /// A dma-buf surface's plane imports in place
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), each its own
     /// dedicated import of the surface's dma-buf, whose memory is not yet freed: each is also one
-    /// of [`blocks`](Self::blocks).
+    /// of [`blocks`](Self::blocks). Always 0 on a host without dma-bufs (Windows).
     pub surface_imports: u64,
 }
