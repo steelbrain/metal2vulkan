@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1285 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3642 |
+| ledger rows (a case whose gap is recorded) | 3654 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -5419,17 +5419,29 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
 | `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
 | `bc1-rgba-srgb` | A BC1 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc1-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc1-rgba-srgb` | A BC1 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc1-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc1-rgba-srgb` | A BC1 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc1-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc1-rgba-srgb` | A BC1 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc1-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc2-rgba-srgb` | A BC2 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc2-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc2-rgba-srgb` | A BC2 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc2-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc2-rgba-srgb` | A BC2 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc2-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc2-rgba-srgb` | A BC2 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc2-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc3-rgba-srgb` | A BC3 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc3-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc3-rgba-srgb` | A BC3 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc3-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc3-rgba-srgb` | A BC3 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc3-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc3-rgba-srgb` | A BC3 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
+| `bc3-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
