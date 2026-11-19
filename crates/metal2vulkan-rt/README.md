@@ -876,9 +876,10 @@ that touch blocks first.
   again. A command buffer whose pair reads as not available once its submission signalled has
   times of 0 too, and `Metrics::stamps_not_available` counts it: a submission the device cancelled
   at a reset, or a driver that makes timestamps available only after the signal. A command buffer
-  retires only once a host wait has seen its submission's progress value: where the semaphore's
-  counter read runs ahead of that wait, `Metrics::waits_behind_counter` counts the round, and
-  nothing retires until the wait agrees. The device tests, the harness and the replay player
+  retires only once a host wait has seen its submission's progress value: with one value pending
+  the completion thread asks only that wait, and with more, where the semaphore's counter read
+  runs ahead of the wait, `Metrics::waits_behind_counter` counts the round, and nothing retires
+  until the wait agrees. The device tests, the harness and the replay player
   report both counts. Vulkan states no most queries a pool may hold or most pools a device may
   make; the runtime's 4,096 a pool is the smallest met: Mesa's Apple-GPU driver makes each pool a
   Metal counter heap, of at most 4,096 entries and at most 32 live in a process, so there at most

@@ -17,15 +17,13 @@ use ash::vk;
 /// state").
 ///
 /// The caller reads a pair only once a host wait of the completion thread has seen its submission's
-/// progress value (a wait with a timeout of 0 after the counter read, where the counter told it
-/// first). The signal's first synchronization scope "includes every command in the same batch that
-/// the signal operation is defined in, and all commands that occur earlier in submission order"
-/// (`vkQueueSubmit2`), "a query is made available by the operation of ... `vkCmdWriteTimestamp2`",
-/// and the host wait happens after the signal ("signal operations happening before host operations
-/// that wait on them"): the pair of a submission that ran is available at the read. A driver that
-/// makes timestamps available only after the signal (MoltenVK 1.4.2 on an M3 Max did, for most
-/// command buffers; it is below the floor) would read none here and leave the GPU times 0 with no
-/// other sign, so the caller counts each pair that reads as not available
+/// progress value (with one value pending, a wait with a timeout of 0 on it; with more, that wait
+/// on the value the counter read found). The read has no wait bit, and Vulkan defines a dependency
+/// on the timestamp writes only for a read with `VK_QUERY_RESULT_WAIT_BIT`: the signal says nothing
+/// about the queries' availability, so a pair can read as not available though its submission ran,
+/// as from a driver that makes timestamps available only after the signal (MoltenVK 1.4.2 on an M3
+/// Max did, for most command buffers; it is below the floor). Such a pair leaves the GPU times 0
+/// with no other sign, so the caller counts each pair that reads as not available
 /// (`Metrics::stamps_not_available`), and every play and suite leg reports the count.
 ///
 /// Bound: the values only decide that command buffer's `GPUStartTime`, through arithmetic defined
