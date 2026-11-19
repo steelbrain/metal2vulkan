@@ -1118,6 +1118,13 @@ an RTX 3090), a handler registered after `Device::new` exited cleanly in 50 runs
 registered before `Instance::new` crashed in 50 of 50. The handler parks the consumer's own threads
 that touch blocks first.
 
+Those runs made a device and ran nothing on it. A device that ran a program's work does not exit
+cleanly with the device alive on NVIDIA's driver, even after quiesce answered true: on an RTX 3090
+(driver 620.70.06), 3 of 9 of a consumer's power-offs ended in a segmentation fault inside `exit()`,
+in a thread of the driver's own reading near a null pointer while the driver's exit handler waited
+on a lock, with every runtime thread already ended; an RTX 2080 exited cleanly in 4 of 4. On NVIDIA
+the consumer drops the device's last handle before it exits, or ends with `_exit`: a known gap.
+
 ### Known gaps
 
 - Command buffers committed while an earlier one of their queue runs are reported complete
