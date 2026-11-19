@@ -426,6 +426,10 @@ mod on_device {
                 (TextureUsage::RENDER_TARGET, None, 2),
                 (read_render, Some(4096), 4),
             ] {
+                let kind = match index {
+                    Some(_) => "shader-read",
+                    None => "render-target",
+                };
                 let info = swapchain(USAGE);
                 let stand_in = StandIn::new(&device, &info);
                 let textures = counters.gauges().textures;
@@ -466,13 +470,13 @@ mod on_device {
                             after.passes - before.passes,
                         ),
                         (1, barriers, 1),
-                        "{name} {usage:?} {from:?}: submissions, barriers, passes of a presenting \
+                        "{name} {kind} {from:?}: submissions, barriers, passes of a presenting \
                          command buffer"
                     );
                     assert_eq!(
                         &texels(&out),
                         expected,
-                        "{name} {usage:?} {from:?}: the presented texels"
+                        "{name} {kind} {from:?}: the presented texels"
                     );
                 }
                 // The swapchain's end, as the guide orders it: every command buffer that used the
@@ -573,8 +577,9 @@ mod on_device {
             );
             assert!(
                 caps.supported_usage_flags.contains(usage),
-                "the surface's images take {usage:?}: {:?}",
-                caps.supported_usage_flags
+                "the surface's images take usage {:#x}: {:#x}",
+                usage.as_raw(),
+                caps.supported_usage_flags.as_raw()
             );
             let (format, pixel_format) = [
                 (vk::Format::B8G8R8A8_UNORM, PixelFormat::BGRA8Unorm),
@@ -703,9 +708,14 @@ mod on_device {
                 ClearColor::new(0.2, 0.6, 0.0, 1.0),
                 ClearColor::new(1.0, 0.0, 0.4, 1.0),
             ];
-            for (usage, image_usage, indexed) in [
-                (TextureUsage::RENDER_TARGET, colour, false),
-                (read_render, colour | vk::ImageUsageFlags::SAMPLED, true),
+            for (usage, image_usage, indexed, kind) in [
+                (TextureUsage::RENDER_TARGET, colour, false, "render-target"),
+                (
+                    read_render,
+                    colour | vk::ImageUsageFlags::SAMPLED,
+                    true,
+                    "shader-read",
+                ),
             ] {
                 let chain = headless.swapchain(&device, image_usage);
                 let count = chain.images.len() as u32;
@@ -842,7 +852,7 @@ mod on_device {
                 }
                 println!(
                     "{name}: {frame} frames presented through a headless swapchain of {count} \
-                     images, {usage:?}"
+                     images, {kind}"
                 );
             }
             // SAFETY: the fence's last acquire is waited for; the surface's swapchains are gone.
