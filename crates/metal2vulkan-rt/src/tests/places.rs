@@ -116,6 +116,7 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let core = device.core();
             let counters = device.counters();
+            core.pool.await_internals();
             wait_until("a wholly free unit in each class", || {
                 core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
             });
@@ -201,8 +202,10 @@ mod on_device {
 
     /// The pool's allocations are 16 MiB of either class, on every device: a take of a byte is a
     /// range of one rounded up to 64 KiB (to `bufferImageGranularity` where that is larger) and
-    /// allocates nothing; a take longer than an allocation makes one of its own length, rounded
-    /// up the same way; and a texture of 32 MiB is placed in a texture block of its own length.
+    /// allocates nothing on the taker's thread, where the block-maker thread then makes the
+    /// class's next unit, the first no longer wholly free; a take longer than an allocation makes
+    /// one of its own length, rounded up the same way; and a texture of 32 MiB is placed in a
+    /// texture block of its own length.
     #[test]
     fn every_device_takes_blocks_from_16_mib_allocations() {
         const MIB: u64 = 1 << 20;
@@ -214,6 +217,7 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let core = device.core();
             let counters = device.counters();
+            core.pool.await_internals();
             for class in [MemoryClass::Shared, MemoryClass::Private] {
                 assert_eq!(class.block_len(), 16 * MIB, "{name}: {class:?}");
                 let made = counters.metrics().blocks_made;
@@ -224,6 +228,9 @@ mod on_device {
                     "{name}: a small {class:?} block of {} bytes",
                     small.len
                 );
+                wait_until("the class's next unit", || {
+                    counters.metrics().blocks_made == made + 1 && core.pool.stocked(class)
+                });
                 let long = (device.take_block(class, 16 * MIB + 1))
                     .unwrap_or_else(|error| panic!("{name}: a long {class:?} block: {error}"));
                 assert!(
@@ -233,7 +240,7 @@ mod on_device {
                 );
                 assert_eq!(
                     counters.metrics().blocks_made,
-                    made + 1,
+                    made + 2,
                     "{name}: the long {class:?} block's allocation alone"
                 );
                 for block in [small, long] {

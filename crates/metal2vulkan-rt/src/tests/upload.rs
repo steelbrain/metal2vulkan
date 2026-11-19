@@ -491,8 +491,10 @@ mod on_device {
                 .grant_indices(IndexClass::Texture, 4096, 8)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let staged = || counters.gauges().staging_bytes;
-            assert_eq!(staged(), 0, "{name}: before any copy");
-            // A copy of 256 KiB: the region, made at the first copy.
+            // The region, which the block-maker thread makes as its first work.
+            device.core().pool.await_internals();
+            assert_eq!(staged(), REGION_LEN, "{name}: before any copy");
+            // A copy of 256 KiB, through the region alone.
             let small = 256;
             let texture = (device.new_texture(&square(small), Some(4096)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));

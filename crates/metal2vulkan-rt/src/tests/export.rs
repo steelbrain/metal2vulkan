@@ -29,6 +29,18 @@ mod on_device {
     /// The length of each export the tests make.
     const LEN: u64 = 1 << 20;
 
+    /// The `Blocks` gauge less the pool's allocations: the blocks the test's own calls hold, the
+    /// device's internals and its exported blocks among them, apart from the units the
+    /// block-maker thread makes ahead as a take leaves a class no wholly free one and frees at
+    /// their idle age. The gauge counts an allocation the thread is making or freeing that the
+    /// pool does not hold, so a caller waits for the count it expects.
+    fn beside_the_pool(device: &Device) -> u64 {
+        let pool = &device.core().pool;
+        let units = pool.allocations(MemoryClass::Private).len()
+            + pool.allocations(MemoryClass::Shared).len();
+        device.counters().gauges().blocks - units as u64
+    }
+
     /// Whether `device` enabled `name`.
     fn enabled(device: &Device, name: &std::ffi::CStr) -> bool {
         device.extensions().iter().any(|n| n.as_c_str() == name)
@@ -215,6 +227,7 @@ mod on_device {
                     continue;
                 }
                 let before = counters.gauges();
+                let beside = beside_the_pool(&device);
                 let (block, export) = (device.new_exported_block(handle, LEN))
                     .unwrap_or_else(|error| panic!("{name}: {handle:?}: {error}"));
                 assert_eq!(
@@ -223,12 +236,14 @@ mod on_device {
                     "{name}: {handle:?}"
                 );
                 assert!(export.size >= LEN, "{name}: {handle:?}: {}", export.size);
-                let live = counters.gauges();
                 assert_eq!(
-                    (live.exports, live.blocks),
-                    (before.exports + 1, before.blocks + 1),
+                    counters.gauges().exports,
+                    before.exports + 1,
                     "{name}: {handle:?}"
                 );
+                within("the exported block counted", || {
+                    beside_the_pool(&device) == beside + 1
+                });
 
                 // rt writes the block and releases it to the other API, twice: the second write
                 // takes no acquire after the first release, and the other API reads its bytes.
@@ -369,12 +384,8 @@ mod on_device {
                 drop((queue, buffer, block));
                 within("the export's free", || {
                     counters.gauges().exports == before.exports
+                        && beside_the_pool(&device) == beside
                 });
-                assert_eq!(
-                    counters.gauges().blocks,
-                    before.blocks,
-                    "{name}: {handle:?}"
-                );
                 exported += 1;
                 println!(
                     "release: {name}: {handle:?} written and released twice, no acquire between, \
