@@ -37,10 +37,9 @@ use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{AttachmentPlace, Dispatch, PassColor, RenderPass, RenderWork};
 use crate::texture::TextureRequest;
-use crate::texture_views::{ParentShape, ViewCall, ViewRequest};
+use crate::texture_views::{ViewCall, ViewRequest};
 use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::{PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage};
-use std::ops::Range;
 use TextureType::{Cube, Type2D, Type2DArray};
 
 /// The owned fixture of the three samplers.
@@ -129,10 +128,9 @@ const PAIRS: [Pair; 4] = [
     ),
 ];
 
-/// A texture's shape: its type, levels, and slices as Metal counts a view's `sliceRange`.
+/// A texture's shape: its levels, and its slices as Metal counts a view's `sliceRange`.
 #[derive(Clone, Copy, Debug)]
 struct Shape {
-    texture_type: TextureType,
     levels: u32,
     slices: u32,
 }
@@ -201,7 +199,6 @@ fn kernel(texture_type: TextureType) -> &'static str {
 impl Pair {
     fn parent_shape(&self) -> Shape {
         Shape {
-            texture_type: self.parent,
             levels: LEVELS,
             slices: self.parent_slices,
         }
@@ -209,18 +206,9 @@ impl Pair {
 
     fn view_shape(&self) -> Shape {
         Shape {
-            texture_type: self.view,
             levels: self.levels.1,
             slices: self.slices.1,
         }
-    }
-
-    fn level_range(&self) -> Range<u32> {
-        self.levels.0..self.levels.0 + self.levels.1
-    }
-
-    fn slice_range(&self) -> Range<u32> {
-        self.slices.0..self.slices.0 + self.slices.1
     }
 
     /// The parent's descriptor: `arrayLength` is 1, a cube's six faces not counted in it.
@@ -250,16 +238,6 @@ impl Pair {
             first_slice: u64::from(self.slices.0),
             slice_count: u64::from(self.slices.1),
             swizzle: TextureSwizzleChannels::DEFAULT,
-        }
-    }
-
-    fn parent_view_shape(&self) -> ParentShape {
-        ParentShape {
-            texture_type: self.parent,
-            format: FORMAT,
-            levels: u64::from(LEVELS),
-            slices: u64::from(self.parent_slices),
-            is_a_view: false,
         }
     }
 
@@ -444,9 +422,9 @@ impl Case for TextureViewCast {
                     }
                 }
             }
-            inputs.push(Input::bytes(&format!("{}:clears", way.site()), &clears));
+            inputs.push(Input::bytes(format!("{}:clears", way.site()), &clears));
             inputs.push(Input::bytes(
-                &format!("{}:points", way.site()),
+                format!("{}:points", way.site()),
                 &point_bytes(&plan.points()),
             ));
         }
@@ -587,6 +565,18 @@ fn sample_layout(offset: u32, side: u32) -> ByteLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::texture_views::ParentShape;
+
+    /// The parent's shape as the view guard reads it.
+    fn parent_view_shape(pair: &Pair) -> ParentShape {
+        ParentShape {
+            texture_type: pair.parent,
+            format: FORMAT,
+            levels: u64::from(LEVELS),
+            slices: u64::from(pair.parent_slices),
+            is_a_view: false,
+        }
+    }
 
     /// No view of the family is one Metal's validation stops, which the request's own guard
     /// answers for with no device: the proof that a row added by mistake cannot end Metal's
@@ -595,8 +585,7 @@ mod tests {
     fn no_view_of_the_family_is_one_metal_s_validation_stops() {
         for pair in &PAIRS {
             assert_eq!(
-                pair.view_request()
-                    .is_well_formed(&pair.parent_view_shape()),
+                pair.view_request().is_well_formed(&parent_view_shape(pair)),
                 None,
                 "{}",
                 pair.case
