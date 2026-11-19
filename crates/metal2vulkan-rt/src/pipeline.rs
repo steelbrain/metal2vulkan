@@ -1321,7 +1321,7 @@ impl ComputePipelineState {
         };
         let form = Form::Sized { partial: None };
         let answers = Answers::default();
-        let compiled = Compiled::new(core, (whole, None), form, None, (Vec::new(), answers));
+        let compiled = Compiled::new(core, whole, form, None, (Vec::new(), answers));
         Ok(ComputePipelineState {
             inner: Arc::new(PipelineInner {
                 compiled: Arc::new(compiled),
