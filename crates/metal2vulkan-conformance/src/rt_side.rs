@@ -614,6 +614,11 @@ impl Side for RtSide<'_> {
         Ok(keep(&mut self.pipelines, state))
     }
 
+    fn static_threadgroup_memory_length(&mut self, pipeline: Handle) -> Answer<u64> {
+        let state = self.held_pipeline(pipeline)?;
+        Ok(u64::from(state.static_threadgroup_memory_length()))
+    }
+
     fn buffer(&mut self, bytes: &[u8]) -> Answer<Handle> {
         let handle = self.zeroed_buffer(bytes.len())?;
         let contents = (self.held(handle)?.contents())

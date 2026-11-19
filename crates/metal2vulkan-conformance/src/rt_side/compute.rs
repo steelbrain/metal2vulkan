@@ -57,7 +57,7 @@ impl RtSide<'_> {
         })
     }
 
-    fn held_pipeline(&self, handle: Handle) -> Answer<&rt::ComputePipelineState> {
+    pub(super) fn held_pipeline(&self, handle: Handle) -> Answer<&rt::ComputePipelineState> {
         (self.pipelines.get(handle.0 as usize))
             .ok_or_else(|| Failure::named("NoSuchHandle", format!("compute pipeline {}", handle.0)))
     }
