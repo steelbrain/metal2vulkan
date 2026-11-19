@@ -16,9 +16,9 @@
 //!   the updater committed behind none, one or three busy command buffers of its queue: what
 //!   Metal's hazard tracking orders between two queues by itself. Behind one or three, the M3 Max
 //!   ran the waiter without the updater's words: its tracking orders only against work already
-//!   submitted. Behind one, the new runtime submits the updater at once, as its queue holds nothing
-//!   back, and the waiter copies every word; [`TRACKED_BEHIND_ONE`] declares that count on its run
-//!   (docs/API.md section 10).
+//!   submitted, as measured there, not documented. Behind one, the new runtime submits the updater
+//!   at once, as its queue has fewer than three submissions in flight, and the waiter copies every
+//!   word; [`TRACKED_BEHIND_ONE`] declares that count on its run (docs/API.md section 10).
 //!
 //! The first three are the answers the probe `probes/cross_queue_fence_held_update.m` measured
 //! with compute dispatches on an Apple M3 Max under macOS 27.0.1; the recordings hold what Metal
@@ -96,11 +96,13 @@ impl Case for FenceOrderCase {
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
         // site alone: every word count and status still compares exactly.
         let mut allowances = vec![crate::replay::shared_memory_notice()];
-        // Behind one busy command buffer, Metal's answer is timing: its tracking orders the copy
-        // only after work already submitted, and it ran the copy first. The new runtime submits
-        // the fill at once, as its queue holds nothing back, and the copy reads all of it, the
-        // order Apple describes for a tracked write (docs/API.md section 10). Either count holds;
-        // the statuses still compare exactly.
+        // Behind one busy command buffer, the new runtime's 1024 is its structure: a writer whose
+        // queue has fewer than three submissions in flight is submitted at once, so the later copy
+        // on another queue reads every word, on every device and run, the order Apple describes
+        // for a tracked write. Metal's 0 is measured, not documented: on the M3 Max (macOS
+        // 27.0.1) the copy ran first in 5 runs of 5 (job m3-max-52432), its tracking ordering only
+        // against work already submitted (docs/API.md section 10). Either count holds on the new
+        // runtime's run; the statuses still compare exactly.
         if self.name == TRACKED_BEHIND_ONE {
             allowances.push(Allowance::new(
                 "case/order/y/words-written",

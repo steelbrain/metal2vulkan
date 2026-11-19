@@ -6789,13 +6789,14 @@ each item named states the rule in full.
 **Command queues**
 
 - **A write whose queue holds nothing back is seen by another queue's command buffer committed
-  after it** (`metal2vulkan-rt`). The runtime submits a queue's command buffer at once while fewer
-  than three of the queue's submissions run, ahead of every command buffer committed after it on
-  any queue, so a later reader on another queue sees the write, as Apple describes a tracked
-  resource: the framework prevents subsequent commands from running until write operations finish.
-  Metal's tracking orders only against work it has already submitted: on an M3 Max with macOS
-  27.0.1, a blit fill of a tracked buffer committed behind one long command buffer of its queue ran
-  after a copy of that buffer on another queue committed after it, which read none of the fill in 5
-  runs of 5 (job m3-max-52432; the conformance case `fence-none-tracked-behind-one`). The runtime's
-  README states what was measured (`crates/metal2vulkan-rt/README.md`, "Queues, command buffers and
-  events").
+  after it** (`metal2vulkan-rt`). A writer whose queue has fewer than three submissions in flight
+  is submitted at once, ahead of every command buffer committed after it on any queue, so a later
+  reader on another queue reads the write, on every device and every run: all 1024 words in the
+  conformance case `fence-none-tracked-behind-one`, whose writer's queue has one busy command
+  buffer in flight. That is the order Apple describes for a tracked resource: the framework
+  prevents subsequent commands from running until write operations finish. Metal's 0 words there
+  is measured, not documented: on an M3 Max with macOS 27.0.1, the copy on the other queue ran
+  before the fill and read none of it in 5 runs of 5 (job m3-max-52432), and behind three busy
+  command buffers likewise (job m3-max-52415); Metal's tracking ordered the copy only against work
+  it had already submitted. The runtime's README states what was measured
+  (`crates/metal2vulkan-rt/README.md`, "Queues, command buffers and events").
