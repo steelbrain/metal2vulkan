@@ -524,10 +524,20 @@ through the runtime, the consumer encodes no read of its planes.
 
 ### Known gaps of memory blocks
 
-- A dma-buf surface takes the copy form on a device without `VK_EXT_image_drm_format_modifier`,
-  or whose `DRM_FORMAT_MOD_LINEAR` entry lacks a plane's format or one of its four usages: the
-  device offers no in-place form for it. The Radeon RX 550 (Polaris 12) is the measured example:
-  its driver lists no modifier extension, and its plain `LINEAR` images refuse the dma-buf handle.
+- An exported surface takes the copy form, its planes copied at each acquire and release, in
+  three cases the build found:
+  - A dma-buf surface on a device without `VK_EXT_image_drm_format_modifier`, or whose
+    `DRM_FORMAT_MOD_LINEAR` entry lacks a plane's format or one of its four usages
+    (`SurfaceCopy::NoModifier`, `SurfaceCopy::Tiling`): the device offers no in-place form for it.
+    On the Radeon RX 550 (Polaris 12) the driver lists no modifier extension, and its plain
+    `LINEAR` images refuse the dma-buf handle.
+  - A dma-buf surface on NVIDIA (`SurfaceCopy::Start`): on the RTX 3090 the driver refuses a
+    linear image of the second plane at its start in the shared dma-buf. No consumer path uses
+    it; the opaque fd surface an NVENC input asks is in place on the RTX 3090.
+  - A layout the device cannot meet (`SurfaceCopy::Pitch`, `SurfaceCopy::Start`): a pitch or
+    start the consumer asks that the driver's linear images do not take. A pitch multiple of
+    4,096 takes `SurfaceCopy::Pitch` on every device measured: the Radeon 780M, the RTX 3090,
+    the Iris Xe, the RX 550 and lavapipe.
 - A shader uses a buffer's `gpuAddress` directly, unchecked: a stale one, of a released buffer, can
   still fault the device.
 - An app buffer too large for the consumer's map budget is copied, on drivers whose dma-buf query
