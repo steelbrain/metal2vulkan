@@ -221,6 +221,31 @@ pub(crate) enum Gauge {
     SurfaceImports,
 }
 
+/// A site that allocates on the consumer's threads, inside its calls, counted on its own in
+/// [`Metrics`].
+#[derive(Clone, Copy)]
+pub(crate) enum Site {
+    /// [`Metrics::texture_allocations`].
+    Texture,
+    /// [`Metrics::texture_block_allocations`].
+    TextureBlock,
+    /// [`Metrics::ring_block_allocations`].
+    RingBlock,
+    /// [`Metrics::staging_region_allocations`].
+    StagingRegion,
+    /// [`Metrics::staging_buffer_allocations`].
+    StagingBuffer,
+    /// [`Metrics::capture_ring_allocations`].
+    CaptureRing,
+    /// [`Metrics::zero_source_allocations`].
+    ZeroSource,
+    /// [`Metrics::take_allocations`].
+    Take,
+}
+
+/// The number of [`Site`]s.
+const SITES: usize = Site::Take as usize + 1;
+
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
 ///
 /// A cheap handle that stays readable after the device is torn down, so a test can read the
@@ -259,6 +284,9 @@ struct Atomics {
     consumer_allocation_nanos: AtomicU64,
     consumer_allocation_max_nanos: AtomicU64,
     maker_allocation_nanos: AtomicU64,
+    /// Each [`Site`]'s allocations, at its index: their count, their bytes and the longest's
+    /// nanoseconds.
+    sites: [[AtomicU64; 3]; SITES],
     dispatches_without_effects: AtomicU64,
     shared_long_reuses: AtomicU64,
     private_long_reuses: AtomicU64,
@@ -510,6 +538,15 @@ impl Counters {
         }
     }
 
+    /// A `vkAllocateMemory` of `bytes` that took `nanos` nanoseconds at `site`, on a thread of the
+    /// consumer's ([`Metrics::texture_allocations`] and the other sites').
+    pub(crate) fn site_allocation(&self, site: Site, bytes: u64, nanos: u64) {
+        let [count, total, longest] = &self.atomics.sites[site as usize];
+        count.fetch_add(1, Relaxed);
+        total.fetch_add(bytes, Relaxed);
+        longest.fetch_max(nanos, Relaxed);
+    }
+
     /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
     pub(crate) fn copied(&self, bytes: u64) {
         self.atomics.bytes_copied.fetch_add(bytes, Relaxed);
@@ -739,6 +776,14 @@ impl Counters {
     /// No Metal counterpart: the cumulative counts since the device was made.
     pub fn metrics(&self) -> Metrics {
         let a = &self.atomics;
+        let site = |site: Site| {
+            let [count, bytes, longest] = &a.sites[site as usize];
+            SiteAllocations {
+                count: count.load(Relaxed),
+                bytes: bytes.load(Relaxed),
+                longest_nanos: longest.load(Relaxed),
+            }
+        };
         Metrics {
             submissions: a.submissions.load(Relaxed),
             submit_infos: a.submit_infos.load(Relaxed),
@@ -761,6 +806,14 @@ impl Counters {
             consumer_allocation_nanos: a.consumer_allocation_nanos.load(Relaxed),
             consumer_allocation_max_nanos: a.consumer_allocation_max_nanos.load(Relaxed),
             maker_allocation_nanos: a.maker_allocation_nanos.load(Relaxed),
+            texture_allocations: site(Site::Texture),
+            texture_block_allocations: site(Site::TextureBlock),
+            ring_block_allocations: site(Site::RingBlock),
+            staging_region_allocations: site(Site::StagingRegion),
+            staging_buffer_allocations: site(Site::StagingBuffer),
+            capture_ring_allocations: site(Site::CaptureRing),
+            zero_source_allocations: site(Site::ZeroSource),
+            take_allocations: site(Site::Take),
             shared_long_reuses: a.shared_long_reuses.load(Relaxed),
             private_long_reuses: a.private_long_reuses.load(Relaxed),
             allocations_mapped: a.allocations_mapped.load(Relaxed),
@@ -960,6 +1013,37 @@ pub struct Metrics {
     /// took, in total: the block-maker thread's, off the consumer's threads, and each class's
     /// first allocation in the device's making.
     pub maker_allocation_nanos: u64,
+    /// Of [`consumer_allocations`](Self::consumer_allocations), those of textures' images that
+    /// took an allocation of their own, not a place in a texture block: an image the device
+    /// requires an allocation of its own for or whose memory types leave out the Private type,
+    /// and one made where device-local memory had no texture block left. A texture's shadow and
+    /// a counted copy's image are among them.
+    pub texture_allocations: SiteAllocations,
+    /// Those of texture blocks: a texture's place that no texture block had room for took a
+    /// Private block, and no free range of the pool, which the block-maker thread keeps 8 MiB of
+    /// ahead per class, fit it, so the take allocated.
+    pub texture_block_allocations: SiteAllocations,
+    /// Those of the parameter ring's 2 MiB blocks: a write into the ring that found no chunk free.
+    pub ring_block_allocations: SiteAllocations,
+    /// Those of the staging region, made at the device's first `replace_region` or `get_bytes`
+    /// copy of 16 MiB or less.
+    pub staging_region_allocations: SiteAllocations,
+    /// Those of staging buffers of their own, one for each `replace_region` or `get_bytes` copy
+    /// larger than the 16 MiB staging region.
+    pub staging_buffer_allocations: SiteAllocations,
+    /// Those of the capture ring, the staging memory commits copy Managed buffers' modified bytes
+    /// into ([`managed_bytes_captured`](Self::managed_bytes_captured)), made at the device's first
+    /// [`Buffer::did_modify_range`](crate::Buffer::did_modify_range) of a Managed buffer with a
+    /// device copy.
+    pub capture_ring_allocations: SiteAllocations,
+    /// Those of the zero source, the buffer of zeros Private fills copy from, made in the device's
+    /// making ([`Device::new`](crate::Device::new)).
+    pub zero_source_allocations: SiteAllocations,
+    /// Those of takes from the pool that no free range fit: the consumer's
+    /// ([`Device::take_block`](crate::Device::take_block)), and a capture's staging blocks of its
+    /// own ([`capture_overflows`](Self::capture_overflows)). Texture blocks' are
+    /// [`texture_block_allocations`](Self::texture_block_allocations).
+    pub take_allocations: SiteAllocations,
     /// Shared takes carved from a long allocation, one a take longer than the 16 MiB unit made for
     /// itself, after that take: a take of the same length, which a long allocation alone serves.
     pub shared_long_reuses: u64,
@@ -1135,6 +1219,22 @@ pub struct Metrics {
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),
     /// [`SurfaceForm::Copy`](crate::SurfaceForm::Copy)).
     pub surfaces_copied: u64,
+}
+
+/// No Metal counterpart: the `vkAllocateMemory` calls one site of the runtime made on the
+/// consumer's threads, inside its calls ([`Metrics::texture_allocations`] and the other
+/// sites'): each call, whether it succeeded or not, timed alone with
+/// [`host_time`](crate::host_time).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiteAllocations {
+    /// The calls.
+    pub count: u64,
+    /// The bytes they asked for.
+    pub bytes: u64,
+    /// The longest call, in nanoseconds; a maximum since the device was made, so the difference
+    /// of two reads does not apply to it.
+    pub longest_nanos: u64,
 }
 
 /// A thread's slot in [`Gauges::threads`], given back as it drops.

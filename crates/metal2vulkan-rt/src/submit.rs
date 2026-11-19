@@ -40,7 +40,7 @@ use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, Chunk, CopyIn, Modified, Named, CAPTURE_LEN};
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Pending, Segment};
 use crate::complete;
-use crate::counters::{Counters, Gauge, Metric};
+use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
@@ -577,7 +577,7 @@ impl Work {
         }
         if state.changes.region.is_none() {
             drop(state);
-            let made = Region::new(core, CAPTURE_LEN)?;
+            let made = Region::new(core, CAPTURE_LEN, Site::CaptureRing)?;
             state = self.lock();
             if state.changes.region.is_none() && !state.closed {
                 state.changes.region = Some(made);
@@ -963,7 +963,7 @@ impl Work {
         let mut state = self.lock();
         if state.region.is_none() {
             drop(state);
-            let made = Region::new(core, REGION_LEN)?;
+            let made = Region::new(core, REGION_LEN, Site::StagingRegion)?;
             state = self.lock();
             if state.region.is_none() {
                 state.region = Some(made);

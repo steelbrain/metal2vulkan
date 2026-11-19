@@ -11,7 +11,7 @@
 //! before ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)): then they read zero as handed out.
 //! The runtime trusts nothing of it after the take, and zeroes every range it is asked to.
 
-use crate::counters::{Counters, Gauge, Metric};
+use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::{Error, Limit};
 use crate::floor;
@@ -725,7 +725,7 @@ impl Pool {
     /// fits, in the order the allocations were made, a long allocation only for a take of its own
     /// length; with no Vulkan call. Where none fits, a range of an allocation made here, of
     /// [`ALLOCATION_LEN`] or the block's length where that is longer, which the consumer's
-    /// [`BlockMappings::map`] maps first. A block's bytes are undefined.
+    /// [`BlockMappings::map`] maps first, counted at `site`. A block's bytes are undefined.
     ///
     /// Err: [`Limit::BlockLen`] past the device's longest allocation or buffer;
     /// [`Limit::BlockIds`]; what [`make_allocation`] returns; [`Limit::AllocationNotMapped`]
@@ -737,6 +737,7 @@ impl Pool {
         class: MemoryClass,
         len: u64,
         max: u64,
+        site: Site,
     ) -> Result<Memory, Error> {
         let (len, align) = self.shape(len, max)?;
         let index = class.index();
@@ -762,7 +763,7 @@ impl Pool {
             return Ok(carve.block(id, class, len));
         }
         drop(state);
-        let memory = self.own(core, class, len, align, id)?;
+        let memory = self.own(core, class, len, align, id, site)?;
         let mut state = self.lock();
         self.settle(&mut state, class);
         self.changed.notify_all();
@@ -770,8 +771,8 @@ impl Pool {
     }
 
     /// Makes block `id` of `len` bytes at a multiple of `align` at the start of an allocation of
-    /// its own, of [`ALLOCATION_LEN`] or `len` where that is longer, whose rest later takes share;
-    /// the consumer maps the allocation first.
+    /// its own, of [`ALLOCATION_LEN`] or `len` where that is longer, whose rest later takes share,
+    /// counted at `site`; the consumer maps the allocation first.
     fn own(
         &self,
         core: &Core,
@@ -779,8 +780,9 @@ impl Pool {
         len: u64,
         align: u64,
         id: BlockId,
+        site: Site,
     ) -> Result<Memory, Error> {
-        let mut allocation = make_allocation(core, class, len.max(ALLOCATION_LEN))?;
+        let mut allocation = make_allocation(core, class, len.max(ALLOCATION_LEN), Some(site))?;
         if !self.map(&allocation, class, true) {
             free_allocation(core, allocation);
             return Err(Error::Limit(Limit::AllocationNotMapped { class, len }));
@@ -1108,7 +1110,7 @@ pub(crate) fn buffer_alignment(device: &ash::Device) -> u64 {
 /// Makes an allocation ahead of need of `class`, and has the consumer map it: the allocation, or
 /// `None` where it was not made or not mapped.
 fn ahead(core: &Core, class: MemoryClass) -> Option<Allocation> {
-    let allocation = make_allocation(core, class, ALLOCATION_LEN).ok()?;
+    let allocation = make_allocation(core, class, ALLOCATION_LEN, None).ok()?;
     if !core.pool.map(&allocation, class, false) {
         free_allocation(core, allocation);
         return None;
@@ -1205,7 +1207,7 @@ pub(crate) fn run(core: Arc<Core>) {
 /// [`allocate`] of `info`, and for Private memory, where the device-local type is out of device
 /// memory, of each other type `bits` allows in the device's order until one is not: the spill
 /// the plan decided, on the allocation's own error and never a budget poll. Returns the memory
-/// and whether it spilled.
+/// and whether it spilled. Each call is counted at `site`, where it names one.
 ///
 /// # Safety
 ///
@@ -1215,6 +1217,7 @@ pub(crate) unsafe fn allocate_spilling(
     class: MemoryClass,
     bits: u32,
     info: &vk::MemoryAllocateInfo<'_>,
+    site: Option<Site>,
 ) -> Result<(vk::DeviceMemory, bool), Error> {
     let out = |result: &Result<vk::DeviceMemory, Error>| {
         result.as_ref().is_err_and(Error::is_out_of_device_memory)
@@ -1223,7 +1226,15 @@ pub(crate) unsafe fn allocate_spilling(
     let mut result = match core.fails_private(class) {
         true => Err(Error::out_of_device_memory()),
         // SAFETY: the caller's.
-        false => unsafe { allocate(&core.device, &core.counters, core.max_allocations, info) },
+        false => unsafe {
+            allocate(
+                &core.device,
+                &core.counters,
+                core.max_allocations,
+                info,
+                site,
+            )
+        },
     };
     if class == MemoryClass::Shared {
         return result.map(|memory| (memory, false));
@@ -1235,7 +1246,15 @@ pub(crate) unsafe fn allocate_spilling(
         let mut next = *info;
         next.memory_type_index = index;
         // SAFETY: the caller's; `bits` allows the type.
-        result = unsafe { allocate(&core.device, &core.counters, core.max_allocations, &next) };
+        result = unsafe {
+            allocate(
+                &core.device,
+                &core.counters,
+                core.max_allocations,
+                &next,
+                site,
+            )
+        };
         if let Ok(memory) = result {
             return Ok((memory, true));
         }
@@ -1246,7 +1265,8 @@ pub(crate) unsafe fn allocate_spilling(
 /// `vkAllocateMemory`, every allocation the runtime makes: one more live allocation in
 /// `counters`' blocks gauge, refused with [`Limit::MemoryAllocations`] before the driver is called
 /// where `max`, the device's `maxMemoryAllocationCount`, are live. Each free falls the gauge. The
-/// call's time is counted on the block-maker thread or on the consumer's.
+/// call's time is counted on the block-maker thread or on the consumer's, and on the consumer's
+/// at `site` too, where the call names one.
 ///
 /// # Safety
 ///
@@ -1256,6 +1276,7 @@ pub(crate) unsafe fn allocate(
     counters: &Counters,
     max: u32,
     info: &vk::MemoryAllocateInfo<'_>,
+    site: Option<Site>,
 ) -> Result<vk::DeviceMemory, Error> {
     if !counters.rise_below(Gauge::Blocks, u64::from(max)) {
         return Err(Error::Limit(Limit::MemoryAllocations { max }));
@@ -1263,7 +1284,12 @@ pub(crate) unsafe fn allocate(
     let start = crate::host_time();
     // SAFETY: the caller's.
     let allocated = unsafe { device.allocate_memory(info, None) };
-    counters.allocation_time(crate::host_time().saturating_sub(start), ON_MAKER.get());
+    let nanos = crate::host_time().saturating_sub(start);
+    let maker = ON_MAKER.get();
+    counters.allocation_time(nanos, maker);
+    if let (false, Some(site)) = (maker, site) {
+        counters.site_allocation(site, info.allocation_size, nanos);
+    }
     allocated.map_err(|result| {
         counters.fall(Gauge::Blocks);
         Error::Vulkan {
@@ -1279,8 +1305,13 @@ pub(crate) unsafe fn allocate(
 /// allocation's pages become resident as they are first written. Where the device enabled
 /// `zeroInitializeDeviceMemory` it is made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`,
 /// which no import carries (`VUID-VkMemoryAllocateFlagsInfo-flags-10760`), and its bytes read zero
-/// until written; elsewhere they are undefined.
-fn make_allocation(core: &Core, class: MemoryClass, len: u64) -> Result<Allocation, Error> {
+/// until written; elsewhere they are undefined. Counted at `site`, where it names one.
+fn make_allocation(
+    core: &Core,
+    class: MemoryClass,
+    len: u64,
+    site: Option<Site>,
+) -> Result<Allocation, Error> {
     let device = &core.device;
     let id = allocation_number(&mut core.pool.lock())?;
     let info = vk::BufferCreateInfo::default()
@@ -1306,14 +1337,15 @@ fn make_allocation(core: &Core, class: MemoryClass, len: u64) -> Result<Allocati
     let bits = requirements.memory_type_bits;
     // SAFETY: the floor chose the memory type for buffers of this usage on this device, and
     // `bufferDeviceAddress` is enabled; a spill takes a type the buffer's requirements allow.
-    let (memory, spilled) = match unsafe { allocate_spilling(core, class, bits, &allocate_info) } {
-        Ok(made) => made,
-        Err(error) => {
-            // SAFETY: the buffer is unused.
-            unsafe { device.destroy_buffer(buffer, None) };
-            return Err(error);
-        }
-    };
+    let (memory, spilled) =
+        match unsafe { allocate_spilling(core, class, bits, &allocate_info, site) } {
+            Ok(made) => made,
+            Err(error) => {
+                // SAFETY: the buffer is unused.
+                unsafe { device.destroy_buffer(buffer, None) };
+                return Err(error);
+            }
+        };
     let mut allocation = Allocation {
         id,
         class,
@@ -1446,7 +1478,8 @@ pub(crate) unsafe fn import(
         })
     })?;
     // SAFETY: the caller's.
-    let memory = match unsafe { allocate(device, &core.counters, core.max_allocations, info) } {
+    let memory = match unsafe { allocate(device, &core.counters, core.max_allocations, info, None) }
+    {
         Ok(memory) => memory,
         Err(error) => {
             // SAFETY: `buffer` is unused.
@@ -1553,13 +1586,14 @@ pub(crate) unsafe fn export(
         .push_next(&mut flags);
     // SAFETY: a dedicated allocation of the buffer's size in a type it lists, exportable as a
     // handle its buffers export.
-    let memory = match unsafe { allocate(device, &core.counters, core.max_allocations, &info) } {
-        Ok(memory) => memory,
-        Err(error) => {
-            destroy();
-            return Err(error);
-        }
-    };
+    let memory =
+        match unsafe { allocate(device, &core.counters, core.max_allocations, &info, None) } {
+            Ok(memory) => memory,
+            Err(error) => {
+                destroy();
+                return Err(error);
+            }
+        };
     let undo = |error: Error| {
         // SAFETY: nothing uses the buffer or the memory.
         unsafe {
@@ -1625,7 +1659,7 @@ pub(crate) unsafe fn export_surface(
         .memory_type_index(index)
         .push_next(&mut export);
     // SAFETY: the caller's; the type is the images'.
-    let memory = unsafe { allocate(device, &core.counters, core.max_allocations, &info) }?;
+    let memory = unsafe { allocate(device, &core.counters, core.max_allocations, &info, None) }?;
     let (id, allocation) = match core.pool.own_numbers() {
         Ok(numbers) => numbers,
         Err(error) => {

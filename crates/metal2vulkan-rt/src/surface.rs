@@ -955,7 +955,7 @@ impl Device {
             .push_next(&mut export);
         // SAFETY: an exportable allocation of a type every image takes, bound to nothing.
         let block = match unsafe {
-            memory::allocate(device, &core.counters, core.max_allocations, &info)
+            memory::allocate(device, &core.counters, core.max_allocations, &info, None)
         } {
             Ok(block) => block,
             Err(error) => {
@@ -1034,7 +1034,7 @@ impl Device {
             // SAFETY: an import of the dma-buf, dedicated to the image, of a type both take, at
             // least the image's requirement and its stated rows.
             let memory = match unsafe {
-                memory::allocate(device, &core.counters, core.max_allocations, &info)
+                memory::allocate(device, &core.counters, core.max_allocations, &info, None)
             } {
                 Ok(memory) => memory,
                 Err(error) => return undo(imported, made, error),

@@ -12,7 +12,7 @@
 //! spans take half the region, so the GPU copies while the host writes the rest. A copy larger
 //! than the region has a staging buffer of its own, which the upload's bound counts.
 
-use crate::counters::Gauge;
+use crate::counters::{Gauge, Site};
 use crate::device::Core;
 use crate::error::Error;
 use crate::memory::{self, Mapping, MemoryClass};
@@ -188,7 +188,7 @@ impl Region {
     ///
     /// Err: what [`memory::allocate`] returns; [`Error::Vulkan`] where the buffer cannot be made,
     /// bound or mapped.
-    pub(crate) fn new(core: &Core, len: u64) -> Result<Region, Error> {
+    pub(crate) fn new(core: &Core, len: u64, site: Site) -> Result<Region, Error> {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         {
             let park = crate::device::lock(&core.park_region).clone();
@@ -197,7 +197,7 @@ impl Region {
                 park.wait();
             }
         }
-        let (buffer, memory, host) = host_buffer(core, len)?;
+        let (buffer, memory, host) = host_buffer(core, len, site)?;
         Ok(Region {
             buffer,
             memory,
@@ -287,7 +287,7 @@ impl Staging {
     /// Err: what [`memory::allocate`] returns; [`Error::Vulkan`] where the buffer cannot be made,
     /// bound or mapped.
     pub(crate) fn new(core: &Arc<Core>, len: u64) -> Result<Staging, Error> {
-        let (buffer, memory, mapping) = host_buffer(core, len)?;
+        let (buffer, memory, mapping) = host_buffer(core, len, Site::StagingBuffer)?;
         core.counters.rise_by(Gauge::StagingBytes, len);
         Ok(Staging {
             core: Arc::clone(core),
@@ -300,8 +300,12 @@ impl Staging {
 }
 
 /// A buffer of `len` bytes for copies to and from images, bound to an allocation of its own of the
-/// Shared type, mapped.
-fn host_buffer(core: &Core, len: u64) -> Result<(vk::Buffer, vk::DeviceMemory, Mapping), Error> {
+/// Shared type, mapped, its allocation counted at `site`.
+fn host_buffer(
+    core: &Core,
+    len: u64,
+    site: Site,
+) -> Result<(vk::Buffer, vk::DeviceMemory, Mapping), Error> {
     let device = &core.device;
     let info = vk::BufferCreateInfo::default()
         .size(len)
@@ -316,8 +320,15 @@ fn host_buffer(core: &Core, len: u64) -> Result<(vk::Buffer, vk::DeviceMemory, M
         .allocation_size(requirements.size)
         .memory_type_index(core.memory_type(MemoryClass::Shared));
     // SAFETY: the Shared type serves a buffer of every usage, so one of fewer too.
-    let allocated =
-        unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) };
+    let allocated = unsafe {
+        memory::allocate(
+            device,
+            &core.counters,
+            core.max_allocations,
+            &allocate,
+            Some(site),
+        )
+    };
     let memory = match allocated {
         Ok(memory) => memory,
         Err(error) => {

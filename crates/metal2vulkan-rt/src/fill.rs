@@ -1,7 +1,7 @@
 //! Zero fills of memory the host does not map: fill and copy commands, recorded into the
 //! upload that goes ahead of later commits.
 
-use crate::counters::{Counters, Gauge, Metric};
+use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::error::Error;
 use crate::memory;
 use ash::vk;
@@ -160,7 +160,13 @@ impl Filler {
             let allocate = vk::MemoryAllocateInfo::default()
                 .allocation_size(requirements.size)
                 .memory_type_index(host_type);
-            self.zeros_memory = memory::allocate(device, counters, max_allocations, &allocate)?;
+            self.zeros_memory = memory::allocate(
+                device,
+                counters,
+                max_allocations,
+                &allocate,
+                Some(Site::ZeroSource),
+            )?;
             counters.count(Metric::BlocksMade);
             device
                 .bind_buffer_memory(self.zeros, self.zeros_memory, 0)

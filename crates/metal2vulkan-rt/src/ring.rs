@@ -17,7 +17,7 @@
 //! argument's alignment. A buffer argument nothing is bound to reads it, as Metal's nil buffer
 //! reads zeros. A read past its 64 KiB, and a write through it, are not covered.
 
-use crate::counters::{Gauge, Metric};
+use crate::counters::{Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::floor;
@@ -229,8 +229,15 @@ fn make(core: &Core) -> Result<(RingBlock, u64, Mapping), Error> {
         .push_next(&mut flags);
     // SAFETY: the floor chose the ring type for buffers of this usage, and `bufferDeviceAddress`
     // is enabled.
-    let allocated =
-        unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) };
+    let allocated = unsafe {
+        memory::allocate(
+            device,
+            &core.counters,
+            core.max_allocations,
+            &allocate,
+            Some(Site::RingBlock),
+        )
+    };
     let memory = match allocated {
         Ok(memory) => memory,
         Err(error) => {

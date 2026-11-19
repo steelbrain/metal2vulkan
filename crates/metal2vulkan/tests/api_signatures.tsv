@@ -2380,6 +2380,7 @@ field	metal2vulkan-rt::Metrics.cache_writes_dropped	pub cache_writes_dropped: u6
 field	metal2vulkan-rt::Metrics.capture_copy_nanos	pub capture_copy_nanos: u64
 field	metal2vulkan-rt::Metrics.capture_overflow_bytes	pub capture_overflow_bytes: u64
 field	metal2vulkan-rt::Metrics.capture_overflows	pub capture_overflows: u64
+field	metal2vulkan-rt::Metrics.capture_ring_allocations	pub capture_ring_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.capture_streams	pub capture_streams: u64
 field	metal2vulkan-rt::Metrics.capture_wait_nanos	pub capture_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.capture_waits	pub capture_waits: u64
@@ -2408,9 +2409,12 @@ field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.private_long_reuses	pub private_long_reuses: u64
 field	metal2vulkan-rt::Metrics.pushes	pub pushes: u64
 field	metal2vulkan-rt::Metrics.pushes_held	pub pushes_held: u64
+field	metal2vulkan-rt::Metrics.ring_block_allocations	pub ring_block_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.sampler_element_writes	pub sampler_element_writes: u64
 field	metal2vulkan-rt::Metrics.shared_long_reuses	pub shared_long_reuses: u64
+field	metal2vulkan-rt::Metrics.staging_buffer_allocations	pub staging_buffer_allocations: SiteAllocations
+field	metal2vulkan-rt::Metrics.staging_region_allocations	pub staging_region_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.staging_sleeps	pub staging_sleeps: u64
 field	metal2vulkan-rt::Metrics.stamps_not_available	pub stamps_not_available: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
@@ -2419,12 +2423,16 @@ field	metal2vulkan-rt::Metrics.submit_infos	pub submit_infos: u64
 field	metal2vulkan-rt::Metrics.surfaces_copied	pub surfaces_copied: u64
 field	metal2vulkan-rt::Metrics.surfaces_in_place	pub surfaces_in_place: u64
 field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64
+field	metal2vulkan-rt::Metrics.take_allocations	pub take_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.takes_from_free_ranges	pub takes_from_free_ranges: u64
+field	metal2vulkan-rt::Metrics.texture_allocations	pub texture_allocations: SiteAllocations
+field	metal2vulkan-rt::Metrics.texture_block_allocations	pub texture_block_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64
 field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-rt::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
 field	metal2vulkan-rt::Metrics.upload_waits	pub upload_waits: u64
 field	metal2vulkan-rt::Metrics.waits_behind_counter	pub waits_behind_counter: u64
+field	metal2vulkan-rt::Metrics.zero_source_allocations	pub zero_source_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.zeroed_take_bytes	pub zeroed_take_bytes: u64
 field	metal2vulkan-rt::Metrics.zeroed_takes	pub zeroed_takes: u64
 field	metal2vulkan-rt::PixelFormatInfo.cast_class	pub cast_class: u64
@@ -2509,6 +2517,9 @@ field	metal2vulkan-rt::ScissorRect.height	pub height: u64
 field	metal2vulkan-rt::ScissorRect.width	pub width: u64
 field	metal2vulkan-rt::ScissorRect.x	pub x: u64
 field	metal2vulkan-rt::ScissorRect.y	pub y: u64
+field	metal2vulkan-rt::SiteAllocations.bytes	pub bytes: u64
+field	metal2vulkan-rt::SiteAllocations.count	pub count: u64
+field	metal2vulkan-rt::SiteAllocations.longest_nanos	pub longest_nanos: u64
 field	metal2vulkan-rt::SizeAndAlign.align	pub align: u64
 field	metal2vulkan-rt::SizeAndAlign.size	pub size: u64
 field	metal2vulkan-rt::StencilDescriptor.depth_failure_operation	pub depth_failure_operation: StencilOperation
@@ -11878,6 +11889,7 @@ struct	metal2vulkan-rt::SamplerDescriptor	#[cfg_attr(feature = "serde", derive(s
 struct	metal2vulkan-rt::SamplerState	#[derive(Clone)] pub struct SamplerState
 struct	metal2vulkan-rt::ScissorRect	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct ScissorRect
 struct	metal2vulkan-rt::SharedEvent	#[derive(Clone)] pub struct SharedEvent
+struct	metal2vulkan-rt::SiteAllocations	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct SiteAllocations
 struct	metal2vulkan-rt::SizeAndAlign	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct SizeAndAlign
 struct	metal2vulkan-rt::StencilDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StencilDescriptor
 struct	metal2vulkan-rt::Surface	pub struct Surface

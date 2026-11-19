@@ -47,6 +47,7 @@ mod ring;
 mod sampler;
 mod sampling;
 mod shadow;
+mod sites;
 mod spill;
 mod staging;
 #[cfg(m2v_gpu)]

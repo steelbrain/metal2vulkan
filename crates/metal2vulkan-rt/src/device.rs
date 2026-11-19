@@ -5,7 +5,7 @@ use crate::arrays::Arrays;
 use crate::block::{Block, Claim};
 use crate::cache::{self, Caches};
 use crate::complete::{self, Done};
-use crate::counters::{Counters, Gauge};
+use crate::counters::{Counters, Gauge, Site};
 use crate::error::{Error, Refusal};
 use crate::export::Exports;
 use crate::extension::{self, ConsumerFeature, DeviceExtension};
@@ -846,7 +846,7 @@ impl Device {
         if core.closed() {
             return Err(Error::Quiesced);
         }
-        let memory = core.take_memory(class, len)?;
+        let memory = core.take_memory(class, len, Site::Take)?;
         let info = memory.info();
         if info.zeroed {
             core.counters.zeroed_take(info.len);
@@ -1400,8 +1400,13 @@ impl Core {
     ///
     /// Err: what [`Pool::take`] returns; [`Limit::BlockLen`](crate::Limit::BlockLen) past the
     /// device's longest allocation or buffer.
-    pub(crate) fn take_memory(&self, class: MemoryClass, len: u64) -> Result<Memory, Error> {
-        self.pool.take(self, class, len, self.max_block_len)
+    pub(crate) fn take_memory(
+        &self,
+        class: MemoryClass,
+        len: u64,
+        site: Site,
+    ) -> Result<Memory, Error> {
+        self.pool.take(self, class, len, self.max_block_len, site)
     }
 
     /// Quiesced or torn down.

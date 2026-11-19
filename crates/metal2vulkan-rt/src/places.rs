@@ -15,6 +15,7 @@
 //! block. Writes through it in other blocks touch no page of a texture block's: blocks start and
 //! end on the pool's granule, at least the device's `bufferImageGranularity`.
 
+use crate::counters::Site;
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::memory::{BlockId, Memory, MemoryClass};
@@ -76,7 +77,8 @@ impl Places {
                 }
             }
             drop(blocks);
-            let memory = core.take_memory(MemoryClass::Private, len.max(BLOCK_LEN))?;
+            let memory =
+                core.take_memory(MemoryClass::Private, len.max(BLOCK_LEN), Site::TextureBlock)?;
             // A block that spilled out of device-local memory holds no place: textures then take
             // memory of their own, and a Managed buffer's device copy a Private block of its own.
             if memory.spilled() {

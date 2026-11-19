@@ -62,7 +62,7 @@ pub use blit::{BlitCommandEncoder, BufferLayout, TexturePlace};
 pub use block::Block;
 pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
-pub use counters::{Counters, Gauges, Metrics};
+pub use counters::{Counters, Gauges, Metrics, SiteAllocations};
 pub use depth_stencil::DepthStencilState;
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};

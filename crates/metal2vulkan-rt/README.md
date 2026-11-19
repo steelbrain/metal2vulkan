@@ -190,7 +190,12 @@ in its memory.
   MiB; on an RTX 2080 a compute pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared
   allocation made beside it. `Metrics::consumer_allocation_nanos` and
   `consumer_allocation_max_nanos` count the time of allocations made on the consumer's threads,
-  and `maker_allocation_nanos` those of the block-maker thread.
+  and `maker_allocation_nanos` those of the block-maker thread. Eight of the consumer's sites are
+  counted apart, each as a `SiteAllocations` (calls, bytes and the longest call):
+  `texture_allocations` (a texture's allocation of its own), `texture_block_allocations`,
+  `ring_block_allocations`, `staging_region_allocations`, `staging_buffer_allocations` (a copy
+  larger than the staging region), `capture_ring_allocations`, `zero_source_allocations` and
+  `take_allocations` (a take that no free range fits).
 - A Private allocation takes the device-local Private type. Where that allocation itself fails
   out of device memory (never a budget poll), it takes the next memory type the resource allows,
   in the device's order: `BlockInfo::device_local` is false for such a block, and

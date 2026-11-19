@@ -32,7 +32,7 @@
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
-use crate::counters::{Counters, Gauge, Metric};
+use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::hazard::HeapId;
@@ -2316,8 +2316,15 @@ impl Made {
                 .push_next(&mut own);
             // SAFETY: the type, and each a spill takes, is one the image's requirements allow, and
             // the allocation its own.
-            let (memory, spilled) =
-                unsafe { memory::allocate_spilling(core, MemoryClass::Private, bits, &allocate) }?;
+            let (memory, spilled) = unsafe {
+                memory::allocate_spilling(
+                    core,
+                    MemoryClass::Private,
+                    bits,
+                    &allocate,
+                    Some(Site::Texture),
+                )
+            }?;
             let spilled = match spilled {
                 true => requirements.size,
                 false => 0,

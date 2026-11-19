@@ -28,7 +28,7 @@
 //! command buffer gives back as it retires.
 
 use crate::buffer::DeviceCopy;
-use crate::counters::{Counters, Gauge, Metric};
+use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::Core;
 use crate::error::Error;
 use crate::memory::{Block, Mapping, MemoryClass};
@@ -374,7 +374,11 @@ pub(crate) fn overflow(
             let (buffer, base, mapping, block_len, filled) = match block.take() {
                 Some(open) if open.4 < open.3 => open,
                 _ => {
-                    let memory = core.take_memory(MemoryClass::Shared, left.min(OVERFLOW_BLOCK))?;
+                    let memory = core.take_memory(
+                        MemoryClass::Shared,
+                        left.min(OVERFLOW_BLOCK),
+                        Site::Take,
+                    )?;
                     let Some(mapping) = memory.mapping else {
                         unreachable!("a Shared block is mapped");
                     };
