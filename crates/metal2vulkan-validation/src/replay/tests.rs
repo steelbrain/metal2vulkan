@@ -450,7 +450,9 @@ fn a_range_that_meets_a_live_one_in_part_ends_it() {
 
 /// A backend that keeps what it is asked: the calls, the waits, the bytes written, the objects
 /// whose resource IDs it gave. It places blocks and buffers apart from the recorded addresses, and
-/// a buffer in a block at its offset. It holds the bytes of the buffers made by length, which
+/// a buffer in a block at its offset; where it `pins`, it makes heaps at their recorded addresses
+/// (one it is told holds no buffer outside them) and a heap's buffer at the heap's address plus
+/// its offset. It holds the bytes of the buffers made by length, which
 /// writes and buffer copies change and a read gives; it runs no dispatch. It counts submissions,
 /// and buffer copies once there was one.
 #[derive(Default)]
@@ -489,6 +491,10 @@ struct Kept {
     skipped: u64,
     /// The frame and position of each call it was told it plays next.
     located: Vec<(u64, u64)>,
+    /// Whether it makes objects at their recorded addresses (`Backend::places_at_recorded`).
+    pins: bool,
+    /// The heaps it was told hold no buffer, in order.
+    no_buffer: Vec<u64>,
 }
 
 impl Backend for Kept {
@@ -509,6 +515,16 @@ impl Backend for Kept {
             "m2v.newBufferInBlock:offset:length:options:" => {
                 let block = call.args[0].as_object().unwrap();
                 made.address = Some(self.bases[&block] + call.args[1].as_uint().unwrap());
+            }
+            "newHeapWithDescriptor:" if self.pins => {
+                made.address = match self.no_buffer.last() {
+                    Some(&heap) if heap == call.result => Some(1 << 47),
+                    _ => call.answer("gpuAddress").and_then(Value::as_address),
+                };
+            }
+            "newBufferWithLength:options:offset:" if self.pins => {
+                let offset = call.args[2].as_uint().unwrap();
+                made.address = Some(self.bases[&call.receiver] + offset);
             }
             "commit" => self.commits += 1,
             "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:" => {
@@ -618,6 +634,14 @@ impl Backend for Kept {
     fn locate(&mut self, frame: u64, call: u64) {
         self.located.push((frame, call));
     }
+
+    fn places_at_recorded(&self) -> bool {
+        self.pins
+    }
+
+    fn holds_no_buffer(&mut self, heap: u64) {
+        self.no_buffer.push(heap);
+    }
 }
 
 /// `build`'s stream, played on `backend`.
@@ -638,6 +662,56 @@ fn addressed(address: u64, length: u64) -> [(&'static str, Value); 2] {
         ("gpuAddress", Value::Address(address)),
         ("gpuLength", Value::Uint(length)),
     ]
+}
+
+/// On a backend that makes objects at their recorded addresses, a heap the stream places only a
+/// texture in is told it holds no buffer before its making, and is made outside them; its range
+/// stays at its recorded address in the map, so a word into it is counted as an address and no
+/// word moves. A heap the stream places a buffer in, and its buffer, are made at their recorded
+/// addresses. The report counts each.
+#[test]
+fn a_heap_without_buffers_is_made_outside_the_recorded_addresses() {
+    let mut kept = Kept {
+        pins: true,
+        ..Kept::default()
+    };
+    kept.heap_answers.insert(5, (0x4000, 0x4000));
+    let heap = [map(&[
+        ("size", Value::Uint(0x1_0000)),
+        ("heapType", Value::Uint(1)),
+        ("options", Value::List(Vec::new())),
+    ])];
+    let (with_buffer, textures_only) = (BLOCK, BLOCK + 0x2_0000);
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let made = addressed(with_buffer, 0x1_0000);
+        w.call("newHeapWithDescriptor:", 1, 2, &heap, &made)?;
+        let buffer = [Value::Uint(0x100), Value::Uint(0), Value::Uint(0x8000)];
+        let made = addressed(with_buffer + 0x8000, 0x100);
+        w.call("newBufferWithLength:options:offset:", 2, 3, &buffer, &made)?;
+        let made = addressed(textures_only, 0x1_0000);
+        w.call("newHeapWithDescriptor:", 1, 4, &heap, &made)?;
+        w.call("m2v.textureDescriptor", 0, 5, &[map(&[])], &[])?;
+        let texture = [Value::Object(5), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 4, 6, &texture, &[])?;
+        let word = (textures_only + 0x10).to_le_bytes().to_vec();
+        w.call(
+            "m2v.write",
+            3,
+            0,
+            &[Value::Uint(0), Value::Bytes(word)],
+            &[],
+        )
+    });
+    ended.unwrap();
+    assert_eq!(kept.no_buffer, [4]);
+    assert_eq!((report.pinned, report.heaps_outside), (Some(2), 1));
+    assert_eq!(report.total.stream["address_looking_words"], 1);
+    assert_eq!(report.total.stream["relocated_words"], 0);
+    let line =
+        "pinned 2 of 2; 1 heaps without buffers outside: every other object with a recorded \
+                range at its recorded address; the address map moves no word";
+    assert!(report.lines().contains(&line.to_owned()), "{report:?}");
 }
 
 /// A buffer whose recorded range meets a live buffer's in part, as a guest's allocator reuses

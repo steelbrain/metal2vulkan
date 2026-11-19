@@ -10,6 +10,9 @@
 //!   every object with a recorded range was made at it.
 //! - A recorded address the runtime refuses (it meets another pin's span) stops the play, naming
 //!   the object, with no other placement tried.
+//! - A heap the stream places no buffer in is made outside the recorded addresses: grown for a
+//!   texture the runtime makes larger than the heap, it leaves the buffer pinned past its recorded
+//!   span that address.
 //! - A command buffer waiting on an event the CPU signals later does not stop another queue's.
 //! - Textures made from descriptor records read back as written.
 //! - A render pass its setter records describe clears a drawable the stream never saw made.
@@ -310,8 +313,8 @@ fn a_data_word_in_a_live_range_plays_as_written() {
         assert_eq!(report.total.stream["address_looking_words"], 2);
         assert_eq!(report.total.stream["relocated_words"], 0);
         assert_eq!(report.pinned, Some(2));
-        let line = "pinned 2 of 2: every object with a recorded range at its recorded address; \
-                    the address map moves no word";
+        let line = "pinned 2 of 2; 0 heaps without buffers outside: every other object with a \
+                    recorded range at its recorded address; the address map moves no word";
         assert!(report.lines().contains(&line.to_string()), "{report:?}");
     });
 }
@@ -338,6 +341,47 @@ fn a_recorded_address_the_runtime_refuses_stops_the_play() {
         );
         assert!(stopped, "{ended:?}");
         assert_eq!(report.pinned, Some(1));
+    });
+}
+
+/// A 64-KiB heap pinned at its recorded address, the stream placing only a 256-KiB texture in it,
+/// and a buffer pinned at the first granule past the heap's recorded span (its four pages and a
+/// guard page, rounded up to 96 KiB): the player grows the heap for the texture, and since the
+/// heap holds no buffer it is made outside the recorded addresses, so the buffer is made at its
+/// own. Pinned at its recorded address, the grown heap's span would hold the buffer's.
+#[test]
+fn a_heap_without_buffers_leaves_the_next_pin_its_address() {
+    let dir = ScratchDir::new("replay-heap-without-buffers").unwrap();
+    let (heap, after) = (BLOCK, BLOCK + (96 << 10));
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let descriptor = Value::Map(vec![
+            ("size".into(), Value::Uint(64 << 10)),
+            ("heapType".into(), Value::Uint(1)),
+            ("options".into(), Value::List(Vec::new())),
+            ("pinnedGpuAddress".into(), Value::Address(heap)),
+        ]);
+        let made = addressed(heap, 64 << 10);
+        w.call("newHeapWithDescriptor:", 1, 2, &[descriptor], &made)?;
+        // RGBA8Unorm, 256 by 256, not mipmapped, Private as the heap is.
+        let two_d = [70, 256, 256].map(Value::Uint);
+        let two_d = [&two_d[..], &[Value::Bool(false)]].concat();
+        let selector = "MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:\
+                        mipmapped:";
+        w.call(selector, 0, 3, &two_d, &[])?;
+        w.call("setUsage:", 3, 0, &[Value::Uint(1)], &[])?;
+        w.call("setResourceOptions:", 3, 0, &[Value::Uint(2 << 4)], &[])?;
+        let texture = [Value::Object(3), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 2, 4, &texture, &[])?;
+        pinned_buffer(w, 5, after, 0x100)
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("heap-without-buffers", device, &path);
+        assert!(report.relaid.grown >= 192 << 10, "{:?}", report.relaid);
+        assert_eq!((report.pinned, report.heaps_outside), (Some(1), 1));
+        let line = "pinned 1 of 1; 1 heaps without buffers outside: every other object with a \
+                    recorded range at its recorded address; the address map moves no word";
+        assert!(report.lines().contains(&line.to_string()), "{report:?}");
     });
 }
 

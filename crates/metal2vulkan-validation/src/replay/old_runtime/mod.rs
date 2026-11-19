@@ -85,6 +85,9 @@ pub struct OldRuntime {
     /// arguments is made of.
     display: Option<Vec<u8>>,
     read_backs_left_out: u64,
+    /// The heap the next call makes, where the stream places no buffer in it
+    /// (`Backend::holds_no_buffer`): it is made outside the space.
+    no_buffer: Option<u64>,
 }
 
 /// A made object with no address.
@@ -181,6 +184,7 @@ impl OldRuntime {
             marked: false,
             read_backs_left_out: 0,
             display: None,
+            no_buffer: None,
         }
     }
 
@@ -378,7 +382,10 @@ impl OldRuntime {
                 (Object::Block(heap, whole), made)
             }
             "newHeapWithDescriptor:" => {
-                let at = address_placement(call)?;
+                let at = match self.no_buffer.take() {
+                    Some(heap) if heap == call.result => AddressPlacement::Outside,
+                    _ => address_placement(call)?,
+                };
                 let descriptor = descriptors::heap(call)?.with_placement(at);
                 let heap = device.new_heap(&descriptor).map_err(unplaced(call, at))?;
                 let made = Made {
@@ -1084,6 +1091,12 @@ impl Backend for OldRuntime {
     /// recorded range is made at it (`address_placement`), every other one outside the space.
     fn places_at_recorded(&self) -> bool {
         true
+    }
+
+    /// The heap goes outside the space: no address the program holds lies in it, and a heap the
+    /// player grew for the runtime's sizes would hold pages past its recorded span.
+    fn holds_no_buffer(&mut self, heap: u64) {
+        self.no_buffer = Some(heap);
     }
 
     fn managed_texture(&self, texture: u64) -> Option<bool> {

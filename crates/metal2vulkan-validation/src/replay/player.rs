@@ -159,6 +159,13 @@ pub trait Backend {
     /// recording's runtime did ignores it.
     fn recorded_id(&mut self, _object: u64, _id: u64) {}
 
+    /// The stream places no buffer in heap `heap`, which the next call makes (read ahead): no
+    /// address the program holds lies in it, as a texture has none and a heap answers none. A
+    /// backend that makes objects at their recorded addresses (`places_at_recorded`) makes it
+    /// outside them, so that a heap the player grew for the runtime's sizes (`relay`) meets no
+    /// other object's recorded range; another ignores it.
+    fn holds_no_buffer(&mut self, _heap: u64) {}
+
     /// Whether the backend makes every object with a recorded range at its recorded address (the
     /// `gpuAddress` it answered) and every other object outside the addresses a recording holds.
     /// The address map then moves no address argument: each range's new address is its recorded
@@ -334,6 +341,11 @@ pub struct Report {
     /// one of them (another stops the play); `None` on a backend the address map moves address
     /// arguments for.
     pub pinned: Option<u64>,
+    /// On a backend that makes objects at their recorded addresses, the heaps with a recorded
+    /// range the stream places no buffer in, which it made outside the recorded addresses
+    /// (`Backend::holds_no_buffer`). Their ranges keep their recorded addresses in the address
+    /// map.
+    pub heaps_outside: u64,
     /// The placement heaps the player laid out again for the runtime's sizes and alignments
     /// (`relay`).
     pub relaid: Relaid,
@@ -717,8 +729,9 @@ impl Report {
         }
         if let Some(pinned) = self.pinned {
             lines.push(format!(
-                "pinned {pinned} of {pinned}: every object with a recorded range at its recorded \
-                 address; the address map moves no word"
+                "pinned {pinned} of {pinned}; {} heaps without buffers outside: every other object \
+                 with a recorded range at its recorded address; the address map moves no word",
+                self.heaps_outside
             ));
         }
         let relaid = self.relaid;
@@ -870,6 +883,15 @@ fn placement_heap(call: &Call) -> Option<u64> {
     (field("heapType")? == 1).then_some(field("size")?)
 }
 
+/// Whether `selector` places a buffer in its receiver where that is a heap: a placement heap's
+/// `newBufferWithLength:options:offset:` or an automatic heap's `newBufferWithLength:options:`.
+fn places_buffer(selector: &str) -> bool {
+    matches!(
+        selector,
+        "newBufferWithLength:options:offset:" | "newBufferWithLength:options:"
+    )
+}
+
 /// The argument of a placement heap's call that is the offset it places at.
 fn placement_offset(selector: &str) -> Option<usize> {
     match selector {
@@ -900,6 +922,10 @@ pub struct Player<'b, B: Backend> {
     /// The live texture descriptors marked `outside` and the textures made of them: objects outside
     /// the program's IDs, whose `gpuResourceID` the program never saw (section 5).
     outside: HashSet<u64>,
+    /// On a backend that makes objects at their recorded addresses, the heaps with a recorded
+    /// range the stream places no buffer in, read ahead: each one's id and the position of the
+    /// call that makes it.
+    bufferless: HashSet<(u64, u64)>,
     /// The `m2v.privateBytes` records, read ahead, by the position of the dispatch each names.
     ahead: HashMap<u64, Vec<Around>>,
     /// The placement heaps' layouts on the runtime, read ahead, by heap.
@@ -1128,6 +1154,7 @@ impl<'b, B: Backend> Player<'b, B> {
             events: HashMap::new(),
             compared: HashSet::new(),
             outside: HashSet::new(),
+            bufferless: HashSet::new(),
             ahead: HashMap::new(),
             layouts: HashMap::new(),
             guest_device: None,
@@ -1239,10 +1266,11 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     /// Index the `m2v.privateBytes` records by the dispatch each names, which comes before it, and
-    /// the ID the program saw of each object by its making (`recorded_ids`), and lay out each
-    /// placement heap for the runtime's answers (`relay`). A stream error ends the reading: the
-    /// play meets it where it lies, as it meets a placement whose size the runtime does not
-    /// answer.
+    /// the ID the program saw of each object by its making (`recorded_ids`), lay out each
+    /// placement heap for the runtime's answers (`relay`), and, on a backend that makes objects
+    /// at their recorded addresses, find the heaps with a recorded range the stream places no
+    /// buffer in (`bufferless`). A stream error ends the reading: the play meets it where it lies,
+    /// as it meets a placement whose size the runtime does not answer.
     fn read_ahead(&mut self, stream: &StreamReader) -> Result<(), PlayError> {
         let mut ahead = stream.reopened()?;
         let mut position = 0;
@@ -1255,6 +1283,11 @@ impl<'b, B: Backend> Player<'b, B> {
         let mut heaps: HashMap<u64, (u64, Placements)> = HashMap::new();
         // The objects made on each recorded device.
         let mut made_on: BTreeMap<u64, u64> = BTreeMap::new();
+        // Each heap making with a recorded range (its id and position), the position of each live
+        // one's by its id, and those the stream places a buffer in.
+        let mut heap_makings = Vec::new();
+        let mut live_heaps: HashMap<u64, u64> = HashMap::new();
+        let mut with_buffer = HashSet::new();
         while let Ok(Some(call)) = ahead.next_call() {
             if &*call.selector == "MTLCreateSystemDefaultDevice" {
                 made_on.entry(call.result).or_default();
@@ -1270,6 +1303,14 @@ impl<'b, B: Backend> Player<'b, B> {
             if let (Some(id), "gpuResourceID") = (answer, &*call.selector) {
                 if let Some(&at) = made_at.get(&call.receiver) {
                     self.recorded_ids.entry((call.receiver, at)).or_insert(id);
+                }
+            }
+            if &*call.selector == "newHeapWithDescriptor:" && call.answer("gpuAddress").is_some() {
+                heap_makings.push((call.result, position));
+                live_heaps.insert(call.result, position);
+            } else if places_buffer(&call.selector) {
+                if let Some(&at) = live_heaps.get(&call.receiver) {
+                    with_buffer.insert((call.receiver, at));
                 }
             }
             match &*call.selector {
@@ -1330,6 +1371,10 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.report.relaid.grown += layout.size.saturating_sub(size);
                 self.layouts.insert(heap, layout);
             }
+        }
+        if self.report.pinned.is_some() {
+            let bufferless = heap_makings.into_iter();
+            self.bufferless = bufferless.filter(|m| !with_buffer.contains(m)).collect();
         }
         Ok(())
     }
@@ -1639,6 +1684,10 @@ impl<'b, B: Backend> Player<'b, B> {
         if let Some(&id) = (self.recorded_ids).get(&(resolved.result, self.position)) {
             self.backend.recorded_id(resolved.result, id);
         }
+        let bufferless = self.bufferless.remove(&(resolved.result, self.position));
+        if bufferless {
+            self.backend.holds_no_buffer(resolved.result);
+        }
         let made = self.run(&resolved)?;
         self.track(&resolved);
         let backend = &*self.backend;
@@ -1666,6 +1715,12 @@ impl<'b, B: Backend> Player<'b, B> {
             let base = match &mut self.report.pinned {
                 Some(pinned) if made.address == Some(address) => {
                     *pinned += 1;
+                    address
+                }
+                // A heap without buffers, made outside the recorded addresses: no address the
+                // program holds lies in it, so its range keeps its recorded address in the map.
+                Some(_) if bufferless => {
+                    self.report.heaps_outside += 1;
                     address
                 }
                 Some(_) => {
