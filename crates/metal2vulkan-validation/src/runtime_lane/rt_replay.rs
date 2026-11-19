@@ -365,11 +365,12 @@ fn the_host_s_library_from_source_is_made_of_its_display_library() {
         let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
         let (report, ended) = Player::new(&mut backend).play(&mut reader);
         ended.unwrap();
-        report.total.executed["skipped_objects"]
+        let executed = &report.total.executed;
+        (executed["skipped_objects"], executed["skipped_calls"])
     };
-    assert_eq!(played(Some(render_library(&dir))), 0);
-    // Without it, the library and the function made of it are skipped.
-    assert_eq!(played(None), 2);
+    assert_eq!(played(Some(render_library(&dir))), (0, 0));
+    // Without it, the library is skipped, and so is the call on it that makes the function.
+    assert_eq!(played(None), (1, 1));
 }
 
 #[test]
