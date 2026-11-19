@@ -13,6 +13,7 @@ use crate::{
     Device, DispatchType, MemoryClass,
 };
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// The words of the long command buffer's buffer, each dispatch's grid: 64 MiB.
 const WORDS: u32 = 1 << 24;
@@ -24,6 +25,10 @@ const LONG_NS: u64 = 250_000_000;
 
 /// The most dispatches the long command buffer holds, on the fastest device.
 const MOST: u64 = 20_000;
+
+/// The dispatches whose time from commit to completion sizes the long command buffer: enough that
+/// the commit's and the completion's own latency are a small part of it.
+const PROBE: u64 = 64;
 
 /// A Private buffer of [`WORDS`] words.
 fn words(device: &Device) -> Buffer {
@@ -77,23 +82,27 @@ fn every_device_reports_a_short_command_buffer_while_a_long_one_after_it_runs() 
             device.new_command_queue(4).expect("a queue"),
             device.new_command_queue(4).expect("a queue"),
         );
-        // The long command buffer's size: as many dispatches as take LONG_NS, from the GPU
-        // time of eight.
-        let probe = long(&long_queue, &state, &buffer, 8);
+        // The long command buffer's size: as many dispatches as take LONG_NS, from the host
+        // time [`PROBE`] take from their commit to their completion. Its GPU times cannot size
+        // it: Vulkan lets a timestamp be written at any stage logically later than the one named,
+        // so a command buffer's start and end may read as one instant (KosmicKrisp's do for one
+        // compute encoder's work). A first command buffer of one dispatch runs before it, so
+        // nothing a first use waits for is timed.
+        let first = long(&long_queue, &state, &buffer, 1);
+        first.commit().expect("a commit");
+        finished(name, &first);
+        let probe = long(&long_queue, &state, &buffer, PROBE);
+        let began = Instant::now();
         probe.commit().expect("a commit");
         finished(name, &probe);
-        let eight = probe.gpu_end_time().saturating_sub(probe.gpu_start_time());
-        assert!(
-            eight > 0,
-            "{name}: the probe's GPU times {}..{}, its kernel times {}..{}, its status {:?}, its error {:?}",
-            probe.gpu_start_time(),
-            probe.gpu_end_time(),
-            probe.kernel_start_time(),
-            probe.kernel_end_time(),
+        let took = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        assert_eq!(
             probe.status(),
+            CommandBufferStatus::Completed,
+            "{name}: the probe's status, its error {:?}",
             probe.error()
         );
-        let count = (LONG_NS * 8).div_ceil(eight).clamp(8, MOST);
+        let count = (LONG_NS * PROBE).div_ceil(took.max(1)).clamp(8, MOST);
 
         // Both command buffers are made before the batch that holds the queue's work, so
         // nothing they make waits behind it.
