@@ -500,13 +500,15 @@ impl Pass {
         };
         // Vulkan renders one sample count into every attachment of a pass
         // (VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857).
+        let mut samples = vk::SampleCountFlags::empty();
         for target in pass.targets() {
-            let samples = target.attachment.samples;
-            if !pass.samples.is_empty() && pass.samples != samples {
+            let own = target.attachment.samples;
+            if !samples.is_empty() && samples != own {
                 return Err(gap(RenderPassKind::SampleCounts));
             }
-            pass.samples = samples;
+            samples = own;
         }
+        pass.samples = samples;
         pass.area = pass.targets().fold(pass.area, |area, t| {
             let extent = t.attachment.extent;
             [area[0].min(extent[0]), area[1].min(extent[1])]
