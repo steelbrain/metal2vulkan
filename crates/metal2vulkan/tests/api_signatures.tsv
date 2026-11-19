@@ -9593,7 +9593,7 @@ method	metal2vulkan-rt::ComputePipelineDescriptor::new	pub fn new(kernel: StageS
 method	metal2vulkan-rt::ComputePipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error>
 method	metal2vulkan-rt::ComputePipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
 method	metal2vulkan-rt::ComputePipelineDescriptor::uses_direct_arguments	pub fn uses_direct_arguments(&self, budget: &crate::Budget) -> Result<bool, Error>
-method	metal2vulkan-rt::ComputePipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, dimensions: [u32; 3]) -> Result<u32, Error>
+method	metal2vulkan-rt::ComputePipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, _dimensions: [u32; 3]) -> Result<u64, Error>
 method	metal2vulkan-rt::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
 method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
 method	metal2vulkan-rt::ComputePipelineState::static_threadgroup_memory_length	pub fn static_threadgroup_memory_length(&self) -> u32
@@ -9722,6 +9722,8 @@ method	metal2vulkan-rt::RenderPipelineDescriptor::slot_writes	pub fn slot_writes
 method	metal2vulkan-rt::RenderPipelineDescriptor::stages_using_direct_arguments	pub fn stages_using_direct_arguments(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Vec<DirectArgumentUse>, Error>
 method	metal2vulkan-rt::RenderPipelineDescriptor::unwritten_fragment_inputs	pub fn unwritten_fragment_inputs(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Option<UnwrittenFragmentInputs>, Error>
 method	metal2vulkan-rt::RenderPipelineDescriptor::vertex_returns_value	pub fn vertex_returns_value(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
+method	metal2vulkan-rt::RenderPipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, dimensions: [u32; 3]) -> Result<u64, Error>
+method	metal2vulkan-rt::RenderPipelineState::imageblock_sample_length	pub fn imageblock_sample_length(&self) -> Result<u32, Error>
 method	metal2vulkan-rt::RenderPipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
 method	metal2vulkan-rt::RenderPipelineState::texture_accesses	pub fn texture_accesses(&self, stage: Stage) -> Vec<(u32, BindingAccess)>
 method	metal2vulkan-rt::ResourceId::to_bits	pub fn to_bits(self) -> u64
@@ -13761,7 +13763,7 @@ variant	metal2vulkan-rt::Gap::FenceOtherQueue	FenceOtherQueue
 variant	metal2vulkan-rt::Gap::FillAlignment	FillAlignment { start: u64, end: u64 }
 variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::HeapTexture	HeapTexture { pixel_format: PixelFormat }
-variant	metal2vulkan-rt::Gap::ImageblockMemoryLength	ImageblockMemoryLength { dimensions: [u32; 3] }
+variant	metal2vulkan-rt::Gap::ImageblockLength	ImageblockLength
 variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
 variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
 variant	metal2vulkan-rt::Gap::LodClamps	LodClamps

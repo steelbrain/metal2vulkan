@@ -1341,21 +1341,18 @@ impl ComputePipelineState {
     }
 
     /// `imageblockMemoryLengthForDimensions:`: 0 for a kernel that declares no imageblock, as
-    /// Metal answers. A kernel that reaches an imageblock has no state here
-    /// ([`Gap::KernelInput`]).
+    /// Metal answers, whatever the dimensions. A kernel that reaches an imageblock has no state
+    /// here ([`Gap::KernelInput`]).
     ///
-    /// Err: [`Gap::ImageblockMemoryLength`] for a kernel that declares an imageblock it never
-    /// reaches, or whose compile kept no reflection to tell: its length is not measured against
-    /// Metal's.
+    /// Err: [`Gap::ImageblockLength`] for a kernel that declares an imageblock it never reaches,
+    /// or whose compile kept no reflection to tell: its length is not measured against Metal's.
     pub fn imageblock_memory_length_for_dimensions(
         &self,
-        dimensions: [u32; 3],
-    ) -> Result<u32, Error> {
+        _dimensions: [u32; 3],
+    ) -> Result<u64, Error> {
         match self.inner.compiled.answers.imageblock {
             Some(false) => Ok(0),
-            Some(true) | None => Err(Error::Unsupported(Gap::ImageblockMemoryLength {
-                dimensions,
-            })),
+            Some(true) | None => Err(Error::Unsupported(Gap::ImageblockLength)),
         }
     }
 

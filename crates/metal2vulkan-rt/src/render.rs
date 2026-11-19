@@ -170,6 +170,12 @@ pub(crate) struct RenderCompiled {
     /// with its use.
     numbered: Vec<NumberedSampler>,
     constexprs: Vec<(usize, CombinedSampler)>,
+    /// Metal's `imageblockSampleLength` of the content: its color attachments' texels as Metal
+    /// packs them (`metal::format::imageblock_sample_length`); `None` where a color format has no
+    /// measured place in Metal's record.
+    imageblock_sample: Option<u32>,
+    /// The descriptor's `rasterSampleCount`.
+    samples: u32,
 }
 
 /// One stage's shader module and what a `VkPipeline` of it takes.
@@ -750,6 +756,10 @@ impl RenderCompiled {
         notes.dedup();
         let fixed = Fixed::of(&pipeline);
         core.counters.rise(Gauge::RenderContents);
+        // A state whose fragment function reaches an imageblock is not made (`unbuilt`), so its
+        // sample is its colors alone.
+        let colors = (descriptor.color_attachments).map(|color| color.map(|c| c.pixel_format));
+        let imageblock_sample = metal2vulkan::metal::format::imageblock_sample_length(&colors);
         let mut compiled = RenderCompiled {
             core: Arc::clone(core),
             stages,
@@ -760,6 +770,8 @@ impl RenderCompiled {
             draws,
             numbered,
             constexprs,
+            imageblock_sample,
+            samples,
         };
         // Made whole before the `VkPipeline`, so dropping it releases what was made.
         let class = match compiled.draws.patches {
@@ -942,6 +954,38 @@ impl RenderPipelineState {
             .filter(|&&(at, _, _)| at == table)
             .map(|&(_, slot, access)| (slot, access.binding()))
             .collect()
+    }
+
+    /// `imageblockSampleLength`: the bytes of one sample of the state's imageblock, its color
+    /// attachments' texels as Metal packs them, each set format's in index order at its
+    /// component's alignment, depth and stencil excluded
+    /// (`metal2vulkan::metal::format::imageblock_sample_length`, measured on an M3 Max and an M4).
+    /// A state whose fragment function reaches an imageblock is not made
+    /// ([`Gap::RenderPipeline`] of kind `Imageblock`), so no explicit imageblock adds to it.
+    ///
+    /// Err: [`Gap::ImageblockLength`] for a color format that has no measured place in Metal's
+    /// record (no direct Vulkan format, or no whole-byte component or packed word).
+    pub fn imageblock_sample_length(&self) -> Result<u32, Error> {
+        (self.inner.compiled.imageblock_sample).ok_or(Error::Unsupported(Gap::ImageblockLength))
+    }
+
+    /// `imageblockMemoryLengthForDimensions:`: the sample length
+    /// ([`RenderPipelineState::imageblock_sample_length`]) times the dimensions' width and height
+    /// and the state's raster sample count, the depth ignored, none rounded (measured on an M3 Max
+    /// and an M4).
+    ///
+    /// Err: as [`RenderPipelineState::imageblock_sample_length`].
+    pub fn imageblock_memory_length_for_dimensions(
+        &self,
+        dimensions: [u32; 3],
+    ) -> Result<u64, Error> {
+        let [width, height, _] = dimensions.map(u64::from);
+        let samples = u64::from(self.inner.compiled.samples);
+        let sample = u64::from(self.imageblock_sample_length()?);
+        Ok(sample
+            .saturating_mul(width)
+            .saturating_mul(height)
+            .saturating_mul(samples))
     }
 
     /// Whether two handles are one state.

@@ -1529,7 +1529,7 @@ that touch blocks first.
   `imageblockMemoryLengthForDimensions:` (`imageblock_memory_length_for_dimensions`) answers 0
   for a kernel that declares no imageblock, as Metal does. A kernel that reaches an imageblock
   has no state (`Gap::KernelInput`); one that declares an imageblock it never reaches, or whose
-  compile kept no reflection to tell, answers `Gap::ImageblockMemoryLength`, as no case measures
+  compile kept no reflection to tell, answers `Gap::ImageblockLength`, as no case measures
   Metal's length.
 
 ### The cache directory
@@ -1751,6 +1751,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   (`Stage::Vertex`) or fragment (`Stage::Fragment`) function uses, by index, with the access a
   draw of the state marks in its hazards for the texture bound there, as a compute state's
   `texture_accesses` answers a kernel's; nothing for another stage.
+- `RenderPipelineState::imageblock_sample_length` answers Metal's `imageblockSampleLength`: the
+  color attachments' texels as Metal packs them, each set format's in index order at its
+  component's alignment, depth and stencil excluded (measured on an M3 Max and an M4:
+  `[R8Unorm, R32Float]` is 8). No explicit imageblock adds to it, as a state whose fragment
+  function reaches one is not made. `imageblock_memory_length_for_dimensions` answers
+  `imageblockMemoryLengthForDimensions:`: that length times the width, the height and the raster
+  sample count, none rounded. A color format with no measured place in Metal's record is
+  `Gap::ImageblockLength`.
 - A state numbers its functions' samplers as a compute state numbers its kernel's:
   `sampler_ids` takes the vertex function's, then the fragment function's, each in Metal's order,
   and answers the index the consumer gives each. Each constexpr sampler a function samples
