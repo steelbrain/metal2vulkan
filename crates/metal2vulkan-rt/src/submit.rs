@@ -1525,8 +1525,8 @@ impl WorkState {
             {
                 pending.held = hold(&fifo.queue, &pending.gpu);
                 if pending.held.is_none() {
-                    cb.scheduled(now);
                     let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+                    cb.scheduled(now, !scheduled.is_empty());
                     if !scheduled.is_empty() {
                         joined.push((Arc::clone(&cb), scheduled));
                     }
@@ -1665,8 +1665,8 @@ impl WorkState {
         };
         pending.held = hold(&fifo.queue, &pending.gpu);
         if !pending.gpu.presents() && pending.held.is_none() {
-            cb.scheduled(now);
             let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+            cb.scheduled(now, !scheduled.is_empty());
             if !scheduled.is_empty() {
                 joined.push((Arc::clone(&cb), scheduled));
             }
@@ -2195,8 +2195,8 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         let now = times::host_time();
         for (cb, pending, error) in &mut finished {
             if error.is_none() && pending.gpu.presents() && pending.held.is_none() {
-                cb.scheduled(now);
                 let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+                cb.scheduled(now, !scheduled.is_empty());
                 if !scheduled.is_empty() {
                     command::run_scheduled(Arc::clone(cb), scheduled);
                 }

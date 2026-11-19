@@ -1131,7 +1131,10 @@ made, with no lock, and never rewritten for layouts.
   thread learns of it; one that ends without a submission: once it ends, before it retires; one
   held for a shared event's value: on the completion thread, once it is reached), with no lock of
   the runtime's held. In the handler its status is `Scheduled` and its kernel times are
-  set, and it runs before the command buffer's completed handlers. The queue's
+  set, and it runs before the command buffer's completed handlers. `wait_until_scheduled` returns
+  once the scheduled handlers have returned, as Metal's does: Apple's page for
+  `waitUntilScheduled` names both events, the command buffer scheduled and its scheduled
+  handlers invoked. The queue's
   later submissions wait while it runs, and it may run while another command buffer's completed
   handler runs on the completion thread. A scheduled handler may read the command buffer's status
   and times, enqueue command buffers, make objects that take no upload, and do the consumer's own

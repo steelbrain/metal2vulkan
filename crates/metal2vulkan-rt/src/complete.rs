@@ -573,7 +573,7 @@ pub(crate) fn run(core: Arc<Core>) {
                 match retire.iter_mut().find_map(|retiree| retiree.failed(&cb)) {
                     Some(handlers) => handlers.scheduled = scheduled,
                     None => {
-                        cb.scheduled(times::host_time());
+                        cb.scheduled(times::host_time(), !scheduled.is_empty());
                         if !scheduled.is_empty() {
                             command::run_scheduled(cb, scheduled);
                         }

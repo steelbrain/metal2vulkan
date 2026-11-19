@@ -109,6 +109,9 @@ struct CbState {
     error: Option<CommandBufferError>,
     /// The handlers have run: waits for completion return.
     finished: bool,
+    /// Scheduled, and its scheduled handlers have returned (or it has none): waits for
+    /// scheduling return.
+    scheduled_ran: bool,
     /// Until commit: what is recorded, and the device.
     building: Option<Building>,
     /// Ended while enqueued and not yet committed (an abandon, a loss or a quiesce): the commit
@@ -329,6 +332,7 @@ impl CommandBuffer {
                     status: CommandBufferStatus::NotEnqueued,
                     error: None,
                     finished: false,
+                    scheduled_ran: false,
                     building: Some(Building {
                         device,
                         gpu: Gpu {
@@ -650,10 +654,20 @@ impl CommandBuffer {
         Ok(())
     }
 
-    /// `waitUntilScheduled`: returns once the command buffer is scheduled, or has completed or
-    /// ended. It sends nothing: a command buffer held in a group is scheduled already, and one
-    /// that presents a drawable ([`present_drawable`](Self::present_drawable)) is scheduled once
-    /// its submission has passed `vkQueueSubmit2`.
+    /// `waitUntilScheduled`: returns once the command buffer is scheduled and its scheduled
+    /// handlers ([`add_scheduled_handler`](Self::add_scheduled_handler)) have returned, or once it
+    /// has completed or ended. Apple's page for the method names both events, the second being
+    /// that "The command buffer invokes all the completion handlers your app submits with
+    /// addScheduledHandler(_:)". Its status reads [`CommandBufferStatus::Scheduled`] inside its
+    /// scheduled handlers, before this returns. It sends nothing: a command buffer held in a group
+    /// is scheduled already, and one that presents a drawable
+    /// ([`present_drawable`](Self::present_drawable)) is scheduled once its submission has passed
+    /// `vkQueueSubmit2`. In a completed handler or a listener of its device, on the completion
+    /// thread, it waits for a scheduled command buffer's handlers, which run on the submit thread.
+    ///
+    /// A call from inside its own scheduled handler keeps the answer every scheduled handler
+    /// gets, [`Refusal::InScheduledHandler`]: the submit thread that runs the handler is the one
+    /// the wait would wait for.
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Refusal::WaitOnOwnThread`]
     /// in a completed handler or a listener of its device for one not yet scheduled.
@@ -661,13 +675,13 @@ impl CommandBuffer {
         not_in_scheduled_handler()?;
         let own = self.on_completion_thread();
         let mut state = self.state();
-        while !matches!(
-            state.status,
-            CommandBufferStatus::Scheduled
-                | CommandBufferStatus::Completed
-                | CommandBufferStatus::Error
-        ) {
-            if own {
+        while !(state.scheduled_ran
+            || matches!(
+                state.status,
+                CommandBufferStatus::Completed | CommandBufferStatus::Error
+            ))
+        {
+            if own && state.status != CommandBufferStatus::Scheduled {
                 return Err(Error::Refused(Refusal::WaitOnOwnThread));
             }
             state = self.wait(state);
@@ -1380,10 +1394,12 @@ impl Building {
 
 impl CbInner {
     /// The last segment joined a submission at `now`: passed to `vkQueueSubmit2` at once, or held
-    /// in its queue's group.
-    pub(crate) fn scheduled(&self, now: u64) {
+    /// in its queue's group. With `handlers`, its scheduled handlers are still to run
+    /// ([`run_scheduled`]), and a wait for its scheduling waits for them.
+    pub(crate) fn scheduled(&self, now: u64, handlers: bool) {
         let mut state = lock(&self.state);
         state.status = CommandBufferStatus::Scheduled;
+        state.scheduled_ran = !handlers;
         let before = self.queue.last_scheduled.fetch_max(now, Relaxed);
         state.times.kernel_start = state.times.kernel_start.max(before);
         state.times.kernel_end = now;
@@ -1425,16 +1441,19 @@ pub(crate) fn not_in_scheduled_handler() -> Result<(), Error> {
 /// thread for one held at `Committed` for a shared event's value (`Pending::held`), before it
 /// retires.
 pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
-    /// Clears the mark as the handlers end, a panic among them too.
-    struct Running;
+    /// As the handlers end, a panic among them too: clears the mark, and has a wait for the
+    /// command buffer's scheduling return.
+    struct Running(Arc<CbInner>);
     impl Drop for Running {
         fn drop(&mut self) {
             IN_SCHEDULED_HANDLER.set(false);
+            lock(&self.0.state).scheduled_ran = true;
+            self.0.changed.notify_all();
         }
     }
+    let running = Running(Arc::clone(&inner));
     let handle = CommandBuffer { inner };
     IN_SCHEDULED_HANDLER.set(true);
-    let running = Running;
     for handler in handlers {
         handler(&handle);
     }
