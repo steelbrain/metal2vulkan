@@ -303,6 +303,30 @@ mod tests {
         }
     }
 
+    /// Metal's recorded reads are the bytes the case wrote, both of them, in every run: what Metal
+    /// answers is the texels themselves, so a side that answers them answers Metal.
+    #[test]
+    fn every_recorded_read_is_what_the_case_wrote() {
+        let mut differ = Vec::new();
+        for (name, surface) in table() {
+            let case = SurfaceTextures { name, surface };
+            let recording = crate::recording::read(name)
+                .unwrap_or_else(|why| panic!("{name}: no recording ({why})"));
+            for answer in &recording.answers {
+                for outcome in &answer.outcomes {
+                    for site in ["texels", "copied"] {
+                        let held = outcome.transcript.root.child(site);
+                        match held.map(|node| &node.observed.value) {
+                            Some(Value::Bytes(bytes)) if *bytes == case.texels() => {}
+                            _ => differ.push(format!("{name}/{site}")),
+                        }
+                    }
+                }
+            }
+        }
+        assert!(differ.is_empty(), "Metal read other bytes at {differ:?}");
+    }
+
     /// The bytes written are below `0x40` each, so every half of an `RGBA16Float` texel is
     /// finite, and they name their texel: no two texels of a row hold the same bytes.
     #[test]
