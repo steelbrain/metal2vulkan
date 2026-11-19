@@ -10,7 +10,7 @@ mod on_device {
     use crate::fill::ZEROS;
     use crate::memory::MakerTest;
     use crate::ring::{Writes, CHUNK};
-    use crate::tests::command::on_device::each_device_with;
+    use crate::tests::command::on_device::{each_device_with, within};
     use crate::{
         Device, DeviceOptions, HostBytes, MemoryClass, Metrics, PixelFormat, Region,
         SiteAllocations, StorageMode, Texture, TextureDescriptor, TextureType, TextureUsage,
@@ -146,7 +146,11 @@ mod on_device {
 
         // A texture of 24 MiB, past every allocation of the pool, whose texture block's
         // device-local allocation fails: an allocation of its own. A spill of the block into
-        // another type the device offers is the texture block's.
+        // another type the device offers is the texture block's. The failure is set once the
+        // block-maker thread holds a wholly free unit of each class, so no unit it makes takes it.
+        within("a wholly free unit in each class", || {
+            core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
+        });
         core.fail_private.store(1, Relaxed);
         let before = device.counters().metrics();
         let own = texture(name, device, 2048, 3072);
