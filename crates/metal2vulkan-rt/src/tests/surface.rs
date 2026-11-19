@@ -536,7 +536,10 @@ mod on_device {
                                 before.surfaces_in_place + 1,
                                 "{label}"
                             );
-                            // The make waits once, for at least the submission of the moves.
+                            // The make waits once, for at least the submission of the moves:
+                            // nothing else submits here, so the moves are still pending at the
+                            // make's flush, and their submission, made after the wait began, is
+                            // counted, however fast the device completes it.
                             assert_eq!(waited, 1, "{label}: the make's wait counted");
                             assert!(behind >= 1, "{label}: {behind} submissions waited for");
                             assert!(

@@ -1306,8 +1306,9 @@ pub struct Metrics {
     pub surface_wait_max_nanos: u64,
     /// The runtime's submissions the surface waits waited for, in total: at each wait's start,
     /// those of the device not yet complete, through the one that moves the planes, which is
-    /// among them. Another API's work is not counted: a wait much longer than these
-    /// submissions' GPU times waited behind work the runtime did not submit.
+    /// among them unless it had completed before the wait began (where another thread's
+    /// submission took the moves first). Another API's work is not counted: a wait much longer
+    /// than these submissions' GPU times waited behind work the runtime did not submit.
     pub surface_wait_submissions: u64,
     /// `vkQueueBindSparse` calls: one for each import over several dma-bufs
     /// (`Device::import_dma_bufs`, on Unix), binding its imports into its buffer. Each signals a

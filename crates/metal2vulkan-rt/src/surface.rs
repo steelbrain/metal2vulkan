@@ -667,12 +667,14 @@ impl Device {
                 }
             }
         }
-        // The images move to the general layout before the handle leaves.
-        let value = core.work.flush();
+        // The images move to the general layout before the handle leaves. The progress reached
+        // is read before the flush wakes the submit thread: a submission it then makes, the
+        // moves' among them, cannot have completed by the read, so it is counted.
         let began = host_time();
         // SAFETY: the progress semaphore is the device's, live while the core is.
         let reached = unsafe { core.device.get_semaphore_counter_value(core.done.progress) }
             .map_err(Error::vulkan("vkGetSemaphoreCounterValue"))?;
+        let value = core.work.flush();
         core.done.wait(core, value)?;
         let waited = host_time().saturating_sub(began);
         core.counters

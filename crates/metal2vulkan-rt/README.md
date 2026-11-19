@@ -622,8 +622,9 @@ list; a view of another format it does not list is `Gap::TextureView` of
 call waits for before the handle leaves, and stay in it through every copy. That wait is counted
 in `Metrics::surface_waits`, with its time in `surface_wait_nanos`, the longest in
 `surface_wait_max_nanos`, and in `surface_wait_submissions` the runtime's submissions it waited
-for: those not yet complete as it began, the one that moves the planes among them. A wait far
-longer than those submissions' GPU times waited behind work the runtime did not submit.
+for: those not yet complete as it began, the one that moves the planes among them unless it
+completed first (where another thread's submission took the moves). A wait far longer than those
+submissions' GPU times waited behind work the runtime did not submit.
 
 **The copy form** is taken where any of that fails, and the answer's `SurfaceForm::Copy` names
 why (`SurfaceCopy`): `NoModifier`, `Tiling`, `Dedicated`, `Pitch`, `Start` or `MemoryType`. The
