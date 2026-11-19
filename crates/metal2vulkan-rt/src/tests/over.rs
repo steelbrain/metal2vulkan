@@ -194,7 +194,7 @@ mod on_device {
                 size: [5, 4, 1],
             };
             let before = counters.metrics().bytes_copied;
-            (texture.replace_region(small, 0, 0, &[0xA5; 80], 20, 0))
+            (texture.replace_region(small, 0, 0, crate::HostBytes::from(&[0xA5; 80][..]), 20, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             for row in 2..6 {
                 let at = (offset + row * pitch + 12) as usize;
@@ -230,7 +230,7 @@ mod on_device {
             let source: Vec<u8> = (0..ROW * u64::from(HEIGHT))
                 .map(|i| (i % 241) as u8 ^ 0x3C)
                 .collect();
-            (plain.replace_region(whole(), 0, 0, &source, ROW, 0))
+            (plain.replace_region(whole(), 0, 0, crate::HostBytes::from(&source[..]), ROW, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let queue = device.new_command_queue(4).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -323,7 +323,7 @@ mod on_device {
                 image(name, &over) == rows(&bytes, offset, pitch),
                 "{name}: the image over a Managed buffer"
             );
-            (over.replace_region(small, 0, 0, &[0x5A; 80], 20, 0))
+            (over.replace_region(small, 0, 0, crate::HostBytes::from(&[0x5A; 80][..]), 20, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             for row in 2..6 {
                 let at = (offset + row * pitch + 12) as usize;

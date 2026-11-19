@@ -1066,7 +1066,7 @@ pub(crate) mod on_device {
                 origin: [4, 4, 0],
                 size: [4, 4, 1],
             };
-            (texture.replace_region(small, 1, 0, &[0x11; 64], 16, 0))
+            (texture.replace_region(small, 1, 0, crate::HostBytes::from(&[0x11; 64][..]), 16, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             fill_region(&mut now, places[1], small, 0x11);
             fill_region(&mut seen, places[1], small, 0x11);

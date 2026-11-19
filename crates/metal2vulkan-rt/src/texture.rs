@@ -36,6 +36,7 @@ use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::hazard::HeapId;
+use crate::host_bytes::HostBytes;
 use crate::memory::{self, Block, BlockId, MemoryClass};
 use crate::places::Place;
 use crate::reaper::{Free, Job};
@@ -3614,10 +3615,11 @@ impl Texture {
     /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:`: the bytes of
     /// `region` of `level` and `slice` (a 3D texture's slice is 0), rows `bytes_per_row` and
     /// images `bytes_per_image` apart in `bytes`, a compressed format's rows being rows of
-    /// blocks. The bytes go to the device's staging region before the call returns (a staging
-    /// buffer of their own past the region's 16 MiB), and the upload copies them into the image
-    /// ahead of every command buffer committed after it, so the call is ordered as Metal's CPU
-    /// write is. Where the region has no room, the call first waits for the oldest copy in it to
+    /// blocks. The call reads `bytes` in place, each byte of the region's rows once, by raw
+    /// copies ([`HostBytes`]): the CPU copies them once, at the call, as Metal's does. The bytes go
+    /// to the device's staging region before the call returns (a staging buffer of their own past
+    /// the region's 16 MiB), and the upload copies them into the image ahead of every command
+    /// buffer committed after it, so the call is ordered as Metal's CPU write is. Where the region has no room, the call first waits for the oldest copy in it to
     /// complete. Counted in [`Metrics::bytes_copied`]. An empty region copies nothing.
     ///
     /// A Managed texture with named bytes ([`Device::new_managed_texture`]) takes them there
@@ -3642,7 +3644,7 @@ impl Texture {
         region: Region,
         level: u32,
         slice: u32,
-        bytes: &[u8],
+        bytes: HostBytes<'_>,
         bytes_per_row: u64,
         bytes_per_image: u64,
     ) -> Result<(), Error> {
@@ -3663,10 +3665,7 @@ impl Texture {
             // that each row of its place lies in the named buffer.
             unsafe {
                 for (from, to, len) in copy.runs_to(place.bytes_per_row, place.bytes_per_image) {
-                    bytes
-                        .as_ptr()
-                        .add(from)
-                        .copy_to_nonoverlapping(host.add(to), len)
+                    bytes.copy_to(from, host.add(to), len)
                 }
             }
             let Some(buffer) = inner.over() else {
@@ -3687,12 +3686,7 @@ impl Texture {
         for (from, to, len) in copy.runs() {
             // SAFETY: `copy` checked that each row lies in `bytes`, and the stage holds every row
             // packed; it is this call's alone until its copy is recorded.
-            unsafe {
-                bytes
-                    .as_ptr()
-                    .add(from)
-                    .copy_to_nonoverlapping(host.add(to), len)
-            };
+            unsafe { bytes.copy_to(from, host.add(to), len) };
         }
         core.counters.copied(copy.len());
         core.work.upload(

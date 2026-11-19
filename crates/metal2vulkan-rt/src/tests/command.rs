@@ -2559,7 +2559,14 @@ pub(crate) mod on_device {
                         ),
                         (
                             "replace_region",
-                            refused(in_texture.replace_region(region, 0, 0, &[0; 4], 4, 4)),
+                            refused(in_texture.replace_region(
+                                region,
+                                0,
+                                0,
+                                crate::HostBytes::from(&[0; 4][..]),
+                                4,
+                                4,
+                            )),
                         ),
                         (
                             "upload_region",

@@ -64,8 +64,15 @@ mod on_device {
                     size: [side, side, 1],
                 };
                 let (row, image) = (u64::from(side) * 4, u64::from(side * side) * 4);
-                (texture.replace_region(region, level, slice, &bytes, row, image))
-                    .expect("the bytes");
+                (texture.replace_region(
+                    region,
+                    level,
+                    slice,
+                    crate::HostBytes::from(&bytes[..]),
+                    row,
+                    image,
+                ))
+                .expect("the bytes");
             }
         }
         texture
@@ -257,7 +264,8 @@ mod on_device {
                 size: [8, 8, 1],
             };
             let texels: Vec<u8> = (0..256).map(|i| (i * 7 + 3) as u8).collect();
-            (formats.replace_region(whole, 0, 0, &texels, 32, 256)).expect("the bytes");
+            (formats.replace_region(whole, 0, 0, crate::HostBytes::from(&texels[..]), 32, 256))
+                .expect("the bytes");
             for (case, parent, format) in [
                 ("an sRGB sibling", &flat, PixelFormat::RGBA8UnormSRGB),
                 ("a same-size format", &formats, PixelFormat::R32Uint),
@@ -459,7 +467,7 @@ mod on_device {
                 size: [2, 2, 1],
             };
             let written: Vec<u8> = (0..16).map(|i| i * 13 + 5).collect();
-            (view.replace_region(region, 0, 0, &written, 8, 0))
+            (view.replace_region(region, 0, 0, crate::HostBytes::from(&written[..]), 8, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             // The texture's level 1 and slice 1 reads what the view wrote, from the same bytes.
             let mut read = vec![0; 16];

@@ -633,7 +633,7 @@ impl Side for RtSide<'_> {
             origin: [0, 0, 0],
             size: [size[0], size[1], 1],
         };
-        (texture.replace_region(region, 0, 0, bytes, row_pitch.into(), 0)).map_err(of_rt)?;
+        (texture.replace_region(region, 0, 0, bytes.into(), row_pitch.into(), 0)).map_err(of_rt)?;
         Ok(self.keep_texture(texture))
     }
 
@@ -1068,7 +1068,7 @@ impl Side for RtSide<'_> {
                 origin: [0, 0, 0],
                 size: [spec.size[0], spec.size[1], 1],
             };
-            (texture.replace_region(region, 0, 0, bytes, spec.row_pitch.into(), 0))
+            (texture.replace_region(region, 0, 0, bytes.into(), spec.row_pitch.into(), 0))
                 .map_err(of_rt)?;
         }
         Ok(self.keep_texture(texture))
@@ -1144,7 +1144,7 @@ impl Side for RtSide<'_> {
                 region,
                 upload.level,
                 upload.slice,
-                upload.bytes,
+                upload.bytes.into(),
                 upload.row_pitch.into(),
                 upload.image_pitch.into(),
             ))
@@ -1247,9 +1247,14 @@ impl Side for RtSide<'_> {
             origin: [0, 0, 0],
             size: [size[0], size[1], 1],
         };
-        (self
-            .held_texture(texture)?
-            .replace_region(region, 0, 0, bytes, row_pitch.into(), 0))
+        (self.held_texture(texture)?.replace_region(
+            region,
+            0,
+            0,
+            bytes.into(),
+            row_pitch.into(),
+            0,
+        ))
         .map_err(|error| Failure::of_rt(&error))
     }
 

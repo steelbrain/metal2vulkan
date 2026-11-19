@@ -192,7 +192,7 @@ mod on_device {
                 region,
                 level,
                 slice,
-                &bytes,
+                crate::HostBytes::from(&bytes[..]),
                 row as u64,
                 (row * h as usize) as u64,
             )

@@ -26,6 +26,9 @@
 //!   format's word. An index is taken while its texture lives and free once it is gone, and its
 //!   grant is released only then. The gauges of textures, descriptor slots and blocks come back to
 //!   zero with the device, and the copies are counted in `bytes_copied`.
+//! - Under a device cfg, `replace_region` reads its bytes in place through `HostBytes::from_raw`,
+//!   from memory no slice covers, and copies the region's bytes once: `bytes_copied` grows by the
+//!   region's rows alone, not the padding between them, and the texture reads them back.
 
 use crate::arrays::Grants;
 use crate::error::{Error, Refusal};
@@ -277,7 +280,7 @@ mod on_device {
                     self.region,
                     self.level,
                     self.slice,
-                    &written,
+                    crate::HostBytes::from(&written[..]),
                     self.bytes_per_row as u64,
                     self.bytes_per_image as u64,
                 )
@@ -443,7 +446,7 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: depth get_bytes: {error}"));
             assert!(
                 matches!(
-                    depth.replace_region(whole, 0, 0, &read, 32, 256),
+                    depth.replace_region(whole, 0, 0, crate::HostBytes::from(&read[..]), 32, 256),
                     Err(Error::Unsupported(Gap::FloatDepthUpload {
                         pixel_format: PixelFormat::Depth32Float
                     }))
@@ -490,7 +493,14 @@ mod on_device {
             d.storage_mode = StorageMode::Private;
             let private = make(&d, Some(4102));
             assert_eq!(
-                refused(private.replace_region(face, 0, 0, &[0; 64], 16, 64)),
+                refused(private.replace_region(
+                    face,
+                    0,
+                    0,
+                    crate::HostBytes::from(&[0; 64][..]),
+                    16,
+                    64
+                )),
                 Refusal::TextureBytesPrivate,
                 "{name}"
             );
@@ -532,6 +542,63 @@ mod on_device {
                 "{name}"
             );
         }
+    }
+
+    /// `replace_region` reads bytes given by a pointer and a length, which the test writes and
+    /// never covers with a slice, and copies the region's bytes once, at the call.
+    #[test]
+    fn every_device_reads_replace_region_bytes_in_place_once() {
+        use crate::tests::command::on_device::each_device;
+        use crate::HostBytes;
+        use std::alloc::Layout;
+        // Five texels of four bytes in each of three rows, the rows 32 bytes apart.
+        const ROW: usize = 32;
+        const USED: usize = 20;
+        const ROWS: usize = 3;
+        const LEN: usize = (ROWS - 1) * ROW + USED;
+        each_device("host_bytes", |name, _, device| {
+            let mut d = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [8, 4, 1]);
+            d.storage_mode = StorageMode::Shared;
+            let texture =
+                (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let region = Region {
+                origin: [1, 1, 0],
+                size: [5, 3, 1],
+            };
+            let layout = Layout::from_size_align(LEN, 1).expect("a layout");
+            // SAFETY: the layout's size is not zero.
+            let start = unsafe { std::alloc::alloc(layout) };
+            assert!(!start.is_null(), "{name}: an allocation");
+            let byte = |at: usize| (at as u8).wrapping_mul(13).wrapping_add(5);
+            for at in 0..LEN {
+                // SAFETY: `at` is inside the allocation.
+                unsafe { start.add(at).write(byte(at)) };
+            }
+            let counters = device.counters();
+            let before = counters.metrics().bytes_copied;
+            // SAFETY: the test's allocation, readable for `LEN` bytes until it is freed below,
+            // after the call.
+            let bytes = unsafe { HostBytes::from_raw(start, LEN) };
+            (texture.replace_region(region, 0, 0, bytes, ROW as u64, 0))
+                .unwrap_or_else(|error| panic!("{name}: replace_region: {error}"));
+            let copied = counters.metrics().bytes_copied - before;
+            // SAFETY: allocated above with `layout`; nothing reads it any more.
+            unsafe { std::alloc::dealloc(start, layout) };
+            assert_eq!(
+                copied,
+                (ROWS * USED) as u64,
+                "{name}: the region's bytes, once"
+            );
+            let mut read = vec![0u8; LEN];
+            (texture.get_bytes(&mut read, ROW as u64, 0, region, 0, 0))
+                .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
+            for row in 0..ROWS {
+                for at in row * ROW..row * ROW + USED {
+                    assert_eq!(read[at], byte(at), "{name}: byte {at}");
+                }
+            }
+            println!("host_bytes: {name}: {copied} bytes copied of the caller's {LEN}");
+        });
     }
 }
 

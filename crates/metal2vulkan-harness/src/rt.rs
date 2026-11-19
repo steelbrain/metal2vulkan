@@ -622,7 +622,8 @@ impl crate::Texture for rt::Texture {
             origin: [0, 0, 0],
             size: [width, height, 1],
         };
-        rt::Texture::replace_region(self, region, 0, slice, bytes, bytes_per_row, 0).map_err(error)
+        rt::Texture::replace_region(self, region, 0, slice, bytes.into(), bytes_per_row, 0)
+            .map_err(error)
     }
 }
 

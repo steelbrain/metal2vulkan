@@ -145,7 +145,7 @@ mod on_device {
             size: [SIDE, SIDE, 1],
         };
         let (row, image) = (u64::from(SIDE * 8), u64::from(SIDE * SIDE * 8));
-        (source.replace_region(whole, 0, 0, &bytes, row, image))
+        (source.replace_region(whole, 0, 0, crate::HostBytes::from(&bytes[..]), row, image))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 
@@ -538,7 +538,7 @@ mod on_device {
                 size: [half_side, half_side, 1],
             };
             let (row, image) = (u64::from(half_side * 8), zeros.len() as u64);
-            (target.replace_region(whole, 0, 0, &zeros, row, image))
+            (target.replace_region(whole, 0, 0, crate::HostBytes::from(&zeros[..]), row, image))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let got = texels(&target, half_side);
             assert!(got.iter().all(|&v| v == 0.0), "{name}: zeroed {got:?}");
@@ -992,7 +992,7 @@ mod on_device {
                         whole,
                         0,
                         0,
-                        &bytes,
+                        crate::HostBytes::from(&bytes[..]),
                         u64::from(side * 8),
                         u64::from(side * side * 8),
                     )

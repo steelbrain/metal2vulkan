@@ -97,8 +97,15 @@ mod on_device {
                 size: [SIDE, SIDE, 1],
             };
             let row = u64::from(SIDE) * 4;
-            (mipmapped.replace_region(whole, 0, 0, &first, row, row * u64::from(SIDE)))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            (mipmapped.replace_region(
+                whole,
+                0,
+                0,
+                crate::HostBytes::from(&first[..]),
+                row,
+                row * u64::from(SIDE),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
             // Where the bytes are staged, they wait for the device's upload, which goes ahead of
             // the next submission; reading them back submits any such upload and waits for it, so
             // the chain's command buffer is measured alone, its upload's barrier outside it.

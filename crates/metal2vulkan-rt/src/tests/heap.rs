@@ -90,8 +90,15 @@ mod on_device {
             let len = (SIDE * SIDE * 4) as usize;
             let row = u64::from(SIDE * 4);
             for (at, texture) in textures.iter().enumerate() {
-                (texture.replace_region(whole, 0, 0, &vec![at as u8 + 1; len], row, 0))
-                    .unwrap_or_else(|error| panic!("{name}: texture {at}: {error}"));
+                (texture.replace_region(
+                    whole,
+                    0,
+                    0,
+                    crate::HostBytes::from(&vec![at as u8 + 1; len][..]),
+                    row,
+                    0,
+                ))
+                .unwrap_or_else(|error| panic!("{name}: texture {at}: {error}"));
             }
             for (at, texture) in textures.iter().enumerate() {
                 let mut read = vec![0; len];

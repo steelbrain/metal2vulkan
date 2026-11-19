@@ -196,7 +196,7 @@ mod on_device {
         d.storage_mode = StorageMode::Shared;
         let texture =
             (device.new_texture(&d, Some(index))).unwrap_or_else(|error| panic!("{name}: {error}"));
-        (texture.replace_region(whole(), 0, 0, bytes, ROW as u64, 0))
+        (texture.replace_region(whole(), 0, 0, bytes.into(), ROW as u64, 0))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         texture
     }

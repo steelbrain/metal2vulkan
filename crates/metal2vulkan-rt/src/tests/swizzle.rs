@@ -102,8 +102,15 @@ mod on_device {
                 size: [2, 2, 1],
             };
             let fill = |texture: &Texture| {
-                (texture.replace_region(whole, 0, 0, &TEXEL.repeat(4), 8, 16))
-                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+                (texture.replace_region(
+                    whole,
+                    0,
+                    0,
+                    crate::HostBytes::from(&TEXEL.repeat(4)[..]),
+                    8,
+                    16,
+                ))
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
             };
             fill(&texture);
             use TextureSwizzle::{Blue, Green, One, Red};

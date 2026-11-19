@@ -1274,8 +1274,15 @@ pub(crate) mod on_device {
                 size: [SIDE, SIDE, 1],
             };
             let row = u64::from(SIDE * 8);
-            (source.replace_region(whole, 0, 0, &bytes, row, row * u64::from(SIDE)))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            (source.replace_region(
+                whole,
+                0,
+                0,
+                crate::HostBytes::from(&bytes[..]),
+                row,
+                row * u64::from(SIDE),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut buffers = Buffers::new(&device);
             let (positions, colors) = vertices(&device, &mut buffers);
             let color = target(

@@ -296,7 +296,7 @@ mod on_device {
                 origin: [0; 3],
                 size: [WIDTH, HEIGHT, 1],
             };
-            (plain.replace_region(whole, 0, 0, &source, row, 0))
+            (plain.replace_region(whole, 0, 0, crate::HostBytes::from(&source[..]), row, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");

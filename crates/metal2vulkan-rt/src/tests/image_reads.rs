@@ -85,8 +85,15 @@ mod on_device {
                 size: [side, side, 1],
             };
             let (row, image) = (u64::from(side * bytes), u64::from(side * side * bytes));
-            (texture.replace_region(whole, level, 0, &texels, row, image))
-                .unwrap_or_else(|error| panic!("level {level}: {error}"));
+            (texture.replace_region(
+                whole,
+                level,
+                0,
+                crate::HostBytes::from(&texels[..]),
+                row,
+                image,
+            ))
+            .unwrap_or_else(|error| panic!("level {level}: {error}"));
         }
         texture
     }

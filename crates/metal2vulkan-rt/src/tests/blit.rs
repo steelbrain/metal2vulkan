@@ -935,7 +935,14 @@ pub(crate) mod on_device {
             let (region, row, image, len) = self.layout();
             let bytes = pattern(len, seed);
             self.texture
-                .replace_region(region, self.level, self.slice, &bytes, row, image)
+                .replace_region(
+                    region,
+                    self.level,
+                    self.slice,
+                    crate::HostBytes::from(&bytes[..]),
+                    row,
+                    image,
+                )
                 .expect("replace_region");
             bytes
         }

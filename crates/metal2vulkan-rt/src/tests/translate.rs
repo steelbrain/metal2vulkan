@@ -2763,7 +2763,7 @@ declare i32 @air.get_height_texture_2d(ptr addrspace(1), i32)
                     },
                     0,
                     0,
-                    &bytes,
+                    crate::HostBytes::from(&bytes[..]),
                     row,
                     row * u64::from(height),
                 )

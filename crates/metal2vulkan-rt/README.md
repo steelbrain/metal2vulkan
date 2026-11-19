@@ -592,9 +592,13 @@ made, with no lock, and never rewritten for layouts.
   a compressed format's rows being rows of blocks (`Refusal::TextureBytesLayout` where they
   overlap or the bytes are too few). `replace_region` copies the bytes into the staging region
   before it returns, and the upload copies them into the image, leaving home for the transfer
-  layout and coming back, ahead of every command buffer committed after the call. `get_bytes`
-  records the copy out into the upload, submits it at once, waits for it and copies the bytes
-  out; as in Metal, the program has waited for the work that writes the texture.
+  layout and coming back, ahead of every command buffer committed after the call. It takes the
+  bytes as `HostBytes`: from a slice, or from a pointer and a length (`HostBytes::from_raw`, for
+  memory another party may write meanwhile, such as a guest's RAM), and reads them in place, each
+  byte of the region once, by raw copies, deciding nothing from their values and keeping no
+  pointer past the call: the CPU copies the region's bytes once, at the call, as Metal's does.
+  `get_bytes` records the copy out into the upload, submits it at once, waits for it and copies
+  the bytes out; as in Metal, the program has waited for the work that writes the texture.
 - `Device::new_managed_texture(descriptor, index, bytes, places)` makes a Managed texture whose
   bytes the consumer names, on every device: an image as `new_texture` makes, and the consumer's
   bytes in a Shared buffer, at a `BytesPlace` (offset, bytes per row, bytes per image) for each

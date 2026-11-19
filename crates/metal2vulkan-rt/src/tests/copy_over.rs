@@ -112,7 +112,7 @@ mod on_device {
         let mut d = descriptor();
         d.storage_mode = StorageMode::Shared;
         let texture = (device.new_texture(&d, None)).unwrap_or_else(|e| panic!("{name}: {e}"));
-        (texture.replace_region(whole(), 0, 0, texels, ROW, 0))
+        (texture.replace_region(whole(), 0, 0, texels.into(), ROW, 0))
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         texture
     }

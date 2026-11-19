@@ -1668,7 +1668,8 @@ mod on_device {
                 origin: [0; 3],
                 size: [4, 4, 1],
             };
-            match first.replace_region(whole, 0, 0, &[0x5A; 64], 16, 64) {
+            match first.replace_region(whole, 0, 0, crate::HostBytes::from(&[0x5A; 64][..]), 16, 64)
+            {
                 Err(Error::Limit(Limit::MemoryAllocations { max: MAX })) => {}
                 other => panic!("{name}: the staging region past the count: {other:?}"),
             }

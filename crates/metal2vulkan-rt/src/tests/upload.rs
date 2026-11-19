@@ -141,7 +141,14 @@ mod on_device {
             for seed in 0..calls {
                 let target = &targets[(seed % 4) as usize];
                 target
-                    .replace_region(whole(side), 0, 0, &pattern(seed), u64::from(side * 4), call)
+                    .replace_region(
+                        whole(side),
+                        0,
+                        0,
+                        crate::HostBytes::from(&pattern(seed)[..]),
+                        u64::from(side * 4),
+                        call,
+                    )
                     .unwrap_or_else(|error| panic!("{name}: copy {seed}: {error}"));
                 let blocks = in_use();
                 assert!(
@@ -171,7 +178,14 @@ mod on_device {
             assert!(in_use() <= ceiling, "{name}: after the reads");
             // The reads waited for every copy, so the ring is empty, and starts again at 0.
             targets[0]
-                .replace_region(whole(side), 0, 0, &pattern(0), u64::from(side * 4), call)
+                .replace_region(
+                    whole(side),
+                    0,
+                    0,
+                    crate::HostBytes::from(&pattern(0)[..]),
+                    u64::from(side * 4),
+                    call,
+                )
                 .unwrap_or_else(|error| panic!("{name}: the copy after the reads: {error}"));
             let spans = core.work.staging_spans();
             assert_eq!(
@@ -200,7 +214,14 @@ mod on_device {
                     .new_texture(&square(big), Some(4101))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 texture
-                    .replace_region(whole(4), 0, 0, &[round as u8; 64], 16, 64)
+                    .replace_region(
+                        whole(4),
+                        0,
+                        0,
+                        crate::HostBytes::from(&[round as u8; 64][..]),
+                        16,
+                        64,
+                    )
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 drop(texture);
                 let (_, bytes, _) = core.work.pending();
@@ -260,7 +281,7 @@ mod on_device {
                 .new_texture(&square(64), Some(4102))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             small
-                .replace_region(whole(4), 0, 0, &[7; 64], 16, 64)
+                .replace_region(whole(4), 0, 0, crate::HostBytes::from(&[7; 64][..]), 16, 64)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(small);
             let buffer = device
@@ -348,8 +369,16 @@ mod on_device {
                     counters.metrics().submissions > submitted
                 });
                 let sleeps = counters.metrics().staging_sleeps;
-                let writer =
-                    thread::spawn(move || write.replace_region(whole(4), 0, 0, &[7; 64], 16, 64));
+                let writer = thread::spawn(move || {
+                    write.replace_region(
+                        whole(4),
+                        0,
+                        0,
+                        crate::HostBytes::from(&[7; 64][..]),
+                        16,
+                        64,
+                    )
+                });
                 wait_until("the write's sleep", || {
                     counters.metrics().staging_sleeps > sleeps
                 });
@@ -473,7 +502,7 @@ mod on_device {
                     whole(small),
                     0,
                     0,
-                    &bytes,
+                    crate::HostBytes::from(&bytes[..]),
                     u64::from(small * 4),
                     bytes.len() as u64,
                 )
@@ -486,8 +515,15 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let bytes: Vec<u8> = (0..large * large * 4).map(|i| (i % 251) as u8).collect();
             let len = bytes.len() as u64;
-            big.replace_region(whole(large), 0, 0, &bytes, u64::from(large * 4), len)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            big.replace_region(
+                whole(large),
+                0,
+                0,
+                crate::HostBytes::from(&bytes[..]),
+                u64::from(large * 4),
+                len,
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(
                 staged(),
                 REGION_LEN + len,
