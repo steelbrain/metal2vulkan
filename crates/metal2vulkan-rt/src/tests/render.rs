@@ -221,7 +221,17 @@ mod on_device {
         let plain = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
         let mut samples = plain.clone();
         samples.raster_sample_count = 4;
-        let cases = [("four samples", samples, RenderPipelineKind::Multisample)];
+        let mut separate = plain.clone();
+        separate.depth_format = Some(PixelFormat::Depth32Float);
+        separate.stencil_format = Some(PixelFormat::Stencil8);
+        let cases = [
+            ("four samples", samples, RenderPipelineKind::Multisample),
+            (
+                "separate depth and stencil formats",
+                separate,
+                RenderPipelineKind::DepthStencilFormats,
+            ),
+        ];
         each_device("render_refused", |name, _, device| {
             let counters = device.counters();
             for (case, d, kind) in &cases {

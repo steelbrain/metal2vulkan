@@ -483,7 +483,13 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
         });
     let unenabled = !(requirements.features).is_subset(&enabled.features)
         || !(requirements.extensions).is_subset(&enabled.extensions);
-    Some(if tessellated {
+    let separate = matches!(
+        (g.depth_format, g.stencil_format),
+        (Some(depth), Some(stencil)) if depth != stencil
+    );
+    Some(if separate {
+        RenderPipelineKind::DepthStencilFormats
+    } else if tessellated {
         RenderPipelineKind::Tessellation
     } else if synthesized {
         RenderPipelineKind::SynthesizedStages

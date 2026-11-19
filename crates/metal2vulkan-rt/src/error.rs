@@ -999,6 +999,12 @@ pub enum Gap {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RenderPipelineKind {
+    /// A depth attachment format and a stencil attachment format that differ
+    /// (`depthAttachmentPixelFormat` and `stencilAttachmentPixelFormat`, as of separate depth and
+    /// stencil textures): Vulkan's pipeline takes one format for both
+    /// (VUID-VkGraphicsPipelineCreateInfo-renderPass-06589), as its rendering takes one view for
+    /// both ([`RenderPassKind::DepthStencilViews`]).
+    DepthStencilFormats,
     /// More than one sample (`rasterSampleCount`).
     Multisample,
     /// Vertex amplification (`maxVertexAmplificationCount` above 1).

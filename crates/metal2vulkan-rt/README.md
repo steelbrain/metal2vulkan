@@ -1568,8 +1568,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of render pipeline states
 
-- Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: more than one
-  sample, vertex amplification, a post-tessellation vertex function (the translation states one;
+- Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: depth and
+  stencil attachment formats that differ, as of separate depth and stencil textures
+  (`DepthStencilFormats`: Vulkan's pipeline takes one format for both,
+  `VUID-VkGraphicsPipelineCreateInfo-renderPass-06589`), more than one sample, vertex amplification, a post-tessellation vertex function (the translation states one;
   a descriptor's tessellation state with any other vertex function is ignored, as Metal ignores it),
   stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
   fragment function's stencil output, alpha to one, constant data the binder supplies, a

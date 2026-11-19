@@ -13877,6 +13877,7 @@ variant	metal2vulkan-rt::RenderPassKind::StoreAction	StoreAction
 variant	metal2vulkan-rt::RenderPassKind::TextureType	TextureType
 variant	metal2vulkan-rt::RenderPipelineKind::AlphaToOne	AlphaToOne
 variant	metal2vulkan-rt::RenderPipelineKind::ConstantData	ConstantData
+variant	metal2vulkan-rt::RenderPipelineKind::DepthStencilFormats	DepthStencilFormats
 variant	metal2vulkan-rt::RenderPipelineKind::DeviceFeature	DeviceFeature
 variant	metal2vulkan-rt::RenderPipelineKind::DrawInput	DrawInput
 variant	metal2vulkan-rt::RenderPipelineKind::DynamicState	DynamicState
