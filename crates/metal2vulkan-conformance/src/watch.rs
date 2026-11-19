@@ -33,7 +33,8 @@ use crate::case::{
     Answer, ArgumentSlot, Bindings, CoordinateProbe, Fill, FragmentFill, FragmentFilled, Handle,
     IndirectReadBack, MappedCoordinates, MeshCommand, MeshFunctions, MeshReflectionSpec, MeshStep,
     PassOutcome, PlaneTexture, RateMapFacts, RateMapRequest, SamplerSpec, ShaderSource, Side,
-    StageInRegion, StageInput, TextureSpec, TileFacts, TilePipelineSpec, TileStep, Venue,
+    StageInRegion, StageInput, SurfaceTexture, TextureSpec, TileFacts, TilePipelineSpec, TileStep,
+    Venue,
 };
 use crate::function_bindings::BindingFacts;
 use crate::indirect_commands::{CommandsMade, EncodedCommand, IcbDescriptor};
@@ -632,6 +633,11 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
         self.inner.plane_texture(buffer, over)
     }
 
+    fn surface_texture(&mut self, surface: &SurfaceTexture) -> Answer<Handle> {
+        let _span = self.watch("surface_texture");
+        self.inner.surface_texture(surface)
+    }
+
     fn fill_texture(&mut self, texture: Handle, fill: &Fill) -> Answer<Value> {
         let _span = self.watch("fill_texture");
         self.inner.fill_texture(texture, fill)
@@ -987,6 +993,11 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
     ) -> Answer<crate::heap_query::ResourceFacts> {
         let _span = self.watch("resource_facts");
         self.inner.resource_facts(of, heap)
+    }
+
+    fn resource_storage_mode(&mut self, of: crate::heap_query::QueriedResource) -> Answer<u64> {
+        let _span = self.watch("resource_storage_mode");
+        self.inner.resource_storage_mode(of)
     }
 
     fn set_resource_label(
