@@ -1238,8 +1238,8 @@ pub enum RenderPipelineKind {
     /// device creation does not enable.
     DeviceFeature,
     /// A function that reads what a draw does not supply yet: a function table, a table the
-    /// binder builds, a parameter block past the push range, a push field or bind-time fact the
-    /// render encoder does not fill, or an unnormalized constexpr sampler.
+    /// binder builds, a parameter block longer than a parameter ring chunk (64 KiB), a push field
+    /// or bind-time fact the render encoder does not fill, or an unnormalized constexpr sampler.
     DrawInput,
 }
 

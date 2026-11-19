@@ -11,7 +11,7 @@
 //!   (not implemented), as before: its push window is not the floor's.
 //! - On `Device::from_queries`' profile the two stages push one range, dense by link: with
 //!   `sampled_fragment`, which pushes its constexpr sampler's index, the fragment function's
-//!   fields start at the vertex function's end rounded up to 8 (16), where the fixed windows put
+//!   fields start at the vertex function's end rounded up to 8 (32), where the fixed windows put
 //!   them at 64. A fragment compiled on its own at base 0 and linked after that vertex function is
 //!   `InvalidDescriptor(PushBase)`; compiled under the vertex function's
 //!   `CompiledFunction::fragment_push_base` it links.
@@ -105,14 +105,15 @@ fn from_queries_lowers_a_vertex_function_over_its_pushed_buffer_addresses() {
             class: SlotClass::Buffer,
             index,
         };
-        // The two slots are read at the vertex's index, so each pushes its length beside its
-        // address, and the pipeline the zero range their outside reads read.
+        // The two slots are read at the vertex's index, so each pushes its length too, and the
+        // function the zero range its outside reads read: the check's fields after the
+        // addresses.
         assert_eq!(
             pushed,
             [
-                (PushField::ZeroAddress, true),
                 (PushField::SlotGuestBase(slot(0)), true),
                 (PushField::SlotGuestBase(slot(1)), true),
+                (PushField::ZeroAddress, true),
                 (PushField::SlotRemaining(slot(0)), true),
                 (PushField::SlotRemaining(slot(1)), true)
             ],

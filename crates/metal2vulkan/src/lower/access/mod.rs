@@ -1719,33 +1719,9 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     cx.descriptors = cx.descriptors.plus(&counts);
     cx.families.access.argument_table =
         table::spills(stage, p.push_window(), cx.inputs.push_base, &cx.push);
-    // Under the identity domains a render pipeline's stages share the floor's one range, which no
-    // stream's pair outgrows: a vertex or fragment function whose fields do not fit in it is
-    // refused, never spilled into a parameter block.
-    if cx.families.access.argument_table
-        && identity(p)
-        && p.push_window() == PushWindow::Floor
-        && matches!(
-            stage,
-            crate::pipeline::sym::Stage::Vertex | crate::pipeline::sym::Stage::Fragment
-        )
-    {
-        let placed =
-            crate::lower::push::place(stage, PushWindow::Floor, cx.inputs.push_base, &cx.push);
-        let (start, _) = crate::lower::push::window(stage, PushWindow::Floor, cx.inputs.push_base);
-        let pushed = placed
-            .push_range
-            .map_or(start, |(offset, size)| offset + size);
-        return Err(Unsupported::needs(
-            Feature::IdentityDomains,
-            Capability::Limit {
-                limit: VkLimit::MaxPushConstantsSize,
-                required: u64::from(pushed) + u64::from(placed.argument_table_size),
-                available: u64::from(crate::lower::push::FLOOR_BYTES),
-            },
-        )
-        .into());
-    }
+    // Under the identity domains a function whose fields spill, of any stage, reads them from a
+    // parameter block whose address its window holds first: a render pipeline's stages too, in
+    // their shares of the floor's one range (`push::VERTEX_FLOOR_END`).
     if cx.families.access.argument_table && identity(p) {
         cx.push.insert(PushField::ArgumentTableAddress);
     }

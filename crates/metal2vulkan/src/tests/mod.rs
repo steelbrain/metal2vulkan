@@ -86,6 +86,7 @@ mod engine_helper_threads;
 mod engine_identity;
 mod engine_identity_contain;
 mod engine_identity_render;
+mod engine_identity_spill;
 mod engine_image_shapes;
 mod engine_imageblock;
 mod engine_index_words;

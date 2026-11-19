@@ -7,9 +7,13 @@
 //! compute window is `[0, 256)` (a dispatch region and 28 buffer addresses), and a render
 //! pipeline's two stages share one range `[0, 256)`, dense by link: the vertex function's fields
 //! from 0, the fragment function's from its `LoweringInputs::push_base`, the vertex function's push
-//! end rounded up to 8, so only the fields the pair places take space. There a vertex or fragment
-//! function whose fields do not fit is refused rather than spilled. `select` places the function's own [`PushField`]s in the
-//! fixed kind order (the derived `Ord` of [`PushField`]; within a kind, by slot). Fields fill the
+//! end rounded up to 8, so only the fields the pair places take space. The vertex function's
+//! window there is `[0, 248)`, 8 bytes short of the range's end ([`VERTEX_FLOOR_END`]): a vertex
+//! function is lowered without knowing its fragment function, and a fragment function whose
+//! fields spill must push its parameter block's address (8 bytes, 8-aligned) from the vertex
+//! function's end, so the vertex function leaves that room. The reserved 8 bytes cost only a vertex
+//! function whose own fields pass 248, which spills where it would have filled them.
+//! `select` places the function's own [`PushField`]s in the fixed kind order (the derived `Ord` of [`PushField`]; within a kind, by slot). Fields fill the
 //! stage window in that order, each at the next offset aligned to the field; from the first field
 //! that does not fit, every field goes to the stage's `ArgumentTable` uniform buffer
 //! (`ResourceSlot{stage, Synthetic(ArgumentTable)}`), at offsets fixed by the same order. The
@@ -35,7 +39,7 @@ pub const fn window(stage: Stage, w: PushWindow, base: u32) -> (u32, u32) {
     match stage {
         Stage::Vertex => match w {
             PushWindow::Guaranteed => (0, 64),
-            PushWindow::Floor => (0, FLOOR_BYTES),
+            PushWindow::Floor => (0, VERTEX_FLOOR_END),
         },
         Stage::Fragment => match w {
             PushWindow::Guaranteed => (64, 128),
@@ -54,6 +58,11 @@ pub const fn window(stage: Stage, w: PushWindow, base: u32) -> (u32, u32) {
 
 /// The push bytes of the new runtime's floor (`PushWindow::Floor`): its `maxPushConstantsSize`.
 pub const FLOOR_BYTES: u32 = 256;
+
+/// The end of a vertex function's window on the floor: the floor's end less one address, so the
+/// fragment function's window, from the vertex function's end rounded up to 8, always holds its
+/// parameter block's address (`PushField::ArgumentTableAddress`, which the order places first).
+pub const VERTEX_FLOOR_END: u32 = FLOOR_BYTES - 8;
 
 /// The SPIR-V shape of a push field's value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -476,7 +485,7 @@ mod tests {
                 (0, 128)
             );
             assert_eq!(window(Stage::Kernel, PushWindow::Floor, base), (0, 256));
-            assert_eq!(window(Stage::Vertex, PushWindow::Floor, base), (0, 256));
+            assert_eq!(window(Stage::Vertex, PushWindow::Floor, base), (0, 248));
             assert_eq!(
                 window(Stage::Fragment, PushWindow::Floor, base),
                 (base, 256)
@@ -486,7 +495,8 @@ mod tests {
 
     /// On the floor a render pipeline's fields are dense by link: a fragment function placed from
     /// the vertex function's push end rounded up to 8 starts there, its fields fill the rest of
-    /// the 256 bytes, and the first that does not fit is where the pair is refused (it spills).
+    /// the 256 bytes, and from the first that does not fit it spills. A vertex function's window
+    /// ends at 248, so a fragment function from its end can always push its block's address.
     #[test]
     fn the_floor_places_a_fragment_function_from_its_base() {
         let vertex: BTreeSet<PushField> = (0..3)
@@ -510,14 +520,36 @@ mod tests {
             24,
             &fragment(30)
         ));
-        // A vertex function alone has the whole floor.
-        let wide: BTreeSet<PushField> = (0..31)
-            .map(|i| PushField::SlotGuestBase(slot(Stage::Vertex, i)))
-            .collect();
-        assert_eq!(
-            check_at(Stage::Vertex, PushWindow::Floor, 0, &wide).push_range,
-            Some((0, 248))
-        );
+        // A vertex function's window ends at 248: 31 addresses fill it, and a 32nd spills.
+        let wide = |n: u32| -> BTreeSet<PushField> {
+            (0..n)
+                .map(|i| PushField::SlotGuestBase(slot(Stage::Vertex, i)))
+                .collect()
+        };
+        let v = check_at(Stage::Vertex, PushWindow::Floor, 0, &wide(31));
+        assert_eq!((v.push_range, v.argument_table_size), (Some((0, 248)), 0));
+        assert!(spills(Stage::Vertex, PushWindow::Floor, 0, &wide(32)));
+        // Fields that would reach 252, 4 bytes into what was the fragment function's, spill.
+        let mut past = wide(31);
+        past.insert(PushField::SlotRemaining(slot(Stage::Vertex, 0)));
+        assert!(spills(Stage::Vertex, PushWindow::Floor, 0, &past));
+        // The fragment function from the fullest vertex function's end pushes its block's
+        // address there, at 248, and spills the rest; from an end of 244 (a base rounded to 4)
+        // the address, 8-aligned, is still at 248.
+        let mut spilled = fragment(2);
+        spilled.insert(PushField::ArgumentTableAddress);
+        for (base, range) in [(248, (248, 8)), (244, (244, 12))] {
+            let f = check_at(Stage::Fragment, PushWindow::Floor, base, &spilled);
+            assert_eq!((f.push_range, f.argument_table_size), (Some(range), 16));
+            assert_eq!(
+                (f.fields[0].field, f.fields[0].loc),
+                (
+                    PushField::ArgumentTableAddress,
+                    PushLoc::Push { offset: 248 }
+                ),
+                "from {base}"
+            );
+        }
     }
 
     /// The vertex window holds 16 residuals; the 17th spills even though a later, smaller field

@@ -85,7 +85,7 @@ use crate::over;
 use crate::pass::{layout_barrier, ops, LoadAction, Pass, RenderPassDescriptor, StoreAction};
 use crate::pipeline::{address_word, FieldValue, PUSH_STAGES};
 use crate::record::{memory_barrier, Reach};
-use crate::render::{Draws, RenderPipelineState, FRAGMENT, VERTEX};
+use crate::render::{DrawPlace, Draws, RenderPipelineState, FRAGMENT, VERTEX};
 use crate::ring::{Placed, CHUNK};
 use crate::sampler::SamplerState;
 use crate::shadow::{self, Area, Held};
@@ -508,6 +508,8 @@ pub struct RenderCommandEncoder {
     facts: Facts,
     /// The push bytes of the last draw.
     push: Vec<u8>,
+    /// The parameter blocks of the last draw's functions, where their fields spill.
+    blocks: [Vec<u8>; 2],
     /// The push bytes are those of the bound pipeline state and resources, and of the images the
     /// pass moved and the shadows the last draw read: the next draw pushes them as they are.
     push_filled: bool,
@@ -579,6 +581,7 @@ impl CommandBuffer {
                     shadow_slots: Vec::new(),
                     facts: Facts::default(),
                     push: Vec::new(),
+                    blocks: [Vec::new(), Vec::new()],
                     push_filled: false,
                     pass,
                 })
@@ -1803,12 +1806,21 @@ impl RenderCommandEncoder {
                     buffer.gpu_address().wrapping_add(*offset)
                 });
                 fill_push(
-                    &mut self.push,
+                    (&mut self.push, &mut self.blocks),
                     (&self.tables, self.facts.nil, factors, self.alpha_test),
                     &self.moved,
                     &self.shadow_slots,
                     state,
                 );
+                // Each spilled function's block into the ring, and its address into the range.
+                let made = &state.inner.compiled.draws.blocks;
+                for (block, made) in self.blocks.iter().zip(made) {
+                    if let Some((_, at)) = *made {
+                        let address = building.write_ring(block)?;
+                        let at = at as usize;
+                        self.push[at..at + 8].copy_from_slice(&address.to_le_bytes());
+                    }
+                }
             }
             self.push_filled = true;
         }
@@ -2334,13 +2346,14 @@ fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, b
     Ok((topology, restart))
 }
 
-/// Fills `push`, the push bytes of a draw of `state`, from the `tables`, a buffer argument bound to
-/// nothing taking `nil`, the nil buffer's address, and length 0, a checked load's zero range at
-/// `zero`: a texture whose image the pass `moved` to the
-/// feedback layout reads through its second element in that layout, and one in `shadow_slots`,
-/// which reads a shadow, through its second element, the shadow's.
+/// Fills `push`, the push bytes of a draw of `state`, and `blocks`, each function's parameter
+/// block where its fields spill (`Draws::blocks`; their addresses the caller writes once they are
+/// in the ring), from the `tables`, a buffer argument bound to nothing taking `nil`, the nil
+/// buffer's address, and length 0, a checked load's zero range at `zero`: a texture whose image
+/// the pass `moved` to the feedback layout reads through its second element in that layout, and
+/// one in `shadow_slots`, which reads a shadow, through its second element, the shadow's.
 fn fill_push(
-    push: &mut Vec<u8>,
+    (push, blocks): (&mut Vec<u8>, &mut [Vec<u8>; 2]),
     (tables, (nil, zero), factors, alpha_test): (&[Tables; 2], (u64, u64), u64, u32),
     moved: &[Moved],
     shadow_slots: &[(usize, u32)],
@@ -2350,19 +2363,26 @@ fn fill_push(
     let ids = &state.inner.numbered.ids;
     push.clear();
     push.resize(draws.push_len.next_multiple_of(4) as usize, 0);
-    for &(offset, table, value) in &draws.fields {
+    for (block, made) in blocks.iter_mut().zip(&draws.blocks) {
+        block.clear();
+        block.resize(made.map_or(0, |(len, _)| len as usize), 0);
+    }
+    for &(place, table, value) in &draws.fields {
         let tables = &tables[table];
-        let at = offset as usize;
+        let (bytes, at) = match place {
+            DrawPlace::Push(offset) => (&mut *push, offset as usize),
+            DrawPlace::Block(of, offset) => (&mut blocks[of], offset as usize),
+        };
         match value {
             // At a multiple of the argument's alignment, which the draw checked first.
             FieldValue::BufferAddress { slot, .. } => {
                 let word = address_word(tables.address(slot, nil));
-                push[at..at + 8].copy_from_slice(&word.to_le_bytes());
+                bytes[at..at + 8].copy_from_slice(&word.to_le_bytes());
             }
             FieldValue::BufferRemaining(slot) => {
-                push[at..at + 4].copy_from_slice(&tables.remaining(slot).to_le_bytes());
+                bytes[at..at + 4].copy_from_slice(&tables.remaining(slot).to_le_bytes());
             }
-            FieldValue::ZeroAddress => push[at..at + 8].copy_from_slice(&zero.to_le_bytes()),
+            FieldValue::ZeroAddress => bytes[at..at + 8].copy_from_slice(&zero.to_le_bytes()),
             FieldValue::TextureId(slot) => {
                 let id = (tables.texture(slot)).map_or(0, |t| {
                     let second = (moved.iter()).any(|m| m.hazard == t.hazard_id())
@@ -2372,30 +2392,30 @@ fn fill_push(
                         false => t.gpu_resource_id().to_bits(),
                     }
                 });
-                push[at..at + 8].copy_from_slice(&id.to_le_bytes());
+                bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
             }
             FieldValue::SamplerId(slot) => {
                 let id = match tables.samplers.get(slot as usize) {
                     Some(Some(sampler)) => sampler.gpu_resource_id().to_bits(),
                     _ => 0,
                 };
-                push[at..at + 8].copy_from_slice(&id.to_le_bytes());
+                bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
             }
             FieldValue::IntegerChannels(slot) => {
                 let word = (tables.texture(slot))
                     .map_or(0, |t| integer_channels_word(t.descriptor().pixel_format));
-                push[at..at + 4].copy_from_slice(&word.to_le_bytes());
+                bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
             }
             FieldValue::ConstexprSampler(place) => {
                 let index = ids.get(place).copied().unwrap_or(0);
-                push[at..at + 4].copy_from_slice(&index.to_le_bytes());
+                bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
             }
-            FieldValue::Word(word) => push[at..at + 4].copy_from_slice(&word.to_le_bytes()),
+            FieldValue::Word(word) => bytes[at..at + 4].copy_from_slice(&word.to_le_bytes()),
             FieldValue::TessellationFactors => {
-                push[at..at + 8].copy_from_slice(&factors.to_le_bytes());
+                bytes[at..at + 8].copy_from_slice(&factors.to_le_bytes());
             }
             FieldValue::AlphaTestReference => {
-                push[at..at + 4].copy_from_slice(&alpha_test.to_le_bytes());
+                bytes[at..at + 4].copy_from_slice(&alpha_test.to_le_bytes());
             }
             // A render content has no dispatch or stage-in region (`render::draws`).
             FieldValue::DispatchRegion | FieldValue::StageInRegion => {}

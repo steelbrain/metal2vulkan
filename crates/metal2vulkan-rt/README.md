@@ -2252,11 +2252,15 @@ or does not check is rebuilt from the generations' names, with young counted ful
   differ only in a field their compile does not read are two contents, each compiled.
 - A render pipeline's two functions push their values (each buffer's address, each constexpr
   sampler's index) in one range of the floor's 256 bytes, dense by link: the vertex function's
-  from 0, the fragment function's from the vertex function's end rounded up to 8, so only the
-  values the pair uses take space. Compute and render pipelines share the device's one pipeline
-  layout and its one push range. A pair whose values do not fit is refused,
-  `Error::Translation` with `maxPushConstantsSize`'s limit; no pair in the replay streams comes
-  near it (the most is 248 bytes).
+  from 0, ending by 248, the fragment function's from the vertex function's end rounded up to 8,
+  so only the values the pair uses take space. Compute and render pipelines share the device's
+  one pipeline layout and its one push range. A function whose values do not fit its share
+  pushes the address of a parameter block first and reads the rest from the block, as a kernel
+  does: a draw writes each such block into the parameter ring where it fills its pushed values
+  anew (the state, a binding or a pushed value changed since the encoder's last draw), and
+  `ring_writes` counts it. The values only a checked access
+  reads (a checked slot's length and the zero range's address) come last, so they are the first
+  to move to the block.
 - A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content and the topology class
   (line or triangle) of the draws it serves. It takes as dynamic state the viewport, scissor, cull
   mode, front face, primitive topology within its class, primitive restart, depth test, write and
@@ -2907,7 +2911,7 @@ A Boolean limit's minimum is 1,
 | `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
 | `maxPerStageUpdateAfterBindResources` | `131072` | both texture arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
 | `maxUpdateAfterBindDescriptorsInAllPools` | `143072` | all five arrays |
-| `maxPushConstantsSize` | `256` | per-command values: a compute kernel's dispatch region and 28 buffer addresses, anything larger in a block whose address is pushed; a render pipeline's vertex and fragment functions' values in the same 256 bytes, dense by link, a pair that does not fit refused |
+| `maxPushConstantsSize` | `256` | per-command values: a compute kernel's dispatch region and 28 buffer addresses, anything larger in a block whose address is pushed; a render pipeline's vertex and fragment functions' values in the same 256 bytes, dense by link, anything larger in a block whose address is pushed |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |

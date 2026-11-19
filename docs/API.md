@@ -128,11 +128,19 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   slot whose argument states an alignment below 4, or none, is reached the same way where each of
   its accesses is one 1- or 2-byte unit no wider than that alignment (an `i8` access of a `uchar`
   buffer, an `i16` one of a `ushort` buffer) on a device with that width's storage access. Any
-  other slot is reached from the word below each access, its offset zero-extended. Fields past a kernel's push window (128 bytes; 256 on
-  a device made by `Device::from_queries`, whose runtime's floor requires that much
-  `maxPushConstantsSize`: a dispatch region and 28 buffer addresses) go to a parameter block in
-  memory, read at the device address `PushField::ArgumentTableAddress`, which
-  the window always holds. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
+  other slot is reached from the word below each access, its offset zero-extended. Fields past a
+  function's push window go to a parameter block in memory, read at the device address
+  `PushField::ArgumentTableAddress`, which the window always holds. A kernel's window is 128 bytes
+  (256 on a device made by `Device::from_queries`, whose runtime's floor requires that much
+  `maxPushConstantsSize`: a dispatch region and 28 buffer addresses). On such a device a render
+  pipeline's two functions share one 256-byte range: the vertex function's window is `[0, 248)`,
+  and the fragment function's runs from the vertex function's end, rounded up to 8, to 256. A
+  vertex function is lowered without knowing its fragment function, so it leaves the last 8
+  bytes, where a fragment function whose fields spill always pushes its block's address; that
+  costs only a vertex function whose own fields pass 248 bytes, which spills where it would have
+  filled them. The fields only a checked access reads
+  (`PushField::ZeroAddress` and each `PushField::SlotRemaining`) come last in the order, so they
+  are the first to move to the block. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
   every dispatch: a dispatch the host knows states Metal's grid and its piece's first threadgroup
   there, and an indirect dispatch a zero grid, whose kernel takes `NumWorkgroups` times its
   workgroup size. On a device made by `Device::new` it declares no `MultiRegion` constant. On one

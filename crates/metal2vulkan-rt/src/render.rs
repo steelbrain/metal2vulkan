@@ -56,6 +56,7 @@ use crate::pipeline::{
     Numbered, PUSH_BYTES,
 };
 use crate::reaper::{Free, Job};
+use crate::ring::CHUNK;
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::cache::VariantKey;
@@ -92,6 +93,14 @@ pub(crate) struct RenderInner {
 pub(crate) const VERTEX: usize = 0;
 pub(crate) const FRAGMENT: usize = 1;
 
+/// Where a draw's field goes: a byte offset of the push range, or of a function's parameter block
+/// ([`VERTEX`] or [`FRAGMENT`]'s), which a draw writes into the parameter ring.
+#[derive(Clone, Copy)]
+pub(crate) enum DrawPlace {
+    Push(u32),
+    Block(usize, u32),
+}
+
 /// What a draw of a content supplies, from the translator.
 pub(crate) struct Draws {
     /// Each buffer slot a function uses: its function ([`VERTEX`] or [`FRAGMENT`]), its index and
@@ -117,8 +126,11 @@ pub(crate) struct Draws {
     pub(crate) writes_memory: bool,
     /// The bytes of the push range the functions read, from 0.
     pub(crate) push_len: u32,
-    /// Each push field: its offset, its function's tables, and its value.
-    pub(crate) fields: Vec<(u32, usize, FieldValue)>,
+    /// Each field: where it goes, the tables it reads, and its value.
+    pub(crate) fields: Vec<(DrawPlace, usize, FieldValue)>,
+    /// Each function's parameter block, where its fields spill past its share of the push range:
+    /// its length, and the push offset of its address (`PushField::ArgumentTableAddress`).
+    pub(crate) blocks: [Option<(u32, u32)>; 2],
     /// Whether a draw must be at base instance 0: a binding has a divisor other than 1 and the
     /// device does not report `supportsNonZeroFirstInstance` (VUID-vkCmdDraw-pNext-09461).
     pub(crate) first_instance_zero: bool,
@@ -310,9 +322,9 @@ fn draw_input() -> Error {
 /// through ([`RenderCompiled::numbered`]), and what a draw of it supplies.
 ///
 /// Err: [`Gap::RenderPipeline`] of [`RenderPipelineKind::DrawInput`] for a pipeline that reads
-/// what a draw does not supply: a function table, a table the binder builds, a parameter block,
-/// a push field or bind-time fact the encoder does not fill, or an unnormalized constexpr
-/// sampler.
+/// what a draw does not supply: a function table, a table the binder builds, a parameter block
+/// longer than a ring chunk, a push field or bind-time fact the encoder does not fill, or an
+/// unnormalized constexpr sampler.
 fn draws(
     pipeline: &RenderPipeline,
     nonzero_first_instance: bool,
@@ -397,19 +409,29 @@ fn draws(
     let mut constexprs = Vec::new();
     let mut fields = Vec::new();
     let mut push_len = 0;
+    let mut blocks = [None; 2];
     for placement in &translated.push {
         let at = table(placement.stage)?;
-        if placement.argument_table_size != 0 {
-            return Err(draw_input());
-        }
         if let Some((offset, size)) = placement.push_range {
             push_len = push_len.max(offset + size);
         }
+        let mut address = None;
         for placed in &placement.fields {
-            let PushLoc::Push { offset } = placed.loc else {
-                return Err(draw_input());
+            let offset = match placed.loc {
+                PushLoc::Push { offset } => DrawPlace::Push(offset),
+                PushLoc::ArgumentTable { offset } => DrawPlace::Block(at, offset),
+                _ => return Err(draw_input()),
             };
             let value = match placed.field {
+                // The function's parameter block's address, which a draw writes once the block is
+                // in the ring.
+                PushField::ArgumentTableAddress => match offset {
+                    DrawPlace::Push(pushed) => {
+                        address = Some(pushed);
+                        continue;
+                    }
+                    DrawPlace::Block(..) => return Err(draw_input()),
+                },
                 PushField::SlotGuestBase(SlotRef {
                     stage,
                     class,
@@ -479,6 +501,12 @@ fn draws(
             };
             fields.push((offset, at, value));
         }
+        // The block, where there is one, is in one ring chunk, and its address in the range.
+        blocks[at] = match (placement.argument_table_size, address) {
+            (0, None) => None,
+            (len @ 1.., Some(address)) if u64::from(len) <= CHUNK => Some((len, address)),
+            _ => return Err(draw_input()),
+        };
     }
     if push_len > PUSH_BYTES {
         return Err(draw_input());
@@ -504,6 +532,7 @@ fn draws(
         writes_memory: translated.writes_memory,
         push_len,
         fields,
+        blocks,
         first_instance_zero: divided && !nonzero_first_instance,
         patches: pipeline.graphics.tessellation.is_some(),
     };
