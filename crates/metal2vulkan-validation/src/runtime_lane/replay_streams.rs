@@ -19,7 +19,8 @@
 //!   index, is sampled through it.
 //! - A blit's generated mipmaps fill a texture's levels below its first.
 //! - A store action an encoder sets over its pass's unknown one stores the pass's clear, with
-//!   fragment samplers bound with LOD clamps.
+//!   fragment samplers bound with LOD clamps; the depth and stencil store actions an encoder sets
+//!   store a depth-only and a stencil-only pass's clears.
 //!
 //! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
 //! their own beside the stream's.
@@ -1052,5 +1053,97 @@ fn an_encoder_s_store_action_and_clamped_samplers_play() {
         let report = play("store-action", device, &path);
         assert_eq!(report.checks.len(), 1);
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    });
+}
+
+/// A depth-only pass and a stencil-only pass whose attachment's store action is unknown until its
+/// encoder sets it to store: the Private `Depth32Float` texture holds the pass's clear depth, 0.25,
+/// and the Private `Stencil8` texture its clear stencil, 0x5a.
+#[test]
+fn an_encoder_s_depth_and_stencil_store_actions_play() {
+    let dir = ScratchDir::new("replay-depth-stencil-store").unwrap();
+    let depth: Vec<u8> = 0.25f32.to_le_bytes().repeat(16);
+    let stencil = vec![0x5au8; 16];
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("commandBuffer", 2, 3, &[], &[])?;
+        // Depth32Float (252) and Stencil8 (253): textures 5 and 9, passes 6 and 10, encoders 7 and
+        // 11.
+        let passes = [
+            (
+                252,
+                "m2v.setDepthAttachment",
+                "clearDepth",
+                Value::F64(0.25),
+            ),
+            (
+                253,
+                "m2v.setStencilAttachment",
+                "clearStencil",
+                Value::Uint(0x5a),
+            ),
+        ];
+        for (at, (format, setter, key, clear)) in [4u64, 8].into_iter().zip(passes) {
+            let (texture, pass, encoder) = (at + 1, at + 2, at + 3);
+            let d = uints(&[
+                ("textureType", 2),
+                ("pixelFormat", format),
+                ("width", 4),
+                ("height", 4),
+                ("usage", 5),
+                ("storageMode", 2),
+            ]);
+            w.call("m2v.textureDescriptor", 0, at, &[d], &[])?;
+            w.call(
+                "newTextureWithDescriptor:",
+                1,
+                texture,
+                &[Value::Object(at)],
+                &[],
+            )?;
+            w.call("MTLRenderPassDescriptor.new", 0, pass, &[], &[])?;
+            // Load action clear (2), store action unknown (4).
+            let Value::Map(mut a) = uints(&[("level", 0), ("loadAction", 2), ("storeAction", 4)])
+            else {
+                unreachable!("a map");
+            };
+            a.push(("texture".into(), Value::Object(texture)));
+            a.push(("resolveTexture".into(), Value::Nil));
+            a.push((key.into(), clear));
+            w.call(setter, pass, 0, &[Value::Map(a)], &[])?;
+            let pass = [Value::Object(pass)];
+            w.call(
+                "renderCommandEncoderWithDescriptor:",
+                3,
+                encoder,
+                &pass,
+                &[],
+            )?;
+            // Store (1).
+            let selector = match format {
+                252 => "setDepthStoreAction:",
+                _ => "setStencilStoreAction:",
+            };
+            w.call(selector, encoder, 0, &[Value::Uint(1)], &[])?;
+            w.call("endEncoding", encoder, 0, &[], &[])?;
+        }
+        w.call("commit", 3, 0, &[], &[])?;
+        let sums = [&depth, &stencil].map(|bytes| Value::Bytes(Sha256::digest(bytes).to_vec()));
+        let textures = [Value::Object(5), Value::Object(9)];
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &textures,
+            &[("sha256", Value::List(sums.to_vec()))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("depth-stencil-store", device, &path);
+        assert_eq!(report.checks.len(), 2);
+        for check in &report.checks {
+            assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
+        }
     });
 }

@@ -521,6 +521,13 @@ impl OldRuntime {
                 let at = index(call, 1)?;
                 self.render(id).set_color_store_action(action, at)
             }
+            "setDepthStoreAction:" | "setStencilStoreAction:" => {
+                let action = StoreAction::from_raw(uint(call, 0)?).map_err(failed(call))?;
+                match &*call.selector {
+                    "setDepthStoreAction:" => self.render(id).set_depth_store_action(action),
+                    _ => self.render(id).set_stencil_store_action(action),
+                }
+            }
             "setViewport:" => {
                 let known = ["originX", "originY", "width", "height", "znear", "zfar"];
                 let f = Fields::arg(call, 0, &known)?;
