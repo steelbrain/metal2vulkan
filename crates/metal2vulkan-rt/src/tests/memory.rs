@@ -1247,6 +1247,79 @@ mod on_device {
         }
     }
 
+    /// An allocation a take longer than the unit made for itself is never the reserve: a Shared
+    /// block of 64 MiB, given back and kept, has its bytes given back to its allocation by a take
+    /// of 20 MiB that no free range fits (an unkeep), so that allocation is idle with free bytes,
+    /// newer than the class's first one. With the 20 MiB block given back too and nothing else
+    /// live, both long allocations are freed at their idle age, and the class keeps its unit
+    /// allocation as its reserve, unweighed. Nothing commits.
+    #[test]
+    fn every_device_frees_a_long_allocation_whose_block_s_bytes_are_free_at_its_idle_age() {
+        const MIB: u64 = 1 << 20;
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let core = device.core();
+            let counters = device.counters();
+            let unit = MemoryClass::Shared.block_len();
+            let long = (device.take_block(MemoryClass::Shared, 64 * MIB))
+                .unwrap_or_else(|error| panic!("{name}: a block of 64 MiB: {error}"));
+            let mut handed = vec![long.id];
+            device.release_block(long).expect("a release");
+            wait_until("the long block kept", || {
+                core.pool.kept(MemoryClass::Shared) == 1
+            });
+            // No free range fits 20 MiB: the take allocates, and asks for the kept block's bytes.
+            let other = (device.take_block(MemoryClass::Shared, 20 * MIB))
+                .unwrap_or_else(|error| panic!("{name}: a block of 20 MiB: {error}"));
+            handed.push(other.id);
+            assert!(
+                core.pool.frees().is_empty(),
+                "{name}: the long allocation was freed before the take: the test, not the \
+                 runtime, was late"
+            );
+            wait_until("the long block's bytes given back", || {
+                core.pool.kept(MemoryClass::Shared) == 0 && hook.unmapped().len() == 1
+            });
+            device.release_block(other).expect("a release");
+            wait_until("the two long allocations freed", || {
+                core.pool.frees().len() == 2 && !core.pool.freeing()
+            });
+            thread::sleep(Duration::from_nanos(2 * IDLE_AGE_NANOS));
+            let gauges = counters.gauges();
+            assert_eq!(
+                (
+                    gauges.blocks,
+                    gauges.shared_idle_bytes,
+                    gauges.shared_reserve_bytes,
+                    gauges.shared_idle_age_nanos
+                ),
+                (ZERO_SOURCE + 2, unit, unit, 0),
+                "{name}: one unit allocation of each class, the Shared one the reserve"
+            );
+            assert_eq!(
+                core.pool.frees().len(),
+                2,
+                "{name}: no third free: the reserve stays"
+            );
+            drop(device);
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: gauges after teardown"
+            );
+            assert_each_unmapped_once(name, &hook, &handed);
+            println!(
+                "memory: {name}: a long allocation with free bytes freed at its idle age; \
+                 metrics {:?}",
+                counters.metrics()
+            );
+        }
+    }
+
     /// The bucket of [`Metrics::idle_reuses_by_age`](crate::Metrics::idle_reuses_by_age) an idle
     /// time of `nanos` counts in: the runtime's upper bounds, 50, 100, 250, 500, 1000 and
     /// 2000 ms.

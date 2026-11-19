@@ -347,8 +347,9 @@ struct Allocation {
 /// wait, for those bytes, and look for a free range once more. It waits only while the block-maker
 /// thread works for it, by one predicate both read: [`State::needs_maker`].
 ///
-/// The idle rule never frees an allocation that the class's free bytes need to stay at or above
-/// [`MAKE_BELOW`], so it does not free what the block-maker thread would make again.
+/// The idle rule never frees a unit allocation, one of [`ALLOCATION_LEN`], that the class's free
+/// bytes need to stay at or above [`MAKE_BELOW`], so it does not free what the block-maker thread
+/// would make again. An allocation a longer take made for itself is never kept so.
 ///
 /// The idle rule runs on the block-maker thread as a block is taken or given back, and again when
 /// the oldest idle allocation reaches [`IDLE_AGE_NANOS`]: it frees each idle allocation of that
@@ -900,9 +901,12 @@ impl State {
     }
 
     /// The class's idle allocations the idle rule weighs, as when each became idle and its memory,
-    /// the oldest first, and the bytes of its reserve. The newest idle allocations with free bytes
-    /// that the class's free bytes need to reach [`MAKE_BELOW`] are its reserve, made ahead of
-    /// need: the rule neither weighs nor frees them.
+    /// the oldest first, and the bytes of its reserve. The newest idle unit allocations, of
+    /// [`ALLOCATION_LEN`], with free bytes that the class's free bytes need to reach [`MAKE_BELOW`]
+    /// are its reserve, made ahead of need: the rule neither weighs nor frees them. An allocation
+    /// a take longer than the unit made for itself is never the reserve, even once its block's
+    /// bytes are free ranges: the rule frees it at its idle age, so it is not held for the
+    /// device's life.
     fn aging(&self, class: MemoryClass) -> (Vec<(u64, vk::DeviceMemory)>, u64) {
         let allocations = &self.allocations[class.index()];
         let mut free: u64 = (allocations.iter())
@@ -924,7 +928,7 @@ impl State {
         idle.sort_unstable_by_key(|&(since, ..)| std::cmp::Reverse(since));
         let mut reserved = 0;
         idle.retain(|&(_, _, bytes, len)| {
-            let reserve = free < MAKE_BELOW && bytes > 0;
+            let reserve = free < MAKE_BELOW && bytes > 0 && len <= ALLOCATION_LEN;
             if reserve {
                 free += bytes;
                 reserved += len;
