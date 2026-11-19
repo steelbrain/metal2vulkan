@@ -262,6 +262,8 @@ struct InFlight {
     commit: u64,
     /// Its stream id (0 for one of the play's own).
     id: u64,
+    /// Its queue's stream id (0 for the play's own).
+    queue_id: u64,
     queue: rt::CommandQueue,
     command_buffer: rt::CommandBuffer,
     /// Set by its completed handler, which the runtime runs once it has let go of what the
@@ -966,6 +968,7 @@ impl NewRuntime {
         self.in_flight.push_back(InFlight {
             commit: self.commits,
             id,
+            queue_id: self.queue_of.get(&id).copied().unwrap_or(0),
             queue: queue.clone(),
             command_buffer,
             retired,
@@ -2377,8 +2380,13 @@ impl Backend for NewRuntime {
             Some(Object::CommandBuffer(waited)) => {
                 // One not in flight has retired already.
                 let flight = (self.in_flight.iter()).find(|flight| flight.id == command_buffer);
+                // The hang record names the command buffer and its queue by their stream IDs.
                 if let Some(flight) = flight {
-                    flight.wait(self.backend, "the replay's wait for a command buffer");
+                    let operation = format!(
+                        "the replay's wait for command buffer #{command_buffer} of queue #{}",
+                        flight.queue_id
+                    );
+                    flight.wait(self.backend, &operation);
                 }
                 match waited.error() {
                     None => Ok(()),
