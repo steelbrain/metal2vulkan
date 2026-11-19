@@ -34,6 +34,7 @@ use crate::device::{Device, DevicePolicy, HandleDomain, PointerDomain};
 use crate::error::{Capability, DescriptorError, Error, Feature, Needs};
 use crate::library::Library;
 use crate::metal::{PixelFormat, VertexFormat, VertexStepFunction};
+use crate::pipeline::artifact::RenderPipeline;
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
@@ -463,8 +464,12 @@ fn from_queries_fetches_a_constant_step_at_vertex_rate_with_stride_zero() {
 /// pulls `ima_vertex`'s position: the vertex function reads it through the slot's pushed device
 /// address at the layout's pushed stride (`PushField::VertexBufferStride(0)`, the descriptor's 8
 /// a static stride), with no bind offset and no descriptor, and fetches its `short` mark in fixed
-/// function; both modules L3-valid. The de-indexed and private list forms, which read the draw's
-/// raw indices at `PushField::CaptureIndexAddress`, stay `Unsupported{IdentityDomains}`.
+/// function; both modules L3-valid. The de-indexed form's key, whose fragment function here reads
+/// no primitive ID and so whose draw's indices the vertex function does not read, pulls both
+/// layouts the same way (every attribute, item 8 of `pipeline::link::vertex`); before the fetch
+/// read a source through its own address it was `Unsupported{IdentityDomains}`. The private list
+/// form, which reads the draw's raw indices at `PushField::CaptureIndexAddress`, stays
+/// `Unsupported{IdentityDomains}`.
 #[test]
 fn from_queries_pulls_a_pulled_vertex_buffer_variant_s_layout_at_its_pushed_stride() {
     use crate::cache::VariantKey;
@@ -480,61 +485,95 @@ fn from_queries_pulls_a_pulled_vertex_buffer_variant_s_layout_at_its_pushed_stri
     private_list.private_list = true;
     for stem in PROFILES {
         let device = fixed_function_device(stem);
-        let p = (device.compile_render_variant(&d, &pulled, &Budget::standard()))
-            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-        let pulled_layouts: Vec<(u32, u32, VertexStride)> = (p.vertex_input.pulled.iter())
-            .map(|a| (a.attribute, a.buffer_index, a.stride))
-            .collect();
-        assert_eq!(
-            pulled_layouts,
-            [(0, 0, VertexStride::Static(8))],
-            "{stem}: the position pulled"
-        );
-        let formats: Vec<vk::Format> = p.vertex_input.attributes.iter().map(|a| a.format).collect();
-        assert_eq!(formats, [vk::Format::R16_SINT], "{stem}: the mark fetched");
-        let vertex = &p.interface.push[0];
-        assert_eq!(vertex.stage, Stage::Vertex, "{stem}");
-        let fields: Vec<PushField> = vertex.fields.iter().map(|f| f.field).collect();
-        assert!(
-            fields.contains(&PushField::VertexBufferStride(0)),
-            "{stem}: the layout's stride pushed: {fields:?}"
-        );
-        assert!(
-            fields
-                .iter()
-                .any(|f| matches!(f, PushField::SlotGuestBase(_))),
-            "{stem}: the buffer's address pushed: {fields:?}"
-        );
-        assert!(
-            !fields
-                .iter()
-                .any(|f| matches!(f, PushField::SlotBindOffset(_))),
-            "{stem}: no bind offset: {fields:?}"
-        );
-        assert!(
-            vertex
-                .fields
-                .iter()
-                .all(|f| matches!(f.loc, PushLoc::Push { .. })),
-            "{stem}: every field in the push range"
-        );
-        assert!(
-            p.layout.sets.iter().all(|s| s.bindings.is_empty()),
-            "{stem}: no descriptor"
-        );
-        for stage in &p.stages {
-            check_words_valid(&stage.spirv, &p.requirements, device.profile())
-                .unwrap_or_else(|e| panic!("{stem}: {:?}: {e}", stage.stage));
+        for (form, v, want_pulled, want_fetched) in [
+            (
+                "pulled",
+                &pulled,
+                &[(0, 0, VertexStride::Static(8))][..],
+                &[vk::Format::R16_SINT][..],
+            ),
+            (
+                "de-indexed",
+                &de_indexed,
+                &[
+                    (0, 0, VertexStride::Static(8)),
+                    (1, 1, VertexStride::Static(4)),
+                ][..],
+                &[][..],
+            ),
+        ] {
+            let p = (device.compile_render_variant(&d, v, &Budget::standard()))
+                .unwrap_or_else(|e| panic!("{stem}: the {form} form: {e:?}"));
+            pulls_at_pushed_strides(stem, form, &device, &p, want_pulled, want_fetched);
         }
-        for (form, v) in [("de-indexed", &de_indexed), ("private list", &private_list)] {
-            match device.compile_render_variant(&d, v, &Budget::standard()) {
-                Err(Error::Unsupported(u)) => assert_eq!(
-                    (u.feature, u.needs),
-                    (Feature::IdentityDomains, Needs::NotImplemented),
-                    "{stem}: the {form} form"
-                ),
-                other => panic!("{stem}: the {form} form: {:?}", other.map(|_| "compiled")),
-            }
+        match device.compile_render_variant(&d, &private_list, &Budget::standard()) {
+            Err(Error::Unsupported(u)) => assert_eq!(
+                (u.feature, u.needs),
+                (Feature::IdentityDomains, Needs::NotImplemented),
+                "{stem}: the private list form"
+            ),
+            other => panic!(
+                "{stem}: the private list form: {:?}",
+                other.map(|_| "compiled")
+            ),
         }
+    }
+}
+
+/// `p`, compiled on `device` (profile `stem`) in `form`, pulls `want_pulled` (attribute, layout,
+/// stride) and fetches `want_fetched` in fixed function, reading each pulled layout through its
+/// slot's pushed address at its pushed stride, with no bind offset, no index read, every field in
+/// the push range and no descriptor; both modules L3-valid.
+fn pulls_at_pushed_strides(
+    stem: &str,
+    form: &str,
+    device: &Device,
+    p: &RenderPipeline,
+    want_pulled: &[(u32, u32, VertexStride)],
+    want_fetched: &[vk::Format],
+) {
+    let pulled_layouts: Vec<(u32, u32, VertexStride)> = (p.vertex_input.pulled.iter())
+        .map(|a| (a.attribute, a.buffer_index, a.stride))
+        .collect();
+    assert_eq!(pulled_layouts, want_pulled, "{stem}: {form}: pulled");
+    let formats: Vec<vk::Format> = p.vertex_input.attributes.iter().map(|a| a.format).collect();
+    assert_eq!(formats, want_fetched, "{stem}: {form}: fetched");
+    let vertex = &p.interface.push[0];
+    assert_eq!(vertex.stage, Stage::Vertex, "{stem}: {form}");
+    let fields: Vec<PushField> = vertex.fields.iter().map(|f| f.field).collect();
+    for &(_, layout, _) in want_pulled {
+        assert!(
+            fields.contains(&PushField::VertexBufferStride(layout)),
+            "{stem}: {form}: layout {layout}'s stride pushed: {fields:?}"
+        );
+        assert!(
+            (fields.iter()).any(|f| matches!(f, PushField::SlotGuestBase(s) if s.index == layout)),
+            "{stem}: {form}: buffer {layout}'s address pushed: {fields:?}"
+        );
+    }
+    assert!(
+        !fields.contains(&PushField::CaptureIndexAddress),
+        "{stem}: {form}: no index read: {fields:?}"
+    );
+    assert!(
+        !fields
+            .iter()
+            .any(|f| matches!(f, PushField::SlotBindOffset(_))),
+        "{stem}: {form}: no bind offset: {fields:?}"
+    );
+    assert!(
+        vertex
+            .fields
+            .iter()
+            .all(|f| matches!(f.loc, PushLoc::Push { .. })),
+        "{stem}: {form}: every field in the push range"
+    );
+    assert!(
+        p.layout.sets.iter().all(|s| s.bindings.is_empty()),
+        "{stem}: {form}: no descriptor"
+    );
+    for stage in &p.stages {
+        check_words_valid(&stage.spirv, &p.requirements, device.profile())
+            .unwrap_or_else(|e| panic!("{stem}: {form}: {:?}: {e}", stage.stage));
     }
 }
