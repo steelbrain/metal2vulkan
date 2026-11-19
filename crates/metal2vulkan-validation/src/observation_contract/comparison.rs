@@ -287,6 +287,7 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::TessellationFactorEdgeCases
         | N::TessellationFactorScale
         | N::TessellationFactorInstance
+        | N::TessellationFractionalSpacing
         | N::TessellationTriangleOrder
         | N::UnmeasuredGroupSpeculation
         | N::NotMipmappedAnisotropicFilter

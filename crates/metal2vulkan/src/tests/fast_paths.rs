@@ -193,6 +193,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             DeviceArithmetic,
             DeviceRayIntersection,
             TessellationWinding,
+            TessellationFractionalSpacing,
             TessellationFactorEdgeCases,
             TessellationFactorScale,
             TessellationFactorInstance,

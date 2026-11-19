@@ -7126,6 +7126,7 @@ macro-member	metal2vulkan-runtime::Degradation::SynthesizedGeometryStage	Synthes
 macro-member	metal2vulkan-runtime::Degradation::TessellationFactorEdgeCases	TessellationFactorEdgeCases = "tessellation-factor-edge-cases";
 macro-member	metal2vulkan-runtime::Degradation::TessellationFactorInstance	TessellationFactorInstance = "tessellation-factor-instance";
 macro-member	metal2vulkan-runtime::Degradation::TessellationFactorScale	TessellationFactorScale = "tessellation-factor-scale";
+macro-member	metal2vulkan-runtime::Degradation::TessellationFractionalSpacing	TessellationFractionalSpacing = "tessellation-fractional-spacing";
 macro-member	metal2vulkan-runtime::Degradation::TessellationTriangleOrder	TessellationTriangleOrder = "tessellation-triangle-order";
 macro-member	metal2vulkan-runtime::Degradation::TessellationWinding	TessellationWinding = "tessellation-winding";
 macro-member	metal2vulkan-runtime::Degradation::TextureBufferFillLeftover	TextureBufferFillLeftover = "texture-buffer-fill-leftover", Precision,
@@ -13799,6 +13800,7 @@ variant	metal2vulkan-rt::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode
 variant	metal2vulkan-rt::PrecisionNote::TessellationFactorEdgeCases	TessellationFactorEdgeCases
 variant	metal2vulkan-rt::PrecisionNote::TessellationFactorInstance	TessellationFactorInstance
 variant	metal2vulkan-rt::PrecisionNote::TessellationFactorScale	TessellationFactorScale
+variant	metal2vulkan-rt::PrecisionNote::TessellationFractionalSpacing	TessellationFractionalSpacing
 variant	metal2vulkan-rt::PrecisionNote::TessellationTriangleOrder	TessellationTriangleOrder
 variant	metal2vulkan-rt::PrecisionNote::TessellationWinding	TessellationWinding
 variant	metal2vulkan-rt::PrecisionNote::UnmeasuredFetchBlend	UnmeasuredFetchBlend
@@ -16737,6 +16739,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationFactorEdgeCases	TessellationFactorEdgeCases
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationFactorInstance	TessellationFactorInstance
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationFactorScale	TessellationFactorScale
+variant	metal2vulkan::pipeline::PrecisionNote::TessellationFractionalSpacing	TessellationFractionalSpacing
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationTriangleOrder	TessellationTriangleOrder
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationWinding	TessellationWinding
 variant	metal2vulkan::pipeline::PrecisionNote::UnmeasuredFetchBlend	UnmeasuredFetchBlend

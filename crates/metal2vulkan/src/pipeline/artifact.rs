@@ -852,6 +852,18 @@ pub enum PrecisionNote {
     /// does. Whether Metal's step counts from the base instance is not read; a base instance of 0
     /// is exact.
     TessellationFactorInstance,
+    /// A tessellation pipeline of a fractional partition (`fractionalOdd`, `fractionalEven`) drawn
+    /// through the device's tessellation stages: Vulkan leaves where a fractional spacing places
+    /// its vertices to the implementation (its two shorter segments' length need only fall
+    /// monotonically with the rounded level less the level, and their place on the edge is the
+    /// implementation's, "Tessellator Spacing"), where Metal's tessellator places them by its own
+    /// rule. Measured equal to Metal's by a consumer's device tests on RADV (Radeon 780M, RX 7900
+    /// XTX), NVIDIA Turing and MoltenVK; other drivers, ANV and lavapipe among them, are not
+    /// measured. A device without `tessellationShader` draws Metal's tessellator through the
+    /// emulation and records none. Recorded on the evaluation stage.
+    ///
+    /// Validation derives no tolerance from it.
+    TessellationFractionalSpacing,
     /// An 8-bit float converts to an integer from the format's documented value (MSL 4.1's fp8
     /// format table for `f8e4m3fn` and `f8e5m2`; LLVM's `Float8E4M3` for `f8e4m3`) with Metal's
     /// saturating float-to-integer rule, where Metal's device here answers otherwise: Metal on

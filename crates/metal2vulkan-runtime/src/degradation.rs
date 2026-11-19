@@ -2676,6 +2676,9 @@ degradations! {
         DeviceRayIntersection = "device-ray-intersection";
         FastMathRewrites = "fast-math-rewrites";
         TessellationWinding = "tessellation-winding";
+        /// A tessellation pipeline of a fractional partition on `metal2vulkan-rt`'s device
+        /// tessellator: where the spacing places its vertices is the device's.
+        TessellationFractionalSpacing = "tessellation-fractional-spacing";
         TessellationFactorEdgeCases = "tessellation-factor-edge-cases";
         TessellationFactorScale = "tessellation-factor-scale";
         TessellationFactorInstance = "tessellation-factor-instance";

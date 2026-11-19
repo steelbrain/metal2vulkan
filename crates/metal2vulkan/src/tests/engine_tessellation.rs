@@ -981,6 +981,7 @@ fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation(
                     PrecisionNote::TessellationFactorEdgeCases,
                     PrecisionNote::TessellationFactorScale,
                     PrecisionNote::TessellationFactorInstance,
+                    PrecisionNote::TessellationFractionalSpacing,
                     PrecisionNote::TessellationTriangleOrder,
                 ];
                 m.precision_notes
@@ -1002,6 +1003,13 @@ fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation(
                     | TessellationFactorStepFunction::PerPatchAndPerInstance
             ) {
                 notes.push(PrecisionNote::TessellationFactorInstance);
+            }
+            if matches!(
+                t.partition_mode,
+                TessellationPartitionMode::FractionalOdd
+                    | TessellationPartitionMode::FractionalEven
+            ) {
+                notes.push(PrecisionNote::TessellationFractionalSpacing);
             }
             if own_order {
                 notes.push(PrecisionNote::TessellationTriangleOrder);
@@ -1096,6 +1104,7 @@ fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation(
                             n,
                             PrecisionNote::TessellationWinding
                                 | PrecisionNote::TessellationFactorEdgeCases
+                                | PrecisionNote::TessellationFractionalSpacing
                                 | PrecisionNote::TessellationTriangleOrder
                         ))
                         .count(),

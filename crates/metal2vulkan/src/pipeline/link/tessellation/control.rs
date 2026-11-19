@@ -212,9 +212,9 @@ impl Control {
 
     /// The readings this control stage takes without a Metal observation on every driver, as
     /// precision notes (the module docs): the winding (measured on four drivers) and the edge
-    /// cases always, the scale when it is enabled, and the instance addressing under a
-    /// per-instance step function. Link notes them on the pipeline's evaluation stage
-    /// ([`super::note_evaluation_stage`]).
+    /// cases always, the scale when it is enabled, the instance addressing under a per-instance
+    /// step function, and a fractional partition's vertex places, the device tessellator's. Link
+    /// notes them on the pipeline's evaluation stage ([`super::note_evaluation_stage`]).
     pub fn notes(&self) -> Vec<PrecisionNote> {
         let mut notes = vec![
             PrecisionNote::TessellationWinding,
@@ -225,6 +225,12 @@ impl Control {
         }
         if matches!(self.step, Step::PerInstance | Step::PerPatchAndPerInstance) {
             notes.push(PrecisionNote::TessellationFactorInstance);
+        }
+        if matches!(
+            self.partition,
+            Partition::FractionalOdd | Partition::FractionalEven
+        ) {
+            notes.push(PrecisionNote::TessellationFractionalSpacing);
         }
         notes
     }

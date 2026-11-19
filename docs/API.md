@@ -4754,6 +4754,15 @@ bound.
   `PrecisionNote::TessellationFactorInstance`: A tessellation pipeline whose factor step function is
   per instance reads instance `i`'s factors at `i · instanceStride`, `i` counting the draw's base
   instance as `[[instance_id]]` does.
+- `metal2vulkan-degrade-tessellation-fractional-spacing` (precision).
+  `PrecisionNote::TessellationFractionalSpacing`: A tessellation pipeline of a fractional partition
+  (`fractionalOdd`, `fractionalEven`) drawn through the device's tessellation stages: Vulkan leaves
+  where a fractional spacing places its vertices to the implementation (its two shorter segments'
+  length need only fall monotonically with the rounded level less the level, and their place on the
+  edge is the implementation's), where Metal's tessellator places them by its own rule. Measured
+  equal to Metal's by a consumer's device tests on RADV (Radeon 780M, RX 7900 XTX), NVIDIA Turing
+  and MoltenVK; other drivers, ANV and lavapipe among them, are not measured. A device without
+  `tessellationShader` draws Metal's tessellator through the emulation and records none.
 - `metal2vulkan-degrade-tessellation-triangle-order` (precision).
   `PrecisionNote::TessellationTriangleOrder`: A tessellation pipeline drawn through the device's
   tessellation stages (a device with `tessellationShader`) whose tessellator is not Apple's (every

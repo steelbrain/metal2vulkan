@@ -1537,6 +1537,7 @@ codec_enum! {
         DeviceDepthBias,
         DepthDenormals,
         DeviceFilteredMipmaps,
+        TessellationFractionalSpacing,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },
