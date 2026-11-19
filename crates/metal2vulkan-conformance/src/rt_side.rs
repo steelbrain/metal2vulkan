@@ -1461,15 +1461,43 @@ impl Side for RtSide<'_> {
                     named.push(handle);
                     self.held_texture(handle)?.gpu_resource_id()
                 }
-                ArgumentSlot::Sampler(handle) => (self.samplers.get(handle.0 as usize))
-                    .ok_or_else(|| Failure::named("NoSuchHandle", format!("sampler {}", handle.0)))?
-                    .gpu_resource_id(),
+                ArgumentSlot::Sampler(handle) => self.held_sampler(handle)?.gpu_resource_id(),
             };
             words.extend(id.to_bits().to_le_bytes());
         }
         let buffer = self.buffer(&words)?;
         self.argument_residents.push((buffer, named));
         Ok(buffer)
+    }
+
+    /// A texture over the buffer itself, the buffer's `newTextureWithDescriptor:offset:bytesPerRow:`
+    /// of one 2D level at its first plane's offset and pitch, readable and writable by shaders, as
+    /// the old side makes it. A texture over a surface's plane answers its call unavailable, as
+    /// the runtime makes no texture of an IOSurface.
+    fn plane_texture(
+        &mut self,
+        buffer: Handle,
+        over: &crate::case::PlaneTexture,
+    ) -> Answer<Handle> {
+        if over.ostype.is_some() {
+            return Err(Failure::unavailable(
+                "newTextureWithDescriptor:iosurface:plane:",
+            ));
+        }
+        let format = rt::PixelFormat::try_from(over.format).map_err(|problem| {
+            Failure::named("NoSuchPixelFormat", format!("{}: {problem}", over.format))
+        })?;
+        let [width, height] = over.size;
+        let mut descriptor =
+            rt::TextureDescriptor::new(rt::TextureType::Type2D, format, width, height);
+        descriptor.usage = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
+        let index = self.on.texture_index(descriptor.usage);
+        let (offset, bytes_per_row) = over.planes[0];
+        let texture = (self
+            .held(buffer)?
+            .new_texture(&descriptor, index, offset, bytes_per_row))
+        .map_err(|error| self.on.failure(&error))?;
+        Ok(keep(&mut self.textures, texture))
     }
 
     fn empty_command_buffers(&mut self) -> Answer<EmptyCommandBuffers> {
@@ -1570,7 +1598,7 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 16] = [
+    const CALLS: [(&str, &str); 17] = [
         (
             "heap_buffer_size_and_align",
             crate::cases::device_queries::HEAP_BUFFERS,
@@ -1614,6 +1642,7 @@ mod answered {
             "compute_pipeline_with_descriptor",
             "pipeline-facts-compute-plain",
         ),
+        ("plane_texture", "buffer-tails-kernels"),
     ];
 
     /// The calls `value` records as unavailable, wherever in it they sit.
