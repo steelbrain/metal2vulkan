@@ -26,6 +26,9 @@
 //! - A two-copy stream's Managed buffers start their GPU copies from the bytes they were made with
 //!   (`rt_replay::made_with`): a no-copy descriptor buffer and a copied one read through a blit as
 //!   the bytes each was made with, on a device that keeps two copies as on one that keeps one.
+//! - A two-copy stream with no identity record (the player's setting): a no-copy Managed buffer
+//!   made with no bytes takes the writes recorded before its first use into its GPU copy too, as
+//!   the new runtime's backend plays it, so a blit reads them.
 //! - A buffer made as a copy of host memory starts with its contents, and the IDs the program saw
 //!   are compared with the runtime's.
 //! - A texture its descriptor marks `outside` takes none of the program's IDs.
@@ -49,8 +52,8 @@ use super::host_memory::on_device_with;
 use super::rt_replay::{library_of, made_with};
 use super::{at_plan, public_case};
 use crate::replay::{
-    Backend, OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value,
-    WAIT_COMPLETED,
+    Backend, ManagedCopies, OldRuntime, PlayError, Player, Report, StreamReader, StreamWriter,
+    Value, WAIT_COMPLETED,
 };
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
@@ -1750,7 +1753,68 @@ fn a_two_copy_stream_s_managed_buffers_start_from_the_bytes_they_were_made_with(
             let object = check.object;
             assert_eq!(Some(check.sha256), check.recorded, "#{object}'s GPU copy");
         }
-        let managed = "managed two copies (the stream's device identity): played as recorded";
+        let managed = "managed two copies (the stream's device identity): played as recorded; 0 \
+                       no-copy ones with contents from first use, not from create";
+        assert!(lines.iter().any(|l| l == managed), "{lines:?}");
+    });
+}
+
+/// A stream with no identity record, played with two copies (`--managed two-copy`): Managed #3, a
+/// no-copy descriptor buffer of 4 bytes made with none, takes 7s by a write with no
+/// `didModifyRange:` before its first use, a blit copying it into Shared #4, which a check reads
+/// as the 7s. The write is the nearest record the stream has of the buffer's bytes at its making,
+/// so its GPU copy takes it, as the new runtime's backend plays it.
+#[test]
+fn a_two_copy_stream_with_no_identity_gives_a_no_copy_buffer_its_writes_before_first_use() {
+    let dir = ScratchDir::new("replay-first-use").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let managed = Value::List(vec![Value::Map(vec![(
+            "ResourceOptions".into(),
+            Value::Uint(16),
+        )])]);
+        let descriptor = Value::Map(vec![
+            ("length".into(), Value::Uint(4)),
+            ("options".into(), managed),
+            ("noCopy".into(), Value::Bool(true)),
+        ]);
+        w.call("newBufferWithDescriptor:", 1, 3, &[descriptor], &[])?;
+        let shared = [Value::Uint(4), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 4, &shared, &[])?;
+        let pairs = [Value::Uint(0), Value::Bytes(vec![7; 4])];
+        w.call("m2v.write", 3, 0, &pairs, &[])?;
+        w.call("commandBuffer", 2, 10, &[], &[])?;
+        w.call("blitCommandEncoder", 10, 11, &[], &[])?;
+        let (zero, four) = (Value::Uint(0), Value::Uint(4));
+        let copy = [Value::Object(3), zero.clone(), Value::Object(4), zero, four];
+        let copy_from = "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:";
+        w.call(copy_from, 11, 0, &copy, &[])?;
+        w.call("endEncoding", 11, 0, &[], &[])?;
+        w.call("commit", 10, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 10, 0, &[], &[])?;
+        let answer = [("sha256", sha(&[7; 4]))];
+        w.call("m2v.check", 0, 0, &[Value::Object(4)], &answer)
+    });
+    on_device_with(at_plan, |device| {
+        let backend = OldRuntime::new(device.clone(), crate::gpu::TEST_DEVICE);
+        let mut backend = backend.with_managed(ManagedCopies::Two);
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let (report, ended) = Player::new(&mut backend).play(&mut reader);
+        let lines = backend.lines();
+        for line in report.lines().iter().chain(&lines) {
+            eprintln!("REPLAY first-use {} {line}", device.name());
+        }
+        ended.unwrap();
+        assert_eq!(report.checks.len(), 1);
+        let check = &report.checks[0];
+        assert_eq!(
+            Some(check.sha256),
+            check.recorded,
+            "the blit read the write"
+        );
+        let managed = "managed two copies (the player's setting): played as recorded; 1 no-copy \
+                       ones with contents from first use, not from create";
         assert!(lines.iter().any(|l| l == managed), "{lines:?}");
     });
 }

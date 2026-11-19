@@ -9,13 +9,13 @@ mod descriptors;
 mod encoders;
 
 use super::heaps::HeapSplit;
-use super::new_runtime::ManagedCopies;
+use super::new_runtime::{objects_named, ManagedCopies};
 use super::player::{Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::value::Value;
 use crate::gpu::wait::{runtime::wait_for_command_buffer, SubmissionBackend};
 use crate::gpu::DeviceType;
-use args::{arg, data, failed, metal, options, range, refuse, region, uint, Fields};
+use args::{arg, data, failed, metal, option_sets, options, range, refuse, region, uint, Fields};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 use metal2vulkan_runtime::{
     AddressPlacement, BlitCommandEncoder, BlitOption, Buffer, BufferContents, BufferDescriptor,
@@ -99,6 +99,15 @@ pub struct OldRuntime {
     identity: bool,
     /// The Managed buffers and blocks a one-copy stream made, played as Shared.
     managed_shared: Cell<u64>,
+    /// Each encoder's command buffer.
+    owners: HashMap<u64, u64>,
+    /// The no-copy Managed buffers of a two-copy stream with no identity record that were made
+    /// with no bytes and whose first use has not been committed, with the command buffer that
+    /// first uses one: the stream's writes into such a buffer reach its GPU copy too, as the new
+    /// runtime's backend plays them (`docs/REPLAY-STREAM.md`, Managed buffers).
+    fresh: HashMap<u64, Option<u64>>,
+    /// The no-copy Managed buffers whose GPU copy took bytes written before their first use.
+    from_first_use: HashSet<u64>,
 }
 
 /// A made object with no address.
@@ -240,6 +249,9 @@ impl OldRuntime {
             managed: None,
             identity: false,
             managed_shared: Cell::new(0),
+            owners: HashMap::new(),
+            fresh: HashMap::new(),
+            from_first_use: HashSet::new(),
         }
     }
 
@@ -248,6 +260,33 @@ impl OldRuntime {
     pub fn with_managed(mut self, copies: ManagedCopies) -> Self {
         self.managed = Some(copies);
         self
+    }
+
+    /// Whether `call` makes a buffer whose GPU copy takes the writes before its first use: a
+    /// no-copy Managed buffer made with no bytes, in a two-copy stream with no identity record
+    /// (the form the player's setting gives), as the new runtime's backend plays it.
+    fn fresh_at_making(&self, call: &Call) -> Result<bool, PlayError> {
+        if self.managed != Some(ManagedCopies::Two) || self.identity {
+            return Ok(false);
+        }
+        let (raw, bytes) = match &*call.selector {
+            "newBufferWithBytesNoCopy:length:options:deallocator:" => {
+                let bytes = arg(call, 0)?.as_bytes().is_some_and(|b| !b.is_empty());
+                (uint(call, 2)?, bytes)
+            }
+            "newBufferWithDescriptor:" => {
+                let f = Fields::arg(call, 0, &descriptors::BUFFER_FIELDS)?;
+                if f.bool("noCopy")? != Some(true) {
+                    return Ok(false);
+                }
+                let raw = option_sets(call, 0, f.list("options")?.unwrap_or_default())?;
+                let bytes = f.get("contents").and_then(Value::as_bytes);
+                (raw, bytes.is_some_and(|b| !b.is_empty()))
+            }
+            _ => return Ok(false),
+        };
+        let mode = options(call, raw)?.storage_mode();
+        Ok(mode == Ok(StorageMode::Managed) && !bytes)
     }
 
     /// The options a buffer or block of `options` is made with: Shared where `options` are
@@ -904,7 +943,22 @@ impl Backend for OldRuntime {
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         if &*call.selector == "release" {
             self.objects.remove(&call.receiver);
+            self.owners.remove(&call.receiver);
+            self.fresh.remove(&call.receiver);
             return Ok(Made::default());
+        }
+        if !self.fresh.is_empty() {
+            // An encoder naming a no-copy Managed buffer not yet used: its command buffer is the
+            // buffer's first use.
+            if let Some(&user) = self.owners.get(&call.receiver) {
+                let mut named = Vec::new();
+                objects_named(&call.args, &mut named);
+                for id in named {
+                    if let Some(first @ None) = self.fresh.get_mut(&id) {
+                        *first = Some(user);
+                    }
+                }
+            }
         }
         if self.skipped(call.receiver) {
             // A call on a skipped object; what it makes is skipped too.
@@ -950,7 +1004,18 @@ impl Backend for OldRuntime {
                 }
                 _ => return Err(refuse(call, "not played on a command queue")),
             },
-            Some(Object::CommandBuffer(_)) => self.command_buffer_call(call)?.map(unaddressed),
+            Some(Object::CommandBuffer(_)) => {
+                let made = self.command_buffer_call(call)?;
+                if &*call.selector == "commit" {
+                    // Its first use committed, a no-copy Managed buffer's GPU copy changes only by
+                    // `didModifyRange:` from here.
+                    self.fresh.retain(|_, user| *user != Some(call.receiver));
+                }
+                if made.is_some() && call.selector.contains("CommandEncoder") {
+                    self.owners.insert(call.result, call.receiver);
+                }
+                made.map(unaddressed)
+            }
             Some(Object::Compute(_)) => {
                 self.compute_call(call)?;
                 None
@@ -996,6 +1061,9 @@ impl Backend for OldRuntime {
                 call.selector
             )));
         }
+        if self.fresh_at_making(call)? {
+            self.fresh.insert(call.result, None);
+        }
         self.objects.insert(call.result, object);
         Ok(made)
     }
@@ -1040,7 +1108,19 @@ impl Backend for OldRuntime {
             PlayError::Invalid(format!(
                 "m2v.write past #{target}'s CPU-visible bytes: {why}"
             ))
-        })
+        })?;
+        // Bytes recorded before a no-copy Managed buffer's first use are its contents at creation,
+        // as near as the stream has them: its GPU copy takes them too.
+        if self.fresh.contains_key(&target) && !bytes.is_empty() {
+            let end = offset + bytes.len() as u64;
+            let did = buffer.did_modify_range(offset..end);
+            did.map_err(|error| PlayError::Runtime {
+                selector: "m2v.write".into(),
+                error: error.to_string(),
+            })?;
+            self.from_first_use.insert(target);
+        }
+        Ok(())
     }
 
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError> {
@@ -1181,7 +1261,11 @@ impl Backend for OldRuntime {
                     "managed one copy ({from}): {} Managed buffers and blocks played as Shared",
                     self.managed_shared.get()
                 ),
-                ManagedCopies::Two => format!("managed two copies ({from}): played as recorded"),
+                ManagedCopies::Two => format!(
+                    "managed two copies ({from}): played as recorded; {} no-copy ones with \
+                     contents from first use, not from create",
+                    self.from_first_use.len()
+                ),
             });
         }
         lines

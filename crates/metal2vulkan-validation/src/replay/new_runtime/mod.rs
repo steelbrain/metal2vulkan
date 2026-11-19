@@ -391,7 +391,7 @@ pub struct NewRuntime {
 }
 
 /// The objects `values` name, lists included.
-fn objects_named(values: &[Value], out: &mut Vec<u64>) {
+pub(super) fn objects_named(values: &[Value], out: &mut Vec<u64>) {
     for value in values {
         match value {
             Value::Object(id) => out.push(*id),

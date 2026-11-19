@@ -117,6 +117,17 @@ pub(super) fn texture(call: &Call, f: &Fields, d: &mut TextureDescriptor) -> Res
     Ok(())
 }
 
+/// A `newBufferWithDescriptor:` descriptor's fields.
+pub(super) const BUFFER_FIELDS: [&str; 7] = [
+    "length",
+    "options",
+    "pinnedGpuAddress",
+    "contents",
+    "noCopy",
+    "deallocator",
+    "zeroFrom",
+];
+
 /// `newBufferWithDescriptor:`: the buffer's length, options and the bytes it was made with (its
 /// `contents`, empty where the stream gives none), which the player also writes once the buffer
 /// is made; a no-copy buffer's later bytes arrive as `m2v.write`, and the pinned address is the
@@ -125,19 +136,7 @@ pub(super) fn texture(call: &Call, f: &Fields, d: &mut TextureDescriptor) -> Res
 /// (`ResourceOptions::PRIVATE_BIT`) is made without it: its GPU writes, which Metal drops, are
 /// kept.
 pub(super) fn buffer(call: &Call) -> Result<(u64, ResourceOptions, &[u8]), PlayError> {
-    let f = Fields::arg(
-        call,
-        0,
-        &[
-            "length",
-            "options",
-            "pinnedGpuAddress",
-            "contents",
-            "noCopy",
-            "deallocator",
-            "zeroFrom",
-        ],
-    )?;
+    let f = Fields::arg(call, 0, &BUFFER_FIELDS)?;
     // The bytes it was made with, where the stream gives them (`docs/REPLAY-STREAM.md`, section 5).
     let contents = match f.get("contents") {
         None => &[][..],

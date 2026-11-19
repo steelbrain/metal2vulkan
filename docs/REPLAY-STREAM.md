@@ -558,8 +558,13 @@ counted from 0), completes the work committed so far, reports as at the stream's
   `didModifyRange:`. Otherwise a Managed buffer plays as the old runtime's, which keeps a GPU copy
   on a device without unified memory, and that copy starts from the bytes the buffer was made
   with, as on the new runtime: the backend's making takes them from the call and announces them
-  (`didModifyRange:` over them). Its report's `managed` line says which form played, from what,
-  and counts the buffers and blocks played as Shared.
+  (`didModifyRange:` over them). In a stream with no identity record played with two copies, a
+  no-copy Managed buffer made with no bytes takes the writes recorded before its first use into
+  its GPU copy too, by the new runtime's rule (above); an identity record gives the bytes at its
+  making instead, and its later writes reach the GPU copy only by `didModifyRange:`, on both
+  runtimes. Its report's `managed` line says which form played, from what, and counts the
+  buffers and blocks played as Shared, or under two copies the no-copy ones whose contents came
+  from first use.
 - **No-copy buffers** (the new runtime) play as the product makes them, by creator:
   - A `newBufferWithDescriptor:` with `noCopy` is a pool buffer in the product: a guest buffer's
     storage in one of the host's blocks. Where its recorded address and length lie inside a live
