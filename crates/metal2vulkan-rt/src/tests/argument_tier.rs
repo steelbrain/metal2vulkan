@@ -1,16 +1,20 @@
-//! Three of the things Metal's argument buffers tier 2 adds over tier 1, under a device cfg on
-//! every device of the cfg's kind, one test a piece (Apple's "Improving CPU performance by using
-//! argument buffers", read against its tier 1 limits):
+//! What Metal's argument buffers tier 2 adds over tier 1, under a device cfg on every device of the
+//! cfg's kind, one test a piece (Apple's "Improving CPU performance by using argument buffers",
+//! read against its tier 1 limits):
 //!
 //! - writable textures in an argument buffer: `a8r_buffers`' `a8r_held` reads a `read_write`
 //!   member's texels, then writes it and a `write` member;
 //! - an argument buffer the GPU writes: `ab_tier2`'s `ab_copy` copies a texture member from one
 //!   argument buffer to another, and `ab_read` reads through the copy;
 //! - an argument buffer the CPU cannot reach: a Private buffer a blit filled, which `ab_read`
-//!   reads through.
+//!   reads through;
+//! - pointer indexing, and an argument buffer that points at others: `ab_indexed`'s thread `g`
+//!   reads through element `g` of an array of argument buffers a pointer member reaches.
 //!
-//! The program writes each texture member itself, as the texture's `gpuResourceID`, as tier 2's
-//! layout lets it.
+//! The program writes each member itself, a texture's `gpuResourceID` and a buffer's
+//! `gpuAddress`, as tier 2's layout lets it. The floor holds every feature this rests on (buffer
+//! device addresses, and the set-1 arrays' runtime descriptor arrays, partial binding and
+//! update-after-bind of sampled and storage images), so the tier is a floor fact.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 
@@ -18,9 +22,10 @@
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType,
-        FunctionDescriptor, IndexClass, Library, MemoryClass, PixelFormat, Region, Resource,
-        ResourceUsage, StageSource, Texture, TextureDescriptor, TextureType, TextureUsage,
+        ArgumentBuffersTier, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState,
+        Device, DispatchType, FunctionDescriptor, IndexClass, Library, MemoryClass, PixelFormat,
+        Region, Resource, ResourceUsage, StageSource, Texture, TextureDescriptor, TextureType,
+        TextureUsage,
     };
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
@@ -153,6 +158,11 @@ mod on_device {
             return;
         };
         each_device("argument_tier_writable", |name, _, device| {
+            assert_eq!(
+                device.argument_buffers_support(),
+                ArgumentBuffersTier::Tier2,
+                "{name}"
+            );
             let state = state(name, &device, &library, "a8r_held");
             let grant = (device.grant_indices(IndexClass::Texture, 1, 2))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -301,6 +311,55 @@ mod on_device {
             drop((texture, held, command_buffer));
             (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             println!("{name}: a texture read through a Private argument buffer");
+        });
+    }
+
+    /// The bound argument buffer holds the address of an array of three, each holding its own
+    /// texture: thread `g` reads through element `g`.
+    #[test]
+    fn every_device_reads_through_the_argument_buffers_a_pointer_member_indexes() {
+        let Some(library) = library("ab_tier2") else {
+            return;
+        };
+        each_device("argument_tier_indexed", |name, _, device| {
+            let indexed = state(name, &device, &library, "ab_indexed");
+            let grant = (device.grant_indices(IndexClass::Texture, 1, 3))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let textures: Vec<Texture> = (0..3)
+                .map(|at| texture(name, &device, 1, 1 + at as u32, &TEXELS[at + 1..at + 2]))
+                .collect();
+            let mut shared = Shared::new(&device);
+            let ids: Vec<u8> = (textures.iter())
+                .flat_map(|t| t.gpu_resource_id().to_bits().to_le_bytes())
+                .collect();
+            let array = shared.of(&device, &ids);
+            let table = shared.of(&device, &array.gpu_address().to_le_bytes());
+            let out = shared.of(&device, &[0; 48]);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder
+                .set_compute_pipeline_state(&indexed)
+                .expect("a state");
+            encoder.set_buffer(Some(&table), 0, 0).expect("table");
+            encoder.set_buffer(Some(&out), 0, 1).expect("out");
+            (encoder.use_resource(Resource::Buffer(&array), ResourceUsage::READ))
+                .expect("the array");
+            for texture in &textures {
+                (encoder.use_resource(Resource::Texture(texture), ResourceUsage::READ))
+                    .expect("a texture");
+            }
+            (encoder.dispatch_threadgroups([1, 1, 1], [3, 1, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert_eq!(float4s(&out, 3), TEXELS[1..4], "{name}");
+            drop((textures, command_buffer));
+            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!("{name}: three textures read through an indexed array of argument buffers");
         });
     }
 }

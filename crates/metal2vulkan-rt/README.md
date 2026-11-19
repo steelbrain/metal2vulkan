@@ -85,6 +85,12 @@ them over this crate's items:
   floor: Vulkan requires storage images of tier 2's four-channel and 32-bit formats, and the
   floor's `shaderStorageImageExtendedFormats` its six 8- and 16-bit single-channel ones. The
   device test `read_write_tier` reads and writes each of the 18 through `access::read_write`.
+- `Device::argument_buffers_support` is `MTLArgumentBuffersTier2` on every device above the
+  floor, which holds buffer device addresses and the set-1 arrays' runtime descriptor arrays,
+  partial binding and update-after-bind of sampled and storage images. The device tests
+  `argument_tier` read and write the writable textures an argument buffer holds, and read
+  through an argument buffer a kernel wrote, a Private one and the array a pointer member
+  indexes.
 
 ### Teardown
 

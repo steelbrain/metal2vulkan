@@ -6288,6 +6288,7 @@ macro-decl	metal2vulkan-air::ir::Sym	ir_id! Sym
 macro-decl	metal2vulkan-air::ir::TypeId	id_type! TypeId
 macro-decl	metal2vulkan-air::ir::TypeId	ir_id! TypeId
 macro-decl	metal2vulkan-air::metal::DataType	metal_enum! DataType
+macro-decl	metal2vulkan-rt::ArgumentBuffersTier	metal_enum! ArgumentBuffersTier
 macro-decl	metal2vulkan-rt::BindingAccess	metal_enum! BindingAccess
 macro-decl	metal2vulkan-rt::CompareFunction	metal_enum! CompareFunction
 macro-decl	metal2vulkan-rt::CullMode	metal_enum! CullMode
@@ -6528,6 +6529,10 @@ macro-member	metal2vulkan-air::metal::DataType::UShort3	UShort3 = 43, "MTLDataTy
 macro-member	metal2vulkan-air::metal::DataType::UShort4	UShort4 = 44, "MTLDataTypeUShort4";
 macro-member	metal2vulkan-air::metal::DataType::VisibleFunctionTable	VisibleFunctionTable = 115, "MTLDataTypeVisibleFunctionTable";
 macro-member	metal2vulkan-air::metal::DataType::aliases	aliases
+macro-member	metal2vulkan-rt::ArgumentBuffersTier::ArgumentBuffersTier	ArgumentBuffersTier = "MTLArgumentBuffersTier"
+macro-member	metal2vulkan-rt::ArgumentBuffersTier::Tier1	Tier1 = 0, "MTLArgumentBuffersTier1";
+macro-member	metal2vulkan-rt::ArgumentBuffersTier::Tier2	Tier2 = 1, "MTLArgumentBuffersTier2";
+macro-member	metal2vulkan-rt::ArgumentBuffersTier::aliases	aliases
 macro-member	metal2vulkan-rt::BindingAccess::BindingAccess	BindingAccess = "MTLBindingAccess"
 macro-member	metal2vulkan-rt::BindingAccess::ReadOnly	ReadOnly = 0, "MTLBindingAccessReadOnly";
 macro-member	metal2vulkan-rt::BindingAccess::ReadWrite	ReadWrite = 1, "MTLBindingAccessReadWrite";
@@ -9617,6 +9622,7 @@ method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
 method	metal2vulkan-rt::DepthStencilState::descriptor	pub fn descriptor(&self) -> &DepthStencilDescriptor
 method	metal2vulkan-rt::DepthStencilState::precision_note	pub fn precision_note(&self) -> Option<PrecisionNote>
+method	metal2vulkan-rt::Device::argument_buffers_support	pub fn argument_buffers_support(&self) -> ArgumentBuffersTier
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
 method	metal2vulkan-rt::Device::extensions	pub fn extensions(&self) -> &[CString]
 method	metal2vulkan-rt::Device::features	pub fn features(&self) -> &[ConsumerFeature]

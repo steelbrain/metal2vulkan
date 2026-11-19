@@ -28,7 +28,7 @@ use ash::vk;
 use metal2vulkan::device::{
     ApiVersion, DeviceDescription, DevicePolicy, HandleDomain, PointerDomain,
 };
-use metal2vulkan::metal::ReadWriteTextureTier;
+use metal2vulkan::metal::{ArgumentBuffersTier, ReadWriteTextureTier};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{c_char, CString};
@@ -615,6 +615,15 @@ impl Device {
     /// and 16-bit single-channel ones), read and written through `access::read_write`.
     pub fn read_write_texture_support(&self) -> ReadWriteTextureTier {
         ReadWriteTextureTier::Tier2
+    }
+
+    /// `argumentBuffersSupport`: `MTLArgumentBuffersTier2` on every device above the floor, which
+    /// holds what tier 2 stands on: buffer device addresses (a program writes a buffer's
+    /// `gpuAddress` into an argument buffer and indexes through it), and the set-1 arrays'
+    /// runtime descriptor arrays, partial binding and update-after-bind of sampled and storage
+    /// images (a program writes a texture's `gpuResourceID`, of a writable texture too).
+    pub fn argument_buffers_support(&self) -> ArgumentBuffersTier {
+        ArgumentBuffersTier::Tier2
     }
 
     /// `hasUnifiedMemory`: true where Vulkan's device type is integrated or CPU, false for a
