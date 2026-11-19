@@ -63,6 +63,22 @@ pub(super) fn slot_word(address: u64) -> u64 {
     address.wrapping_sub(crate::lower::access::SLOT_ADDRESS_BIAS)
 }
 
+/// The zero range's address the tests push for `PushField::ZeroAddress`. No test buffer lies at
+/// it, so a checked load of a case whose accesses all stay inside their slots traps in the
+/// interpreter if one goes outside.
+pub(super) const ZERO_UNMAPPED: u64 = 0x7f_0000_0000;
+
+/// The length the tests push for a slot's `PushField::SlotRemaining`: `bytes` less the bind
+/// offset `bind`.
+pub(super) fn remaining_word(bytes: usize, bind: u64) -> [u8; 4] {
+    let remaining = (bytes as u64)
+        .checked_sub(bind)
+        .expect("bound inside its buffer");
+    u32::try_from(remaining)
+        .expect("a u32 length")
+        .to_le_bytes()
+}
+
 /// Every committed profile `Device::from_queries` derives under the identity domains (those with
 /// `bufferDeviceAddress` and `shaderInt64`), by stem.
 pub(super) fn identity_profiles() -> Vec<(String, DeviceProfile)> {
@@ -274,6 +290,11 @@ fn dispatch(
                 let (address, bind, _) = &buffers[s.index as usize];
                 push[o..o + 8].copy_from_slice(&slot_word(address + bind).to_le_bytes());
             }
+            PushField::SlotRemaining(s) => {
+                let (_, bind, bytes) = &buffers[s.index as usize];
+                push[o..o + 4].copy_from_slice(&remaining_word(bytes.len(), *bind));
+            }
+            PushField::ZeroAddress => push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes()),
             PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
             _ => return Err(format!("unexpected push field {f:?}")),
         }

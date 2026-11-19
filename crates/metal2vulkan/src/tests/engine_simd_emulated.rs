@@ -151,6 +151,16 @@ fn run_all(
                 push[o..o + 8].copy_from_slice(&word.to_le_bytes());
                 addressed = true;
             }
+            // The output's word per thread, and the constant's one word.
+            PushField::SlotRemaining(s) => {
+                let bytes = [n as usize * 4, 4][s.index as usize];
+                let word = super::engine_word_phases::remaining_word(bytes, 0);
+                push[o..o + 4].copy_from_slice(&word);
+            }
+            PushField::ZeroAddress => {
+                let word = super::engine_word_phases::ZERO_UNMAPPED;
+                push[o..o + 8].copy_from_slice(&word.to_le_bytes());
+            }
             PushField::DispatchRegion => {
                 push[o..o + 32].copy_from_slice(&region_bytes([0; 3], local, local).expect("packs"))
             }

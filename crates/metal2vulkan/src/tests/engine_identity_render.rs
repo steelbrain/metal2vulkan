@@ -105,13 +105,18 @@ fn from_queries_lowers_a_vertex_function_over_its_pushed_buffer_addresses() {
             class: SlotClass::Buffer,
             index,
         };
+        // The two slots are read at the vertex's index, so each pushes its length beside its
+        // address, and the pipeline the zero range their outside reads read.
         assert_eq!(
             pushed,
             [
+                (PushField::ZeroAddress, true),
                 (PushField::SlotGuestBase(slot(0)), true),
-                (PushField::SlotGuestBase(slot(1)), true)
+                (PushField::SlotGuestBase(slot(1)), true),
+                (PushField::SlotRemaining(slot(0)), true),
+                (PushField::SlotRemaining(slot(1)), true)
             ],
-            "{stem}: the vertex function's buffer addresses, pushed"
+            "{stem}: the vertex function's buffer addresses and lengths, pushed"
         );
         assert_eq!(vertex.argument_table_size, 0, "{stem}: no parameter block");
         assert!(
@@ -153,12 +158,12 @@ fn from_queries_pushes_a_render_pipeline_dense_by_link() {
             p.interface.push.iter().map(|s| s.push_range).collect();
         assert_eq!(
             ranges[0],
-            Some((0, 16)),
-            "{stem}: two buffer addresses from 0"
+            Some((0, 32)),
+            "{stem}: the zero range, two buffer addresses and their lengths from 0"
         );
         let fragment = ranges[1].unwrap_or_else(|| panic!("{stem}: the fragment pushes"));
         assert_eq!(
-            fragment.0, 16,
+            fragment.0, 32,
             "{stem}: the fragment's fields follow the vertex's"
         );
         // The stages compiled apart, then linked.
@@ -173,7 +178,7 @@ fn from_queries_pushes_a_render_pipeline_dense_by_link() {
             &budget,
         ))
         .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-        assert_eq!(vertex.fragment_push_base(), 16, "{stem}");
+        assert_eq!(vertex.fragment_push_base(), 32, "{stem}");
         let mut inputs = keys.fragment_inputs.clone().expect("fragment inputs");
         let compiled = |inputs: &crate::pipeline::lower_inputs::LoweringInputs| {
             (device.compile_function(&function(&d.fragment), inputs, &budget))
@@ -186,7 +191,7 @@ fn from_queries_pushes_a_render_pipeline_dense_by_link() {
             Err(Error::InvalidDescriptor(DescriptorError::PushBase {
                 fragment,
                 vertex_end,
-            })) => assert_eq!((fragment, vertex_end), (0, 16), "{stem}"),
+            })) => assert_eq!((fragment, vertex_end), (0, 32), "{stem}"),
             other => panic!("{stem}: {:?}", other.map(|_| "linked")),
         }
         inputs.push_base = vertex.fragment_push_base();
@@ -195,7 +200,7 @@ fn from_queries_pushes_a_render_pipeline_dense_by_link() {
             .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
         assert_eq!(
             linked.interface.push[1].push_range.map(|r| r.0),
-            Some(16),
+            Some(32),
             "{stem}"
         );
     }

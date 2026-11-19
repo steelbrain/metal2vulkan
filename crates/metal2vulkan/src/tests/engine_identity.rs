@@ -79,7 +79,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::engine_word_phases::slot_word;
+use super::engine_word_phases::{remaining_word, slot_word, ZERO_UNMAPPED};
 use crate::bind::{BindState, BoundBuffer, Dispatch, StageTable};
 use crate::budget::Budget;
 use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
@@ -255,6 +255,14 @@ fn a_buffer_kernel_reads_each_slot_at_its_pushed_device_address() {
                     let (base, bind) = at[s.index as usize];
                     push[o..o + 8].copy_from_slice(&slot_word(base + bind).to_le_bytes());
                     read.push(s);
+                }
+                PushField::SlotRemaining(s) => {
+                    let (_, bind) = at[s.index as usize];
+                    let bytes = [bits.len(), halves.len(), out.len()][s.index as usize];
+                    push[o..o + 4].copy_from_slice(&remaining_word(bytes, bind));
+                }
+                PushField::ZeroAddress => {
+                    push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
                 }
                 PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
                 _ => panic!("{stem}: unexpected push field {f:?}"),
@@ -855,6 +863,12 @@ fn the_stage_in_region_is_read_from_its_pushed_field() {
                 PushField::SlotGuestBase(s) if s == slot(0) => {
                     push[o..o + 8].copy_from_slice(&slot_word(OUT).to_le_bytes())
                 }
+                PushField::SlotRemaining(s) if s == slot(0) => {
+                    push[o..o + 4].copy_from_slice(&remaining_word(expected.len(), 0))
+                }
+                PushField::ZeroAddress => {
+                    push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
+                }
                 PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
                 PushField::StageInRegion => push[o..o + 32].copy_from_slice(&region_in),
                 _ => panic!("{stem}: unexpected push field {f:?}"),
@@ -1208,10 +1222,23 @@ fn textures_at_their_resource_ids(ab: bool) {
                         fields.push(field.field);
                         continue;
                     }
+                    // The check's fields, which the count below leaves out: the output's
+                    // length, the argument buffer's, and the zero range.
+                    PushField::SlotRemaining(s) => {
+                        let bytes = match (ab, s.index) {
+                            (false, 0) | (true, 1) => 4 * 21,
+                            _ => 8 * ids.len(),
+                        };
+                        push[o..o + 4].copy_from_slice(&remaining_word(bytes, 0));
+                        continue;
+                    }
+                    PushField::ZeroAddress => ZERO_UNMAPPED,
                     _ => panic!("{stem}: unexpected push field {field:?}"),
                 };
                 push[o..o + 8].copy_from_slice(&bytes.to_le_bytes());
-                fields.push(field.field);
+                if field.field != PushField::ZeroAddress {
+                    fields.push(field.field);
+                }
             }
             assert_eq!(fields.len(), [5, 3][usize::from(ab)], "{stem}: {fields:?}");
             let mut images: Vec<Image> = (0..SRC)
@@ -1488,8 +1515,9 @@ entry:\n\
     )
 }
 
-/// The push bytes of a [`grid_kernel`]: its output at `out` and the region `region`.
-fn grid_push(plan: &Plan, out: u64, region: [u8; 32]) -> Vec<u8> {
+/// The push bytes of a [`grid_kernel`]: its output at `out.0`, `out.1` bytes long, and the region
+/// `region`.
+fn grid_push(plan: &Plan, out: (u64, usize), region: [u8; 32]) -> Vec<u8> {
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         let PushLoc::Push { offset } = f.loc else {
@@ -1498,8 +1526,12 @@ fn grid_push(plan: &Plan, out: u64, region: [u8; 32]) -> Vec<u8> {
         let o = offset as usize;
         match f.field {
             PushField::SlotGuestBase(s) if s == slot(0) => {
-                push[o..o + 8].copy_from_slice(&slot_word(out).to_le_bytes())
+                push[o..o + 8].copy_from_slice(&slot_word(out.0).to_le_bytes())
             }
+            PushField::SlotRemaining(s) if s == slot(0) => {
+                push[o..o + 4].copy_from_slice(&remaining_word(out.1, 0))
+            }
+            PushField::ZeroAddress => push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes()),
             PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
             _ => panic!("unexpected push field {f:?}"),
         }
@@ -1550,12 +1582,12 @@ fn every_dispatch_reads_metals_grid_from_its_pushed_region() {
             for &(base, grid, workgroups) in dispatches {
                 let region = region_bytes(base, grid, L).expect("packs");
                 let res = Resources {
+                    push: grid_push(&plan, (OUT, out.len()), region),
                     buffers: vec![Buffer {
                         slot: None,
                         address: Some(OUT),
                         bytes: out,
                     }],
-                    push: grid_push(&plan, OUT, region),
                     spec: local_size3(L),
                 };
                 let cfg = Config {
@@ -1630,12 +1662,12 @@ fn from_queries_reads_every_regions_base_and_its_size_by_multi_region() {
                 let mut spec = local_size3(local);
                 spec.insert(SpecKey::MultiRegion, multi);
                 let res = Resources {
+                    push: grid_push(&plan, (OUT, out.len()), region),
                     buffers: vec![Buffer {
                         slot: None,
                         address: Some(OUT),
                         bytes: out,
                     }],
-                    push: grid_push(&plan, OUT, region),
                     spec,
                 };
                 let cfg = Config {
@@ -1910,7 +1942,7 @@ fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
                     address: Some(OUT),
                     bytes: vec![0; want.len()],
                 }],
-                push: grid_push(&plan, OUT, region),
+                push: grid_push(&plan, (OUT, want.len()), region),
                 spec,
             };
             let cfg = Config {
@@ -2033,7 +2065,7 @@ fn a_partial_threadgroups_variant_answers_the_edge_threadgroups_of_a_ragged_grid
                 address: Some(OUT),
                 bytes: vec![0; 4 * words],
             }],
-            push: grid_push(&plan, OUT, region),
+            push: grid_push(&plan, (OUT, 4 * words), region),
             spec: local_size3(L),
         };
         let cfg = Config {
@@ -2191,7 +2223,7 @@ fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
                         address: Some(OUT),
                         bytes: vec![0; 4 * len],
                     }],
-                    push: grid_push(&plan, OUT, region),
+                    push: grid_push(&plan, (OUT, 4 * len), region),
                     spec,
                 };
                 let cfg = Config {
@@ -2216,7 +2248,7 @@ fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
             }],
             push: grid_push(
                 &plan,
-                OUT,
+                (OUT, 4 * 48),
                 region_bytes([0; 3], [0; 3], [4, 2, 1]).expect("packs"),
             ),
             spec: local_size3([4, 2, 1]),
@@ -2319,7 +2351,7 @@ fn an_oblivious_kernel_runs_at_a_chosen_size() {
                             address: Some(OUT),
                             bytes: vec![0; 4 * len],
                         }],
-                        push: grid_push(&plan, OUT, region),
+                        push: grid_push(&plan, (OUT, 4 * len), region),
                         spec: local_size3(tile),
                     };
                     let cfg = Config {
@@ -2463,6 +2495,15 @@ fn the_emulated_tiers_barriers_run_only_in_a_threadgroup_of_several_threads() {
                     }
                     PushField::SlotGuestBase(s) if s == slot(1) => {
                         push[o..o + 8].copy_from_slice(&slot_word(OUT).to_le_bytes())
+                    }
+                    PushField::SlotRemaining(s) if s == slot(0) => {
+                        push[o..o + 4].copy_from_slice(&remaining_word(input.len(), 0))
+                    }
+                    PushField::SlotRemaining(s) if s == slot(1) => {
+                        push[o..o + 4].copy_from_slice(&remaining_word(16 * n as usize, 0))
+                    }
+                    PushField::ZeroAddress => {
+                        push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
                     }
                     PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
                     _ => panic!("unexpected push field {f:?}"),
@@ -2651,6 +2692,14 @@ fn unwritten_slots_are_loaded_through_non_writable_places() {
                     PushField::SlotGuestBase(s) => {
                         push[o..o + 8]
                             .copy_from_slice(&slot_word(AT[s.index as usize]).to_le_bytes());
+                    }
+                    // `data`'s 16 bytes, `out`'s word and the count's.
+                    PushField::SlotRemaining(s) => {
+                        let bytes = [data.len(), 4, 4][s.index as usize];
+                        push[o..o + 4].copy_from_slice(&remaining_word(bytes, 0));
+                    }
+                    PushField::ZeroAddress => {
+                        push[o..o + 8].copy_from_slice(&ZERO_UNMAPPED.to_le_bytes())
                     }
                     PushField::DispatchRegion => {
                         let region = region_bytes([0; 3], [1, 1, 1], [1, 1, 1]).expect("packs");
