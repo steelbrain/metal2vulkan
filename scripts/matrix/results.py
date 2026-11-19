@@ -765,6 +765,35 @@ REBASED_SHAPE, REBASED_TREES = "another timing shape", "another harness or old r
 #: The shape the matrix times a leg's harness rows in (its harness_runs), kept in the leg's note:
 #: both runtimes in one process, their passes alternating, the new runtime's first.
 HARNESS_SHAPE = "one process, new then old"
+#: The old runtime's own spread across its passes in a leg, past which the leg's times judge
+#: nothing (base_spread): the leg is VOID, and the matrix times it once more, later; a leg VOID
+#: again reads "venue unstable", its times never failing it.
+BASE_SPREAD = 0.10
+
+
+def base_spread(times):
+    """The old runtime's own spread across its passes in a leg's TIMES, as (spread, row), or None
+    where no steady row has two: of each row the leg re-timed (RETIME_PAIRS), on the times it is
+    judged on (gpu_judged), the old runtime's main run's and its re-timed runs', the largest over
+    the smallest less 1, and of the rows, the largest. A creation row's first samples are cold,
+    spread by nature and judged cold against cold, so none counts."""
+    widest = None
+    for row in sorted({key[len(HARNESS_RETIME):].rsplit("/", 2)[0] for key in times if key.startswith(HARNESS_RETIME)}):
+        if first_row(row):
+            continue
+        gpu = gpu_judged(times, row)
+        main, again = (f"{HARNESS_GPU}old/{row}", HARNESS_RETIME_GPU) if gpu else (f"{HARNESS_OLD}{row}", HARNESS_RETIME)
+        values = [times.get(main)] + [times.get(f"{again}{row}/{pair}/old") for pair in range(1, RETIME_PAIRS + 1)]
+        values = [value for value in values if value]
+        if len(values) >= 2 and (widest is None or max(values) / min(values) - 1 > widest[0]):
+            widest = (max(values) / min(values) - 1, row)
+    return widest
+
+
+def base_spread_void(times):
+    """Whether a leg's TIMES are VOID by the old runtime's own spread (base_spread, BASE_SPREAD)."""
+    spread = base_spread(times)
+    return spread is not None and spread[0] > BASE_SPREAD
 
 
 def frozen_old(times, row, gpu):
@@ -827,8 +856,10 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
     row is a problem, its times measuring different work. BASE is the times of the leg's base: a
     judged row whose old time moved past FROZEN_DRIFT from the base's is VOID, named and not
     judged (frozen_move), unless REBASED, how the base differs, leaves it uncompared
-    (frozen_rebased)."""
-    problems, parked = [], []
+    (frozen_rebased). Where the old runtime's own spread across its passes in the leg is past
+    BASE_SPREAD (base_spread), every row its times would fail is named VOID and fails nothing;
+    the problems of its records and its counts stand."""
+    problems, parked, timed = [], [], []
     suites = leg["suites"].values()
     for row in sorted({test[len(HARNESS_OLD):] for suite in suites for test in suite["failed"]
                        if test.startswith(HARNESS_OLD)}):
@@ -886,19 +917,19 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
             if gate is not None:
                 own, driver, gap = gate
                 if own is None:
-                    problems.append(f"{line}: judged on the new runtime's own part ({gap}), which needs "
+                    timed.append(f"{line}: judged on the new runtime's own part ({gap}), which needs "
                                     "the driver's part from every process")
                     continue
                 line = (f"harness budget {row}: median of {FIRST_RUNS} processes, the new runtime's own "
                         f"part {own:.1f} us over old's whole {old:.1f} us is {own / old:.3f}; the "
                         f"driver's part {driver:.1f} us, new {new:.1f} us whole is {new / old:.3f}: {gap}")
                 if own / old > limit:
-                    problems.append(f"{line}, {past_limit(leg_id, row)}: a regression of its own")
+                    timed.append(f"{line}, {past_limit(leg_id, row)}: a regression of its own")
                 else:
                     parked.append(line)
                 continue
             if new / old > limit:
-                problems.append(f"{line}, {past_limit(leg_id, row)}")
+                timed.append(f"{line}, {past_limit(leg_id, row)}")
             elif listed_row(row) in ceilings:
                 parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
             continue
@@ -927,7 +958,7 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
             if variance:
                 parked.append(f"{past}: the card's own variance, not judged ({variance})")
             else:
-                problems.append(past)
+                timed.append(past)
         elif variance and ratio > HARNESS_BUDGET:
             parked.append(f"{line}, within its limit: the card's own variance ({variance})")
         elif listed_row(row) not in ceilings:
@@ -936,6 +967,13 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
             parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
         else:
             parked.append(f"{line}, within {HARNESS_BUDGET}: its ceiling {ceilings[listed_row(row)]} leaves the list")
+    spread = base_spread(times)
+    if spread is not None and spread[0] > BASE_SPREAD:
+        parked.append(f"harness budget VOID: the old runtime's own spread across its passes is {spread[0]:.1%} "
+                      f"on {spread[1]}, past {BASE_SPREAD:.0%}, so the leg's times judge nothing")
+        parked += [f"VOID: {line}" for line in timed]
+    else:
+        problems += timed
     return problems, parked
 
 
@@ -1042,14 +1080,16 @@ def over_lines(leg_id, records, base, rebased, rounds_since):
     """The report's table on LEG_ID: one line per row over its limit in the leg's RECORDS
     (over_rows): its kind, its ratio and limit, the frozen arm's verdict against BASE, the base
     leg's records (`VOID`, `stands`, `rebased` where REBASED leaves it uncompared, `no base`; `-`
-    for a count), and its status (row_status)."""
+    for a count; `VOID` on every time where the old runtime's own spread voids the leg,
+    base_spread), and its status (row_status)."""
     base_times = base and base["time"]
     before = {(row, kind) for row, kind, _, _ in over_rows(leg_id, base)} if base else set()
+    void = base_spread_void(records["time"])
     lines = []
     for row, kind, ratio, limit in over_rows(leg_id, records):
         move = frozen_move(records["time"], base_times, row)
-        meter = ("-" if kind == "count" else "no base" if move is None else "rebased" if frozen_rebased(row, rebased)
-                 else "VOID" if abs(move[2]) > FROZEN_DRIFT else "stands")
+        meter = ("-" if kind == "count" else "VOID" if void else "no base" if move is None
+                 else "rebased" if frozen_rebased(row, rebased) else "VOID" if abs(move[2]) > FROZEN_DRIFT else "stands")
         status = row_status(leg_id, row, (row, kind) in before, rounds_since)
         lines.append(f"{leg_id:<24} {row:<36} {kind:<9} {ratio:6.3f} over {limit:.3f}  {meter:<7}  {status}")
     return lines
@@ -1103,9 +1143,14 @@ def verdict_line(leg_id, leg):
                       for name, s in leg.get("suites", {}).items())
     counted = sum(len(values) for values in leg.get("records", {}).values())
     where = " ".join(part for part in (leg.get("device"), leg.get("driver")) if part)
-    head = f"{'PASS' if leg['verdict'] == 'pass' else 'FAIL'} {leg_id:10} {where or '?'} on {leg.get('node', '?')}"
+    verdict = {"pass": "PASS", "unstable": "UNSTABLE"}.get(leg["verdict"], "FAIL")
+    head = f"{verdict} {leg_id:10} {where or '?'} on {leg.get('node', '?')}"
     tail = (f"{tests or 'no suite ran'}; {counted} records; base {(leg.get('base') or 'none')[:10]}; "
             f"jobs {' '.join(leg.get('jobs', [])) or '-'}")
+    if "timed" in leg:
+        spread = leg["timed"]["spread"]
+        tail += "; base spread " + ("n/a" if spread is None else f"{spread[0]:.1%} on {spread[1]}")
+        tail += "".join(f", {state}" for state in leg["timed"]["states"])
     if leg["problems"]:
         tail += " | " + " | ".join(leg["problems"][:4]) + (" ..." if len(leg["problems"]) > 4 else "")
     if leg.get("parked"):

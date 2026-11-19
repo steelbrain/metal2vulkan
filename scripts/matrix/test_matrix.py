@@ -159,6 +159,39 @@ done
 """
 
 
+class TimedAgainTests(unittest.TestCase):
+    def test_a_harness_past_the_old_runtime_s_spread_is_timed_once_more_after_the_node_s_other_jobs(self):
+        run = run_of({})
+        run.harness, run.layer, run.cfg = True, None, {}
+        legs = [matrix.Leg("1002:744c", "n", "0000:06:00.0", "radeon"),
+                matrix.Leg("10de:1e87", "n", "0000:09:00.0", "nvidia")]
+        # Each timing's old runtime runs of its one re-timed row: the main run's, then its pairs'.
+        olds = {"1002:744c": [[100.0, 115.0], [100.0, 104.0], [100.0, 140.0]], "10de:1e87": [[100.0, 101.0]]}
+        asked = []
+
+        def job(kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None,
+                hold_line=False):
+            asked.append((name, 'rm -rf "$S"' in script))
+            if name.startswith("rt-"):
+                return 0, "".join(f"M2V-LEG {leg.id} begin\nM2V-SUITE {leg.id} rt exit 0\n" for leg in legs), {"id": name}
+            leg_id = name.split("-", 1)[1].removesuffix("-again")
+            lines = [f"M2V-LEG {leg_id} begin", "M2V-MATRIX time harness-old/alu 100.0",
+                     "M2V-MATRIX time harness-new/alu 110.0"]
+            for pair, old in enumerate(olds[leg_id].pop(0), 1):
+                lines += [f"M2V-MATRIX time harness-retime/alu/{pair}/old {old}",
+                          f"M2V-MATRIX time harness-retime/alu/{pair}/new {old * 1.1:.1f}"]
+            return 0, "\n".join(lines + [f"M2V-SUITE {leg_id} harness exit 0"]) + "\n", {"id": name}
+
+        with mock.patch.object(run, "job", job, create=True), mock.patch.object(matrix, "log"):
+            run.gpu_node("n", legs, lambda: ("carry", "mirror", "rev"))
+        # The XTX's old runtime spread 15% in its first timing: it is timed once more, after the
+        # 2080's, and that last job is the node's last, which tidies; once more only.
+        self.assertEqual(asked, [("rt-n", False), ("harness-1002:744c", False), ("harness-10de:1e87", False),
+                                 ("harness-1002:744c-again", True)])
+        self.assertEqual([(round(spread, 2), row) for spread, row in legs[0].timings], [(0.15, "alu"), (0.04, "alu")])
+        self.assertEqual([(round(spread, 2), row) for spread, row in legs[1].timings], [(0.01, "alu")])
+
+
 class HarnessRunTests(unittest.TestCase):
     def test_both_runtimes_are_timed_in_one_process_and_each_runtime_s_creation_rows_in_its_own(self):
         with tempfile.TemporaryDirectory() as work:

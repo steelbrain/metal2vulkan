@@ -180,6 +180,8 @@ class Leg:
     def __init__(self, leg_id, node, gpu=None, icd=None, select=False):
         self.id, self.node, self.gpu, self.icd, self.select = leg_id, node, gpu, icd, select
         self.jobs, self.parsed = [], dict(device={}, suites={})
+        # Each harness timing's old-runtime spread (results.base_spread), in order (Run.timed_again).
+        self.timings = []
         self.started = self.ended = None
 
 
@@ -703,15 +705,30 @@ class Run:
             leg.started = time.time()
         jobs = [("rt", legs, f"rt-{node}")] + ([("harness", [leg], f"harness-{leg.id}") for leg in legs]
                                                if self.harness else [])
-        for suite, these, name in jobs:
+        while jobs:
+            suite, these, name = jobs.pop(0)
             layer = self.layer if suite == "rt" else None
-            script = gpu_script(self.short, self.setup(node), these, mirror, rev, suite, name == jobs[-1][2],
+            script = gpu_script(self.short, self.setup(node), these, mirror, rev, suite, not jobs,
                                 layer and layer[1:])
             code, out, rec = self.job("gpu" if suite == "rt" else "time", node, script, name,
                                       gpus=[leg.gpu for leg in these],
                                       carries=[carry] + ([layer[0]] if layer else []), space="gpu",
                                       exclusive=suite == "harness")
             self.finish(these, code, out, rec, suite)
+            if suite == "harness" and self.timed_again(these[0]):
+                jobs.append((suite, these, f"{name}-again"))
+
+    def timed_again(self, leg):
+        """Whether LEG's harness, just timed, is timed once more, after the node's other jobs: the
+        old runtime's own spread across its passes (results.base_spread) is past
+        results.BASE_SPREAD in its first timing. Each timing's spread is kept in LEG.timings."""
+        spread = results.base_spread(results.leg_records(leg.parsed)[0]["time"])
+        leg.timings.append(spread)
+        again = len(leg.timings) == 1 and spread is not None and spread[0] > results.BASE_SPREAD
+        if again:
+            log(f"{leg.id}: the old runtime's own spread {spread[0]:.1%} on {spread[1]} voids its times; "
+                "timed once more, later")
+        return again
 
     def finish(self, legs, code, out, rec, suite):
         """Merge one job's legs into theirs: a leg it did not run, or whose suite never reported its
@@ -741,13 +758,18 @@ class Run:
         if code != 0:
             return self.fail([leg], f"the Windows build (job {rec and rec.get('id')}) failed: exit {code}", rec)
         leg.started = time.time()
-        for suite in ["rt"] + (["harness"] if self.harness else []):
+        suites = ["rt"] + (["harness"] if self.harness else [])
+        while suites:
+            suite = suites.pop(0)
             layer = self.layer if suite == "rt" else None
+            name = f"win{suite}-{leg.id}" + ("-again" if suite == "harness" and leg.timings else "")
             code, out, rec = self.job("winrun" if suite == "rt" else "wintime", leg.node,
-                                      winrun_script(leg, suite, layer and layer[1:]), f"win{suite}-{leg.id}",
+                                      winrun_script(leg, suite, layer and layer[1:]), name,
                                       gpus=[leg.gpu], carries=[layer[0]] if layer else [], space="win",
                                       exclusive=suite == "harness")
             self.finish([leg], code, out, rec, suite)
+            if suite == "harness" and self.timed_again(leg):
+                suites.append(suite)
 
     def lavapipe(self, leg):
         leg.node = self.build_node["node"]
@@ -847,6 +869,14 @@ def leg_entry(run, leg):
     rebased = base and frozen_rebase(run.sha, results.HARNESS_SHAPE, base_sha, base)
     budget, budget_parked = results.harness_budget(leg.id, parsed, base and base["records"]["time"], rebased)
     problems += budget
+    timed = None
+    if leg.timings:
+        # The old runtime's own spread in the timing judged (the last), and what came of the first.
+        first = leg.timings[0]
+        states = [f"VOID at {first[0]:.1%} on {first[1]}, timed again"] if len(leg.timings) > 1 else []
+        if results.base_spread_void(records["time"]):
+            states.append("venue unstable" if len(leg.timings) > 1 else "VOID")
+        timed = dict(spread=results.base_spread(records["time"]), states=states)
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
     dev = parsed["device"]
@@ -863,7 +893,8 @@ def leg_entry(run, leg):
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
         records=records, base=base_sha, base_records=base and base["records"], shape=results.HARNESS_SHAPE,
         problems=problems,
-        parked=results.leg_parked(parsed, records) + budget_parked)
+        parked=results.leg_parked(parsed, records) + budget_parked,
+        **({"timed": timed} if timed is not None else {}))
 
 
 def run_cmd(sha, only, dry):
@@ -922,7 +953,8 @@ def run_cmd(sha, only, dry):
             entries[leg_id]["parked"] += lines
     for leg_id, e in entries.items():
         e.pop("base_records")
-        e["verdict"] = "fail" if e["problems"] else "pass"
+        e["verdict"] = ("fail" if e["problems"] else
+                        "unstable" if "venue unstable" in e.get("timed", {}).get("states", []) else "pass")
         doc["legs"][leg_id] = e
     wall = round((time.time() - started) / 60, 2)
     doc["runs"].append(dict(started=datetime.fromtimestamp(started, timezone.utc).isoformat(timespec="seconds"),
@@ -933,8 +965,10 @@ def run_cmd(sha, only, dry):
     for leg_id in sorted(entries):
         print_leg(sha, leg_id, doc["legs"][leg_id])
     print_over(sha, doc)
-    failed = sum(1 for e in entries.values() if e["verdict"] != "pass")
-    print(f"matrix {sha[:12]}: {len(entries) - failed} of {len(entries)} legs pass, {wall} min wall; note {NOTES}")
+    failed = sum(1 for e in entries.values() if e["verdict"] == "fail")
+    unstable = sum(1 for e in entries.values() if e["verdict"] == "unstable")
+    print(f"matrix {sha[:12]}: {len(entries) - failed - unstable} of {len(entries)} legs pass"
+          + (f", {unstable} venue unstable" if unstable else "") + f", {wall} min wall; note {NOTES}")
     return 1 if failed else 0
 
 

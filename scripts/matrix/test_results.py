@@ -374,6 +374,53 @@ class HarnessBudgetTests(unittest.TestCase):
             leg = leg_of(recs(time=times, size={"harness-new/long_4cb": 4096}))
             self.assertEqual(len(results.harness_budget("a", leg)[0]), 1)
 
+    def test_the_old_runtime_s_own_spread_is_its_re_timed_rows_widest_on_what_each_is_judged_on(self):
+        def retimed(row, main, olds, gpu=False):
+            prefix = "harness-retime-gpu" if gpu else "harness-retime"
+            out = {f"{'harness-gpu-' if gpu else 'harness-'}old/{row}": main}
+            for pair, old in enumerate(olds, 1):
+                out[f"{prefix}/{row}/{pair}/old"] = old
+            return out
+
+        # No row re-timed: no spread to read.
+        self.assertIsNone(results.base_spread({"harness-old/alu": 100.0, "harness-new/alu": 101.0}))
+        # The widest of the re-timed rows, on its time.
+        times = {**retimed("alu", 100.0, [104.0, 98.0]), **retimed("bandwidth", 100.0, [100.0, 115.0])}
+        spread, row = results.base_spread(times)
+        self.assertEqual((round(spread, 3), row), (0.15, "bandwidth"))
+        # A row judged on its GPU time spreads on it, its host time's spread aside.
+        gpu = {"harness-gpu-new/sampling": 20.0, "harness-old/sampling": 50.0, "harness-new/sampling": 50.0,
+               "harness-retime/sampling/1/old": 80.0, "harness-retime/sampling/2/old": 50.0,
+               **retimed("sampling", 20.0, [20.4, 20.2], gpu=True)}
+        spread, row = results.base_spread(gpu)
+        self.assertEqual((round(spread, 3), row), (0.02, "sampling"))
+        # A creation row's cold first samples never count.
+        cold = {f"harness-old/{r}": 1000.0 for r in ("create_state/first",)}
+        cold.update({f"harness-retime/create_state/first/{pair}/old": 3000.0 for pair in (1, 2)})
+        self.assertIsNone(results.base_spread(cold))
+
+    def test_a_leg_past_the_old_runtime_s_own_spread_fails_nothing_on_its_times(self):
+        times = {"harness-old/alu": 100.0, "harness-new/alu": 110.0,
+                 "harness-retime/alu/1/old": 100.0, "harness-retime/alu/1/new": 110.0,
+                 "harness-retime/alu/2/old": 115.0, "harness-retime/alu/2/new": 126.5,
+                 "harness-old/sized": 100.0, "harness-new/sized": 100.0}
+        sizes = {"harness-old/sized": 1, "harness-new/sized": 2}
+        past = ("harness budget alu: new 110.0 us over old 100.0 us is 1.100, past 1.03; re-timed in 2 pairs, "
+                "1.100, 1.100, median 1.100")
+        sized = "harness budget sized: new ran at size 2, old at 1, so its times measure different work"
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            # Its old runtime spread 15% across its passes on alu: its times judge nothing, its
+            # records' problems stand.
+            problems, parked = results.harness_budget("a", leg_of(recs(time=times, size=sizes)))
+            self.assertEqual(problems, [sized])
+            self.assertEqual(parked, [
+                "harness budget VOID: the old runtime's own spread across its passes is 15.0% on alu, past "
+                "10%, so the leg's times judge nothing", f"VOID: {past}"])
+            # Within 10%, the same row fails.
+            times["harness-retime/alu/2/old"], times["harness-retime/alu/2/new"] = 105.0, 115.5
+            problems, _ = results.harness_budget("a", leg_of(recs(time=times, size=sizes)))
+            self.assertEqual(problems, [sized, past])
+
     def test_a_row_over_its_budget_is_judged_by_the_median_of_its_re_timed_pairs(self):
         one = {"harness-old/vote_loop": 419.3, "harness-new/vote_loop": 470.8}
         past = "harness budget vote_loop: new 470.8 us over old 419.3 us is 1.123, past 1.03"
@@ -919,6 +966,29 @@ class OverTableTests(unittest.TestCase):
             ("alu", "host time", 1.085, 1.03), (row, "host time", 1.2, 1.03),
             ("frame", "count", 1.25, 1.03), ("frame", "count", 1.25, 1.0),
             ("sampling", "GPU time", 1.5, 1.03)])
+
+    def test_a_timing_leg_s_line_names_its_base_spread_and_a_leg_void_twice_is_unstable(self):
+        leg = {"verdict": "unstable", "suites": {"harness": {"run": 0, "passed": 0, "exit": 0}},
+               "records": {}, "problems": [], "parked": [], "node": "n", "jobs": ["j1", "j2"],
+               "timed": {"spread": [0.15, "alu"], "states": ["VOID at 14.0% on alu, timed again", "venue unstable"]}}
+        line = results.verdict_line("a:0001", leg)
+        self.assertTrue(line.startswith("UNSTABLE a:0001"), line)
+        self.assertIn("; base spread 15.0% on alu, VOID at 14.0% on alu, timed again, venue unstable", line)
+        leg.update(verdict="pass", timed={"spread": None, "states": []})
+        line = results.verdict_line("a:0001", leg)
+        self.assertTrue(line.startswith("PASS a:0001"), line)
+        self.assertTrue(line.endswith("; base spread n/a"), line)
+        # A leg that times nothing names no spread.
+        del leg["timed"]
+        self.assertNotIn("base spread", results.verdict_line("a:0001", leg))
+
+    def test_a_leg_void_by_the_old_runtime_s_spread_reads_void_on_every_time(self):
+        times = {"harness-old/alu": 100.0, "harness-new/alu": 110.0,
+                 "harness-retime/alu/1/old": 100.0, "harness-retime/alu/1/new": 110.0,
+                 "harness-retime/alu/2/old": 115.0, "harness-retime/alu/2/new": 126.5}
+        lines = results.over_lines("a:0001", recs(time=times), None, None, lambda since: None)
+        self.assertEqual(len(lines), 1)
+        self.assertIn(" VOID ", lines[0])
 
     def test_a_gated_first_take_is_listed_by_its_own_part_alone(self):
         row, driver = "create_64MiB/first_take", "create_64MiB/first_allocation_total"

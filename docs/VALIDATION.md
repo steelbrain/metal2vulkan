@@ -410,7 +410,14 @@ one process with both runtimes interleaved. The report shows that move on every 
 harness, one old runtime and one timing shape: where the trees of `crates/metal2vulkan-harness`
 or `crates/metal2vulkan-runtime` differ between the two commits, every row but the creation rows
 reads `rebased` and voids nothing, and where the base was timed in another shape (the note's
-`shape`), every row does. On each GPU, a harness row timed on both runtimes in the leg
+`shape`), every row does. Within a leg the old runtime's own spread across its passes is
+measured too: of each row the leg re-timed, its old time in the leg's main run and in each
+re-timed pair (the time the row is judged on), the largest over the smallest, less 1; a
+creation row's first samples, cold and judged cold against cold, never count. The leg's line
+names the largest as its base spread (`n/a` where no row was re-timed). Past 10%
+(`BASE_SPREAD`) the leg's times are VOID: the matrix times its harness once more, after the
+node's other jobs, and judges that timing; a leg VOID again reads `venue unstable` (verdict
+`UNSTABLE`), and its times fail nothing. On each GPU, a harness row timed on both runtimes in the leg
 (`harness-new/<row>` and `harness-old/<row>`) holds the new runtime's time to at most 1.03 times
 the old's, times the row's floor on that GPU where it has one: the widest ratio between two of
 the old runtime's own runs of the row there (`scripts/matrix/floors.tsv`, measured again when the
