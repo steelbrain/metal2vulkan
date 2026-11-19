@@ -641,6 +641,9 @@ impl RtSide<'_> {
                 ))
                 .map_err(of_rt)
             }
+            // The scope and the stages only narrow what Metal orders: the runtime's barrier orders
+            // every access of the encoder's draws so far before its later ones.
+            RenderStep::BarrierScope { .. } => encoder.memory_barrier().map_err(of_rt),
             other => Err(Failure::unavailable(&step_name(other))),
         }
     }
