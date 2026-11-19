@@ -2067,6 +2067,15 @@ or does not check is rebuilt from the generations' names, with young counted ful
   constexpr sampler). Of the replay streams' contents that translate, every one reads only its
   slots' addresses, resource IDs and constexpr sampler indices. A state for indirect
   command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
+- A fragment function whose group operations read, combine or count other lanes (every SIMD-group
+  and quad group function, and the SIMD-group matrix functions) is refused at creation, an
+  `Error::Translation` naming `SubgroupOperations` and `shaderQuadControl`: Metal runs the helpers
+  of a partly covered quad, and they take part in those operations, which Vulkan gives only under
+  `RequireFullQuadsKHR`; rt enables `shaderQuadControl` on no device. No replay stream has one: no
+  fragment module of the 26 streams' libraries calls a SIMD-group, quad or SIMD-group matrix
+  function (each library whose bytes name one disassembled with `llvm-dis`, jobs m3-max-52530,
+  52531, 52532, 52557 and 52604). Their libraries that call quad functions, 2 to 5 a stream, call
+  them from no fragment function.
 - Metal's triangle fill mode and depth clip mode, which Vulkan 1.3 bakes into a `VkPipeline`, are
   their defaults.
 - On a driver that keeps the topology class in a pipeline (dynamicPrimitiveTopologyUnrestricted
