@@ -29,7 +29,7 @@
 //! makes it (the old runtime on a driver not measured to decode the format as Metal does;
 //! `metal2vulkan-rt` for every block-compressed texture, its static note). Each round's texels are
 //! loosened by the largest difference that notice's catalogue entry (docs/API.md) states for the
-//! format's family on any driver, justified by the notice alone ([`CompressedDecode::decode_bound`]):
+//! format's family on any driver, justified by the notice alone (`CompressedDecode::decode_bound`):
 //! a texel past it is the notice's claim failing, a divergence. On MoltenVK, whose driver has both
 //! facts, the old runtime announces nothing and every texel compares exactly.
 //!
