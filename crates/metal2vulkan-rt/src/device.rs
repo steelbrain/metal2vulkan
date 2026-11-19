@@ -454,7 +454,7 @@ impl Device {
     /// is made waits for that make, counted in
     /// [`Metrics::maker_waits`](crate::Metrics::maker_waits); where the make failed, the call
     /// makes it on its own thread. After that the thread makes a class's next allocation while
-    /// the class's free bytes run low.
+    /// the class holds no wholly free unit (16 MiB that no block holds).
     ///
     /// Err: [`Error::BelowFloor`] with every item the device lacks; [`Error::Vulkan`] where a
     /// Vulkan call fails; [`Error::Thread`]; [`Error::Translation`] where the translator takes no
@@ -860,13 +860,16 @@ impl Device {
     /// [`BlockInfo::offset`](crate::BlockInfo::offset)).
     ///
     /// It is a free range of the class's allocations: the first that fits, in the order the
-    /// allocations were made, with no Vulkan call. An allocation longer than [`MemoryClass::block_len`] (16 MiB), a long one, which a
-    /// longer take made for itself, serves only takes of its own length. Where no free range fits,
+    /// allocations were made, with no Vulkan call. An allocation longer than
+    /// [`MemoryClass::block_len`] (16 MiB), a long one, which a longer take made for itself,
+    /// serves only takes of its own length. Where no free range fits,
     /// it is the start of an allocation made in this call, of 16 MiB or the block's length where
     /// that is longer, whose rest later blocks share, which [`BlockMappings::map`] maps before the
     /// call returns. The block-maker thread makes a class's next allocation of 16 MiB off every
-    /// caller's path while the class's free bytes are fewer than 8 MiB, so a take that leaves more
-    /// free sets nothing off beside the consumer's next calls.
+    /// caller's path while the class holds no wholly free unit, an allocation of 16 MiB that no
+    /// block holds, so a take of up to 16 MiB lands in memory made ahead once it has made it; a
+    /// small take that breaks the class's last whole unit sets off an allocation beside the
+    /// consumer's next calls.
     ///
     /// A block's bytes are undefined, new or taken again: the runtime zeroes nothing ahead of
     /// need. They are the consumer's to zero where Metal owes zeros
@@ -950,9 +953,9 @@ impl Device {
     /// thread frees each allocation that has been idle for 250 ms, the idle age, after
     /// [`BlockMappings::unmap`] of it, one at a time and whatever the device's queues are doing; a
     /// take that lands in an idle allocation before then ends its idle time. Each class keeps a
-    /// reserve that it does not free: the newest idle 16 MiB allocation with free bytes while the
-    /// class's free bytes need it to stay at 8 MiB or more. A long allocation, which a take longer
-    /// than 16 MiB made for itself, is never the reserve.
+    /// reserve that it does not free, its wholly free unit: the last idle 16 MiB allocation in the
+    /// order the allocations were made. A long allocation, which a take longer than 16 MiB made
+    /// for itself, is never the reserve.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's block, whose handle is dropped all the
     /// same.

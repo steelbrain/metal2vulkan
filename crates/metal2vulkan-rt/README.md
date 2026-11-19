@@ -192,16 +192,18 @@ in its memory.
   is longer, up to the device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen`
   past them). Its rest serves later takes.
 - `Device::new` makes one allocation of each class before it returns. After that the block-maker
-  thread makes a class's next allocation of 16 MiB, off every caller's path, while the class's free
-  bytes are fewer than 8 MiB, and at no other time: a take that leaves more free sets nothing off
-  beside the consumer's next calls. A take that no free range fits allocates on the calling
-  thread; the pool keeps 8 MiB ahead per class. A driver may hold the device's other calls for the whole of an
-  allocation, longer for more bytes: on an RTX 3090 (NVIDIA's Linux driver) a pipeline state's
-  creation beside a Shared allocation's making took 6 to 8 ms at 16 MiB and 40 to 45 ms at 256
-  MiB; on an RTX 2080 a compute pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared
-  allocation made beside it. `Metrics::consumer_allocation_nanos` and
-  `consumer_allocation_max_nanos` count the time of allocations made on the consumer's threads,
-  and `maker_allocation_nanos` those of the block-maker thread. Eight of the consumer's sites are
+  thread makes a class's next allocation of 16 MiB, off every caller's path, while the class holds
+  no wholly free unit (an allocation of 16 MiB that no block holds), and at no other time. So a
+  take of up to 16 MiB lands in memory made ahead once the block-maker thread has made it, and the
+  trade is that a small take that breaks a class's last whole unit sets off an allocation beside
+  the consumer's next calls. A take that no free range fits allocates on the calling thread. A
+  driver may hold the device's other calls for the whole of an allocation, longer for more bytes:
+  on an RTX 3090 (NVIDIA's Linux driver) a pipeline state's creation beside a Shared allocation's
+  making took 6 to 8 ms at 16 MiB and 40 to 45 ms at 256 MiB; on an RTX 2080 a compute
+  pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared allocation made beside it.
+  `Metrics::consumer_allocation_nanos` and `consumer_allocation_max_nanos` count the time of
+  allocations made on the consumer's threads, and `maker_allocation_nanos` those of the
+  block-maker thread. Eight of the consumer's sites are
   counted apart, each as a `SiteAllocations` (calls, bytes and the longest call):
   `texture_allocations` (a texture's allocation of its own), `texture_block_allocations`,
   `ring_block_allocations`, `staging_region_allocations`, `staging_buffer_allocations` (a copy
@@ -296,10 +298,10 @@ in its memory.
   harness's own rows `idle_frees` and `idle_frees_under_commits` hold each free, measured alone,
   to begin within 25 ms of its idle age, with no commits and with one every 2 ms. It frees
   between the allocations it makes, never beside one. Each class keeps a reserve that the idle
-  rule does not free: the newest idle 16 MiB allocation with free bytes while the class's free
-  bytes need it to stay at 8 MiB or more. An idle allocation's bytes are all free, so the reserve
-  is one 16 MiB allocation of each class at most. A long allocation, which a take longer than
-  16 MiB made for itself, is never the reserve.
+  rule does not free: its last idle 16 MiB allocation in the order the allocations were made, its
+  wholly free unit. Takes land in the first allocation with room, so they reach the reserve last,
+  and a class idle past the idle age holds that one wholly free unit and no other. A long
+  allocation, which a take longer than 16 MiB made for itself, is never the reserve.
   `Metrics::allocations_freed`
   counts the frees and `Metrics::idle_frees_by_age` their idle times; `Metrics::idle_reuses_by_age`
   counts idle allocations taken again, by how long they were idle. `Gauges::shared_idle_bytes` and
@@ -768,7 +770,7 @@ over it. It is not built yet: every call is `Gap::D3d11Surface`.
   `Metrics::submissions_during_frees` the submits made while one was in progress.
 - NVIDIA's Linux driver also holds a submit made while another thread is inside
   `vkAllocateMemory` until the allocation returns, device-local memory included. A take that
-  leaves its class fewer than 8 MiB free sets the block-maker making the class's next allocation
+  leaves its class no wholly free unit sets the block-maker making the class's next allocation
   at once, so the take's own first submission can wait out that allocation. On an RTX 3090
   (driver 620.70.06, rt at ac1896537f) a 16 MiB Private allocation of 661 µs held the submit of
   the first command buffer to read a new 16 MiB Private buffer for 603 µs; on an RTX 2080 one of

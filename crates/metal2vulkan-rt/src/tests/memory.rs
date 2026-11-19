@@ -1,6 +1,7 @@
 //! Memory blocks and buffers: the plan of a zero fill, a block's length and alignment, the idle
 //! clock; and, under a device cfg, on every device of the cfg's kind, that the device makes an
-//! allocation of each class as it is made and the next only while a class's free bytes run low,
+//! allocation of each class as it is made and the next only while a class holds no wholly free
+//! unit, that a class idle past the idle age keeps one wholly free unit and no other,
 //! that blocks are handed out and buffers view them, zeroed from their `zero_from` (a Private
 //! buffer's fill ahead of a copy into it in the next command buffer), that the consumer's hook
 //! maps each allocation before any block of it goes out and a take whose allocation it does not
@@ -118,7 +119,7 @@ mod on_device {
     use crate::{
         AllocationId, AllocationInfo, Block, BlockId, BlockInfo, BlockMappings, Buffer,
         CommandBufferStatus, ComputePipelineState, Device, DeviceOptions, DispatchType, Error,
-        Gauges, Limit, MemoryClass, PixelFormat, Refusal, TextureDescriptor, TextureType,
+        Gauges, Limit, MemoryClass, Metrics, PixelFormat, Refusal, TextureDescriptor, TextureType,
         MAX_BUFFER_LENGTH,
     };
     use ash::vk;
@@ -718,13 +719,14 @@ mod on_device {
     }
 
     /// The device's making makes one allocation of each class before it returns, before the
-    /// block-maker thread started, which then makes none while small takes leave 8 MiB or more
-    /// free: a Shared take of a byte is a range of the first allocation. A take that leaves fewer
-    /// free sets the block-maker thread off, which makes the class's next allocation off the
-    /// taker's thread.
+    /// block-maker thread started, each wholly free, so the thread makes none. A Shared take of a
+    /// byte, a range of the first, leaves the class no wholly free unit: the block-maker thread
+    /// makes the next, off the taker's thread. Once it has, a take of a whole unit, 16 MiB, lands
+    /// in it and allocates nothing on this thread, and the block-maker thread makes the next in
+    /// turn. Under a rule that made an allocation only once the class's free bytes ran low, the
+    /// small take would set nothing off and the 16 MiB take would allocate on its own thread.
     #[test]
-    fn every_device_makes_an_allocation_only_while_a_class_s_free_bytes_run_low() {
-        const MIB: u64 = 1 << 20;
+    fn every_device_makes_a_class_s_next_allocation_once_it_holds_no_wholly_free_unit() {
         let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
@@ -753,29 +755,46 @@ mod on_device {
             );
             let small = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: a small block: {error}"));
-            thread::sleep(Duration::from_millis(200));
+            // The block-maker thread makes the next unit. The wait is bounded and asserts
+            // nothing, so a rule that makes none fails at the whole take below, which then
+            // allocates on this thread.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !core.pool.stocked(MemoryClass::Shared) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let ahead = counters.metrics();
+            let whole = (device.take_block(MemoryClass::Shared, len))
+                .unwrap_or_else(|error| panic!("{name}: a block of 16 MiB: {error}"));
+            let taken = counters.metrics();
+            let site = |metrics: &Metrics| metrics.take_allocations.count;
             assert_eq!(
-                counters.metrics().blocks_made,
-                made,
-                "{name}: an allocation beside a small take"
+                (
+                    taken.consumer_allocations - ahead.consumer_allocations,
+                    site(&taken) - site(&ahead)
+                ),
+                (0, 0),
+                "{name}: the 16 MiB take allocated on this thread, {} allocations made ahead \
+                 after the small take",
+                ahead.blocks_made - made
             );
-            assert_eq!(counters.gauges().shared_idle_bytes, 0, "{name}: in use");
-            let half = (device.take_block(MemoryClass::Shared, 8 * MIB))
-                .unwrap_or_else(|error| panic!("{name}: a block of 8 MiB: {error}"));
+            assert_eq!(whole.offset, 0, "{name}: a wholly free unit");
             wait_until("the next Shared allocation", || {
-                counters.metrics().blocks_made == made + 1 && core.pool.stocked(MemoryClass::Shared)
+                counters.metrics().blocks_made == made + 2 && core.pool.stocked(MemoryClass::Shared)
             });
             let metrics = counters.metrics();
             assert_eq!(
-                (metrics.block_bytes_made, metrics.consumer_allocations),
-                (3 * len, before.consumer_allocations),
-                "{name}: three allocations of 16 MiB, the third off this thread"
+                (
+                    metrics.block_bytes_made - before.block_bytes_made,
+                    metrics.consumer_allocations
+                ),
+                (2 * len, before.consumer_allocations),
+                "{name}: two allocations of 16 MiB, both off this thread"
             );
             assert!(
                 metrics.maker_allocation_nanos > before.maker_allocation_nanos,
                 "{name}: the block-maker thread's allocation time"
             );
-            drop((small, half));
+            drop((small, whole));
             drop(device);
             assert_eq!(
                 counters.gauges(),
@@ -783,7 +802,8 @@ mod on_device {
                 "{name}: gauges after teardown"
             );
             println!(
-                "memory: {name}: an allocation made only below 8 MiB free; metrics {:?}",
+                "memory: {name}: the next allocation made once no unit is wholly free, a 16 MiB \
+                 take on this thread allocated nothing; metrics {:?}",
                 counters.metrics()
             );
         }
@@ -992,8 +1012,8 @@ mod on_device {
                 "{name}: the take's allocation, mapped on the taker's thread"
             );
 
-            // A take that leaves fewer than 8 MiB free: the block-maker thread makes and maps the
-            // next allocation, ahead of need.
+            // A take that breaks the class's only wholly free unit: the block-maker thread makes
+            // and maps the next allocation, ahead of need.
             let low = (device.take_block(MemoryClass::Shared, 12 * MIB))
                 .unwrap_or_else(|error| panic!("{name}: a block of 12 MiB: {error}"));
             hook.assert_mapped(name, &low);
@@ -1152,14 +1172,15 @@ mod on_device {
     }
 
     /// Each idle allocation is freed at its idle age, oldest first: four Shared blocks of 16 MiB,
-    /// each with an allocation of its own, taken beside a small block and given back leave their
-    /// allocations idle, the oldest idle age gauge no older than the first give-back. A take of
+    /// taken beside a small block once the block-maker thread made each one's allocation ahead,
+    /// and given back, leave their allocations idle beside the one made ahead after them, the
+    /// class's reserve, the oldest idle age gauge no older than the first give-back. A take of
     /// their length right then lands in the oldest, the first fit, counted in the bucket of its
     /// idle time, and holds it for 300 ms: the other three are freed at their idle age, one at a
     /// time, after the hook's unmap of each, on the block-maker thread. Given back again, the
-    /// first is freed at its idle age from then. The small block's allocation, once its block is
-    /// given back, is the reserve that keeps 8 MiB free, and stays past the idle age, unweighed:
-    /// the oldest idle age gauge reads 0. Nothing commits.
+    /// first is freed at its idle age from then, and so is the small block's allocation once its
+    /// block is given back. The reserve, the last made, stays past the idle age, unweighed: the
+    /// oldest idle age gauge reads 0. Nothing commits.
     #[test]
     fn every_device_frees_each_idle_allocation_at_its_idle_age() {
         let instance = crate::tests::validation::instance(&[]);
@@ -1175,10 +1196,16 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: a small block: {error}"));
             let taken: Vec<Block> = (0..4)
                 .map(|_| {
+                    wait_until("a Shared unit made ahead", || {
+                        core.pool.stocked(MemoryClass::Shared)
+                    });
                     (device.take_block(MemoryClass::Shared, len))
                         .unwrap_or_else(|error| panic!("{name}: a block: {error}"))
                 })
                 .collect();
+            wait_until("the reserve made ahead", || {
+                core.pool.stocked(MemoryClass::Shared)
+            });
             let four: Vec<AllocationId> = taken.iter().map(|block| block.allocation).collect();
             let ids: Vec<BlockId> = taken.iter().map(|block| block.id).collect();
             let small_id = small.id;
@@ -1192,7 +1219,11 @@ mod on_device {
             });
             let gauges = counters.gauges();
             let read = crate::host_time();
-            assert_eq!(gauges.shared_idle_bytes, 4 * len, "{name}: four idle");
+            assert_eq!(
+                (gauges.shared_idle_bytes, gauges.shared_reserve_bytes),
+                (5 * len, len),
+                "{name}: four idle and the reserve"
+            );
             assert!(
                 gauges.shared_idle_age_nanos > 0
                     && gauges.shared_idle_age_nanos <= read - releasing,
@@ -1263,10 +1294,19 @@ mod on_device {
             assert_freed_at_the_idle_age(name, &frees[3..]);
             assert_eq!(hook.unmapped()[3].allocation, four[0], "{name}: the first");
 
-            // The small block's allocation is the reserve: kept past the idle age, unweighed.
+            // The small block's allocation freed at its idle age too; the reserve kept past it,
+            // unweighed.
             device.release_block(small).expect("a release");
             wait_until("the small block given back", || core.pool.holds(small_id));
+            wait_until("the small block's allocation freed", || {
+                core.pool.frees().len() == 5 && !core.pool.freeing()
+            });
             thread::sleep(Duration::from_nanos(2 * IDLE_AGE_NANOS));
+            assert_eq!(
+                core.pool.frees().len(),
+                5,
+                "{name}: no free past the small block's: the reserve stays"
+            );
             let gauges = counters.gauges();
             assert_eq!(
                 (
@@ -1284,8 +1324,8 @@ mod on_device {
                     metrics.allocations_freed - before.allocations_freed,
                     freed(0)
                 ),
-                (4, 0),
-                "{name}: four frees, none before the idle age: {:?}",
+                (5, 0),
+                "{name}: five frees, none before the idle age: {:?}",
                 metrics.idle_frees_by_age
             );
             drop(device);
@@ -1297,6 +1337,105 @@ mod on_device {
             assert_each_unmapped_once(name, &hook);
             println!(
                 "memory: {name}: idle allocations freed at their idle age, frees {:?}; metrics {:?}",
+                free_times(&frees),
+                counters.metrics()
+            );
+        }
+    }
+
+    /// A class idle past the idle age holds one wholly free unit and no other: in each class,
+    /// three blocks of 16 MiB, each taken once the block-maker thread made its unit ahead, leave
+    /// the class four units, three in use and the reserve made after them. Given back, the three
+    /// are freed at their idle age; the reserve, the last made, stays, unweighed, and nothing more
+    /// is made or freed past the idle age. Nothing commits.
+    #[test]
+    fn every_device_keeps_one_wholly_free_unit_per_class_once_idle() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        const CLASSES: [MemoryClass; 2] = [MemoryClass::Private, MemoryClass::Shared];
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let core = device.core();
+            let counters = device.counters();
+            let unit = MemoryClass::Shared.block_len();
+            let mut blocks = Vec::new();
+            for class in CLASSES {
+                for _ in 0..3 {
+                    wait_until("a unit made ahead", || core.pool.stocked(class));
+                    blocks.push(
+                        (device.take_block(class, unit))
+                            .unwrap_or_else(|error| panic!("{name}: a {class:?} block: {error}")),
+                    );
+                }
+                wait_until("the reserve made ahead", || core.pool.stocked(class));
+            }
+            let whole = |class: MemoryClass| {
+                (core.pool.allocations(class).into_iter())
+                    .filter(|&(_, len, live, free)| len == unit && live == 0 && free == len)
+                    .count()
+            };
+            for class in CLASSES {
+                assert_eq!(
+                    (core.pool.allocations(class).len(), whole(class)),
+                    (4, 1),
+                    "{name}: {class:?}: three units in use and the reserve"
+                );
+            }
+            let made = counters.metrics().blocks_made;
+            let ids: Vec<BlockId> = blocks.iter().map(|block| block.id).collect();
+            for block in blocks {
+                device.release_block(block).expect("a release");
+            }
+            wait_until("the six given back", || {
+                ids.iter().all(|&id| core.pool.holds(id))
+            });
+            for class in CLASSES {
+                assert_eq!(whole(class), 4, "{name}: {class:?}: four wholly free units");
+            }
+            wait_until("six idle allocations freed", || {
+                core.pool.frees().len() == 6 && !core.pool.freeing()
+            });
+            assert_freed_at_the_idle_age(name, &core.pool.frees());
+            thread::sleep(Duration::from_nanos(2 * IDLE_AGE_NANOS));
+            let gauges = counters.gauges();
+            for class in CLASSES {
+                let allocations = core.pool.allocations(class);
+                assert_eq!(
+                    (allocations.len(), whole(class)),
+                    (1, 1),
+                    "{name}: {class:?}: one wholly free unit and no other: {allocations:?}"
+                );
+            }
+            assert_eq!(
+                (
+                    core.pool.frees().len() as u64,
+                    counters.metrics().blocks_made - made
+                ),
+                (6, 0),
+                "{name}: nothing more freed or made past the idle age"
+            );
+            assert_eq!(
+                (
+                    gauges.shared_reserve_bytes,
+                    gauges.private_reserve_bytes,
+                    gauges.shared_idle_age_nanos,
+                    gauges.private_idle_age_nanos
+                ),
+                (unit, unit, 0, 0),
+                "{name}: each class's reserve, unweighed"
+            );
+            let frees = core.pool.frees();
+            drop(device);
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: gauges after teardown"
+            );
+            assert_each_unmapped_once(name, &hook);
+            println!(
+                "memory: {name}: one wholly free unit per class once idle, frees {:?}; metrics {:?}",
                 free_times(&frees),
                 counters.metrics()
             );
@@ -1383,10 +1522,10 @@ mod on_device {
 
     /// Steady commits hold no idle allocation, and a submission during a free is counted. A
     /// command buffer is committed every 2 ms; 0.5 seconds in, a Shared block of 16 MiB that fills
-    /// an allocation is given back, which makes that allocation the class's reserve and the one
-    /// made ahead before it one too many; a second is given back once the first free ended and the
-    /// Shared idle bytes were seen back at the made-ahead amount, which makes the first's
-    /// allocation one too many in turn; the commits stop once the second free ended. Each free
+    /// an allocation is given back, which leaves the class two wholly free units, one too many:
+    /// the one made ahead last stays, the class's reserve; a second is given back once the first
+    /// free ended and the Shared idle bytes were seen back at the made-ahead amount, one too many
+    /// in turn; the commits stop once the second free ended. Each free
     /// begins after the give-back that set it off, at its idle age or after, one at a time, while
     /// the commits go on, and once they stop the Shared idle bytes are the made-ahead amount they
     /// were before. Then the free a third give-back sets off is held open: a command buffer

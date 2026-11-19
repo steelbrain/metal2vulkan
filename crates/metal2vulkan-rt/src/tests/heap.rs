@@ -40,7 +40,7 @@ mod on_device {
             let counters = device.counters();
             let block = (device.take_block(MemoryClass::Private, MemoryClass::Private.block_len()))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            wait_until("8 MiB free in each class", || {
+            wait_until("a wholly free unit in each class", || {
                 core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
             });
             let blocks = counters.gauges().blocks;

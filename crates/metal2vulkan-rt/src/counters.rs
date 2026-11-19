@@ -1120,8 +1120,8 @@ pub struct Metrics {
     /// a counted copy's image are among them.
     pub texture_allocations: SiteAllocations,
     /// Those of texture blocks: a texture's place that no texture block had room for took a
-    /// Private block, and no free range of the pool, which the block-maker thread keeps 8 MiB of
-    /// ahead per class, fit it, so the take allocated.
+    /// Private block, and no free range of the pool, which the block-maker thread keeps a wholly
+    /// free 16 MiB unit of ahead per class, fit it, so the take allocated.
     pub texture_block_allocations: SiteAllocations,
     /// Those of the parameter ring's 2 MiB blocks: a write into the ring that found no chunk free
     /// where the block-maker thread, which makes each block ahead of need, made none (its make
@@ -1485,8 +1485,8 @@ pub struct Gauges {
     /// As [`shared_allocation_bytes`](Self::shared_allocation_bytes), of Private allocations.
     pub private_allocation_bytes: u64,
     /// Bytes of idle Shared allocations, which hold no block anyone holds: those idle for less
-    /// than 250 ms, which the idle rule frees at that age, and the reserve made ahead of need
-    /// that keeps the free bytes at 8 MiB or more (one allocation of 16 MiB, at most).
+    /// than 250 ms, which the idle rule frees at that age, and the reserve made ahead of need,
+    /// the class's wholly free unit (one allocation of 16 MiB, at most).
     pub shared_idle_bytes: u64,
     /// Bytes of idle Private allocations, as [`shared_idle_bytes`](Self::shared_idle_bytes) for
     /// Shared ones.
@@ -1497,9 +1497,9 @@ pub struct Gauges {
     pub shared_idle_age_nanos: u64,
     /// As [`shared_idle_age_nanos`](Self::shared_idle_age_nanos), of Private allocations.
     pub private_idle_age_nanos: u64,
-    /// Bytes of the Shared reserve: the idle allocations made ahead of need that the idle rule
-    /// does not free, which keep the class's free bytes at 8 MiB or more. Counted in
-    /// [`shared_idle_bytes`](Self::shared_idle_bytes) too.
+    /// Bytes of the Shared reserve: the idle allocation made ahead of need that the idle rule does
+    /// not free, the class's wholly free unit, the last idle one of 16 MiB in the order made.
+    /// Counted in [`shared_idle_bytes`](Self::shared_idle_bytes) too.
     pub shared_reserve_bytes: u64,
     /// As [`shared_reserve_bytes`](Self::shared_reserve_bytes), of Private allocations.
     pub private_reserve_bytes: u64,

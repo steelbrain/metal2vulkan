@@ -33,7 +33,7 @@ mod on_device {
         each_device("spill", |name, _, device| {
             let core = device.core();
             let counters = device.counters();
-            wait_until("8 MiB free in each class", || {
+            wait_until("a wholly free unit in each class", || {
                 core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
             });
 

@@ -1,9 +1,9 @@
 //! Memory: the blocks the consumer takes and releases, each a range of one of the device's
 //! allocations; the pool that hands them out from the allocations' free ranges and frees idle
-//! allocations; the allocations its own thread makes ahead of need, while a class's free bytes run
-//! low, and the runtime's fixed-size internals it makes for the rest of the device ([`Internal`]);
-//! and how memory is made and freed. A block's bytes are undefined: the runtime zeroes
-//! nothing ahead of need. A buffer reads zero where
+//! allocations; the allocations its own thread makes ahead of need, while a class holds no wholly
+//! free unit, and the runtime's fixed-size internals it makes for the rest of the device
+//! ([`Internal`]); and how memory is made and freed. A block's bytes are undefined: the runtime
+//! zeroes nothing ahead of need. A buffer reads zero where
 //! [`Device::new_buffer`](crate::Device::new_buffer) zeroes its range.
 //!
 //! Where the device enabled `zeroInitializeDeviceMemory`, every allocation of the pool is made
@@ -28,20 +28,18 @@ use std::time::Duration;
 /// where no free range fits it, unless the take is longer: 16 MiB of either class, the unit.
 ///
 /// A driver may hold the device's other calls (pipeline creation, submissions, other allocations)
-/// for the whole of an allocation's `vkAllocateMemory`, and the hold grows with the bytes: on an
-/// RTX 3090 (NVIDIA's Linux driver) about 0.25 ms per MiB of Shared memory and a third of that of
-/// Private. The call alone, on an otherwise idle device, takes 2.9 to 4 ms for 16 MiB of Shared
-/// memory on an RTX 2080 or 3090 and 0.55 ms of Private, against 0.3 ms or less for either on
-/// RADV, Mesa's Intel driver and Intel's Windows driver for the UHD Graphics 630. So allocations
-/// are short, and a take longer than one pays its own length once: the allocation it makes, a
-/// long allocation, serves later takes of that length.
+/// for the whole of an allocation's `vkAllocateMemory` and `vkFreeMemory`, and the hold grows with
+/// the bytes. reims measured it on an RTX 3090 and an RTX 2080 (NVIDIA's Linux driver 620.70.06),
+/// five runs each: one thread allocating memory with a device address while another times empty
+/// `vkQueueSubmit`s in a loop, the longest of which takes about 1.8 to 2 ms with no allocation
+/// beside it. A 16 MiB Private allocation holds no submission past that, and one of 256 MiB holds
+/// one for 6.55 ms on the 3090 and 8.0 ms on the 2080. A 16 MiB Shared allocation (host-visible,
+/// host-coherent and host-cached) holds one for 7.8 and 9.0 ms, and one of 256 MiB for 51 and
+/// 78 ms. Freeing 16 MiB of Private memory holds none past the baseline, and 256 MiB about 5 ms;
+/// freeing 16 MiB of Shared memory holds one up to 19 ms, and 256 MiB 93 ms at the median and 178
+/// to 207 ms at most. So allocations are short, and a take longer than one pays its own length
+/// once: the allocation it makes, a long allocation, serves later takes of that length.
 const ALLOCATION_LEN: u64 = 16 << 20;
-
-/// The block-maker thread makes an allocation of a class while the class's free bytes, the free
-/// ranges of all its allocations, are fewer than this: half an allocation. A take that leaves more
-/// free makes nothing happen beside the consumer's next calls, so a small take beside a pipeline's
-/// creation does not set off an allocation that the driver holds the creation for.
-const MAKE_BELOW: u64 = ALLOCATION_LEN / 2;
 
 /// A block's length, and its first byte's offset in its allocation, are multiples of this, or of
 /// the device's `bufferImageGranularity` where that is larger: no block shares a page of that
@@ -59,7 +57,7 @@ const BASE_ALIGN: u64 = 2 << 20;
 /// play no part, so a program that keeps committing gives back what it stopped using. The
 /// block-maker thread frees an allocation idle this long, after the consumer's unmap of it, one at
 /// a time and between the allocations it makes, so a free never runs beside its own
-/// `vkAllocateMemory`; a class's reserve ([`MAKE_BELOW`]) is not freed. A driver may hold a
+/// `vkAllocateMemory`; a class's reserve ([`State::whole`]) is not freed. A driver may hold a
 /// submission made during a free for the rest of it (on the NVIDIA cards measured in
 /// Thunderbolt enclosures, freeing host-visible memory takes about 1.1 ms per MiB):
 /// [`Metrics::submissions_during_frees`](crate::Metrics::submissions_during_frees) counts them.
@@ -91,10 +89,10 @@ impl MemoryClass {
     /// of need, 16 MiB of either class.
     ///
     /// A [`Device::take_block`](crate::Device::take_block) is a range of one of the class's
-    /// allocations, the first with room; the block-maker thread makes another while the class's
-    /// free bytes are fewer than half this. A take that no free range fits makes an allocation of
-    /// this length, which later takes share, or of its own where it is longer, which only later
-    /// takes of that length share.
+    /// allocations, the first with room; the block-maker thread makes another while none of the
+    /// class's allocations of this length is wholly free. A take that no free range fits makes an
+    /// allocation of this length, which later takes share, or of its own where it is longer, which
+    /// only later takes of that length share.
     pub const fn block_len(self) -> u64 {
         ALLOCATION_LEN
     }
@@ -532,14 +530,15 @@ impl Allocation {
 /// The pool: every allocation of each class, and the ranges of each that no block holds.
 ///
 /// A take is the first free range of the class's allocations that fits it, in the order the
-/// allocations were made; a long allocation serves only takes of its own length. Where none fits, the take makes an allocation itself, of
-/// [`ALLOCATION_LEN`] or of its own length where that is longer. A block given back is a free
-/// range of its allocation at once. The block-maker thread ([`run`]) makes an allocation of a
-/// class while the class's free bytes are fewer than [`MAKE_BELOW`]; a take never waits for it.
+/// allocations were made; a long allocation serves only takes of its own length. Where none fits,
+/// the take makes an allocation itself, of [`ALLOCATION_LEN`] or of its own length where that is
+/// longer. A block given back is a free range of its allocation at once. The block-maker thread
+/// ([`run`]) makes an allocation of a class while the class holds no wholly free unit
+/// ([`State::whole`]); a take never waits for it.
 ///
-/// The idle rule never frees a unit allocation that the class's free bytes need to stay at or
-/// above [`MAKE_BELOW`], so it does not free what the block-maker thread would make again. A long
-/// allocation is never kept so.
+/// The idle rule never frees the class's reserve, its last idle unit allocation in the order they
+/// were made, so it does not free what the block-maker thread would make again. A long allocation
+/// is never kept so.
 ///
 /// The idle rule runs on the block-maker thread as a block is taken or given back, and again when
 /// the oldest idle allocation reaches [`IDLE_AGE_NANOS`]: it frees each idle allocation of that
@@ -771,12 +770,11 @@ impl Pool {
         self.freeing.load(Relaxed)
     }
 
-    /// For the device tests: whether the class's free bytes are at least [`MAKE_BELOW`], so the
-    /// block-maker thread makes nothing for it (an allocation it made is counted once its fill's
-    /// submission completed).
+    /// For the device tests: whether the class holds a wholly free unit ([`State::whole`]), so
+    /// the block-maker thread makes nothing for it.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn stocked(&self, class: MemoryClass) -> bool {
-        self.lock().free(class) >= MAKE_BELOW
+        self.lock().whole(class)
     }
 
     /// For the device tests: the allocations of both classes with a block in use, counted where
@@ -868,7 +866,7 @@ impl Pool {
             self.counters.carved();
             self.settle(&mut state, class);
             // The block-maker thread runs the idle rule on this take, and makes an allocation
-            // where the class's free bytes ran low.
+            // where it took the class's last wholly free unit.
             self.changed.notify_all();
             return Ok(carve.block(id, class, len));
         }
@@ -1092,12 +1090,18 @@ impl Pool {
 }
 
 impl State {
-    /// The bytes of the free ranges of the class's allocations, but those retiring.
-    fn free(&self, class: MemoryClass) -> u64 {
+    /// Whether the class holds a wholly free unit: a unit allocation of [`ALLOCATION_LEN`], not
+    /// retiring, that no block holds, so a take of up to a whole unit has a free range with no
+    /// Vulkan call. The block-maker thread makes the class's next allocation while it holds none
+    /// ([`run`]), and the idle rule keeps the last such unit in the order made, the reserve
+    /// ([`aging`](Self::aging)): once the class is idle past [`IDLE_AGE_NANOS`], it holds that one
+    /// wholly free unit and no other. The trade: a small take that breaks the class's last whole
+    /// unit sets off an allocation beside the consumer's next calls, where a rule on the class's
+    /// free bytes would wait until they ran low; in return a take of up to a unit, the 16 MiB
+    /// ones among them, lands in memory made ahead once the block-maker thread has made it.
+    fn whole(&self, class: MemoryClass) -> bool {
         (self.allocations[class.index()].iter())
-            .filter(|allocation| !allocation.retiring)
-            .map(|allocation| allocation.free.bytes())
-            .sum()
+            .any(|allocation| allocation.unit() && !allocation.retiring && allocation.live == 0)
     }
 
     /// The allocation of `class` whose memory is `memory`.
@@ -1131,44 +1135,23 @@ impl State {
     }
 
     /// The class's idle allocations the idle rule weighs, as when each became idle and its memory,
-    /// the oldest first, and the bytes of its reserve. The newest idle unit allocations, of
-    /// [`ALLOCATION_LEN`], with free bytes that the class's free bytes need to reach [`MAKE_BELOW`]
-    /// are its reserve, made ahead of need: the rule neither weighs nor frees them. A long
-    /// allocation, which a take longer than the unit made for itself, is never the reserve: the
-    /// rule frees it at its idle age, so it is not held for the device's life.
+    /// the oldest first, and the bytes of its reserve. The last idle unit allocation, of
+    /// [`ALLOCATION_LEN`], in the order the allocations were made is the reserve, the class's
+    /// wholly free unit ([`whole`](Self::whole)): the rule neither weighs nor frees it. Takes land
+    /// in the first allocation with room, so the last is the one they reach last, and a class whose
+    /// takes come and go within a unit's bytes keeps its reserve with no allocation made or freed.
+    /// A long allocation, which a take longer than the unit made for itself, is never the reserve:
+    /// the rule frees it at its idle age, so it is not held for the device's life.
     fn aging(&self, class: MemoryClass) -> (Vec<(u64, vk::DeviceMemory)>, u64) {
-        let allocations = &self.allocations[class.index()];
-        let mut free: u64 = (allocations.iter())
-            .filter(|allocation| allocation.live > 0 && !allocation.retiring)
-            .map(|allocation| allocation.free.bytes())
-            .sum();
-        let mut idle: Vec<(u64, vk::DeviceMemory, u64, u64)> = (allocations.iter())
-            .filter(|allocation| allocation.live == 0 && !allocation.retiring)
-            .map(|allocation| {
-                let bytes = allocation.free.bytes();
-                (
-                    allocation.idle_since,
-                    allocation.memory,
-                    bytes,
-                    allocation.len,
-                )
-            })
+        let idle = (self.allocations[class.index()].iter())
+            .filter(|allocation| allocation.live == 0 && !allocation.retiring);
+        let reserve = idle.clone().rfind(|allocation| allocation.unit());
+        let mut weighed: Vec<(u64, vk::DeviceMemory)> = idle
+            .filter(|allocation| reserve.is_none_or(|reserve| reserve.memory != allocation.memory))
+            .map(|allocation| (allocation.idle_since, allocation.memory))
             .collect();
-        idle.sort_unstable_by_key(|&(since, ..)| std::cmp::Reverse(since));
-        let mut reserved = 0;
-        idle.retain(|&(_, _, bytes, len)| {
-            let reserve = free < MAKE_BELOW && bytes > 0 && len <= ALLOCATION_LEN;
-            if reserve {
-                free += bytes;
-                reserved += len;
-            }
-            !reserve
-        });
-        idle.reverse();
-        let weighed: Vec<(u64, vk::DeviceMemory)> = (idle.into_iter())
-            .map(|(since, memory, ..)| (since, memory))
-            .collect();
-        (weighed, reserved)
+        weighed.sort_unstable_by_key(|&(since, _)| since);
+        (weighed, reserve.map_or(0, |reserve| reserve.len))
     }
 
     /// Takes the allocation of `class` whose memory is `memory` out of the pool, for the caller to
@@ -1298,7 +1281,7 @@ pub(crate) fn stock(core: &Core) {
 /// The block-maker thread, until the device's teardown or a quiesce stops it. Off every caller's
 /// path, in order: it makes each internal asked of it ([`Internal`]), the device's fixed-size
 /// ones first of all; it frees each imported or exported block given back, then runs an import's
-/// release; it makes an allocation of a class whose free bytes are fewer than [`MAKE_BELOW`],
+/// release; it makes an allocation of a class that holds no wholly free unit ([`State::whole`]),
 /// having the consumer map it before it joins the pool; and it frees each allocation idle for
 /// [`IDLE_AGE_NANOS`], after the consumer's unmap of it, one at a time. It sleeps until the next
 /// change, or until the oldest idle allocation reaches the idle age. Stopped, it makes nothing
@@ -1338,7 +1321,7 @@ pub(crate) fn run(core: Arc<Core>) {
             continue;
         }
         let wanted = (MemoryClass::ALL.into_iter())
-            .find(|&class| !state.failed[class.index()] && state.free(class) < MAKE_BELOW);
+            .find(|&class| !state.failed[class.index()] && !state.whole(class));
         if let Some(class) = wanted {
             drop(state);
             let made = ahead(&core, class);

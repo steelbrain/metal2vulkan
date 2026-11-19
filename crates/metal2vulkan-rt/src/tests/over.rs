@@ -79,14 +79,14 @@ mod on_device {
             .collect()
     }
 
-    /// The device's live allocations once the block-maker thread has nothing to make (8 MiB free
-    /// in each class), and the texture blocks among them.
+    /// The device's live allocations once the block-maker thread has nothing to make (a wholly
+    /// free unit in each class), and the texture blocks among them.
     fn settled(name: &str, core: &Core) -> (u64, usize) {
         let deadline = Instant::now() + Duration::from_secs(120);
         while !core.pool.stocked(MemoryClass::Private) || !core.pool.stocked(MemoryClass::Shared) {
             assert!(
                 Instant::now() < deadline,
-                "{name}: 8 MiB free in each class"
+                "{name}: a wholly free unit in each class"
             );
             thread::sleep(Duration::from_millis(1));
         }
