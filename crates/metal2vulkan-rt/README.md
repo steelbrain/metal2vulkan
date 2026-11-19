@@ -1559,7 +1559,12 @@ that touch blocks first.
   for a kernel that declares no imageblock, as Metal does. A kernel that reaches an imageblock
   has no state (`Gap::KernelInput`); one that declares an imageblock it never reaches, or whose
   compile kept no reflection to tell, answers `Gap::ImageblockLength`, as no case measures
-  Metal's length.
+  Metal's length. `requiredThreadsPerThreadgroup` (`required_threads_per_threadgroup`) is the
+  descriptor's size, `[0, 0, 0]` where it set none, as the M3 recordings
+  `pipeline-facts-compute-plain` and `pipeline-facts-compute-described` answer, and
+  `supportIndirectCommandBuffers` (`support_indirect_command_buffers`) is false: a descriptor
+  that asks for indirect command buffers is refused at the making
+  (`Gap::IndirectCommandBuffers`).
 
 ### The cache directory
 
@@ -1791,7 +1796,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   suite's recordings `pipeline-facts-render-plain`, `pipeline-facts-render-two-attachments` and
   `pipeline-facts-render-multisampled` (an Apple M3 Max, macOS 27.0.1 build 26A434, three runs
   each): `RGBA8Unorm` answers 4 and 128 at `[8, 4, 3]`; `RGBA8Unorm` then `RGBA16Float` 12 and
-  384; the same at four samples 12 and 1536.
+  384; the same at four samples 12 and 1536. `support_indirect_command_buffers` is false, as a
+  compute state's is: a descriptor that asks for indirect command buffers is refused at the
+  making. The runtime makes no tile render state, so it has no tile getters
+  (`threadgroupSizeMatchesTileSize`, `requiredThreadsPerTileThreadgroup`).
 - A state numbers its functions' samplers as a compute state numbers its kernel's:
   `sampler_ids` takes the vertex function's, then the fragment function's, each in Metal's order,
   and answers the index the consumer gives each. Each constexpr sampler a function samples

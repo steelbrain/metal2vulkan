@@ -137,6 +137,8 @@ struct Answers {
     /// Whether the kernel declares an imageblock, as the compile's kept reflection answers it;
     /// `None` where the compile kept none.
     imageblock: Option<bool>,
+    /// `requiredThreadsPerThreadgroup`: the descriptor's, zeros where it set none.
+    required_threads_per_threadgroup: [u32; 3],
 }
 
 impl Answers {
@@ -146,6 +148,7 @@ impl Answers {
             static_threadgroup_memory_length: pipeline.metal_info.static_threadgroup_memory_length,
             thread_execution_width: pipeline.metal_info.thread_execution_width,
             imageblock,
+            required_threads_per_threadgroup: [0; 3],
         }
     }
 }
@@ -856,6 +859,10 @@ impl Compiled {
             (None, false) => Form::Tiled,
             (None, true) => Form::Square,
         };
+        let answers = Answers {
+            required_threads_per_threadgroup: required.unwrap_or([0; 3]),
+            ..answers
+        };
         let compiled = Compiled::new(core, (whole, rows), form, emulated, (notes, answers));
         // A tiling kernel's grids one deep run on one `VkPipeline`, made with the state: its
         // tiles', or an image-only kernel's square workgroups'; and so do an observing kernel's
@@ -1367,6 +1374,20 @@ impl ComputePipelineState {
             Some(false) => Ok(0),
             Some(true) | None => Err(Error::Unsupported(Gap::ImageblockLength)),
         }
+    }
+
+    /// `requiredThreadsPerThreadgroup`: the descriptor's size, `[0, 0, 0]` where it set none, as
+    /// Metal answers (the conformance recordings `pipeline-facts-compute-plain` and
+    /// `pipeline-facts-compute-described`, an Apple M3 Max under macOS 27.0.1).
+    pub fn required_threads_per_threadgroup(&self) -> [u32; 3] {
+        self.inner.compiled.answers.required_threads_per_threadgroup
+    }
+
+    /// `supportIndirectCommandBuffers`: false on every state the runtime makes, as a descriptor
+    /// that asks for indirect command buffers is refused at the making
+    /// ([`Gap::IndirectCommandBuffers`]).
+    pub fn support_indirect_command_buffers(&self) -> bool {
+        false
     }
 
     /// No Metal counterpart as such: each texture slot the kernel uses, by index, ascending, with

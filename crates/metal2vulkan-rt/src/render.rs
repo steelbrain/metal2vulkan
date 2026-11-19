@@ -1001,6 +1001,13 @@ impl RenderPipelineState {
             .saturating_mul(samples))
     }
 
+    /// `supportIndirectCommandBuffers`: false on every state the runtime makes, as a descriptor
+    /// that asks for indirect command buffers is refused at the making
+    /// ([`Gap::IndirectCommandBuffers`]).
+    pub fn support_indirect_command_buffers(&self) -> bool {
+        false
+    }
+
     /// Whether two handles are one state.
     pub(crate) fn is(&self, other: &RenderPipelineState) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)

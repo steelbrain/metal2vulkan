@@ -9601,7 +9601,9 @@ method	metal2vulkan-rt::ComputePipelineDescriptor::uses_direct_arguments	pub fn 
 method	metal2vulkan-rt::ComputePipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, _dimensions: [u32; 3]) -> Result<u64, Error>
 method	metal2vulkan-rt::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
 method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
+method	metal2vulkan-rt::ComputePipelineState::required_threads_per_threadgroup	pub fn required_threads_per_threadgroup(&self) -> [u32; 3]
 method	metal2vulkan-rt::ComputePipelineState::static_threadgroup_memory_length	pub fn static_threadgroup_memory_length(&self) -> u32
+method	metal2vulkan-rt::ComputePipelineState::support_indirect_command_buffers	pub fn support_indirect_command_buffers(&self) -> bool
 method	metal2vulkan-rt::ComputePipelineState::texture_accesses	pub fn texture_accesses(&self) -> Vec<(u32, BindingAccess)>
 method	metal2vulkan-rt::ComputePipelineState::thread_execution_width	pub fn thread_execution_width(&self) -> u32
 method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
@@ -9732,6 +9734,7 @@ method	metal2vulkan-rt::RenderPipelineDescriptor::vertex_returns_value	pub fn ve
 method	metal2vulkan-rt::RenderPipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, dimensions: [u32; 3]) -> Result<u64, Error>
 method	metal2vulkan-rt::RenderPipelineState::imageblock_sample_length	pub fn imageblock_sample_length(&self) -> Result<u32, Error>
 method	metal2vulkan-rt::RenderPipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
+method	metal2vulkan-rt::RenderPipelineState::support_indirect_command_buffers	pub fn support_indirect_command_buffers(&self) -> bool
 method	metal2vulkan-rt::RenderPipelineState::texture_accesses	pub fn texture_accesses(&self, stage: Stage) -> Vec<(u32, BindingAccess)>
 method	metal2vulkan-rt::ResourceId::to_bits	pub fn to_bits(self) -> u64
 method	metal2vulkan-rt::SamplerDescriptor::new	pub fn new() -> SamplerDescriptor
