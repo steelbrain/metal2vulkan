@@ -76,6 +76,22 @@ pub(crate) const GROUP_RUN: u64 = 16_000_000;
 /// (job m3-max-49358).
 pub(crate) const UNSEEN_JOINS: usize = 4;
 
+/// Whether a command buffer whose queue's expected run is `run` (none before one of its command
+/// buffers retired with its GPU times) joins a held group whose members' expected runs sum to
+/// `held`, `unseen` of them joined since the queue's last retirement: only while the sum with its
+/// own stays within [`GROUP_RUN`] and fewer than [`UNSEEN_JOINS`] joined unseen. Else the group
+/// goes first and the command buffer leads the next.
+pub(crate) fn joins(held: u64, unseen: usize, run: Option<u64>) -> bool {
+    run.is_some_and(|run| held.saturating_add(run) <= GROUP_RUN) && unseen < UNSEEN_JOINS
+}
+
+/// Whether a group of `members` command buffers goes member by member as it is sent, its queue's
+/// expected run being `run` then: where the members' expected runs, summed at that run, pass
+/// [`GROUP_RUN`], or the run is not known. One member is one submission either way.
+pub(crate) fn apart(members: u64, run: Option<u64>) -> bool {
+    members > 1 && run.is_none_or(|run| run.saturating_mul(members) > GROUP_RUN)
+}
+
 /// The submissions of a queue not yet seen complete at which its command buffers are held in a
 /// group. Three, not two: with two, the GPU idles between a group's end and the next
 /// submission's start whenever the completion that sends the held group comes late. Behind three,
@@ -1481,9 +1497,7 @@ impl WorkState {
             } else {
                 0
             };
-            if run.is_none_or(|run| group.run.saturating_add(run) > GROUP_RUN)
-                || unseen >= UNSEEN_JOINS
-            {
+            if !joins(group.run, unseen, run) {
                 return Step::Goes(index);
             }
         }
@@ -1620,10 +1634,7 @@ impl WorkState {
         let mut batch = fifo.group.take()?;
         // The bound again, with the expected run as it now stands: a completion since a join may
         // have raised it.
-        let members = batch.starts.len() as u64;
-        batch.apart = members > 1
-            && (fifo.queue.expected_run())
-                .is_none_or(|run| run.saturating_mul(members) > GROUP_RUN);
+        batch.apart = apart(batch.starts.len() as u64, fifo.queue.expected_run());
         let own = fifo.in_flight.len();
         if own < IN_FLIGHT && across >= IN_FLIGHT {
             self.counters.count(Metric::LoneSubmissionsAcrossQueues);

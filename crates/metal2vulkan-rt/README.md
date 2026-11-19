@@ -743,18 +743,18 @@ made, with no lock, and never rewritten for layouts.
   16 ms. One whose queue has no run yet, or that would take the sum past the bound, goes alone, the
   group held going first. The bound is tested again as the group goes, with the expected run as it
   then stands: a group past it goes member by member, one `vkQueueSubmit2` each, only the last
-  signalling. At most four command buffers join a group while none of the queue's retires, as in the
-  old runtime, since they join on an expected run no completion has updated: in a replay stream on
-  an RTX 3090, the most GPU time over four consecutive command buffers of a queue was 385.1 ms,
-  within a quarter of amdgpu's default job timeout of 2,000 ms, and over sixteen 1,536.6 ms. The
-  thread holds a segment whose event waits are not met, and its queue's later command buffers behind
-  it, while the segments before it run, so the host can see a signal the command buffer makes before
-  its wait. Other queues go on. `Scheduled` means the last segment is in a submission: passed to
-  `vkQueueSubmit2`, or in a group held. A command buffer whose segments hold no commands, no event
-  wait and no event signal takes no submission: the submit thread schedules it as it reaches it, and
-  it completes with its queue's command buffer before it, in flight, or at once where that one has
-  completed. Where that one is in a group held, it joins the group, which goes at once, so its
-  completion waits only on submitted work.
+  signalling. At most four command buffers join a group while none of the queue's retires (four, the
+  old runtime's bound on a group), since they join on an expected run no completion has updated: in
+  a replay stream on an RTX 3090, the most GPU time over four consecutive command buffers of a queue
+  was 385.1 ms, within a quarter of amdgpu's default job timeout of 2,000 ms, and over sixteen
+  1,536.6 ms. The thread holds a segment whose event waits are not met, and its queue's later
+  command buffers behind it, while the segments before it run, so the host can see a signal the
+  command buffer makes before its wait. Other queues go on. `Scheduled` means the last segment is in
+  a submission: passed to `vkQueueSubmit2`, or in a group held. A command buffer whose segments hold
+  no commands, no event wait and no event signal takes no submission: the submit thread schedules it
+  as it reaches it, and it completes with its queue's command buffer before it, in flight, or at
+  once where that one has completed. Where that one is in a group held, it joins the group, which
+  goes at once, so its completion waits only on submitted work.
 - A command buffer's scheduled handlers run on the submit thread, once it is scheduled and before
   its submission goes to the driver (one that ends without a submission: once it ends, before it
   retires), with no lock of the runtime's held. In the handler its status is `Scheduled` and its

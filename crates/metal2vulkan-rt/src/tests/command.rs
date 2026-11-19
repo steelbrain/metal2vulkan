@@ -7,10 +7,46 @@
 //! device; the thread gauge holding the device's four threads as it is made; and a command
 //! buffer joining a held group only within the group's expected GPU run. Without a device: a push
 //! whose bytes the command buffer holds is not recorded again; a queue's expected run rises to a
-//! longer run at once and halves toward a shorter one.
+//! longer run at once and halves toward a shorter one; the join and send decisions of the group
+//! bound.
 
 use crate::command::Pushed;
 use crate::queue::next_run;
+use crate::submit::{apart, joins, GROUP_RUN, UNSEEN_JOINS};
+
+/// The group bound's decisions. A command buffer joins a held group only while the members'
+/// expected runs and its own, summed, stay within `GROUP_RUN`; one past it goes alone, the group
+/// first; one whose queue has no expected run yet goes alone; and a group that holds an unknown
+/// run takes no more. At most `UNSEEN_JOINS` join while none of their queue's retires. At the
+/// send the bound is tested again, at the run as it then stands: a group past it, or of an
+/// unknown run, goes member by member; one member never does.
+#[test]
+fn a_command_buffer_joins_a_group_only_within_the_bound_tested_again_at_the_send() {
+    let ms = 1_000_000;
+    assert!(joins(10 * ms, 1, Some(ms)), "within the bound");
+    assert!(joins(10 * ms, 1, Some(GROUP_RUN - 10 * ms)), "at the bound");
+    assert!(
+        !joins(10 * ms, 1, Some(GROUP_RUN - 10 * ms + 1)),
+        "past it: alone"
+    );
+    assert!(!joins(0, 0, None), "an unknown run: alone");
+    assert!(
+        !joins(u64::MAX, 1, Some(1)),
+        "a group holding an unknown run"
+    );
+    assert!(joins(0, UNSEEN_JOINS - 1, Some(1)), "below the unseen cap");
+    assert!(!joins(0, UNSEEN_JOINS, Some(1)), "at the unseen cap");
+    assert!(!apart(4, Some(GROUP_RUN / 4)), "within at the send");
+    assert!(
+        apart(4, Some(GROUP_RUN / 4 + 1)),
+        "past it at the send: member by member"
+    );
+    assert!(apart(2, None), "an unknown run at the send");
+    assert!(
+        !apart(1, None) && !apart(1, Some(u64::MAX)),
+        "one member is one submission"
+    );
+}
 
 /// A queue's expected GPU run: its first command buffer's run; a longer run raises it at once, a
 /// shorter one halves the way toward it, and the "none yet" mark (`u64::MAX`) is never a run.
