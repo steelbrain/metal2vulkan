@@ -762,11 +762,12 @@ pub(super) fn stage_stores(cx: &SelectCx<'_>) -> Result<(), Error> {
 
 /// The format a storage slot is declared with and its class: the slot's `StorageImageChoice` from
 /// the lowering inputs, or, without one, a formatless `Identity` declaration where the device's
-/// `shaderStorageImage{Read,Write}WithoutFormat` grant its accesses without a format; otherwise the
-/// format is an input the caller must supply (`NeedsInput`). A choice whose view SPIR-V names no
-/// format for is declared without one wherever the profile accesses storage so at all, by the
-/// features or by the formats' own bits (`DeviceProfile::accesses_without_format`; the choice
-/// checked the view's bits).
+/// `shaderStorageImage{Read,Write}WithoutFormat` grant its accesses without a format, or, under the
+/// identity domains, where the formats' own bits grant its read ([`reads_by_format_bits`]);
+/// otherwise the format is an input the caller must supply (`NeedsInput`). A choice whose view
+/// SPIR-V names no format for is declared without one wherever the profile accesses storage so at
+/// all, by the features or by the formats' own bits (`DeviceProfile::accesses_without_format`; the
+/// choice checked the view's bits).
 ///
 /// A slot that is only queried accesses no texel, so it is declared `Unknown` with class
 /// `Identity` whatever the choice (queries need no format feature, and no format then pairs with
@@ -801,9 +802,16 @@ fn storage_format(
                 StorageImageClass::Identity,
             ));
         }
-        // Under the identity domains no input names the bound format, and a formatless access the
-        // device does not take is not lowered yet.
+        // Under the identity domains no input names the bound format: a read the formats' own
+        // bits grant is declared without one, as a heap storage class's is; any other formatless
+        // access the device does not take is not lowered yet.
         if crate::lower::access::identity(cx.profile) {
+            if reads_by_format_bits(cx, s, texel) {
+                return Ok((
+                    crate::spv::ImageFormat::Unknown,
+                    StorageImageClass::Identity,
+                ));
+            }
             return Err(Unsupported::not_implemented(Feature::IdentityDomains).into());
         }
         return Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat {
@@ -878,6 +886,49 @@ fn storage_format(
         return Err(Unsupported::not_representable(Feature::Format).into());
     }
     Ok((format, choice.class))
+}
+
+/// Whether storage slot `s` of texel class `texel`, which no input names the bound format of, is
+/// read without a format by the formats' own bits alone, as a heap storage class is
+/// (`DeviceProfile::storage_reads_by_format_bits`: ANV before Gfx12.5): the slot reads, the device
+/// writes without a format where the slot writes, and the class's neutral format, which an unbound
+/// slot reads, and the view of every read-write tier format the slot can hold, whose reads Metal
+/// defines, have the format's read bit (`bind::heap::tier_read_gaps`). A storage cube is the
+/// binder's 2D-array view.
+fn reads_by_format_bits(cx: &SelectCx<'_>, s: &SlotPlan, texel: TexelClass) -> bool {
+    let profile = cx.profile;
+    let Some(shape) = s.shape else {
+        return false;
+    };
+    if !s.uses.read
+        || !profile.storage_reads_by_format_bits()
+        || (s.uses.write && !profile.fields().images.storage_write_without_format)
+    {
+        return false;
+    }
+    let (dim, arrayed) = match shape.dim {
+        ImageDim::D1 => (SymDim::D1, shape.array),
+        ImageDim::D2 => (SymDim::D2, shape.array),
+        ImageDim::D3 => (SymDim::D3, false),
+        ImageDim::Cube => (SymDim::D2, true),
+        ImageDim::Buffer => (SymDim::Buffer, false),
+    };
+    let class = ImageHandleClass {
+        dim,
+        arrayed,
+        multisampled: shape.ms,
+        sampled_type: texel.sampled_type(),
+        depth_compare: false,
+        access: ImageAccess::Storage,
+        format: StorageFormatClass::Unknown,
+    };
+    let usage = match shape.dim {
+        ImageDim::Buffer => FormatUsage::StorageTexelBufferReadWithoutFormat,
+        _ => FormatUsage::StorageImageReadWithoutFormat,
+    };
+    let neutral = crate::bind::neutral::storage_neutral(texel.sampled_type());
+    profile.supports_format(neutral, usage)
+        && crate::bind::heap::tier_read_gaps(profile, &class).is_empty()
 }
 
 /// The format of a `ulong` storage slot that is read or written: Metal binds only an `RG32Uint`

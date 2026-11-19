@@ -54,6 +54,10 @@
 //! - A kernel writing integer texels to a storage slot without a format (`ic`, generated)
 //!   saturates each lane to the channel widths the consumer pushes
 //!   (`PushField::TextureIntegerChannels`), with no fact, on the CPU interpreter.
+//! - A storage slot read without a format (`engine/rrp_swizzled_storage`'s `rrp_sw_rwread_f`) on
+//!   the Iris Xe, which reads storage so by the formats' own bits alone, is declared without a
+//!   format where every read-write tier format has the read bit, and refused where one lacks it;
+//!   `Device::new`'s answer there is unchanged.
 //! - A kernel that samples through a bicubic constexpr sampler (`engine/a2_bicubic_weights`) is
 //!   still refused as `Unsupported{IdentityDomains}`, not implemented, where the default domains
 //!   compile it.
@@ -2502,5 +2506,65 @@ fn unwritten_slots_are_loaded_through_non_writable_places() {
                 run(&module, &Config::default(), res).unwrap_or_else(|e| panic!("{what}: {e}"));
             assert_eq!(got.buffers[1], want.to_le_bytes(), "{what}: out");
         }
+    }
+}
+
+/// A storage slot's read without a format that no input names (`engine/rrp_swizzled_storage`'s
+/// `rrp_sw_rwread_f`), under the identity domains on a device that reads storage so by the formats'
+/// own bits alone (`DeviceProfile::storage_reads_by_format_bits`: the Iris Xe, which lacks
+/// `shaderStorageImageReadWithoutFormat` and sets the read bit on every read-write tier format), is
+/// declared without a format, as a heap storage class's read is: the pipeline requires the SPIR-V
+/// capability and not the feature. With one tier format's bit cleared (`RGBA16Float`) the read is
+/// still refused as `Unsupported{IdentityDomains}`. `Device::new`'s answer on the Iris Xe, the
+/// format as the binder's input (`NeedsInput{StorageTextureFormat}`), does not change.
+#[test]
+fn a_storage_read_the_formats_bits_grant_is_formatless_under_the_identity_domains() {
+    use crate::device::requirements::SpirvCapability;
+    use crate::error::RuntimeInput;
+    const IRIS: &str = "intel-irisxe-rplp-anv";
+    const ENTRY: &str = "rrp_sw_rwread_f";
+    let Some(bc) = assemble("rrp_swizzled_storage") else {
+        return;
+    };
+    let compiled = |device: &Device| {
+        let lib = Library::from_air(&bc).expect("library");
+        let f = lib.function(ENTRY).expect("entry");
+        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
+        device.compile_compute_pipeline(&d, &Budget::standard())
+    };
+    let desc = crate::pipeline::testing::description(IRIS).unwrap_or_else(|e| panic!("{e}"));
+    let iris = Device::from_queries(desc.clone(), identity()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(iris.profile().storage_reads_by_format_bits());
+    let pipe = compiled(&iris).unwrap_or_else(|e| panic!("{IRIS}: {e}"));
+    let capability = SpirvCapability::of(crate::spv::Capability::StorageImageReadWithoutFormat);
+    assert!(pipe.requirements.spirv_capabilities.contains(&capability));
+    assert!(!pipe
+        .requirements
+        .features
+        .contains(&VkFeature::ShaderStorageImageReadWithoutFormat));
+
+    let mut cleared = desc.clone();
+    let props = (cleared.formats.formats)
+        .get_mut(&vk::Format::R16G16B16A16_SFLOAT)
+        .expect("RGBA16F");
+    props.optimal_tiling = props
+        .optimal_tiling
+        .difference(vk::FormatFeatureFlags2::STORAGE_READ_WITHOUT_FORMAT);
+    let cleared = Device::from_queries(cleared, identity()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(cleared.profile().storage_reads_by_format_bits());
+    match compiled(&cleared) {
+        Err(Error::Unsupported(u)) => assert_eq!(
+            (u.feature, u.needs),
+            (Feature::IdentityDomains, Needs::NotImplemented)
+        ),
+        other => panic!("cleared: {:?}", other.map(|_| ())),
+    }
+
+    let old = Device::new(desc, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+    match compiled(&old) {
+        Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat { slot })) => {
+            assert_eq!((slot.class, slot.index), (SlotClass::Texture, 0));
+        }
+        other => panic!("Device::new: {:?}", other.map(|_| ())),
     }
 }
