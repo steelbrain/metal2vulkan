@@ -3116,8 +3116,10 @@ impl Texture {
     /// and writes through either reach the same bytes, as Metal's do.
     ///
     /// Built: the texture's own pixel format or another its image lists, over every slice in the
-    /// texture's own type, a slice subrange of a 1D or 2D array, or one slice of a 2D array as a
-    /// 2D texture, each over any level subrange. A texture's image lists the formats Metal views
+    /// texture's own type, a slice subrange of a 1D array, a 2D array or a cube array (whole
+    /// cubes), a 2D texture as a 2D array of its one slice, one slice of a 2D array as a 2D
+    /// texture, and a cube's or a cube array's slices as a 2D texture (one face), a 2D array (any
+    /// faces), a cube (six) or a cube array (whole cubes), each over any level subrange. A texture's image lists the formats Metal views
     /// it as that the device holds in a viewed form of the image format's compatibility class: its
     /// sRGB sibling whatever its usage, and with `PixelFormatView` usage, or an empty usage
     /// (Metal's `MTLTextureUsageUnknown`, which the runtime takes as every usage), every
@@ -3130,9 +3132,10 @@ impl Texture {
     /// texture's.
     ///
     /// Err: [`Refusal::TextureViewRange`] for an empty range of levels or slices or one past the
-    /// texture's, and [`Refusal::TextureViewFormat`] for another pixel format of a texture made
-    /// with a usage that is not empty and lacks `PixelFormatView`, as Metal's validation stops
-    /// them; [`Gap::TextureView`] for another kind Metal makes, naming it;
+    /// texture's, [`Refusal::TextureViewSlices`] for a slice count the view's type does not take,
+    /// and [`Refusal::TextureViewFormat`] for another pixel format of a texture made with a usage
+    /// that is not empty and lacks `PixelFormatView`, as Metal's validation stops them;
+    /// [`Gap::TextureView`] for another kind Metal makes, naming it;
     /// [`Refusal::TextureIndex`], [`Refusal::IndicesNotGranted`] as [`Device::new_texture`];
     /// [`Error::Vulkan`] where a view cannot be made.
     pub fn new_texture_view(
@@ -3219,14 +3222,34 @@ impl Texture {
             }));
         }
         let every_slice = slice_count == self::slices(p);
+        // Metal's casts (Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)`): 1D to
+        // 1D, 2D to 2D or a 2D array, a 2D array, a cube or a cube array to any of those four, and
+        // 3D to 3D. A view of each over the same image is Vulkan's on every device: an image made
+        // cube-compatible, as a cube's and a cube array's are, takes a 2D, 2D array, cube or cube
+        // array view of its layers, and any image a 2D array view of one layer.
         match (p.texture_type, texture_type) {
             (from, to) if from == to => {
-                if !every_slice && !matches!(to, T::Type1DArray | T::Type2DArray) {
+                let subrange = matches!(to, T::Type1DArray | T::Type2DArray | T::CubeArray);
+                if !every_slice && !subrange {
                     return gap(TextureViewKind::Slices);
                 }
             }
-            (T::Type2DArray, T::Type2D) if slice_count == 1 => {}
+            (T::Type2D, T::Type2DArray) | (T::Type2DArray, T::Type2D) => {}
+            (T::Cube | T::CubeArray, T::Type2D | T::Type2DArray | T::Cube | T::CubeArray) => {}
+            (T::Type2DArray, T::Cube | T::CubeArray) => return gap(TextureViewKind::CubeOfArray),
             _ => return gap(TextureViewKind::TextureType),
+        }
+        let fits = match texture_type {
+            T::Type2D => slice_count == 1,
+            T::Cube => slice_count == 6,
+            T::CubeArray => slice_count.is_multiple_of(6),
+            _ => true,
+        };
+        if !fits {
+            return Err(Error::Refused(Refusal::TextureViewSlices {
+                texture_type,
+                slice_count,
+            }));
         }
         let mut d = *p;
         d.texture_type = texture_type;

@@ -14064,6 +14064,7 @@ variant	metal2vulkan-rt::Refusal::TextureSampleCount	TextureSampleCount { sample
 variant	metal2vulkan-rt::Refusal::TextureSwizzleWithWrites	TextureSwizzleWithWrites
 variant	metal2vulkan-rt::Refusal::TextureViewFormat	TextureViewFormat { texture: PixelFormat, view: PixelFormat }
 variant	metal2vulkan-rt::Refusal::TextureViewRange	TextureViewRange { level: u32, level_count: u32, slice: u32, slice_count: u32 }
+variant	metal2vulkan-rt::Refusal::TextureViewSlices	TextureViewSlices { texture_type: TextureType, slice_count: u32 }
 variant	metal2vulkan-rt::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
 variant	metal2vulkan-rt::Refusal::VertexBufferOffset	VertexBufferOffset { index: u32, offset: u64, length: u64 }
@@ -14119,6 +14120,7 @@ variant	metal2vulkan-rt::SurfaceCopy::Start	Start { plane: usize }
 variant	metal2vulkan-rt::SurfaceCopy::Tiling	Tiling { plane: usize }
 variant	metal2vulkan-rt::SurfaceForm::Copy	Copy(SurfaceCopy)
 variant	metal2vulkan-rt::SurfaceForm::InPlace	InPlace
+variant	metal2vulkan-rt::TextureViewKind::CubeOfArray	CubeOfArray
 variant	metal2vulkan-rt::TextureViewKind::PixelFormat	PixelFormat
 variant	metal2vulkan-rt::TextureViewKind::Slices	Slices
 variant	metal2vulkan-rt::TextureViewKind::SurfacePixelFormat	SurfacePixelFormat

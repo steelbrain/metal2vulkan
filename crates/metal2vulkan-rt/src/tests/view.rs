@@ -3,9 +3,13 @@
 //! the array each report Metal's extent, levels and slices, and a blit copy out of each reads the
 //! parent's level and slice under the view's first, its bytes plain Metal's (probe
 //! `texture_view_rules.m` in the conformance crate, an Apple M3 Max, macOS 27.0.1, job
-//! m3-max-43677). A view costs no submission, no block and no copied byte. What Metal's validation
-//! stops is `Refusal::TextureViewRange` or `Refusal::TextureViewFormat`, and each kind of view
-//! the runtime does not build `Gap::TextureView` naming it. A view with a swizzle holds Metal's
+//! m3-max-43677). A 2D texture as a 2D array, and a cube's and a cube array's faces as Metal's
+//! casts view them (a 2D array of some faces, a 2D texture of one, a cube and a cube array of a
+//! cube array's second cube), each report Metal's type, extent, levels and array length, and a blit
+//! copy out of each reads the parent's level and slice under its first. A view costs no
+//! submission, no block and no copied byte. What Metal's validation stops is
+//! `Refusal::TextureViewRange`, `Refusal::TextureViewSlices` or `Refusal::TextureViewFormat`, and
+//! each kind of view the runtime does not build `Gap::TextureView` naming it. A view with a swizzle holds Metal's
 //! combination of it over its parent's, in its descriptor and its resource ID's word, over a
 //! texture of any usage. A view of another pixel format Metal views the texture as (its sRGB
 //! sibling, or with `PixelFormatView` usage a same-size colour format) reads its parent's bytes,
@@ -103,6 +107,155 @@ mod on_device {
         unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) }.to_vec()
     }
 
+    /// The bytes of level `level` and slice `slice` of an `RGBA8Unorm` cube or cube array of
+    /// [`cube_parent`], `side` texels a side at level 0.
+    fn cube_bytes(side: u32, level: u32, slice: u32) -> Vec<u8> {
+        let side = side >> level;
+        (0..side * side * 4)
+            .map(|i| (i * 13 + 5 + 11 * level + 29 * slice) as u8)
+            .collect()
+    }
+
+    /// An 8x8 `RGBA8Unorm` Shared cube (`cubes` 1) or cube array of `cubes` cubes, 2 levels, of
+    /// `ShaderRead` usage at `index`, each level and slice holding [`cube_bytes`].
+    fn cube_parent(device: &Device, cubes: u32, index: u32) -> Texture {
+        let texture_type = match cubes {
+            1 => TextureType::Cube,
+            _ => TextureType::CubeArray,
+        };
+        let mut d = TextureDescriptor::new(texture_type, PixelFormat::RGBA8Unorm, 8, 8);
+        d.array_length = cubes;
+        d.mipmap_level_count = 2;
+        d.usage = TextureUsage::SHADER_READ;
+        d.storage_mode = StorageMode::Shared;
+        let texture = device.new_texture(&d, Some(index)).expect("a texture");
+        for level in 0..2 {
+            for slice in 0..6 * cubes {
+                let side = 8 >> level;
+                let region = Region {
+                    origin: [0; 3],
+                    size: [side, side, 1],
+                };
+                let (row, image) = (u64::from(side) * 4, u64::from(side * side) * 4);
+                let bytes = cube_bytes(8, level, slice);
+                (texture.replace_region(
+                    region,
+                    level,
+                    slice,
+                    crate::HostBytes::from(&bytes[..]),
+                    row,
+                    image,
+                ))
+                .expect("the bytes");
+            }
+        }
+        texture
+    }
+
+    /// Metal's casts of a cube and a cube array over the same image (Apple's
+    /// `makeTextureView(pixelFormat:textureType:levels:slices:)`), each over a level and slice
+    /// range inside the parent: a 2D array of some faces, a 2D texture of one, a cube of a cube
+    /// array's second cube and a cube array of it. Each reports Metal's type, extent, levels and
+    /// array length, and a blit copy out of its level 0 and slice 0 reads the parent's level and
+    /// slice under them. A view costs no submission, block or copied byte.
+    #[test]
+    fn every_device_views_a_cube_s_faces_as_metal_casts_them() {
+        each_device("texture_views_of_cubes", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 16)
+                .expect("a grant");
+            let cube = cube_parent(&device, 1, 4096);
+            let cubes = cube_parent(&device, 2, 4097);
+            let block = (device.take_block(MemoryClass::Shared, 256)).expect("a Shared block");
+            let out = (device.new_buffer(block.id, 0, 256, Some(0))).expect("a buffer");
+            let queue = device.new_command_queue(1).expect("a queue");
+            use TextureType::{Cube, CubeArray, Type2D, Type2DArray};
+            // The parent, the view's type, levels and slices; what the view reports (width,
+            // levels, array length); the parent's level and slice its level 0 and slice 0 are.
+            let cases = [
+                (
+                    "cube-faces",
+                    &cube,
+                    Type2DArray,
+                    1..2,
+                    2..5,
+                    [4, 1, 3],
+                    [1, 2],
+                ),
+                (
+                    "cube-all-faces",
+                    &cube,
+                    Type2DArray,
+                    0..2,
+                    0..6,
+                    [8, 2, 6],
+                    [0, 0],
+                ),
+                ("cube-face", &cube, Type2D, 1..2, 4..5, [4, 1, 1], [1, 4]),
+                ("cubes-face", &cubes, Type2D, 0..1, 9..10, [8, 1, 1], [0, 9]),
+                (
+                    "cubes-faces",
+                    &cubes,
+                    Type2DArray,
+                    0..2,
+                    3..11,
+                    [8, 2, 8],
+                    [0, 3],
+                ),
+                ("cubes-cube", &cubes, Cube, 1..2, 6..12, [4, 1, 1], [1, 6]),
+                (
+                    "cubes-array",
+                    &cubes,
+                    CubeArray,
+                    0..1,
+                    6..12,
+                    [8, 1, 1],
+                    [0, 6],
+                ),
+            ];
+            let counters = device.counters();
+            for (at, (case, parent, texture_type, levels, slices, reports, under)) in
+                (4100..).zip(cases)
+            {
+                settled(&device);
+                let before = counters.metrics();
+                let view = (parent.new_texture_view(
+                    PixelFormat::RGBA8Unorm,
+                    texture_type,
+                    levels,
+                    slices,
+                    Some(at),
+                ))
+                .unwrap_or_else(|error| panic!("{name}: {case}: {error}"));
+                let after = counters.metrics();
+                assert_eq!(
+                    (
+                        after.submissions - before.submissions,
+                        after.blocks_made - before.blocks_made,
+                        after.bytes_copied - before.bytes_copied,
+                    ),
+                    (0, 0, 0),
+                    "{name}: {case}: a view's submissions, blocks and bytes copied"
+                );
+                let d = view.descriptor();
+                assert_eq!(
+                    (
+                        d.texture_type,
+                        [d.width, d.mipmap_level_count, d.array_length]
+                    ),
+                    (texture_type, reports),
+                    "{name}: {case}: what the view reports"
+                );
+                let [level, slice] = under;
+                assert_eq!(
+                    bytes(&queue, &view, &out, 4),
+                    cube_bytes(8, level, slice),
+                    "{name}: {case}: the bytes"
+                );
+            }
+        });
+    }
+
     #[test]
     fn every_device_views_levels_and_slices_of_a_texture() {
         each_device("texture_views", |name, _, device| {
@@ -172,6 +325,15 @@ mod on_device {
                     1..3,
                     [8, 2, 2],
                     0xe16c_7fad_7cbe_2725,
+                ),
+                (
+                    "2d-as-array",
+                    &flat,
+                    Type2DArray,
+                    0..3,
+                    0..1,
+                    [8, 3, 1],
+                    0x1bad_e16c_f57f_1725,
                 ),
             ];
             let counters = device.counters();
@@ -289,21 +451,39 @@ mod on_device {
             let mut d = TextureDescriptor::new(TextureType::Cube, rgba, 4, 4);
             d.usage = TextureUsage::SHADER_READ;
             let cube = device.new_texture(&d, Some(4114)).expect("a texture");
-            for (case, result, kind) in [
-                (
-                    "a 2D array of a 2D texture",
-                    view(&flat, rgba, Type2DArray, 0..3, 0..1),
-                    TextureViewKind::TextureType,
-                ),
+            let mut d = TextureDescriptor::new(Type2DArray, rgba, 4, 4);
+            d.array_length = 6;
+            d.usage = TextureUsage::SHADER_READ;
+            let six = device.new_texture(&d, Some(4118)).expect("a texture");
+            // A slice count the view's type does not take, as Metal's validation stops it.
+            for (case, result) in [
                 (
                     "a 2D view of two slices",
                     view(&array, rgba, Type2D, 0..1, 0..2),
-                    TextureViewKind::TextureType,
                 ),
                 (
                     "three faces of a cube",
                     view(&cube, rgba, TextureType::Cube, 0..1, 0..3),
-                    TextureViewKind::Slices,
+                ),
+            ] {
+                assert!(
+                    matches!(
+                        result,
+                        Err(Error::Refused(Refusal::TextureViewSlices { .. }))
+                    ),
+                    "{name}: {case}"
+                );
+            }
+            for (case, result, kind) in [
+                (
+                    "a cube of a 2D array",
+                    view(&six, rgba, TextureType::Cube, 0..1, 0..6),
+                    TextureViewKind::CubeOfArray,
+                ),
+                (
+                    "a 3D view of a cube",
+                    view(&cube, rgba, TextureType::Type3D, 0..1, 0..1),
+                    TextureViewKind::TextureType,
                 ),
             ] {
                 match result {

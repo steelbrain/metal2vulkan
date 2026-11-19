@@ -6,7 +6,7 @@ use crate::floor::BelowFloor;
 use crate::import::ImportHandle;
 use crate::memory::{BlockId, MemoryClass};
 use ash::vk;
-use metal2vulkan::metal::PixelFormat;
+use metal2vulkan::metal::{PixelFormat, TextureType};
 use std::{fmt, io};
 
 /// What a failing call returns.
@@ -559,6 +559,22 @@ pub enum Refusal {
         level_count: u32,
         /// The view's first slice in the texture: an array's element, or a cube's face.
         slice: u32,
+        /// Its slices.
+        slice_count: u32,
+    },
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a slice count the view's
+    /// type does not take: other than one for a 2D view, other than six for a cube, or not a
+    /// multiple of six for a cube array.
+    ///
+    /// Basis: metal-documented (Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)`
+    /// page: "The length value of the sliceRange parameter needs to be 6 if the new texture type
+    /// value is MTLTextureType.typeCube, or a multiple of 6 if the new texture type value is
+    /// MTLTextureType.typeCubeArray"; and measured on an Apple M3 Max, macOS 27.0.1, for
+    /// `metal2vulkan-runtime`'s view plan: plain Metal asserts "newSliceRange.length(2) must equal
+    /// (1) for textureType (MTLTextureType2D)").
+    TextureViewSlices {
+        /// The view's texture type.
+        texture_type: TextureType,
         /// Its slices.
         slice_count: u32,
     },
@@ -1313,10 +1329,15 @@ pub enum TextureViewKind {
     /// linear image does not hold that format. None was counted: reims's pl8rt boot makes 0
     /// views of another format over its surface textures.
     SurfacePixelFormat,
-    /// Another texture type, but a 2D view of one slice of a 2D array.
+    /// Another texture type than the casts built
+    /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)).
     TextureType,
-    /// Some of the slices of a texture that is not a 1D or 2D array: a cube's faces, or a cube
-    /// array's cubes.
+    /// A cube or a cube array view of a 2D array, one of Metal's casts: Vulkan views an image as
+    /// a cube only where the image was made cube-compatible, and a 2D array's image is made
+    /// without it. No stream makes one.
+    CubeOfArray,
+    /// Some of the slices of a texture that is not an array of 1D or 2D textures or of cubes: a
+    /// 2D multisample array's.
     Slices,
 }
 
@@ -1799,6 +1820,13 @@ impl fmt::Display for Refusal {
                 f,
                 "a view of {level_count} levels from {level} and {slice_count} slices from {slice} is empty or leaves the texture"
             ),
+            Refusal::TextureViewSlices {
+                texture_type,
+                slice_count,
+            } => write!(
+                f,
+                "a {texture_type:?} view of {slice_count} slices, which Metal does not make of that type"
+            ),
             Refusal::TextureViewFormat { texture, view } => write!(
                 f,
                 "a {view:?} view of a {texture:?} texture, which Metal does not view it as with \
@@ -2037,6 +2065,11 @@ impl fmt::Display for Gap {
             Gap::RenderPipeline { kind } => {
                 write!(f, "a render pipeline state with {kind:?} is not built")
             }
+            Gap::TextureView {
+                kind: TextureViewKind::CubeOfArray,
+            } => f.write_str(
+                "a cube view of a 2D array is not built: Vulkan views an image as a cube only where the image was made cube-compatible, and a 2D array's is not",
+            ),
             Gap::TextureView { kind } => write!(f, "a texture view that changes {kind:?} is not built"),
             Gap::RenderPass { kind } => write!(f, "a render pass with {kind:?} is not built"),
             Gap::Draw { kind } => write!(f, "a draw with {kind:?} is not built"),

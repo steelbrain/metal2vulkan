@@ -1046,11 +1046,15 @@ made, with no lock, and never rewritten for layouts.
   what Metal's view reports: the extent of its first level, its levels and its slices. Copies,
   `replace_region` and `get_bytes` through it reach the parent's levels and slices under it, and a
   view of a Managed texture names the parent's bytes of them; its hazards are its parent's. Built:
-  the parent's own pixel format, over every slice in the parent's type, a slice subrange of a 1D or
-  2D array, or one slice of a 2D array as a 2D texture, each over any level subrange; a view of a
-  view is a view of the first parent. Refused, as Metal's validation stops them: an empty range of
-  levels or slices, or one past the parent's (`Refusal::TextureViewRange`), and another pixel format
-  of a texture made without `PixelFormatView` usage (`Refusal::TextureViewFormat`).
+  the parent's own pixel format, over every slice in the parent's type, a slice subrange of a 1D
+  array, a 2D array or a cube array (whole cubes), a 2D texture as a 2D array of its one slice,
+  one slice of a 2D array as a 2D texture, and a cube's or a cube array's slices as a 2D texture
+  (one face), a 2D array (any faces), a cube (six) or a cube array (whole cubes), each over any
+  level subrange; a view of a view is a view of the first parent. Refused, as Metal's validation
+  stops them: an empty range of levels or slices, or one past the parent's
+  (`Refusal::TextureViewRange`), a slice count the view's type does not take
+  (`Refusal::TextureViewSlices`), and another pixel format of a texture made without
+  `PixelFormatView` usage (`Refusal::TextureViewFormat`).
 - `Device::new_texture_for_views(descriptor)` has no Metal counterpart of its own: a texture as
   `new_texture` makes it, of any usage, with no index. Shaders reach it only through its views,
   each at an index of its own, which a view of a texture shaders reach takes as above. It is the
@@ -1148,9 +1152,10 @@ made, with no lock, and never rewritten for layouts.
   buffer is scheduled.
 - Texture views that change what the replay streams' views keep are not built
   (`Gap::TextureView`, naming the kind): another pixel format the texture's image does not list,
-  another texture type (but a 2D view of one slice of a 2D array), and some of a cube's faces or a
-  cube array's cubes. A view of a pixel format Metal does not view the texture as is
-  `Refusal::TextureViewFormat`.
+  another texture type than the casts built above, some of a 2D multisample array's slices, and a
+  cube or a cube array view of a 2D array (`TextureViewKind::CubeOfArray`), which needs a
+  cube-compatible image that a 2D array's is not made as. A view of a pixel format Metal does not
+  view the texture as is `Refusal::TextureViewFormat`.
 - A swizzle reaches a texture's sampled element alone, as Apple defines it for reads and
   samples. A swizzled texture, or a view made with a swizzle or of a swizzled texture, has a
   storage element and attachment views that map each channel to itself, as Vulkan requires of

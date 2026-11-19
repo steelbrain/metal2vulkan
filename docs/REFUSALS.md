@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 72 | 72 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 28 | 28 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 20 | 16 | 0 | 0 | 36 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 20 | 17 | 0 | 0 | 36 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 1 | 27 | 0 | 0 | 0 |
 
@@ -663,6 +663,7 @@ Columns:
 | `BufferCopyLayout` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose offset or row stride, for a format of single... | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_buffer_copy_rules.m` in the conformance crate, jobs m3-max-43541 and m3-max-43545: Metal's validation layer stops an RGBA8Unorm offset of 2, `sourceOffset (2) must be a multiple of 4 bytes`, a row stride of 18, `sourceBytesPerRow (18) must be a multiple of 4 bytes`, and the same of a copy into a buffer, a row stride of 12 for rows of 16 bytes, an image stride of 12 for images of 16, and a region 16 bytes past the buffer's end, `totalBytesUsed(4112) must be <= [sourceBuffer length](4096)`; it takes an R8Unorm offset of 2, a row stride of 0 for one row, image strides of no whole number of rows, and an image stride on a 2D texture and on a slice of a 1D array | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)` | `-` |
 | `FillRange` | `BlitCommandEncoder::fill_buffer` of an empty range, or of one past the buffer's end | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_fill_rules.m` in the conformance crate, job m3-max-43573: Metal's validation layer stops both, `range.length(0) must not be 0` and `(range.location + range.length)(68) must be <= [buffer length](64)` | 1: `crates/metal2vulkan-rt/src/blit.rs (fill_range)` | `-` |
 | `TextureViewRange` | `Texture::new_texture_view` of an empty range of levels or slices, or of one past the texture's | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the conformance crate, job m3-max-43677: Metal's validation layer stops each, `(newLevelRange.location + newLevelRange.length)(4) must be <= [texture mipmapLevelCount](3)`, `newLevelRange.length must not be 0` and `(newSliceRange.location + newSliceRange.length)(4) must be <= (3)` | 1: `crates/metal2vulkan-rt/src/texture.rs (view)` | `-` |
+| `TextureViewSlices` | `Texture::new_texture_view` of a slice count the view's type does not take | every device (a public call's own check of its arguments) | `metal-documented`: Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)` page: "The length value of the sliceRange parameter needs to be 6 if the new texture type value is MTLTextureType.typeCube, or a multiple of 6 if the new texture type value is MTLTextureType.typeCubeArray"; and measured on an Apple M3 Max, macOS 27.0.1, for `metal2vulkan-runtime`'s view plan: plain Metal asserts "newSliceRange.length(2) must equal (1) for textureType (MTLTextureType2D)" | 1: `crates/metal2vulkan-rt/src/texture.rs (view)` | `-` |
 | `TextureViewFormat` | `Texture::new_texture_view` of a pixel format Metal does not view the texture as | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the conformance crate, job m3-max-43677: Metal's validation layer stops an `R32Uint` view of an `RGBA8Unorm` texture of `ShaderRead` usage, `Texture View Validation`, and makes it where the usage adds `PixelFormatView`; Apple's `makeTextureView` and `MTLTextureUsage.pixelFormatView` pages state the rest | 1: `crates/metal2vulkan-rt/src/texture.rs (view)` | `-` |
 | `MipmapFormat` | `BlitCommandEncoder::generate_mipmaps` of a texture of more than one level whose pixel format is not a colour-renderable, filterable one | every device (a public call's own check of its arguments) | `metal-measured`: Apple's `generateMipmaps(for:)` page: mipmap generation works only for textures with colour-renderable and colour-filterable pixel formats; Metal's API validation stops the others, measured on an Apple M3 Max and an M4 for `metal2vulkan-runtime`'s mipmap plan | 1: `crates/metal2vulkan-rt/src/blit.rs (generate_mipmaps)` | `-` |
 | `TextureCopyMismatch` | `BlitCommandEncoder::copy_from_texture` between textures of two pixel formats, or of two sample counts | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_copy_format_pairs.m` in the conformance crate: Metal's validation layer stops every pair of two formats it was given, sRGB, integer, float, channel order, depth and compressed pairs among them, with `[sourceTexture pixelFormat](...) must equal [destinationTexture pixelFormat](...)`, and a source of four samples into one of one with `[sourceTexture sampleCount](4) must equal [destinationTexture sampleCount](1)` | 1: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)` | `-` |
@@ -1281,6 +1282,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::BufferCopyLayout`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`
 - `rt:Refusal::FillRange`: `crates/metal2vulkan-rt/src/blit.rs (fill_range)`
 - `rt:Refusal::TextureViewRange`: `crates/metal2vulkan-rt/src/texture.rs (view)`
+- `rt:Refusal::TextureViewSlices`: `crates/metal2vulkan-rt/src/texture.rs (view)`
 - `rt:Refusal::TextureViewFormat`: `crates/metal2vulkan-rt/src/texture.rs (view)`
 - `rt:Refusal::MipmapFormat`: `crates/metal2vulkan-rt/src/blit.rs (generate_mipmaps)`
 - `rt:Refusal::TextureCopyMismatch`: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)`
