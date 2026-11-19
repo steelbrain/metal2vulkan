@@ -1531,8 +1531,8 @@ fn render_encoder_setters_play_with_their_effects() {
             };
             color.push(("texture".into(), Value::Object(target)));
             color.push(("clearColor".into(), Value::Map(red.to_vec())));
-            let args = [Value::Uint(0), Value::Map(color)];
-            w.call("m2v.setColorAttachment", pass, 0, &args, &[])?;
+            let attachment = [Value::Uint(0), Value::Map(color)];
+            w.call("m2v.setColorAttachment", pass, 0, &attachment, &[])?;
             let at = [Value::Object(pass)];
             w.call("renderCommandEncoderWithDescriptor:", 13, encoder, &at, &[])?;
             let state = [Value::Object(*pipeline)];
