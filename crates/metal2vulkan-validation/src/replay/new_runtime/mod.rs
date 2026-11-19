@@ -2151,6 +2151,9 @@ impl Backend for NewRuntime {
             }
             return Ok(Made::default());
         }
+        if self.surfaces.notes(call.receiver) {
+            self.surface_encoded(call);
+        }
         let encodes = matches!(
             self.objects.get(&call.receiver),
             Some(
@@ -2240,6 +2243,9 @@ impl Backend for NewRuntime {
                 _ => return Err(refuse(call, "not played on its receiver")),
             },
         };
+        if &*call.selector == "endEncoding" && self.surfaces.notes(call.receiver) {
+            self.surface_ended(call)?;
+        }
         let Some((object, made)) = made else {
             return Ok(Made::default());
         };
@@ -2249,6 +2255,7 @@ impl Backend for NewRuntime {
                 call.selector
             )));
         }
+        self.surface_made(call, &object);
         self.objects.insert(call.result, object);
         Ok(made)
     }

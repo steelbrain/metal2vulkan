@@ -815,12 +815,14 @@ fn surface_textures_take_the_reserved_index_their_descriptor_names() {
 }
 
 /// Two textures over plane 0 of one surface (#6, 2 by 2 texels, 8 bytes a row): #8, RGBA8Unorm,
-/// which a kernel writes the inverse of #7's texels into, and #9, BGRA8Unorm, which a later
-/// command buffer's kernel reads and writes the inverse of into #10, so that #10 holds #7's texels
-/// with red and blue swapped. Then #15, RGBA8Unorm of 1 by 2 over the same range, which starts from
-/// the texels at its bytes (the first and third of #8's), and a copy from the guest's RAM into the
-/// range's first 8 bytes, which reaches #15's first texel; a kernel that then reads #8, of the
-/// older extent, into #20 reads #8's texels from before the copy, and is counted.
+/// which a kernel writes the inverse of #7's texels into, and #9, BGRA8Unorm, a view of the same
+/// shape, which a later command buffer's kernel reads and writes the inverse of into #10, so that
+/// #10 holds #7's texels with red and blue swapped. Then #15, RGBA8Unorm of 1 by 2 over the same
+/// plane, a new shape, which starts from the texels at its bytes once #8's write is in the buffer
+/// (the first and third of #8's), and a copy from the guest's RAM into the plane's first 8 bytes,
+/// which reaches both shapes: a kernel that then reads #8 into #20 reads the copy's bytes in #8's
+/// first row. Last, a blit of #7's first column into #15: at its encoder's end the write goes into
+/// #8's shape through the buffer, so a kernel reading #8 into #24 reads it in #8's first column.
 #[test]
 fn textures_over_one_surface_share_its_texels() {
     /// A command buffer of queue #2 whose kernel (#5) reads `from` and writes the inverse into
@@ -941,6 +943,35 @@ fn textures_over_one_surface_share_its_texels() {
             &[],
         )?;
         invert(w, 18, 8, 20)?;
+        w.call("commandBuffer", 2, 22, &[], &[])?;
+        w.call("blitCommandEncoder", 22, 23, &[], &[])?;
+        let origin = uints(&[("x", 0), ("y", 0), ("z", 0)]);
+        let column = uints(&[("width", 1), ("height", 2), ("depth", 1)]);
+        let copy = [
+            Value::Object(7),
+            Value::Uint(0),
+            Value::Uint(0),
+            origin.clone(),
+            column,
+            Value::Object(15),
+            Value::Uint(0),
+            Value::Uint(0),
+            origin,
+        ];
+        let blit = "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:\
+                    destinationSlice:destinationLevel:destinationOrigin:";
+        w.call(blit, 23, 0, &copy, &[])?;
+        w.call("endEncoding", 23, 0, &[], &[])?;
+        w.call("commit", 22, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 22, 0, &[], &[])?;
+        w.call(
+            "newTextureWithDescriptor:",
+            1,
+            24,
+            &[texture(70, 2, 2)],
+            &[],
+        )?;
+        invert(w, 25, 8, 24)?;
         w.call("m2v.check", 0, 0, &[Value::Object(6)], &[])
     });
     // Each texture's rows as a check reads them: `width` texels a row, the rows as far apart as
@@ -951,27 +982,45 @@ fn textures_over_one_surface_share_its_texels() {
             let pitch = bytes.len() / 2;
             [&bytes[..width * 4], &bytes[pitch..pitch + width * 4]].concat()
         };
-        [rows(8, 2), rows(10, 2), rows(15, 1), rows(20, 2)]
+        [rows(10, 2), rows(20, 2), rows(24, 2)]
     });
-    let first = [&copied[..4], &written_through[8..12]].concat();
+    // The inverse of RGBA8 texels' colours, as the kernel writes it.
+    let inverse = |bytes: &[u8]| -> Vec<u8> {
+        (bytes.chunks(4))
+            .flat_map(|t| [0xFF - t[0], 0xFF - t[1], 0xFF - t[2], t[3]])
+            .collect()
+    };
+    // #8 after the copy: the copy's bytes in its first row, its written texels in its second.
+    let copied_over = [&copied[..], &written_through[8..]].concat();
+    // #8 after the blit through #15: #7's texels in its first column.
+    let blitted = [
+        &source[..4],
+        &copied[4..8],
+        &source[8..12],
+        &written_through[12..],
+    ]
+    .concat();
     assert_eq!(
         rows,
-        [written_through, read_through, first, source],
+        [read_through, inverse(&copied_over), inverse(&blitted)],
         "{lines:?}"
     );
     let executed = &report.total.executed;
     let counted = |key: &str| executed.get(key).copied().unwrap_or(0);
     let counts = [
         "surface_textures",
-        "surface_entries",
-        "surface_fills",
-        "surface_shape_changes",
+        "surface_shapes",
+        "surface_shapes_found",
+        "surface_written_back",
         "surface_copies_in",
-        "surface_older_uses",
+        "surface_overlap_copies",
+        "surface_overlap_bytes",
+        "surface_straddled",
+        "surface_unordered_writes",
         "substitutes_read",
     ]
     .map(counted);
-    assert_eq!(counts, [3, 2, 2, 1, 1, 1, 0], "{executed:?}");
+    assert_eq!(counts, [3, 2, 1, 1, 2, 1, 8, 0, 0, 0], "{executed:?}");
     let receivers: Vec<(u64, bool)> = (report.checks.iter())
         .map(|check| (check.object, check.receiver))
         .collect();

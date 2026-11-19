@@ -18,7 +18,7 @@ use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
 use metal2vulkan_rt as rt;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Where a binding is: the stage (fragment or not) and whether it is a texture.
 type Slot = (bool, bool, u32);
@@ -42,14 +42,22 @@ const OWN: usize = usize::MAX;
 
 /// A render pass descriptor, and the properties it holds that the runtime's descriptor does not:
 /// each by its attachment (the colors' indices, then the depth and stencil attachments') or
-/// [`OWN`], and its key. The runtime makes an encoder of it only where there are none.
+/// [`OWN`], and its key. The runtime makes an encoder of it only where there are none. Each
+/// attachment's texture as the stream names it, by attachment, for the surfaces' shapes a pass
+/// writes (`surfaces`).
 #[derive(Default)]
 pub(super) struct Pass {
     descriptor: rt::RenderPassDescriptor,
     unheld: HashSet<(usize, &'static str)>,
+    textures: HashMap<usize, u64>,
 }
 
 impl Pass {
+    /// Its attachments' textures, as the stream names them.
+    pub(super) fn textures(&self) -> impl Iterator<Item = u64> + '_ {
+        self.textures.values().copied()
+    }
+
     /// Records that property `key` of attachment `at` is set to a value the runtime's descriptor
     /// holds (`held`) or one it does not.
     fn hold(&mut self, at: usize, key: &'static str, held: bool) {
@@ -238,7 +246,8 @@ impl NewRuntime {
     ) -> Result<AttachmentSet, PlayError> {
         // A skipped texture is held as none, and the pass marked as one the runtime does not
         // build while the attachment names it.
-        let (texture, skipped) = match f.set_object("texture")? {
+        let recorded = f.set_object("texture")?;
+        let (texture, skipped) = match recorded {
             Some(Some(id)) if self.skipped(id) => (Some(None), Some(true)),
             Some(Some(id)) => (Some(Some(self.texture_of(call, id)?)), Some(false)),
             Some(None) => (Some(None), Some(false)),
@@ -264,6 +273,11 @@ impl NewRuntime {
             texture,
         };
         let pass = self.pass(call.receiver);
+        match recorded {
+            Some(Some(id)) => pass.textures.insert(at, id),
+            Some(None) => pass.textures.remove(&at),
+            None => None,
+        };
         if let Some(skipped) = skipped {
             pass.hold(at, "texture", !skipped);
         }

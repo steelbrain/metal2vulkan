@@ -736,34 +736,56 @@ counted from 0), completes the work committed so far, reports as at the stream's
   first few. A play with a substitute read is equal at best where played; one with a substitute
   only made is not touched by it.
 
-  A texture over a surface's plane (section 7) plays as the product makes it: one texture of the
-  runtime's made for views (`Device::new_texture_for_views`) for each receiver range (the
+  A texture over a surface's plane (section 7) plays as the product's per-shape form makes it: one
+  texture of the runtime's made for views (`Device::new_texture_for_views`) for each plane (the
   receiver buffer, the plane, its offset and row pitch) and shape (width, height and bytes a
-  texel), with shader read and write, render-target and pixel-format-view usage, and each recorded
-  surface texture a view of it at the texture's own index, so a texture of another format of the
-  same bytes a texel shares its texels. The receiver buffer holds the pages' bytes as the stream
-  writes them. A new entry is filled from it, by a blit in a command buffer of the backend's own
-  committed at the making, after every earlier commit; a new shape over a range first downloads the
-  range's newest entry into the buffer at that entry's extent, so bytes map by byte offset. An
-  older shape's entry goes once no texture of it lives, and is not kept current: the
-  `surface_older_uses` counter counts the calls that name such a texture after a newer shape over
-  its range was made (calls through argument buffers are not seen). A copy from the guest's RAM
-  into a range also copies the range into its newest entry, and a copy back to the guest's RAM
-  first copies the newest entry into the range, both in the copy's own blit encoder, where the
-  GPU's order holds them. A recorded CPU write into a range reaches the texels it covers of the
-  newest entry through the runtime's upload (`Texture::replace_region`), until the buffer's first
-  `m2v.externalWriteDone`; that record refills every entry of its buffer from the buffer, by a blit
+  texel, and whether shaders may write it), with shader read, render-target and pixel-format-view
+  usage, and shader write only where the texture it is made for declares it or Metal's unknown
+  usage, and each recorded surface texture, and each view of one, a view of it at the texture's
+  own index, so a texture of another format of the same bytes a texel shares its texels. A shape
+  shaders may write serves a later texture of its extent that does not declare it; a texture that
+  declares it over a plane whose shape of its extent has none is another shape of the plane. Textures over the same pages at
+  another offset or pitch are another plane: nothing moves between two planes but through the
+  buffer, at the recorded copies. The receiver buffer holds the pages' bytes as the stream writes
+  them, and every shape is current over its whole extent, by the product's three rules:
+  - A new shape is filled from the buffer, once the buffer's dirty shapes are copied into it, by
+    blits in a command buffer of the backend's own committed at the making, after every earlier
+    commit. The same shape made again is a view of it, with no copy.
+  - A shape is dirty once a committed command buffer may have written it, until it is copied into
+    the buffer. A copy back to the guest's RAM first copies every dirty shape of the buffer, and
+    every shape its command buffer may have written before, into the buffer, in the copy's own blit
+    encoder, where the GPU's order holds it.
+  - At the end of an encoder that may have written a shape, the write goes into each other shape of
+    its plane that a live texture views or that is dirty: the write's texels that the others
+    overlap (every two shapes of a plane overlap from its first texel) are copied into the buffer at
+    the plane's offset and pitch, then from there into each other shape, in two blit encoders of the
+    same command buffer; the plane's other shapes go. A texel the write's rows reach only in part
+    keeps its bytes (`surface_straddled`), and an encoder that may have written two shapes of one
+    plane takes the one noted last as the plane's write (`surface_unordered_writes`).
+
+  An encoder may have written a shape through a render pass's attachment, a blit's destination, a
+  texture bound at a slot that the bound pipeline state's interface writes
+  (`texture_accesses`), and, where no interface is at hand (a stage the runtime answers none for, a
+  skipped state, a `useResource:usage:`), a texture whose usage lets a shader write it
+  (`surface_usage_writes`). A write through an argument buffer with no use named is not seen, and
+  not counted. A shape no texture views stays while it is one of its buffer's four most recently
+  used such shapes, or dirty. A copy from the guest's RAM into the buffer also copies the bytes into
+  every shape they reach, in the copy's own blit encoder, the guest's bytes winning over a shape's
+  write not yet in the buffer. A recorded CPU write reaches the texels it covers of every shape
+  through the runtime's upload (`Texture::replace_region`), until the buffer's first
+  `m2v.externalWriteDone`; that record refills every shape of its buffer from the buffer, by a blit
   in a command buffer of the backend's own committed then. Another call that names a receiver
   buffer as a buffer is refused, and a texture of a format that reads across a surface's two planes
   (a two-plane YCbCr or XR10 format) is skipped (`skipped_surfaces_across_planes`). The counts
-  (`surface_textures`, `surface_entries`, `surface_fills`, `surface_shape_changes`,
-  `surface_cpu_writes`, `surface_external_writes`, `surface_refills`, `surface_refill_bytes`,
-  `surface_refill_gpu_nanos`, `surface_copies_in`, `surface_copies_out`, `surface_bytes`) are the
-  player's work, among its executed counters; `surface_refill_gpu_nanos` is the GPU time of the
-  refills' command buffers, counted in the frame whose end first sees each complete. The report's
-  `surfaces` line gives them with the longest refill command buffer and the frames of the first
-  older-shape uses. A check
-  of a texture reads its first level and slice as the old runtime's backend lays them out.
+  (`surface_textures`, `surface_shapes`, `surface_shapes_found`, `surface_shapes_dropped`,
+  `surface_written_back`, `surface_written_back_bytes`, `surface_overlap_copies`,
+  `surface_overlap_bytes`, `surface_straddled`, `surface_unordered_writes`,
+  `surface_usage_writes`, `surface_cpu_writes`, `surface_external_writes`, `surface_refills`,
+  `surface_refill_bytes`, `surface_refill_gpu_nanos`, `surface_copies_in`, `surface_copies_out`,
+  `surface_bytes`) are the player's work, among its executed counters; `surface_refill_gpu_nanos`
+  is the GPU time of the refills' command buffers, counted in the frame whose end first sees each
+  complete. The report's `surfaces` line gives them with the longest refill command buffer. A
+  check of a texture reads its first level and slice as the old runtime's backend lays them out.
 
   The counts are among its executed counters; a `skipped_` one above zero makes the play no gate
   result, and `report.txt` says so on a `skipped` line. It places buffers of their own, and the GPU

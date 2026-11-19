@@ -180,6 +180,7 @@ impl NewRuntime {
                 // `didModifyRange:` from here.
                 self.fresh.retain(|_, user| *user != Some(call.receiver));
                 self.unwritten.committed(call.receiver);
+                self.surfaces.committed(call.receiver);
                 for place in self.staging.remove(&call.receiver).unwrap_or_default() {
                     self.places.give(place, self.commits, Vec::new());
                 }
