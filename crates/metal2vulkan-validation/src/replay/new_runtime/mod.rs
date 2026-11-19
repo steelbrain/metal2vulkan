@@ -348,9 +348,8 @@ pub struct NewRuntime {
     /// The device's `minImportedHostPointerAlignment`, where it imports host memory: the
     /// alignment of the host pages a no-copy buffer's memory is imported from (`imports`).
     host_alignment: Option<u64>,
-    /// The no-copy buffers whose memory was imported, and the bytes imported.
-    imported: u64,
-    imported_bytes: u64,
+    /// The no-copy buffers by how they play, and the recorded ranges of the stream's blocks.
+    no_copies: imports::NoCopies,
 }
 
 /// The objects `values` name, lists included.
@@ -681,8 +680,7 @@ impl NewRuntime {
         Ok(NewRuntime {
             places: Places::new(device.clone()),
             host_alignment: imports::host_alignment(&device),
-            imported: 0,
-            imported_bytes: 0,
+            no_copies: imports::NoCopies::default(),
             device,
             objects: HashMap::new(),
             indices: indices::Indices::default(),
@@ -1015,21 +1013,22 @@ impl NewRuntime {
     }
 
     /// A buffer of `length` bytes and storage `mode` in a place of its own, zeroed, holding
-    /// `bytes` from its start; `no_copy` where its bytes are the program's memory.
+    /// `bytes` from its start; `no_copy` (its creator) where its bytes are host memory, which is
+    /// imported.
     fn new_buffer(
         &mut self,
         call: &Call,
         length: u64,
         mode: rt::StorageMode,
         bytes: &[u8],
-        no_copy: bool,
+        no_copy: Option<imports::NoCopy>,
     ) -> Result<Option<(Object, Made)>, PlayError> {
         let mode = match mode {
             rt::StorageMode::Managed => match self.managed_form(call)? {
                 ManagedCopies::One => rt::StorageMode::Shared,
                 ManagedCopies::Two => {
                     // A stream that tells its form gives a no-copy buffer's bytes at creation.
-                    if no_copy && !self.identity && bytes.is_empty() {
+                    if no_copy.is_some() && !self.identity && bytes.is_empty() {
                         self.fresh.insert(call.result, None);
                     }
                     rt::StorageMode::Managed
@@ -1051,7 +1050,7 @@ impl NewRuntime {
         // A no-copy buffer's memory is host pages imported as a block of their own, as the
         // product imports the program's (`imports`); any other buffer's, a place of its own.
         let (block, start, import, place) = match no_copy {
-            true => {
+            Some(kind) => {
                 let alignment = (self.host_alignment).ok_or_else(|| {
                     refuse(
                         call,
@@ -1060,11 +1059,10 @@ impl NewRuntime {
                 })?;
                 let (import, len) =
                     imports::imported(&self.device, length, alignment).map_err(translated(call))?;
-                self.imported += 1;
-                self.imported_bytes += len;
+                self.no_copies.imported(kind, len);
                 (import.id, 0, Some(import), None)
             }
-            false => {
+            None => {
                 let place =
                     (self.places.take(class, length, recorded, completed)).map_err(failed(call))?;
                 (place.block, place.range.start, None, Some(place))
@@ -1416,13 +1414,14 @@ impl NewRuntime {
             }
             "newBufferWithLength:options:" => {
                 let mode = storage(call, uint(call, 1)?)?;
-                self.new_buffer(call, uint(call, 0)?, mode, &[], false)
+                self.new_buffer(call, uint(call, 0)?, mode, &[], None)
             }
             "newBufferWithBytesNoCopy:length:options:deallocator:" => {
                 let mode = storage(call, uint(call, 2)?)?;
                 // The pages' bytes at creation, where the stream gives them.
                 let bytes = arg(call, 0)?.as_bytes().unwrap_or_default();
-                self.new_buffer(call, uint(call, 1)?, mode, bytes, true)
+                let kind = Some(imports::NoCopy::Bytes);
+                self.new_buffer(call, uint(call, 1)?, mode, bytes, kind)
             }
             "newBufferWithBytes:length:options:" => {
                 let length = uint(call, 1)?;
@@ -1431,7 +1430,7 @@ impl NewRuntime {
                     .and_then(|length| data(call, 0).ok()?.get(..length))
                     .ok_or_else(|| refuse(call, "fewer bytes than its length"))?;
                 let mode = storage(call, uint(call, 2)?)?;
-                self.new_buffer(call, length, mode, bytes, false)
+                self.new_buffer(call, length, mode, bytes, None)
             }
             "newBufferWithDescriptor:" => {
                 let f = Fields::arg(
@@ -1457,7 +1456,18 @@ impl NewRuntime {
                 let raw = option_sets(call, 0, f.list("options")?.unwrap_or_default())?;
                 let length = f.required("length", Fields::uint)?;
                 let no_copy = f.get("noCopy").and_then(Value::as_bool) == Some(true);
-                self.new_buffer(call, length, storage(call, raw)?, contents, no_copy)
+                if no_copy {
+                    // The program's buffer in a recorded block's storage: a buffer of the block.
+                    let recorded = (call.answer("gpuAddress").and_then(Value::as_address))
+                        .or_else(|| f.get("pinnedGpuAddress").and_then(Value::as_address));
+                    let holding = recorded.and_then(|at| self.no_copies.holding(at, length));
+                    if let Some((block, offset)) = holding {
+                        self.no_copies.in_block();
+                        return self.no_copy_in_block(call, block, offset, length, raw, contents);
+                    }
+                }
+                let kind = no_copy.then_some(imports::NoCopy::Descriptor);
+                self.new_buffer(call, length, storage(call, raw)?, contents, kind)
             }
             "m2v.newBlockWithLength:storageMode:" | "newHeapWithDescriptor:" => {
                 let (length, class) = match &*call.selector {
@@ -1494,6 +1504,12 @@ impl NewRuntime {
                     offset: 0,
                     len: length,
                 };
+                let recorded = call.answer("gpuAddress").and_then(Value::as_address);
+                if let (Some(start), "m2v.newBlockWithLength:storageMode:") =
+                    (recorded, &*call.selector)
+                {
+                    self.no_copies.block_made(call.result, start, length);
+                }
                 Ok(Some((Object::Block(range, class, block), made)))
             }
             "newLibraryWithData:error:" => {
@@ -1724,63 +1740,16 @@ impl NewRuntime {
         range: rt::HeapRange,
         class: rt::MemoryClass,
     ) -> Result<Option<(Object, Made)>, PlayError> {
-        // A buffer of `length` bytes and storage options `raw` at `offset` in the block. A
-        // two-copy Managed one's GPU copy, on a device that keeps one, is the one place the play
-        // holds for it, placed as a Private buffer of its length is; the stream's block holds its
-        // bytes.
-        let device = self.device.clone();
-        let mut placed = |length: u64, raw: u64, offset: u64| {
-            let at = range.offset + offset;
-            let mut copy = None;
-            let buffer = match storage(call, raw)? {
-                rt::StorageMode::Managed if class == rt::MemoryClass::Shared => {
-                    match self.managed_form(call)? {
-                        ManagedCopies::One => device.new_buffer(range.block, at, length, None),
-                        ManagedCopies::Two if device.has_unified_memory() => {
-                            self.seconds.in_block += 1;
-                            device.new_managed_buffer((range.block, at), None, length, length)
-                        }
-                        ManagedCopies::Two => {
-                            let completed = self.completed();
-                            // The GPU copy keeps the slack the buffer had in the recording.
-                            let recorded =
-                                granule(call.answer("gpuAddress").and_then(Value::as_address));
-                            let place = (self.places.take(
-                                rt::MemoryClass::Private,
-                                length,
-                                recorded,
-                                completed,
-                            ))
-                            .map_err(failed(call))?;
-                            let copy_at = (place.block, place.range.start);
-                            copy = Some(place);
-                            device.new_managed_buffer(
-                                (range.block, at),
-                                Some(copy_at),
-                                length,
-                                length,
-                            )
-                        }
-                    }
-                }
-                _ => device.new_buffer(range.block, at, length, None),
-            };
-            let buffer = buffer.map_err(failed(call))?;
-            if class == rt::MemoryClass::Shared {
-                let placed = (call.receiver, offset..offset + length);
-                self.unwritten.made(call.result, Some(placed));
-            }
-            addressed(buffer, copy)
-        };
+        let block = (call.receiver, range, class);
         match &*call.selector {
             "newBufferWithLength:options:offset:" => {
-                placed(uint(call, 0)?, uint(call, 1)?, uint(call, 2)?)
+                self.in_block(call, block, uint(call, 0)?, uint(call, 1)?, uint(call, 2)?)
             }
             "m2v.newBufferInBlock:offset:length:options:" => {
                 if Self::id(call, 0)? != call.receiver {
                     return Err(refuse(call, "a block other than its receiver"));
                 }
-                placed(uint(call, 2)?, uint(call, 3)?, uint(call, 1)?)
+                self.in_block(call, block, uint(call, 2)?, uint(call, 3)?, uint(call, 1)?)
             }
             "newTextureWithDescriptor:offset:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
@@ -1790,6 +1759,85 @@ impl NewRuntime {
             }
             _ => Err(refuse(call, "not played on a heap")),
         }
+    }
+
+    /// A buffer of `length` bytes and storage options `raw` at `offset` in `block` (the block's
+    /// object, its range and its class). A two-copy Managed one's GPU copy, on a device that keeps
+    /// one, is the one place the play holds for it, placed as a Private buffer of its length is;
+    /// the stream's block holds its bytes.
+    fn in_block(
+        &mut self,
+        call: &Call,
+        (object, range, class): (u64, rt::HeapRange, rt::MemoryClass),
+        length: u64,
+        raw: u64,
+        offset: u64,
+    ) -> Result<Option<(Object, Made)>, PlayError> {
+        let device = self.device.clone();
+        let at = range.offset + offset;
+        let mut copy = None;
+        let buffer = match storage(call, raw)? {
+            rt::StorageMode::Managed if class == rt::MemoryClass::Shared => {
+                match self.managed_form(call)? {
+                    ManagedCopies::One => device.new_buffer(range.block, at, length, None),
+                    ManagedCopies::Two if device.has_unified_memory() => {
+                        self.seconds.in_block += 1;
+                        device.new_managed_buffer((range.block, at), None, length, length)
+                    }
+                    ManagedCopies::Two => {
+                        let completed = self.completed();
+                        // The GPU copy keeps the slack the buffer had in the recording.
+                        let recorded =
+                            granule(call.answer("gpuAddress").and_then(Value::as_address));
+                        let place = (self.places.take(
+                            rt::MemoryClass::Private,
+                            length,
+                            recorded,
+                            completed,
+                        ))
+                        .map_err(failed(call))?;
+                        let copy_at = (place.block, place.range.start);
+                        copy = Some(place);
+                        device.new_managed_buffer((range.block, at), Some(copy_at), length, length)
+                    }
+                }
+            }
+            _ => device.new_buffer(range.block, at, length, None),
+        };
+        let buffer = buffer.map_err(failed(call))?;
+        if class == rt::MemoryClass::Shared {
+            self.unwritten
+                .made(call.result, Some((object, offset..offset + length)));
+        }
+        addressed(buffer, copy)
+    }
+
+    /// A descriptor-form no-copy buffer recorded inside block `object`'s recorded range, at
+    /// `offset` there: the program's buffer in the block's storage, played as a buffer of the
+    /// block (`in_block`), its bytes at its making (`contents`, a two-copy stream's) first put
+    /// there.
+    fn no_copy_in_block(
+        &mut self,
+        call: &Call,
+        object: u64,
+        offset: u64,
+        length: u64,
+        raw: u64,
+        contents: &[u8],
+    ) -> Result<Option<(Object, Made)>, PlayError> {
+        let (range, class) = match self.objects.get(&object) {
+            Some(Object::Block(range, class, _)) => (*range, *class),
+            _ => {
+                let why = format!("#{object} holds a no-copy buffer and is no block");
+                return Err(PlayError::Invalid(why));
+            }
+        };
+        if !contents.is_empty() {
+            let at = range.offset + offset;
+            let bytes = self.device.new_buffer(range.block, at, length, None);
+            write_into(&bytes.map_err(failed(call))?, 0, contents)?;
+        }
+        self.in_block(call, (object, range, class), length, raw, offset)
     }
 
     /// A call of buffer `buffer`.
@@ -1958,6 +2006,7 @@ impl Backend for NewRuntime {
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a
                 // heap's resources keep the heap.
                 Some(Object::Block(range, class, block)) => {
+                    self.no_copies.block_released(call.receiver);
                     self.device.release_block(block).map_err(failed(call))?;
                     self.block_bytes[class_index(class)] -= range.len;
                 }
@@ -2460,12 +2509,7 @@ impl Backend for NewRuntime {
         if self.managed == Some(ManagedCopies::Two) && self.device.has_unified_memory() {
             lines.push(self.seconds.line());
         }
-        lines.push(format!(
-            "no-copy imports {}: no-copy buffers made over host pages of the player's own, each \
-             imported as a block of its own ({} bytes in all); a texture over one is the \
-             runtime's counted copy (over_copies, over_copy_bytes)",
-            self.imported, self.imported_bytes
-        ));
+        lines.push(self.no_copies.line());
         lines.push(self.asides.line());
         lines.push(self.places.line());
         lines.push(self.unwritten.line());

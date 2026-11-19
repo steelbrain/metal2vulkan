@@ -46,10 +46,12 @@
 //! - A buffer's linear texture (the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:
 //!   bytesPerImage:`) of a 2D descriptor plays as the public texture over the buffer, and one of a
 //!   2D array, whose slices Metal lays out itself, is refused.
-//! - Both no-copy creators (`newBufferWithBytesNoCopy:length:options:deallocator:`, and
-//!   `newBufferWithDescriptor:` with `noCopy`) make their buffers over host pages the player
-//!   imports: a texture over one is the runtime's counted copy (one copy of its 64 bytes), a blit
-//!   of the texture reads the stream's bytes, and the imports end with the device.
+//! - A no-copy buffer is made over host pages the player imports where the product's is an import
+//!   (a bytes-form one, and a descriptor-form one outside every recorded block): a texture over
+//!   one is the runtime's counted copy (one copy of its 64 bytes, on the imported side), a blit of
+//!   the texture reads the stream's bytes, and the imports end with the device. A descriptor-form
+//!   one recorded inside a block's recorded range is a buffer of the block, which reads the bytes
+//!   written into the block there, with no import.
 //! - Buffers keep the slack of their recorded granule: two recorded at addresses of 32 KiB and
 //!   64 KiB granules take places that span their lengths rounded up to those granules, the slack
 //!   the places hold the sum of both.
@@ -1001,9 +1003,11 @@ fn a_linear_texture_over_a_buffer_plays_where_2d_and_is_refused_as_an_array() {
     }
 }
 
-/// Both no-copy creators make their buffers over imported host pages: a texture over one is the
-/// runtime's counted copy, which a blit of the texture reads the stream's bytes through, and the
-/// imports end with the device.
+/// A no-copy buffer is an import where the product's is: a bytes-form one, and a descriptor-form
+/// one outside every recorded block. A texture over one is the runtime's counted copy, which a
+/// blit of the texture reads the stream's bytes through, and the imports end with the device. A
+/// descriptor-form one recorded inside a block's recorded range is a buffer of that block, which
+/// reads the bytes written into the block there, and no import.
 #[test]
 fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
     let dir = ScratchDir::new("rt-replay-no-copy").unwrap();
@@ -1036,6 +1040,30 @@ fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
         ];
         let descriptor = Value::Map(Vec::from(fields.map(|(key, value)| (key.into(), value))));
         w.call("newBufferWithDescriptor:", 1, 4, &[descriptor], &[])?;
+        // #10 a Shared block recorded at BASE, and #11 a descriptor-form no-copy buffer recorded
+        // 8 KiB into it, whose first bytes a write into the block sets.
+        const BASE: u64 = 0x10_0000_0000;
+        let block = [Value::Uint(65536), Value::Uint(0)];
+        let at = |address, length| {
+            [
+                ("gpuAddress", Value::Address(address)),
+                ("gpuLength", Value::Uint(length)),
+            ]
+        };
+        let selector = "m2v.newBlockWithLength:storageMode:";
+        w.call(selector, 1, 10, &block, &at(BASE, 65536))?;
+        let fields = [
+            ("length", Value::Uint(4096)),
+            ("options", Value::List(Vec::new())),
+            ("pinnedGpuAddress", Value::Address(BASE + 8192)),
+            ("contents", Value::Nil),
+            ("noCopy", Value::Bool(true)),
+        ];
+        let inside = Value::Map(Vec::from(fields.map(|(key, value)| (key.into(), value))));
+        let pinned = at(BASE + 8192, 4096);
+        w.call("newBufferWithDescriptor:", 1, 11, &[inside], &pinned)?;
+        let set = [Value::Uint(8192), Value::Bytes(vec![1, 2, 3, 4])];
+        w.call("m2v.write", 10, 0, &set, &[])?;
         let keys = [
             ("pixelFormat", 70),
             ("width", 4),
@@ -1076,6 +1104,10 @@ fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
         w.call(WAIT_COMPLETED, 8, 0, &[], &[])?;
         let sum = Value::List(vec![Value::Bytes(Sha256::digest(&texels).to_vec())]);
         w.call("m2v.check", 0, 0, &[Value::Object(7)], &[("sha256", sum)])?;
+        let mut held = vec![0u8; 4096];
+        held[..4].copy_from_slice(&[1, 2, 3, 4]);
+        let sum = Value::List(vec![Value::Bytes(Sha256::digest(&held).to_vec())]);
+        w.call("m2v.check", 0, 0, &[Value::Object(11)], &[("sha256", sum)])?;
         w.call("release", 6, 0, &[], &[])?;
         w.call("release", 3, 0, &[], &[])
     });
@@ -1088,12 +1120,19 @@ fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
         eprintln!("REPLAY no-copy {line}");
     }
     ended.unwrap();
-    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
-    let imports = lines
+    assert_eq!(report.checks.len(), 2, "{lines:?}");
+    for check in &report.checks {
+        let object = check.object;
+        assert_eq!(Some(check.sha256), check.recorded, "#{object}");
+    }
+    // #4 and #3 imported; #11 a buffer of block #10.
+    let kinds = lines
         .iter()
-        .find(|line| line.starts_with("no-copy imports "));
+        .find(|line| line.starts_with("no-copy buffers: "));
+    let counted = "no-copy buffers: descriptor-form 1 in a recorded block (buffers of it, no \
+                   import), 1 outside every block (each imported, ";
     assert!(
-        imports.is_some_and(|line| line.starts_with("no-copy imports 2:")),
+        kinds.is_some_and(|line| line.starts_with(counted) && line.contains("; bytes-form 1 (")),
         "{lines:?}"
     );
     // The texture's bytes into its image of its own, once.
