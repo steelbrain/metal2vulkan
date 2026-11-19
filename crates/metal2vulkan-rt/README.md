@@ -364,6 +364,11 @@ first, and what to do where both refuse, is the consumer's.
 Each call returns the block and the index of the memory type it imported into, and refuses before
 any allocation is attempted.
 
+The no-copy imports have no read-only form: `import_host_memory` takes pages mapped readable and
+writable, and Vulkan defines no read-only import. Metal's private read-only option (bit 24 of
+`MTLResourceOptions`, not in the public header) so has no counterpart here: over pages a consumer
+imports, a GPU write reaches them, where Metal drops it.
+
 The two rules differ because a failed dma-buf import is not harmless: on NVIDIA's Linux driver
 (620.70.06, an RTX 3090) one failed dma-buf import into a later type the query offered broke every
 later allocation of that type, the Shared type among them, so the dma-buf rule attempts nothing it
