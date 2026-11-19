@@ -303,8 +303,9 @@ mod on_device {
     use super::refused;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        Device, DeviceOptions, Error, Gap, IndexClass, PixelFormat, Refusal, Region, StorageMode,
-        Texture, TextureDescriptor, TextureType, TextureUsage,
+        BufferLayout, Device, DeviceOptions, Error, Gap, IndexClass, MemoryClass, PixelFormat,
+        Refusal, Region, StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType,
+        TextureUsage,
     };
     use metal2vulkan::metal::resource_word::TextureWord;
     use metal2vulkan::metal::TextureSwizzleChannels;
@@ -688,7 +689,7 @@ mod on_device {
     /// clear, its memory the driver's zeros, counted in `zeroed_textures`; elsewhere cleared.
     #[test]
     fn every_device_reads_zero_from_a_new_texture_where_another_was_written() {
-        use crate::tests::command::on_device::within;
+        use crate::tests::command::on_device::{finished, within};
         use crate::texture::TextureObject;
         const OLD: u8 = 0xa5;
         let instance = crate::tests::validation::instance(&[]);
@@ -810,24 +811,63 @@ mod on_device {
                     let row = w.div_ceil(block) as usize * unit;
                     (region, row, h.div_ceil(block) as usize, z)
                 };
-                // Each image of each level and slice of `texture`, as its image holds it.
+                // Each image of each level and slice of `texture`, as a blit copies it into a
+                // Shared buffer prefilled with other bytes, so a zero read is a copy that ran.
                 let images = |texture: &Texture| {
-                    let mut images = Vec::new();
+                    let mut spans = Vec::new();
+                    let mut end = 0;
                     for at in 0..levels {
                         let (region, row, rows, depth) = level(at);
                         for slice in 0..slices {
                             for z in 0..depth {
-                                let mut bytes = vec![0x5a; row * rows];
-                                let mut region = region;
-                                region.origin[2] = z;
-                                texture
-                                    .image_bytes(&mut bytes, row as u64, region, at, slice)
-                                    .unwrap_or_else(|error| {
-                                        panic!("{name}: {format:?} level {at}: {error}")
-                                    });
-                                images.push(bytes);
+                                spans.push((at, slice, z, region.size, row, end));
+                                end += (row * rows) as u64;
                             }
                         }
+                    }
+                    let block = (device.take_block(MemoryClass::Shared, end))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    let buffer = (device.new_buffer(block.id, 0, end, None))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    let contents = buffer.contents().expect("a Shared buffer");
+                    // SAFETY: the buffer is alive, `end` bytes long, and no GPU work uses it.
+                    unsafe { contents.as_ptr().write_bytes(0x5a, end as usize) };
+                    let queue = device.new_command_queue(1).expect("a queue");
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                    for &(level, slice, z, [w, h, _], row, offset) in &spans {
+                        let from = TexturePlace {
+                            slice,
+                            level,
+                            origin: [0, 0, z],
+                        };
+                        let layout = BufferLayout {
+                            offset,
+                            bytes_per_row: row as u64,
+                            bytes_per_image: 0,
+                        };
+                        (encoder.copy_from_texture_to_buffer(
+                            texture,
+                            from,
+                            [w, h, 1],
+                            &buffer,
+                            layout,
+                        ))
+                        .unwrap_or_else(|error| {
+                            panic!("{name}: {format:?} level {level}: {error}")
+                        });
+                    }
+                    encoder.end_encoding();
+                    command_buffer.commit().expect("a commit");
+                    finished(&name, &command_buffer);
+                    assert_eq!(command_buffer.error(), None, "{name}: {format:?}");
+                    // SAFETY: the buffer is alive, `end` bytes long, and its copies completed.
+                    let read =
+                        unsafe { std::slice::from_raw_parts(contents.as_ptr(), end as usize) };
+                    let mut images = Vec::new();
+                    for (index, &(.., offset)) in spans.iter().enumerate() {
+                        let next = spans.get(index + 1).map_or(end, |span| span.5);
+                        images.push(read[offset as usize..next as usize].to_vec());
                     }
                     images
                 };
