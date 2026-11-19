@@ -1,8 +1,8 @@
 //! The calls of command buffers and of their compute, blit and render encoders.
 
 use super::args::{
-    arg, data, failed, index, list, metal, narrow, origin, range, refuse, size, uint, variant,
-    Fields,
+    arg, data, failed, index, list, metal, narrow, origin, range, refuse, region, size, uint,
+    variant, Fields,
 };
 use super::{own_buffer, Object, OldRuntime};
 use crate::replay::player::{piece, placed_runs, upload, PlayError};
@@ -236,6 +236,10 @@ impl OldRuntime {
                 let length = index(call, 0)?;
                 let at = index(call, 1)?;
                 self.compute(id).set_threadgroup_memory_length(length, at)
+            }
+            "setStageInRegion:" => {
+                let at = region(call, arg(call, 0)?)?;
+                self.compute(id).set_stage_in_region(at)
             }
             "dispatchThreadgroups:threadsPerThreadgroup:" => {
                 let groups = size(call, arg(call, 0)?)?;

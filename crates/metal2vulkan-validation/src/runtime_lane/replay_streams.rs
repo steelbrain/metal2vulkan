@@ -1818,3 +1818,29 @@ fn a_two_copy_stream_with_no_identity_gives_a_no_copy_buffer_its_writes_before_f
         assert!(lines.iter().any(|l| l == managed), "{lines:?}");
     });
 }
+
+/// A compute encoder's `setStageInRegion:` plays on the old runtime's backend: the region (an
+/// origin and a size) reaches the encoder's `set_stage_in_region`, and the play goes on to its
+/// end.
+#[test]
+fn a_compute_encoder_s_stage_in_region_plays() {
+    let dir = ScratchDir::new("replay-stage-in-region").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("commandBuffer", 2, 3, &[], &[])?;
+        w.call("computeCommandEncoder", 3, 4, &[], &[])?;
+        let origin = uints(&[("x", 1), ("y", 2), ("z", 0)]);
+        let size = uints(&[("width", 8), ("height", 4), ("depth", 1)]);
+        let region = Value::Map(vec![("origin".into(), origin), ("size".into(), size)]);
+        w.call("setStageInRegion:", 4, 0, &[region], &[])?;
+        w.call("endEncoding", 4, 0, &[], &[])?;
+        w.call("commit", 3, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 3, 0, &[], &[])
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("stage-in-region", device, &path);
+        assert_eq!(report.total.stream["calls"], 8);
+        assert_eq!(report.total.stream["encoders"], 1);
+    });
+}
