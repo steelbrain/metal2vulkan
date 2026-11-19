@@ -712,6 +712,18 @@ impl Side for RtSide<'_> {
         })
     }
 
+    /// The runtime's own answer, which reads none of the query's option bits.
+    fn heap_buffer_size_and_align(
+        &mut self,
+        query: &crate::device_queries::HeapBufferQuery,
+    ) -> Answer<crate::texture_query::SizeAndAlign> {
+        let sized = (self.on.device).heap_buffer_size_and_align(query.length, query.options);
+        Ok(crate::texture_query::SizeAndAlign {
+            size: sized.size,
+            align: sized.align,
+        })
+    }
+
     /// Whether `newTextureWithDescriptor:` of the query makes a texture, at the next texture index
     /// where a shader reaches it. The runtime answers no texture Metal answers nil for: what it
     /// does not make is its typed error, recorded as the failure it is.
@@ -1402,5 +1414,68 @@ impl Side for RtSide<'_> {
             Ok((gpu_times(&fill), gpu_times(&empty))),
         );
         Ok(EmptyCommandBuffers { alone, behind })
+    }
+}
+
+/// Each call this side answers on the runtime is the runtime's answer: replayed here, a case that
+/// reaches one records no refusal of it as unavailable.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod answered {
+    use crate::device::Venues;
+    use crate::transcript::{Node, Value};
+
+    const VENUE: Venues = if cfg!(m2v_gpu) {
+        Venues::Gpu
+    } else {
+        Venues::Cpu
+    };
+
+    /// Each call the side answers, with a case that reaches it.
+    const CALLS: [(&str, &str); 1] = [(
+        "heap_buffer_size_and_align",
+        crate::cases::device_queries::HEAP_BUFFERS,
+    )];
+
+    /// The calls `value` records as unavailable, wherever in it they sit.
+    fn unavailable(value: &Value, calls: &mut Vec<String>) {
+        match value {
+            Value::Variant { name, payload } if name == "Unavailable" => {
+                if let Value::Fields(fields) = payload.as_ref() {
+                    if let Some(Value::Lines(call)) = fields.get("call") {
+                        calls.extend(call.iter().cloned());
+                    }
+                }
+            }
+            Value::Variant { payload, .. } => unavailable(payload, calls),
+            Value::List(values) => values.iter().for_each(|held| unavailable(held, calls)),
+            Value::Fields(fields) => fields.values().for_each(|held| unavailable(held, calls)),
+            _ => {}
+        }
+    }
+
+    /// The calls a site and the sites under it record as unavailable.
+    fn unavailable_under(node: &Node, calls: &mut Vec<String>) {
+        unavailable(&node.observed.value, calls);
+        for child in &node.children {
+            unavailable_under(child, calls);
+        }
+    }
+
+    #[test]
+    fn a_call_the_side_answers_is_never_unavailable() {
+        let names: Vec<String> = CALLS.iter().map(|(_, case)| (*case).to_owned()).collect();
+        let cases = crate::run::selected(&names).unwrap();
+        let (report, _) = crate::run::replay_rt_on_under(VENUE, &cases, 1).unwrap();
+        for (call, case) in CALLS {
+            let row = (report.rows().iter())
+                .find(|row| row.case == case)
+                .unwrap_or_else(|| panic!("{case} gave no row: {:?}", report.errors()));
+            let mut calls = Vec::new();
+            unavailable_under(&row.ours.root, &mut calls);
+            assert!(
+                !calls.iter().any(|named| named == call),
+                "{case} recorded {call} as unavailable"
+            );
+        }
     }
 }
