@@ -181,7 +181,7 @@ pub fn replay_against(
         case,
         answer,
         &ours,
-        (&announced, venue.lossless_compression),
+        (&announced, venue.lossless_compression, venue.new_runtime),
         abort.is_some(),
     );
     Ok(Replayed {
@@ -202,8 +202,8 @@ pub fn replay_against(
 
 /// The verdict of `ours` against `answer`'s outcomes: the most favourable of them, because Metal
 /// produced any of the set and matching one of them is matching Metal. With it, what the case's
-/// allowances did against that outcome. `offered` is what the run announced and whether its venue
-/// presents Metal's lossless compression.
+/// allowances did against that outcome. `offered` is what the run announced, whether its venue
+/// presents Metal's lossless compression, and whether the run is `metal2vulkan-rt`'s.
 ///
 /// The allowances follow the verdict rather than being gathered over every outcome, because they
 /// are a fact about the comparison the verdict came from: a racy case whose run matched the
@@ -212,7 +212,7 @@ fn verdict_over(
     case: &dyn Case,
     answer: &Answer,
     ours: &Transcript,
-    (announced, compression): (&[String], bool),
+    (announced, compression, new_runtime): (&[String], bool, bool),
     stopped: bool,
 ) -> (Verdict, Allowances) {
     let allowances = case.allowances();
@@ -238,7 +238,9 @@ fn verdict_over(
             ));
             continue;
         }
-        let offered = Offered::new(announced, &answer.validated).on_venue(compression);
+        let offered = Offered::new(announced, &answer.validated)
+            .on_venue(compression)
+            .on_new_runtime(new_runtime);
         let found = compare_run(&outcome.transcript, ours, &allowances, offered, stopped);
         let used = Allowances {
             named: found.named,

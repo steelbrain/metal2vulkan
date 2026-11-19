@@ -294,6 +294,7 @@ fn venue(instance: &rt::Instance, physical: &rt::PhysicalDevice) -> Venue {
             vk::api_version_minor(properties.api_version)
         ),
         lossless_compression: false,
+        new_runtime: true,
         host: (properties.device_type == vk::PhysicalDeviceType::CPU)
             .then(crate::case::host_vector_isa),
     }

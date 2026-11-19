@@ -2867,6 +2867,58 @@ fn a_refusal_reads_by_what_metals_validation_did() {
     assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
 }
 
+/// **A notice scoped to `metal2vulkan-rt` loosens the new runtime's run alone.**
+/// [`Justification::NewRuntimeNotice`] holds on `metal2vulkan-rt`'s run where the run announced
+/// the notice, and faults the case there where it did not. On the old runtime's run it holds
+/// nowhere and faults nothing, even where the old runtime announces the same notice: the site
+/// compares as if the case loosened nothing, so a difference there is the site's own one row, and
+/// the report says why the bound never fired.
+#[test]
+fn a_notice_scoped_to_the_new_runtime_leaves_the_old_runtimes_site_its_one_row() {
+    let leaf = |bits: u32| {
+        Transcript::new(vec![Node::leaf(
+            "texels",
+            Observed::value(Value::Float {
+                bits: u64::from(bits),
+                width: crate::transcript::FloatWidth::Single,
+            }),
+        )])
+    };
+    let code = Degradation::CompressedTexelDecode.code().to_owned();
+    let allowances = vec![Allowance::new(
+        "case/texels",
+        Loosening::Absolute(0.01),
+        Justification::new_runtime_notice(Degradation::CompressedTexelDecode),
+    )];
+    let metal = leaf(0.5f32.to_bits());
+    let ours = leaf(0.505f32.to_bits());
+    let announced = [code];
+    let old = Offered::new(&announced, &Validated::NotRun);
+    let found = compare(&metal, &ours, &allowances, old);
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+    let paths: Vec<&str> = found
+        .divergences
+        .iter()
+        .map(|at| at.path.as_str())
+        .collect();
+    assert_eq!(paths, ["case/texels"], "{found:?}");
+    assert_eq!(found.unfired.len(), 1, "{found:?}");
+    assert_eq!(
+        found.unfired[0].why,
+        Some(Unjustified::OldRuntime.to_string())
+    );
+
+    let found = compare(&metal, &ours, &allowances, old.on_new_runtime(true));
+    assert!(found.divergences.is_empty(), "{found:?}");
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+    assert_eq!(found.announced.len(), 1, "{found:?}");
+
+    let silent = Offered::new(&[], &Validated::NotRun).on_new_runtime(true);
+    let found = compare(&metal, &ours, &allowances, silent);
+    assert_eq!(found.bad_allowances.len(), 1, "{found:?}");
+    assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
+}
+
 /// **A venue's own answer at a site that differs on a venue presenting Metal's compression is the
 /// site's one row.** [`crate::replay::without_compression`] holds only where the venue keeps no
 /// texture compressed; on the Mac that recorded the case (MoltenVK on the M3 Max) it holds
@@ -3336,6 +3388,7 @@ fn the_known_gaps_ledger_parses_and_names_real_cases() {
         driver: "vendor 0x10005 device 0x0000".to_owned(),
         api: "1.2".to_owned(),
         lossless_compression: true,
+        new_runtime: false,
         host: None,
     };
     for known in &quads {
@@ -3491,6 +3544,7 @@ fn venue_named(device: &str) -> Venue {
         driver: "stub".to_owned(),
         api: "none".to_owned(),
         lossless_compression: true,
+        new_runtime: false,
         host: None,
     }
 }
@@ -3508,6 +3562,7 @@ fn a_cpu_venue_is_told_apart_by_its_hosts_vector_set() {
         driver: "vendor 0x10005 device 0x0000".to_owned(),
         api: "1.4".to_owned(),
         lossless_compression: false,
+        new_runtime: false,
         host: host.map(str::to_owned),
     };
     let avx2 = venue(Some("x86-64 AVX2"));

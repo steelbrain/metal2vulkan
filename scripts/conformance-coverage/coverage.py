@@ -441,8 +441,12 @@ def case_families(
             "loosenings": sorted(set(re.findall(r"\bLoosening::([A-Za-z]+)", text))),
             "justifications": sorted(
                 {
-                    {"notice": "Degradation", "accepted": "AcceptedDifference"}.get(name, name)
-                    for name in re.findall(r"\bJustification::([A-Za-z]+)", text)
+                    {
+                        "notice": "Degradation",
+                        "accepted": "AcceptedDifference",
+                        "new_runtime_notice": "NewRuntimeNotice",
+                    }.get(name, name)
+                    for name in re.findall(r"\bJustification::([A-Za-z_]+)", text)
                 }
             ),
             # A carried answer record mode must refuse to replace, because its Metal leg is unsafe.

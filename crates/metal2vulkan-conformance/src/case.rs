@@ -691,6 +691,9 @@ pub struct Venue {
     /// (`DeviceProperties::lossless_compression`), as the Apple silicon Mac every recording was
     /// taken on does: what a venue's own answer (`Justification::WithoutCompression`) holds by.
     pub lossless_compression: bool,
+    /// Whether the side is `metal2vulkan-rt`'s: what a notice a case scopes to the new runtime
+    /// (`Justification::NewRuntimeNotice`) holds by.
+    pub new_runtime: bool,
     /// For a CPU implementation (`DeviceKind::Cpu`), the host's widest vector instruction set
     /// ([`host_vector_isa`]), which its shader compiler targets; `None` for a GPU. The device's
     /// name and driver do not carry it, and its answers follow it: one llvmpipe build (Mesa 26.2.6,

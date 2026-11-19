@@ -4023,7 +4023,8 @@ bound.
   named is unmeasured. Validation derives no tolerance from them; the conformance suite's BC1 to
   BC5 decode cases hold each texel to its family's largest bound on any driver (an sRGB form's to
   the sRGB decode's largest step over 4/255), plus both values' rounding to `float`, justified by
-  the notice alone.
+  the notice alone, on `metal2vulkan-rt`'s run; on the old runtime's they loosen nothing, and a
+  texel its device moves is that venue's known-gaps row.
   Cost: a read, sample or gather of its texels answers the device's decode of its blocks (an sRGB
   form's code through the device's sRGB decode), where Metal interpolates with 6-bit weights: a BC1
   to BC3 channel up to 4/255 off Metal's on NVIDIA (615.71.09, the RTX 3090 and RTX 5080 Laptop

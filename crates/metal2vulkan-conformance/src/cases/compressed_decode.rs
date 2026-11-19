@@ -27,11 +27,13 @@
 //! **The device's decode is the answer.** A BC texture keeps no decoded twin: every device samples
 //! its own BC image through its own decode, announced `compressed-texel-decode` where the runtime
 //! makes it (the old runtime on a driver not measured to decode the format as Metal does;
-//! `metal2vulkan-rt` for every block-compressed texture, its static note). Each round's texels are
-//! loosened by the largest difference that notice's catalogue entry (docs/API.md) states for the
-//! format's family on any driver, justified by the notice alone (`CompressedDecode::decode_bound`):
-//! a texel past it is the notice's claim failing, a divergence. On MoltenVK, whose driver has both
-//! facts, the old runtime announces nothing and every texel compares exactly.
+//! `metal2vulkan-rt` for every block-compressed texture, its static note). On `metal2vulkan-rt`'s
+//! run each round's texels are loosened by the largest difference that notice's catalogue entry
+//! (docs/API.md) states for the format's family on any driver, justified by the notice alone
+//! (`CompressedDecode::decode_bound`): a texel past it is the note's claim failing, a
+//! divergence. The bound is scoped to the new runtime (`Justification::NewRuntimeNotice`): on the
+//! old runtime's run it loosens nothing, every texel compares exactly, and the device's decode is
+//! a `known-gaps.tsv` row where it differs, as it was before the note.
 //!
 //! Nothing here can fault a GPU: one compute pass a round, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.
@@ -298,12 +300,13 @@ impl Case for CompressedDecode {
     fn allowances(&self) -> Vec<Allowance> {
         // The device's decode of the texture's own blocks, announced `compressed-texel-decode`
         // where the runtime makes it, declared at the notices site, moves a texel by up to the
-        // largest difference its catalogue entry states for the format's family: each round's
-        // texels are loosened by that number and no further, justified by the notice, so a run
-        // past it is the notice's claim failing. A texel's `float` value is
-        // also the device's conversion of its decoded codes (`device-texel-conversion`), which
-        // loosens nothing. Where neither runtime announces the decode, every texel compares
-        // exactly.
+        // largest difference its catalogue entry states for the format's family: on
+        // `metal2vulkan-rt`'s run each round's texels are loosened by that number and no further,
+        // justified by the notice, so a run past it is the note's claim failing. The old
+        // runtime's run is not loosened: there the notice holds nowhere and faults nothing, and a
+        // texel the device moves is the venue's ledger row. A texel's `float` value is also the
+        // device's conversion of its decoded codes (`device-texel-conversion`), which loosens
+        // nothing.
         // Every row reads its answer back through a `Shared` buffer, so on a device without
         // unified memory the runtime announces `shared-in-system-memory`
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
@@ -323,7 +326,7 @@ impl Case for CompressedDecode {
             all.push(Allowance::new(
                 format!("case/round/{round}/texels"),
                 Loosening::Absolute(self.decode_bound()),
-                Justification::notice(Degradation::CompressedTexelDecode),
+                Justification::new_runtime_notice(Degradation::CompressedTexelDecode),
             ));
         }
         all

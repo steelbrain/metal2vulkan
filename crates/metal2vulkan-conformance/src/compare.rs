@@ -248,10 +248,11 @@ pub fn compare_run(
     // validation check that has since gone fails here rather than comparing under it.
     for allowance in allowances {
         let missing = match &allowance.justified_by {
-            justification @ crate::allowance::Justification::Degradation(code) => {
+            justification @ (crate::allowance::Justification::Degradation(code)
+            | crate::allowance::Justification::NewRuntimeNotice(code)) => {
                 let announced = std::slice::from_ref(code);
-                match justification.unjustified(&Offered::new(announced, offered.metal_validation))
-                {
+                let exists = Offered::new(announced, offered.metal_validation).on_new_runtime(true);
+                match justification.unjustified(&exists) {
                     // The run's own notices are checked where the allowance fires, not here.
                     Some(Unjustified::NoticeNotAnnounced(_)) | None => None,
                     other => other,

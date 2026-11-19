@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1285 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3654 |
+| ledger rows (a case whose gap is recorded) | 3731 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -540,7 +540,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | tolerances in all | 14 |
 | modules declaring a notice (loosening no value) | 136 |
 | loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
-| justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
+| justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression`, `NewRuntimeNotice` |
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 129 |
 | `Side` methods the Metal leg reaches an SDK item through | 124 |
@@ -581,7 +581,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `command_buffer_facts` | 1 | 1 | every field | 29 |
 | `command_queues` | 1 | 1 | every field | 5 |
 | `compressed_blits` | 4 | 4 | every field | 49 |
-| `compressed_decode` | 10 | 10 | 1 tolerance(s): `Degradation` | 43 |
+| `compressed_decode` | 10 | 10 | 1 tolerance(s): `NewRuntimeNotice` | 43 |
 | `compressed_moves` | 14 | 14 | every field | 41 |
 | `compressed_views` | 14 | 14 | every field | 48 |
 | `compute_encoder_commands` | 8 | 8 | every field | 66 |
@@ -3565,6 +3565,90 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
 | `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
 | `blit-generated-mipmaps-bgra10xr` | `generateMipmapsForTexture:` of a 64x64 `Shared` `BGRA10_XR` texture of seven levels is the runtime's bilinear compute filter in the device's `float` (`mipmap_f… |
+| `bc1-rgba` | A BC1 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc1-rgba` | A BC1 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc1-rgba` | A BC1 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc1-rgba` | A BC1 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc1-rgba` | A BC1 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc1-rgba-srgb` | A BC1 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc1-rgba-srgb` | A BC1 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc1-rgba-srgb` | A BC1 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc1-rgba-srgb` | A BC1 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc1-rgba-srgb` | A BC1 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc1-rgba-srgb` | A BC1 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc1-rgba-srgb` | A BC1 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc1-rgba-srgb` | A BC1 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc2-rgba` | A BC2 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc2-rgba` | A BC2 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc2-rgba` | A BC2 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc2-rgba` | A BC2 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc2-rgba` | A BC2 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc2-rgba` | A BC2 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc2-rgba` | A BC2 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc2-rgba` | A BC2 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc2-rgba-srgb` | A BC2 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc2-rgba-srgb` | A BC2 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc2-rgba-srgb` | A BC2 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc2-rgba-srgb` | A BC2 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc2-rgba-srgb` | A BC2 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc2-rgba-srgb` | A BC2 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc2-rgba-srgb` | A BC2 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc2-rgba-srgb` | A BC2 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc3-rgba` | A BC3 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc3-rgba` | A BC3 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc3-rgba` | A BC3 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc3-rgba` | A BC3 texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights and rounds each channel to an 8-bit code; ours is the device's own dec… |
+| `bc3-rgba` | A BC3 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc3-rgba` | A BC3 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc3-rgba` | A BC3 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc3-rgba` | A BC3 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc3-rgba-srgb` | A BC3 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc3-rgba-srgb` | A BC3 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc3-rgba-srgb` | A BC3 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc3-rgba-srgb` | A BC3 sRGB texel read on lavapipe: Metal interpolates the block's endpoints with 6-bit weights, rounds each channel to an 8-bit code and decodes the code throug… |
+| `bc3-rgba-srgb` | A BC3 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc3-rgba-srgb` | A BC3 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc3-rgba-srgb` | A BC3 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc3-rgba-srgb` | A BC3 sRGB texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (t… |
+| `bc4-r-unorm` | A BC4 unsigned texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 16320, unrounded; ours is the devi… |
+| `bc4-r-unorm` | A BC4 unsigned texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 16320, unrounded; ours is the devi… |
+| `bc4-r-unorm` | A BC4 unsigned texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 16320, unrounded; ours is the devi… |
+| `bc4-r-unorm` | A BC4 unsigned texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 16320, unrounded; ours is the devi… |
+| `bc4-r-unorm` | A BC4 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc4-r-unorm` | A BC4 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc4-r-unorm` | A BC4 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc4-r-unorm` | A BC4 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc4-r-snorm` | A BC4 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `bc4-r-snorm` | A BC4 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `bc4-r-snorm` | A BC4 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `bc4-r-snorm` | A BC4 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `bc4-r-snorm` | A BC4 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc4-r-snorm` | A BC4 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc4-r-snorm` | A BC4 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc4-r-snorm` | A BC4 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc5-rg-unorm` | A BC5 unsigned texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 16320, unrounded; ours is the devi… |
+| `bc5-rg-unorm` | A BC5 unsigned texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 16320, unrounded; ours is the devi… |
+| `bc5-rg-unorm` | A BC5 unsigned texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 16320, unrounded; ours is the devi… |
+| `bc5-rg-unorm` | A BC5 unsigned texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 16320, unrounded; ours is the devi… |
+| `bc5-rg-unorm` | A BC5 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc5-rg-unorm` | A BC5 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc5-rg-unorm` | A BC5 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc5-rg-unorm` | A BC5 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc5-rg-snorm` | A BC5 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `bc5-rg-snorm` | A BC5 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `bc5-rg-snorm` | A BC5 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `bc5-rg-snorm` | A BC5 signed texel read on lavapipe: Metal interpolates the channel's endpoints with 6-bit weights and answers its sum over 8128, unrounded; ours is the device'… |
+| `bc5-rg-snorm` | A BC5 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc5-rg-snorm` | A BC5 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc5-rg-snorm` | A BC5 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
+| `bc5-rg-snorm` | A BC5 texel read on the RTX 5080: Metal interpolates the block's endpoints with 6-bit weights; ours is the device's own decode of the texture's BC image (the ru… |
 | `etc2-rgb8` | A read of an ETC2 or EAC 8-bit form's texels through its decoded twin, which holds Metal's own codes: the device converts each code by the reciprocal product, s… |
 | `etc2-rgb8-srgb` | A read of an ETC2 or EAC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code b… |
 | `etc2-rgb8-srgb` | A read of an ETC2 or EAC sRGB form's texels through its decoded twin's `R8G8B8A8_SRGB` view, which holds Metal's own codes: the device decodes each 8-bit code b… |
@@ -5419,29 +5503,22 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
 | `attribute-format-fetches` | Metal converts a normalized attribute field as `c / (2^b - 1)`, correctly rounded, and a kernel's `[[stage_in]]` attribute is always the shader's own fetch, who… |
 | `bc1-rgba-srgb` | A BC1 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc1-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc1-rgba-srgb` | A BC1 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc1-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc1-rgba-srgb` | A BC1 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc1-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc1-rgba-srgb` | A BC1 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc1-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc2-rgba-srgb` | A BC2 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc2-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc2-rgba-srgb` | A BC2 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc2-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc2-rgba-srgb` | A BC2 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc2-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc2-rgba-srgb` | A BC2 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc2-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc3-rgba-srgb` | A BC3 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc3-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc3-rgba-srgb` | A BC3 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc3-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc3-rgba-srgb` | A BC3 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc3-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
 | `bc3-rgba-srgb` | A BC3 sRGB texel read: the device decodes the texture's BC image itself (the runtime keeps no decoded twin of a BC texture), and decodes each sRGB code by its o… |
-| `bc3-rgba-srgb` | The case holds each texel to its family's bound, justified by `compressed-texel-decode` alone (`cases/compressed_decode.rs`). The old runtime holds `DriverFact:… |
+| `bc4-r-snorm` | A BC4 signed texel read: ours is the device's own decode of the texture's BC image (the runtime keeps no decoded twin of a BC texture), where Metal interpolates… |
+| `bc4-r-unorm` | A BC4 texel read: ours is the device's own decode of the texture's BC image (the runtime keeps no decoded twin of a BC texture), where Metal interpolates the bl… |
+| `bc5-rg-snorm` | A BC5 signed texel read: ours is the device's own decode of the texture's BC image (the runtime keeps no decoded twin of a BC texture), where Metal interpolates… |
+| `bc5-rg-snorm` | A BC5 signed texel read: ours is the device's own decode of the texture's BC image (the runtime keeps no decoded twin of a BC texture), where Metal interpolates… |
+| `bc5-rg-snorm` | A BC5 signed texel read: ours is the device's own decode of the texture's BC image (the runtime keeps no decoded twin of a BC texture), where Metal interpolates… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |

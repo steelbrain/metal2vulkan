@@ -1879,6 +1879,7 @@ impl Side for RuntimeSide<'_> {
                 properties.api_version.major, properties.api_version.minor
             ),
             lossless_compression: properties.lossless_compression,
+            new_runtime: false,
             host: (properties.kind == DeviceKind::Cpu).then(crate::case::host_vector_isa),
         }
     }
