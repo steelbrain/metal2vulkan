@@ -10,12 +10,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
 use metal2vulkan::library::Library;
-use metal2vulkan::metal::{Mutability, VertexFormat};
+use metal2vulkan::metal::VertexFormat;
 use metal2vulkan::pipeline::{
-    ComputePipelineDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
-    VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
+    ComputePipelineDescriptor, FunctionDescriptor, StageSource, VertexAttributeDescriptor,
+    VertexBufferLayoutDescriptor, VertexDescriptor,
 };
-use metal2vulkan::repro::{ReproBundle, ReproDevice};
+use metal2vulkan::repro::ReproDevice;
 use metal2vulkan::Budget;
 
 fn repo() -> &'static Path {
@@ -491,6 +491,11 @@ fn replay(scratch: &Scratch, dir: &Path) -> (Option<i32>, String) {
 #[cfg(unix)]
 #[test]
 fn a_runtime_bundle_replays_the_refusal_on_the_device_it_names() {
+    // Imported here rather than at the top: this test alone uses them, and it is unix-only.
+    use metal2vulkan::metal::Mutability;
+    use metal2vulkan::pipeline::RenderPipelineDescriptor;
+    use metal2vulkan::repro::ReproBundle;
+
     let scratch = Scratch::new();
     let bundles = scratch.join("bundles");
     let json = std::fs::read_to_string(profile("moltenvk-m3")).unwrap();
