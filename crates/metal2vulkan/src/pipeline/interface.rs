@@ -132,6 +132,12 @@ pub struct TextureSlot {
     /// A depth texture sampled with comparison.
     pub depth_compare: bool,
     pub access: TextureAccess,
+    /// The function declares the slot `access::write` or `access::read_write`, so it reaches the
+    /// bound texture through a storage image (a storage texel buffer for a texture buffer), whose
+    /// view Vulkan requires to map each channel to itself: a read there takes no component
+    /// mapping. `false` for a `sample` or `read` slot, which reaches a sampled image.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub storage: bool,
 }
 
 /// How a texture is used (Metal `access::` qualifiers plus sampling).

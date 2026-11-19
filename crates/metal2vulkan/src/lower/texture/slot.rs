@@ -362,6 +362,7 @@ impl SlotPlan {
             sampled_type,
             depth_compare: self.uses.compare,
             access: TextureAccess::new(u.sample, u.read || u.atomic, u.write || u.atomic),
+            storage: self.storage(),
         })
     }
 }

@@ -254,10 +254,8 @@ impl Facts {
             };
             self.vertex.push((binding, buffer, offset));
         }
-        for &(table, slot, access) in &draws.textures {
-            if matches!(access, Access::ReadWrite)
-                && tables[table].texture(slot).is_some_and(Texture::swizzled)
-            {
+        for &(table, slot) in &draws.storage_reads {
+            if tables[table].texture(slot).is_some_and(Texture::swizzled) {
                 return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
             }
         }

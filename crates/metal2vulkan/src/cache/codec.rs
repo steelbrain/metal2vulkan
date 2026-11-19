@@ -1157,7 +1157,7 @@ codec_struct! {
     MeshRecords { vertices, primitives, corners, vertex_words, primitive_words, fields, slot_words }
     RecordField { value, per_primitive, offset, words, numeric }
     BufferSlot { access, window, form, kind }
-    TextureSlot { texture_type, sampled_type, depth_compare, access }
+    TextureSlot { texture_type, sampled_type, depth_compare, access, storage }
     TextureAccess { sample, read, write }
     SamplerSlot { compare, coordinate_sensitive }
     AccessSet { read, write }

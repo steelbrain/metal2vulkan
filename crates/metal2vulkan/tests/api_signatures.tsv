@@ -5926,6 +5926,7 @@ field	metal2vulkan::pipeline::TextureAccess.write	pub write: bool
 field	metal2vulkan::pipeline::TextureSlot.access	pub access: TextureAccess
 field	metal2vulkan::pipeline::TextureSlot.depth_compare	pub depth_compare: bool
 field	metal2vulkan::pipeline::TextureSlot.sampled_type	pub sampled_type: SampledType
+field	metal2vulkan::pipeline::TextureSlot.storage	pub storage: bool
 field	metal2vulkan::pipeline::TextureSlot.texture_type	pub texture_type: metal::TextureType
 field	metal2vulkan::pipeline::ThreadgroupArgument.alignment	pub alignment: u32
 field	metal2vulkan::pipeline::ThreadgroupArgument.index	pub index: u32

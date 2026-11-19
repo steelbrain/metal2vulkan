@@ -622,9 +622,9 @@ made, with no lock, and never rewritten for layouts.
   samples. A swizzled texture, or a view made with a swizzle or of a swizzled texture, has a
   storage element and attachment views that map each channel to itself, as Vulkan requires of
   a storage image and an attachment: a write and a render pass store the texels unswizzled.
-  A draw or dispatch whose function declares `access::read_write` at a slot bound to such a
-  texture is `Gap::SwizzledReadWrite`, found when the pipeline state or a binding changes: its
-  read would answer the texel unswizzled, where Metal reads it through the swizzle. A texture's
+  A draw or dispatch whose function declares `access::read_write` at a slot it reads, bound to
+  such a texture, is `Gap::SwizzledReadWrite`, found when the pipeline state or a binding
+  changes: its read would answer the texel unswizzled, where Metal reads it through the swizzle. A texture's
   own descriptor takes a swizzle only without shader-write and render-target usage
   (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone.
 - Textures over a swapchain image are not built yet. Heap textures are placed only in Private

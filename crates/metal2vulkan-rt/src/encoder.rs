@@ -883,10 +883,8 @@ impl ComputeCommandEncoder {
         // so the whole module answers this check and the next, once after each change.
         if !self.facts.aligned {
             self.facts.nil = check_alignments(&self.core, &self.slots, &inner.whole.interface)?;
-            for &(slot, access) in &inner.whole.interface.textures {
-                if matches!(access, Access::ReadWrite)
-                    && matches!(self.textures.get(slot as usize), Some(Some(t)) if t.swizzled())
-                {
+            for &slot in &inner.whole.interface.storage_reads {
+                if matches!(self.textures.get(slot as usize), Some(Some(t)) if t.swizzled()) {
                     return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
                 }
             }

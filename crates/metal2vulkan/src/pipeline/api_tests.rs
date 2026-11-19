@@ -742,6 +742,7 @@ mod serde_round_trips {
                 sampled_type: SampledType::Uint,
                 depth_compare: false,
                 access: TextureAccess::new(false, true, true),
+                storage: true,
             }),
         );
         slots.insert(

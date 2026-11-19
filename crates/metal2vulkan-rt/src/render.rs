@@ -89,6 +89,10 @@ pub(crate) struct Draws {
     pub(crate) buffers: Vec<(usize, u32, Access)>,
     /// Each texture slot a function uses, likewise.
     pub(crate) textures: Vec<(usize, u32, Access)>,
+    /// Each texture slot a function reads through its storage image (`TextureSlot::storage`, a
+    /// `read_write` slot it reads), with its function, which takes no swizzle: a swizzled texture
+    /// bound there is `Gap::SwizzledReadWrite`.
+    pub(crate) storage_reads: Vec<(usize, u32)>,
     /// The fragment function's texture slots it reads only at the fragment's own pixel
     /// (`StageModule::own_pixel_textures`), sorted: what a draw copies of an attachment it reads
     /// through one on a device without the attachment feedback loop (`crate::shadow`).
@@ -327,6 +331,7 @@ fn draws(
     }
     let mut buffers = Vec::new();
     let mut textures = Vec::new();
+    let mut storage_reads = Vec::new();
     for (slot, used) in &translated.slots {
         let at = table(slot.stage)?;
         match (slot.class, used) {
@@ -337,6 +342,9 @@ fn draws(
             }
             (SlotClass::Texture, SlotInterface::Texture(texture)) => {
                 textures.push((at, slot.index, texture_access(texture.access)));
+                if texture.storage && texture.access.read {
+                    storage_reads.push((at, slot.index));
+                }
             }
             (SlotClass::Sampler, SlotInterface::Sampler(_)) => {}
             _ => return Err(draw_input()),
@@ -428,6 +436,7 @@ fn draws(
     let draws = Draws {
         buffers,
         textures,
+        storage_reads,
         own_pixel,
         bindings,
         reads_unbound: translated.reads_unbound_resources,

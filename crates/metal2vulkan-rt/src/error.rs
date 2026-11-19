@@ -897,15 +897,16 @@ pub enum Gap {
     ///
     /// Basis: ours (a fence is built for one queue; the replay streams use each on one queue).
     FenceOtherQueue,
-    /// A draw or dispatch whose function declares `access::read_write` at texture slot `slot`
-    /// where the texture bound there has a swizzle other than each channel's own (a view made
+    /// A draw or dispatch whose function declares `access::read_write` at texture slot `slot` and
+    /// reads it, where the texture bound there has a swizzle other than each channel's own (a view made
     /// with one, [`Texture::new_texture_view_with_swizzle`](crate::Texture::new_texture_view_with_swizzle)):
     /// such a slot reads through the texture's storage element, which maps each channel to
     /// itself as Vulkan requires of a storage image
     /// (VUID-VkWriteDescriptorSet-descriptorType-00336), so its `read` would answer the texel
     /// unswizzled, where Metal reads it through the swizzle. Found when the pipeline state or a
-    /// binding changes, for the read-write slots alone. Writes through `access::write` are
-    /// Metal's: the swizzle is defined for reads and samples.
+    /// binding changes, for the read-write slots a function reads alone
+    /// (`TextureSlot::storage` with a read). A write is not swizzled: Apple defines the swizzle
+    /// for reads and samples.
     ///
     /// Basis: ours (built when a replay stream counts one).
     SwizzledReadWrite {

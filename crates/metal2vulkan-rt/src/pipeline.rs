@@ -371,6 +371,10 @@ pub(crate) struct Interface {
     pub(crate) buffers: Vec<(u32, Access)>,
     /// Each texture slot the kernel uses, with its access.
     pub(crate) textures: Vec<(u32, Access)>,
+    /// Each texture slot the kernel reads through its storage image (`TextureSlot::storage`, a
+    /// `read_write` slot it reads), which takes no swizzle: a swizzled texture bound there is
+    /// `Gap::SwizzledReadWrite`.
+    pub(crate) storage_reads: Vec<u32>,
     /// The samplers a state of the kernel numbers, in Metal's order
     /// (`PipelineInterface::numbered_samplers`).
     pub(crate) numbered: Vec<NumberedSampler>,
@@ -1009,6 +1013,7 @@ fn interface(
     }
     let mut buffers = Vec::new();
     let mut textures = Vec::new();
+    let mut storage_reads = Vec::new();
     for (slot, used) in &translated.slots {
         match (slot.stage, slot.class, used) {
             (Stage::Kernel, SlotClass::Buffer, SlotInterface::Buffer(buffer))
@@ -1018,6 +1023,9 @@ fn interface(
             }
             (Stage::Kernel, SlotClass::Texture, SlotInterface::Texture(texture)) => {
                 textures.push((slot.index, texture_access(texture.access)));
+                if texture.storage && texture.access.read {
+                    storage_reads.push(slot.index);
+                }
             }
             (Stage::Kernel, SlotClass::Sampler, SlotInterface::Sampler(_)) => {}
             _ => return Err(gap()),
@@ -1166,6 +1174,7 @@ fn interface(
     Ok(Interface {
         buffers,
         textures,
+        storage_reads,
         numbered,
         constexprs,
         reads_unbound: translated.reads_unbound_resources,
