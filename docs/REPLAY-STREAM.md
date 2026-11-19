@@ -569,7 +569,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   `over_copy_bytes_imported` those over an imported one alone; the rest are over the runtime's own
   blocks, where the device's linear image does not take the texture. The report's `no-copy
   buffers` line counts the descriptor-form ones in a block, those outside every block and their
-  bytes imported, and the bytes-form ones and theirs, apart. The stream records no no-copy
+  bytes imported, and the bytes-form ones and theirs, apart; its `textures over buffers` line
+  counts the textures over buffers it made (not substituted), in place and in an image of their
+  own, by whether the runtime's `textures_copied_over` gauge rose across the making (a copied
+  texture freed on another thread in that moment hides one). The stream records no no-copy
   buffer's host address (section 5), so whether two of the program's shared pages is not known to
   the player; its own never do.
 - **Announced bytes** (both runtimes' backends). On a stream whose header has bit 0 set (section
