@@ -2490,6 +2490,14 @@ pub trait Side {
         Err(Failure::unavailable("resource_facts"))
     }
 
+    /// `storageMode` of the resource `of` names, by its raw `MTLStorageMode`: the one of
+    /// [`Side::resource_facts`]' answers a side may hold apart from the rest. By default it is
+    /// that answer's own field, read through the same getter.
+    fn resource_storage_mode(&mut self, of: crate::heap_query::QueriedResource) -> Answer<u64> {
+        self.resource_facts(of, None)
+            .map(|facts| facts.storage_mode)
+    }
+
     /// `setLabel:` of `label` on the resource `of` names, as [`Side::set_heap_label`] is for a
     /// heap.
     fn set_resource_label(

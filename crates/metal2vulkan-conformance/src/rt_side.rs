@@ -579,17 +579,33 @@ fn texture_facts(texture: &rt::Texture) -> crate::buffer_texture::BufferTextureF
         array_length: d.array_length.into(),
         sample_count: d.sample_count.into(),
         usage: u64::from(d.usage.as_raw()),
-        // `MTLStorageMode`'s raw values.
-        storage_mode: match d.storage_mode {
-            rt::StorageMode::Shared => 0,
-            rt::StorageMode::Managed => 1,
-            rt::StorageMode::Private => 2,
-            rt::StorageMode::Memoryless => 3,
-        },
+        storage_mode: storage_mode(d.storage_mode),
         cpu_cache_mode: consumers(),
         hazard_tracking_mode: consumers(),
         gpu_optimized: consumers(),
     }
+}
+
+/// `MTLStorageMode`'s raw value of `mode`.
+fn storage_mode(mode: rt::StorageMode) -> u64 {
+    match mode {
+        rt::StorageMode::Shared => 0,
+        rt::StorageMode::Managed => 1,
+        rt::StorageMode::Private => 2,
+        rt::StorageMode::Memoryless => 3,
+    }
+}
+
+/// The consumer's own, for `MTLResource`'s getters but `storageMode`: the runtime keeps no label,
+/// device, CPU cache or hazard tracking mode, option word or heap on a buffer or texture, and its
+/// consumer keeps what it made each with and where it placed it.
+fn resource_is_the_consumers() -> Failure {
+    Failure::named(
+        "TheConsumers",
+        "metal2vulkan-rt keeps no label, device, cpuCacheMode, hazardTrackingMode, resourceOptions, \
+         heap, heapOffset or isAliasable of a resource: its consumer keeps what it made each with \
+         and where it placed it",
+    )
 }
 
 /// [`waited_for`] within [`ARRIVAL`], as a status.
@@ -866,6 +882,35 @@ impl Side for RtSide<'_> {
 
     fn heap_own_facts(&mut self, _heap: Handle) -> Answer<crate::heap_query::HeapOwnFacts> {
         Err(heap_is_the_consumers())
+    }
+
+    /// The consumer's own but for `storageMode`, which [`Side::resource_storage_mode`] answers.
+    fn resource_facts(
+        &mut self,
+        _of: crate::heap_query::QueriedResource,
+        _heap: Option<Handle>,
+    ) -> Answer<crate::heap_query::ResourceFacts> {
+        Err(resource_is_the_consumers())
+    }
+
+    /// A texture's or view's storage mode as the runtime made it, and a buffer's as the class of
+    /// the block it lies in.
+    fn resource_storage_mode(&mut self, of: crate::heap_query::QueriedResource) -> Answer<u64> {
+        use crate::heap_query::QueriedResource;
+        Ok(match of {
+            QueriedResource::Texture(handle) => {
+                storage_mode(self.held_texture(handle)?.descriptor().storage_mode)
+            }
+            QueriedResource::Buffer(handle) => {
+                let (_, block) = (self.buffers.get(handle.0 as usize)).ok_or_else(|| {
+                    Failure::named("NoSuchHandle", format!("buffer {}", handle.0))
+                })?;
+                match block.class {
+                    rt::MemoryClass::Shared => storage_mode(rt::StorageMode::Shared),
+                    rt::MemoryClass::Private => storage_mode(rt::StorageMode::Private),
+                }
+            }
+        })
     }
 
     /// A heap's `newTextureWithDescriptor:`, which places the texture where the heap's own

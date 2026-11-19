@@ -414,6 +414,9 @@ const TOGETHER: [(u64, bool); 3] = [(4096, false), (8192, true), (1 << 16, false
 mod site {
     /// The resource's ten getters, fresh.
     pub const FRESH: &str = "fresh";
+    /// `storageMode` alone, read beside the ten: the getter a side answers apart from the rest
+    /// (`Side::resource_storage_mode`).
+    pub const STORAGE_MODE: &str = "storage-mode";
     /// The heap the resource was placed in, before anything touched the resource.
     pub const HEAP_BEFORE: &str = "heap-before";
     /// That heap after `makeAliasable`.
@@ -514,6 +517,13 @@ impl Case for ResourceFactsCase {
                 }
             };
             node = node.with(facts(side, &made, site::FRESH));
+            node = node.with(Node::leaf(
+                site::STORAGE_MODE,
+                Observed::value(match side.resource_storage_mode(made.resource) {
+                    Ok(mode) => Value::Uint(mode),
+                    Err(failure) => failure.recorded(),
+                }),
+            ));
             match self.ask {
                 Ask::OwnGetters => {}
                 Ask::Aliasing => node = aliasing_of(side, &made, node),
