@@ -1,0 +1,134 @@
+{
+  "format": 1,
+  "case": "fence-none-tracked-behind-busy",
+  "suite_version": 1,
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 5,
+      "outcomes": [
+        {
+          "runs": 5,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "shape",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "9f133e5c4cbe50cba2e14bf6eff26d4dcaf98097484e4e431ada7c588ea6af95"
+                        }
+                      }
+                    },
+                    {
+                      "name": "buffer-bytes-and-written-byte",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "0b05a72b3f11e6c4b8210f3317e4e55dca521804b84be42f52b5dd9a14f94168"
+                        }
+                      }
+                    },
+                    {
+                      "name": "long-job-busy-and-bound",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7ede4c30dcc8992c255ec4829fe0b2084d452bef7b2f169b1a32af2976e4af7b"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "order",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "y/words-written",
+                      "observed": {
+                        "value": {
+                          "uint": 0
+                        }
+                      }
+                    },
+                    {
+                      "name": "updater/status-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "waiter/status-once-both-completed",
+                      "observed": {
+                        "value": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}
