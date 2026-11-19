@@ -51,7 +51,7 @@ pub struct SurfaceSpec<'a> {
     /// The handle the surface's memory is shared through.
     pub handle: ExportHandle,
     /// What the planes' one pitch is a multiple of: the other API's pitch rule (256 for a VA-API
-    /// import, 4 for an NVENC input, for instance). At least 1.
+    /// import, 4 for NVIDIA's opaque fd route, for instance). At least 1.
     pub pitch_multiple: u64,
     /// What each plane's start after the first is a multiple of: the other API's rule. At least 1.
     pub start_multiple: u64,

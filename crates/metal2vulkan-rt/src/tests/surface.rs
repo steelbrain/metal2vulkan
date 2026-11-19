@@ -1,8 +1,9 @@
 //! Exported surfaces, under a device cfg, on every device of the cfg's kind: for each handle the
 //! device exports and each picture (1080p 8-bit: R8 and RG8 at half size; 4K 16-bit: R16 and
-//! RG16 at half size), a VA-API row (a dma-buf at 256-byte pitches and 4 KiB starts with rows of
-//! room), an NVENC row (an opaque handle at a pitch multiple of 4, each plane directly below the
-//! one before) and a copy-form row (an opaque handle at a pitch multiple of 4096, which no
+//! RG16 at half size), the product's VA-API row (a dma-buf at 256-byte pitches and starts, each
+//! plane holding the coded picture's rows: 8 and 4 rows below the 1080p planes, none below the
+//! 4K ones), its NVIDIA row (an opaque handle at a pitch multiple of 4, each plane directly below
+//! the one before) and a copy-form row (an opaque handle at a pitch multiple of 4096, which no
 //! driver's fixed pitch of these pictures meets). Each surface's layout is checked against the
 //! rule (plane 0 at 0, one pitch, exact starts); a second device of the same physical device
 //! imports the handle and writes three pictures, each acquired by rt and read through its plane
@@ -80,13 +81,26 @@ mod on_device {
         ),
     ];
 
-    /// A row of the test: its name, handle, multiples and each plane's rows of room.
+    /// A row of the test: its name, handle and multiples, and whether each plane holds the coded
+    /// picture's rows (the luma's height rounded up to 16, the chroma half that), as a VA-API
+    /// decoder writes them, or only the picture's.
     struct Row {
         name: &'static str,
         handle: ExportHandle,
         pitch_multiple: u64,
         start_multiple: u64,
-        rows_below: [u32; 2],
+        coded: bool,
+    }
+
+    impl Row {
+        /// Each plane's rows below it, of picture `planes`.
+        fn rows_below(&self, planes: &[Plane; 2]) -> [u32; 2] {
+            if !self.coded {
+                return [0, 0];
+            }
+            let rows = planes[0].height.next_multiple_of(16);
+            [rows - planes[0].height, rows / 2 - planes[1].height]
+        }
     }
 
     /// The opaque handle of this host.
@@ -100,22 +114,22 @@ mod on_device {
             name: "VA-API",
             handle: ExportHandle::DmaBuf,
             pitch_multiple: 256,
-            start_multiple: 4096,
-            rows_below: [8, 4],
+            start_multiple: 256,
+            coded: true,
         },
         Row {
-            name: "NVENC",
+            name: "NVIDIA",
             handle: OPAQUE,
             pitch_multiple: 4,
             start_multiple: 1,
-            rows_below: [0, 0],
+            coded: false,
         },
         Row {
             name: "copy-form",
             handle: OPAQUE,
             pitch_multiple: 4096,
             start_multiple: 1,
-            rows_below: [0, 0],
+            coded: false,
         },
     ];
 
@@ -420,10 +434,11 @@ mod on_device {
             pitch >= planes[0].row().max(planes[1].row()),
             "{name}: pitch {pitch}"
         );
-        let below = pitch * u64::from(planes[0].height + row.rows_below[0]);
+        let rows_below = row.rows_below(planes);
+        let below = pitch * u64::from(planes[0].height + rows_below[0]);
         let start = below.next_multiple_of(row.start_multiple.max(planes[1].texel));
         assert_eq!(p1.offset, start, "{name}: plane 1's exact start");
-        let end = p1.offset + pitch * u64::from(planes[1].height + row.rows_below[1]);
+        let end = p1.offset + pitch * u64::from(planes[1].height + rows_below[1]);
         assert!(
             export.export.size >= end,
             "{name}: the size holds the planes"
@@ -467,7 +482,7 @@ mod on_device {
                         PlaneSpec {
                             descriptor,
                             index: None,
-                            rows_below: row.rows_below[i],
+                            rows_below: row.rows_below(planes)[i],
                         }
                     });
                     let spec = SurfaceSpec {
@@ -507,7 +522,7 @@ mod on_device {
                         made.as_secs_f64() * 1e3
                     );
                     check_layout(&label, row, planes, &export);
-                    if row.name == "NVENC" && form == SurfaceForm::InPlace {
+                    if row.name == "NVIDIA" && form == SurfaceForm::InPlace {
                         in_place_pitch[at] = Some(export.planes[0].row_pitch);
                     }
                     if row.name == "copy-form" {

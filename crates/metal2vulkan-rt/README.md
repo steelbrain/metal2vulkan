@@ -489,9 +489,12 @@ The layout is one rule in both forms. The planes share one pitch, a multiple of 
 and of every plane's texel. Plane 0 is at offset 0; each next plane starts at the first multiple
 of `start_multiple` and of its texel at or past the previous plane's start plus its rows and its
 `rows_below` at the pitch. A start multiple of 1 with no rows below puts each plane directly below
-the one before, at the same pitch: an NVENC input (NV12 or P010) asks `pitch_multiple: 4,
-start_multiple: 1` and `rows_below: 0`. A VA-API import asks a pitch multiple of 256. The layout
-is linear: a dma-buf's import names `DRM_FORMAT_MOD_LINEAR`.
+the one before, at the same pitch: NVIDIA's opaque fd route (NV12 or P010) asks `pitch_multiple:
+4, start_multiple: 1` and `rows_below: 0`. A VA-API import asks `pitch_multiple: 256,
+start_multiple: 256`, each plane holding the coded picture's rows: the luma's `rows_below` is its
+height rounded up to 16 less its height, the chroma's half that rounded height less its own (8 and
+4 at 1080p, none at 720p and 2160p). The layout is linear: a dma-buf's import names
+`DRM_FORMAT_MOD_LINEAR`.
 
 **In place**, each plane's texture is a linear image in the shared memory, which the other API's
 writes reach with no copy. What a consumer passes to get it, by handle:
@@ -549,7 +552,7 @@ through the runtime, the consumer encodes no read of its planes.
     `LINEAR` images refuse the dma-buf handle.
   - A dma-buf surface on NVIDIA (`SurfaceCopy::Start`): on the RTX 3090 the driver refuses a
     linear image of the second plane at its start in the shared dma-buf. No consumer path uses
-    it; the opaque fd surface an NVENC input asks is in place on the RTX 3090.
+    it; the opaque fd surface of NVIDIA's route is in place on the RTX 3090.
   - A layout the device cannot meet (`SurfaceCopy::Pitch`, `SurfaceCopy::Start`): a pitch or
     start the consumer asks that the driver's linear images do not take. A pitch multiple of
     4,096 takes `SurfaceCopy::Pitch` on every device measured: the Radeon 780M, the RTX 3090,
