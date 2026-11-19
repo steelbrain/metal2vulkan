@@ -94,7 +94,7 @@ use metal2vulkan::metal::{
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipelineDescriptor, LinkedFunctions, MeshPipelineDescriptor,
     RenderPipelineDescriptor, StageInputAttributeDescriptor, StageInputDescriptor,
-    StageInputLayoutDescriptor, StageSource, TessellationDescriptor, TileRenderPipelineDescriptor,
+    StageInputLayoutDescriptor, StageSource, TileRenderPipelineDescriptor,
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 use metal2vulkan_runtime::{
