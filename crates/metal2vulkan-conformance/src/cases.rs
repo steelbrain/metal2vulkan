@@ -74,6 +74,7 @@ pub mod compute_heap_residency;
 pub mod compute_pipeline_descriptors;
 pub mod compute_render_chains;
 pub mod compute_threadgroups;
+pub mod copy_out_strides;
 pub mod denormal_word_fetches;
 pub mod depth_resolve_pairs;
 pub mod depth_stencil_space;
@@ -324,6 +325,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in format_copies::all() {
         cases.push(Box::new(case));
     }
+    cases.push(Box::new(copy_out_strides::CopyOutStrides));
     for case in nearest_positions::all() {
         cases.push(Box::new(case));
     }
