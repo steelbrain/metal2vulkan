@@ -2252,6 +2252,7 @@ A facts call answers many getters at once, and a side answers or refuses each of
 |---|---|---|---|
 | `ComputeDescriptorFacts` | 11 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 0 (0), 0 |
 | `RenderDescriptorFacts` | 30 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 0 (0), 0 |
+| `EventRise` | 7 | 1 | `label`: `label`, 1 (1), 1 |
 
 ## The ledger
 

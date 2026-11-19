@@ -16,6 +16,7 @@ use crate::event_orders::{
     SCRATCH, SIGNALLING_BYTE, SIGNAL_WAIT, WAITING_BYTE,
 };
 use crate::scheduled_handlers::{Returned, ScheduledHandlerOrder, ARRIVAL, HOLD_LIMIT, WINDOW};
+use crate::shared_events::{EventRise, WAIT_MS};
 use metal2vulkan_rt as rt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -160,6 +161,47 @@ impl RtSide<'_> {
             waiting_at_the_end,
             signalling_at_the_end,
             bytes: read(&scratch, SCRATCH)?,
+        })
+    }
+
+    /// [`crate::case::Side::shared_event_rises`]: the host's sets, the GPU's signals and the
+    /// host's bounded waits on one shared event of the runtime's. The runtime keeps no label, so
+    /// the side states none and the label is a refused field (the consumer's own).
+    pub(super) fn event_rise(&mut self) -> Answer<EventRise> {
+        let bound = Duration::from_millis(WAIT_MS);
+        let queue = self.own_queue()?;
+        let event = self.on.device.new_shared_event().map_err(of_rt)?;
+        let initial = event.signaled_value();
+        // The host's sets: a lower value leaves the event where it was.
+        event.set_signaled_value(5);
+        event.set_signaled_value(3);
+        event.set_signaled_value(5);
+        let after_host_sets = event.signaled_value();
+        let signal = |value: u64| -> Answer<u64> {
+            let command_buffer = queue.command_buffer().map_err(of_rt)?;
+            (command_buffer.encode_signal_event(event.as_event(), value)).map_err(of_rt)?;
+            command_buffer.commit().map_err(of_rt)?;
+            if waited_for(&command_buffer, COMPLETION).is_none() {
+                return Err(Failure::named(
+                    "NeverCompleted",
+                    format!("the command buffer signalling {value}"),
+                ));
+            }
+            Ok(event.signaled_value())
+        };
+        let wait = |value: u64| (event.wait_until_signaled_value(value, bound)).map_err(of_rt);
+        let after_gpu_signals = [signal(3)?, signal(5)?];
+        let waits = [wait(3)?, wait(5)?, wait(6)?];
+        let after_max_signal = signal(u64::MAX)?;
+        let waited_for_max = wait(u64::MAX)?;
+        Ok(EventRise {
+            label: Err(Failure::unavailable("label")),
+            initial,
+            after_host_sets,
+            after_gpu_signals,
+            waits,
+            after_max_signal,
+            waited_for_max,
         })
     }
 

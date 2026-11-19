@@ -1169,3 +1169,6 @@ pipeline-descriptor-reset	*	refused	case/facts/label	Err(Unavailable({call: "lab
 compute-descriptor-defaults	*	refused	case/facts/label	Err(Unavailable({call: "label"}))	refused: the consumer's own (label). rt keeps no label on a pipeline descriptor or on anything it makes of one, so the facts' label field is refused and the descriptor's other fields, the translator's, compare.
 compute-descriptor-set	*	refused	case/facts/label	Err(Unavailable({call: "label"}))	refused: the consumer's own (label). rt keeps no label on a pipeline descriptor or on anything it makes of one, so the facts' label field is refused and the descriptor's other fields, the translator's, compare.
 compute-descriptor-reset	*	refused	case/facts/label	Err(Unavailable({call: "label"}))	refused: the consumer's own (label). rt keeps no label on a pipeline descriptor or on anything it makes of one, so the facts' label field is refused and the descriptor's other fields, the translator's, compare.
+#
+# The rising-value probe's label, a field the new runtime's side refuses on every venue.
+shared-event-rising-value	*	refused	case/rising-value/label	Err(Unavailable({call: "label"}))	refused: the consumer's own (label). rt keeps no label on an event, so the side sets none and the label field is refused; the event's values, signals and waits compare.

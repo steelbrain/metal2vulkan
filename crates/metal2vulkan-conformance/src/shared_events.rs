@@ -7,6 +7,7 @@
 //! Every fact here is a value or a boolean, so the record is a small set of fields rather than
 //! bytes, and the GPU's part is three command buffers that encode one signal each and nothing else.
 
+use crate::case::field;
 use crate::transcript::{Node, NodeName, Observed, Value};
 
 /// How long a host wait is given before it counts as having run out.
@@ -17,10 +18,10 @@ use crate::transcript::{Node, NodeName, Observed, Value};
 pub const WAIT_MS: u64 = 10;
 
 /// What one run of the rising-value probe observed. Each field is one call's answer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct EventRise {
-    /// `label`, after `setLabel:`.
-    pub label: Option<String>,
+    /// `label`, after `setLabel:`; a side whose runtime keeps no label refuses it.
+    pub label: crate::case::Field<Option<String>>,
     /// `signaledValue` of a new event.
     pub initial: u64,
     /// `signaledValue` after the host set 5, then 3, then 5.
@@ -38,7 +39,7 @@ pub struct EventRise {
 impl EventRise {
     /// The observations as the sites a case emits under one node, so both sides emit one shape.
     pub fn node(&self, name: impl Into<NodeName>) -> Node {
-        let label = match &self.label {
+        let label = |held: &Option<String>| match held {
             Some(label) => Value::Variant {
                 name: "Some".to_owned(),
                 payload: Box::new(Value::Lines(vec![label.clone()])),
@@ -46,7 +47,7 @@ impl EventRise {
             None => Value::unit_variant("None"),
         };
         let mut node = Node::branch(name, Vec::new())
-            .with(Node::leaf("label", Observed::value(label)))
+            .with(Node::leaf("label", field(&self.label, label)))
             .with(Node::leaf(
                 "signaled-value/new",
                 Observed::value(Value::Uint(self.initial)),

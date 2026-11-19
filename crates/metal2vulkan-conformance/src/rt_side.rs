@@ -1427,6 +1427,12 @@ impl Side for RtSide<'_> {
         self.highest_signal(values)
     }
 
+    fn shared_event_rises(&mut self, label: &str) -> Answer<crate::shared_events::EventRise> {
+        // The runtime keeps no label to set: the side states none, and refuses its read-back.
+        let _ = label;
+        self.event_rise()
+    }
+
     fn held_command_buffer(&mut self) -> Answer<crate::event_orders::HeldCommandBuffer> {
         self.held_command_buffer_probe()
     }

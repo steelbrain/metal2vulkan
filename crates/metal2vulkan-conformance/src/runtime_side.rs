@@ -5021,7 +5021,7 @@ impl Side for RuntimeSide<'_> {
         let after_max_signal = signal(u64::MAX)?;
         let waited_for_max = event.wait_until_signaled_value(u64::MAX, bound);
         Ok(EventRise {
-            label: read_label,
+            label: Ok(read_label),
             initial,
             after_host_sets,
             after_gpu_signals,

@@ -5681,7 +5681,7 @@ impl Side for MetalSide {
         let after_max_signal = signal(u64::MAX)?;
         let waited_for_max = event.waitUntilSignaledValue_timeoutMS(u64::MAX, WAIT_MS);
         Ok(EventRise {
-            label: read_label,
+            label: Ok(read_label),
             initial,
             after_host_sets,
             after_gpu_signals,
