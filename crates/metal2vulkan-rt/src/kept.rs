@@ -26,7 +26,7 @@ use std::sync::Arc;
 pub(crate) trait Handle {
     /// The object alone, which holds no handle of the device: what a command buffer keeps of
     /// it, and what an encoder borrows.
-    type Kept: Clone;
+    type Kept: Clone + Uncount;
 
     /// The object, as the handle holds it.
     fn object(&self) -> &Self::Kept;
@@ -59,11 +59,8 @@ impl<T: Handle> Lent<T> {
     ///
     /// The recording the borrow is used in keeps the object until after the borrow's last use.
     unsafe fn of(handle: &T) -> Lent<T> {
-        // SAFETY: a copy of the object that takes no count and is never dropped, so it gives
-        // back none; the caller keeps the object alive past the borrow's last use.
-        Lent(ManuallyDrop::new(unsafe {
-            std::ptr::read(handle.object())
-        }))
+        // SAFETY: the caller keeps the object alive past the borrow's last use.
+        Lent(unsafe { handle.object().uncounted() })
     }
 
     /// The object's address ([`Handle::address_of`]).
@@ -82,9 +79,27 @@ impl<T: Handle> Deref for Lent<T> {
 
 impl<T: Handle> Clone for Lent<T> {
     fn clone(&self) -> Lent<T> {
-        // SAFETY: the same object as `self`, uncounted as `self` is, which the recording keeps as
-        // long.
-        Lent(unsafe { std::ptr::read(&self.0) })
+        // SAFETY: the same object as `self`, which the recording keeps as long.
+        Lent(unsafe { self.0.uncounted() })
+    }
+}
+
+/// An object of which a copy that takes no count can be made: an `Arc`, or a state that is one.
+pub(crate) trait Uncount: Sized {
+    /// Another copy of the object, made of the same pointer, that took no count: dropping it
+    /// would give back what it never took, so it is never dropped.
+    ///
+    /// # Safety
+    ///
+    /// The object lives past the copy's last use.
+    unsafe fn uncounted(&self) -> ManuallyDrop<Self>;
+}
+
+impl<T> Uncount for Arc<T> {
+    unsafe fn uncounted(&self) -> ManuallyDrop<Arc<T>> {
+        // SAFETY: the pointer is a live `Arc`'s; the copy is never dropped, and the caller keeps
+        // the allocation alive past its last use.
+        ManuallyDrop::new(unsafe { Arc::from_raw(Arc::as_ptr(self)) })
     }
 }
 

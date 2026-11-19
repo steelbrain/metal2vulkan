@@ -1611,6 +1611,16 @@ impl Drop for Compiled {
     }
 }
 
+impl crate::kept::Uncount for ComputePipelineState {
+    unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<ComputePipelineState> {
+        // SAFETY: the caller keeps the state alive past the copy's last use.
+        let inner = unsafe { crate::kept::Uncount::uncounted(&self.inner) };
+        std::mem::ManuallyDrop::new(ComputePipelineState {
+            inner: std::mem::ManuallyDrop::into_inner(inner),
+        })
+    }
+}
+
 impl crate::kept::Handle for ComputePipelineState {
     /// The state itself: it holds no handle of the device.
     type Kept = ComputePipelineState;

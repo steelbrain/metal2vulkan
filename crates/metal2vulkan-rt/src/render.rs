@@ -1040,6 +1040,16 @@ impl Drop for RenderCompiled {
     }
 }
 
+impl crate::kept::Uncount for RenderPipelineState {
+    unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<RenderPipelineState> {
+        // SAFETY: the caller keeps the state alive past the copy's last use.
+        let inner = unsafe { crate::kept::Uncount::uncounted(&self.inner) };
+        std::mem::ManuallyDrop::new(RenderPipelineState {
+            inner: std::mem::ManuallyDrop::into_inner(inner),
+        })
+    }
+}
+
 impl crate::kept::Handle for RenderPipelineState {
     /// The state itself: it holds no handle of the device.
     type Kept = RenderPipelineState;
