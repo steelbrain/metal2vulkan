@@ -4,13 +4,15 @@
 //! barriers, bytes copied and passes as the same work without them). Across queues: a fence any
 //! queue's encoders update and wait on is taken; a wait on another queue goes after an update the
 //! submit thread holds in a group, a wait with nothing for the GPU completes after it, and so does
-//! a wait held at an event while an update committed after it is held so; a wait does not wait
-//! for an update held at an event wait or behind an uncommitted enqueue, as on an M3 Max.
+//! a wait held at an event while an update committed after it is held so, a render encoder's
+//! wait among them; a wait does not wait for an update held at an event wait or behind an
+//! uncommitted enqueue, as on an M3 Max, nor on a fence never updated.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::{behind_busy, each_device, finished, within, word};
+    use crate::tests::draw::on_device::{pass, target};
     use crate::{
         Buffer, BufferLayout, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
         DispatchType, Fence, MemoryClass, Metrics, PixelFormat, SharedEvent, TextureDescriptor,
@@ -274,6 +276,78 @@ mod on_device {
                 (updater, waiter)
             });
             assert_eq!(word(&copy), 0x5a5a_5a5a, "{name}: the wait reads the fill");
+        });
+    }
+
+    /// A wait on queue B from a render encoder, whose command buffer then copies what queue A's
+    /// update wrote in a blit encoder that waits on nothing: the render encoder's wait orders the
+    /// command buffer after the update A holds in a group.
+    #[test]
+    fn every_device_orders_a_render_encoders_wait_on_another_queue_after_an_update_held_in_a_group()
+    {
+        each_device("fence_group_render", |name, _, device| {
+            let (written, copy) = written_and_copy(&device);
+            let fence = device.new_fence();
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            behind_held_update(name, &device, |a, b| {
+                let updater = update(a, &written, &fence);
+                staged(name, &updater);
+                let waiter = b.command_buffer().expect("a command buffer");
+                let mut render =
+                    (waiter.render_command_encoder(&pass(&color, None))).expect("an encoder");
+                render.wait_for_fence(&fence).expect("a wait");
+                render.end_encoding();
+                let mut blit = waiter.blit_command_encoder().expect("an encoder");
+                (blit.copy_from_buffer_to_buffer(&written, 0, &copy, 0, 64)).expect("a copy");
+                blit.end_encoding();
+                waiter.commit().expect("a commit");
+                staged(name, &waiter);
+                (updater, waiter)
+            });
+            assert_eq!(word(&copy), 0x5a5a_5a5a, "{name}: the copy reads the fill");
+        });
+    }
+
+    /// A wait on a fence no encoder updated waits for nothing, while queue A holds in a group an
+    /// update of another fence: on queue B, an encoder that only waits on it completes at once,
+    /// and a command buffer with work after the wait goes in one submission of its own, A's group
+    /// staying held.
+    #[test]
+    fn every_device_runs_a_wait_on_a_fence_never_updated_at_once() {
+        each_device("fence_never_updated", |name, _, device| {
+            let (written, copy) = written_and_copy(&device);
+            let updated = device.new_fence();
+            let never = device.new_fence();
+            let counters = device.counters();
+            let a = device.new_command_queue(8).expect("a queue");
+            let b = device.new_command_queue(8).expect("a queue");
+            behind_busy(name, &device, &a, |busy, _, _| {
+                let updater = update(&a, &written, &updated);
+                staged(name, &updater);
+                let empty = b.command_buffer().expect("a command buffer");
+                let mut compute =
+                    (empty.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+                compute.wait_for_fence(&never).expect("a wait");
+                compute.end_encoding();
+                run(name, &empty);
+                let before = counters.metrics().submissions;
+                let waiter = wait(&b, &written, &copy, &never, None);
+                waiter.commit().expect("a commit");
+                staged(name, &waiter);
+                thread::sleep(Duration::from_millis(50));
+                assert_eq!(
+                    counters.metrics().submissions - before,
+                    1,
+                    "{name}: the wait's submission alone, the group A holds held"
+                );
+                busy.open();
+                finished(name, &waiter);
+                finished(name, &updater);
+            });
         });
     }
 
