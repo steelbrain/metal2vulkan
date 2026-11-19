@@ -2497,6 +2497,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_external_memory_dma_buf` | device, where listed | importing a dma-buf (`Device::import_dma_buf`), and exporting a block as one |
 | `VK_KHR_external_memory_win32` | device, where listed | exporting a block as an NT handle (`Device::new_exported_block`) |
 | `VK_EXT_queue_family_foreign` | device, where listed | the foreign queue family that a dma-buf export's ownership transfers name |
+| `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
 
 ### Features
 
