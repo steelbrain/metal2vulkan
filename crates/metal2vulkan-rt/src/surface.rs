@@ -992,10 +992,16 @@ impl Device {
             }
         };
         let mut export = vk::ExportMemoryAllocateInfo::default().handle_types(spec.handle.vk());
+        // The allocation, each plane's import and the buffer's ([`Surface::buffer`]) take device
+        // addresses alike: one payload's allocations in one device take one set of flags (ANV, of
+        // Mesa 26.2, refused the buffer's import with device addresses beside planes' imports
+        // without them, `VK_ERROR_INVALID_EXTERNAL_HANDLE`).
+        let mut flags = address_flags();
         let info = vk::MemoryAllocateInfo::default()
             .allocation_size(len)
             .memory_type_index(index)
-            .push_next(&mut export);
+            .push_next(&mut export)
+            .push_next(&mut flags);
         // SAFETY: an exportable allocation of a type every image takes, bound to nothing.
         let block = match unsafe {
             memory::allocate(device, &core.counters, core.max_allocations, &info, None)
@@ -1071,11 +1077,13 @@ impl Device {
                 .handle_type(spec.handle.vk())
                 .fd(fd.as_raw_fd());
             let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
+            let mut flags = address_flags();
             let info = vk::MemoryAllocateInfo::default()
                 .allocation_size(size)
                 .memory_type_index(import_type)
                 .push_next(&mut import)
-                .push_next(&mut dedicated);
+                .push_next(&mut dedicated)
+                .push_next(&mut flags);
             // SAFETY: an import of the dma-buf, dedicated to the image, of a type both take, at
             // least the image's requirement and its stated rows.
             let memory = match unsafe {
@@ -1350,4 +1358,10 @@ fn acquire(from: u32, to: u32, buffer: vk::Buffer) -> vk::BufferMemoryBarrier2<'
         .buffer(buffer)
         .offset(0)
         .size(vk::WHOLE_SIZE)
+}
+
+/// The flags every allocation of a surface's memory takes: device addresses, which its buffer
+/// needs (`VUID-vkBindBufferMemory-bufferDeviceAddress-03339`).
+fn address_flags() -> vk::MemoryAllocateFlagsInfo<'static> {
+    vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS)
 }

@@ -551,7 +551,10 @@ writes reach with no copy. What a consumer passes to get it, by handle:
   must take both. Each plane's image lies on its own dedicated import of the surface's dma-buf,
   bound at its first byte, sized to the larger of its requirement and its stated offset plus its
   subresource; the allocation the dma-buf came from is freed once the imports and the consumer's
-  handle exist, so a surface is two allocations, counted in `Gauges::surface_imports`.
+  handle exist, so a surface is two allocations, counted in `Gauges::surface_imports`. That
+  allocation and every import of it take device addresses, which the surface's buffer needs: one
+  payload's allocations in one device take one set of flags (ANV, of Mesa 26.2, refused a buffer's
+  import with device addresses beside plane imports without them).
 - `ExportHandle::OpaqueFd` and `ExportHandle::OpaqueWin32`: each plane's format's `LINEAR` tiling
   offers sampling, rendering and both copies, exportable and importable as the handle, not only
   in an allocation of its own. The pitch is the driver's own for each plane's `LINEAR` image: the
