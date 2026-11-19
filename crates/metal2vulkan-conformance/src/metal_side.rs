@@ -6589,6 +6589,98 @@ impl Side for MetalSide {
         Ok(keep(&mut self.textures, texture))
     }
 
+    /// An IOSurface laid as the case states, read back plane by plane before a texture lies over
+    /// it, and `newTextureWithDescriptor:iosurface:plane:` of the plane's format and extent:
+    /// Shared, read by shaders.
+    fn surface_texture(&mut self, spec: &crate::case::SurfaceTexture) -> Answer<Handle> {
+        use crate::metal_surface::{PlaneLayout, Surface};
+        let at = spec.plane as usize;
+        let plane = *(spec.planes.get(at)).ok_or_else(|| {
+            Failure::named(
+                "NoSuchPlane",
+                format!("plane {at} of a surface of {}", spec.planes.len()),
+            )
+        })?;
+        let laid = |plane: &crate::case::SurfacePlane| PlaneLayout {
+            width: u64::from(plane.size[0]),
+            height: u64::from(plane.size[1]),
+            offset: plane.offset,
+            bytes_per_row: plane.bytes_per_row,
+            bytes_per_element: plane.texel,
+        };
+        // The layout was a request, so it is read back before a texture lies over it.
+        let surface = match (spec.planar, spec.planes.as_slice()) {
+            (true, [first, second]) => {
+                let planes = [laid(first), laid(second)];
+                let surface =
+                    Surface::two_plane(spec.ostype, first.size, &planes, spec.length as usize)
+                        .map_err(|why| Failure::named("NoSurface", why))?;
+                (surface.planes_are_as_asked(&planes))
+                    .map_err(|why| Failure::named("SurfaceLaidOtherwise", why))?;
+                surface
+            }
+            (false, [only]) => {
+                let (texel, row) = (only.texel as u32, only.bytes_per_row as u32);
+                let surface = Surface::single_plane(Some(spec.ostype), only.size, texel, row, 0)
+                    .map_err(|why| Failure::named("NoSurface", why))?;
+                (surface.is_as_asked(only.size, row))
+                    .map_err(|why| Failure::named("SurfaceLaidOtherwise", why))?;
+                surface
+            }
+            (planar, planes) => {
+                return Err(Failure::named(
+                    "NoSuchPlaneLayout",
+                    format!(
+                        "{} planes of a surface made {} a plane dictionary: this side lays one \
+                         without and two with",
+                        planes.len(),
+                        if planar { "with" } else { "without" }
+                    ),
+                ))
+            }
+        };
+        let [width, height] = plane.size;
+        let selector = objc2::sel!(newTextureWithDescriptor:iosurface:plane:);
+        let device: &ProtocolObject<dyn MTLDevice> = &self.device;
+        require_selector(
+            device,
+            selector,
+            "MTLDevice newTextureWithDescriptor:iosurface:plane:",
+        )?;
+        let texture = objc2::rc::autoreleasepool(|_| {
+            let descriptor = MTLTextureDescriptor::new();
+            descriptor.setTextureType(MTLTextureType::Type2D);
+            descriptor.setPixelFormat(MTLPixelFormat(plane.format.as_raw() as usize));
+            // SAFETY: the case's own extent; the setters read nothing but the value given.
+            unsafe {
+                descriptor.setWidth(width as usize);
+                descriptor.setHeight(height as usize);
+            }
+            descriptor.setStorageMode(MTLStorageMode::Shared);
+            descriptor.setUsage(MTLTextureUsage::ShaderRead);
+            let descriptor: &MTLTextureDescriptor = &descriptor;
+            // SAFETY: the selector was just checked; it takes the descriptor, a live surface laid
+            // as read back above and one of its planes, and answers a `+1` texture. The surface
+            // is kept below, so it outlives the texture over it.
+            let texture: Option<Retained<ProtocolObject<dyn MTLTexture>>> = unsafe {
+                objc2::msg_send![device, newTextureWithDescriptor: descriptor, iosurface: surface.as_ptr(), plane: at]
+            };
+            texture
+        })
+        .ok_or_else(|| {
+            Failure::named(
+                "NewTextureWithIOSurfacePlane",
+                format!(
+                    "{:?} over plane {at} of a {width}x{height} '{}' surface returned nil",
+                    plane.format,
+                    crate::metal_surface::four_cc(spec.ostype)
+                ),
+            )
+        })?;
+        self.surfaces.push(surface);
+        Ok(keep(&mut self.textures, texture))
+    }
+
     fn buffer_texture(
         &mut self,
         request: &crate::buffer_texture::BufferTextureRequest,
@@ -7610,6 +7702,7 @@ impl MetalSide {
             let _: () = objc2::msg_send![&*descriptor, setRotation: plane.rotation as objc2_foundation::NSUInteger];
         }
         let surface = crate::metal_surface::Surface::single_plane(
+            None,
             plane.plane,
             plane.texel,
             plane.row_pitch,

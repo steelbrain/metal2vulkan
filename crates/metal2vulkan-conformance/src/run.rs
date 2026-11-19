@@ -64,17 +64,34 @@ pub fn replay_on_under(
 /// report, and say whether the same selection read the same thing in each of `runs` passes, as
 /// [`replay_on_under`] does for the old runtime. The runtime has no policy and moves none of the
 /// old runtime's counts, so the report holds no cost rows.
+///
+/// A case that made exported surfaces prints how many of each form it made
+/// (`Metrics::surfaces_in_place`, `Metrics::surfaces_copied`), which is the evidence of the form a
+/// venue's surfaces took: nothing in a verdict reads it.
 pub fn replay_rt_on_under(
     venues: Venues,
     cases: &[Box<dyn Case>],
     runs: u32,
 ) -> Result<(Report, Stability), String> {
     let device = crate::rt_side::RtDevice::open(venues)?;
+    let counters = device.device().counters();
     let pass = || {
         let mut report = Report::new();
         for case in cases {
+            let before = counters.metrics();
             let mut side = crate::rt_side::RtSide::new(&device);
             report.add_result(replay(case.as_ref(), &mut side));
+            drop(side);
+            let after = counters.metrics();
+            let in_place = after.surfaces_in_place - before.surfaces_in_place;
+            let copied = after.surfaces_copied - before.surfaces_copied;
+            if in_place + copied > 0 {
+                println!(
+                    "surface forms: {} on {}: {in_place} in place, {copied} copied",
+                    case.name(),
+                    device.venue().device
+                );
+            }
         }
         report
     };

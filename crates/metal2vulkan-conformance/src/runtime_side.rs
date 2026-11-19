@@ -3749,6 +3749,31 @@ impl Side for RuntimeSide<'_> {
         Ok(keep(&mut self.textures, texture))
     }
 
+    /// A texture over one plane of a buffer standing for the surface, as the runtime takes an
+    /// IOSurface (`Buffer::new_texture_with_iosurface_plane`): the buffer is the surface's
+    /// allocation, the plane at the offset and pitch the case lays it.
+    fn surface_texture(&mut self, spec: &crate::case::SurfaceTexture) -> Answer<Handle> {
+        let at = spec.plane as usize;
+        let plane = *(spec.planes.get(at)).ok_or_else(|| {
+            Failure::named(
+                "NoSuchPlane",
+                format!("plane {at} of a surface of {}", spec.planes.len()),
+            )
+        })?;
+        let [width, height] = plane.size;
+        let mut descriptor =
+            TextureDescriptor::texture_2d(plane.format, u64::from(width), u64::from(height), false);
+        descriptor.resource_options = ResourceOptions::shared();
+        descriptor.usage = TextureUsage::SHADER_READ;
+        let buffer = (self.device)
+            .new_buffer(spec.length, ResourceOptions::shared())
+            .map_err(Failure::from_error)?;
+        let over = IoSurfacePlane::new(plane.offset, plane.bytes_per_row, spec.planar);
+        let texture = (buffer.new_texture_with_iosurface_plane(&descriptor, over))
+            .map_err(Failure::from_error)?;
+        Ok(keep(&mut self.textures, texture))
+    }
+
     fn fill_texture(&mut self, texture: Handle, fill: &Fill) -> Answer<Value> {
         let texture = self.held_texture(texture)?.clone();
         let command_buffer = self

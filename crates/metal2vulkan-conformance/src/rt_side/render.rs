@@ -111,12 +111,15 @@ impl RtSide<'_> {
     /// `newTextureWithDescriptor:` of a render target: Shared or Private, multisampled or of the
     /// shape the spec states, at a texture index where a shader reaches it. A target over a buffer
     /// is the buffer's `newTextureWithDescriptor:offset:bytesPerRow:` of one level of 2D, whose
-    /// storage is the buffer's, as the old runtime's side makes it.
+    /// storage is the buffer's, as the old runtime's side makes it. A target over a surface's
+    /// plane is framebuffer-only and rotated, by Apple's private descriptor setters, which the
+    /// runtime has no counterpart of: `setRotation:` where it turns, else `setFramebufferOnly:`.
     pub(super) fn make_target(&mut self, spec: &TargetSpec) -> Answer<Handle> {
-        if spec.surface.is_some() {
-            return Err(Failure::unavailable(
-                "newTextureWithDescriptor:iosurface:plane:",
-            ));
+        if let Some(plane) = &spec.surface {
+            return Err(Failure::unavailable(match plane.rotation {
+                0 => "setFramebufferOnly:",
+                _ => "setRotation:",
+            }));
         }
         let mut descriptor = rt::TextureDescriptor::new(
             rt::TextureType::Type2D,

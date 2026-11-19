@@ -7668,7 +7668,7 @@ fn every_case_carries_a_cost_recording() {
     ///
     /// A whole-set run is the only shape that pays a record: a case's counts depend on what ran
     /// before it in the same process, so a selection cannot pay one however many cases it names.
-    const AFTER_THE_LAST_RUN: [&str; 20] = [
+    const AFTER_THE_LAST_RUN: [&str; 26] = [
         "vector-word-phases-0",
         "vector-word-phases-4",
         "vector-word-phases-8",
@@ -7689,6 +7689,12 @@ fn every_case_carries_a_cost_recording() {
         "fence-none-tracked-behind-busy",
         "fence-none-tracked",
         "fence-none-tracked-behind-one",
+        "surface-textures-bgra-bgra8",
+        "surface-textures-rgha-rgba16f",
+        "surface-textures-420v-luma-r8",
+        "surface-textures-420v-chroma-rg8",
+        "surface-textures-x420-luma-r16",
+        "surface-textures-x420-chroma-rg16",
     ];
 
     /// Cases a whole-set run did not cover although they were committed before it ran.

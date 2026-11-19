@@ -1660,6 +1660,16 @@ pub trait Side {
         Err(Failure::unavailable("plane_texture"))
     }
 
+    /// `newTextureWithDescriptor:iosurface:plane:` of a surface the side makes as `surface` states
+    /// ([`SurfaceTexture`]): a 2D texture of the plane's format and extent, Shared, that shaders
+    /// read, over that plane.
+    fn surface_texture(&mut self, surface: &SurfaceTexture) -> Answer<Handle> {
+        let _ = surface;
+        Err(Failure::unavailable(
+            "newTextureWithDescriptor:iosurface:plane:",
+        ))
+    }
+
     /// One command buffer with one blit encoder holding one fill of `texture` ([`Fill`]),
     /// committed and waited for.
     ///
@@ -2927,6 +2937,46 @@ pub enum CommandDraw {
         object: [u32; 3],
         mesh: [u32; 3],
     },
+}
+
+/// A surface a case makes a texture over one plane of ([`Side::surface_texture`]): its
+/// four-character OSType, its planes where the case lays them, and the plane the texture covers.
+///
+/// The layout is what Metal's side asks `IOSurfaceCreate` for and the old runtime's stand-in buffer
+/// holds. A case of this shape writes and reads the texture's texels alone, never the surface's
+/// bytes, so a side that lays the planes its own way (the new runtime's exported surface) answers
+/// the same texels.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SurfaceTexture {
+    /// The surface's OSType (`kIOSurfacePixelFormat`).
+    pub ostype: [u8; 4],
+    /// Whether the surface is made with a plane dictionary (`kIOSurfacePlaneInfo`): a planar
+    /// surface answers `IOSurfaceGetPlaneCount` its planes, and one without answers 0 and is its
+    /// own plane 0.
+    pub planar: bool,
+    /// Each plane, in its order in the surface: one for a surface without a plane dictionary.
+    pub planes: Vec<SurfacePlane>,
+    /// The surface's allocation, in bytes.
+    pub length: u64,
+    /// The plane the texture covers, whose format and extent it takes.
+    pub plane: u32,
+}
+
+/// One plane of a [`SurfaceTexture`]: the format a texture over it takes, its extent in that
+/// format's texels, and where it lies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfacePlane {
+    /// The pixel format of a texture over the plane, one texel an element of the plane.
+    pub format: PixelFormat,
+    /// The plane's extent in texels.
+    pub size: [u32; 2],
+    /// The bytes of one texel, which is the plane's `kIOSurfacePlaneBytesPerElement`: the case
+    /// states it, as it states the layout.
+    pub texel: u64,
+    /// The plane's first byte in the surface's allocation.
+    pub offset: u64,
+    /// The bytes between its rows.
+    pub bytes_per_row: u64,
 }
 
 /// A texture a case makes over a buffer: over one plane of the surface the buffer stands for, or

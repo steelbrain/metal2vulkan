@@ -377,6 +377,8 @@ pub struct RtSide<'a> {
     /// Each argument buffer the case made ([`Side::argument_buffer`]), with the textures its
     /// resource IDs name, which a dispatch that binds it makes resident.
     argument_residents: Vec<(Handle, Vec<Handle>)>,
+    /// Each surface a texture of the case lies over ([`Side::surface_texture`]).
+    surfaces: Vec<rt::Surface>,
 }
 
 impl<'a> RtSide<'a> {
@@ -398,6 +400,7 @@ impl<'a> RtSide<'a> {
             drawn: BTreeSet::new(),
             encoder_notes: BTreeSet::new(),
             argument_residents: Vec::new(),
+            surfaces: Vec::new(),
         }
     }
 
@@ -1596,10 +1599,70 @@ impl Side for RtSide<'_> {
         Ok(buffer)
     }
 
+    /// An IOSurface as the runtime's consumer makes one: an exported surface of the case's planes
+    /// (`Device::new_exported_surface`), each a texture of its format and extent that shaders
+    /// read, in the first of a dma-buf, an opaque fd and an NT handle the device exports, laid by
+    /// the runtime's rule at VA-API's 256-byte multiples. The case's texture is its plane's,
+    /// at an index of its own; the other planes are reached through views alone. The case reads
+    /// the texels alone, so the runtime's layout is not the case's to state.
+    fn surface_texture(&mut self, spec: &crate::case::SurfaceTexture) -> Answer<Handle> {
+        let at = spec.plane as usize;
+        if at >= spec.planes.len() {
+            return Err(Failure::named(
+                "NoSuchPlane",
+                format!("plane {at} of a surface of {}", spec.planes.len()),
+            ));
+        }
+        let index = self.on.next_index(rt::IndexClass::Texture);
+        let planes: Vec<rt::PlaneSpec> = (spec.planes.iter().enumerate())
+            .map(|(plane, laid)| {
+                let [width, height] = laid.size;
+                let mut descriptor =
+                    rt::TextureDescriptor::new(rt::TextureType::Type2D, laid.format, width, height);
+                descriptor.usage = rt::TextureUsage::SHADER_READ;
+                rt::PlaneSpec {
+                    descriptor,
+                    index: (plane == at).then_some(index),
+                    rows_below: 0,
+                }
+            })
+            .collect();
+        let on = self.on;
+        let make = |handle| {
+            on.device.new_exported_surface(&rt::SurfaceSpec {
+                handle,
+                pitch_multiple: 256,
+                start_multiple: 256,
+                planes: &planes,
+            })
+        };
+        let unexported = |answer: &Result<(rt::Surface, rt::SurfaceExport), rt::Error>| {
+            matches!(
+                answer,
+                Err(rt::Error::Limit(
+                    rt::Limit::NoExport { .. } | rt::Limit::ExportType { .. }
+                ))
+            )
+        };
+        let mut answer = make(rt::ExportHandle::DmaBuf);
+        for handle in [rt::ExportHandle::OpaqueFd, rt::ExportHandle::OpaqueWin32] {
+            if !unexported(&answer) {
+                break;
+            }
+            answer = make(handle);
+        }
+        let (surface, _export) = answer.map_err(|error| on.failure(&error))?;
+        let texture = surface.planes()[at].clone();
+        self.surfaces.push(surface);
+        Ok(self.keep_texture(texture))
+    }
+
     /// A texture over the buffer itself, the buffer's `newTextureWithDescriptor:offset:bytesPerRow:`
     /// of one 2D level at its first plane's offset and pitch, readable and writable by shaders, as
-    /// the old side makes it. A texture over a surface's plane answers its call unavailable, as
-    /// the runtime makes no texture of an IOSurface.
+    /// the old side makes it. A texture over a surface's plane the buffer stands for is one of
+    /// Metal's two-plane YCbCr formats, which converts the codes of both planes as it reads, and
+    /// the runtime has no texture of one; another format over a surface's plane is
+    /// [`Side::surface_texture`]'s.
     fn plane_texture(
         &mut self,
         buffer: Handle,
@@ -1607,7 +1670,7 @@ impl Side for RtSide<'_> {
     ) -> Answer<Handle> {
         if over.ostype.is_some() {
             return Err(Failure::unavailable(
-                "newTextureWithDescriptor:iosurface:plane:",
+                "newTextureWithDescriptor:iosurface:plane: of a two-plane YCbCr format",
             ));
         }
         let format = rt::PixelFormat::try_from(over.format).map_err(|problem| {

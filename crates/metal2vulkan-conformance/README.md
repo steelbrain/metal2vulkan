@@ -693,6 +693,7 @@ edits one.
 | `mesh_barriers` | Whether a reader draw sees a writer draw's words across a memory barrier | run on Metal |
 | `mesh_commands` | What an indirect command buffer's own-state mesh commands drew, and what two commands with no barrier between them determine | run on Metal |
 | `surface_fills` | Which bytes one private texture fill changed over a surface's plane or a buffer | carried; `fillTexture:` is Apple SPI |
+| `surface_textures` | What a texture of an ordinary format over a `'BGRA'`, `'RGhA'`, `'420v'` or `'x420'` surface's plane reads back, by `getBytes:` and by a blit, after `replaceRegion:` wrote it | run on Metal |
 | `indirect_private_types` | An indirect render command's read-back for each primitive type | carried; the getters are private |
 | `pixel_samplers` | A pixel-coordinate sampler's samples, through a slot, an argument buffer, a normalized control and a constexpr sampler | run on Metal |
 | `pixel_downscales` | A linear downscale by eight through a pixel-coordinate sampler, at seven texture sizes | run on Metal |

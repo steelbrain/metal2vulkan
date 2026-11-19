@@ -182,6 +182,7 @@ pub mod stage_in_unread;
 pub mod stencil_resolve_pairs;
 pub mod stencil_resolved_sample;
 pub mod surface_fills;
+pub mod surface_textures;
 pub mod swizzled_storage;
 pub mod tessellation_crossings;
 pub mod tessellation_rendered;
@@ -450,6 +451,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.push(Box::new(mesh_commands::own_state_commands()));
     cases.push(Box::new(mesh_commands::unordered_draws()));
     cases.push(Box::new(surface_fills::over_planes_and_buffers()));
+    cases.extend(surface_textures::all());
     for case in rate_maps::all() {
         cases.push(Box::new(case));
     }

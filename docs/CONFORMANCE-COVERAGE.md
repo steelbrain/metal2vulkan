@@ -14,7 +14,7 @@ The suite reaches Metal through `objc2-metal`, whose Rust name for a binding is 
 
 Its limits, measured rather than asserted:
 
-- **1692 of 1748 call sites** in the Metal leg resolve to an item of the SDK. 23 of those resolve because only one type in `objc2-metal` binds the name at all, so no typing was needed.
+- **1699 of 1756 call sites** in the Metal leg resolve to an item of the SDK. 23 of those resolve because only one type in `objc2-metal` binds the name at all, so no typing was needed.
 - **2 call sites send a selector `objc2-metal` binds on no Metal type at all**, so they are an item of no Metal container and there is no count for them to cost: `alloc`, `class`, which are `NSObject`'s.
 - **4 call sites send a selector by hand that `objc2-metal` binds no name for**, which is why they are sent with `msg_send!` rather than called. The crate names no container for such a selector, so no receiver typing can reach one and no item here is credited: `detachBacking`, `fillTexture:level:slice:region:bytes:length:`, `setFramebufferOnly:`, `setRotation:`. None of them is an implemented row of the coverage map — the generator fails rather than writing this document if one is, because that would be an item the suite exercises and nothing counts.
 - **9 call sites resolve to no item although some Metal type binds the selector**: an instance send whose receiver this could not type, a message to a class that does not bind the name sent to it, or a selector sent by hand to a receiver whose Rust type is a **supertype** of the one that binds it — which is often why it is sent by hand, since `objc2` casts between two protocol objects nowhere. Each sent its selector to exactly one receiver, so each exercised one item; which one is what the typing could not say. **Every one of their selectors is bound by at least one item some other call site credits**, so none of these sites proves an item is missing from the count. That is not a proof that the count is complete: such a site may have sent its selector to a type other than the credited one, and this cannot tell. To rule it out, spell the receiver's type at the call site — a `let` with a type, rather than a `let` with none — and this re-derives with the item credited to the case that calls it. A pattern binding is not one of the shapes that costs a site: a tuple, a `for`, a `match` arm and a closure parameter are each typed from what made them.
@@ -40,7 +40,7 @@ Its limits, measured rather than asserted:
 | share of the reachable exercised | 83% |
 | of those exercised, no case reaching it loosens anything | 557 |
 | of those exercised, a case reaching it loosens some site | 258 |
-| case modules | 172 |
+| case modules | 173 |
 | committed recordings | 1297 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
 | of those, reached only where this cannot name the family | 3 |
@@ -527,7 +527,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 
 | | |
 |---|---|
-| case modules | 172 |
+| case modules | 173 |
 | committed recordings | 1297 |
 | recorded runs behind a case, median | 3 |
 | recorded runs, least and most | 1 and 30 |
@@ -538,15 +538,15 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 17 |
 | tolerances in all | 19 |
-| modules declaring a notice (loosening no value) | 138 |
+| modules declaring a notice (loosening no value) | 139 |
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `NewRuntimeAccepted`, `WithoutCompression`, `NewRuntimeNotice` |
 | modules forbidding a re-record | 8 |
-| `Side` methods (the suite's whole device vocabulary) | 130 |
-| `Side` methods the Metal leg reaches an SDK item through | 125 |
+| `Side` methods (the suite's whole device vocabulary) | 131 |
+| `Side` methods the Metal leg reaches an SDK item through | 126 |
 | SDK items a case's Metal leg reaches, median | 55 |
 | the same, least and most | 0 and 216 |
-| Metal call sites in the leg | 1748 |
+| Metal call sites in the leg | 1756 |
 | distinct selectors the leg sends | 662 |
 | of those, resolved to an item of the coverage map | 655 |
 | oracles the recordings name | `apple-m3-max` ×1297 |
@@ -697,6 +697,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `stencil_resolve_pairs` | 2 | 2 | every field | 140 |
 | `stencil_resolved_sample` | 1 | 1 | every field | 140 |
 | `surface_fills` | 1 | 0 | every field | 0 |
+| `surface_textures` | 0 | 0 | every field | 0 |
 | `swizzled_storage` | 6 | 6 | every field | 45 |
 | `tessellation_crossings` | 6 | 6 | every field | 110 |
 | `tessellation_rendered` | 1 | 1 | every field | 126 |

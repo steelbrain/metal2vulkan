@@ -374,22 +374,26 @@ impl Surface {
     /// over, so the surface answers `IOSurfaceGetPlaneCount` 0 and its layout is read back through
     /// the top-level queries ([`Surface::is_as_asked`]) rather than the plane ones.
     ///
-    /// No OSType is stated. A rotated target's format is Metal's, not CoreVideo's, and the surface
-    /// only has to hold bytes of the right shape; asking for a four-character code Apple would
-    /// reinterpret is how a layout stops being the one the case states.
+    /// A rotated target states no OSType (`ostype` `None`): its format is Metal's, not
+    /// CoreVideo's, and the surface only has to hold bytes of the right shape; asking for a
+    /// four-character code Apple would reinterpret is how a layout stops being the one the case
+    /// states. A surface texture's case states the OSType its surface is of
+    /// ([`crate::case::SurfaceTexture`]).
     pub fn single_plane(
+        ostype: Option<[u8; 4]>,
         size: [u32; 2],
         bytes_per_element: u32,
         bytes_per_row: u32,
         pad: u8,
     ) -> Result<Surface, String> {
         // SAFETY: IOSurface's key constants, read once each.
-        let (width, height, element, row) = unsafe {
+        let (width, height, element, row, format) = unsafe {
             (
                 kIOSurfaceWidth,
                 kIOSurfaceHeight,
                 kIOSurfaceBytesPerElement,
                 kIOSurfaceBytesPerRow,
+                kIOSurfacePixelFormat,
             )
         };
         let values = [
@@ -398,12 +402,15 @@ impl Surface {
             number(u64::from(bytes_per_element)),
             number(u64::from(bytes_per_row)),
         ];
-        let properties = dictionary(&[
+        let code = ostype.map(|ostype| number(u64::from(u32::from_be_bytes(ostype))));
+        let mut pairs = vec![
             (width, values[0].0),
             (height, values[1].0),
             (element, values[2].0),
             (row, values[3].0),
-        ]);
+        ];
+        pairs.extend(code.as_ref().map(|code| (format, code.0)));
+        let properties = dictionary(&pairs);
         // SAFETY: a live dictionary of IOSurface's own keys, read during the call.
         let made = unsafe { IOSurfaceCreate(properties.0) };
         let surface = NonNull::new(made).map(Surface).ok_or_else(|| {
