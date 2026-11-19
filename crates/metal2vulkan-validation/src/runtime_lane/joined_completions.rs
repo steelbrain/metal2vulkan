@@ -20,6 +20,9 @@
 //! goes last in `M`'s group, so its completed handler runs while `L` still runs on the GPU; were `U`
 //! held before `L` in a group, it would be seen complete only once `L` completed. `M`, seen complete
 //! with its group's last, has completed by the time `U`'s handler runs, and before `L` completes.
+//! Whether `U` joins `M`'s group depends on the scheduler's pass finding `U` ready with `M`, which
+//! a loaded host may not (`M` then goes alone, `WorkCounts::batches_held_alone_unkept`): the test
+//! asserts the order, and that `M` either went in `U`'s submission or alone for a reason counted.
 
 use super::degrade_notices::counts;
 use super::grouped_submissions::{bytes_of, groups, taken_in, warm, GROUPED};
@@ -222,7 +225,8 @@ fn unmarked_parts_go_alone_under_the_exact_completion() {
 }
 
 /// The module docs' `M`, `U` and `L`: `U`'s completion is seen while `L` still runs, `M`'s by then
-/// too, and `M` and `U` went in one kernel submission where the device groups.
+/// too; where the device groups, `M` and `U` went in one kernel submission that `U` closed, or
+/// `M` went alone for a reason the runtime counts, and nothing else moved.
 #[test]
 fn an_unmarked_command_buffer_is_seen_complete_at_its_own_end() {
     let messages = Messages::default();
@@ -307,12 +311,19 @@ fn an_unmarked_command_buffer_is_seen_complete_at_its_own_end() {
         Some((true, false)),
         "at U's completed handler, M complete and L still running"
     );
-    if moved.grouping {
+    assert_eq!(
+        moved.submissions + moved.grouped,
+        3,
+        "{moved:?}: M, U and L in three kernel submissions, or M and U in one"
+    );
+    if moved.grouping && moved.grouped == 1 {
         assert_eq!(
-            moved.long, 0,
-            "{moved:?}: M alone for its queue's expected run"
+            (moved.batches, moved.closed),
+            (2, 1),
+            "{moved:?}: U closes M's group"
         );
-        assert!(moved.grouped >= 1 && moved.closed >= 1, "{moved:?}");
+    } else if moved.grouping {
+        assert_eq!(moved.unkept + moved.long, 1, "{moved:?}: why M went alone");
     } else {
         assert_eq!((moved.grouped, moved.closed), (0, 0), "{moved:?}");
     }
