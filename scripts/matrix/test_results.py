@@ -270,12 +270,13 @@ class HarnessBudgetTests(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
-    def select(self, leg_id, lines):
-        """The rows the leg's re-time selection chooses from LINES, as the matrix runs it."""
+    def select(self, leg_id, lines, cpu=None):
+        """The rows the leg's re-time selection chooses from LINES, as the matrix runs it on a node
+        whose CPU model is CPU."""
         run = subprocess.run(["awk", "-v", f"limits={results.harness_limits(leg_id)}", "-v",
                               f"gpulimits={results.harness_limits(leg_id, gpu=True)}", "-v",
                               f"wallre={results.WALL_RE}", "-v", f"budget={results.HARNESS_BUDGET!r}",
-                              results.RETIME_SELECT],
+                              "-v", f"skipre={results.retime_skip(cpu)}", results.RETIME_SELECT],
                              input="\n".join(lines) + "\n", capture_output=True, text=True, check=True)
         return sorted(line.split()[1] for line in run.stdout.splitlines())
 
@@ -911,6 +912,65 @@ class HarnessBudgetTests(unittest.TestCase):
             # A leg with no counts (Windows, or a refused counter) has no gate.
             self.assertEqual(budget("8086:3e9b", {}), ([], []))
 
+    def test_a_frame_row_where_the_cpu_clock_follows_the_load_is_judged_by_its_instructions_alone(self):
+        cpu = next(iter(results.CLOCK_FOLLOWS_LOAD))
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 130.0,
+                 "harness-old/frame_from_idle": 100.0, "harness-new/frame_from_idle": 150.0,
+                 "harness-old/burst_160": 100.0, "harness-new/burst_160": 110.0,
+                 "harness-old/alu": 100.0, "harness-new/alu": 110.0}
+        counted = {"harness-new/frame/per_run": 161000, "harness-old/frame/per_run": 149000,
+                   "harness-new/frame/own_per_run": 61000, "harness-new/frame/others_per_run": 100000}
+        lines = [f"M2V-MATRIX time {key} {value:.3f}" for key, value in times.items()]
+
+        def budget(these=times, counts=counted, on=cpu):
+            return results.harness_budget("1002:15bf", leg_of(recs(time=these, instructions=counts)), cpu=on)
+
+        lenient = ("harness budget frame: LENIENT instructions new own {} per run over old whole 149000 is {}; "
+                   "new others 100000, old's driver threads not separable")
+        not_judged = ("harness budget {}: new {} us over old 100.0 us is {}, not judged: judged by {} "
+                      "instructions per frame, its time only as a cross-GPU outlier, as its node's CPU clock "
+                      "follows the load")
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}), \
+                mock.patch.object(results, "STORED_INSTRUCTIONS", {}):
+            # On the listed CPU the frame rows' times fail nothing and are named; their count is
+            # judged; the burst row, and every other, is judged on its time as anywhere.
+            problems, parked = budget()
+            self.assertEqual(problems, ["harness budget alu: new 110.0 us over old 100.0 us is 1.100, past 1.03",
+                                        "harness budget burst_160: new 110.0 us over old 100.0 us is 1.100, past 1.03"])
+            self.assertEqual(parked, [
+                "harness budget frame: EXACT instructions new own 61000 per run, none stored",
+                lenient.format(61000, "0.409"), not_judged.format("frame", "130.0", "1.300", "its"),
+                not_judged.format("frame_from_idle", "150.0", "1.500", "its workload's")])
+            # Its count past old's whole count fails it there.
+            over = dict(counted, **{"harness-new/frame/own_per_run": 150000})
+            self.assertIn(lenient.format(150000, "1.007") + ": new own over old whole", budget(counts=over)[0])
+            # On any other CPU, and on a leg whose note names none, the frame rows' times fail.
+            for other in ("AMD Ryzen 7 8745H w/ Radeon 780M Graphics", None):
+                problems, _ = budget(on=other)
+                self.assertIn("harness budget frame: new 130.0 us over old 100.0 us is 1.300, past 1.03", problems)
+                self.assertIn("harness budget frame_from_idle: new 150.0 us over old 100.0 us is 1.500, past 1.03",
+                              problems)
+            # The leg re-times none of them there, and every row the budget fails elsewhere.
+            self.assertEqual(self.select("1002:15bf", lines, cpu), ["alu", "burst_160"])
+            self.assertEqual(self.select("1002:15bf", lines), ["alu", "burst_160", "frame", "frame_from_idle"])
+            # The old runtime's spread on a frame row voids no leg there, and does elsewhere.
+            spread = dict(times, **{"harness-retime/frame/1/old": 100.0, "harness-retime/frame/2/old": 130.0,
+                                    "harness-retime/frame/1/new": 130.0, "harness-retime/frame/2/new": 130.0})
+            self.assertIsNone(results.base_spread(spread, cpu))
+            self.assertEqual(results.base_spread(spread)[1], "frame")
+            self.assertFalse(results.base_spread_void(spread, cpu))
+            self.assertTrue(results.base_spread_void(spread))
+            # The time stays a cross-GPU outlier check: harness-new/ records are no parked records.
+            self.assertFalse("harness-new/frame".startswith(results.PARKED_RECORDS))
+            # The over table lists their counts there, never their times.
+            rows = results.over_rows("1002:15bf", recs(time=times, instructions=over), cpu)
+            self.assertEqual([(row, kind) for row, kind, _, _ in rows],
+                             [("alu", "host time"), ("burst_160", "host time"), ("frame", "count")])
+            rows = results.over_rows("1002:15bf", recs(time=times, instructions=over))
+            self.assertEqual([(row, kind) for row, kind, _, _ in rows],
+                             [("alu", "host time"), ("burst_160", "host time"), ("frame", "count"),
+                              ("frame", "host time"), ("frame_from_idle", "host time")])
+
     def test_the_stored_counts_table_reads_per_family_and_row(self):
         text = "# a comment\nrow  all  1002\nframe  61253  -\nburst_160  -  90000\n"
         self.assertEqual(results.read_counts(text), {"all": {"frame": 61253}, "1002": {"burst_160": 90000}})
@@ -992,6 +1052,24 @@ class OverTableTests(unittest.TestCase):
         # A leg that times nothing names no spread.
         del leg["timed"]
         self.assertNotIn("base spread", results.verdict_line("a:0001", leg))
+
+    def test_the_verdict_line_names_the_rule_that_judged_each_row(self):
+        cpu = next(iter(results.CLOCK_FOLLOWS_LOAD))
+        times = {f"harness-{runtime}/{row}": 100.0 for runtime in ("old", "new")
+                 for row in ("frame", "frame_5cb_from_idle", "alu", "burst_160")}
+        times["harness-new/authored/first_use_wait_total"] = 900.0
+        leg = {"verdict": "pass", "suites": {"harness": {"run": 0, "passed": 0, "exit": 0}},
+               "records": {"time": times}, "problems": [], "parked": [], "node": "n", "jobs": ["j1"], "cpu": cpu}
+        line = results.verdict_line("1002:15bf", leg)
+        self.assertIn(f"; rows judged by instructions per frame, time as a cross-GPU outlier only ({cpu}): "
+                      "frame, frame_5cb_from_idle; by time: the other 2", line)
+        # Elsewhere, and on a note that names no CPU, every row by its time.
+        for other in ("Apple M3 Max", None):
+            leg["cpu"] = other
+            self.assertIn("; rows judged by time: all 4", results.verdict_line("1002:15bf", leg))
+        # A leg that compared no row names no rule.
+        leg["records"] = {}
+        self.assertNotIn("rows judged", results.verdict_line("1002:15bf", leg))
 
     def test_a_leg_void_by_the_old_runtime_s_spread_reads_void_on_every_time(self):
         times = {"harness-old/alu": 100.0, "harness-new/alu": 110.0,

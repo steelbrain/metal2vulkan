@@ -223,5 +223,16 @@ class HarnessRunTests(unittest.TestCase):
         self.assertEqual(suites[matrix.HARNESS_SUITE]["duplicated"], set())
 
 
+class JudgingRuleTests(unittest.TestCase):
+    def test_a_node_whose_cpu_clock_follows_the_load_re_times_no_frame_row(self):
+        cpu = next(iter(matrix.results.CLOCK_FOLLOWS_LOAD))
+        listed = matrix.harness_runs('"w"', '"h"', "a", cpu=cpu)
+        self.assertIn(f"-v skipre='{matrix.results.retime_skip(cpu)}'", listed)
+        self.assertIn("-v skipre='' ", matrix.harness_runs('"w"', '"h"', "a"))
+        script = matrix.gpu_script("abc", "", [matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")],
+                                   "POTLUCK_MIRROR_x", "0" * 40, "harness", False, cpu=cpu)
+        self.assertIn(f"-v skipre='{matrix.results.retime_skip(cpu)}'", script)
+
+
 if __name__ == "__main__":
     unittest.main()

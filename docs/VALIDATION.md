@@ -441,7 +441,14 @@ a row with none stored is named. LENIENT, named on every row: the own count is a
 runtime's whole count (`.../per_run`), the old runtime naming none of its threads, so its driver's
 share cannot be taken out. A new runtime that records its whole count but not its own fails the
 row. A time that moves while its count holds names waits. Every row records its counts; only
-these are gated on them. A row whose GPU time varies on
+these are gated on them. On a node whose CPU's clock follows the load (`CLOCK_FOLLOWS_LOAD` in
+`scripts/matrix/results.py`, by potluck's CPU model: the Ryzen 7 7840HS, whose cores' mean clock
+tracked the frame rows' pass time on its Radeon 780M, r = -0.88 over twelve passes of one build),
+the frame rows (`frame`, `frame_5cb` and their `_from_idle` rows) of every card the node hosts
+are judged by the instructions gate alone, a latency from idle row by its workload's counts:
+their time is named on the leg's line and judged only as a cross-GPU outlier, the leg re-times
+none of them, and their old runtime's spread voids no leg. The leg's line names the rule that
+judged each row (`rows judged by ...`). A row whose GPU time varies on
 one card itself (`CARD_VARIANCE`: the XTX's `sampling` and `constant_managed`) is named on the
 leg's line as the card's variance and fails nothing. A row over it fails its leg unless a ruling, made after the work on that
 row, gave it a ceiling on that GPU (`HARNESS_CEILINGS` in `scripts/matrix/results.py`); a ceiling

@@ -361,6 +361,34 @@ HARNESS_GPU = "harness-gpu-"
 WALL_ROWS = ("frame", "burst")
 #: WALL_ROWS as the re-time selection's awk pattern.
 WALL_RE = "^(" + "|".join(WALL_ROWS) + ")"
+#: The CPUs whose cores' clock follows the load, by their model as potluck's node facts give it
+#: (`cpu_model`, kept in a leg's note as `cpu`), each with what was seen there. On a node with one,
+#: a frame row's host time moves with the clock its passes found, so the frame rows (FRAME_ROWS) of
+#: every card the node hosts are judged by the new runtime's instructions per frame
+#: (instruction_gate; a latency from idle row by its workload's), and their time only as a
+#: cross-GPU outlier (time_outliers): harness_budget names their time and judges nothing on it,
+#: the leg re-times none of them (RETIME_SELECT, retime_skip), and the old runtime's spread on them
+#: voids no leg (base_spread). The planner's ruling.
+CLOCK_FOLLOWS_LOAD = {
+    "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics":
+        "the cores' mean clock tracked the frame rows' pass time, r = -0.88 over twelve passes of one "
+        "build on its Radeon 780M (m3-max-49287)",
+}
+#: The frame rows, by the start of their names: the frames workloads' rows and their latency from
+#: idle rows (FROM_IDLE).
+FRAME_ROWS = ("frame",)
+
+
+def counts_judge(cpu, row):
+    """Whether ROW is judged by instructions per frame on a node whose CPU model is CPU
+    (CLOCK_FOLLOWS_LOAD), its time only as a cross-GPU outlier."""
+    return cpu in CLOCK_FOLLOWS_LOAD and row.startswith(FRAME_ROWS)
+
+
+def retime_skip(cpu):
+    """The rows a leg on a node whose CPU model is CPU does not re-time, as RETIME_SELECT's awk
+    pattern SKIPRE: the rows counts_judge judges by their counts, or none (empty)."""
+    return "^(" + "|".join(FRAME_ROWS) + ")" if cpu in CLOCK_FOLLOWS_LOAD else ""
 #: Rows whose GPU time varies on one card itself, run to run or with its driver's register
 #: assignment of an unchanged loop, by GPU leg, with what was seen: harness_budget judges them on
 #: their GPU time against their GPU floor like any other, never fails a leg for them, and names
@@ -701,7 +729,8 @@ RETIME_KEEP = (r"s#^M2V-MATRIX time harness-$timed/$row #M2V-MATRIX time harness
 #: where it has them on both and does not match WALLRE (gpu_judged), against GPULIMITS', else of
 #: its times, against LIMITS' (`row=limit ...`, harness_limits), or BUDGET where a row has no
 #: limit listed, a latency from idle row (FROM_IDLE) against its workload's row's (listed_row):
-#: harness_budget's comparison, of the same decimals.
+#: harness_budget's comparison, of the same decimals. None that matches SKIPRE (retime_skip), where
+#: it is not empty: their times judge nothing.
 RETIME_SELECT = r"""function read(text, into,   n, i, l, p) { n = split(text, l, " "); for (i = 1; i <= n; i++) { split(l[i], p, "="); into[p[1]] = p[2] } }
 BEGIN { read(limits, limit); read(gpulimits, glimit) }
 $1 == "M2V-MATRIX" && $2 == "time" && $3 ~ /^harness-(old|new)\/[^\/]+$/ {
@@ -714,6 +743,7 @@ END {
   for (row in rows) {
     old = t["harness-old/" row]; new = t["harness-new/" row]
     if (old == "" || new == "" || old + 0 <= 0) continue
+    if (skipre != "" && row ~ skipre) continue
     gold = g["harness-gpu-old/" row] + 0; gnew = g["harness-gpu-new/" row] + 0
     lr = row; sub(/_from_idle$/, "", lr)
     if (row !~ wallre && gold > 0 && gnew > 0) { r = gnew / gold; m = (lr in glimit) ? glimit[lr] + 0 : budget + 0 }
@@ -772,15 +802,16 @@ HARNESS_SHAPE = "one process, new then old"
 BASE_SPREAD = 0.10
 
 
-def base_spread(times):
+def base_spread(times, cpu=None):
     """The old runtime's own spread across its passes in a leg's TIMES, as (spread, row), or None
     where no steady row has two: of each row the leg re-timed (RETIME_PAIRS), on the times it is
     judged on (gpu_judged), the old runtime's main run's and its re-timed runs', the largest over
     the smallest less 1, and of the rows, the largest. A creation row's first samples are cold,
-    spread by nature and judged cold against cold, so none counts."""
+    spread by nature and judged cold against cold, so none counts; nor does a row judged by its
+    counts on a node whose CPU model is CPU (counts_judge), whose time judges nothing."""
     widest = None
     for row in sorted({key[len(HARNESS_RETIME):].rsplit("/", 2)[0] for key in times if key.startswith(HARNESS_RETIME)}):
-        if first_row(row):
+        if first_row(row) or counts_judge(cpu, row):
             continue
         gpu = gpu_judged(times, row)
         main, again = (f"{HARNESS_GPU}old/{row}", HARNESS_RETIME_GPU) if gpu else (f"{HARNESS_OLD}{row}", HARNESS_RETIME)
@@ -791,9 +822,10 @@ def base_spread(times):
     return widest
 
 
-def base_spread_void(times):
-    """Whether a leg's TIMES are VOID by the old runtime's own spread (base_spread, BASE_SPREAD)."""
-    spread = base_spread(times)
+def base_spread_void(times, cpu=None):
+    """Whether a leg's TIMES, on a node whose CPU model is CPU, are VOID by the old runtime's own
+    spread (base_spread, BASE_SPREAD)."""
+    spread = base_spread(times, cpu)
     return spread is not None and spread[0] > BASE_SPREAD
 
 
@@ -835,7 +867,7 @@ def frozen_void(times, base, rebased=None):
     return [(row, *move) for row, move in moves if move and abs(move[2]) > FROZEN_DRIFT]
 
 
-def harness_budget(leg_id, leg, base=None, rebased=None):
+def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
     """The harness budget on LEG, the parsed leg LEG_ID: each row timed on both runtimes
     (`harness-new/<row>` and `harness-old/<row>`) against its limit, row_limit: HARNESS_BUDGET times
     the greater of its ceiling (HARNESS_CEILINGS) and its floor. A row with a GPU time on both
@@ -859,7 +891,8 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
     judged (frozen_move), unless REBASED, how the base differs, leaves it uncompared
     (frozen_rebased). Where the old runtime's own spread across its passes in the leg is past
     BASE_SPREAD (base_spread), every row its times would fail is named VOID and fails nothing;
-    the problems of its records and its counts stand."""
+    the problems of its records and its counts stand. On a node whose CPU model is CPU, a row
+    counts_judge judges by its counts is judged by the instructions gate alone, its time named."""
     problems, parked, timed = [], [], []
     suites = leg["suites"].values()
     for row in sorted({test[len(HARNESS_OLD):] for suite in suites for test in suite["failed"]
@@ -889,6 +922,12 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
         gated, named = instruction_gate(leg_id, row, records)
         problems += gated
         parked += named
+        if counts_judge(cpu, row):
+            whose = "its workload's" if row.endswith(FROM_IDLE) else "its"
+            parked.append(f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is {new / old:.3f}, "
+                          f"not judged: judged by {whose} instructions per frame, its time only as a "
+                          "cross-GPU outlier, as its node's CPU clock follows the load")
+            continue
         shown = next((why for end, why in SHOWN_FIRST.items() if row.endswith(end)), None)
         if first_row(row) and shown:
             samples = first_samples(times, row)
@@ -968,7 +1007,7 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
             parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
         else:
             parked.append(f"{line}, within {HARNESS_BUDGET}: its ceiling {ceilings[listed_row(row)]} leaves the list")
-    spread = base_spread(times)
+    spread = base_spread(times, cpu)
     if spread is not None and spread[0] > BASE_SPREAD:
         parked.append(f"harness budget VOID: the old runtime's own spread across its passes is {spread[0]:.1%} "
                       f"on {spread[1]}, past {BASE_SPREAD:.0%}, so the leg's times judge nothing")
@@ -978,7 +1017,7 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
     return problems, parked
 
 
-def over_rows(leg_id, records):
+def over_rows(leg_id, records, cpu=None):
     """Every harness row of a leg's RECORDS past its limit on LEG_ID as harness_budget judges it,
     each `(row, kind, ratio, limit)`, in row order: kind `GPU time` for a row judged on its GPU
     time (gpu_judged), `host time` for one judged on its time, `own part` for a creation row judged
@@ -987,7 +1026,8 @@ def over_rows(leg_id, records):
     (EXACT against the stored count, LENIENT against the old runtime's whole count), the ratio
     new over old (the median of the re-timed pairs where the row was re-timed, of the FIRST_RUNS
     processes' medians for a creation row's first sample). A row its re-timed pairs bring within
-    is not over; a shown row (SHOWN_FIRST) is never judged, so never over."""
+    is not over; a shown row (SHOWN_FIRST) is never judged, so never over; nor is the time of a row
+    judged by its counts on a node whose CPU model is CPU (counts_judge)."""
     times, counted = records["time"], records["instructions"]
     out = []
     for key in sorted(times):
@@ -1002,7 +1042,7 @@ def over_rows(leg_id, records):
                 out.append((row, "count", own / stored, HARNESS_BUDGET))
             if own > old_i:
                 out.append((row, "count", own / old_i, 1.0))
-        if first_row(row) and any(row.endswith(end) for end in SHOWN_FIRST):
+        if counts_judge(cpu, row) or (first_row(row) and any(row.endswith(end) for end in SHOWN_FIRST)):
             continue
         if first_row(row):
             samples = first_samples(times, row)
@@ -1077,17 +1117,17 @@ def row_status(leg_id, row, over_before, rounds_since):
     return ("UNOWNED" if over_before else "NEW") + notes
 
 
-def over_lines(leg_id, records, base, rebased, rounds_since):
+def over_lines(leg_id, records, base, rebased, rounds_since, cpu=None):
     """The report's table on LEG_ID: one line per row over its limit in the leg's RECORDS
     (over_rows): its kind, its ratio and limit, the frozen arm's verdict against BASE, the base
     leg's records (`VOID`, `stands`, `rebased` where REBASED leaves it uncompared, `no base`; `-`
     for a count; `VOID` on every time where the old runtime's own spread voids the leg,
-    base_spread), and its status (row_status)."""
+    base_spread), and its status (row_status). CPU: the CPU model of the leg's node."""
     base_times = base and base["time"]
-    before = {(row, kind) for row, kind, _, _ in over_rows(leg_id, base)} if base else set()
-    void = base_spread_void(records["time"])
+    before = {(row, kind) for row, kind, _, _ in over_rows(leg_id, base, cpu)} if base else set()
+    void = base_spread_void(records["time"], cpu)
     lines = []
-    for row, kind, ratio, limit in over_rows(leg_id, records):
+    for row, kind, ratio, limit in over_rows(leg_id, records, cpu):
         move = frozen_move(records["time"], base_times, row)
         meter = ("-" if kind == "count" else "VOID" if void else "no base" if move is None
                  else "rebased" if frozen_rebased(row, rebased) else "VOID" if abs(move[2]) > FROZEN_DRIFT else "stands")
@@ -1138,8 +1178,24 @@ def harness_rows(records, base=None, rebased=None):
     return lines
 
 
+def judging_rules(cpu, times):
+    """Which rule judged each harness row of a leg's TIMES, on a node whose CPU model is CPU, as
+    the verdict line names it: the rows judged by instructions per frame (counts_judge) by name,
+    the rest, judged by time (harness_budget), counted; nothing where the leg compared no row."""
+    rows = sorted({key[len(HARNESS_NEW):] for key in times
+                   if key.startswith(HARNESS_NEW) and times.get(HARNESS_OLD + key[len(HARNESS_NEW):])})
+    if not rows:
+        return ""
+    counted = [row for row in rows if counts_judge(cpu, row)]
+    if not counted:
+        return f"; rows judged by time: all {len(rows)}"
+    return (f"; rows judged by instructions per frame, time as a cross-GPU outlier only ({cpu}): "
+            f"{', '.join(counted)}; by time: the other {len(rows) - len(counted)}")
+
+
 def verdict_line(leg_id, leg):
-    """The one line `run` and `show` print for a leg of a note."""
+    """The one line `run` and `show` print for a leg of a note, with the rule that judged each of
+    its harness rows (judging_rules, by its node's CPU model, `cpu`)."""
     tests = ", ".join(f"{name} {s['passed']}/{s['run']}" if s["run"] else f"{name} exit {s['exit']}"
                       for name, s in leg.get("suites", {}).items())
     counted = sum(len(values) for values in leg.get("records", {}).values())
@@ -1148,6 +1204,7 @@ def verdict_line(leg_id, leg):
     head = f"{verdict} {leg_id:10} {where or '?'} on {leg.get('node', '?')}"
     tail = (f"{tests or 'no suite ran'}; {counted} records; base {(leg.get('base') or 'none')[:10]}; "
             f"jobs {' '.join(leg.get('jobs', [])) or '-'}")
+    tail += judging_rules(leg.get("cpu"), (leg.get("records") or {}).get("time") or {})
     if "timed" in leg:
         spread = leg["timed"]["spread"]
         tail += "; base spread " + ("n/a" if spread is None else f"{spread[0]:.1%} on {spread[1]}")
