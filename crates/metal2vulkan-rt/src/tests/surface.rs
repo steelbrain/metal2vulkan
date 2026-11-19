@@ -7,10 +7,11 @@
 //! driver's fixed pitch of these pictures meets). Each surface's layout is checked against the
 //! rule (plane 0 at 0, one pitch, exact starts); a second device of the same physical device
 //! imports the handle and writes three pictures, each acquired by rt and read through its plane
-//! textures; rt copies a picture into the planes and releases them, and the second device reads
-//! it through the handle (the encode round); rt clears each plane in a render pass, reads it, and
-//! releases it to the second device's read (the render round). The make's wall time per surface
-//! is printed.
+//! textures by a blit into a Shared buffer whose bytes the host compares (a consumer's CPU read of
+//! a decoded picture); rt copies a picture into the planes and releases them, and the second
+//! device reads it through the handle (the encode round); rt clears each plane in a render pass,
+//! reads it, and releases it to the second device's read (the render round). The memory type the
+//! export names, with its flags, and the make's wall time per surface are printed.
 //!
 //! The second device stands in for the other API, as in the export tests: a device of another
 //! instance cannot run under the validation layer.
@@ -457,6 +458,11 @@ mod on_device {
                 .find(|physical| physical.raw() == device.raw().physical_device)
                 .expect("the device's physical device");
             let queue = device.new_command_queue(4).expect("a queue");
+            let raw = device.raw();
+            // SAFETY: the physical device is the instance's.
+            let kinds = unsafe {
+                (raw.instance).get_physical_device_memory_properties(raw.physical_device)
+            };
             let mut in_place_pitch = [None; 2];
             for row in &ROWS {
                 let handle = row.handle;
@@ -515,8 +521,10 @@ mod on_device {
                             );
                         }
                     }
+                    let index = export.export.memory_type;
+                    let flags = kinds.memory_types_as_slice()[index as usize].property_flags;
                     println!(
-                        "surface: {label}: form {form:?}, pitch {}, plane 1 at {}, size {}, made in {:.3} ms",
+                        "surface: {label}: form {form:?}, pitch {}, plane 1 at {}, size {}, memory type {index} ({flags:?}), made in {:.3} ms",
                         export.planes[0].row_pitch,
                         export.planes[1].offset,
                         export.export.size,
