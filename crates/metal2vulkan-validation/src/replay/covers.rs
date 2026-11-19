@@ -384,10 +384,8 @@ impl Covers {
             false => &[SlotStage::Kernel],
         };
         for &stage in stages {
-            if !self.writes.contains_key(&(pipeline, stage)) {
-                let answered = writes(pipeline, stage).unwrap_or_default();
-                self.writes.insert((pipeline, stage), answered);
-            }
+            (self.writes.entry((pipeline, stage)))
+                .or_insert_with(|| writes(pipeline, stage).unwrap_or_default());
         }
         let mut written = Vec::new();
         for &(stage, index, texture) in &held {
