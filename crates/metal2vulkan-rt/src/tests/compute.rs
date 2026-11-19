@@ -692,10 +692,11 @@ pub(crate) mod on_device {
         });
     }
 
-    /// Vulkan reads indirect arguments only at a multiple of 4 of the `VkBuffer`: in a buffer the
-    /// consumer placed 2 bytes into its block, arguments at offsets Metal takes are refused
-    /// (`Refusal::ArgumentPlace`), and arguments in a buffer placed at byte 4100, a multiple of 4
-    /// no Metal buffer starts at, are read where they lie.
+    /// Vulkan reads indirect arguments only at a multiple of 4 of the `VkBuffer`, which spans
+    /// the block's allocation: in a buffer the consumer placed 2 bytes into its block, arguments
+    /// at offsets Metal takes are refused (`Refusal::ArgumentPlace`, at their byte of the
+    /// allocation), and arguments in a buffer placed at byte 4100, a multiple of 4 no Metal buffer
+    /// starts at, are read where they lie.
     #[test]
     fn every_device_reads_indirect_arguments_only_at_a_multiple_of_4_of_their_block() {
         each_device("compute_indirect_place", |name, _, device| {
@@ -726,7 +727,11 @@ pub(crate) mod on_device {
             for offset in [0, 16] {
                 match encoder.dispatch_threadgroups_with_indirect_buffer(&off, offset, [16, 1, 1]) {
                     Err(Error::Refused(Refusal::ArgumentPlace { place, alignment })) => {
-                        assert_eq!((place, alignment), (2 + offset, 4), "{name}: at {offset}");
+                        assert_eq!(
+                            (place, alignment),
+                            (block.offset + 2 + offset, 4),
+                            "{name}: at {offset}"
+                        );
                     }
                     other => panic!("{name}: arguments at {offset}: {other:?}"),
                 }

@@ -1420,8 +1420,8 @@ impl RenderCommandEncoder {
     ///
     /// Err: as [`draw_primitives`](Self::draw_primitives); [`Refusal::OtherDevice`] for another
     /// device's index buffer; [`Refusal::IndexBufferOffset`]; [`Refusal::ArgumentPlace`] for
-    /// indices at a byte of the buffer's block that is not a multiple of the index size, as a
-    /// buffer placed at such a byte has.
+    /// indices at a byte of the buffer's block's allocation that is not a multiple of the index
+    /// size, as a buffer placed at such a byte has.
     pub fn draw_indexed_primitives(
         &mut self,
         primitive_type: PrimitiveType,

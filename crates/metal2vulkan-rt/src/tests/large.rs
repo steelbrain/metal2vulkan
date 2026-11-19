@@ -7,7 +7,8 @@
 //! - such a buffer and its block given up right after the commit of a command buffer that writes
 //!   and reads it: the command buffer completes and reads its writes;
 //! - a block given up while an encoded, uncommitted command buffer holds a buffer in it is not
-//!   taken again until that command buffer retires, or is dropped uncommitted;
+//!   taken again until that command buffer retires, and goes back to the pool once it is dropped
+//!   uncommitted;
 //!
 //! and every gauge reads zero after teardown.
 
@@ -16,6 +17,8 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::{Buffer, CommandQueue, ComputePipelineState, Device, DispatchType, MemoryClass};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     /// The length of the first of three buffers a replayed frame makes, 548 MiB: a take longer
     /// than any allocation the pool makes on its own.
@@ -253,7 +256,7 @@ mod on_device {
     /// length then gets another block, whose bytes the dispatch leaves as they were once the
     /// command buffer is committed and completes, while the first block's range reads the
     /// dispatch's write through no handle. A command buffer dropped uncommitted gives such a
-    /// block back: the next take of its length gets it again.
+    /// block back to the pool, which holds it only once the command buffer is gone.
     #[test]
     fn every_device_takes_no_block_an_encoded_uncommitted_command_buffer_holds() {
         const SMALL: u64 = 4 << 20;
@@ -311,21 +314,23 @@ mod on_device {
             assert_eq!(after, expected, "{name}: the other block's bytes");
             drop((command_buffer, second));
 
-            // Dropped uncommitted, the command buffer gives the block back: a length no other
-            // block given back has, so the next take of it gets this one or a new range.
+            // Dropped uncommitted, the command buffer gives the block back.
             let len = SMALL + (64 << 10);
             let third = take(len);
-            let third_address = third.gpu_address;
+            let third_id = third.id;
             let buffer = (device.new_buffer(third.id, 0, len, Some(0))).expect("a buffer");
             let command_buffer = encode(&buffer);
             drop((buffer, third));
-            drop(command_buffer);
-            let again = take(len);
-            assert_eq!(
-                again.gpu_address, third_address,
-                "{name}: the block given back"
+            assert!(
+                !device.core().pool.holds(third_id),
+                "{name}: the pool holds a block an encoded command buffer holds"
             );
-            drop(again);
+            drop(command_buffer);
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while !device.core().pool.holds(third_id) {
+                assert!(Instant::now() < deadline, "{name}: the block given back");
+                thread::sleep(Duration::from_millis(1));
+            }
         });
     }
 }

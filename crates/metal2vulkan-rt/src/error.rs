@@ -688,9 +688,9 @@ pub enum Refusal {
         /// The buffer's length.
         length: u64,
     },
-    /// An indirect dispatch's arguments, or an indexed draw's indices, at a byte of the block
-    /// the buffer lies in (its device copy's, for a Managed buffer with one) that is not a
-    /// multiple of 4, or of the index size.
+    /// An indirect dispatch's arguments, or an indexed draw's indices, at a byte of the
+    /// allocation the buffer's block lies in (its device copy's, for a Managed buffer with one)
+    /// that is not a multiple of 4, or of the index size.
     ///
     /// Metal's offset rules keep both at such a multiple of the buffer's start, so only a buffer
     /// that starts off it meets this: a no-copy buffer
@@ -705,7 +705,9 @@ pub enum Refusal {
     /// memory; a Metal buffer starts at an aligned address, so Metal's offset rule alone keeps
     /// both aligned there).
     ArgumentPlace {
-        /// The byte of the block the arguments or indices start at.
+        /// The byte of the allocation the arguments or indices start at: their block's offset
+        /// there ([`BlockInfo::offset`](crate::BlockInfo::offset)) plus their place in the
+        /// block.
         place: u64,
         /// The multiple Vulkan reads them at: 4, or the index size.
         alignment: u64,
