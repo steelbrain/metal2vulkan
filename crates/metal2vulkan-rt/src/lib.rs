@@ -84,6 +84,8 @@ pub use metal2vulkan::library::Library;
 pub use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 /// `MTLBindingAccess`, which a pipeline state's texture slots answer: the translator's.
 pub use metal2vulkan::metal::BindingAccess;
+/// `MTLReadWriteTextureTier`: the translator's.
+pub use metal2vulkan::metal::ReadWriteTextureTier;
 /// `MTLSamplerMinMagFilter`, `MTLSamplerMipFilter`, `MTLSamplerAddressMode`,
 /// `MTLSamplerBorderColor`, `MTLCompareFunction` and `MTLSamplerReductionMode`: the translator's.
 pub use metal2vulkan::metal::{

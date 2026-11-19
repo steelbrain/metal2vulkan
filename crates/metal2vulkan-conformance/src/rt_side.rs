@@ -978,6 +978,10 @@ impl Side for RtSide<'_> {
         })
     }
 
+    fn read_write_texture_tier(&mut self) -> Answer<metal2vulkan::metal::ReadWriteTextureTier> {
+        Ok(self.on.device.read_write_texture_support())
+    }
+
     fn minimum_linear_texture_alignment(&mut self, format: PixelFormat) -> Answer<u64> {
         (self.on.device.minimum_linear_texture_alignment(format))
             .map_err(|error| Failure::of_rt(&error))

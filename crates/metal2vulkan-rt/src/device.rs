@@ -28,6 +28,7 @@ use ash::vk;
 use metal2vulkan::device::{
     ApiVersion, DeviceDescription, DevicePolicy, HandleDomain, PointerDomain,
 };
+use metal2vulkan::metal::ReadWriteTextureTier;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{c_char, CString};
@@ -605,6 +606,14 @@ impl Device {
         let complete = spawn("m2v-complete", core, Role::Complete, complete::run)?;
         lock(&device.shared.threads).complete = Some(complete);
         Ok(device)
+    }
+
+    /// `readWriteTextureSupport`: `MTLReadWriteTextureTier2` on every device above the floor.
+    /// Tier 2's 18 formats are storage images Vulkan requires of every device (the four-channel
+    /// and the 32-bit ones) or the floor's `shaderStorageImageExtendedFormats` requires (the six 8-
+    /// and 16-bit single-channel ones), read and written through `access::read_write`.
+    pub fn read_write_texture_support(&self) -> ReadWriteTextureTier {
+        ReadWriteTextureTier::Tier2
     }
 
     /// `hasUnifiedMemory`: true where Vulkan's device type is integrated or CPU, false for a

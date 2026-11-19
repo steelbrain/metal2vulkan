@@ -81,6 +81,10 @@ them over this crate's items:
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock
   (see "Presenting"). The runtime keeps owning every handle.
 - `Device::has_unified_memory` is true where Vulkan's device type is integrated or CPU.
+- `Device::read_write_texture_support` is `MTLReadWriteTextureTier2` on every device above the
+  floor: Vulkan requires storage images of tier 2's four-channel and 32-bit formats, and the
+  floor's `shaderStorageImageExtendedFormats` its six 8- and 16-bit single-channel ones. The
+  device test `read_write_tier` reads and writes each of the 18 through `access::read_write`.
 
 ### Teardown
 
