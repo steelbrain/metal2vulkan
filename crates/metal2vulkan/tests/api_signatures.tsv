@@ -9594,7 +9594,7 @@ method	metal2vulkan-rt::Instance::extensions	pub fn extensions(&self) -> &[CStri
 method	metal2vulkan-rt::Instance::new	pub fn new(extensions: &[&CStr]) -> Result<Instance, Error>
 method	metal2vulkan-rt::Instance::physical_devices	pub fn physical_devices(&self) -> Result<Vec<PhysicalDevice>, Error>
 method	metal2vulkan-rt::Instance::raw	pub fn raw(&self) -> (&ash::Entry, &ash::Instance)
-method	metal2vulkan-rt::Instance::with_drivers	pub unsafe fn with_drivers(extensions: &[&CStr], drivers: &[vk::PFN_vkGetInstanceProcAddr]) -> Result<Instance, Error>
+method	metal2vulkan-rt::Instance::with_drivers	pub unsafe fn with_drivers(loader: Option<&Path>, extensions: &[&CStr], drivers: &[vk::PFN_vkGetInstanceProcAddr]) -> Result<Instance, Error>
 method	metal2vulkan-rt::Library::bytes	pub fn bytes(&self) -> &[u8]
 method	metal2vulkan-rt::Library::content_hash	pub fn content_hash(&self) -> &Hash256
 method	metal2vulkan-rt::Library::dependencies	pub fn dependencies(&self) -> impl Iterator<Item = &str>

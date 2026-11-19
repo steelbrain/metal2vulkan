@@ -35,21 +35,25 @@ them over this crate's items:
 
 ## Instance and device
 
-- `Instance::new` loads the Vulkan loader and creates the instance at the floor's version, with
-  the floor's instance extensions and each extension the consumer names that the loader offers:
-  the window system's, and any other it uses. Where the loader offers
-  `VK_KHR_portability_enumeration`, it is enabled and portability devices are listed too, each
-  checked against the floor as any other. `Instance::extensions` lists those enabled.
+- `Instance::new` loads the Vulkan loader, the first of the platform's standard names that the
+  system's library search finds (`vulkan-1.dll` on Windows, `libvulkan.dylib` then
+  `libvulkan.1.dylib` on macOS, `libvulkan.so.1` then `libvulkan.so` elsewhere), and creates the
+  instance at the floor's version, with the floor's instance extensions and each extension the
+  consumer names that the loader offers: the window system's, and any other it uses. Where the
+  loader offers `VK_KHR_portability_enumeration`, it is enabled and portability devices are listed
+  too, each checked against the floor as any other. `Instance::extensions` lists those enabled.
   `Instance::physical_devices` lists the physical devices in the loader's order.
-- `Instance::with_drivers` (unsafe) is `Instance::new` with the consumer's own Vulkan drivers, for
-  a consumer that ships its driver (on macOS, Mesa's Mac driver in its bundle). Each is given by
-  its `vkGetInstanceProcAddr`: for a driver built for the Vulkan loader, the
-  `vk_icdGetInstanceProcAddr` it exports. The instance enables `VK_LUNARG_direct_driver_loading`
-  and gives the loader the list in its exclusive mode, so the loader loads those drivers alone,
-  none the system installed or its variables name; where the loader does not offer the
-  extension, it refuses with `Error::NoDirectDriverLoading`. An extension is enabled where the
-  loader or one of the drivers lists it. The runtime searches for no driver, reads no variable
-  and names none: the consumer loads the library and keeps it loaded while the instance lives.
+- `Instance::with_drivers` (unsafe) is `Instance::new` with the consumer's own Vulkan loader, its
+  own Vulkan drivers, or both, for a consumer that ships them (on macOS, the loader and Mesa's Mac
+  driver in its bundle). The loader is given by its path and is the one loaded, with no search of
+  the standard names. Each driver is given by its `vkGetInstanceProcAddr`: for a driver built for
+  the Vulkan loader, the `vk_icdGetInstanceProcAddr` it exports. The instance enables
+  `VK_LUNARG_direct_driver_loading` and gives the loader the list in its exclusive mode, so the
+  loader loads those drivers alone, none the system installed or its variables name; where the
+  loader does not offer the extension, it refuses with `Error::NoDirectDriverLoading`. An
+  extension is enabled where the loader or one of the drivers lists it. The runtime searches no
+  directory for a loader or a driver, reads no variable and names no driver: the consumer loads
+  each driver's library and keeps it loaded while the instance lives.
 - `Device::new` checks a physical device against the floor and makes one `VkDevice`. Every
   command queue, every guest process and the compositor share it. It takes the floor's queue
   family, the first that does graphics and compute: one queue for the runtime, and a second for

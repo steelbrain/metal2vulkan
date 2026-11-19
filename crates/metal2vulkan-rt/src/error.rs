@@ -14,8 +14,9 @@ use std::{fmt, io};
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum Error {
-    /// [`Instance::new`](crate::Instance::new) found no Vulkan loader to load. Metal has no
-    /// counterpart: Metal is part of the system.
+    /// [`Instance::new`](crate::Instance::new) found no Vulkan loader under the platform's
+    /// standard names, or [`Instance::with_drivers`](crate::Instance::with_drivers) none at the
+    /// consumer's path. Metal has no counterpart: Metal is part of the system.
     Loader(ash::LoadingError),
     /// [`Instance::with_drivers`](crate::Instance::with_drivers): the consumer gave its own
     /// drivers, and the Vulkan loader does not offer `VK_LUNARG_direct_driver_loading`, by which

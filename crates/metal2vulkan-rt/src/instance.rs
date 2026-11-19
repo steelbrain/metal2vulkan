@@ -4,6 +4,7 @@ use crate::error::Error;
 use crate::floor;
 use ash::vk;
 use std::ffi::{c_char, CStr, CString};
+use std::path::Path;
 use std::sync::Arc;
 
 /// No Metal counterpart: Metal has no instance. The Vulkan instance the runtime creates for its
@@ -29,42 +30,53 @@ pub(crate) struct Shared {
 
 impl Instance {
     /// Loads the Vulkan loader and creates the instance with the floor's instance extensions, the
-    /// portability listing where the loader offers it, and each of `extensions` the loader offers: the window system's (such as `VK_KHR_xlib_surface`
-    /// or `VK_KHR_win32_surface`) and any other the consumer uses. A name the floor already lists,
-    /// or listed twice, is enabled once. [`Instance::extensions`] says which were enabled; the
-    /// consumer names an extension's dependencies too. The loader loads the drivers the system
-    /// installed; [`Instance::with_drivers`] gives it the consumer's own instead.
+    /// portability listing where the loader offers it, and each of `extensions` the loader
+    /// offers: the window system's (such as `VK_KHR_xlib_surface` or `VK_KHR_win32_surface`) and
+    /// any other the consumer uses. A name the floor already lists, or listed twice, is enabled
+    /// once. [`Instance::extensions`] says which were enabled; the consumer names an extension's
+    /// dependencies too. The loader loads the drivers the system installed;
+    /// [`Instance::with_drivers`] gives it the consumer's own instead.
+    ///
+    /// The loader is the first of the platform's standard names that the system's library search
+    /// finds: `vulkan-1.dll` on Windows, `libvulkan.dylib` then `libvulkan.1.dylib` on macOS,
+    /// `libvulkan.so.1` then `libvulkan.so` elsewhere. The runtime searches no directory of its
+    /// own and reads no variable; [`Instance::with_drivers`] takes the consumer's loader instead.
     ///
     /// Err: [`Error::Loader`] where no loader loads; [`Error::Vulkan`] where the instance is not
     /// made, the floor's extensions missing among the causes (`VK_ERROR_EXTENSION_NOT_PRESENT`).
     pub fn new(extensions: &[&CStr]) -> Result<Instance, Error> {
-        // SAFETY: no driver is given.
-        unsafe { Instance::with_drivers(extensions, &[]) }
+        // SAFETY: no loader and no driver is given.
+        unsafe { Instance::with_drivers(None, extensions, &[]) }
     }
 
-    /// No Metal counterpart (Metal is part of the system): [`Instance::new`], with `drivers` the
-    /// only Vulkan drivers the loader loads, where any is given. Each is a driver the consumer
-    /// loaded itself, from its own distribution, given by its `vkGetInstanceProcAddr`: for a
-    /// driver built for the Vulkan loader, the `vk_icdGetInstanceProcAddr` it exports. The
+    /// No Metal counterpart (Metal is part of the system): [`Instance::new`], with the library at
+    /// `loader` the Vulkan loader, alone, where the consumer gives one (such as the loader its own
+    /// distribution ships), and with `drivers` the only Vulkan drivers the loader loads, where any
+    /// is given. Each is a driver the consumer loaded itself, from its own distribution, given by
+    /// its `vkGetInstanceProcAddr`: for a driver built for the Vulkan loader, the
+    /// `vk_icdGetInstanceProcAddr` it exports. The
     /// instance then enables `VK_LUNARG_direct_driver_loading` and gives the loader the list in
     /// its exclusive mode (`VK_DIRECT_DRIVER_LOADING_MODE_EXCLUSIVE_LUNARG`): no driver the system
     /// installed, or that the loader's variables name, is loaded. An instance extension is offered
     /// where the loader or one of the drivers lists it, as the loader does not ask such drivers
-    /// for theirs. With no driver, it is [`Instance::new`].
+    /// for theirs. With no loader and no driver, it is [`Instance::new`].
     ///
-    /// Err: as [`Instance::new`]; [`Error::NoDirectDriverLoading`] where a driver is given and the
-    /// loader does not offer `VK_LUNARG_direct_driver_loading`.
+    /// Err: as [`Instance::new`], [`Error::Loader`] where the library at `loader` does not load;
+    /// [`Error::NoDirectDriverLoading`] where a driver is given and the loader does not offer
+    /// `VK_LUNARG_direct_driver_loading`.
     ///
     /// # Safety
     ///
-    /// Each of `drivers` is a Vulkan driver's `vkGetInstanceProcAddr`, whose library stays loaded
-    /// while the instance, or anything made from it, lives.
+    /// `loader`, where given, is a Vulkan loader, whose loading runs its initialisation and
+    /// nothing else. Each of `drivers` is a Vulkan driver's `vkGetInstanceProcAddr`, whose library
+    /// stays loaded while the instance, or anything made from it, lives.
     pub unsafe fn with_drivers(
+        loader: Option<&Path>,
         extensions: &[&CStr],
         drivers: &[vk::PFN_vkGetInstanceProcAddr],
     ) -> Result<Instance, Error> {
-        // SAFETY: loading the loader runs its initialisation and nothing else.
-        let entry = unsafe { ash::Entry::load() }.map_err(Error::Loader)?;
+        // SAFETY: the loader at the caller's path is one, by the caller.
+        let entry = unsafe { load(loader) }.map_err(Error::Loader)?;
         // SAFETY: the loader is loaded.
         let loader = names(unsafe { entry.enumerate_instance_extension_properties(None) })?;
         let mut offered = Vec::new();
@@ -148,6 +160,37 @@ impl Instance {
     /// The instance's function table.
     pub(crate) fn vk(&self) -> &ash::Instance {
         &self.shared.instance
+    }
+}
+
+/// The Vulkan loader's standard names on this platform, in the order [`load`] tries them through
+/// the system's library search.
+const LOADER_NAMES: &[&str] = if cfg!(windows) {
+    &["vulkan-1.dll"]
+} else if cfg!(target_vendor = "apple") {
+    &["libvulkan.dylib", "libvulkan.1.dylib"]
+} else {
+    &["libvulkan.so.1", "libvulkan.so"]
+};
+
+/// The Vulkan loader: the library at `path` where one is given, else the first of
+/// [`LOADER_NAMES`] the system's library search finds. Err: the given path's failure, or the
+/// first name's where none loads.
+///
+/// # Safety
+///
+/// `path`, where given, is a Vulkan loader.
+unsafe fn load(path: Option<&Path>) -> Result<ash::Entry, ash::LoadingError> {
+    // SAFETY: the library is the caller's loader, or the system's under a loader's standard name;
+    // loading a loader runs its initialisation and nothing else.
+    let from = |name: &std::ffi::OsStr| unsafe { ash::Entry::load_from(name) };
+    match path {
+        Some(path) => from(path.as_os_str()),
+        None => from(LOADER_NAMES[0].as_ref()).or_else(|first| {
+            (LOADER_NAMES[1..].iter())
+                .find_map(|name| from(name.as_ref()).ok())
+                .ok_or(first)
+        }),
     }
 }
 

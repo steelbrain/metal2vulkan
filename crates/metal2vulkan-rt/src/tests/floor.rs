@@ -184,6 +184,26 @@ fn an_instance_enables_what_the_loader_or_the_drivers_offer_and_direct_loading_w
     ));
 }
 
+/// The consumer's loader is the library at its path, alone: a path that holds none is refused by
+/// type, with no search of the platform's standard names after it, which would find the
+/// machine's loader where it has one.
+#[test]
+fn a_consumer_s_loader_is_its_path_alone() {
+    use crate::{Error, Instance};
+    let missing = std::env::temp_dir().join("m2v-no-vulkan-loader/libvulkan");
+    assert!(
+        !missing.exists(),
+        "{}: a library at the test's path",
+        missing.display()
+    );
+    // SAFETY: no library is at the path, so nothing loads.
+    match unsafe { Instance::with_drivers(Some(&missing), &[], &[]) } {
+        Err(Error::Loader(_)) => {}
+        Err(error) => panic!("a path with no loader: {error}"),
+        Ok(_) => panic!("an instance from a path with no loader: a standard name was searched"),
+    }
+}
+
 /// The translator's description is restricted to what device creation enables: a feature or an
 /// extension the device reports beyond the floor is outside the enable set, so the translator's
 /// profile never relies on it, and the floor's `robustImageAccess`, `robustImageAccess2`,

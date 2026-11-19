@@ -81,7 +81,7 @@ pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
     );
     let made = match direct_driver() {
         // SAFETY: the driver's library stays loaded for the process (`direct_driver`).
-        Some(driver) => unsafe { Instance::with_drivers(extensions, &[driver]) },
+        Some(driver) => unsafe { Instance::with_drivers(None, extensions, &[driver]) },
         None => Instance::new(extensions),
     };
     let instance = made.unwrap_or_else(|error| panic!("{test}: an instance at the floor: {error}"));
