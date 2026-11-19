@@ -2870,6 +2870,61 @@ fn the_dump_compare_reports_a_word_whose_cover_the_buffer_s_last_write_voided() 
     assert!(!comparison.agrees());
 }
 
+/// A listed command buffer's dump holds every buffer its encoders named, whatever made it: a
+/// plain buffer, a buffer in a block and a host's padded buffer; a texture it names is no dump.
+#[test]
+fn a_listed_command_buffer_dumps_every_buffer_it_names_whatever_made_it() {
+    let dir = ScratchDir::new("dumps-makers").unwrap();
+    let (_, ended) = dumped(&mut Kept::default(), dir.path(), |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let block = [Value::Uint(0x1_0000), Value::Uint(0)];
+        let at = addressed(BLOCK, 0x1_0000);
+        w.call("m2v.newBlockWithLength:storageMode:", 1, 2, &block, &at)?;
+        let plain = [Value::Uint(16), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 3, &plain, &[])?;
+        let inner = [
+            Value::Object(2),
+            Value::Uint(0x100),
+            Value::Uint(0x100),
+            Value::Uint(0),
+        ];
+        let at = addressed(BLOCK + 0x100, 0x100);
+        w.call(
+            "m2v.newBufferInBlock:offset:length:options:",
+            2,
+            4,
+            &inner,
+            &at,
+        )?;
+        let padded = [Value::Uint(64), Value::Uint(0), Value::Nil];
+        w.call("m2v.newBufferOfLengthPaddingUnobserved", 1, 5, &padded, &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 7, &[map(&[])], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 8, &[Value::Object(7)], &[])?;
+        w.call("commandBuffer", 6, 20, &[], &[])?;
+        w.call("computeCommandEncoder", 20, 21, &[], &[])?;
+        for (buffer, index) in [(3, 0), (4, 1), (5, 2)] {
+            let bound = [Value::Object(buffer), Value::Uint(0), Value::Uint(index)];
+            w.call("setBuffer:offset:atIndex:", 21, 0, &bound, &[])?;
+        }
+        let slot = [Value::Object(8), Value::Uint(0)];
+        w.call("setTexture:atIndex:", 21, 0, &slot, &[])?;
+        w.call("endEncoding", 21, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])
+    });
+    ended.unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let dumps = ["cb20-obj3", "cb20-obj4", "cb20-obj5"];
+    let wanted: Vec<String> = (dumps.iter())
+        .flat_map(|dump| [format!("{dump}.bin"), format!("{dump}.cover")])
+        .collect();
+    assert_eq!(names, wanted);
+}
+
 /// Two plays alike agree; a dump one play has alone is reported.
 #[test]
 fn the_dump_compare_agrees_on_alike_plays_and_reports_a_dump_one_play_lacks() {

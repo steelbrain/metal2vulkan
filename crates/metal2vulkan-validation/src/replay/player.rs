@@ -1700,7 +1700,10 @@ impl<'b, B: Backend> Player<'b, B> {
             return;
         };
         let selector = &*call.selector;
-        let buffer = selector.starts_with("newBuffer") || selector == "m2v.newBufferInBlock";
+        // The host's padded and exported buffers reach here as `newBufferWithLength:options:`
+        // (`plain`); a buffer in a block is `m2v.newBufferInBlock:offset:length:options:`.
+        let buffer =
+            selector.starts_with("newBuffer") || selector.starts_with("m2v.newBufferInBlock");
         if call.result != 0 && buffer {
             dump.buffers.insert(call.result);
         }
