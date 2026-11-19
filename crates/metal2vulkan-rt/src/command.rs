@@ -1469,6 +1469,7 @@ pub(crate) fn retire(
         ring,
         managed: _,
         images,
+        fences,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
@@ -1477,7 +1478,7 @@ pub(crate) fn retire(
         copy_in.retire(core);
     }
     ring.give_back(core);
-    drop((blocks, images));
+    drop((blocks, images, fences));
     kept.clear();
     if let Some(pair) = stamps {
         times::reset(&core.device, pair.pool, pair.first, written);
