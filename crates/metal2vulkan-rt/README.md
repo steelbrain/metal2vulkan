@@ -741,6 +741,27 @@ planes' first use, so `Surface::wait_until_ready()` returns at once.
     start the consumer asks that the driver's linear images do not take. A pitch multiple of
     4,096 takes `SurfaceCopy::Pitch` on every device measured: the Radeon 780M, the RTX 3090,
     the Iris Xe, the RX 550 and lavapipe.
+- On the Iris Xe (ANV, Mesa 26.2.6) a 4K dma-buf surface takes 3.05 ms for P010 and 1.80 ms for
+  NV12 from the start of its make to the return of `Surface::wait_until_ready()` (medians of ten),
+  where the M3 Max takes 1.62 and 1.22 ms to create an IOSurface of the same planes, make its two
+  plane textures and clear both in one waited render pass. The make is 0.25 and 0.21 ms of it; the
+  rest is the wait for the submission that moves the planes, the first command buffer to use the
+  new memory, which the runtime records and submits on its own thread. That submission reaches
+  its first GPU timestamp 2.94 ms after it is submitted for P010 and 1.43 ms for NV12, against
+  0.26 and 0.32 ms without the moves, and the delay grows with the size. A fill of a newly
+  allocated block of P010's size takes 8.50 ms at its first submission and 4.34 ms at its second,
+  3.52 ms of GPU time in both. The device lacks the zero-initialize feature and the runtime writes
+  no zeros there. The time is consistent with the kernel making the memory's pages resident at
+  their first submission; which kernel work it is was not measured.
+- On the UHD 630 under Intel's Windows driver (101.2145) a 4K surface exported as an opaque Win32
+  handle takes 8.45 ms for P010 and 4.28 ms for NV12 from the start of its make to the return of
+  `Surface::wait_until_ready()` (medians of ten), against the M3 Max's 1.62 and 1.22 ms. The
+  driver's `vkAllocateMemory` of the planes' memory, 24,903,680 and 12,451,840 bytes, is 6.99 and
+  3.40 ms of it. Of the same size and memory type, in another run, that allocation takes 0.23 and
+  0.11 ms without `VkExportMemoryAllocateInfo` and 10.15 and 6.41 ms with it (8.07 and 4.92 ms
+  without device addresses): 0.27 to 0.51 ms a MB across the runs. A buffer in the exported
+  allocation takes the same GPU time at its first fill as at its second, 14.15 and 14.09 ms at
+  P010's size. The ready wait is 1.12 and 0.61 ms.
 - A shader uses a buffer's `gpuAddress` directly, unchecked: a stale one, of a released buffer, can
   still fault the device.
 - An app buffer too large for the consumer's map budget is copied, on drivers whose dma-buf query
