@@ -952,10 +952,13 @@ that touch blocks first.
   device every frame, the hang lasts about a frame and then every guest process sees the device
   lost; it lasts indefinitely only when nothing else submits. RADV (a 780M and an RX 7900 XTX)
   signals the semaphore within about 2 s and refuses the next submission; Intel's Windows driver (a
-  UHD 630) does so at once; ANV (an Iris Xe) takes the store with no fault. The old runtime took a
-  store through a pointer to an address nothing maps, and one 64 TiB past a buffer, without a fault
-  on all six GPUs, since it does not hand kernels raw addresses; the new runtime refuses the first
-  kernel and took the second without a fault. A bad address that the old runtime survived ends the
+  UHD 630) does so at once; ANV (an Iris Xe) takes the store with no fault. On RADV (a 780M), the
+  command buffers of the submission a reset cut can report completed, since the reset signals its
+  semaphore before any call reports the loss: the loss is reported by the next call, where Metal
+  ends the faulting command buffer with an error. The old runtime took a store through a pointer to
+  an address nothing maps, and one 64 TiB past a buffer, without a fault on all six GPUs, since it
+  does not hand kernels raw addresses; the new runtime refuses the first kernel and took the second
+  without a fault. A bad address that the old runtime survived ends the
   GPU's work for every guest process under the new runtime on NVIDIA and RADV: the consequence of
   one device and direct addresses, which the owner accepted.
 - An index past a set 1 array's length is a fault of the same kind. A kernel indexes the arrays
