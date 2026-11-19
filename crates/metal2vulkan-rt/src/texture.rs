@@ -574,7 +574,9 @@ pub(crate) enum Backing {
     /// memory is the runtime's to free.
     Drawable,
     /// A surface plane's own dedicated import of the surface's dma-buf
-    /// ([`Device::new_exported_surface`]), counted in the surface imports gauge.
+    /// ([`Device::new_exported_surface`]), counted in the surface imports gauge: a Unix host's
+    /// alone, as the dma-buf is.
+    #[cfg(unix)]
     Import(vk::DeviceMemory),
 }
 
@@ -2391,7 +2393,9 @@ impl Made {
                 }
                 Some(Backing::Placed(place)) => core.places.release(core, place),
                 // A surface's plane images are made by `crate::surface`, never here.
-                Some(Backing::InBlock | Backing::Drawable | Backing::Import(_)) | None => {}
+                #[cfg(unix)]
+                Some(Backing::Import(_)) => {}
+                Some(Backing::InBlock | Backing::Drawable) | None => {}
             }
         }
     }
@@ -4079,6 +4083,7 @@ pub(crate) struct SurfaceImage {
 pub(crate) unsafe fn discard_surface_image(core: &Core, made: SurfaceImage) {
     // SAFETY: the caller's contract.
     unsafe { core.device.destroy_image(made.image, None) };
+    #[cfg(unix)]
     if let Backing::Import(memory) = made.backing {
         // SAFETY: the image bound to it is destroyed.
         unsafe { core.device.free_memory(memory, None) };

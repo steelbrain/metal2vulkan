@@ -20,7 +20,9 @@
 
 use crate::block::Block;
 use crate::buffer::Buffer;
-use crate::counters::{Gauge, Metric};
+#[cfg(unix)]
+use crate::counters::Gauge;
+use crate::counters::Metric;
 use crate::device::{Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::export::{Export, ExportHandle};
