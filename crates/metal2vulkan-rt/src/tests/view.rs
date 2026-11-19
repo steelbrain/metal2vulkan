@@ -9,7 +9,8 @@
 //! combination of it over its parent's, in its descriptor and its resource ID's word, over a
 //! texture of any usage. A view of another pixel format Metal views the texture as (its sRGB
 //! sibling, or with `PixelFormatView` usage a same-size colour format) reads its parent's bytes,
-//! and one of a format Metal does not view it as is `Refusal::TextureViewFormat`. Every gauge
+//! and one of a format Metal does not view it as is `Refusal::TextureViewFormat`; a texture of
+//! Metal's unknown usage (0) takes every usage, `PixelFormatView`'s views among them. Every gauge
 //! comes back to zero with the device, the views' image views among them. A view of a Managed
 //! texture writes the texture's own named bytes. A command buffer keeps a view it uses after its
 //! parent, as Metal's retains every object its encoders use: released while the command buffer
@@ -78,16 +79,16 @@ mod on_device {
         texture
     }
 
-    /// The bytes of level 0 and slice 0 of `view`, copied by a blit into `out`, a Shared buffer
-    /// long enough, rows tight.
-    fn bytes(queue: &CommandQueue, view: &Texture, out: &Buffer) -> Vec<u8> {
+    /// The bytes of level 0 and slice 0 of `view`, of `texel` bytes a texel, copied by a blit
+    /// into `out`, a Shared buffer long enough, rows tight.
+    fn bytes(queue: &CommandQueue, view: &Texture, out: &Buffer, texel: u32) -> Vec<u8> {
         let d = view.descriptor();
-        let len = u64::from(d.width * d.height) * 4;
+        let len = u64::from(d.width * d.height * texel);
         let command_buffer = queue.command_buffer().expect("a command buffer");
         let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
         let layout = BufferLayout {
             offset: 0,
-            bytes_per_row: u64::from(d.width) * 4,
+            bytes_per_row: u64::from(d.width * texel),
             bytes_per_image: 0,
         };
         let size = [d.width, d.height, 1];
@@ -113,7 +114,7 @@ mod on_device {
             let block = (device.take_block(MemoryClass::Shared, 256)).expect("a Shared block");
             let out = (device.new_buffer(block.id, 0, 256, Some(0))).expect("a buffer");
             let queue = device.new_command_queue(1).expect("a queue");
-            let read = |view: &Texture| bytes(&queue, view, &out);
+            let read = |view: &Texture| bytes(&queue, view, &out, 4);
             use TextureType::{Type2D, Type2DArray};
             // The probe's cases: the parent, the view's type, levels and slices; what the view
             // reports (width, levels, array length); its level 0's bytes' FNV-1a 64.
@@ -373,6 +374,73 @@ mod on_device {
             assert_eq!(fnv(&read(&of_view)), 0x5d01_ec06_0898_5ec5);
             drop((views, of_view, formats, cube, apple, written));
             within("the textures freed", || counters.gauges().textures == 0);
+        });
+    }
+
+    /// A texture of Metal's unknown usage (0) takes every usage, `PixelFormatView`'s among them,
+    /// so Metal views it as any colour format of its texel's bytes: an `R8Unorm` and an `RG8Unorm`
+    /// texture of that usage, made with an index ([`Device::new_texture`]) and for views alone
+    /// ([`Device::new_texture_for_views`]), each viewed as the integer format of its size
+    /// (`R8Uint`, `RG8Uint`). Bytes written through the texture read back through the view, and
+    /// bytes written through the view read back through the texture.
+    #[test]
+    fn every_device_views_a_texture_of_unknown_usage_as_a_same_size_format() {
+        each_device("unknown_usage_views", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 32)
+                .expect("a grant");
+            let block = (device.take_block(MemoryClass::Shared, 256)).expect("a Shared block");
+            let out = (device.new_buffer(block.id, 0, 256, Some(0))).expect("a buffer");
+            let queue = device.new_command_queue(1).expect("a queue");
+            let mut indices = 4096..4128;
+            let whole = Region {
+                origin: [0; 3],
+                size: [8, 8, 1],
+            };
+            for (format, view_format, texel) in [
+                (PixelFormat::R8Unorm, PixelFormat::R8Uint, 1u32),
+                (PixelFormat::RG8Unorm, PixelFormat::RG8Uint, 2),
+            ] {
+                for for_views in [false, true] {
+                    let case = format!("{format:?} as {view_format:?} (for views: {for_views})");
+                    let mut d = TextureDescriptor::new(TextureType::Type2D, format, 8, 8);
+                    d.usage = TextureUsage::empty();
+                    d.storage_mode = StorageMode::Shared;
+                    let texture = match for_views {
+                        true => device.new_texture_for_views(&d),
+                        false => device.new_texture(&d, indices.next()),
+                    };
+                    let texture = texture.unwrap_or_else(|error| panic!("{name}: {case}: {error}"));
+                    let view = (texture.new_texture_view(
+                        view_format,
+                        TextureType::Type2D,
+                        0..1,
+                        0..1,
+                        indices.next(),
+                    ))
+                    .unwrap_or_else(|error| panic!("{name}: {case}: the view: {error}"));
+                    assert_eq!(
+                        view.descriptor().pixel_format,
+                        view_format,
+                        "{name}: {case}"
+                    );
+                    let row = u64::from(8 * texel);
+                    for (seed, written_through, read_through) in
+                        [(11u32, &texture, &view), (5, &view, &texture)]
+                    {
+                        let written: Vec<u8> =
+                            (0..64 * texel).map(|i| (i * 37 + seed) as u8).collect();
+                        let host = crate::HostBytes::from(&written[..]);
+                        (written_through.replace_region(whole, 0, 0, host, row, 0))
+                            .unwrap_or_else(|error| panic!("{name}: {case}: {error}"));
+                        assert_eq!(
+                            bytes(&queue, read_through, &out, texel),
+                            written,
+                            "{name}: {case}: read through the other"
+                        );
+                    }
+                }
+            }
         });
     }
 
