@@ -1,9 +1,9 @@
 //! Kernels that sample textures, under a device cfg on every device of the cfg's kind: the
 //! harness's `sample_down`, through a runtime sampler state bound with LOD clamps that read as its
-//! own, and `sample_up`, through a constexpr sampler at the index the consumer gives it, chained in
-//! one serial encoder so the second samples what the first wrote. Each answer is checked against
-//! the linear filter's, and the constexpr sampler's index is shared between the states that number
-//! it there and freed with the last.
+//! own, under a stage-in region it ignores, and `sample_up`, through a constexpr sampler at the
+//! index the consumer gives it, chained in one serial encoder so the second samples what the first
+//! wrote. Each answer is checked against the linear filter's, and the constexpr sampler's index is
+//! shared between the states that number it there and freed with the last.
 //! A texture of any usage is made at any index of a texture grant: `sample_down` samples a texture
 //! of shader-read usage alone at an index below 4,096 and writes one of shader-write usage above
 //! it, in one dispatch. An index belongs to the texture placed there last: sampling and writing
@@ -210,6 +210,11 @@ mod on_device {
         encoder
             .set_sampler_state_with_lod_clamps(Some(sampler), 0.0, 1000.0, 0)
             .expect("sampler");
+        // A stage-in region, which a kernel without a `[[stage_in]]` argument ignores.
+        encoder.set_stage_in_region(Region {
+            origin: [1, 2, 0],
+            size: [3, 4, 1],
+        });
         encoder
             .dispatch_threads([SIDE / 2, SIDE / 2, 1], [4, 4, 1])
             .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"));

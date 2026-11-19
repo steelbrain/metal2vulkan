@@ -18,7 +18,7 @@ use crate::pipeline::{
 use crate::record::Reach;
 use crate::ring::CHUNK;
 use crate::sampler::SamplerState;
-use crate::texture::Texture;
+use crate::texture::{Region, Texture};
 use ash::vk;
 use metal2vulkan::metal::format::integer_channels_word;
 use metal2vulkan::pipeline::{
@@ -608,6 +608,14 @@ impl ComputeCommandEncoder {
     ) -> Result<(), Error> {
         crate::sampler::clamps_at_bind(sampler, lod_min_clamp, lod_max_clamp)?;
         self.set_sampler_state(sampler, index)
+    }
+
+    /// `setStageInRegion:`: it changes nothing a dispatch does. The region is what a kernel's
+    /// `[[stage_in]]` argument fetches by, and a kernel with one is [`Gap::KernelInput`] at its
+    /// state's creation, so no state this encoder dispatches has one; a dispatch of a kernel
+    /// without one ignores the region, as Metal's does.
+    pub fn set_stage_in_region(&mut self, region: Region) {
+        let _ = region;
     }
 
     /// `setBufferOffset:atIndex:`.

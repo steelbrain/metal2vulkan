@@ -9513,6 +9513,7 @@ method	metal2vulkan-rt::ComputeCommandEncoder::set_bytes	pub fn set_bytes(&mut s
 method	metal2vulkan-rt::ComputeCommandEncoder::set_compute_pipeline_state	pub fn set_compute_pipeline_state(&mut self, state: &ComputePipelineState) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_sampler_state	pub fn set_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_sampler_state_with_lod_clamps	pub fn set_sampler_state_with_lod_clamps(&mut self, sampler: Option<&SamplerState>, lod_min_clamp: f32, lod_max_clamp: f32, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::set_stage_in_region	pub fn set_stage_in_region(&mut self, region: Region)
 method	metal2vulkan-rt::ComputeCommandEncoder::set_texture	pub fn set_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_threadgroup_memory_length	pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
