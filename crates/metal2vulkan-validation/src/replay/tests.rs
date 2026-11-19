@@ -1664,10 +1664,11 @@ fn a_part_commits_only_where_the_host_cut_it() {
 }
 
 /// A buffer made as a copy of host memory starts with its descriptor's `contents`, a blob or
-/// inline bytes: the backend makes it with the contents nil, and the player writes them from its
-/// first byte as recorded, counting a word that looks like an address where it answered a
-/// `gpuAddress` (here a pointer into itself); a buffer of no address is written as it is, and a
-/// no-copy buffer's nil contents write nothing.
+/// inline bytes: the backend's making takes them as bytes (a buffer that plays with two copies
+/// starts its GPU copy from them), and the player writes them from its first byte as recorded,
+/// counting a word that looks like an address where it answered a `gpuAddress` (here a pointer
+/// into itself); a buffer of no address is written as it is, and a no-copy buffer's nil contents
+/// write nothing.
 #[test]
 fn a_copied_buffer_starts_with_its_contents() {
     let mut kept = Kept::default();
@@ -1695,13 +1696,19 @@ fn a_copied_buffer_starts_with_its_contents() {
         w.call(selector, 1, 4, &descriptor(8, Value::Nil, true), &[])
     });
     ended.unwrap();
-    for args in &kept.args[1..] {
+    let made_with = [
+        Value::Bytes(long.clone()),
+        Value::Bytes(pointer.to_vec()),
+        Value::Nil,
+    ];
+    assert_eq!(kept.args.len(), 1 + made_with.len());
+    for (args, made_with) in kept.args[1..].iter().zip(&made_with) {
         let contents = args[0]
             .as_map()
             .unwrap()
             .iter()
             .find(|(k, _)| &**k == "contents");
-        assert_eq!(contents.map(|(_, v)| v), Some(&Value::Nil));
+        assert_eq!(contents.map(|(_, v)| v), Some(made_with));
     }
     let untouched = (3, 0, pointer.to_vec());
     assert_eq!(kept.writes, [(2, 0, long), untouched]);
