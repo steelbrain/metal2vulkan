@@ -1885,46 +1885,48 @@ impl RenderCommandEncoder {
                 device.cmd_set_front_face(command, face);
             }
             // Of the tests, the fields that differ from the ones last recorded; every field
-            // before the first draw.
-            let (t, was) = (self.tests, self.recorded);
-            if dirty & DEPTH != 0 {
-                if was.is_none_or(|w| w.depth_test != t.depth_test) {
-                    device.cmd_set_depth_test_enable(command, t.depth_test);
+            // before the first draw. A draw whose tests are not dirty copies none of them.
+            if dirty & (DEPTH | STENCIL) != 0 {
+                let (t, was) = (self.tests, self.recorded);
+                if dirty & DEPTH != 0 {
+                    if was.is_none_or(|w| w.depth_test != t.depth_test) {
+                        device.cmd_set_depth_test_enable(command, t.depth_test);
+                    }
+                    if was.is_none_or(|w| w.depth_write != t.depth_write) {
+                        device.cmd_set_depth_write_enable(command, t.depth_write);
+                    }
+                    if was.is_none_or(|w| w.depth_compare != t.depth_compare) {
+                        device.cmd_set_depth_compare_op(command, t.depth_compare);
+                    }
                 }
-                if was.is_none_or(|w| w.depth_write != t.depth_write) {
-                    device.cmd_set_depth_write_enable(command, t.depth_write);
+                if dirty & STENCIL != 0 {
+                    if was.is_none_or(|w| w.stencil != t.stencil) {
+                        device.cmd_set_stencil_test_enable(command, t.stencil);
+                    }
+                    for (at, face) in both.iter().enumerate() {
+                        let f = &t.faces[at];
+                        let old = was.map(|w| w.faces[at]);
+                        let ops = |f: &Face| (f.fail, f.pass, f.depth_fail, f.compare);
+                        if old.is_none_or(|o| ops(&o) != ops(f)) {
+                            device.cmd_set_stencil_op(
+                                command,
+                                *face,
+                                f.fail,
+                                f.pass,
+                                f.depth_fail,
+                                f.compare,
+                            );
+                        }
+                        if old.is_none_or(|o| o.compare_mask != f.compare_mask) {
+                            device.cmd_set_stencil_compare_mask(command, *face, f.compare_mask);
+                        }
+                        if old.is_none_or(|o| o.write_mask != f.write_mask) {
+                            device.cmd_set_stencil_write_mask(command, *face, f.write_mask);
+                        }
+                    }
                 }
-                if was.is_none_or(|w| w.depth_compare != t.depth_compare) {
-                    device.cmd_set_depth_compare_op(command, t.depth_compare);
-                }
+                self.recorded = Some(t);
             }
-            if dirty & STENCIL != 0 {
-                if was.is_none_or(|w| w.stencil != t.stencil) {
-                    device.cmd_set_stencil_test_enable(command, t.stencil);
-                }
-                for (at, face) in both.iter().enumerate() {
-                    let f = &t.faces[at];
-                    let old = was.map(|w| w.faces[at]);
-                    let ops = |f: &Face| (f.fail, f.pass, f.depth_fail, f.compare);
-                    if old.is_none_or(|o| ops(&o) != ops(f)) {
-                        device.cmd_set_stencil_op(
-                            command,
-                            *face,
-                            f.fail,
-                            f.pass,
-                            f.depth_fail,
-                            f.compare,
-                        );
-                    }
-                    if old.is_none_or(|o| o.compare_mask != f.compare_mask) {
-                        device.cmd_set_stencil_compare_mask(command, *face, f.compare_mask);
-                    }
-                    if old.is_none_or(|o| o.write_mask != f.write_mask) {
-                        device.cmd_set_stencil_write_mask(command, *face, f.write_mask);
-                    }
-                }
-            }
-            self.recorded = Some(t);
             if dirty & REFERENCE != 0 {
                 for (face, reference) in both.iter().zip(self.stencil_reference) {
                     device.cmd_set_stencil_reference(command, *face, reference);
