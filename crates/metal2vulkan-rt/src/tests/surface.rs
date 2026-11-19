@@ -478,7 +478,8 @@ mod on_device {
                             p.width,
                             p.height,
                         );
-                        descriptor.usage = TextureUsage::RENDER_TARGET;
+                        // Read by shaders through views alone: no index of its own.
+                        descriptor.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
                         PlaneSpec {
                             descriptor,
                             index: None,

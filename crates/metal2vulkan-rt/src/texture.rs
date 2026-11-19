@@ -4008,6 +4008,33 @@ impl Buffer {
         offset: u64,
         bytes_per_row: u64,
     ) -> Result<Texture, Error> {
+        self.texture_over(descriptor, Reach::Index(index), offset, bytes_per_row)
+    }
+
+    /// A surface plane's texture over this buffer, as [`Buffer::new_texture`] makes it, but that
+    /// with no index a plane shaders read or write is reached through its views alone
+    /// ([`Device::new_texture_for_views`]).
+    pub(crate) fn new_plane_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        index: Option<u32>,
+        offset: u64,
+        bytes_per_row: u64,
+    ) -> Result<Texture, Error> {
+        let reach = match index {
+            Some(_) => Reach::Index(index),
+            None => Reach::Views,
+        };
+        self.texture_over(descriptor, reach, offset, bytes_per_row)
+    }
+
+    fn texture_over(
+        &self,
+        descriptor: &TextureDescriptor,
+        reach: Reach,
+        offset: u64,
+        bytes_per_row: u64,
+    ) -> Result<Texture, Error> {
         let mut d = *descriptor;
         d.storage_mode = match self.held() {
             (_, Some(_)) => StorageMode::Managed,
@@ -4017,7 +4044,7 @@ impl Buffer {
             },
         };
         let over = Source::Over(self, offset, bytes_per_row);
-        self.device().texture(&d, Reach::Index(index), over)
+        self.device().texture(&d, reach, over)
     }
 }
 
@@ -4126,8 +4153,9 @@ impl Device {
         let core = self.core();
         let d = *descriptor;
         let checked = self.prepare(&d).and_then(|(shape, plan, usage)| {
+            // With no index, a plane shaders reach is reached through its views alone.
             let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
-            if reached != index.is_some() {
+            if index.is_some() && !reached {
                 return Err(Error::Refused(Refusal::TextureIndex { index }));
             }
             let missing = plan.linear_usage() & !made.usage;

@@ -67,7 +67,10 @@ pub struct PlaneSpec {
     /// The plane's texture, as [`Buffer::new_texture`] takes it: 2D, of one level, sample and
     /// slice, of a color format of one texel an element.
     pub descriptor: TextureDescriptor,
-    /// The texture's index, as for [`Device::new_texture`].
+    /// The texture's index, as for [`Device::new_texture`]; with none, a plane shaders read or
+    /// write is reached through its views alone, each with an index of its own, as
+    /// [`Device::new_texture_for_views`] makes a texture: the image under the textures a consumer
+    /// makes over the plane as its views.
     pub index: Option<u32>,
     /// Rows of room below the plane's own rows, before the next plane's start.
     pub rows_below: u32,
@@ -660,7 +663,9 @@ impl Device {
         let (block, export) = self.new_exported_block(spec.handle, end)?;
         let buffer = self.new_buffer(block.id, 0, block.len, None)?;
         let planes = (spec.planes.iter().zip(&starts))
-            .map(|(plane, &start)| buffer.new_texture(&plane.descriptor, plane.index, start, pitch))
+            .map(|(plane, &start)| {
+                buffer.new_plane_texture(&plane.descriptor, plane.index, start, pitch)
+            })
             .collect::<Result<Vec<_>, _>>()?;
         self.core().counters.count(Metric::SurfacesCopied);
         let layouts = (starts.iter())

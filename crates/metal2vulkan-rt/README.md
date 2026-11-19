@@ -516,7 +516,9 @@ writes reach with no copy. What a consumer passes to get it, by handle:
   bound in one exportable allocation that holds no buffer, counted in `Gauges::exports`.
 
 Storage joins an image's usage where its tiling offers it; a usage a plane's texture asks that its
-tiling lacks is `Gap::SurfaceUsage`. A plane's image lists, for views of another format, the
+tiling lacks is `Gap::SurfaceUsage`. A plane given no index whose usage reaches shaders is reached
+through its views alone, each with an index of its own, as `Device::new_texture_for_views` makes
+a texture: the textures a consumer makes over a plane are its views. A plane's image lists, for views of another format, the
 formats of the texture's own list that its tiling samples, and none where the device refuses that
 list; a view of another format it does not list is `Gap::TextureView` of
 `TextureViewKind::SurfacePixelFormat`. The images move to the general layout in a submission the
