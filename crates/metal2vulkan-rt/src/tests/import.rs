@@ -57,6 +57,7 @@ fn host_memory_takes_the_first_coherent_listed_type_offered() {
 /// On unix, where the tests map host memory themselves.
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod on_device {
+    use crate::memory::Release;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{Device, DeviceOptions, Error, ImportHandle, Limit, MemoryClass};
@@ -111,10 +112,10 @@ mod on_device {
     }
 
     /// A release that sets a flag, and the flag.
-    fn releasing() -> (Option<Box<dyn FnOnce() + Send>>, Arc<AtomicBool>) {
+    fn releasing() -> (Option<Release>, Arc<AtomicBool>) {
         let ran = Arc::new(AtomicBool::new(false));
         let set = Arc::clone(&ran);
-        let release: Box<dyn FnOnce() + Send> = Box::new(move || set.store(true, Ordering::SeqCst));
+        let release: Release = Box::new(move || set.store(true, Ordering::SeqCst));
         (Some(release), ran)
     }
 
