@@ -1746,8 +1746,8 @@ for dependency in &pipeline.dependencies {
   encoder needs to place a barrier only on a hazard.
 - `interface.unbound_storage_textures` says, provably, whether a pipeline's functions may reach
   a texture through its storage image through anything but their bound slots: a texture write or
-  atomic, or a read of a texture the operation declares `access::write` or `access::read_write`,
-  through a texture they load from memory or make from an integer (an argument buffer's texture,
+  atomic, or a read the operation does not declare `access::sample` or `access::read`, through a
+  texture they load from memory or make from an integer (an argument buffer's texture,
   a resource ID), or an intersection or a call the function cannot see into. A runtime that
   gives some textures no storage image needs it to find such an access to one.
 

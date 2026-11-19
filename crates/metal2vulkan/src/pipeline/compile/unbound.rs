@@ -20,11 +20,11 @@
 //! (its records are only reached through an argument buffer), ray tracing, and a call the
 //! entry cannot see into (a visible function's, an unknown intrinsic).
 //!
-//! Of the texture operations through such a texture, those that reach it through its storage
-//! image are storage accesses: a write, an atomic, and a read of an `access::write` or
-//! `access::read_write` texture (the access the operation carries). An intersection and a call
-//! the entry cannot see into are storage accesses too; an indirect command buffer's operations
-//! and the other ray tracing operations touch no texture.
+//! Of the texture operations through such a texture, those that may reach it through its storage
+//! image are storage accesses: a write, an atomic, and a read or block read the operation does
+//! not declare `access::sample` or `access::read` (one that declares no access counts). An
+//! intersection and a call the entry cannot see into are storage accesses too; an indirect
+//! command buffer's operations and the other ray tracing operations touch no texture.
 
 use crate::air;
 use crate::air::intrinsics::{
@@ -132,9 +132,9 @@ pub(super) fn unbound(e: &air::Entry, memory: &MemoryPlan) -> Unbound {
                                 | TexOp::BlockRead => (true, false),
                             };
                             out.add(handle && reads, handle && writes);
-                            let storage =
-                                matches!(t.access, Some(Access::Write | Access::ReadWrite));
-                            out.storage_textures |= handle && (writes || (reads && storage));
+                            let storage_read = matches!(t.op, TexOp::Read | TexOp::BlockRead)
+                                && !matches!(t.access, Some(Access::Sample | Access::Read));
+                            out.storage_textures |= handle && (writes || storage_read);
                         }
                         AirIntrinsic::IndirectCommand(_)
                         | AirIntrinsic::AccelerationStructure(_) => out.add(true, true),

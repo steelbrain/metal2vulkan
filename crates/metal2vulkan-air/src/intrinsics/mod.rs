@@ -84,8 +84,8 @@ pub use stage::{GlobalBuiltin, GlobalVar, WorkItem};
 pub use stage::{Interpolate, InterpolateAt};
 pub use sync::{BarrierName, MemFlags, Sync};
 #[cfg(test)]
-pub use texture::{Access, Form};
-pub use texture::{Component, LodMode, Query, SamplerOp, TexOp, TexRole, Texture};
+pub use texture::Form;
+pub use texture::{Access, Component, LodMode, Query, SamplerOp, TexOp, TexRole, Texture};
 pub use ty::NumTy;
 pub use ty::{Elem, Sign};
 pub use vector_data::{HalfRounding, VectorData, VectorDataOp};

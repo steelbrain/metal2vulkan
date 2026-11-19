@@ -442,8 +442,9 @@ pub struct StageInterface {
     /// The function may reach a texture through its storage image through something other than
     /// its bound slots, as [`reads_unbound_resources`](Self::reads_unbound_resources) states for
     /// reads (an argument buffer's texture, a resource ID): a texture write or atomic, or a read
-    /// of a texture the operation declares `access::write` or `access::read_write`. An
-    /// intersection and a call the entry cannot see into count too. `false` is proven.
+    /// the operation does not declare `access::sample` or `access::read` (`access::write`,
+    /// `access::read_write`, or none declared). An intersection and a call the entry cannot see
+    /// into count too. `false` is proven.
     #[cfg_attr(feature = "serde", serde(default))]
     pub unbound_storage_textures: bool,
     /// The samplers a pipeline state of the function numbers for it, of the entry its function
