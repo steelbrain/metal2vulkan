@@ -98,7 +98,7 @@ fn a_copy_out_splits_where_its_stride_is_no_multiple_of_its_rows_power_and_keeps
                         let row = u64::from(blocks) * u64::from(bytes);
                         let stride =
                             u64::from(length.max(width).div_ceil(block)) * u64::from(bytes);
-                        let split = stride % row_power(row) != 0;
+                        let split = !stride.is_multiple_of(row_power(row));
                         let case = format!(
                             "{bytes} bytes, {blocks} blocks, width {width}, length {length}, at \
                              {at}, depth {depth}, layers {layers}, image height {}",
@@ -123,7 +123,7 @@ fn a_copy_out_splits_where_its_stride_is_no_multiple_of_its_rows_power_and_keeps
                             ) * u64::from(bytes);
                             assert_eq!(part_stride, stride, "{case}: the stride is kept");
                             if split {
-                                assert_eq!(part_stride % row_power(part_row), 0, "{case}");
+                                assert!(part_stride.is_multiple_of(row_power(part_row)), "{case}");
                             }
                         }
                         assert_eq!(union, whole, "{case}: the parts' bytes are the copy's");
@@ -155,10 +155,10 @@ fn a_copy_out_splits_where_its_stride_is_no_multiple_of_its_rows_power_and_keeps
 /// of 4, which a last part's need not be.
 #[test]
 fn a_depth_or_stencil_copy_out_is_one_region() {
-    for (aspect, bytes) in [
-        (vk::ImageAspectFlags::DEPTH, 2),
-        (vk::ImageAspectFlags::DEPTH, 4),
-        (vk::ImageAspectFlags::STENCIL, 1),
+    for (name, aspect, bytes) in [
+        ("depth", vk::ImageAspectFlags::DEPTH, 2),
+        ("depth", vk::ImageAspectFlags::DEPTH, 4),
+        ("stencil", vk::ImageAspectFlags::STENCIL, 1),
     ] {
         let u = CopyUnit {
             aspect,
@@ -167,7 +167,11 @@ fn a_depth_or_stencil_copy_out_is_one_region() {
         };
         let mut r = region(0, 3, [0, 2], 2);
         r.image_subresource.aspect_mask = aspect;
-        assert_eq!(regions(&u, r).as_slice().len(), 1, "{aspect:?}");
+        assert_eq!(
+            regions(&u, r).as_slice().len(),
+            1,
+            "{name} of {bytes} bytes"
+        );
     }
 }
 
@@ -282,7 +286,10 @@ mod on_device {
         let power = row_power(bx * block);
         drop((buffer, texture, queue, command_buffer));
         device.release_block(blk).expect("a release");
-        places.iter().any(|&(_, offset)| offset % power == 0) && row % power != 0
+        places
+            .iter()
+            .any(|&(_, offset)| offset.is_multiple_of(power))
+            && !row.is_multiple_of(power)
     }
 
     /// Copies out of a texture to bytes land each row at its stride, the padding between rows

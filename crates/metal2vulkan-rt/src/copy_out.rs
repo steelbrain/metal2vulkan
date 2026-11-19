@@ -41,7 +41,7 @@ pub(crate) static SPLIT: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomi
 /// The largest power of two up to 16 that divides `bytes`; 1 for 0.
 pub(crate) fn row_power(bytes: u64) -> u64 {
     let mut power = 1;
-    while power < 16 && bytes != 0 && bytes % (power * 2) == 0 {
+    while power < 16 && bytes != 0 && bytes.is_multiple_of(power * 2) {
         power *= 2;
     }
     power
@@ -65,7 +65,10 @@ pub(crate) fn regions(unit: &CopyUnit, region: vk::BufferImageCopy) -> Regions {
         length => length,
     };
     let stride = u64::from(length.div_ceil(block_width)) * bytes;
-    if unit.aspect != vk::ImageAspectFlags::COLOR || blocks < 2 || stride % row_power(row) == 0 {
+    if unit.aspect != vk::ImageAspectFlags::COLOR
+        || blocks < 2
+        || stride.is_multiple_of(row_power(row))
+    {
         return one;
     }
     let before = (blocks - 1) * block_width;
