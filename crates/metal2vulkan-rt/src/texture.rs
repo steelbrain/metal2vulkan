@@ -1951,8 +1951,14 @@ fn plan(
     let gap = || Error::Unsupported(Gap::TextureFormat { pixel_format: pf });
     let profile = core.translator.profile();
     plan.view_formats = view_formats(profile, pf, usage, &plan);
-    plan.cube =
+    // A square 2D array of six slices or more is made cube-compatible where the device's image
+    // format query takes the flag (`Plan::cube`).
+    let mut cube =
         d.texture_type == TextureType::Type2DArray && d.width == d.height && d.array_length >= 6;
+    let cube_flag = |cube: bool| match cube {
+        true => vk::ImageCreateFlags::CUBE_COMPATIBLE,
+        false => vk::ImageCreateFlags::empty(),
+    };
     let read = plan.usage.contains(vk::ImageUsageFlags::SAMPLED);
     let render = plan.usage.intersects(
         vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -1976,15 +1982,15 @@ fn plan(
         .ty(shape.image_type)
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(image_usage)
-        .flags(plan.flags(shape));
+        .flags(plan.flags(shape) | cube_flag(cube));
     if !plan.view_formats.is_empty() {
         info = info.push_next(&mut list);
     }
     let mut properties = core.image_format_properties(&info);
     // A square 2D array whose format the device does not make cube-compatible is made without
     // the flag, and a cube view of it is `TextureViewKind::CubeOfArray`.
-    if properties.is_none() && plan.cube {
-        plan.cube = false;
+    if properties.is_none() && cube {
+        cube = false;
         info = info.flags(plan.flags(shape));
         properties = core.image_format_properties(&info);
     }
@@ -2022,6 +2028,7 @@ fn plan(
     }
     plan.usage = image_usage;
     plan.attachment_reads = attachment_reads;
+    plan.cube = cube;
     Ok(plan)
 }
 
