@@ -148,7 +148,7 @@ impl AllocationId {
 
 /// Nearest Metal counterpart: the memory of a placement `MTLHeap`, which the consumer places
 /// buffers in ([`Device::new_buffer`](crate::Device::new_buffer)); for an imported block
-/// ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
+/// (`Device::import_dma_buf` on Unix,
 /// [`Device::import_host_memory`](crate::Device::import_host_memory)), the memory of a no-copy
 /// buffer (`newBufferWithBytesNoCopy:length:options:deallocator:`); for an exported block
 /// ([`Device::new_exported_block`](crate::Device::new_exported_block)), none.

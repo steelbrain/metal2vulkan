@@ -1,8 +1,9 @@
 //! Imports: blocks over memory the consumer brings, the memory of Metal's no-copy buffers
 //! (`newBufferWithBytesNoCopy:length:options:deallocator:`). A dma-buf by its fd
-//! ([`Device::import_dma_buf`]) or host memory by its address ([`Device::import_host_memory`]),
-//! each into the memory type its own rule takes from the handle's query, and each a block the
-//! consumer places buffers in as it places them in a block it took.
+//! (`Device::import_dma_buf`, on Unix) or host memory by its address
+//! ([`Device::import_host_memory`]), each into the memory type its own rule takes from the
+//! handle's query, and each a block the consumer places buffers in as it places them in a block
+//! it took.
 //!
 //! The two rules differ. A dma-buf is imported only into the first type its fd's query offers,
 //! and only where that type is host-visible and host-coherent: on NVIDIA's Linux driver
@@ -23,7 +24,7 @@ use std::sync::Arc;
 /// No Metal counterpart: the handle an import takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ImportHandle {
-    /// A Linux dma-buf by its fd ([`Device::import_dma_buf`]).
+    /// A Linux dma-buf by its fd (`Device::import_dma_buf`, on Unix).
     DmaBuf,
     /// Host memory by its address ([`Device::import_host_memory`]).
     HostMemory,
@@ -250,12 +251,13 @@ impl Device {
     ///
     /// The pages are pinnable host memory: anonymous memory, or a mapping of a file (a memfd's
     /// among them). Pages the consumer maps through a dma-buf's fd go through
-    /// [`Device::import_dma_buf`] instead. On NVIDIA's Linux driver (620.70.06, an RTX 3090), a
-    /// pointer into a mapping of a udmabuf is refused with `VK_ERROR_OUT_OF_DEVICE_MEMORY` in each
-    /// type its query offers, and the process's later allocations fail too: a device-local one
-    /// after either refusal, and a host-cached one after the refusal in the host-cached type.
+    /// `Device::import_dma_buf` (Unix) instead. On NVIDIA's Linux driver (620.70.06, an RTX
+    /// 3090), a pointer into a mapping of a udmabuf is refused with
+    /// `VK_ERROR_OUT_OF_DEVICE_MEMORY` in each type its query offers, and the process's later
+    /// allocations fail too: a device-local one after either refusal, and a host-cached one after
+    /// the refusal in the host-cached type.
     ///
-    /// The block lives, and `release` runs, as for [`Device::import_dma_buf`]: `release`,
+    /// The block lives, and `release` runs, as for `Device::import_dma_buf` (Unix): `release`,
     /// Metal's deallocator, runs once the memory is freed, and from then the pages are the
     /// consumer's alone. Each import is one `VkDeviceMemory` allocation and counts against the
     /// device's `maxMemoryAllocationCount`.

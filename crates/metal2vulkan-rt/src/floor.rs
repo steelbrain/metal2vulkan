@@ -44,7 +44,7 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// of their own: the KHR, and the EXT it was promoted from, whose feature and pipeline structures
 /// are the same and which a device may list alone, the imports' three: host memory by its
 /// address ([`Device::import_host_memory`](crate::Device::import_host_memory)), and a dma-buf
-/// ([`Device::import_dma_buf`](crate::Device::import_dma_buf)) through the fd's, and the
+/// (`Device::import_dma_buf`, on Unix) through the fd's, and the
 /// exports' ([`Device::new_exported_block`](crate::Device::new_exported_block)): the fd's and
 /// the dma-buf's again, an NT handle's, and the foreign queue family a dma-buf's ownership
 /// transfers name, and the DRM format modifier, through which a dma-buf's surface lies in place

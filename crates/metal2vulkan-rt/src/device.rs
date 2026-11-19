@@ -302,7 +302,7 @@ pub(crate) struct Core {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) hold_completions: std::sync::RwLock<()>,
     pub(crate) pool: Pool,
-    /// What the device imports ([`Device::import_dma_buf`], [`Device::import_host_memory`]).
+    /// What the device imports (`Device::import_dma_buf` on Unix, [`Device::import_host_memory`]).
     pub(crate) imports: Imports,
     /// What the device exports ([`Device::new_exported_block`]).
     pub(crate) exports: Exports,

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 /// No Metal counterpart: rt's own handle of a block of memory the consumer places buffers in, as
 /// a placement `MTLHeap`'s buffers sit in its memory
 /// ([`Device::take_block`](crate::Device::take_block)), or as a no-copy buffer's bytes are the
-/// memory it was made over ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
+/// memory it was made over (`Device::import_dma_buf` on Unix,
 /// [`Device::import_host_memory`](crate::Device::import_host_memory)), or as another API reaches
 /// it by a handle ([`Device::new_exported_block`](crate::Device::new_exported_block)). It derefs
 /// to the block's [`BlockInfo`], plain data.

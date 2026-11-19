@@ -1439,7 +1439,7 @@ pub enum Limit {
         len: u64,
     },
     /// An import of a handle the device does not take
-    /// ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
+    /// (`Device::import_dma_buf` on Unix,
     /// [`Device::import_host_memory`](crate::Device::import_host_memory), and a dma-buf surface's
     /// buffer, [`Surface::buffer`](crate::Surface::buffer)): it does not list the
     /// handle's extensions (`VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` for a

@@ -1197,7 +1197,7 @@ pub struct Metrics {
     pub over_copy_bytes: u64,
     /// Of [`over_copies`](Self::over_copies), those of a texture whose buffer's bytes are in an
     /// imported block ([`Device::import_host_memory`](crate::Device::import_host_memory),
-    /// [`Device::import_dma_buf`](crate::Device::import_dma_buf)); the rest are over a buffer in a
+    /// `Device::import_dma_buf` on Unix); the rest are over a buffer in a
     /// block of the runtime's own, where the device's linear image does not take the texture.
     pub over_copies_imported: u64,
     /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
@@ -1471,7 +1471,7 @@ pub struct Gauges {
     /// from its first record until its times are read at its completion: made as command buffers
     /// need them, and kept until the device drops.
     pub timestamp_pools: u64,
-    /// Imported blocks ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
+    /// Imported blocks (`Device::import_dma_buf` on Unix,
     /// [`Device::import_host_memory`](crate::Device::import_host_memory)) whose memory is not yet
     /// freed: each is also one of [`blocks`](Self::blocks).
     pub imports: u64,

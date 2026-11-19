@@ -135,6 +135,21 @@ jobs:
             echo "::endgroup::"
           done
 
+      # rt's documentation for both Windows targets, from Linux as above: a doc link to an item
+      # only one host has (a Unix host's dma-buf import, Windows' Direct3D 11 import) is
+      # unresolved on the other host.
+      - name: Build rt's documentation for Windows (warnings denied, Linux)
+        if: runner.os == 'Linux'
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+          for target in x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc; do
+            echo "::group::$target"
+            cargo doc --target "$target" -p metal2vulkan-rt --all-features --no-deps
+            echo "::endgroup::"
+          done
+
       - name: Build public documentation (warnings denied)
         env:
           RUSTDOCFLAGS: -Dwarnings

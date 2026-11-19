@@ -4249,7 +4249,7 @@ impl Buffer {
     /// its memory alignment, a format or usage its linear tiling lacks, memory that spilled, a
     /// render target whose advertised subresource passes its rows or the buffer), over a buffer
     /// in an imported block (a no-copy buffer's, [`Device::import_host_memory`],
-    /// [`Device::import_dma_buf`]), and over a buffer in an exported block
+    /// `Device::import_dma_buf` on Unix), and over a buffer in an exported block
     /// ([`Device::new_exported_block`], whose memory is dedicated to its buffer), the
     /// texture is an optimal image of its own, which the device copies the bytes shaders reach
     /// into and back (`crate::over`): over a Shared buffer once a submission, over a Managed
