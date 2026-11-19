@@ -948,6 +948,129 @@ mod on_device {
             );
         }
     }
+
+    /// An upload that zeroes two new textures by their clears records one barrier after the
+    /// clears, whatever it zeroes (`Metrics::texture_clear_barriers`, also counted in
+    /// `barriers`). Two textures made in the places two written ones gave back, which every
+    /// device clears, are moved home in the upload of the one submission after them: it counts
+    /// two clears and one such barrier, and both read zero.
+    #[test]
+    fn every_device_counts_one_zeroing_barrier_for_an_upload_that_clears_two_textures() {
+        use crate::tests::command::on_device::{finished, within};
+        const SIDE: u32 = 64;
+        const ROW: u64 = SIDE as u64 * 4;
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(
+            !devices.is_empty(),
+            "the loader lists no device of this cfg's kind"
+        );
+        for (name, physical) in devices {
+            let device = Device::new(&physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let counters = device.counters();
+            let grant = device
+                .grant_indices(IndexClass::Texture, 4096, 2)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let d = descriptor(
+                TextureType::Type2D,
+                PixelFormat::RGBA8Unorm,
+                [SIDE, SIDE, 1],
+            );
+            let whole = Region {
+                origin: [0; 3],
+                size: [SIDE, SIDE, 1],
+            };
+            let textures = counters.gauges().textures;
+            let bytes = vec![0xa5; (ROW * u64::from(SIDE)) as usize];
+            let written: Vec<Texture> = (0..2)
+                .map(|at| {
+                    let texture = (device.new_texture(&d, Some(4096 + at)))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    let host = crate::HostBytes::from(&bytes[..]);
+                    (texture.replace_region(whole, 0, 0, host, ROW, ROW * u64::from(SIDE)))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    texture
+                })
+                .collect();
+            let places: Vec<_> = written.iter().map(Texture::place).collect();
+            drop(written);
+            within("the written textures' places freed", || {
+                counters.gauges().textures == textures
+            });
+            let before = counters.metrics();
+            let new: Vec<Texture> = (0..2)
+                .map(|at| {
+                    (device.new_texture(&d, Some(4096 + at)))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"))
+                })
+                .collect();
+            for texture in &new {
+                assert!(
+                    places.contains(&texture.place()),
+                    "{name}: a new texture in a place a written one gave back"
+                );
+            }
+            // One submission: a blit of both into a Shared buffer prefilled with other bytes.
+            let len = 2 * ROW * u64::from(SIDE);
+            let block = (device.take_block(MemoryClass::Shared, len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let buffer = (device.new_buffer(block.id, 0, len, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let contents = buffer.contents().expect("a Shared buffer");
+            // SAFETY: the buffer is alive, `len` bytes long, and no GPU work uses it.
+            unsafe { contents.as_ptr().write_bytes(0x5a, len as usize) };
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            for (at, texture) in new.iter().enumerate() {
+                let from = TexturePlace {
+                    slice: 0,
+                    level: 0,
+                    origin: [0; 3],
+                };
+                let layout = BufferLayout {
+                    offset: at as u64 * len / 2,
+                    bytes_per_row: ROW,
+                    bytes_per_image: 0,
+                };
+                (encoder.copy_from_texture_to_buffer(texture, from, whole.size, &buffer, layout))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(&name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            // SAFETY: the buffer is alive, `len` bytes long, and its copies completed.
+            let read = unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) };
+            assert!(
+                read.iter().all(|&byte| byte == 0),
+                "{name}: the new textures"
+            );
+            let after = counters.metrics();
+            let barriers = after.barriers - before.barriers;
+            assert_eq!(
+                (
+                    after.texture_clears - before.texture_clears,
+                    after.texture_clear_barriers - before.texture_clear_barriers,
+                ),
+                (2, 1),
+                "{name}: the clears and the barrier after them"
+            );
+            assert!(
+                barriers >= 2,
+                "{name}: {barriers} barriers, the moves home and the zeroing's among them"
+            );
+            drop((buffer, block, new, command_buffer, queue));
+            device
+                .release_indices(grant)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!(
+                "texture zeros: {name}: one upload cleared 2 new textures and counted 1 zeroing \
+                 barrier of its {barriers}"
+            );
+        }
+    }
 }
 
 /// The linear row rounding of a format of `texel` bytes over the minimum linear texture

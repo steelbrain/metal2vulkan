@@ -2428,6 +2428,7 @@ field	metal2vulkan-rt::Metrics.take_allocations	pub take_allocations: SiteAlloca
 field	metal2vulkan-rt::Metrics.takes_from_free_ranges	pub takes_from_free_ranges: u64
 field	metal2vulkan-rt::Metrics.texture_allocations	pub texture_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.texture_block_allocations	pub texture_block_allocations: SiteAllocations
+field	metal2vulkan-rt::Metrics.texture_clear_barriers	pub texture_clear_barriers: u64
 field	metal2vulkan-rt::Metrics.texture_clear_bytes	pub texture_clear_bytes: u64
 field	metal2vulkan-rt::Metrics.texture_clears	pub texture_clears: u64
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64

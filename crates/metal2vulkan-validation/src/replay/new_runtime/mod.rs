@@ -2515,6 +2515,7 @@ impl Backend for NewRuntime {
             ("texture_clear_bytes", metrics.texture_clear_bytes),
             ("zeroed_textures", metrics.zeroed_textures),
             ("zeroed_texture_bytes", metrics.zeroed_texture_bytes),
+            ("texture_clear_barriers", metrics.texture_clear_barriers),
             ("pipelines_created", metrics.pipelines_created),
             ("first_use_waits", metrics.first_use_waits),
             ("first_use_wait_nanos", metrics.first_use_wait_nanos),

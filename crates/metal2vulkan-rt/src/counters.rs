@@ -83,10 +83,12 @@ pub(crate) enum Metric {
     SurfacesInPlace,
     /// [`Metrics::surfaces_copied`].
     SurfacesCopied,
+    /// [`Metrics::texture_clear_barriers`].
+    TextureClearBarriers,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::SurfacesCopied as usize + 1;
+const METRICS: usize = Metric::TextureClearBarriers as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -119,6 +121,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::ExternalReleases,
     Metric::SurfacesInPlace,
     Metric::SurfacesCopied,
+    Metric::TextureClearBarriers,
 ];
 
 // Each metric of the order is at its own index.
@@ -279,6 +282,7 @@ struct Atomics {
     texture_clear_bytes: AtomicU64,
     zeroed_textures: AtomicU64,
     zeroed_texture_bytes: AtomicU64,
+    texture_clear_barriers: AtomicU64,
     cache_bytes_written: AtomicU64,
     pipelines_created: AtomicU64,
     first_use_waits: AtomicU64,
@@ -453,6 +457,7 @@ impl Counters {
             Metric::ExternalReleases => &a.external_releases,
             Metric::SurfacesInPlace => &a.surfaces_in_place,
             Metric::SurfacesCopied => &a.surfaces_copied,
+            Metric::TextureClearBarriers => &a.texture_clear_barriers,
         }
     }
 
@@ -824,6 +829,7 @@ impl Counters {
             texture_clear_bytes: a.texture_clear_bytes.load(Relaxed),
             zeroed_textures: a.zeroed_textures.load(Relaxed),
             zeroed_texture_bytes: a.zeroed_texture_bytes.load(Relaxed),
+            texture_clear_barriers: a.texture_clear_barriers.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
             first_use_waits: a.first_use_waits.load(Relaxed),
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
@@ -979,8 +985,8 @@ pub struct Metrics {
     /// block ([`external_acquires`](Self::external_acquires)), and one for each release of one
     /// ([`external_releases`](Self::external_releases)). Any other draw takes none. An upload
     /// adds one where it moves new textures' images to their home layouts, one more after the
-    /// zeroing of those it zeroes ([`texture_clears`](Self::texture_clears)), and two around each
-    /// copy between a texture's image and the staging region or a named buffer
+    /// zeroing of those it zeroes ([`texture_clear_barriers`](Self::texture_clear_barriers)), and
+    /// two around each copy between a texture's image and the staging region or a named buffer
     /// (`replaceRegion` and `getBytes`).
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
@@ -1027,6 +1033,10 @@ pub struct Metrics {
     pub zeroed_textures: u64,
     /// The bytes of memory of those images.
     pub zeroed_texture_bytes: u64,
+    /// The barriers that move new textures' images home after their zeroing: one for each upload
+    /// that zeroed any ([`texture_clears`](Self::texture_clears)), however many it zeroed, also
+    /// counted in [`barriers`](Self::barriers).
+    pub texture_clear_barriers: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,

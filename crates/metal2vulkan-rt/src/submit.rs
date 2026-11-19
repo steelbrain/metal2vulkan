@@ -328,6 +328,7 @@ impl Upload {
         }
         let moves: Vec<_> = zeroings.iter().map(|zeroing| zeroing.home).collect();
         barrier(moves.as_slice());
+        core.counters.count(Metric::TextureClearBarriers);
     }
 }
 
