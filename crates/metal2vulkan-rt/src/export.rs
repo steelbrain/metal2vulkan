@@ -246,11 +246,11 @@ impl Device {
 }
 
 impl Block {
-    /// No Metal counterpart: the other API's writes into this exported block
+    /// No Metal counterpart: the other API's accesses of this exported block
     /// ([`Device::new_exported_block`]) are done, and the runtime's commands may now read and
-    /// write it. The consumer calls it once the other API's work that wrote the block has
-    /// completed (its own wait on the decoder, for one), and before it commits the command
-    /// buffers that use what was written.
+    /// write it. The consumer calls it once the other API's work that accessed the block (work
+    /// that wrote it, or that read it after a release) has completed (its own wait on the
+    /// decoder, for one), and before it commits the command buffers that use the block.
     ///
     /// The call records the block's acquire from the other API's queue family: the whole
     /// block, from `VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle, or from
@@ -261,19 +261,18 @@ impl Block {
     /// counted in [`Metrics::external_acquires`](crate::Metrics::external_acquires).
     ///
     /// The contract has three parts: between this call and the other API's next write, the other
-    /// API does not access the block; when it writes again, it reads nothing of the block but
-    /// what it has itself written since; and after each acquire, a byte the other API has not
-    /// written since the previous acquire is undefined to the runtime, unless the consumer
-    /// released the block between the two
-    /// ([`release_to_external`](crate::BlitCommandEncoder::release_to_external)): a release and
-    /// the acquire after it transfer ownership, and Vulkan leaves contents undefined only where
-    /// "no ownership transfer is defined", so the bytes the other API did not write keep what
-    /// the release handed it. No release back to the other API follows the acquire: without one,
-    /// Vulkan leaves the block's contents undefined to the other API's reads ("the contents of
-    /// that resource are undefined for any read accesses performed by the second queue family"),
-    /// and in this direction that API reads only its own writes. Where it is to read the
-    /// runtime's writes, the consumer releases the block
-    /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external)).
+    /// API does not access the block, unless a release
+    /// ([`release_to_external`](crate::BlitCommandEncoder::release_to_external)) comes between,
+    /// from whose completion it may read the whole block, the runtime's writes and its own
+    /// earlier ones; when it writes again, it reads nothing of the block but what it has itself
+    /// written since and what a release since handed it; and after each acquire, a byte the other
+    /// API has not written since the previous acquire is undefined to the runtime, unless a
+    /// release came between the two: a release and the acquire after it transfer ownership, and
+    /// Vulkan leaves contents undefined only where "no ownership transfer is defined", so the
+    /// bytes the other API did not write keep what the release handed it. The acquire is not
+    /// followed by a release of its own: without one, Vulkan leaves the block's contents undefined
+    /// to the other API's reads ("the contents of that resource are undefined for any read
+    /// accesses performed by the second queue family").
     ///
     /// Err: [`Refusal::NotExported`] for a block that is not exported;
     /// [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`]; and

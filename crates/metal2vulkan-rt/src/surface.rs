@@ -1440,11 +1440,11 @@ impl Surface {
         Ok(())
     }
 
-    /// No Metal counterpart: the other API's writes into this surface are done, and the
+    /// No Metal counterpart: the other API's accesses of this surface are done, and the
     /// runtime's commands may now read and write its planes, as
     /// [`Block::external_writes_done`] is for a block. The consumer calls it once the other API's
-    /// work that wrote the surface has completed, and before it commits the command buffers that
-    /// use what was written.
+    /// work that accessed the surface (work that wrote it, or that read it after a release) has
+    /// completed, and before it commits the command buffers that use the surface.
     ///
     /// In place, the call records each plane's image's acquire from the other API's queue
     /// family (`VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf, `VK_QUEUE_FAMILY_EXTERNAL` for an

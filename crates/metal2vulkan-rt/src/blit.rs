@@ -821,10 +821,11 @@ impl BlitCommandEncoder {
 
     /// No Metal counterpart: releases `buffer`'s exported block
     /// ([`Device::new_exported_block`](crate::Device::new_exported_block)) to the other API, which
-    /// reads what this command buffer's commands wrote into it once the command buffer has
-    /// completed: a video encoder that reads the frames a blit wrote, for one. The consumer calls
-    /// it after the encoder's last copy into the block, and has the other API read the block
-    /// after its own wait on the command buffer's completion.
+    /// reads the block once this command buffer has completed: what its commands wrote (a video
+    /// encoder that reads the frames a blit wrote, for one), or what the other API wrote before
+    /// and the commands only read (a decoder that reads a reference picture again). The consumer
+    /// calls it after the encoder's last command that uses the block, and has the other API read
+    /// the block after its own wait on the command buffer's completion.
     ///
     /// The call records the whole block's release from the runtime's queue family to the other
     /// API's (`VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle, `VK_QUEUE_FAMILY_FOREIGN_EXT` for
@@ -837,14 +838,17 @@ impl BlitCommandEncoder {
     /// command records it, or its end barrier where none follows.
     ///
     /// The contract: from the call until the consumer's next write into the block through the
-    /// runtime, the consumer encodes no read of the block (of a buffer in it, or of a texture
-    /// over one), and the runtime reads none of it. That next write needs no acquire: Vulkan lets
-    /// the releasing queue use the block again without one, its contents written anew ("It is
-    /// valid to never call the acquire operation after a release, and instead simply start using
-    /// the resource on any queue (even the releasing queue), but the contents should be
-    /// reinitialized before being read"). Where the other API writes the block in between,
-    /// [`Block::external_writes_done`](crate::Block::external_writes_done) comes before the
-    /// runtime's commands use what it wrote.
+    /// runtime or the next [`Block::external_writes_done`](crate::Block::external_writes_done),
+    /// the consumer encodes no read of the block (of a buffer in it, or of a texture over one),
+    /// and the runtime reads none of it. That next write, once the other API's reads have
+    /// completed, needs no acquire: Vulkan lets the releasing queue use the block again without
+    /// one, its contents written anew ("It is valid to never call the acquire operation after a
+    /// release, and instead simply start using the resource on any queue (even the releasing
+    /// queue), but the contents should be reinitialized before being read"). Where the other API
+    /// writes the block in between, `external_writes_done` comes before the runtime's commands
+    /// use what it wrote; where it only reads the block and the runtime is to read it again,
+    /// `external_writes_done` comes first too, once those reads have completed: the acquire after
+    /// the release, which keeps the block's bytes.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's buffer; [`Refusal::NotExported`] for
     /// a buffer whose block is not exported; [`Error::Vulkan`] where the command buffer cannot
@@ -887,10 +891,11 @@ impl BlitCommandEncoder {
 
     /// No Metal counterpart: releases `surface`
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)) to the other API,
-    /// which reads what this command buffer's commands wrote into its planes once the command
-    /// buffer has completed: a video encoder that reads the pictures a pass rendered, for one. The consumer calls it after the
-    /// encoder's last command that writes the planes, and has the other API read the surface
-    /// after its own wait on the command buffer's completion.
+    /// which reads its planes once this command buffer has completed: what its commands wrote (a
+    /// video encoder that reads the pictures a pass rendered, for one), or what the other API
+    /// wrote before and the commands only read (a decoder that reads a reference picture again).
+    /// The consumer calls it after the encoder's last command that uses the planes, and has the
+    /// other API read the surface after its own wait on the command buffer's completion.
     ///
     /// In place, the call records each plane's image's release from the runtime's queue family to
     /// the other API's (`VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle,
@@ -901,8 +906,9 @@ impl BlitCommandEncoder {
     /// [`Metrics::external_releases`](crate::Metrics::external_releases). In the copy form it is
     /// the block's release ([`release_to_external`](Self::release_to_external)), the planes'
     /// images copied back into the block first. The contract is the block's: from the call until
-    /// the consumer's next write into the surface through the runtime, the consumer encodes no
-    /// read of its planes.
+    /// the consumer's next write into the surface through the runtime or the next
+    /// [`Surface::external_writes_done`](crate::Surface::external_writes_done), the consumer
+    /// encodes no read of its planes.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's surface; [`Error::Vulkan`] where the
     /// command buffer cannot record.

@@ -8,7 +8,9 @@
 //! rule (plane 0 at 0, one pitch, exact starts); a second device of the same physical device
 //! imports the handle and writes three pictures, each acquired by rt and read through its plane
 //! textures by a blit into a Shared buffer whose bytes the host compares (a consumer's CPU read of
-//! a decoded picture); rt copies a picture into the planes and releases them, and the second
+//! a decoded picture); rt releases the third to the second device's read, which hands it back with
+//! nothing written, then acquires and reads it again, each read from zeroed bytes and none a copy
+//! in place (the reference round: a decoder's reference picture); rt copies a picture into the planes and releases them, and the second
 //! device reads it through the handle (the encode round); rt clears each plane in a render pass,
 //! reads it, and releases it to the second device's read (the render round). Then the buffer
 //! round: the surface's buffer, made at its first call and counted in the surface gauges (none in
@@ -353,8 +355,9 @@ mod on_device {
             assert_eq!(command_buffer.error(), None, "{name}");
         }
 
-        /// Acquires the import and reads its whole length into `bytes`.
-        fn read(&self, name: &str, bytes: &crate::Buffer) {
+        /// Acquires the import and reads its whole length into `bytes`; where `hand_back`, then
+        /// releases it, nothing written, as a decoder hands back a reference picture it read.
+        fn read(&self, name: &str, bytes: &crate::Buffer, hand_back: bool) {
             let (to, offset) = bytes.device_range();
             let family = self.device.raw().queue_family_index;
             let (import, len, external) = (self.import.buffer, self.import.len, self.external);
@@ -367,6 +370,7 @@ mod on_device {
                         dst_offset: offset,
                         size: len,
                     }];
+                    let release = [transfer(import, family, external, true)];
                     // SAFETY: the command buffer is recording; the import outlives the wait.
                     unsafe {
                         raw.cmd_pipeline_barrier2(
@@ -374,6 +378,12 @@ mod on_device {
                             &vk::DependencyInfo::default().buffer_memory_barriers(&acquire),
                         );
                         raw.cmd_copy_buffer(command, import, to, &copy);
+                        if hand_back {
+                            raw.cmd_pipeline_barrier2(
+                                command,
+                                &vk::DependencyInfo::default().buffer_memory_barriers(&release),
+                            );
+                        }
                     }
                 })
                 .expect("the read");
@@ -459,8 +469,8 @@ mod on_device {
     }
 
     /// For each handle the device exports and each picture, each row's surface: its layout, three
-    /// pictures written by the other device and read by rt, the encode round and the render
-    /// round, each byte compared; the form and the make's wall time printed.
+    /// pictures written by the other device and read by rt, the reference round, the encode round
+    /// and the render round, each byte compared; the form and the make's wall time printed.
     #[test]
     fn every_device_carries_each_form_of_surface() {
         each_device("surface", |name, instance, device| {
@@ -647,6 +657,51 @@ mod on_device {
                         "{label}"
                     );
 
+                    // The reference round: picture 3, which rt acquired and read, is released to
+                    // the other API's read (a decoder reading its reference picture) and handed
+                    // back with nothing written; rt acquires it again and reads it once more.
+                    // Each read starts from zeroed bytes; in place the round copies nothing.
+                    let held = counters.metrics();
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                    (encoder.release_surface_to_external(&surface))
+                        .unwrap_or_else(|error| panic!("{label}: the reference release: {error}"));
+                    encoder.end_encoding();
+                    command_buffer.commit().expect("a commit");
+                    finished(&label, &command_buffer);
+                    assert_eq!(command_buffer.error(), None, "{label}");
+                    fill(&theirs, |out| out.fill(0));
+                    other.read(&label, &theirs, true);
+                    assert_eq!(
+                        wrong(3, planes, at_layout, bytes_of(&theirs)),
+                        None,
+                        "{label}: the reference picture read through the handle"
+                    );
+                    (surface.external_writes_done())
+                        .unwrap_or_else(|error| panic!("{label}: the re-acquire: {error}"));
+                    fill(&mine, |out| out.fill(0));
+                    rt_read(&label, &queue, &surface, planes, &mine);
+                    assert_eq!(
+                        wrong(3, planes, (offsets, pitches), bytes_of(&mine)),
+                        None,
+                        "{label}: picture 3 read by rt after the re-acquire"
+                    );
+                    let handed = counters.metrics();
+                    assert_eq!(
+                        (
+                            handed.external_releases - held.external_releases,
+                            handed.external_acquires - held.external_acquires
+                        ),
+                        (1, 1),
+                        "{label}: the reference round's release and acquire"
+                    );
+                    if form == SurfaceForm::InPlace {
+                        assert_eq!(
+                            handed.over_copies, held.over_copies,
+                            "{label}: the reference round in place copies nothing"
+                        );
+                    }
+
                     // The encode round: rt copies a picture into the planes and releases them.
                     let (_source_block, source) = shared(&device, packed(planes).2);
                     fill(&source, |out| {
@@ -688,7 +743,7 @@ mod on_device {
                         releases + 1,
                         "{label}"
                     );
-                    other.read(&label, &theirs);
+                    other.read(&label, &theirs, false);
                     assert_eq!(
                         wrong(9, planes, at_layout, bytes_of(&theirs)),
                         None,
@@ -750,7 +805,7 @@ mod on_device {
                     encoder.end_encoding();
                     command_buffer.commit().expect("a commit");
                     finished(&label, &command_buffer);
-                    other.read(&label, &theirs);
+                    other.read(&label, &theirs, false);
                     let read = bytes_of(&theirs);
                     for (i, plane) in planes.iter().enumerate() {
                         let texel = cleared(i, plane);
@@ -950,7 +1005,7 @@ mod on_device {
             None,
             "{label}: picture 6 written through the buffer, read through the planes"
         );
-        other.read(label, &theirs);
+        other.read(label, &theirs, false);
         assert_eq!(
             wrong(6, planes, at_layout, bytes_of(&theirs)),
             None,

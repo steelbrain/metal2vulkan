@@ -534,36 +534,40 @@ which is dedicated to its buffer (`VUID-vkBindImageMemory-memory-10926`): a text
 in it is the counted copy, as over an imported block, and a heap texture in it is
 `Gap::HeapTexture`.
 
-Once the other API's work that wrote the block has completed (the consumer's own wait on the
-decoder), the consumer calls `Block::external_writes_done()` before it commits the command buffers
-that use what was written. The call records the block's acquire from the other API's queue family
-(`VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle, `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf) in
-the upload, ahead of every command buffer committed after it, without waiting for the GPU: one
-buffer barrier, counted in `Metrics::external_acquires`. A block that is not exported is
-`Refusal::NotExported`. The contract has three parts: between `external_writes_done` and the
-other API's next write, the other API does not access the block; when it writes again, it reads
-nothing of the block but what it has itself written since; and after each acquire, a byte the
-other API has not written since the previous acquire is undefined to the runtime, unless the
-consumer released the block between the two (`release_to_external`, below): a release and the
+Once the other API's work that accessed the block has completed (work that wrote it, or that read it
+after a release; the consumer's own wait on the decoder), the consumer calls
+`Block::external_writes_done()` before it commits the command buffers that use the block. The call
+records the block's acquire from the other API's queue family (`VK_QUEUE_FAMILY_EXTERNAL` for an
+opaque handle, `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf) in the upload, ahead of every command
+buffer committed after it, without waiting for the GPU: one buffer barrier, counted in
+`Metrics::external_acquires`. A block that is not exported is `Refusal::NotExported`. The contract
+has three parts: between `external_writes_done` and the other API's next write, the other API does
+not access the block, unless a release (`release_to_external`, below) comes between, from whose
+completion it may read the whole block, the runtime's writes and its own earlier ones; when it
+writes again, it reads nothing of the block but what it has itself written since and what a release
+since handed it; and after each acquire, a byte the other API has not written since the previous
+acquire is undefined to the runtime, unless a release came between the two: a release and the
 acquire after it transfer ownership, which keeps the bytes the other API did not write (section
-7.7.6). No release follows the acquire: without one, Vulkan leaves the block's contents undefined
-to the other API's reads (section 7.7.6), and in this direction that API reads only its own
-writes.
+7.7.6). The acquire is not followed by a release of its own: without one, Vulkan leaves the block's
+contents undefined to the other API's reads (section 7.7.6).
 
-Where the other API is to read what the runtime's commands wrote (a video encoder reading the
-frames a blit wrote), the consumer calls `BlitCommandEncoder::release_to_external(&buffer)`, with a
-buffer in the block, after the encoder's last copy into it. The call records the whole block's
-release from the runtime's queue family to the other API's (the acquire's family) into that
-command buffer, after every command before it: one buffer barrier, counted in
-`Metrics::external_releases`, with no submission of its own and no wait. The barrier that orders
-the release before later commands is owed, and the command buffer's end barrier pays it where
-nothing follows. A buffer whose block is not exported is `Refusal::NotExported`. The contract of
-this direction: the other API reads the block from that command buffer's completion, which the
-consumer waits for; from the call until the consumer's next write into the block through the
-runtime, the runtime does not read the block and the consumer encodes no read of it. That next
-write needs no acquire: after a release, Vulkan lets the releasing queue use the resource again
-without one, its contents written anew (section 7.7.6). Where the other API writes the block in
-between, `external_writes_done` comes first, as above.
+Where the other API is to read the block after the runtime's commands (a video encoder reading the
+frames a blit wrote, or a decoder reading again, as a reference, a picture the runtime read), the
+consumer calls `BlitCommandEncoder::release_to_external(&buffer)`, with a buffer in the block, after
+the encoder's last command that uses it. The call records the whole block's release from the
+runtime's queue family to the other API's (the acquire's family) into that command buffer, after
+every command before it: one buffer barrier, counted in `Metrics::external_releases`, with no
+submission of its own and no wait. The barrier that orders the release before later commands is
+owed, and the command buffer's end barrier pays it where nothing follows. A buffer whose block is
+not exported is `Refusal::NotExported`. The contract of this direction: the other API reads the
+block from that command buffer's completion, which the consumer waits for; from the call until the
+consumer's next write into the block through the runtime or the next `external_writes_done`, the
+runtime does not read the block and the consumer encodes no read of it. That next write, once the
+other API's reads have completed, needs no acquire: after a release, Vulkan lets the releasing queue
+use the resource again without one, its contents written anew (section 7.7.6). Where the other API
+writes the block in between, `external_writes_done` comes first, as above; where it only reads the
+block and the runtime is to read it again, `external_writes_done` comes first too, once those reads
+have completed: the acquire after the release, which keeps the block's bytes (section 7.7.6).
 
 ### Exported surfaces
 
@@ -645,17 +649,18 @@ that the submissions copy the bytes into and back (`Metrics::over_copies`). A st
 driver cannot take falls to the copy form with no error: the answer's `form` is the only sign.
 `Metrics::surfaces_in_place` and `Metrics::surfaces_copied` count each form made.
 
-One contract for both forms, the exported block's above, after the ready point. Once the other
-API's work that wrote the surface has completed, the consumer calls
-`Surface::external_writes_done()` before it commits the command buffers that use what was
-written: in place, each plane's image's acquire from the other API's queue family, the general
-layout kept, one barrier in the upload; in the copy form the block's acquire. Where the other
-API is to read what the runtime's commands wrote, the consumer calls
-`BlitCommandEncoder::release_surface_to_external(&surface)` after the last command that writes
-the planes: in place, each plane's image's release, one barrier; in the copy form the
-block's release, the planes' images copied back first. Both count in `Metrics::external_acquires`
-and `Metrics::external_releases`. From a release until the consumer's next write into the surface
-through the runtime, the consumer encodes no read of its planes.
+One contract for both forms, the exported block's above, after the ready point. Once the other API's
+work that accessed the surface has completed (work that wrote it, or that read it after a release),
+the consumer calls `Surface::external_writes_done()` before it commits the command buffers that use
+the surface: in place, each plane's image's acquire from the other API's queue family, the general
+layout kept, one barrier in the upload; in the copy form the block's acquire. Where the other API is
+to read the surface after the runtime's commands (what they wrote, or a reference picture they
+read), the consumer calls `BlitCommandEncoder::release_surface_to_external(&surface)` after the last
+command that uses the planes: in place, each plane's image's release, one barrier; in the copy form
+the block's release, the planes' images copied back first. Both count in
+`Metrics::external_acquires` and `Metrics::external_releases`. From a release until the consumer's
+next write into the surface through the runtime or the next `external_writes_done`, the consumer
+encodes no read of its planes.
 
 **The surface's buffer.** `Surface::buffer()` answers a buffer over the surface's own memory, the
 counterpart of an IOSurface-backed buffer: from the memory's first byte, its bytes at the layout
