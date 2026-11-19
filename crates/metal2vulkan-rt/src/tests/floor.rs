@@ -479,7 +479,7 @@ fn each_missing_feature_is_named() {
 #[test]
 fn each_low_limit_is_named() {
     type Lower = fn(&mut Queried);
-    let cases: [(Lower, &str, u32); 17] = [
+    let cases: [(Lower, &str, u32); 18] = [
         (
             |d| {
                 d.vulkan12
