@@ -61,59 +61,60 @@ define void @tgz_reads(%"struct.metal::_atomic" addrspace(1)* nocapture noundef 
   br i1 %39, label %29, label %25, !llvm.loop !35
 
 40:                                               ; preds = %51, %25
-  %41 = phi i32 [ 0, %25 ], [ %60, %51 ]
+  %41 = phi i32 [ 0, %25 ], [ %61, %51 ]
   %42 = icmp ne i32 %9, 0
   %43 = zext i1 %42 to i32
   %44 = tail call i32 @air.simd_or.u.i32(i32 %43) #3
   %45 = icmp ne i32 %8, 0
   %46 = zext i1 %45 to i32
   %47 = tail call i32 @air.simd_or.u.i32(i32 %46) #3
-  %48 = tail call i32 @air.simd_xor.u.i32(i32 %41) #3
+  %48 = tail call i32 @air.simd_sum.u.i32(i32 %41) #3
   %49 = tail call i32 @air.simd_sum.u.i32(i32 1) #3
   %50 = tail call i1 @air.simd_is_first() #3
-  br i1 %50, label %63, label %79
+  br i1 %50, label %64, label %80
 
 51:                                               ; preds = %25, %51
-  %52 = phi i32 [ %61, %51 ], [ %27, %25 ]
-  %53 = phi i32 [ %60, %51 ], [ 0, %25 ]
+  %52 = phi i32 [ %62, %51 ], [ %27, %25 ]
+  %53 = phi i32 [ %61, %51 ], [ 0, %25 ]
   %54 = zext i32 %52 to i64
   %55 = getelementptr inbounds [2048 x i32], [2048 x i32] addrspace(3)* @_ZZ9tgz_readsPU9MTLdeviceN5metal7_atomicIjvEEPU14MTLthreadgroupjjjjE4decl, i64 0, i64 %54
   %56 = load i32, i32 addrspace(3)* %55, align 4, !tbaa !24
   %57 = getelementptr inbounds i32, i32 addrspace(3)* %1, i64 %54
   %58 = load i32, i32 addrspace(3)* %57, align 4, !tbaa !24, !alias.scope !28, !noalias !31
-  %59 = xor i32 %56, %53
-  %60 = xor i32 %59, %58
-  %61 = add i32 %52, %4
-  %62 = icmp ult i32 %61, 2048
-  br i1 %62, label %51, label %40, !llvm.loop !36
+  %59 = shl i32 %58, 1
+  %60 = add i32 %56, %53
+  %61 = add i32 %60, %59
+  %62 = add i32 %52, %4
+  %63 = icmp ult i32 %62, 2048
+  br i1 %63, label %51, label %40, !llvm.loop !36
 
-63:                                               ; preds = %40
-  %64 = icmp eq i32 %44, 0
-  br i1 %64, label %68, label %65
+64:                                               ; preds = %40
+  %65 = icmp eq i32 %44, 0
+  br i1 %65, label %69, label %66
 
-65:                                               ; preds = %63
-  %66 = getelementptr inbounds %"struct.metal::_atomic", %"struct.metal::_atomic" addrspace(1)* %0, i64 0, i32 0
-  %67 = tail call i32 @air.atomic.global.or.u.i32(i32 addrspace(1)* nocapture %66, i32 1, i32 0, i32 2, i1 true) #4
-  br label %68
+66:                                               ; preds = %64
+  %67 = getelementptr inbounds %"struct.metal::_atomic", %"struct.metal::_atomic" addrspace(1)* %0, i64 0, i32 0
+  %68 = tail call i32 @air.atomic.global.or.u.i32(i32 addrspace(1)* nocapture %67, i32 1, i32 0, i32 2, i1 true) #4
+  br label %69
 
-68:                                               ; preds = %65, %63
-  %69 = icmp eq i32 %47, 0
-  br i1 %69, label %73, label %70
+69:                                               ; preds = %66, %64
+  %70 = icmp eq i32 %47, 0
+  br i1 %70, label %74, label %71
 
-70:                                               ; preds = %68
-  %71 = getelementptr inbounds %"struct.metal::_atomic", %"struct.metal::_atomic" addrspace(1)* %0, i64 1, i32 0
-  %72 = tail call i32 @air.atomic.global.or.u.i32(i32 addrspace(1)* nocapture %71, i32 1, i32 0, i32 2, i1 true) #4
-  br label %73
+71:                                               ; preds = %69
+  %72 = getelementptr inbounds %"struct.metal::_atomic", %"struct.metal::_atomic" addrspace(1)* %0, i64 1, i32 0
+  %73 = tail call i32 @air.atomic.global.or.u.i32(i32 addrspace(1)* nocapture %72, i32 1, i32 0, i32 2, i1 true) #4
+  br label %74
 
-73:                                               ; preds = %70, %68
-  %74 = getelementptr inbounds %"struct.metal::_atomic", %"struct.metal::_atomic" addrspace(1)* %0, i64 2, i32 0
-  %75 = tail call i32 @air.atomic.global.xor.u.i32(i32 addrspace(1)* nocapture %74, i32 %48, i32 0, i32 2, i1 true) #4
-  %76 = mul i32 %49, %49
-  %77 = getelementptr inbounds %"struct.metal::_atomic", %"struct.metal::_atomic" addrspace(1)* %0, i64 3, i32 0
-  %78 = tail call i32 @air.atomic.global.add.u.i32(i32 addrspace(1)* nocapture %77, i32 %76, i32 0, i32 2, i1 true) #4
-  br label %79
+74:                                               ; preds = %71, %69
+  %75 = getelementptr inbounds %"struct.metal::_atomic", %"struct.metal::_atomic" addrspace(1)* %0, i64 2, i32 0
+  %76 = tail call i32 @air.atomic.global.add.u.i32(i32 addrspace(1)* nocapture %75, i32 %48, i32 0, i32 2, i1 true) #4
+  %77 = mul i32 %49, %49
+  %78 = getelementptr inbounds %"struct.metal::_atomic", %"struct.metal::_atomic" addrspace(1)* %0, i64 3, i32 0
+  %79 = tail call i32 @air.atomic.global.add.u.i32(i32 addrspace(1)* nocapture %78, i32 %77, i32 0, i32 2, i1 true) #4
+  br label %80
 
-79:                                               ; preds = %73, %40
+80:                                               ; preds = %74, %40
   ret void
 }
 
@@ -127,16 +128,10 @@ declare i1 @air.simd_is_first() local_unnamed_addr #1
 declare i32 @air.simd_or.u.i32(i32) local_unnamed_addr #1
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
-declare i32 @air.simd_xor.u.i32(i32) local_unnamed_addr #1
-
-; Function Attrs: convergent mustprogress nounwind willreturn
 declare i32 @air.simd_sum.u.i32(i32) local_unnamed_addr #1
 
 ; Function Attrs: mustprogress nounwind willreturn
 declare i32 @air.atomic.global.or.u.i32(i32 addrspace(1)* nocapture, i32, i32, i32, i1) local_unnamed_addr #2
-
-; Function Attrs: mustprogress nounwind willreturn
-declare i32 @air.atomic.global.xor.u.i32(i32 addrspace(1)* nocapture, i32, i32, i32, i1) local_unnamed_addr #2
 
 ; Function Attrs: mustprogress nounwind willreturn
 declare i32 @air.atomic.global.add.u.i32(i32 addrspace(1)* nocapture, i32, i32, i32, i1) local_unnamed_addr #2
