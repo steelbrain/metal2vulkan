@@ -153,8 +153,6 @@ impl FenceOrder {
 
 /// How many of the words in `bytes` hold the updater's word, four [`WRITTEN`] bytes.
 pub fn written_words(bytes: &[u8]) -> u64 {
-    bytes
-        .chunks_exact(4)
-        .filter(|word| word.iter().all(|byte| *byte == WRITTEN))
-        .count() as u64
+    let (words, _) = bytes.as_chunks::<4>();
+    words.iter().filter(|word| **word == [WRITTEN; 4]).count() as u64
 }
