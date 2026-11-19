@@ -3,8 +3,8 @@
 //! What the runtime does not build yet is skipped and counted: a render pipeline state it answers
 //! with a typed gap or the translator refuses (`render_states`, by the gap, with the first state
 //! and the runtime's answer of each); a render encoder whose pass the
-//! runtime's descriptor cannot hold (a resolve texture, a depth plane, store action options, a
-//! visibility result buffer, layered or tile rendering, a skipped texture) or that it answers with
+//! runtime's descriptor cannot hold (a depth plane, store action options, a visibility result
+//! buffer, layered or tile rendering, a skipped texture or resolve texture) or that it answers with
 //! a typed gap (`encoders`); a draw whose pipeline state, or a buffer or texture bound to either
 //! stage, is a skipped object (`draws`); and a render command the runtime answers with a typed
 //! gap, a draw it does not build among them (`render_commands`, by the gap, with the first frame
@@ -144,6 +144,31 @@ fn scissor(call: &Call, value: &Value) -> Result<rt::ScissorRect, PlayError> {
     })
 }
 
+/// `MTLMultisampleDepthResolveFilter`.
+fn depth_resolve_filter(
+    call: &Call,
+    raw: u64,
+) -> Result<rt::MultisampleDepthResolveFilter, PlayError> {
+    Ok(match raw {
+        0 => rt::MultisampleDepthResolveFilter::Sample0,
+        1 => rt::MultisampleDepthResolveFilter::Min,
+        2 => rt::MultisampleDepthResolveFilter::Max,
+        other => return Err(refuse(call, format!("depth resolve filter {other}"))),
+    })
+}
+
+/// `MTLMultisampleStencilResolveFilter`.
+fn stencil_resolve_filter(
+    call: &Call,
+    raw: u64,
+) -> Result<rt::MultisampleStencilResolveFilter, PlayError> {
+    Ok(match raw {
+        0 => rt::MultisampleStencilResolveFilter::Sample0,
+        1 => rt::MultisampleStencilResolveFilter::DepthResolvedSample,
+        other => return Err(refuse(call, format!("stencil resolve filter {other}"))),
+    })
+}
+
 /// `MTLStoreAction`.
 fn store_action(call: &Call, raw: u64) -> Result<rt::StoreAction, PlayError> {
     Ok(match raw {
@@ -165,6 +190,10 @@ struct AttachmentSet {
     slice: Option<u32>,
     load_action: Option<rt::LoadAction>,
     store_action: Option<rt::StoreAction>,
+    resolve_texture: Option<Option<rt::Texture>>,
+    resolve_level: Option<u32>,
+    resolve_slice: Option<u32>,
+    resolve_depth_plane: Option<u32>,
 }
 
 /// `set`'s properties set on the attachment descriptor `a`, of any of the three kinds.
@@ -185,6 +214,18 @@ macro_rules! set_attachment {
         }
         if let Some(action) = set.store_action {
             a.store_action = action;
+        }
+        if let Some(texture) = set.resolve_texture {
+            a.resolve_texture = texture;
+        }
+        if let Some(level) = set.resolve_level {
+            a.resolve_level = level;
+        }
+        if let Some(slice) = set.resolve_slice {
+            a.resolve_slice = slice;
+        }
+        if let Some(plane) = set.resolve_depth_plane {
+            a.resolve_depth_plane = plane;
         }
     }};
 }
@@ -297,7 +338,14 @@ impl NewRuntime {
             Some(None) => (Some(None), Some(false)),
             None => (None, None),
         };
-        let resolve = f.set_object("resolveTexture")?;
+        // A skipped resolve texture is held as none, and the pass marked as one the runtime does
+        // not build while the attachment names it.
+        let (resolve_texture, resolve_skipped) = match f.set_object("resolveTexture")? {
+            Some(Some(id)) if self.skipped(id) => (Some(None), Some(true)),
+            Some(Some(id)) => (Some(Some(self.texture_of(call, id)?)), Some(false)),
+            Some(None) => (Some(None), Some(false)),
+            None => (None, None),
+        };
         let depth_plane = f.uint("depthPlane")?;
         let options = f.uint("storeActionOptions")?;
         let narrow = |key: &str| -> Result<Option<u32>, PlayError> {
@@ -315,6 +363,10 @@ impl NewRuntime {
                 .map(|raw| store_action(call, raw))
                 .transpose()?,
             texture,
+            resolve_texture,
+            resolve_level: narrow("resolveLevel")?,
+            resolve_slice: narrow("resolveSlice")?,
+            resolve_depth_plane: narrow("resolveDepthPlane")?,
         };
         let pass = self.pass(call.receiver);
         match recorded {
@@ -325,8 +377,8 @@ impl NewRuntime {
         if let Some(skipped) = skipped {
             pass.hold(at, "texture", !skipped);
         }
-        if let Some(resolve) = resolve {
-            pass.hold(at, "resolveTexture", resolve.is_none());
+        if let Some(skipped) = resolve_skipped {
+            pass.hold(at, "resolveTexture", !skipped);
         }
         if let Some(plane) = depth_plane {
             pass.hold(at, "depthPlane", plane == 0);
@@ -414,10 +466,16 @@ impl NewRuntime {
                 let f = Fields::arg(call, 0, &attachment_keys(&own))?;
                 let set = self.attachment_set(call, &f, rt::MAX_COLOR_ATTACHMENTS)?;
                 let clear = f.float("clearDepth")?;
+                let filter = (f.uint("depthResolveFilter")?)
+                    .map(|raw| depth_resolve_filter(call, raw))
+                    .transpose()?;
                 let a = &mut self.pass(call.receiver).descriptor.depth_attachment;
                 set_attachment!(set, &mut *a);
                 if let Some(clear) = clear {
                     a.clear_depth = clear;
+                }
+                if let Some(filter) = filter {
+                    a.depth_resolve_filter = filter;
                 }
             }
             "m2v.setStencilAttachment" => {
@@ -425,10 +483,16 @@ impl NewRuntime {
                 let f = Fields::arg(call, 0, &attachment_keys(&own))?;
                 let set = self.attachment_set(call, &f, rt::MAX_COLOR_ATTACHMENTS + 1)?;
                 let clear = f.count("clearStencil")?;
+                let filter = (f.uint("stencilResolveFilter")?)
+                    .map(|raw| stencil_resolve_filter(call, raw))
+                    .transpose()?;
                 let a = &mut self.pass(call.receiver).descriptor.stencil_attachment;
                 set_attachment!(set, &mut *a);
                 if let Some(clear) = clear {
                     a.clear_stencil = clear;
+                }
+                if let Some(filter) = filter {
+                    a.stencil_resolve_filter = filter;
                 }
             }
             _ => return Err(refuse(call, "not played on a render pass descriptor")),

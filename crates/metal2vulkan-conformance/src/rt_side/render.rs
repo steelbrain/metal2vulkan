@@ -15,7 +15,10 @@ use crate::render::{
 use crate::transcript::{Negative, Value};
 use crate::work::Plane;
 use metal2vulkan_rt as rt;
-use metal2vulkan_runtime::{LoadAction, StoreAction, StoreActionOptions, VisibilityResultMode};
+use metal2vulkan_runtime::{
+    LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, StoreAction,
+    StoreActionOptions, VisibilityResultMode,
+};
 
 /// A typed error of the runtime as the failure it records.
 fn of_rt(error: rt::Error) -> Failure {
@@ -46,28 +49,50 @@ fn store(action: StoreAction) -> Answer<rt::StoreAction> {
 }
 
 /// An attachment's place, refused where it names what the runtime's attachment has no field
-/// for: a depth plane, a resolve's place, a resolve texture or store action options.
-fn plain(
-    place: &AttachmentPlace,
-    resolve: Option<Handle>,
-    options: StoreActionOptions,
-) -> Answer<()> {
+/// for: a depth plane or store action options.
+fn plain(place: &AttachmentPlace, options: StoreActionOptions) -> Answer<()> {
     if place.depth_plane != 0 {
         return Err(Failure::unavailable("depthPlane"));
-    }
-    if resolve.is_some()
-        || (
-            place.resolve_level,
-            place.resolve_slice,
-            place.resolve_depth_plane,
-        ) != (0, 0, 0)
-    {
-        return Err(Failure::unavailable("resolveTexture"));
     }
     if options != StoreActionOptions::default() {
         return Err(Failure::unavailable("storeActionOptions"));
     }
     Ok(())
+}
+
+/// The runtime's depth resolve filter for a case's.
+fn depth_filter(
+    filter: MultisampleDepthResolveFilter,
+) -> Answer<rt::MultisampleDepthResolveFilter> {
+    Ok(match filter {
+        MultisampleDepthResolveFilter::Sample0 => rt::MultisampleDepthResolveFilter::Sample0,
+        MultisampleDepthResolveFilter::Min => rt::MultisampleDepthResolveFilter::Min,
+        MultisampleDepthResolveFilter::Max => rt::MultisampleDepthResolveFilter::Max,
+        other => {
+            return Err(Failure::named(
+                "NoSuchDepthResolveFilter",
+                format!("{other:?}"),
+            ))
+        }
+    })
+}
+
+/// The runtime's stencil resolve filter for a case's.
+fn stencil_filter(
+    filter: MultisampleStencilResolveFilter,
+) -> Answer<rt::MultisampleStencilResolveFilter> {
+    Ok(match filter {
+        MultisampleStencilResolveFilter::Sample0 => rt::MultisampleStencilResolveFilter::Sample0,
+        MultisampleStencilResolveFilter::DepthResolvedSample => {
+            rt::MultisampleStencilResolveFilter::DepthResolvedSample
+        }
+        other => {
+            return Err(Failure::named(
+                "NoSuchStencilResolveFilter",
+                format!("{other:?}"),
+            ))
+        }
+    })
 }
 
 /// The runtime's viewport of the case's.
@@ -353,33 +378,53 @@ impl RtSide<'_> {
         }
         for (at, color) in pass.colors.iter().enumerate() {
             let Some(held) = color.texture else { continue };
-            plain(&color.place, color.resolve, color.options)?;
+            plain(&color.place, color.options)?;
             let attachment = (descriptor.color_attachments.get_mut(at))
                 .ok_or_else(|| Failure::named("NoSuchAttachment", format!("color {at}")))?;
             attachment.texture = Some(self.held_texture(held)?.clone());
             attachment.level = color.place.level;
             attachment.slice = color.place.slice;
+            attachment.resolve_texture = (color.resolve)
+                .map(|resolve| self.held_texture(resolve).cloned())
+                .transpose()?;
+            attachment.resolve_level = color.place.resolve_level;
+            attachment.resolve_slice = color.place.resolve_slice;
+            attachment.resolve_depth_plane = color.place.resolve_depth_plane;
             attachment.load_action = load(color.load)?;
             attachment.store_action = store(color.store)?;
             let [red, green, blue, alpha] = color.clear;
             attachment.clear_color = rt::ClearColor::new(red, green, blue, alpha);
         }
         if let Some(depth) = &pass.depth {
-            plain(&depth.place, depth.resolve, depth.options)?;
+            plain(&depth.place, depth.options)?;
             let attachment = &mut descriptor.depth_attachment;
             attachment.texture = Some(self.held_texture(depth.texture)?.clone());
             attachment.level = depth.place.level;
             attachment.slice = depth.place.slice;
+            attachment.resolve_texture = (depth.resolve)
+                .map(|resolve| self.held_texture(resolve).cloned())
+                .transpose()?;
+            attachment.resolve_level = depth.place.resolve_level;
+            attachment.resolve_slice = depth.place.resolve_slice;
+            attachment.resolve_depth_plane = depth.place.resolve_depth_plane;
+            attachment.depth_resolve_filter = depth_filter(depth.filter)?;
             attachment.load_action = load(depth.load)?;
             attachment.store_action = store(depth.store)?;
             attachment.clear_depth = depth.clear;
         }
         if let Some(stencil) = &pass.stencil {
-            plain(&stencil.place, stencil.resolve, stencil.options)?;
+            plain(&stencil.place, stencil.options)?;
             let attachment = &mut descriptor.stencil_attachment;
             attachment.texture = Some(self.held_texture(stencil.texture)?.clone());
             attachment.level = stencil.place.level;
             attachment.slice = stencil.place.slice;
+            attachment.resolve_texture = (stencil.resolve)
+                .map(|resolve| self.held_texture(resolve).cloned())
+                .transpose()?;
+            attachment.resolve_level = stencil.place.resolve_level;
+            attachment.resolve_slice = stencil.place.resolve_slice;
+            attachment.resolve_depth_plane = stencil.place.resolve_depth_plane;
+            attachment.stencil_resolve_filter = stencil_filter(stencil.filter)?;
             attachment.load_action = load(stencil.load)?;
             attachment.store_action = store(stencil.store)?;
             attachment.clear_stencil = stencil.clear;

@@ -2488,6 +2488,21 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DeviceFilteredMipmaps,
+    /// A multisample color resolve by Vulkan's `AVERAGE` mode, which leaves the rounding of the
+    /// average, and the sRGB conversion, to the device: Metal rounds a normalized channel's average
+    /// to nearest with ties up and averages an sRGB channel in linear space by its own 12-bit
+    /// tables, where a device may round a tie down and Vulkan only recommends the linear average
+    /// for an sRGB format; a float channel's average may differ in its last bits, and a NaN or
+    /// infinite sample's average is the device's. Measured against Metal's rules at 2 and 4
+    /// samples (`metal2vulkan-runtime`'s `device-rounded-resolve`, which this note announces too):
+    /// on RADV, ANV, NVIDIA and lavapipe every unorm, snorm and packed 16-bit unorm channel within
+    /// one code of Metal's, an sRGB channel within two. Static per operation: no pipeline stage
+    /// records it; `metal2vulkan-rt`'s render pass carries it for every color attachment it
+    /// resolves (`RenderPassDescriptor::precision_note`), on every device.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    DeviceRoundedResolve,
     /// A texture, or a view, whose own pixel format is block-compressed (BC1 to BC7, and the ASTC,
     /// ETC2 and EAC formats where the device makes them): a read, sample or gather of its texels
     /// answers the device's decode of its blocks (an sRGB form's code through the device's sRGB

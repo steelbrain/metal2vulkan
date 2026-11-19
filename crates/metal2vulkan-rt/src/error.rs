@@ -787,6 +787,20 @@ pub enum Refusal {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
+    /// A store action that resolves (`MultisampleResolve` or `StoreAndMultisampleResolve`), on a
+    /// render pass attachment or set by its encoder, for an attachment with no resolve texture.
+    ///
+    /// Basis: metal-documented (`MTLRenderPass.h`: `resolveTexture` is "Only used (and
+    /// required) if the store action is set to MTLStoreActionMultisampleResolve").
+    ResolveTexture,
+    /// A resolve of a render pass color attachment of an integer pixel format.
+    ///
+    /// Basis: metal-measured (an Apple M4, macOS 27.0.1: Metal's validation stops the pass, the
+    /// format "cannot be a MSAA resolve target").
+    ResolveFormat {
+        /// The attachment's pixel format.
+        pixel_format: PixelFormat,
+    },
     /// A render pass attachment of a level or slice past its texture's.
     ///
     /// Basis: ours (no texel of the texture is there to render into).
@@ -1310,8 +1324,27 @@ pub enum RenderPassKind {
     /// Attachments of two sample counts: Vulkan renders one count into every attachment of a
     /// pass (VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857).
     SampleCounts,
-    /// A resolve texture, or a store action that resolves.
+    /// A resolve the runtime does not build: into a resolve texture of another pixel format than
+    /// its attachment's (the format's sRGB twin among them), of more than one sample, made without
+    /// `RenderTarget` usage, or whose level is not the attachment level's width and height; of an
+    /// attachment of one sample; of an extended-range, bfloat or YCbCr color attachment, whose
+    /// image Vulkan's average would read in its own encoding; or of a depth and a stencil
+    /// attachment into two views (VUID-VkRenderingInfo-pDepthAttachment-06086).
     Resolve,
+    /// A depth or stencil resolve the device's resolve modes do not offer
+    /// (`VkPhysicalDeviceDepthStencilResolveProperties`): a depth attachment's `Min` or `Max`
+    /// filter where `supportedDepthResolveModes` lacks its mode; the stencil filter
+    /// `DepthResolvedSample`, the stencil of the sample the depth resolve keeps, which no Vulkan
+    /// resolve mode is; or the two aspects of one depth-stencil attachment resolving where the
+    /// device pairs no such resolves (`independentResolveNone` for one aspect alone,
+    /// `independentResolve` for two modes; VUID-VkRenderingInfo-pDepthAttachment-06104 and
+    /// -06105).
+    ResolveFilter,
+    /// A store action an encoder sets that does not resolve (`setColorStoreAction:atIndex:` and
+    /// its depth and stencil siblings), for an attachment whose pass left its store action
+    /// `Unknown` with a resolve texture: the rendering began resolving into the texture, as Vulkan
+    /// fixes the resolve as the rendering begins.
+    LateStore,
     /// An attachment of a texture type but a 2D texture, a 2D array, a cube or a cube array: a 1D
     /// texture's, or a 3D texture's depth plane.
     TextureType,
@@ -1937,6 +1970,13 @@ impl fmt::Display for Refusal {
             Refusal::AttachmentFormat { pixel_format } => write!(
                 f,
                 "an attachment of {pixel_format:?} is not of its kind's formats"
+            ),
+            Refusal::ResolveTexture => {
+                write!(f, "a store action resolves an attachment with no resolve texture")
+            }
+            Refusal::ResolveFormat { pixel_format } => write!(
+                f,
+                "a color attachment of {pixel_format:?} resolves, which an integer format does not"
             ),
             Refusal::VertexBufferOffset {
                 index,

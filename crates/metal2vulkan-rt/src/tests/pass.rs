@@ -1,8 +1,8 @@
 //! Render passes: load and store actions, clear values, and what a pass does not build.
 //!
-//! - Metal's load actions are Vulkan's of the same name, and both plain store actions store
-//!   (a pass that ends its rendering early loads what it stored); a resolving store action is
-//!   `Gap::RenderPass` of `Resolve`, `Unknown` and `CustomSampleDepthStore` of `StoreAction`.
+//! - Metal's load actions are Vulkan's of the same name, and both plain store actions, `Unknown`
+//!   and the two that resolve store (a pass that ends its rendering early loads what it stored);
+//!   `CustomSampleDepthStore` is `Gap::RenderPass` of `StoreAction`.
 //! - A clear color is a `float` for a float, normalized or sRGB channel, rotated for a rotated
 //!   format and for `A8Unorm` held in `R8_UNORM`; an integer channel's is truncated toward zero
 //!   and saturated to its width, NaN 0; a format only a shader clears (extended range, bfloat)
@@ -25,8 +25,8 @@ use crate::{ClearColor, LoadAction, PixelFormat, StoreAction};
 use ash::vk;
 use metal2vulkan::metal::format::FormatEmulation;
 
-/// Each load action is Vulkan's of the same name, and the plain and unknown store actions store;
-/// the others are gaps.
+/// Each load action is Vulkan's of the same name, and every store action but
+/// `CustomSampleDepthStore`, a gap, stores.
 #[test]
 fn load_actions_are_one_to_one_and_plain_store_actions_store() {
     let pairs = [
@@ -39,6 +39,14 @@ fn load_actions_are_one_to_one_and_plain_store_actions_store() {
             (StoreAction::DontCare, vk::AttachmentStoreOp::STORE),
             (StoreAction::Store, vk::AttachmentStoreOp::STORE),
             (StoreAction::Unknown, vk::AttachmentStoreOp::STORE),
+            (
+                StoreAction::MultisampleResolve,
+                vk::AttachmentStoreOp::STORE,
+            ),
+            (
+                StoreAction::StoreAndMultisampleResolve,
+                vk::AttachmentStoreOp::STORE,
+            ),
         ] {
             assert!(
                 ops(load, store).ok() == Some((op, store_op)),
@@ -46,21 +54,11 @@ fn load_actions_are_one_to_one_and_plain_store_actions_store() {
             );
         }
     }
-    for (store, kind) in [
-        (StoreAction::MultisampleResolve, RenderPassKind::Resolve),
-        (
-            StoreAction::StoreAndMultisampleResolve,
-            RenderPassKind::Resolve,
-        ),
-        (
-            StoreAction::CustomSampleDepthStore,
-            RenderPassKind::StoreAction,
-        ),
-    ] {
-        match ops(LoadAction::Load, store) {
-            Err(Error::Unsupported(Gap::RenderPass { kind: k })) => assert_eq!(k, kind),
-            other => panic!("{store:?}: {:?}", other.map(|_| "ops")),
+    match ops(LoadAction::Load, StoreAction::CustomSampleDepthStore) {
+        Err(Error::Unsupported(Gap::RenderPass { kind })) => {
+            assert_eq!(kind, RenderPassKind::StoreAction)
         }
+        other => panic!("CustomSampleDepthStore: {:?}", other.map(|_| "ops")),
     }
 }
 

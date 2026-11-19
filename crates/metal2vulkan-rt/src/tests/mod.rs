@@ -49,6 +49,7 @@ mod push_window;
 mod read_write_tier;
 mod readback;
 mod render;
+mod resolve;
 mod ring;
 mod sampler;
 mod sampling;

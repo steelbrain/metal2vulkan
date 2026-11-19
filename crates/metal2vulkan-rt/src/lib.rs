@@ -122,8 +122,8 @@ pub use metal2vulkan::pipeline::{
     ComputePipelineDescriptor, FunctionDescriptor, NumberedSampler, PrecisionNote, StageSource,
 };
 pub use pass::{
-    ClearColor, LoadAction, RenderPassColorAttachmentDescriptor,
-    RenderPassDepthAttachmentDescriptor, RenderPassDescriptor,
+    ClearColor, LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter,
+    RenderPassColorAttachmentDescriptor, RenderPassDepthAttachmentDescriptor, RenderPassDescriptor,
     RenderPassStencilAttachmentDescriptor, StoreAction, MAX_COLOR_ATTACHMENTS,
 };
 pub use pipeline::ComputePipelineState;

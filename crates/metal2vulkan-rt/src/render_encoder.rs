@@ -77,12 +77,14 @@ use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Face, Tests};
 use crate::device::Core;
 use crate::encoder::{check_alignment, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS};
-use crate::error::{DrawKind, Error, Gap, Limit, Refusal};
+use crate::error::{DrawKind, Error, Gap, Limit, Refusal, RenderPassKind};
 use crate::fence::Fence;
 use crate::hazard::Access;
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::over;
-use crate::pass::{layout_barrier, ops, LoadAction, Pass, RenderPassDescriptor, StoreAction};
+use crate::pass::{
+    layout_barrier, ops, resolving, LoadAction, Pass, RenderPassDescriptor, StoreAction, Target,
+};
 use crate::pipeline::{address_word, FieldValue, PUSH_STAGES};
 use crate::record::{memory_barrier, Reach};
 use crate::render::{DrawPlace, Draws, RenderPipelineState, FRAGMENT, VERTEX};
@@ -602,12 +604,15 @@ fn begin(
     descriptor: &RenderPassDescriptor,
 ) -> Result<(Pass, vk::CommandBuffer), Error> {
     let pass = Pass::check(core, descriptor)?;
-    let overs: Vec<(u32, Access)> = (pass.targets())
-        .map(|t| (t.texture.hazard_id(), Access::ReadWrite))
+    // The attachments and the resolve textures, which the pass writes.
+    let written =
+        || (pass.targets().map(|t| &t.texture)).chain(pass.resolves().map(|r| &r.texture));
+    let overs: Vec<(u32, Access)> = written()
+        .map(|texture| (texture.hazard_id(), Access::ReadWrite))
         .collect();
-    for t in pass.targets() {
-        building.keep_texture(&t.texture);
-        building.wrote_texture_managed(&t.texture);
+    for texture in written() {
+        building.keep_texture(texture);
+        building.wrote_texture_managed(texture);
     }
     // Kept as Metal's pass holds it, and no access declared: no draw writes it while `Disabled`
     // is the only mode built.
@@ -619,7 +624,7 @@ fn begin(
     let command = building.ordered_command()?;
     // Marked after `ordered_command`, as a blit's copy marks it: the host reads a texture over a
     // Shared buffer's bytes in the buffer.
-    if pass.targets().any(|t| t.texture.host_reads()) {
+    if written().any(|texture| texture.host_reads()) {
         building.wrote_host();
     }
     building.overs_after(&overs, false);
@@ -628,6 +633,11 @@ fn begin(
     let away: Vec<vk::ImageMemoryBarrier2> = (pass.targets())
         .filter(|t| t.moves())
         .map(|t| t.barrier(t.attachment.home, t.layout))
+        .chain(
+            (pass.resolves())
+                .filter(|r| r.moves())
+                .map(|r| r.barrier(r.attachment.home, r.layout)),
+        )
         .collect();
     let device = &core.device;
     // A pass that opens its command buffer and moves no attachment needs no first barrier: each
@@ -1217,20 +1227,21 @@ impl RenderCommandEncoder {
     /// `setColorStoreAction:atIndex:`: the store action of the colour attachment at `index`, which
     /// its pass left `Unknown`. The pass stores every attachment
     /// ([`StoreAction::Unknown`]), so a `Store` or a `DontCare` changes nothing the device does:
-    /// the texels are kept, one of the outcomes Metal allows a `DontCare`. An index with no
-    /// attachment is nothing to store.
+    /// the texels are kept, one of the outcomes Metal allows a `DontCare`. An attachment with a
+    /// resolve texture began resolving into it, so an action that resolves changes nothing
+    /// either. An index with no attachment is nothing to store.
     ///
-    /// Err: [`Gap::RenderPass`] of [`RenderPassKind::Resolve`](crate::RenderPassKind::Resolve)
-    /// for an action that resolves, of
-    /// [`RenderPassKind::StoreAction`](crate::RenderPassKind::StoreAction) for
-    /// `CustomSampleDepthStore`.
+    /// Err: [`Refusal::ResolveTexture`](crate::Refusal::ResolveTexture) for an action that
+    /// resolves an attachment with no resolve texture; [`Gap::RenderPass`] of
+    /// [`RenderPassKind::LateStore`](crate::RenderPassKind::LateStore) for one that does not, of
+    /// an attachment with one; of [`RenderPassKind::StoreAction`](crate::RenderPassKind::StoreAction)
+    /// for `CustomSampleDepthStore`.
     pub fn set_color_store_action(
         &mut self,
         action: StoreAction,
         index: usize,
     ) -> Result<(), Error> {
-        let attached = self.pass.colors.get(index).is_some_and(Option::is_some);
-        later_store(action, attached)
+        later_store(action, self.pass.colors.get(index).and_then(Option::as_ref))
     }
 
     /// `setDepthStoreAction:`: the store action of the depth attachment, as
@@ -1238,7 +1249,7 @@ impl RenderCommandEncoder {
     ///
     /// Err: as [`set_color_store_action`](Self::set_color_store_action).
     pub fn set_depth_store_action(&mut self, action: StoreAction) -> Result<(), Error> {
-        later_store(action, self.pass.depth.is_some())
+        later_store(action, self.pass.depth.as_ref())
     }
 
     /// `setStencilStoreAction:`: the store action of the stencil attachment, as
@@ -1246,7 +1257,7 @@ impl RenderCommandEncoder {
     ///
     /// Err: as [`set_color_store_action`](Self::set_color_store_action).
     pub fn set_stencil_store_action(&mut self, action: StoreAction) -> Result<(), Error> {
-        later_store(action, self.pass.stencil.is_some())
+        later_store(action, self.pass.stencil.as_ref())
     }
 
     /// `memoryBarrierWithScope:afterStages:beforeStages:` and
@@ -2300,6 +2311,11 @@ impl RenderCommandEncoder {
                     .iter()
                     .map(|m| layout_barrier(m.image, m.whole, looped, m.home)),
             )
+            .chain(
+                (self.pass.resolves())
+                    .filter(|r| r.moves())
+                    .map(|r| r.barrier(r.layout, r.attachment.home)),
+            )
             .collect();
         let device = &core.device;
         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
@@ -2483,15 +2499,27 @@ fn around(
     .collect()
 }
 
-/// A store action an encoder sets for an attachment its pass left unknown, `attached` where the
-/// pass has that attachment: the pass stores it whatever the action, so only an action the
-/// rendering could not have begun with is refused.
+/// A store action an encoder sets for an attachment its pass left unknown, `target` where the
+/// pass has that attachment: the pass stores it whatever the action, and resolves it where it
+/// names a resolve texture, so only an action the rendering could not have begun with is
+/// refused.
 ///
-/// Err: as [`ops`].
-fn later_store(action: StoreAction, attached: bool) -> Result<(), Error> {
-    match attached {
-        true => ops(LoadAction::Load, action).map(drop),
-        false => Ok(()),
+/// Err: [`Refusal::ResolveTexture`] for an action that resolves an attachment that does not;
+/// [`Gap::RenderPass`] of [`RenderPassKind::LateStore`] for one that does not resolve an
+/// attachment that does; as [`ops`].
+fn later_store(action: StoreAction, target: Option<&Target>) -> Result<(), Error> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    ops(LoadAction::Load, action)?;
+    match (resolving(action, true)?, target.resolve.is_some()) {
+        (true, false) if action != StoreAction::Unknown => {
+            Err(Error::Refused(Refusal::ResolveTexture))
+        }
+        (false, true) => Err(Error::Unsupported(Gap::RenderPass {
+            kind: RenderPassKind::LateStore,
+        })),
+        _ => Ok(()),
     }
 }
 

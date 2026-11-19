@@ -16,6 +16,7 @@ use crate::import::Imports;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::kernel_map::KernelMap;
 use crate::memory::{self, BlockId, BlockMappings, Memory, MemoryClass, Pool};
+use crate::pass::ResolveModes;
 use crate::pipeline::{PUSH_BYTES, PUSH_STAGES};
 use crate::places::Places;
 use crate::reaper::{self, Job, Reaper};
@@ -266,6 +267,8 @@ pub(crate) struct Core {
     /// (`floor::Capabilities::attachment_reads`): through the feedback loop where `feedback` is
     /// set, else through a copy of the image into its shadow (`crate::shadow`).
     pub(crate) attachment_reads: bool,
+    /// The depth and stencil resolve modes a render pass may resolve by.
+    pub(crate) resolve_modes: ResolveModes,
     /// The longest block: the device's `maxMemoryAllocationSize` or `maxBufferSize`, whichever is
     /// less.
     pub(crate) max_block_len: u64,
@@ -575,11 +578,14 @@ impl Device {
         let device = unsafe { crate::tests::layouts::recorded(vk_instance, device) };
         drop(links);
         let mut vulkan11 = vk::PhysicalDeviceVulkan11Properties::default();
+        let mut vulkan12 = vk::PhysicalDeviceVulkan12Properties::default();
         let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
         let mut properties = vk::PhysicalDeviceProperties2::default()
             .push_next(&mut vulkan11)
+            .push_next(&mut vulkan12)
             .push_next(&mut vulkan13);
-        // SAFETY: as for the floor check; the device is Vulkan 1.3, which defines both structures.
+        // SAFETY: as for the floor check; the device is Vulkan 1.3, which defines the three
+        // structures.
         unsafe { vk_instance.get_physical_device_properties2(raw, &mut properties) };
         answer(&mut properties.properties.limits);
         let max_allocations = properties.properties.limits.max_memory_allocation_count;
@@ -651,6 +657,12 @@ impl Device {
         let max_block_len = vulkan11
             .max_memory_allocation_size
             .min(vulkan13.max_buffer_size);
+        let resolve_modes = ResolveModes {
+            depth: vulkan12.supported_depth_resolve_modes,
+            stencil: vulkan12.supported_stencil_resolve_modes,
+            independent_none: vulkan12.independent_resolve_none == vk::TRUE,
+            independent: vulkan12.independent_resolve == vk::TRUE,
+        };
         let device_local = (0u32..)
             .zip(capabilities.memory.memory_types_as_slice())
             .filter(|(_, kind)| {
@@ -684,6 +696,7 @@ impl Device {
             calibrated,
             feedback,
             attachment_reads: capabilities.attachment_reads,
+            resolve_modes,
             max_block_len,
             max_allocations,
             granularity,

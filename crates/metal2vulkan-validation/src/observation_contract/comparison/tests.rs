@@ -86,6 +86,7 @@ fn every_precision_note_has_its_table_row() {
         (N::DeviceDepthBias, Allowance::Unbounded),
         (N::DepthDenormals, Allowance::Unbounded),
         (N::DeviceFilteredMipmaps, Allowance::Unbounded),
+        (N::DeviceRoundedResolve, Allowance::Unbounded),
         (N::CompressedTexelDecode, Allowance::Unbounded),
         (N::SharedExponentKept, Allowance::Unbounded),
     ];

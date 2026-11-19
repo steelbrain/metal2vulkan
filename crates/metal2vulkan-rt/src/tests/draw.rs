@@ -1022,10 +1022,8 @@ pub(crate) mod on_device {
             );
             same(
                 encoder.set_depth_store_action(crate::StoreAction::MultisampleResolve),
-                Err(Error::Unsupported(Gap::RenderPass {
-                    kind: crate::RenderPassKind::Resolve,
-                })),
-                "a resolving store action set later",
+                Err(Error::Refused(Refusal::ResolveTexture)),
+                "a resolving store action set later, with no resolve texture",
             );
             draw(encoder.set_depth_store_action(crate::StoreAction::Store));
             encoder.end_encoding();

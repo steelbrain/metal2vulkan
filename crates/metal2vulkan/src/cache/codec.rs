@@ -1544,6 +1544,7 @@ codec_enum! {
         TessellationFractionalSpacing,
         CompressedTexelDecode,
         SharedExponentKept,
+        DeviceRoundedResolve,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

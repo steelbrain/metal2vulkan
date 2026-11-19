@@ -12,6 +12,17 @@
 //! tile-based device that stores a target Metal would have discarded. The render area is the
 //! smallest attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are
 //! set.
+//!
+//! A store action that resolves (`MultisampleResolve`, `StoreAndMultisampleResolve`, and
+//! `Unknown` where the attachment names a resolve texture) resolves in the same rendering, by
+//! Vulkan's own resolve: the attachment's `VkRenderingAttachmentInfo` names a view of the resolve
+//! texture's `resolveLevel` and `resolveSlice` and a resolve mode. A color attachment resolves by
+//! `AVERAGE`, the device's average ([`PrecisionNote::DeviceRoundedResolve`]); a depth attachment
+//! by its [`MultisampleDepthResolveFilter`]'s mode and a stencil attachment by its
+//! [`MultisampleStencilResolveFilter`]'s, where the device's resolve modes offer them. Either
+//! action stores the multisample texels too, as a `DontCare` store does: a rendering the encoder
+//! ends early and begins again resolves again as it ends, and its last resolve holds the pass's
+//! whole result.
 
 use crate::buffer::{Buffer, BufferObject};
 use crate::device::Core;
@@ -19,8 +30,8 @@ use crate::error::{Error, Gap, Refusal, RenderPassKind};
 use crate::texture::{Attachment, Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
-use metal2vulkan::metal::PixelFormat;
-use metal2vulkan::pipeline::SampledType;
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::pipeline::{PrecisionNote, SampledType};
 use std::sync::Arc;
 
 /// The color attachments a pass has (`MTLRenderPassDescriptor.colorAttachments`).
@@ -50,20 +61,58 @@ pub enum StoreAction {
     /// `MTLStoreActionStore`: the pass's texels are kept, `VK_ATTACHMENT_STORE_OP_STORE`.
     #[default]
     Store,
-    /// `MTLStoreActionMultisampleResolve`: refused, [`Gap::RenderPass`] of
-    /// [`RenderPassKind::Resolve`].
+    /// `MTLStoreActionMultisampleResolve`: the pass resolves the attachment into its resolve
+    /// texture as its rendering ends (the module's documentation), and keeps the multisample
+    /// texels too, `VK_ATTACHMENT_STORE_OP_STORE`, as `DontCare` does. Refused with no resolve
+    /// texture, [`Refusal::ResolveTexture`].
     MultisampleResolve,
-    /// `MTLStoreActionStoreAndMultisampleResolve`: refused, as `MultisampleResolve`.
+    /// `MTLStoreActionStoreAndMultisampleResolve`: the pass keeps the texels and resolves them, as
+    /// `MultisampleResolve` does.
     StoreAndMultisampleResolve,
     /// `MTLStoreActionUnknown`, left to the encoder to decide before it ends
     /// ([`RenderCommandEncoder::set_color_store_action`](crate::RenderCommandEncoder::set_color_store_action)
     /// and its depth and stencil siblings): `VK_ATTACHMENT_STORE_OP_STORE`, as Vulkan fixes the
     /// store as the rendering begins. A `DontCare` set later keeps the texels, as `DontCare` does;
-    /// on a tile-based device this stores a target Metal would have discarded.
+    /// on a tile-based device this stores a target Metal would have discarded. Where the
+    /// attachment names a resolve texture the rendering resolves into it, as Vulkan fixes the
+    /// resolve as the rendering begins too: the encoder may then set only an action that resolves
+    /// ([`RenderPassKind::LateStore`]).
     Unknown,
     /// `MTLStoreActionCustomSampleDepthStore`: refused, [`Gap::RenderPass`] of
     /// [`RenderPassKind::StoreAction`].
     CustomSampleDepthStore,
+}
+
+/// `MTLMultisampleDepthResolveFilter`: the depth a resolve of a multisample depth attachment
+/// keeps of each pixel's samples, by the Vulkan resolve mode of the same choice. Sample 0 is on
+/// every device (`VK_RESOLVE_MODE_SAMPLE_ZERO_BIT`, which Vulkan requires); `Min` and `Max` where
+/// the device's `supportedDepthResolveModes` has `VK_RESOLVE_MODE_MIN_BIT` or
+/// `VK_RESOLVE_MODE_MAX_BIT`, else [`Gap::RenderPass`] of [`RenderPassKind::ResolveFilter`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MultisampleDepthResolveFilter {
+    /// `MTLMultisampleDepthResolveFilterSample0`: sample 0's depth.
+    #[default]
+    Sample0,
+    /// `MTLMultisampleDepthResolveFilterMin`: the least of the samples' depths.
+    Min,
+    /// `MTLMultisampleDepthResolveFilterMax`: the greatest of the samples' depths.
+    Max,
+}
+
+/// `MTLMultisampleStencilResolveFilter`: the stencil a resolve of a multisample stencil
+/// attachment keeps of each pixel's samples.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MultisampleStencilResolveFilter {
+    /// `MTLMultisampleStencilResolveFilterSample0`: sample 0's stencil,
+    /// `VK_RESOLVE_MODE_SAMPLE_ZERO_BIT`, which Vulkan requires of every device.
+    #[default]
+    Sample0,
+    /// `MTLMultisampleStencilResolveFilterDepthResolvedSample`: the stencil of the sample whose
+    /// depth the depth resolve keeps. No Vulkan resolve mode picks it: refused, [`Gap::RenderPass`]
+    /// of [`RenderPassKind::ResolveFilter`].
+    DepthResolvedSample,
 }
 
 /// `MTLClearColor`: the color a `Clear` load action writes, in the attachment format's channels
@@ -107,17 +156,21 @@ impl ClearColor {
 /// `MTLRenderPassColorAttachmentDescriptor`, with `MTLRenderPassAttachmentDescriptor`'s
 /// properties.
 ///
-/// Not built: a resolve (`resolveTexture` with a resolving store action, refused by the store
-/// action), a 3D texture's `depthPlane` (refused by the texture's type) and
+/// A store action that resolves resolves into `resolve_texture` by the device's average (the
+/// module's documentation). Refused, as [`Gap::RenderPass`] of [`RenderPassKind::Resolve`]: a
+/// resolve of an extended-range, bfloat or YCbCr format, which Vulkan's average would take in the
+/// image's own encoding. An integer format has no resolve, [`Refusal::ResolveFormat`].
+///
+/// Not built: a 3D texture's `depthPlane` (refused by the texture's type) and
 /// `storeActionOptions`, whose one option needs more than one sample.
 ///
-/// Its default is Metal's: no texture, level and slice 0, `DontCare` load, `Store` store, opaque
-/// black clear.
+/// Its default is Metal's: no texture or resolve texture, levels, slices and planes 0, `DontCare`
+/// load, `Store` store, opaque black clear.
 #[derive(Clone, Default)]
 pub struct RenderPassColorAttachmentDescriptor {
     /// `texture`: the texture rendered into; `None` for no attachment at this index. It needs
-    /// `RenderTarget` usage and a color format, and one sample; a 2D texture, a 2D array, a cube
-    /// or a cube array.
+    /// `RenderTarget` usage and a color format; a 2D texture, a 2D array, a cube, a cube array, or
+    /// a 2D multisample texture or array.
     pub texture: Option<Texture>,
     /// `level`: the mipmap level rendered into.
     pub level: u32,
@@ -129,6 +182,19 @@ pub struct RenderPassColorAttachmentDescriptor {
     pub store_action: StoreAction,
     /// `clearColor`: opaque black by default.
     pub clear_color: ClearColor,
+    /// `resolveTexture`: the texture a store action that resolves resolves into; `None` by
+    /// default, and read only where the store action resolves, as Metal reads it. It takes the
+    /// attachment's pixel format, one sample and `RenderTarget` usage, and its level the
+    /// attachment level's width and height; another is [`Gap::RenderPass`] of
+    /// [`RenderPassKind::Resolve`].
+    pub resolve_texture: Option<Texture>,
+    /// `resolveLevel`: the resolve texture's mipmap level resolved into.
+    pub resolve_level: u32,
+    /// `resolveSlice`: the resolve texture's array slice or cube face resolved into.
+    pub resolve_slice: u32,
+    /// `resolveDepthPlane`: a 3D resolve texture's depth plane. A plane but 0 is
+    /// [`Gap::RenderPass`] of [`RenderPassKind::TextureType`], as a 3D attachment is.
+    pub resolve_depth_plane: u32,
 }
 
 /// `MTLRenderPassDepthAttachmentDescriptor`.
@@ -141,7 +207,10 @@ pub struct RenderPassColorAttachmentDescriptor {
 /// [`RenderPassKind::DepthStencilViews`]. A `Clear` load's depth lies in `[0, 1]`; another is
 /// refused, [`RenderPassKind::ClearDepth`].
 ///
-/// Not built: a resolve and a 3D texture's `depthPlane`, as a color attachment's.
+/// A store action that resolves resolves into `resolve_texture` by `depth_resolve_filter`, as a
+/// color attachment's resolves (the module's documentation).
+///
+/// Not built: a 3D texture's `depthPlane`, as a color attachment's.
 #[derive(Clone)]
 pub struct RenderPassDepthAttachmentDescriptor {
     /// `texture`: the texture whose depth is rendered into; `None` for no depth attachment. It
@@ -157,11 +226,21 @@ pub struct RenderPassDepthAttachmentDescriptor {
     pub store_action: StoreAction,
     /// `clearDepth`: 1 by default.
     pub clear_depth: f64,
+    /// `resolveTexture`, as a color attachment's.
+    pub resolve_texture: Option<Texture>,
+    /// `resolveLevel`, as a color attachment's.
+    pub resolve_level: u32,
+    /// `resolveSlice`, as a color attachment's.
+    pub resolve_slice: u32,
+    /// `resolveDepthPlane`, as a color attachment's.
+    pub resolve_depth_plane: u32,
+    /// `depthResolveFilter`: `Sample0` by default.
+    pub depth_resolve_filter: MultisampleDepthResolveFilter,
 }
 
 impl Default for RenderPassDepthAttachmentDescriptor {
-    /// Metal's defaults: no texture, level and slice 0, `Clear` load, `DontCare` store, a clear
-    /// depth of 1.
+    /// Metal's defaults: no texture or resolve texture, levels, slices and planes 0, `Clear` load,
+    /// `DontCare` store, a clear depth of 1, the `Sample0` resolve filter.
     fn default() -> RenderPassDepthAttachmentDescriptor {
         RenderPassDepthAttachmentDescriptor {
             texture: None,
@@ -170,13 +249,23 @@ impl Default for RenderPassDepthAttachmentDescriptor {
             load_action: LoadAction::Clear,
             store_action: StoreAction::DontCare,
             clear_depth: 1.0,
+            resolve_texture: None,
+            resolve_level: 0,
+            resolve_slice: 0,
+            resolve_depth_plane: 0,
+            depth_resolve_filter: MultisampleDepthResolveFilter::Sample0,
         }
     }
 }
 
 /// `MTLRenderPassStencilAttachmentDescriptor`.
 ///
-/// Not built: a resolve and a 3D texture's `depthPlane`, as a color attachment's.
+/// A store action that resolves resolves into `resolve_texture` by `stencil_resolve_filter`, as
+/// a color attachment's resolves (the module's documentation). With a depth attachment that
+/// resolves too, both resolve into one view (`VUID-VkRenderingInfo-pDepthAttachment-06086`), else
+/// [`Gap::RenderPass`] of [`RenderPassKind::Resolve`].
+///
+/// Not built: a 3D texture's `depthPlane`, as a color attachment's.
 #[derive(Clone)]
 pub struct RenderPassStencilAttachmentDescriptor {
     /// `texture`: the texture whose stencil is rendered into; `None` for no stencil attachment. It
@@ -192,11 +281,21 @@ pub struct RenderPassStencilAttachmentDescriptor {
     pub store_action: StoreAction,
     /// `clearStencil`: 0 by default; its low 8 bits are the stencil's, as Metal keeps them.
     pub clear_stencil: u32,
+    /// `resolveTexture`, as a color attachment's.
+    pub resolve_texture: Option<Texture>,
+    /// `resolveLevel`, as a color attachment's.
+    pub resolve_level: u32,
+    /// `resolveSlice`, as a color attachment's.
+    pub resolve_slice: u32,
+    /// `resolveDepthPlane`, as a color attachment's.
+    pub resolve_depth_plane: u32,
+    /// `stencilResolveFilter`: `Sample0` by default.
+    pub stencil_resolve_filter: MultisampleStencilResolveFilter,
 }
 
 impl Default for RenderPassStencilAttachmentDescriptor {
-    /// Metal's defaults: no texture, level and slice 0, `Clear` load, `DontCare` store, a clear
-    /// stencil of 0.
+    /// Metal's defaults: no texture or resolve texture, levels, slices and planes 0, `Clear` load,
+    /// `DontCare` store, a clear stencil of 0, the `Sample0` resolve filter.
     fn default() -> RenderPassStencilAttachmentDescriptor {
         RenderPassStencilAttachmentDescriptor {
             texture: None,
@@ -205,6 +304,11 @@ impl Default for RenderPassStencilAttachmentDescriptor {
             load_action: LoadAction::Clear,
             store_action: StoreAction::DontCare,
             clear_stencil: 0,
+            resolve_texture: None,
+            resolve_level: 0,
+            resolve_slice: 0,
+            resolve_depth_plane: 0,
+            stencil_resolve_filter: MultisampleStencilResolveFilter::Sample0,
         }
     }
 }
@@ -239,6 +343,79 @@ pub struct RenderPassDescriptor {
     pub visibility_result_buffer: Option<Buffer>,
 }
 
+impl RenderPassDescriptor {
+    /// The static note of the pass's color resolves: [`PrecisionNote::DeviceRoundedResolve`] where
+    /// a color attachment's store action resolves (or is `Unknown` with a resolve texture), as
+    /// Vulkan's `AVERAGE` leaves the average's rounding, and an sRGB format's conversion, to the
+    /// device. `None` where no color attachment resolves: a depth or stencil resolve keeps one
+    /// sample's value, or the least or greatest, exactly.
+    pub fn precision_note(&self) -> Option<PrecisionNote> {
+        let resolves = |c: &RenderPassColorAttachmentDescriptor| {
+            c.texture.is_some()
+                && matches!(
+                    resolving(c.store_action, c.resolve_texture.is_some()),
+                    Ok(true)
+                )
+        };
+        (self.color_attachments.iter().any(resolves)).then_some(PrecisionNote::DeviceRoundedResolve)
+    }
+}
+
+/// The device's depth and stencil resolve modes
+/// (`VkPhysicalDeviceVulkan12Properties`, Vulkan 1.2's depth-stencil resolve properties).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ResolveModes {
+    /// `supportedDepthResolveModes`.
+    pub(crate) depth: vk::ResolveModeFlags,
+    /// `supportedStencilResolveModes`.
+    pub(crate) stencil: vk::ResolveModeFlags,
+    /// `independentResolveNone`: one aspect of a depth-stencil attachment may resolve while the
+    /// other does not.
+    pub(crate) independent_none: bool,
+    /// `independentResolve`: the two aspects may resolve by different modes.
+    pub(crate) independent: bool,
+}
+
+/// The resolve of an attachment of a checked pass: a view of its resolve texture's level and
+/// slice, and the mode Vulkan resolves by.
+pub(crate) struct Resolve {
+    pub(crate) texture: Texture,
+    pub(crate) attachment: Attachment,
+    /// The layout the pass resolves into it in: its home, or the attachment layout for an image
+    /// whose home is shader-read-only, which the pass moves there and back.
+    pub(crate) layout: vk::ImageLayout,
+    pub(crate) mode: vk::ResolveModeFlags,
+}
+
+impl Resolve {
+    /// Whether the pass moves its image out of home and back.
+    pub(crate) fn moves(&self) -> bool {
+        self.layout != self.attachment.home
+    }
+
+    /// The barrier that moves its level and layer, every aspect, from `old` to `new`, after every
+    /// earlier command and before every later one.
+    pub(crate) fn barrier(
+        &self,
+        old: vk::ImageLayout,
+        new: vk::ImageLayout,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        let a = &self.attachment;
+        layout_barrier(a.image, range(a), old, new)
+    }
+}
+
+/// The level and layer of `a`, every aspect.
+fn range(a: &Attachment) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: a.aspects,
+        base_mip_level: a.level,
+        level_count: 1,
+        base_array_layer: a.layer,
+        layer_count: 1,
+    }
+}
+
 /// One attachment of a checked pass.
 pub(crate) struct Target {
     pub(crate) texture: Texture,
@@ -250,6 +427,8 @@ pub(crate) struct Target {
     load: vk::AttachmentLoadOp,
     store: vk::AttachmentStoreOp,
     clear: vk::ClearValue,
+    /// Where its store action resolves, its resolve.
+    pub(crate) resolve: Option<Resolve>,
 }
 
 impl Target {
@@ -271,8 +450,9 @@ impl Target {
 
     /// Its `VkRenderingAttachmentInfo`; `resumed`, for a rendering the pass begins again, which
     /// loads what the pass stored.
+    /// Where it resolves, the rendering resolves it as it ends, each time it begins.
     pub(crate) fn info(&self, resumed: bool) -> vk::RenderingAttachmentInfo<'static> {
-        vk::RenderingAttachmentInfo::default()
+        let info = vk::RenderingAttachmentInfo::default()
             .image_view(self.attachment.view)
             .image_layout(self.layout)
             .load_op(match resumed {
@@ -280,7 +460,14 @@ impl Target {
                 false => self.load,
             })
             .store_op(self.store)
-            .clear_value(self.clear)
+            .clear_value(self.clear);
+        match &self.resolve {
+            Some(r) => info
+                .resolve_mode(r.mode)
+                .resolve_image_view(r.attachment.view)
+                .resolve_image_layout(r.layout),
+            None => info,
+        }
     }
 
     /// The barrier that moves its level and layer, every aspect, from `old` to `new`, after every
@@ -296,14 +483,7 @@ impl Target {
 
     /// Its level and layer, every aspect.
     pub(crate) fn range(&self) -> vk::ImageSubresourceRange {
-        let a = &self.attachment;
-        vk::ImageSubresourceRange {
-            aspect_mask: a.aspects,
-            base_mip_level: a.level,
-            level_count: 1,
-            base_array_layer: a.layer,
-            layer_count: 1,
-        }
+        range(&self.attachment)
     }
 }
 
@@ -352,6 +532,18 @@ impl Pass {
             .chain(stencil)
     }
 
+    /// Every attachment's resolve, colors first: the stencil attachment's only where the depth
+    /// attachment does not resolve, whose resolve view it otherwise shares.
+    pub(crate) fn resolves(&self) -> impl Iterator<Item = &Resolve> {
+        let depth = self.depth.as_ref().and_then(|t| t.resolve.as_ref());
+        let stencil =
+            (self.stencil.as_ref().and_then(|t| t.resolve.as_ref())).filter(|_| depth.is_none());
+        (self.colors.iter().flatten())
+            .filter_map(|t| t.resolve.as_ref())
+            .chain(depth)
+            .chain(stencil)
+    }
+
     /// Records `vkCmdBeginRendering` of the pass into `command`; `resumed`, again after the
     /// encoder ended it early, loading what it stored.
     ///
@@ -397,7 +589,8 @@ impl Pass {
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's texture or visibility result buffer;
     /// [`Refusal::AttachmentUsage`]; [`Refusal::AttachmentPlace`]; [`Refusal::AttachmentFormat`];
-    /// [`Gap::RenderPass`]; [`Error::Vulkan`] where an attachment's view cannot be made.
+    /// [`Refusal::ResolveTexture`]; [`Refusal::ResolveFormat`]; [`Gap::RenderPass`];
+    /// [`Error::Vulkan`] where an attachment's view cannot be made.
     pub(crate) fn check(core: &Arc<Core>, d: &RenderPassDescriptor) -> Result<Pass, Error> {
         let gap = |kind| Error::Unsupported(Gap::RenderPass { kind });
         let mine = |texture: &Texture| match texture.is_of(core) {
@@ -422,6 +615,40 @@ impl Pass {
                 }));
             }
             let attachment = texture.attachment(c.level, c.slice)?;
+            let resolve = match (
+                resolving(c.store_action, c.resolve_texture.is_some())?,
+                &c.resolve_texture,
+            ) {
+                (true, Some(into)) => {
+                    // Metal resolves no integer format; an emulated one would average the
+                    // image's own encoding.
+                    if !matches!(formats::sampled_type(pf), Some(SampledType::Float)) {
+                        return Err(Error::Refused(Refusal::ResolveFormat { pixel_format: pf }));
+                    }
+                    if !matches!(
+                        texture.emulation(),
+                        FormatEmulation::Direct
+                            | FormatEmulation::RotatedView
+                            | FormatEmulation::AlphaInRed
+                    ) {
+                        return Err(gap(RenderPassKind::Resolve));
+                    }
+                    let into = ResolveInto {
+                        texture: into,
+                        level: c.resolve_level,
+                        slice: c.resolve_slice,
+                        depth_plane: c.resolve_depth_plane,
+                    };
+                    Some(resolve(
+                        core,
+                        texture,
+                        &attachment,
+                        into,
+                        vk::ResolveModeFlags::AVERAGE,
+                    )?)
+                }
+                _ => None,
+            };
             let clear = match c.load_action {
                 LoadAction::Clear => vk::ClearValue {
                     color: clear_color(pf, texture.emulation(), c.clear_color)
@@ -436,6 +663,7 @@ impl Pass {
                 c.load_action,
                 c.store_action,
                 clear,
+                resolve,
             )?);
         }
         let z = &d.depth_attachment;
@@ -450,6 +678,31 @@ impl Pass {
                     }));
                 }
                 let attachment = texture.attachment(z.level, z.slice)?;
+                let resolve = match (
+                    resolving(z.store_action, z.resolve_texture.is_some())?,
+                    &z.resolve_texture,
+                ) {
+                    (true, Some(into)) => {
+                        let mode = match z.depth_resolve_filter {
+                            MultisampleDepthResolveFilter::Sample0 => {
+                                vk::ResolveModeFlags::SAMPLE_ZERO
+                            }
+                            MultisampleDepthResolveFilter::Min => vk::ResolveModeFlags::MIN,
+                            MultisampleDepthResolveFilter::Max => vk::ResolveModeFlags::MAX,
+                        };
+                        if !core.resolve_modes.depth.contains(mode) {
+                            return Err(gap(RenderPassKind::ResolveFilter));
+                        }
+                        let into = ResolveInto {
+                            texture: into,
+                            level: z.resolve_level,
+                            slice: z.resolve_slice,
+                            depth_plane: z.resolve_depth_plane,
+                        };
+                        Some(resolve(core, texture, &attachment, into, mode)?)
+                    }
+                    _ => None,
+                };
                 let clear = match z.load_action {
                     LoadAction::Clear if !(0.0..=1.0).contains(&z.clear_depth) => {
                         return Err(gap(RenderPassKind::ClearDepth))
@@ -469,6 +722,7 @@ impl Pass {
                     z.load_action,
                     z.store_action,
                     clear,
+                    resolve,
                 )?)
             }
             None => None,
@@ -485,6 +739,32 @@ impl Pass {
                     }));
                 }
                 let attachment = texture.attachment(s.level, s.slice)?;
+                let resolve = match (
+                    resolving(s.store_action, s.resolve_texture.is_some())?,
+                    &s.resolve_texture,
+                ) {
+                    (true, Some(into)) => {
+                        let mode = match s.stencil_resolve_filter {
+                            MultisampleStencilResolveFilter::Sample0 => {
+                                vk::ResolveModeFlags::SAMPLE_ZERO
+                            }
+                            MultisampleStencilResolveFilter::DepthResolvedSample => {
+                                return Err(gap(RenderPassKind::ResolveFilter))
+                            }
+                        };
+                        if !core.resolve_modes.stencil.contains(mode) {
+                            return Err(gap(RenderPassKind::ResolveFilter));
+                        }
+                        let into = ResolveInto {
+                            texture: into,
+                            level: s.resolve_level,
+                            slice: s.resolve_slice,
+                            depth_plane: s.resolve_depth_plane,
+                        };
+                        Some(resolve(core, texture, &attachment, into, mode)?)
+                    }
+                    _ => None,
+                };
                 let clear = vk::ClearValue {
                     depth_stencil: vk::ClearDepthStencilValue {
                         depth: 0.0,
@@ -497,6 +777,7 @@ impl Pass {
                     s.load_action,
                     s.store_action,
                     clear,
+                    resolve,
                 )?)
             }
             None => None,
@@ -504,6 +785,21 @@ impl Pass {
         if let (Some(depth), Some(stencil)) = (&depth, &stencil) {
             if depth.attachment.view != stencil.attachment.view {
                 return Err(gap(RenderPassKind::DepthStencilViews));
+            }
+            // One view's two aspects resolve as the device pairs them
+            // (VUID-VkRenderingInfo-pDepthAttachment-06086, -06104 and -06105).
+            let modes = &core.resolve_modes;
+            match (&depth.resolve, &stencil.resolve) {
+                (Some(d), Some(s)) if d.attachment.view != s.attachment.view => {
+                    return Err(gap(RenderPassKind::Resolve))
+                }
+                (Some(d), Some(s)) if d.mode != s.mode && !modes.independent => {
+                    return Err(gap(RenderPassKind::ResolveFilter))
+                }
+                (Some(_), None) | (None, Some(_)) if !modes.independent_none => {
+                    return Err(gap(RenderPassKind::ResolveFilter))
+                }
+                _ => {}
             }
         }
         let mut pass = Pass {
@@ -544,10 +840,11 @@ impl Pass {
 }
 
 /// The Vulkan load and store operations of Metal's `load` and `store` actions: the load one to
-/// one, and `STORE` for `Store`, `DontCare` ([`StoreAction::DontCare`]) and `Unknown`
-/// ([`StoreAction::Unknown`]).
+/// one, and `STORE` for `Store`, `DontCare` ([`StoreAction::DontCare`]), `Unknown`
+/// ([`StoreAction::Unknown`]) and the two that resolve, whose resolve is the attachment's
+/// ([`Target::info`]).
 ///
-/// Err: [`Gap::RenderPass`] of [`RenderPassKind::Resolve`] or [`RenderPassKind::StoreAction`].
+/// Err: [`Gap::RenderPass`] of [`RenderPassKind::StoreAction`].
 pub(crate) fn ops(
     load: LoadAction,
     store: StoreAction,
@@ -559,19 +856,91 @@ pub(crate) fn ops(
     };
     let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
     let store = match store {
-        StoreAction::DontCare | StoreAction::Store | StoreAction::Unknown => {
-            vk::AttachmentStoreOp::STORE
-        }
-        StoreAction::MultisampleResolve | StoreAction::StoreAndMultisampleResolve => {
-            return gap(RenderPassKind::Resolve)
-        }
+        StoreAction::DontCare
+        | StoreAction::Store
+        | StoreAction::Unknown
+        | StoreAction::MultisampleResolve
+        | StoreAction::StoreAndMultisampleResolve => vk::AttachmentStoreOp::STORE,
         StoreAction::CustomSampleDepthStore => return gap(RenderPassKind::StoreAction),
     };
     Ok((load, store))
 }
 
-/// One attachment of `texture`, viewed as `attachment`, with its load and store actions and its
-/// clear value.
+/// Whether an attachment of store action `store` resolves, `named` where it names a resolve
+/// texture: an action that resolves, and `Unknown` with a resolve texture, which the encoder is
+/// left to set to one (Vulkan fixes the resolve as the rendering begins).
+///
+/// Err: [`Refusal::ResolveTexture`] for an action that resolves with no resolve texture.
+pub(crate) fn resolving(store: StoreAction, named: bool) -> Result<bool, Error> {
+    let resolves = matches!(
+        store,
+        StoreAction::MultisampleResolve | StoreAction::StoreAndMultisampleResolve
+    );
+    match (resolves, named) {
+        (true, false) => Err(Error::Refused(Refusal::ResolveTexture)),
+        (true, true) => Ok(true),
+        (false, named) => Ok(named && store == StoreAction::Unknown),
+    }
+}
+
+/// Where an attachment resolves: the resolve texture and its level, slice and depth plane.
+struct ResolveInto<'a> {
+    texture: &'a Texture,
+    level: u32,
+    slice: u32,
+    depth_plane: u32,
+}
+
+/// The resolve of `texture`'s attachment `attachment` into `into` by `mode`: a view of the
+/// resolve texture's level and slice, as an attachment's.
+///
+/// Err: [`Refusal::OtherDevice`] for another device's resolve texture; [`Gap::RenderPass`] of
+/// [`RenderPassKind::Resolve`] for an attachment of one sample, and for a resolve texture of
+/// another pixel format, of more than one sample, made without `RenderTarget` usage, or whose
+/// level is not the attachment level's width and height; [`Gap::RenderPass`] of
+/// [`RenderPassKind::TextureType`] for a depth plane but 0; what the resolve texture's
+/// attachment view returns.
+fn resolve(
+    core: &Arc<Core>,
+    texture: &Texture,
+    attachment: &Attachment,
+    into: ResolveInto<'_>,
+    mode: vk::ResolveModeFlags,
+) -> Result<Resolve, Error> {
+    let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
+    if !into.texture.is_of(core) {
+        return Err(Error::Refused(Refusal::OtherDevice));
+    }
+    let d = into.texture.descriptor();
+    let renders = d.usage.is_empty() || d.usage.contains(TextureUsage::RENDER_TARGET);
+    if attachment.samples == vk::SampleCountFlags::TYPE_1
+        || d.sample_count != 1
+        || d.pixel_format != texture.descriptor().pixel_format
+        || !renders
+    {
+        return gap(RenderPassKind::Resolve);
+    }
+    if into.depth_plane != 0 {
+        return gap(RenderPassKind::TextureType);
+    }
+    let view = into.texture.attachment(into.level, into.slice)?;
+    if view.extent != attachment.extent || view.format != attachment.format {
+        return gap(RenderPassKind::Resolve);
+    }
+    let layout = match view.home {
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::ImageLayout::ATTACHMENT_OPTIMAL,
+        home => home,
+    };
+    Ok(Resolve {
+        texture: into.texture.clone(),
+        attachment: view,
+        layout,
+        mode,
+    })
+}
+
+/// One attachment of `texture`, viewed as `attachment`, with its load and store actions, its
+/// clear value and its resolve.
 ///
 /// Err: as [`ops`].
 fn target(
@@ -580,6 +949,7 @@ fn target(
     load: LoadAction,
     store: StoreAction,
     clear: vk::ClearValue,
+    resolve: Option<Resolve>,
 ) -> Result<Target, Error> {
     let (load, store) = ops(load, store)?;
     let layout = match attachment.home {
@@ -593,6 +963,7 @@ fn target(
         load,
         store,
         clear,
+        resolve,
     })
 }
 

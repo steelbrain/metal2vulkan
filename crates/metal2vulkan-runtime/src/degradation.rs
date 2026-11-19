@@ -258,6 +258,7 @@ macro_rules! degradations {
                     PrecisionNote::SnormMinimumKept => Degradation::SnormMinimumKept,
                     PrecisionNote::DepthDenormals => Degradation::DepthDenormals,
                     PrecisionNote::DeviceFilteredMipmaps => Degradation::DeviceFilteredMipmaps,
+                    PrecisionNote::DeviceRoundedResolve => Degradation::DeviceRoundedResolve,
                     PrecisionNote::CompressedTexelDecode => Degradation::CompressedTexelDecode,
                     PrecisionNote::SharedExponentKept => Degradation::SharedExponentKept,
                     PrecisionNote::DeviceReconvergence => {

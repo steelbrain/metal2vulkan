@@ -3213,6 +3213,11 @@ bound.
   NaN or an infinity: Metal's resolve counts a half or small-float NaN as 0 and a half infinity as
   65536 of its sign, and makes any 32-bit float NaN 0x7fc00000, where the device's average may
   keep them.
+  On `metal2vulkan-rt` it is the static note `PrecisionNote::DeviceRoundedResolve` of a render
+  pass that resolves a color attachment (`RenderPassDescriptor::precision_note`), by Vulkan's
+  `AVERAGE` in the pass's own rendering, on every device: an extended-range, bfloat or YCbCr
+  attachment's resolve is `Gap::RenderPass` of `RenderPassKind::Resolve`, and an integer one is
+  `Refusal::ResolveFormat`.
 - `metal2vulkan-degrade-unmeasured-resolve` (precision). `UnmeasuredResolve`: A multisample color
   resolve of more than 4 samples, of which Apple's GPUs make no texture: no Metal answer is measured
   there; likewise a stencil resolved by `DepthResolvedSample` after `Min` or `Max`, whose pick among

@@ -2389,13 +2389,32 @@ or does not check is rebuilt from the generations' names, with young counted ful
   texels, one of the outcomes Metal allows. Vulkan fixes the store as the rendering begins, so an
   `Unknown` store action stores, and the encoder's `set_color_store_action`,
   `set_depth_store_action` and `set_stencil_store_action` change nothing the device does: on a
-  tile-based device this stores a target Metal would have discarded. A resolving action set there
-  is refused (`Gap::RenderPass` of `Resolve`). A clear color is a `float` in a
+  tile-based device this stores a target Metal would have discarded. A clear color is a `float` in a
   float, normalized or sRGB channel, which the device converts to the format by its own rules
   (Vulkan clamps a normalized value and asks for rounding to nearest; Metal rounds to nearest
   even); an integer channel's is truncated toward zero and saturated to the channel's width, NaN
   0, as Metal's. A rotated format's clear color, and `A8Unorm`'s held in `R8_UNORM`, go through
   the format's rotation. A clear stencil keeps its low 8 bits.
+- A store action that resolves (`MultisampleResolve`, `StoreAndMultisampleResolve`, and `Unknown`
+  where the attachment names a resolve texture) resolves by Vulkan's own resolve, in the same
+  rendering: the attachment's `VkRenderingAttachmentInfo` names a view of the resolve texture's
+  `resolve_level` and `resolve_slice` and a resolve mode, so no pass, copy or barrier of its own
+  is added; a resolve texture whose home is shader-read-only moves to the attachment layout and
+  back with the pass, as an attachment does. Both actions also store the samples, as `DontCare`
+  keeps them: a rendering the encoder ends early and begins again resolves again as it ends, and
+  its last resolve holds the whole pass. A color attachment resolves by `AVERAGE`, the mode
+  Vulkan requires of a float, normalized or sRGB format, under the static note
+  `PrecisionNote::DeviceRoundedResolve` (`RenderPassDescriptor::precision_note`) on every device:
+  the device rounds the average, and decodes and encodes an sRGB channel, by its own rules. A
+  depth attachment resolves by its `depth_resolve_filter`: `Sample0` by
+  `VK_RESOLVE_MODE_SAMPLE_ZERO_BIT`, which Vulkan requires, and `Min` and `Max` by their modes
+  where `supportedDepthResolveModes` has them; a stencil attachment by `Sample0` alone. A depth
+  and a stencil attachment that both resolve resolve into one view, paired as the device's
+  `independentResolve` and `independentResolveNone` allow. The resolve texture takes the
+  attachment's pixel format and one sample, and its level the attachment level's width and
+  height. Refused as Metal refuses it: a resolving action with no resolve texture
+  (`Refusal::ResolveTexture`, also where an encoder sets it later) and an integer format's resolve
+  (`Refusal::ResolveFormat`).
 - A depth attachment is loaded, cleared and stored as a color attachment is, its clear depth a
   `float`: an optimal image in its real layout, of the Vulkan format the translator's format table
   chooses by the device's format query (`Depth32Float` is `D32_SFLOAT`, `Depth32Float_Stencil8`
@@ -2605,8 +2624,18 @@ or does not check is rebuilt from the generations' names, with young counted ful
   or NaN (`ClearDepth`: Vulkan clears no such depth without `VK_EXT_depth_range_unrestricted`,
   `VUID-VkClearDepthStencilValue-depth-00022`, which the floor does not require), attachments of
   two sample counts (`SampleCounts`: Vulkan renders one count into every attachment of a pass,
-  `VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857`), a resolve (`Resolve`: a
-  resolve texture, or a store action that resolves), a 1D or 3D texture's attachment, the
+  `VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857`), a resolve the runtime does not
+  build (`Resolve`: into a resolve texture of another pixel format, of more than one sample, made
+  without `RenderTarget` usage or whose level is not the attachment level's size; out of an
+  attachment of one sample; of an extended-range, bfloat or YCbCr format, whose image Vulkan's
+  average would read in its own encoding; or of a depth and a stencil attachment into two views),
+  a depth or stencil resolve the device's resolve modes do not offer (`ResolveFilter`: `Min` or
+  `Max` where `supportedDepthResolveModes` lacks it, the stencil filter `DepthResolvedSample`,
+  which no Vulkan resolve mode is, and two aspects paired where `independentResolve` or
+  `independentResolveNone` does not allow it), a store action an encoder sets that does not
+  resolve an attachment whose pass left it `Unknown` with a resolve texture (`LateStore`: the
+  rendering began resolving, as Vulkan fixes the resolve as it begins), a 1D or 3D texture's
+  attachment, a 3D resolve texture's plane (`TextureType`), the
   `CustomSampleDepthStore` store action, a clear of a format only a shader clears (extended
   range, bfloat, YCbCr), and a pass with no attachment. The descriptor has no field for a
   rasterization rate map, tile sizes, imageblock and threadgroup memory, sample buffer
