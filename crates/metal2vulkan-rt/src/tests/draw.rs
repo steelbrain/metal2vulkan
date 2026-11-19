@@ -26,6 +26,8 @@
 //!     a pass without a depth attachment, is the formats' gap, and a depth test is its own.
 //!   - a fragment function samples a texture through its constexpr sampler at the index the
 //!     consumer gave it: each pixel reads its own texel.
+//!   - a fragment function's second output for colour attachment 0 (the owned fixture
+//!     `engine/stage_io.ll`'s `stage_io_fragment_dual_source`) is the blend's second source.
 //!   - four samples (the owned fixture `engine/psc_sample_coverage.ll`'s `psc_read_samples`): a
 //!     triangle drawn by a state of `rasterSampleCount` 4 into a 4-sample target covers, per
 //!     sample as a kernel reads them, every pixel on one side of its edge, none on the other and,
@@ -1100,6 +1102,74 @@ pub(crate) mod on_device {
             println!(
                 "{name}: a plain vertex function's pipeline made under two tessellation states"
             );
+        });
+    }
+
+    /// A fragment function's second output for colour attachment 0 is the blend's second source
+    /// (the owned fixture `engine/stage_io.ll`'s `stage_io_fragment_dual_source`: its position's
+    /// `xy`, 0 and 1 first, a quarter in every channel second). Blended by `Source1Color` and
+    /// `Source1Alpha` with no destination term, each texel holds a quarter of the first output,
+    /// clamped to the unorm target's range first: a pixel centre's coordinate of 0.5 or 1. A device
+    /// without `dualSrcBlend` is below the floor, so every device makes the state.
+    #[test]
+    fn every_device_blends_a_fragment_function_s_second_output() {
+        use metal2vulkan::metal::BlendFactor;
+        let Some(examples) = examples() else {
+            return;
+        };
+        let Some(engine) = library(&engine_dir().join("stage_io.ll")) else {
+            return;
+        };
+        let mut d = descriptor(&examples, "colored_fragment", PixelFormat::RGBA8Unorm);
+        d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+            (engine.function("stage_io_fragment_dual_source")).expect("the function"),
+        )));
+        if let Some(color) = &mut d.color_attachments[0] {
+            color.blending_enabled = true;
+            color.source_rgb_blend_factor = BlendFactor::Source1Color;
+            color.destination_rgb_blend_factor = BlendFactor::Zero;
+            color.source_alpha_blend_factor = BlendFactor::Source1Alpha;
+            color.destination_alpha_blend_factor = BlendFactor::Zero;
+        }
+        each_device("draw_dual_source", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            // The second triangle covers the target.
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let quarter = |v: f32| (v.min(1.0) * 0.25 * 255.0).round() as u8;
+            let want: Vec<u8> = (0..SIDE)
+                .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+                .flat_map(|(x, y)| {
+                    [
+                        quarter(x as f32 + 0.5),
+                        quarter(y as f32 + 0.5),
+                        0,
+                        quarter(1.0),
+                    ]
+                })
+                .collect();
+            let got = read(&color, 4);
+            // A unit of the last place either way: the blend's product is the device's.
+            let near =
+                got.len() == want.len() && got.iter().zip(&want).all(|(g, w)| g.abs_diff(*w) <= 1);
+            assert!(near, "{name}: the texels {got:?}, against {want:?}");
+            println!("{name}: a fragment function's second output blended as the second source");
         });
     }
 

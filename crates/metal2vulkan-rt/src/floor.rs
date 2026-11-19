@@ -320,6 +320,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // device's tessellator: a synthesized control stage reads each patch's factors through their
     // address, and the function is the evaluation stage. A device without it is below the floor.
     feature!(core.tessellation_shader => TessellationShader),
+    // A fragment function's second output for a colour attachment (`[[color(0), index(1)]]`)
+    // blends with its first, as Metal's dual-source blending does. A device without it is below
+    // the floor.
+    feature!(core.dual_src_blend => DualSrcBlend),
     // What Vulkan 1.1 to 1.3 require of every device and the translator's shaders use where they
     // are enabled: multiview, subgroup operations on 8-, 16- and 64-bit values, a fragment's
     // demotion to a helper and its termination, and workgroup memory zeroed at its declaration.

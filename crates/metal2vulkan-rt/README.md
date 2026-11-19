@@ -2009,6 +2009,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `independentBlend` | `VkPhysicalDeviceFeatures` | each color attachment of a render pipeline blended by its own state, as Metal's are |
 | `fragmentStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a fragment function's writes and atomics on device memory |
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |
+| `dualSrcBlend` | `VkPhysicalDeviceFeatures` | a fragment function's second output for colour attachment 0 (`[[color(0), index(1)]]`) as the blend's second source (`Source1Color`, `Source1Alpha` and their complements) |
 | `multiview` | `VkPhysicalDeviceVulkan11Features` | Vulkan 1.1 requires it; the translator's multiview forms |
 | `shaderDrawParameters` | `VkPhysicalDeviceVulkan11Features` | a vertex function's `[[base_vertex]]` and `[[base_instance]]` as the draw's own `BaseVertex` and `BaseInstance`, so no draw pushes its bases; Vulkan 1.1 requires it where the device lists `VK_KHR_shader_draw_parameters`, Roadmap 2024 of every device |
 | `shaderSubgroupExtendedTypes` | `VkPhysicalDeviceVulkan12Features` | SIMD-group operations on 8-, 16- and 64-bit values; Vulkan 1.2 requires it |
