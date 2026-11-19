@@ -132,8 +132,7 @@ in its memory.
 - A block is a range of one of the device's allocations of its class: the length asked rounded up
   to 64 KiB (to `bufferImageGranularity` where that is larger), at an offset that is a multiple of
   that length rounded up to a power of two, up to 2 MiB. A take is the first free range of the
-  class's allocations that fits it whose bytes are all zeroed, else the first that fits, in the
-  order the allocations were made: under the pool's lock, with no Vulkan call and no call to the
+  class's allocations that fits it, in the order the allocations were made: under the pool's lock, with no Vulkan call and no call to the
   consumer's hook (`Metrics::takes_from_free_ranges`). A long allocation, which a take longer than
   16 MiB made for itself, serves only later takes of exactly its length:
   `Metrics::shared_long_reuses` and `private_long_reuses` count them, and
@@ -169,25 +168,8 @@ in its memory.
   refused before the driver is called; `Gauges::blocks` counts those live. The limit is about 4.29
   billion on RADV, NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD
   Graphics 630, and 4,096 at Vulkan's minimum.
-- A take answers a zero mark, `BlockInfo::zeroed`: how many of the block's first bytes the
-  runtime zeroed itself and nothing held since. They read zero; the bytes past it are undefined,
-  new or taken again. Bytes outside the mark are the consumer's to zero where Metal owes zeros. The
-  runtime zeroes from a block's first byte only, on the block-maker thread, off the consumer's
-  threads: each Shared allocation it makes ahead of need, whole, before any take lands in it
-  (each device's first one in its making), and the free Shared bytes blocks gave back, in steps of
-  256 KiB from the front of each allocation's first free bytes not zeroed, the allocations in the
-  order they were made. A take lands where its whole length is zeroed if any free range of that
-  length is; a take that no free range fits waits at most for the step that runs, and answers the
-  bytes zeroed there, so a mark is any length up to the block's. The thread starts no step while a
-  zeroed buffer's memset runs on the consumer's thread (below), so the two do not share the memory
-  bus (`Metrics::zero_steps_held` counts the steps held back). Nothing else counts:
-  not the driver, the memory type or a new allocation. A Private block's mark is 0, as is a block
-  of an allocation a take makes itself. The consumer writes the bytes inside the mark only
-  through a buffer it places over them, which lowers the mark to the buffer's offset; a zeroed
-  buffer (below) zeroes only its bytes past the mark. `Metrics::allocations_zeroed`,
-  `allocation_zeroing_nanos`, `free_bytes_zeroed` and `free_zeroing_nanos` count the zeroing,
-  `zeroed_bytes_taken` the marks the takes answered, and `zeroed_bytes_freed` the bytes zeroed
-  for a take that never came, freed with their idle allocation. A buffer reads zero where
+- A block's bytes are undefined, new or taken again: the runtime zeroes nothing ahead of need,
+  and nothing the driver or the memory type does counts. A buffer reads zero where
   `Device::new_buffer` zeroes its range (below), as Metal zeroes a buffer from
   `newBufferWithLength:options:`, and Metal owes zeros for that call's buffers alone: not for a
   heap's memory or a texture's, whose bytes are undefined, as Metal is silent on them. The
@@ -204,7 +186,7 @@ in its memory.
   that drop made explicit. Clones of a handle share one claim, so dropping one of two gives nothing
   back. It takes effect once no buffer, command buffer or upload using the block remains: its
   bytes are then a free range of its allocation at once, as written. A later take that lands
-  there has a new number, and its zero mark is what the block-maker thread zeroed of them since.
+  there has a new number.
   An allocation that holds no block anyone holds is idle. Its idle time starts when its last block
   comes back, and only a take that lands in it again ends it. The idle age is 250 ms, on every
   device: the block-maker thread frees each allocation idle that long, one at a time, after
@@ -234,13 +216,11 @@ in its memory.
   zeroes the buffer's bytes from that offset in it to its end: `Some(0)` all of them, as
   `newBufferWithLength:options:` does, and `None` none, for a buffer placed in a heap (Metal does
   not zero heap memory) or one whose bytes the consumer writes itself; an offset at or past the
-  length zeroes nothing. A Shared range is zeroed through the mapping, before the call returns,
-  past the block's zero mark, as the bytes inside it read zero already; a
+  length zeroes nothing. A Shared range is zeroed through the mapping, before the call returns; a
   Private one by a GPU fill of exactly the range, recorded into the upload, which goes ahead of
   every command buffer committed after the call and ends with a barrier that orders the fill
   before every later command (a copy into the buffer among them), and holds the block until it
-  completes. `Metrics::bytes_zeroed` counts the bytes, and `Metrics::zeroed_bytes_used` the bytes of
-  a Shared range that the block's zero mark covered. A length of 0, a length
+  completes. `Metrics::bytes_zeroed` counts the bytes. A length of 0, a length
   past `MAX_BUFFER_LENGTH` (2 GiB) and a range past the block are refused, as Metal answers nil for
   each.
 - A shader reaches a buffer argument's bytes by 32-bit offsets from its bind address, which the

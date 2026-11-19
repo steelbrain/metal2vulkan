@@ -132,39 +132,6 @@ impl Ranges {
         }
     }
 
-    /// No bytes free.
-    pub(crate) fn empty() -> Ranges {
-        Ranges { free: Vec::new() }
-    }
-
-    /// How many bytes from `offset` on, at most `len`, are free without a break.
-    pub(crate) fn run_at(&self, offset: u64, len: u64) -> u64 {
-        let index = self.free.partition_point(|&(_, end)| end <= offset);
-        match self.free.get(index) {
-            Some(&(start, end)) if start <= offset => (end - offset).min(len),
-            _ => 0,
-        }
-    }
-
-    /// Takes whatever of `offset..offset + len` is free, free or not.
-    pub(crate) fn cut(&mut self, offset: u64, len: u64) {
-        let stop = offset + len;
-        let mut kept = Vec::with_capacity(self.free.len() + 1);
-        for &(start, end) in &self.free {
-            if end <= offset || stop <= start {
-                kept.push((start, end));
-                continue;
-            }
-            if start < offset {
-                kept.push((start, offset));
-            }
-            if stop < end {
-                kept.push((stop, end));
-            }
-        }
-        self.free = kept;
-    }
-
     /// Takes `len` bytes, more than 0, at the first offset that is a multiple of `align`, a power
     /// of two, with the bytes free from it; `None` where there is none.
     pub(crate) fn take(&mut self, len: u64, align: u64) -> Option<u64> {
@@ -178,35 +145,6 @@ impl Ranges {
             let at = start.checked_add(base)?.checked_next_multiple_of(align)? - base;
             (at.checked_add(len)? <= end).then_some((index, at))
         })
-    }
-
-    /// The first offset that is a multiple of `align`, a power of two, with `len` bytes, more than
-    /// 0, free from it, which stay free; `None` where there is none.
-    pub(crate) fn find(&self, len: u64, align: u64) -> Option<u64> {
-        self.first_fit(len, align, 0).map(|(_, at)| at)
-    }
-
-    /// The first run of these bytes that `other` does not hold, as `start..end`.
-    pub(crate) fn first_outside(&self, other: &Ranges) -> Option<(u64, u64)> {
-        for &(start, end) in &self.free {
-            let mut at = start;
-            for &(from, to) in &other.free {
-                if to <= at || from >= end {
-                    continue;
-                }
-                if from > at {
-                    return Some((at, from));
-                }
-                at = to;
-                if at >= end {
-                    break;
-                }
-            }
-            if at < end {
-                return Some((at, end));
-            }
-        }
-        None
     }
 
     /// Takes `len` bytes, more than 0, at the first offset that lies `base` bytes past a multiple

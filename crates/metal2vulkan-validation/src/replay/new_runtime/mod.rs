@@ -742,8 +742,8 @@ impl NewRuntime {
     /// nothing wrote it, while a block the runtime takes again holds a released one's bytes.
     /// `from` is the extent the runtime zeroed itself. Each piece is a buffer zeroed from its start
     /// and dropped at once: its zeroing stays (`rt::Device::new_buffer`).
-    fn zero_block(&self, block: &rt::Block, from: u64, len: u64) -> Result<(), rt::Error> {
-        let mut at = from;
+    fn zero_block(&self, block: &rt::Block, len: u64) -> Result<(), rt::Error> {
+        let mut at = 0;
         while at < len {
             let piece = (len - at).min(rt::MAX_BUFFER_LENGTH);
             drop(self.device.new_buffer(block.id, at, piece, Some(0))?);
@@ -1324,8 +1324,8 @@ impl NewRuntime {
                     .device
                     .take_block(class, length)
                     .map_err(failed(call))?;
-                // The bytes past the take's zero mark are the player's to zero.
-                (self.zero_block(&block, block.zeroed, length)).map_err(failed(call))?;
+                // A block's bytes are undefined: the player zeroes them.
+                (self.zero_block(&block, length)).map_err(failed(call))?;
                 self.block_bytes[class_index(class)] += length;
                 let made = Made {
                     address: Some(block.gpu_address),
@@ -2118,15 +2118,7 @@ impl Backend for NewRuntime {
                 metrics.attachment_read_copy_bytes,
             ),
             ("bytes_zeroed", metrics.bytes_zeroed),
-            ("zeroed_bytes_used", metrics.zeroed_bytes_used),
-            ("allocations_zeroed", metrics.allocations_zeroed),
-            ("allocation_zeroing_nanos", metrics.allocation_zeroing_nanos),
-            ("free_bytes_zeroed", metrics.free_bytes_zeroed),
-            ("free_zeroing_nanos", metrics.free_zeroing_nanos),
-            ("zero_steps_held", metrics.zero_steps_held),
-            ("zeroed_bytes_taken", metrics.zeroed_bytes_taken),
             ("takes_from_free_ranges", metrics.takes_from_free_ranges),
-            ("zeroed_bytes_freed", metrics.zeroed_bytes_freed),
             ("block_zero_fills", metrics.block_zero_fills),
             ("block_zero_fill_bytes", metrics.block_zero_fill_bytes),
             ("pipelines_created", metrics.pipelines_created),

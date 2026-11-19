@@ -4,11 +4,10 @@
 //! that blocks are handed out and buffers view them, zeroed from their `zero_from` (a Private
 //! buffer's fill ahead of a copy into it in the next command buffer), that the consumer's hook
 //! maps each allocation before any block of it goes out and a take whose allocation it does not
-//! map is refused, that a block given back is a free range at once, its bytes as written, that a
-//! take lands in zeroed bytes first, that each idle allocation is freed at its idle age, under
-//! steady commits too, that seeded takes and releases of mixed lengths all return, that a take
-//! answers its zero mark (free Shared bytes zeroed in steps) and a Private range is zeroed when
-//! the consumer asks, and that teardown frees everything with the gauges at zero.
+//! map is refused, that a block given back is a free range at once, its bytes as written, the
+//! first fit of a later take, that each idle allocation is freed at its idle age, under steady
+//! commits too, that seeded takes and releases of mixed lengths all return, that a Private range
+//! is zeroed when the consumer asks, and that teardown frees everything with the gauges at zero.
 
 use crate::fill::{plan, Plan};
 use crate::memory::{base_align, idle_due, round, IDLE_AGE_NANOS};
@@ -110,7 +109,7 @@ fn the_idle_clock_is_due_at_the_idle_age() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::device::lock;
-    use crate::memory::{IDLE_AGE_NANOS, ZERO_STEP};
+    use crate::memory::IDLE_AGE_NANOS;
     use crate::tests::command::on_device::finished;
     use crate::tests::compute::on_device::{add, WORDS};
     use crate::tests::devices_of_the_cfgs_kind;
@@ -472,9 +471,6 @@ mod on_device {
             let hook = Arc::new(Hook::default());
             let device = device_with(&hook, physical, name);
             let core = device.core();
-            // Free bytes stay as written: the block-maker thread zeroes none of them here (the
-            // zero mark's own test zeroes them).
-            core.pool.zero_steps(Some(0));
             let counters = device.counters();
             let gpu = Gpu::new(&device);
 
@@ -782,18 +778,17 @@ mod on_device {
         }
     }
 
-    /// A block given back is a free range of its allocation at once, its bytes as written, and a
-    /// take lands in zeroed bytes first. With the block-maker thread zeroing no free bytes: a
-    /// Shared block of 16 MiB, the device's first Shared allocation whole and zeroed, is written
-    /// and given back once the next allocation is made ahead of need; then of two takes of
-    /// 16 MiB the first lands in that next allocation, zeroed whole, and the second in the first
-    /// block's bytes, a new number at its address and mapping, its bytes as written, its zero mark
-    /// 0. Both are takes from free ranges: neither allocates nor calls the hook. A Private block
-    /// the GPU wrote, given back, holds the GPU's bytes when a take of its length lands there
-    /// again, the first fit; a buffer zeroed over a range of them reads zero there, ahead of the
-    /// next command buffer committed, and nowhere else.
+    /// A block given back is a free range of its allocation at once, its bytes as written, and the
+    /// first fit of a later take: a Shared block of 16 MiB, the device's first Shared allocation
+    /// whole, is written and given back once the next allocation is made ahead of need; then of
+    /// two takes of 16 MiB the first lands in the first block's bytes, a new number at its address
+    /// and mapping, its bytes as written, and the second in that next allocation. Both are takes
+    /// from free ranges: neither allocates nor calls the hook. A Private block the GPU wrote,
+    /// given back, holds the GPU's bytes when a take of its length lands there again, the first
+    /// fit; a buffer zeroed over a range of them reads zero there, ahead of the next command buffer
+    /// committed, and nowhere else.
     #[test]
-    fn every_device_takes_zeroed_bytes_first_and_else_given_back_bytes_as_written() {
+    fn every_device_takes_given_back_bytes_as_written_at_the_first_fit() {
         let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
@@ -801,18 +796,11 @@ mod on_device {
             let hook = Arc::new(Hook::default());
             let device = device_with(&hook, physical, name);
             let core = device.core();
-            // Free bytes stay as written: the block-maker thread zeroes none of them here (the
-            // zero mark's own test zeroes them).
-            core.pool.zero_steps(Some(0));
             let counters = device.counters();
             let len = MemoryClass::Shared.block_len();
             let first = (device.take_block(MemoryClass::Shared, len))
                 .unwrap_or_else(|error| panic!("{name}: a Shared block: {error}"));
-            assert_eq!(
-                (first.offset, first.zeroed),
-                (0, len),
-                "{name}: the first Shared allocation whole, zeroed ahead of need"
-            );
+            assert_eq!(first.offset, 0, "{name}: the first Shared allocation whole");
             let info = *first;
             let host = bytes(&first);
             host[0] = 0x5A;
@@ -825,13 +813,6 @@ mod on_device {
             device.release_block(first).expect("a release");
             wait_until("the block given back", || core.pool.holds(info.id));
             let before = counters.metrics();
-            let clean = (device.take_block(MemoryClass::Shared, len))
-                .unwrap_or_else(|error| panic!("{name}: a block: {error}"));
-            assert_eq!(
-                (clean.allocation, clean.offset, clean.zeroed),
-                (next, 0, len),
-                "{name}: the zeroed bytes first"
-            );
             let again = (device.take_block(MemoryClass::Shared, len))
                 .unwrap_or_else(|error| panic!("{name}: a block: {error}"));
             assert_eq!(
@@ -839,11 +820,10 @@ mod on_device {
                     again.allocation,
                     again.offset,
                     again.gpu_address,
-                    again.contents,
-                    again.zeroed
+                    again.contents
                 ),
-                (info.allocation, 0, info.gpu_address, info.contents, 0),
-                "{name}: the given-back bytes, with no zero mark"
+                (info.allocation, 0, info.gpu_address, info.contents),
+                "{name}: the given-back bytes, the first fit"
             );
             assert_ne!(again.id, info.id, "{name}: each take is a new number");
             let host = bytes(&again);
@@ -851,6 +831,13 @@ mod on_device {
                 (host[0], host[host.len() - 1]),
                 (0x5A, 0x5A),
                 "{name}: the given-back bytes, as written"
+            );
+            let second = (device.take_block(MemoryClass::Shared, len))
+                .unwrap_or_else(|error| panic!("{name}: a block: {error}"));
+            assert_eq!(
+                (second.allocation, second.offset),
+                (next, 0),
+                "{name}: the allocation made ahead of need, next"
             );
             let after = counters.metrics();
             assert_eq!(
@@ -880,8 +867,8 @@ mod on_device {
             let back = (device.take_block(MemoryClass::Private, private_len))
                 .unwrap_or_else(|error| panic!("{name}: the Private bytes again: {error}"));
             assert_eq!(
-                (back.allocation, back.gpu_address, back.zeroed),
-                (private_info.allocation, private_info.gpu_address, 0),
+                (back.allocation, back.gpu_address),
+                (private_info.allocation, private_info.gpu_address),
                 "{name}: the given-back Private bytes, the first fit"
             );
             let zeroed = (device.new_buffer(back.id, 4096, 4096, Some(0)))
@@ -918,7 +905,7 @@ mod on_device {
                 );
             }
             drop((zeroed, copy, queue));
-            drop((clean, again, back, gpu));
+            drop((second, again, back, gpu));
             drop(device);
             assert_eq!(
                 counters.gauges(),
@@ -927,8 +914,7 @@ mod on_device {
             );
             assert_each_unmapped_once(name, &hook);
             println!(
-                "memory: {name}: zeroed bytes taken first, given-back bytes as written; metrics \
-                 {:?}",
+                "memory: {name}: given-back bytes taken as written at the first fit; metrics {:?}",
                 counters.metrics()
             );
         }
@@ -1164,7 +1150,7 @@ mod on_device {
     /// time, after the hook's unmap of each, on the block-maker thread. Given back again, the
     /// first is freed at its idle age from then. The small block's allocation, once its block is
     /// given back, is the reserve that keeps 8 MiB free, and stays past the idle age, unweighed:
-    /// the oldest idle age gauge reads 0. Nothing commits, and no free bytes are zeroed.
+    /// the oldest idle age gauge reads 0. Nothing commits.
     #[test]
     fn every_device_frees_each_idle_allocation_at_its_idle_age() {
         let instance = crate::tests::validation::instance(&[]);
@@ -1174,8 +1160,6 @@ mod on_device {
             let hook = Arc::new(Hook::default());
             let device = device_with(&hook, physical, name);
             let core = device.core();
-            // No zero step takes a range out of the free bytes: the first fit is the oldest.
-            core.pool.zero_steps(Some(0));
             let counters = device.counters();
             let len = MemoryClass::Shared.block_len();
             let small = (device.take_block(MemoryClass::Shared, 1))
@@ -1853,246 +1837,6 @@ mod on_device {
         }
     }
 
-    /// The zero mark ([`BlockInfo::zeroed`]): a take answers how many of the block's first bytes
-    /// the runtime zeroed, and they read zero. A Shared block carved from the allocation the device
-    /// made ahead of need is zeroed whole. A long block, of an allocation a take made itself, has
-    /// a mark of 0; written and given back, the block-maker thread zeroes its free bytes in steps
-    /// from their first byte: the next take of its length, which only that allocation serves,
-    /// after three steps answers three steps' bytes, zero, and the rest as written. A buffer
-    /// zeroed over the block zeroes only past the mark and lowers the mark to its offset, so a
-    /// later buffer there is zeroed whole. Given back again, the bytes are zeroed to their end, and
-    /// a take lands in them zeroed whole. A Private block's mark is 0. The zeroing is counted.
-    #[test]
-    fn every_device_answers_a_take_s_zero_mark_and_zeroes_free_shared_bytes_in_steps() {
-        const LEN: u64 = 4 << 20;
-        const LONG: u64 = 24 << 20;
-        let instance = crate::tests::validation::instance(&[]);
-        let devices = devices_of_the_cfgs_kind(&instance);
-        assert!(!devices.is_empty(), "no device of this cfg's kind");
-        for (name, physical) in &devices {
-            let hook = Arc::new(Hook::default());
-            let device = device_with(&hook, physical, name);
-            let core = device.core();
-            let counters = device.counters();
-            let made = counters.metrics();
-            assert!(
-                made.allocations_zeroed >= 1,
-                "{name}: the device's first Shared allocation is zeroed ahead of need"
-            );
-
-            // A block of the allocation made ahead of need: zeroed whole. Held to the end, so its
-            // allocation has no free bytes to zero but those zeroed ahead.
-            let block = (device.take_block(MemoryClass::Shared, LEN))
-                .unwrap_or_else(|error| panic!("{name}: a Shared block: {error}"));
-            assert_eq!(block.zeroed, LEN, "{name}: a block of a zeroed allocation");
-            assert!(
-                bytes(&block).iter().all(|&byte| byte == 0),
-                "{name}: it reads zero"
-            );
-
-            // A long block: an allocation of its own, made by the take, its mark 0.
-            let long = (device.take_block(MemoryClass::Shared, LONG))
-                .unwrap_or_else(|error| panic!("{name}: a long block: {error}"));
-            assert_eq!(
-                (long.offset, long.zeroed),
-                (0, 0),
-                "{name}: a block of an allocation the take made"
-            );
-            let allocation = long.allocation;
-            let id = long.id;
-            bytes(&long).fill(0xCD);
-
-            // Given back, then three steps of its bytes zeroed from the first.
-            core.pool.zero_steps(Some(0));
-            device.release_block(long).expect("a release");
-            wait_until("the long block given back", || core.pool.holds(id));
-            assert_eq!(
-                core.pool.clean(allocation),
-                Some(0),
-                "{name}: nothing zeroed"
-            );
-            core.pool.zero_steps(Some(3));
-            wait_until("three steps", || {
-                core.pool.clean(allocation) == Some(3 * ZERO_STEP)
-            });
-            let again = (device.take_block(MemoryClass::Shared, LONG))
-                .unwrap_or_else(|error| panic!("{name}: the long bytes again: {error}"));
-            assert_eq!(
-                (again.allocation, again.offset, again.zeroed),
-                (allocation, 0, 3 * ZERO_STEP),
-                "{name}: the long allocation, its mark three steps"
-            );
-            let id = again.id;
-            let host = bytes(&again);
-            let mark = again.zeroed as usize;
-            assert!(
-                host[..mark].iter().all(|&byte| byte == 0),
-                "{name}: zero inside the mark"
-            );
-            assert!(
-                host[mark..].iter().all(|&byte| byte == 0xCD),
-                "{name}: as written past the mark"
-            );
-
-            // A zeroed buffer over the block zeroes the bytes past the mark alone, counting the
-            // mark's bytes as used, and lowers the mark to its offset: a buffer placed there
-            // after it is zeroed whole.
-            let before = counters.metrics();
-            let whole = (device.new_buffer(id, 0, LONG, Some(0)))
-                .unwrap_or_else(|error| panic!("{name}: a zeroed buffer: {error}"));
-            let after = counters.metrics();
-            assert_eq!(
-                (
-                    after.bytes_zeroed - before.bytes_zeroed,
-                    after.zeroed_bytes_used - before.zeroed_bytes_used
-                ),
-                (LONG - 3 * ZERO_STEP, 3 * ZERO_STEP),
-                "{name}: the bytes zeroed past the mark, and the mark's bytes used"
-            );
-            assert!(host.iter().all(|&byte| byte == 0), "{name}: the buffer");
-            host[..4096].fill(0xCD);
-            drop(whole);
-            let before = counters.metrics().bytes_zeroed;
-            let first = (device.new_buffer(id, 0, 4096, Some(0)))
-                .unwrap_or_else(|error| panic!("{name}: a zeroed buffer: {error}"));
-            assert_eq!(
-                counters.metrics().bytes_zeroed - before,
-                4096,
-                "{name}: the mark fell to the first buffer's offset"
-            );
-            assert!(host[..4096].iter().all(|&byte| byte == 0), "{name}");
-            drop(first);
-
-            // Given back again: zeroed to their end, and taken zeroed whole.
-            host.fill(0xEF);
-            core.pool.zero_steps(None);
-            device.release_block(again).expect("a release");
-            wait_until("the long bytes zeroed to their end", || {
-                core.pool.clean(allocation) == Some(LONG)
-            });
-            let third = (device.take_block(MemoryClass::Shared, LONG))
-                .unwrap_or_else(|error| panic!("{name}: the long bytes a third time: {error}"));
-            assert_eq!(
-                (third.allocation, third.zeroed),
-                (allocation, LONG),
-                "{name}"
-            );
-            assert!(bytes(&third).iter().all(|&byte| byte == 0), "{name}");
-
-            let private = (device.take_block(MemoryClass::Private, LEN))
-                .unwrap_or_else(|error| panic!("{name}: a Private block: {error}"));
-            assert_eq!(private.zeroed, 0, "{name}: a Private block's mark");
-
-            let metrics = counters.metrics();
-            assert_eq!(
-                metrics.free_bytes_zeroed - made.free_bytes_zeroed,
-                3 * ZERO_STEP + LONG,
-                "{name}: the free bytes zeroed"
-            );
-            assert_eq!(
-                metrics.zeroed_bytes_taken - made.zeroed_bytes_taken,
-                LEN + 3 * ZERO_STEP + LONG,
-                "{name}: the marks of the Shared takes"
-            );
-            let per = |nanos: u64, count: u64| nanos as f64 / count.max(1) as f64 / 1e3;
-            println!(
-                "memory: {name}: zero mark; {} Shared allocations zeroed ahead, {:.1} us each; free \
-                 bytes zeroed {} in {:.1} us per MiB",
-                metrics.allocations_zeroed,
-                per(metrics.allocation_zeroing_nanos, metrics.allocations_zeroed),
-                metrics.free_bytes_zeroed,
-                per(metrics.free_zeroing_nanos, metrics.free_bytes_zeroed >> 20),
-            );
-
-            // A take that leaves the class's free bytes under 8 MiB: the block-maker thread makes
-            // and zeroes the next allocation. The host pages the process holds, before and after.
-            let resident = || {
-                let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
-                let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
-                Some(pages * 4096)
-            };
-            let (zeroed, before) = (metrics.allocations_zeroed, resident());
-            let low = (device.take_block(MemoryClass::Shared, 2 * LEN))
-                .unwrap_or_else(|error| panic!("{name}: a Shared block: {error}"));
-            assert_eq!(low.zeroed, 2 * LEN, "{name}: the allocation's clean bytes");
-            wait_until("the next allocation zeroed", || {
-                counters.metrics().allocations_zeroed > zeroed
-            });
-            if let (Some(before), Some(after)) = (before, resident()) {
-                println!(
-                    "memory: {name}: zero mark; the next Shared allocation made and zeroed ahead \
-                     of need, 16 MiB: the process's resident bytes went from {before} to {after} \
-                     ({:+} MiB)",
-                    (after as i64 - before as i64) / (1 << 20)
-                );
-            }
-            drop((block, third, private, low));
-            drop(device);
-            wait_until("the teardown", || counters.gauges() == Gauges::default());
-            assert_each_unmapped_once(name, &hook);
-        }
-    }
-
-    /// The block-maker thread starts no zero step while a memset of Shared bytes runs on the
-    /// consumer's thread, so the two never share the memory bus: with a memset held open
-    /// ([`Pool::fill`](crate::memory::Pool::fill)), a long Shared block written and given back
-    /// leaves free bytes not zeroed, the thread holds its step back (counted) and zeroes nothing;
-    /// once the memset ends, the thread zeroes them to their end.
-    #[test]
-    fn every_device_holds_its_zero_steps_while_a_consumer_memset_runs() {
-        const LONG: u64 = 24 << 20;
-        let instance = crate::tests::validation::instance(&[]);
-        let devices = devices_of_the_cfgs_kind(&instance);
-        assert!(!devices.is_empty(), "no device of this cfg's kind");
-        for (name, physical) in &devices {
-            let device = Device::new(physical, DeviceOptions::default())
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let core = device.core();
-            let counters = device.counters();
-            let block = (device.take_block(MemoryClass::Shared, LONG))
-                .unwrap_or_else(|error| panic!("{name}: a long block: {error}"));
-            let (id, allocation) = (block.id, block.allocation);
-            let gauges = counters.gauges();
-            assert!(
-                gauges.shared_allocation_bytes >= LONG + MemoryClass::Shared.block_len()
-                    && gauges.private_allocation_bytes >= MemoryClass::Private.block_len(),
-                "{name}: the long allocation's bytes and each class's first: {gauges:?}"
-            );
-            bytes(&block).fill(0xCD);
-            let before = counters.metrics();
-            let fill = core.pool.fill();
-            device.release_block(block).expect("a release");
-            wait_until("the step held back", || {
-                counters.metrics().zero_steps_held > before.zero_steps_held
-            });
-            thread::sleep(Duration::from_millis(20));
-            assert_eq!(
-                (
-                    core.pool.holds(id),
-                    core.pool.clean(allocation),
-                    counters.metrics().free_bytes_zeroed - before.free_bytes_zeroed
-                ),
-                (true, Some(0), 0),
-                "{name}: no step beside the memset"
-            );
-            drop(fill);
-            wait_until("the free bytes zeroed to their end", || {
-                core.pool.clean(allocation) == Some(LONG)
-            });
-            assert_eq!(
-                counters.metrics().free_bytes_zeroed - before.free_bytes_zeroed,
-                LONG,
-                "{name}: zeroed once the memset ended"
-            );
-            println!(
-                "memory: {name}: zero steps held {} times beside a memset",
-                counters.metrics().zero_steps_held - before.zero_steps_held
-            );
-            drop(device);
-            wait_until("the teardown", || counters.gauges() == Gauges::default());
-        }
-    }
-
     /// The add kernel over `a`, `b` and `out`, committed on `queue` and waited for.
     fn add_into(
         name: &str,
@@ -2170,8 +1914,7 @@ mod on_device {
             let again = (device.take_block(MemoryClass::Private, len))
                 .unwrap_or_else(|error| panic!("{name}: the Private bytes again: {error}"));
             assert_eq!(
-                (again.gpu_address, again.zeroed),
-                (first.gpu_address, 0),
+                again.gpu_address, first.gpu_address,
                 "{name}: the given-back bytes, the first fit"
             );
             let id = again.id;

@@ -101,11 +101,8 @@ impl Device {
     /// `newBufferWithLength:options:` zeroes a new buffer in Metal, and `None` none, for a buffer
     /// placed in a heap, whose memory Metal does not zero, or one whose bytes the consumer writes
     /// itself. An offset at or past the length zeroes nothing. In a Shared block the bytes are
-    /// zeroed through the mapping, before the call returns, but those the block's zero mark still
-    /// covers ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)), which read zero already: a
-    /// buffer lowers the mark to its offset, the consumer's bytes from there on; in a Private
-    /// block by a GPU fill in the
-    /// upload, which is submitted ahead of every command buffer committed after this call and ends
+    /// zeroed through the mapping, before the call returns; in a Private block by a GPU fill in
+    /// the upload, which is submitted ahead of every command buffer committed after this call and ends
     /// with a barrier that orders the fill before every later command (a copy into the buffer
     /// among them), and which holds the block until it completes. The bytes zeroed are counted in
     /// [`Metrics::bytes_zeroed`](crate::Metrics::bytes_zeroed).
@@ -142,30 +139,17 @@ impl Device {
             // SAFETY: `offset` is inside the block.
             Mapping::new(unsafe { mapping.at(offset) })
         });
-        // The buffer's bytes are the consumer's from now; those the block's zero mark covered
-        // read zero already.
-        let clean = block.place_at(offset).saturating_sub(offset).min(length);
         if let Some(from) = zero_from.filter(|&from| from < length) {
             match contents {
-                Some(contents) => {
-                    let start = from.max(clean);
-                    // No zero step of the block-maker thread runs beside the memset.
-                    let fill = self.core().pool.fill();
-                    // SAFETY: `start..length` lies in the new buffer, whose range is in the block.
-                    unsafe {
-                        (contents.get().as_ptr())
-                            .add(start as usize)
-                            .write_bytes(0, (length - start) as usize)
-                    };
-                    drop(fill);
-                    self.core().counters.zeroed(length - start);
-                    self.core().counters.zeroed_used(start - from);
-                }
-                None => {
-                    (self.core().work).zero(self.core(), &block, offset + from, end)?;
-                    self.core().counters.zeroed(length - from);
-                }
+                // SAFETY: `from..length` lies in the new buffer, whose range is in the block.
+                Some(contents) => unsafe {
+                    (contents.get().as_ptr())
+                        .add(from as usize)
+                        .write_bytes(0, (length - from) as usize)
+                },
+                None => (self.core().work).zero(self.core(), &block, offset + from, end)?,
             }
+            self.core().counters.zeroed(length - from);
         }
         Ok(self.buffer(block, offset, length, contents, None))
     }
@@ -246,8 +230,6 @@ impl Device {
                 Some((copy_block, copy_offset))
             }
         };
-        // The consumer's bytes are its own to write: the block's zero mark stops before them.
-        block.place_at(offset);
         // SAFETY: `offset` is inside the block.
         let contents = Some(Mapping::new(unsafe { mapping.at(offset) }));
         let Some((copy_block, copy_offset)) = copy else {
@@ -297,9 +279,8 @@ impl Device {
     /// `newBufferWithLength:options:`, for `length` bytes at `offset` of a Private block the
     /// consumer holds, where the consumer places such a buffer.
     ///
-    /// What differs: the consumer asks, and the runtime infers nothing. A take zeroes no Private
-    /// block ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed) is 0 for one), and this zeroes only
-    /// the range named. The range is zeroed by a GPU fill in the upload, as
+    /// What differs: the consumer asks, and the runtime infers nothing. A take zeroes no block,
+    /// and this zeroes only the range named. The range is zeroed by a GPU fill in the upload, as
     /// [`Device::new_buffer`]'s zeroing of a Private buffer is: submitted ahead of every command
     /// buffer committed after this call, ending with a barrier that orders the fill before every
     /// later command, and holding the block until it completes. The call never waits for the

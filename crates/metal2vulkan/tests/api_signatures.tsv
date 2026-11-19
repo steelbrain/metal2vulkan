@@ -2257,7 +2257,6 @@ field	metal2vulkan-rt::BlockInfo.gpu_address	pub gpu_address: u64
 field	metal2vulkan-rt::BlockInfo.id	pub id: BlockId
 field	metal2vulkan-rt::BlockInfo.len	pub len: u64
 field	metal2vulkan-rt::BlockInfo.offset	pub offset: u64
-field	metal2vulkan-rt::BlockInfo.zeroed	pub zeroed: u64
 field	metal2vulkan-rt::BufferLayout.bytes_per_image	pub bytes_per_image: u64
 field	metal2vulkan-rt::BufferLayout.bytes_per_row	pub bytes_per_row: u64
 field	metal2vulkan-rt::BufferLayout.offset	pub offset: u64
@@ -2346,11 +2345,9 @@ field	metal2vulkan-rt::IndexGrant.class	pub class: IndexClass
 field	metal2vulkan-rt::IndexGrant.count	pub count: u32
 field	metal2vulkan-rt::IndexGrant.first	pub first: u32
 field	metal2vulkan-rt::Metrics.allocation_map_refusals	pub allocation_map_refusals: u64
-field	metal2vulkan-rt::Metrics.allocation_zeroing_nanos	pub allocation_zeroing_nanos: u64
 field	metal2vulkan-rt::Metrics.allocations_freed	pub allocations_freed: u64
 field	metal2vulkan-rt::Metrics.allocations_mapped	pub allocations_mapped: u64
 field	metal2vulkan-rt::Metrics.allocations_mapped_on_takes	pub allocations_mapped_on_takes: u64
-field	metal2vulkan-rt::Metrics.allocations_zeroed	pub allocations_zeroed: u64
 field	metal2vulkan-rt::Metrics.attachment_read_copies	pub attachment_read_copies: u64
 field	metal2vulkan-rt::Metrics.attachment_read_copy_bytes	pub attachment_read_copy_bytes: u64
 field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
@@ -2379,8 +2376,6 @@ field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_n
 field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.forced_flushes_across_queues	pub forced_flushes_across_queues: u64
-field	metal2vulkan-rt::Metrics.free_bytes_zeroed	pub free_bytes_zeroed: u64
-field	metal2vulkan-rt::Metrics.free_zeroing_nanos	pub free_zeroing_nanos: u64
 field	metal2vulkan-rt::Metrics.groups_beside_another_queue	pub groups_beside_another_queue: u64
 field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
@@ -2408,10 +2403,6 @@ field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-rt::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
 field	metal2vulkan-rt::Metrics.upload_waits	pub upload_waits: u64
 field	metal2vulkan-rt::Metrics.waits_behind_counter	pub waits_behind_counter: u64
-field	metal2vulkan-rt::Metrics.zero_steps_held	pub zero_steps_held: u64
-field	metal2vulkan-rt::Metrics.zeroed_bytes_freed	pub zeroed_bytes_freed: u64
-field	metal2vulkan-rt::Metrics.zeroed_bytes_taken	pub zeroed_bytes_taken: u64
-field	metal2vulkan-rt::Metrics.zeroed_bytes_used	pub zeroed_bytes_used: u64
 field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device
 field	metal2vulkan-rt::RawDevice.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice

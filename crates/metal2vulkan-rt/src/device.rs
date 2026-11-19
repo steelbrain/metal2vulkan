@@ -645,9 +645,8 @@ impl Device {
     /// ([`BlockInfo::allocation`](crate::BlockInfo::allocation),
     /// [`BlockInfo::offset`](crate::BlockInfo::offset)).
     ///
-    /// It is a free range of the class's allocations: the first that fits whose bytes are all
-    /// zeroed, else the first that fits, in the order the allocations were made, with no Vulkan
-    /// call. An allocation longer than [`MemoryClass::block_len`] (16 MiB), a long one, which a
+    /// It is a free range of the class's allocations: the first that fits, in the order the
+    /// allocations were made, with no Vulkan call. An allocation longer than [`MemoryClass::block_len`] (16 MiB), a long one, which a
     /// longer take made for itself, serves only takes of its own length. Where no free range fits,
     /// it is the start of an allocation made in this call, of 16 MiB or the block's length where
     /// that is longer, whose rest later blocks share, which [`BlockMappings::map`] maps before the
@@ -655,14 +654,10 @@ impl Device {
     /// caller's path while the class's free bytes are fewer than 8 MiB, so a take that leaves more
     /// free sets nothing off beside the consumer's next calls.
     ///
-    /// A block's bytes are undefined, new or taken again, past its zero mark
-    /// ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)): how many of its first bytes the runtime
-    /// zeroed itself, on the block-maker thread, and nothing held since. The block-maker thread
-    /// zeroes each Shared allocation it makes ahead of need before any take lands in it, and the
-    /// free Shared bytes blocks gave back, in steps of 256 KiB; a take that no other free range
-    /// fits waits at most for the step that runs, never for the rest. A Private block's mark is 0
-    /// ([`Device::zero_block_range`] zeroes a range of one ahead of the next commit). Bytes past
-    /// the mark are the consumer's to zero where Metal owes zeros. A buffer reads zero where
+    /// A block's bytes are undefined, new or taken again: the runtime zeroes nothing ahead of
+    /// need. They are the consumer's to zero where Metal owes zeros
+    /// ([`Device::zero_block_range`] zeroes a range of a Private block ahead of the next commit).
+    /// A buffer reads zero where
     /// [`Device::new_buffer`] zeroes its range, as `newBufferWithLength:options:` does in Metal;
     /// Metal is silent on the bytes of a placement heap's memory and of a texture placed there.
     ///

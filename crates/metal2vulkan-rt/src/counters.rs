@@ -232,15 +232,7 @@ struct Atomics {
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
     bytes_zeroed: AtomicU64,
-    zeroed_bytes_used: AtomicU64,
-    allocations_zeroed: AtomicU64,
-    allocation_zeroing_nanos: AtomicU64,
-    free_bytes_zeroed: AtomicU64,
-    zero_steps_held: AtomicU64,
-    free_zeroing_nanos: AtomicU64,
-    zeroed_bytes_taken: AtomicU64,
     takes_from_free_ranges: AtomicU64,
-    zeroed_bytes_freed: AtomicU64,
     block_zero_fills: AtomicU64,
     block_zero_fill_bytes: AtomicU64,
     cache_bytes_written: AtomicU64,
@@ -512,31 +504,6 @@ impl Counters {
         self.atomics.bytes_zeroed.fetch_add(bytes, Relaxed);
     }
 
-    /// `bytes` of a new Shared buffer owed zeros that its block's zero mark covered, so its
-    /// memset skipped them ([`Metrics::zeroed_bytes_used`]).
-    pub(crate) fn zeroed_used(&self, bytes: u64) {
-        self.atomics.zeroed_bytes_used.fetch_add(bytes, Relaxed);
-    }
-
-    /// A Shared allocation zeroed ahead of need, in `nanos` ([`Metrics::allocations_zeroed`]).
-    pub(crate) fn zeroed_ahead(&self, nanos: u64) {
-        let a = &self.atomics;
-        a.allocations_zeroed.fetch_add(1, Relaxed);
-        a.allocation_zeroing_nanos.fetch_add(nanos, Relaxed);
-    }
-
-    /// A zero step held back for a consumer memset ([`Metrics::zero_steps_held`]).
-    pub(crate) fn zero_step_held(&self) {
-        self.atomics.zero_steps_held.fetch_add(1, Relaxed);
-    }
-
-    /// A step of free bytes zeroed, `bytes` in `nanos` ([`Metrics::free_bytes_zeroed`]).
-    pub(crate) fn zeroed_free(&self, bytes: u64, nanos: u64) {
-        let a = &self.atomics;
-        a.free_bytes_zeroed.fetch_add(bytes, Relaxed);
-        a.free_zeroing_nanos.fetch_add(nanos, Relaxed);
-    }
-
     /// A take carved from a long allocation made for another take, of a Shared one where `shared`
     /// ([`Metrics::shared_long_reuses`]).
     pub(crate) fn long_reuse(&self, shared: bool) {
@@ -566,17 +533,9 @@ impl Counters {
         self.atomics.allocation_map_refusals.fetch_add(1, Relaxed);
     }
 
-    /// A take carved from a free range, whose zero mark is `bytes`
-    /// ([`Metrics::takes_from_free_ranges`], [`Metrics::zeroed_bytes_taken`]).
-    pub(crate) fn carved(&self, bytes: u64) {
-        let a = &self.atomics;
-        a.takes_from_free_ranges.fetch_add(1, Relaxed);
-        a.zeroed_bytes_taken.fetch_add(bytes, Relaxed);
-    }
-
-    /// `bytes` zeroed and then freed before a take ([`Metrics::zeroed_bytes_freed`]).
-    pub(crate) fn zeroed_freed(&self, bytes: u64) {
-        self.atomics.zeroed_bytes_freed.fetch_add(bytes, Relaxed);
+    /// A take carved from a free range ([`Metrics::takes_from_free_ranges`]).
+    pub(crate) fn carved(&self) {
+        self.atomics.takes_from_free_ranges.fetch_add(1, Relaxed);
     }
 
     /// A zero fill of `bytes` the consumer asked of a Private block
@@ -717,15 +676,7 @@ impl Counters {
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
             bytes_zeroed: a.bytes_zeroed.load(Relaxed),
-            zeroed_bytes_used: a.zeroed_bytes_used.load(Relaxed),
-            allocations_zeroed: a.allocations_zeroed.load(Relaxed),
-            allocation_zeroing_nanos: a.allocation_zeroing_nanos.load(Relaxed),
-            free_bytes_zeroed: a.free_bytes_zeroed.load(Relaxed),
-            free_zeroing_nanos: a.free_zeroing_nanos.load(Relaxed),
-            zero_steps_held: a.zero_steps_held.load(Relaxed),
-            zeroed_bytes_taken: a.zeroed_bytes_taken.load(Relaxed),
             takes_from_free_ranges: a.takes_from_free_ranges.load(Relaxed),
-            zeroed_bytes_freed: a.zeroed_bytes_freed.load(Relaxed),
             block_zero_fills: a.block_zero_fills.load(Relaxed),
             block_zero_fill_bytes: a.block_zero_fill_bytes.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
@@ -871,45 +822,13 @@ pub struct Metrics {
     pub bytes_copied: u64,
     /// Bytes of new buffers zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s from its
     /// `zero_from` to the buffer's end, and a Managed buffer's device copy's past its copied bytes
-    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)), less the bytes of a
-    /// Shared buffer that its block's zero mark still covered ([`BlockInfo::zeroed`]), which read
-    /// zero already.
-    ///
-    /// [`BlockInfo::zeroed`]: crate::BlockInfo::zeroed
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
     pub bytes_zeroed: u64,
-    /// The bytes of new Shared buffers owed zeros that their blocks' zero marks covered
-    /// ([`BlockInfo::zeroed`]), so the buffers' memsets skipped them: the runtime's zeroing that
-    /// a buffer used, against [`bytes_zeroed`](Self::bytes_zeroed), the consumer's thread's.
-    ///
-    /// [`BlockInfo::zeroed`]: crate::BlockInfo::zeroed
-    pub zeroed_bytes_used: u64,
-    /// Shared allocations the runtime zeroed whole ahead of need, before any take landed in them:
-    /// the block-maker thread's and each device's first. A zero mark ([`BlockInfo::zeroed`]) of a
-    /// block in one counts those bytes.
-    ///
-    /// [`BlockInfo::zeroed`]: crate::BlockInfo::zeroed
-    pub allocations_zeroed: u64,
-    /// The nanoseconds of [`host_time`](crate::host_time) that zeroing took, in total.
-    pub allocation_zeroing_nanos: u64,
-    /// Free Shared bytes, given back by blocks, that the block-maker thread zeroed, in steps of
-    /// 256 KiB from the front of each allocation's first free bytes not zeroed.
-    pub free_bytes_zeroed: u64,
-    /// The nanoseconds of [`host_time`](crate::host_time) those steps took, in total.
-    pub free_zeroing_nanos: u64,
-    /// Times the block-maker thread held a zero step back because a memset of Shared bytes ran
-    /// on the consumer's thread ([`Device::new_buffer`](crate::Device::new_buffer)'s zeroing): it
-    /// starts the step once the memset ends, so the two do not share the memory bus.
-    pub zero_steps_held: u64,
-    /// The zero marks of every take, summed: the bytes the takes found zeroed.
-    pub zeroed_bytes_taken: u64,
     /// Takes carved from a free range of an allocation already made: under the pool's lock, with
     /// no Vulkan call and no call to the consumer's hook. A take that no free range fits makes an
     /// allocation instead ([`consumer_allocations`](Self::consumer_allocations),
     /// [`allocations_mapped_on_takes`](Self::allocations_mapped_on_takes)).
     pub takes_from_free_ranges: u64,
-    /// Bytes the runtime zeroed that an idle allocation's free gave back before any take found
-    /// them: its clean bytes.
-    pub zeroed_bytes_freed: u64,
     /// Zero fills the consumer asked of Private blocks
     /// ([`Device::zero_block_range`](crate::Device::zero_block_range)).
     pub block_zero_fills: u64,
