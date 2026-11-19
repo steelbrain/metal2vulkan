@@ -16,6 +16,15 @@ device against the floor below.
   `VK_KHR_portability_enumeration`, it is enabled and portability devices are listed too, each
   checked against the floor as any other. `Instance::extensions` lists those enabled.
   `Instance::physical_devices` lists the physical devices in the loader's order.
+- `Instance::with_drivers` (unsafe) is `Instance::new` with the consumer's own Vulkan drivers, for
+  a consumer that ships its driver (on macOS, Mesa's Mac driver in its bundle). Each is given by
+  its `vkGetInstanceProcAddr`: for a driver built for the Vulkan loader, the
+  `vk_icdGetInstanceProcAddr` it exports. The instance enables `VK_LUNARG_direct_driver_loading`
+  and gives the loader the list in its exclusive mode, so the loader loads those drivers alone,
+  none the system installed or its variables name; where the loader does not offer the
+  extension, it refuses with `Error::NoDirectDriverLoading`. An extension is enabled where the
+  loader or one of the drivers lists it. The runtime searches for no driver, reads no variable
+  and names none: the consumer loads the library and keeps it loaded while the instance lives.
 - `Device::new` checks a physical device against the floor and makes one `VkDevice`. Every
   command queue, every guest process and the compositor share it. It takes the floor's queue
   family, the first that does graphics and compute: one queue for the runtime, and a second for

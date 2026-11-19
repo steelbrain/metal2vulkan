@@ -328,6 +328,12 @@ loader at its OS's directory; the leg's note gives the layer's version (`layer`)
 the layer says so there, which is a problem of the leg, and points the loader at no layer, so its
 device tests fail. The harness's timing jobs run without the layer.
 
+Where a job names a Vulkan driver's library in `M2V_DIRECT_DRIVER` (on macOS, Mesa's Mac driver,
+`libvulkan_kosmickrisp.dylib`), `metal2vulkan-rt`'s device tests load it themselves and give it
+to the loader alone through `Instance::with_drivers`, as a consumer that ships its driver does;
+the loader's `VK_DRIVER_FILES` and its own search then go unused, and each test's output says
+`direct driver PATH`. Elsewhere the job's `VK_DRIVER_FILES` chooses the driver.
+
 ### Records and rules
 
 A test records a value by printing one line on its standard output; the matrix collects the lines
