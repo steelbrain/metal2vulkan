@@ -465,7 +465,15 @@ between, `external_writes_done` comes first, as above.
   three rows up (alu and long_4cb 14%, image_filter 7.6%) and three down (zero_products 18%,
   vote_loop 9%, frame_5cb 7%). There a change in the code that runs before an otherwise identical
   loop moves the kernel by -18% to +14%, by a mechanism not shown: not the code's placement, not
-  the instruction count, not the thread payload and not register numbers. In an earlier probe of
+  the instruction count, not the thread payload and not register numbers. ANV's compiler has no
+  64-bit integer add on Gen12, so each access through an address costs, beyond a binding-table
+  access (the old runtime's form), a compare for the carry, an add of the high word and four
+  moves that pack the address into the message, and the bias one 32-bit add more: the particle
+  kernel's loop, which reads once an iteration, is 31 instructions there against the old
+  runtime's 24. That kernel alone, back to back, takes 1.26 times as long per dispatch as a native
+  Vulkan program of the same work and 1.17 times as long as the old runtime's (502.0 against 397.0
+  and 429.5 microseconds), its output bytes equal to both. Intel's Windows driver on Gen12 is
+  unaudited. In an earlier probe of
   constant reads, 32-bit offsets bought 4.3 to 6.6% on AMD cards and more on the RTX 3090, where a
   64-bit sum was 8.9% slower on the RX 7900 XTX. A longer buffer is `Refusal::BufferTooLong`.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
