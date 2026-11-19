@@ -95,9 +95,9 @@ use metal2vulkan::metal::{
 use metal2vulkan_runtime::Degradation;
 
 use super::tessellation_sweeps::{
-    air_inputs, domain_pipeline, grid_record, load, medium_layout, quad_factors, raw_quad_factors,
-    read_medium_marks, shaders_of, tessellation_notices, Domain, FINITE, MEDIUM_GRID, MEDIUM_MAX,
-    QUAD_FACTOR_BYTES, REGION_BYTES,
+    air_inputs, domain_pipeline, drawn_or_refused, grid_record, load, medium_layout, quad_factors,
+    raw_quad_factors, read_medium_marks, refused_pass, shaders_of, tessellation_notices, Domain,
+    FINITE, MEDIUM_GRID, MEDIUM_MAX, QUAD_FACTOR_BYTES, REGION_BYTES,
 };
 
 // ---- The vocabulary every case of the family states its cells in ------------------------------
@@ -325,16 +325,17 @@ impl Cross {
         for (at, leg) in self.legs.iter().enumerate() {
             let site = leg.path.join("/");
             let region = read_medium_marks(side, sites, &site, held.marks, self.region(at))?;
-            let mut leaves = vec![Node::leaf(
+            let marks = Node::leaf(
                 "marks",
                 Observed::bytes(region, medium_layout(self.region(at))),
-            )];
-            if let Some(pass) = encoded.iter().position(|held| *held == at) {
-                if let Some(Some(failure)) = outcome.refused.get(pass) {
-                    leaves.push(Node::leaf("pass", Observed::value(failure.recorded())));
-                }
-            }
-            answered.push((leg.path.clone(), leaves));
+            );
+            let name = leg.path[leg.path.len() - 1];
+            let pass = encoded.iter().position(|held| *held == at);
+            let node = drawn_or_refused(
+                Node::branch(name, vec![marks]),
+                refused_pass(&outcome, pass),
+            );
+            answered.push((leg.path.clone(), node));
         }
         for node in grouped(0, &answered) {
             sites.push(node);
@@ -351,9 +352,9 @@ struct Bound {
 }
 
 /// The branches of `answered`, which all share their paths' first `level` names, grouped by the
-/// name at `level`: a leg whose path ends there holds its own leaves, and one that goes deeper
-/// hangs under a branch the legs beside it share.
-fn grouped(level: usize, answered: &[(Vec<&'static str>, Vec<Node>)]) -> Vec<Node> {
+/// name at `level`: a leg whose path ends there is its own node, named so, and one that goes
+/// deeper hangs under a branch the legs beside it share.
+fn grouped(level: usize, answered: &[(Vec<&'static str>, Node)]) -> Vec<Node> {
     let mut out = Vec::new();
     let mut at = 0;
     while at < answered.len() {
@@ -363,11 +364,10 @@ fn grouped(level: usize, answered: &[(Vec<&'static str>, Vec<Node>)]) -> Vec<Nod
             end += 1;
         }
         let group = &answered[at..end];
-        let children = match level + 1 == group[0].0.len() {
+        out.push(match level + 1 == group[0].0.len() {
             true => group[0].1.clone(),
-            false => grouped(level + 1, group),
-        };
-        out.push(Node::branch(name, children));
+            false => Node::branch(name, grouped(level + 1, group)),
+        });
         at = end;
     }
     out

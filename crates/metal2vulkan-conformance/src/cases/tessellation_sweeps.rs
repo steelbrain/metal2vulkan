@@ -142,7 +142,9 @@
 //! validation refuses, so this family adds no refusal-surface row.
 
 use crate::allowance::Allowance;
-use crate::case::{call, made, probe, Abort, Case, Failure, Handle, Input, MetalSource, Side};
+use crate::case::{
+    call, made, probe, Abort, Case, Failure, Handle, Input, MetalSource, PassOutcome, Side,
+};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -544,16 +546,12 @@ impl Case for PartitionModes {
         for (at, &mode) in modes.iter().enumerate() {
             let base = at as u64 * u64::from(REGION_BYTES);
             let region = read_marks(side, sites, partition_site(mode), marks, base)?;
-            let mut node = Node::branch(partition_site(mode), Vec::new()).with(Node::leaf(
+            let node = Node::branch(partition_site(mode), Vec::new()).with(Node::leaf(
                 "marks",
                 Observed::bytes(region, marks_layout(base)),
             ));
-            if let Some(pass) = drawn.iter().position(|held| *held == at) {
-                if let Some(Some(failure)) = outcome.refused.get(pass) {
-                    node = node.with(Node::leaf("pass", Observed::value(failure.recorded())));
-                }
-            }
-            nodes.push(node);
+            let pass = drawn.iter().position(|held| *held == at);
+            nodes.push(drawn_or_refused(node, refused_pass(&outcome, pass)));
         }
         sites.push(Node::branch(self.domain.patch_type(), nodes));
         Ok(())
@@ -693,14 +691,11 @@ impl Case for EdgeFactors {
         for (at, (site, _)) in FACTOR_SITES.iter().enumerate() {
             let base = at as u64 * u64::from(REGION_BYTES);
             let region = read_marks(side, sites, site, marks, base)?;
-            let mut node = Node::branch(*site, Vec::new()).with(Node::leaf(
+            let node = Node::branch(*site, Vec::new()).with(Node::leaf(
                 "marks",
                 Observed::bytes(region, marks_layout(base)),
             ));
-            if let Some(Some(failure)) = outcome.refused.get(at) {
-                node = node.with(Node::leaf("pass", Observed::value(failure.recorded())));
-            }
-            sites.push(node);
+            sites.push(drawn_or_refused(node, refused_pass(&outcome, Some(at))));
         }
         Ok(())
     }
@@ -932,7 +927,7 @@ impl Case for NonFiniteFactors {
         // Each value is one branch holding the placements asked of it, and the control — which has
         // no placement — holds its marks directly, so the transcript says which of Metal's two
         // rules each answer is of.
-        let mut groups: Vec<(&'static str, Vec<Node>)> = Vec::new();
+        let mut groups: Vec<Node> = Vec::new();
         for (at, cell) in cells.iter().enumerate() {
             let base = at as u64 * u64::from(REGION_BYTES);
             let site = match cell.placement {
@@ -940,24 +935,24 @@ impl Case for NonFiniteFactors {
                 Some(placement) => format!("{}/{}", cell.value, placement.site()),
             };
             let region = read_medium_marks(side, sites, &site, marks, base)?;
-            let mut leaves = vec![Node::leaf(
+            let leaves = vec![Node::leaf(
                 "marks",
                 Observed::bytes(region, medium_layout(base)),
             )];
-            if let Some(Some(failure)) = outcome.refused.get(at) {
-                leaves.push(Node::leaf("pass", Observed::value(failure.recorded())));
-            }
-            let held = match cell.placement {
-                None => leaves,
-                Some(placement) => vec![Node::branch(placement.site(), leaves)],
-            };
-            match groups.last_mut() {
-                Some((value, nodes)) if *value == cell.value => nodes.extend(held),
-                _ => groups.push((cell.value, held)),
+            let refused = refused_pass(&outcome, Some(at));
+            match cell.placement {
+                None => groups.push(drawn_or_refused(Node::branch(cell.value, leaves), refused)),
+                Some(placement) => {
+                    let held = drawn_or_refused(Node::branch(placement.site(), leaves), refused);
+                    match groups.last_mut() {
+                        Some(group) if group.name == cell.value => group.children.push(held),
+                        _ => groups.push(Node::branch(cell.value, vec![held])),
+                    }
+                }
             }
         }
-        for (value, nodes) in groups {
-            sites.push(Node::branch(value, nodes));
+        for group in groups {
+            sites.push(group);
         }
         Ok(())
     }
@@ -1214,17 +1209,13 @@ impl Case for FactorSteps {
                 let base = u64::from(Self::region(at, leg) * REGION_BYTES);
                 let site = format!("{}/{}", step.name(), named.site);
                 let region = read_coarse_marks(side, sites, &site, marks, base)?;
-                let mut held = Node::branch(named.site, Vec::new()).with(Node::leaf(
+                let held = Node::branch(named.site, Vec::new()).with(Node::leaf(
                     "marks",
                     Observed::bytes(region, coarse_layout(base)),
                 ));
-                if pipelines[at].is_some() {
-                    if let Some(Some(failure)) = outcome.refused.get(pass) {
-                        held = held.with(Node::leaf("pass", Observed::value(failure.recorded())));
-                    }
-                    pass += 1;
-                }
-                node = node.with(held);
+                let drawn = pipelines[at].is_some().then_some(pass);
+                pass += usize::from(drawn.is_some());
+                node = node.with(drawn_or_refused(held, refused_pass(&outcome, drawn)));
             }
             sites.push(node);
         }
@@ -1597,16 +1588,12 @@ impl Case for FactorScales {
                 }
                 let base = at as u64 * u64::from(REGION_BYTES);
                 let region = read_medium_marks(side, sites, cell.site, marks, base)?;
-                let mut node = Node::branch(cell.site, Vec::new()).with(Node::leaf(
+                let node = Node::branch(cell.site, Vec::new()).with(Node::leaf(
                     "marks",
                     Observed::bytes(region, medium_layout(base)),
                 ));
-                if let Some(pass) = drawn.iter().position(|held| *held == at) {
-                    if let Some(Some(failure)) = outcome.refused.get(pass) {
-                        node = node.with(Node::leaf("pass", Observed::value(failure.recorded())));
-                    }
-                }
-                nodes.push(node);
+                let pass = drawn.iter().position(|held| *held == at);
+                nodes.push(drawn_or_refused(node, refused_pass(&outcome, pass)));
             }
             sites.push(Node::branch(Self::pipeline_site(enabled), nodes));
         }
@@ -1630,6 +1617,24 @@ pub(super) fn medium_layout(offset: u64) -> ByteLayout {
         image_pitch: MEDIUM_WORDS * 4,
         images: 1,
         gaps: Gaps::Compared,
+    }
+}
+
+/// Our refusal of the pass a leg was drawn by, `pass` being its place among the passes the run
+/// encoded where it was encoded at all.
+pub(super) fn refused_pass(outcome: &PassOutcome, pass: Option<usize>) -> Option<&Failure> {
+    outcome.refused.get(pass?)?.as_ref()
+}
+
+/// A leg's site as our side answers it: `node`, the leg's answer, or where our side refused the
+/// pass that drew it, that refusal as the site's own value with nothing under it. A refused pass
+/// has no answer: what a read-back holds after it is the buffer's starting bytes, which no site
+/// records. The comparison reads our refusal at a site whose Metal answer is a tree as that
+/// refusal alone and does not descend under it, so the leg's one row is the refusal's.
+pub(super) fn drawn_or_refused(node: Node, refused: Option<&Failure>) -> Node {
+    match refused {
+        Some(failure) => Node::leaf(node.name, Observed::value(failure.recorded())),
+        None => node,
     }
 }
 
@@ -1966,12 +1971,8 @@ impl Case for PatchIndices {
                     Observed::bytes(bytes.clone(), patch_words_layout(base)),
                 )),
             };
-            if let Some(pass) = drawn.iter().position(|held| *held == at) {
-                if let Some(Some(failure)) = outcome.refused.get(pass) {
-                    node = node.with(Node::leaf("pass", Observed::value(failure.recorded())));
-                }
-            }
-            sites.push(node);
+            let pass = drawn.iter().position(|held| *held == at);
+            sites.push(drawn_or_refused(node, refused_pass(&outcome, pass)));
         }
         Ok(())
     }
@@ -2137,6 +2138,44 @@ mod tests {
     #[test]
     fn the_four_steps_are_every_factor_step_function() {
         assert_eq!(STEP_FUNCTIONS.to_vec(), Step::ALL.to_vec());
+    }
+
+    /// A leg whose pass our side refused answers with the refusal at the leg's own site and no
+    /// marks: the comparison holds that one refusal and nothing under it. The marks read back after
+    /// a refused pass are the buffer's starting bytes, and recorded they made a row for every cell
+    /// Metal marked. A leg whose pass ran keeps its marks.
+    #[test]
+    fn a_refused_pass_is_the_legs_answer_and_no_marks() {
+        use crate::allowance::Offered;
+        use crate::transcript::Transcript;
+        let bytes = MEDIUM_WORDS as usize * 4;
+        let leg = |marks: Vec<u8>| {
+            Node::branch("factor-1", Vec::new()).with(Node::leaf(
+                "marks",
+                Observed::bytes(marks, medium_layout(0)),
+            ))
+        };
+        let metal = Transcript::new(vec![leg(vec![1; bytes])]);
+        let failure = Failure::named(
+            "Error::Unsupported",
+            "a render pass with NoAttachment is not built",
+        );
+        let ours = Transcript::new(vec![drawn_or_refused(leg(vec![0; bytes]), Some(&failure))]);
+        let found = crate::compare::compare(&metal, &ours, &[], Offered::notices(&[]));
+        assert!(found.divergences.is_empty(), "{found:?}");
+        let refused: Vec<&str> = found.refusals.iter().map(|at| at.path.as_str()).collect();
+        assert_eq!(refused, ["case/factor-1"], "{found:?}");
+        assert!(found.refusals[0].ours.contains("NoAttachment"), "{found:?}");
+
+        let drawn = drawn_or_refused(leg(vec![1; bytes]), None);
+        assert!(drawn.child("marks").is_some());
+        let found = crate::compare::compare(
+            &metal,
+            &Transcript::new(vec![drawn]),
+            &[],
+            Offered::notices(&[]),
+        );
+        assert!(found.is_exact(), "{found:?}");
     }
 
     /// The bytes the recording of `case` holds at the leaf `path` (node names from the root,
