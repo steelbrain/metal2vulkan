@@ -1473,7 +1473,7 @@ pub(crate) mod on_device {
                     });
                 }
                 let sent = || device.counters().metrics().submissions - before;
-                within(name, || sent() >= AHEAD + 1);
+                within(name, || sent() > AHEAD);
                 assert_eq!(sent(), AHEAD + 1, "{name}: sent behind the busy work");
                 busy.open();
                 for command_buffer in &held {

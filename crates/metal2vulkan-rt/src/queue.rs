@@ -168,7 +168,7 @@ impl QueueInner {
     /// One of its command buffers ran `nanos` on the GPU: the expected run rises to a longer one
     /// at once and halves toward a shorter one ([`next_run`]).
     pub(crate) fn ran(&self, nanos: u64) {
-        let _ = (self.run).fetch_update(Ordering::Relaxed, Ordering::Relaxed, |run| {
+        let _ = (self.run).try_update(Ordering::Relaxed, Ordering::Relaxed, |run| {
             Some(next_run((run != u64::MAX).then_some(run), nanos))
         });
         self.retired.fetch_add(1, Ordering::Relaxed);
