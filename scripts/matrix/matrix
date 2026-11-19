@@ -347,14 +347,15 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     as in a process of its own. For HARNESS_WARM, a short second run on the same cache follows,
     before the suite's line, and its first-use records are kept under harness-<runtime>-warm/: the
     same first uses with the driver's cache warm. These runs skip the creation rows
-    (results.HARNESS_CREATES): those run alone after them, in results.FIRST_RUNS processes of
-    their own, each timing both runtimes in the same order on a fresh empty driver cache and
-    store, so no row before them moves their times: each creation's first sample on the new
-    runtime is cold, and the old runtime's follows it on the same cache. The first process's
-    output is kept whole, its devices' gauges apart (results.CREATES_APART); of each later one's,
-    only the first
-    samples (results.FIRST_KEEP), which results.harness_budget judges by the median of the
-    processes. Then the rows over their limits (results.RETIME_SELECT, at most
+    (results.HARNESS_CREATES): those run alone after them, in results.FIRST_RUNS rounds, each
+    round one process per runtime, the runtimes' order alternating from round to round, each
+    process on a fresh empty driver cache and store. So a creation's first sample is cold against
+    cold: no row before it, and no work of the other runtime in its process, warms the driver
+    for it (a driver's process-wide setup, paid by whichever runtime makes the process's first
+    pipeline, took one runtime's first state from 16.7 ms cold to 5.3 ms behind the other's on an
+    Iris Xe). The first round's two outputs are kept whole, their devices' gauges apart
+    (results.CREATES_APART); of each later process's, only the first samples
+    (results.FIRST_KEEP), which results.harness_budget judges by the median of the rounds. Then the rows over their limits (results.RETIME_SELECT, at most
     results.RETIME_ROWS, the furthest over first) are each re-timed alone in results.RETIME_PAIRS
     pairs, old then new, then new then old, their times and GPU times kept (results.RETIME_KEEP)
     for results.harness_budget; a frames workload's latency from idle row (results.FROM_IDLE)
@@ -392,17 +393,20 @@ def harness_runs(manifest_dir, command, leg, windows=False):
         sed -n "{rename}"
     done
     for n in $(seq {results.FIRST_RUNS}); do
-      rm -rf "$cache" "$store"
-      cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
-      export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
-{point}      if [ $n -eq 1 ]; then
-        CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime {runtimes} --only {creates} --store {store} 2>&1 |
-          sed "{results.CREATES_APART}" | tee -a "$out/timed"
-      else
-        CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime {runtimes} --only {creates} --store {store} 2>&1 |
-          sed -n "{results.FIRST_KEEP}"
-      fi
-      [ ${{PIPESTATUS[0]}} -eq 0 ] || r=1
+      case $((n % 2)) in 1) order="{" ".join(HARNESS_RUNTIMES)}" ;; *) order="{" ".join(reversed(HARNESS_RUNTIMES))}" ;; esac
+      for runtime in $order; do
+        rm -rf "$cache" "$store"
+        cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
+        export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
+{point}        if [ $n -eq 1 ]; then
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
+            sed "{results.CREATES_APART}" | tee -a "$out/timed"
+        else
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
+            sed -n "{results.FIRST_KEEP}"
+        fi
+        [ ${{PIPESTATUS[0]}} -eq 0 ] || r=1
+      done
     done
     case "{leg}" in
 {limits}

@@ -590,13 +590,14 @@ def past_limit(leg_id, row, gpu=False):
 
 #: The harness's creation rows, by the start of their names. A leg times them apart from the
 #: other rows (the matrix's harness_runs): the process that times the others on both runtimes
-#: skips them, and they run alone after it, in FIRST_RUNS processes of their own, each timing both
-#: runtimes on a fresh driver cache and store, so no row before them moves their times.
+#: skips them, and they run alone after it, in FIRST_RUNS rounds, each round one process per
+#: runtime on a fresh driver cache and store, so no row before them and no work of the other
+#: runtime moves their times: a cold first sample is compared cold against cold.
 HARNESS_CREATES = "create_"
 #: A creation row's first samples (`<row>/first`, `/first_take`, `/next_take`,
 #: `/first_allocation_total`, `/device_first`) are one sample per process, so harness_budget judges
-#: each by the median of FIRST_RUNS processes per runtime: the first process's own record and the
-#: later processes' `harness-first/<row>/<n>/<runtime>`. A first sample alone is never past its
+#: each by the median of FIRST_RUNS rounds' processes per runtime: the first round's own records
+#: and the later rounds' `harness-first/<row>/<n>/<runtime>`. A first sample alone is never past its
 #: limit.
 FIRST_RUNS = 5
 HARNESS_FIRST = "harness-first/"

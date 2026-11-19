@@ -386,19 +386,22 @@ runtimes: those records are judged. A short second run on the same directory and
 `harness-new-warm/<set>/first_use_*`, the same first uses with both warm; they are parked.
 
 Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run alone after them,
-`--only 'create_*'`, in five processes of their own, each timing both runtimes in the same order
-on a fresh empty cache directory and store, so no row before them moves their times: a
-creation's first sample on the new runtime is cold, and the old runtime's follows it on the same
-cache. The first process's records are kept whole, its devices' gauges at drop as `harness-<runtime>/creates/device/...`; of each later process, only the
-creation rows' first samples (`<row>/first`, `/first_call`, `/first_one_thread`, `/first_take`,
-`/next_take`, `/first_allocation_total`, `/device_first`, one sample per process), as
-`harness-first/<row>/<n>/<runtime>`,
-parked for the `time` rule.
+`--only 'create_*'`, in five rounds, each round one process per runtime (`--runtime new`,
+`--runtime old`, the order alternating from round to round), each process on a fresh empty cache
+directory and store. A cold first sample is so compared cold against cold: no row before it, and
+no work of the other runtime in its process, warms the driver for it. On an Iris Xe the driver's
+process-wide setup, paid by whichever runtime makes the process's first pipeline, took the old
+runtime's `create_state/first` from 16.7 ms alone to 5.3 ms behind the new runtime's in one
+process, which a shared process charged to the new runtime alone. The first round's records are
+kept whole, their devices' gauges at drop as `harness-<runtime>/creates/device/...`; of each later
+process, only the creation rows' first samples (`<row>/first`, `/first_call`,
+`/first_one_thread`, `/first_take`, `/next_take`, `/first_allocation_total`, `/device_first`,
+one sample per process), as `harness-first/<row>/<n>/<runtime>`, parked for the `time` rule.
 
 The harness budget compares the two runtimes rather than two commits, apart from the `time` rule
 and the parked records. The old runtime, frozen, is its noise meter: on each GPU, the old
 runtime's time a row is judged on (its GPU time where it is judged on that, a creation row's
-median of five processes) is compared with the same time in the leg's base, the previous round,
+median of five rounds) is compared with the same time in the leg's base, the previous round,
 and a row whose old time moved more than 10% either way is VOID for the round on that GPU: it is
 named on the leg's line and judged on nothing, and its comparison comes only from a re-time in
 one process with both runtimes interleaved. The report shows that move on every row the base has
@@ -438,7 +441,7 @@ is never taken from a measured ratio, and the greater of a row's ceiling and flo
 A listed row fails its leg past its ceiling times 1.03, the noise allowance parity gets, and one
 within that is named on the leg's line. A fix lowers its row's ceiling to the ratio it reaches,
 and a row within 1.03 leaves the list. A creation row's first sample is judged by the ratio of
-the medians of its five processes, the new runtime's over the old's; a first sample alone is
+the medians of its five rounds, the new runtime's over the old's; a first sample alone is
 never past its limit. A compute pipeline state row's `/first` is its creation and one dispatch
 through to completion, one threadgroup of 64 by 1 by 1, the replay streams' commonest compute
 dispatch size (24% of their dispatches), since Metal compiles at the creation and a runtime may
