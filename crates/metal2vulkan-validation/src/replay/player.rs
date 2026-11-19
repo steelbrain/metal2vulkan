@@ -12,6 +12,7 @@ use super::heaps::{
     heap_size, placement_heap, placement_offset, places_buffer, places_texture, recorded_range,
     relay, HeapSplit, Layout, Overlaps, Placements,
 };
+use super::stale::Stale;
 use super::stream::{Call, StreamError, StreamReader};
 use super::texwrites::TexWrites;
 use super::value::{Hash, Value};
@@ -283,6 +284,8 @@ impl From<StreamError> for PlayError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Check {
     pub object: u64,
+    /// The frame it was read in: the presents played before it.
+    pub frame: u64,
     pub sha256: Hash,
     /// The recording's own checksum, where the stream holds one.
     pub recorded: Option<Hash>,
@@ -406,6 +409,9 @@ pub struct Report {
     pub ends: Vec<End>,
     /// The CPU's writes into Managed textures, and those a committed user may still be using.
     pub texture_writes: TextureWrites,
+    /// The GPU's reads of Managed bytes that no announcement took to the GPU copy, as a play that
+    /// keeps two copies holds them (`stale.rs`).
+    pub managed_reads: ManagedReads,
     /// The recorded devices other than the one the guest makes its objects on, whose identity
     /// records the play takes nothing from (`Player::guest_device`).
     pub other_devices: Vec<u64>,
@@ -459,6 +465,71 @@ impl TextureWrites {
             self.pending_textures,
             self.unknown,
         )
+    }
+}
+
+/// One kind of a play's reads of Managed bytes that no announcement took to the GPU copy: the
+/// buffers read, the uses, and the frame of the first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReadClass {
+    pub objects: u64,
+    pub uses: u64,
+    pub first_frame: Option<u64>,
+}
+
+impl ReadClass {
+    fn text(&self) -> String {
+        match self.first_frame {
+            None => "none".to_owned(),
+            Some(frame) => format!(
+                "{} objects, {} uses, first at frame {frame}",
+                self.objects, self.uses
+            ),
+        }
+    }
+}
+
+/// The GPU's reads of a Managed object's bytes that no announcement took to its GPU copy, counted
+/// from the stream alone as a play that keeps two copies holds them (`docs/REPLAY-STREAM.md`,
+/// section 10). The made-with reads (`made_with`) are served: each runtime's GPU copy starts from
+/// the bytes the buffer was made with. The stale ones (`stale`), of bytes the CPU wrote that no
+/// `didModifyRange:` announced, play as recorded on both runtimes: Metal leaves what the GPU reads
+/// there undefined. With no identity record (`no_identity`), a no-copy buffer's writes before its
+/// first use are served and not counted. Where the guest device's identity record keeps one copy,
+/// none is counted (`one_copy`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ManagedReads {
+    pub one_copy: bool,
+    pub no_identity: bool,
+    pub stale: ReadClass,
+    pub made_with: ReadClass,
+}
+
+impl ManagedReads {
+    /// The report's `managed reads` line.
+    pub fn line(&self) -> String {
+        if self.one_copy {
+            return "managed reads on two copies: none counted: the stream's identity record \
+                    keeps one copy"
+                .to_owned();
+        }
+        let first_use = match self.no_identity {
+            true => "; writes before first use served (no identity record)",
+            false => "",
+        };
+        format!(
+            "managed reads on two copies: made-with {}, served; stale {}, played as recorded{first_use}",
+            self.made_with.text(),
+            self.stale.text()
+        )
+    }
+
+    /// The first frame a read of either kind falls in.
+    pub fn first_frame(&self) -> Option<u64> {
+        match (self.stale.first_frame, self.made_with.first_frame) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 }
 
@@ -735,7 +806,10 @@ impl Report {
                 Some(_) => "differs",
             };
             let sha = super::value::hex(&check.sha256);
-            lines.push(format!("check #{} {sha} {verdict}", check.object));
+            lines.push(format!(
+                "check #{} frame {} {sha} {verdict}",
+                check.object, check.frame
+            ));
         }
         for id in &self.ids {
             let played = id
@@ -822,6 +896,7 @@ impl Report {
             ));
         }
         lines.push(self.texture_writes.line());
+        lines.push(self.managed_reads.line());
         lines.push(format!("total{}", counted(&self.total)));
         lines
     }
@@ -987,6 +1062,7 @@ pub struct Player<'b, B: Backend> {
     texwrites: TexWrites,
     /// What texture writes covered in placement heaps (`Report::covered`).
     covers: Covers,
+    stale: Stale,
     /// The live buffers a texture over a surface's plane was made on
     /// (`newTextureWithDescriptor:iosurface:plane:`), which stand for the surfaces' pages. A
     /// runtime may keep the texels apart from the buffer, as the product does: their checks and
@@ -1211,6 +1287,7 @@ impl<'b, B: Backend> Player<'b, B> {
             frame_out: None,
             texwrites: TexWrites::default(),
             covers: Covers::default(),
+            stale: Stale::default(),
             receivers: HashSet::new(),
             placed_sizes: HashMap::new(),
             dump: None,
@@ -1282,6 +1359,7 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         self.report.total = Counts { stream, executed };
         self.report.texture_writes = self.texwrites.counts();
+        self.report.managed_reads = self.stale.counts();
         self.report.covered = self.covers.covers;
         self.report.binding_uncovers = self.covers.binding_uncovers;
         (self.report, ended)
@@ -1616,6 +1694,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 let guest = self.guest_device.is_none_or(|guest| guest == call.receiver);
                 if let (Some(unified), true) = (unified, guest) {
                     self.backend.recorded_unified_memory(unified);
+                    self.stale.identity(unified);
                 }
                 Ok(())
             }
@@ -1675,6 +1754,7 @@ impl<'b, B: Backend> Player<'b, B> {
             "release" => {
                 self.texwrites.released(call.receiver);
                 self.covers.released(call.receiver);
+                self.stale.released(call.receiver);
                 if let Some(dump) = &mut self.dump {
                     dump.buffers.remove(&call.receiver);
                 }
@@ -1764,6 +1844,7 @@ impl<'b, B: Backend> Player<'b, B> {
         pending.committed = true;
         let (queue, signals) = (pending.queue, pending.signals.clone());
         self.texwrites.committed(command_buffer, queue, &signals);
+        (self.stale).committed(command_buffer, self.report.frames.len() as u64);
         self.committed.push(command_buffer);
         self.run(&own_call("commit", command_buffer, 0, &[]))?;
         *self.fixed.entry(COMMITS).or_default() += 1;
@@ -1883,6 +1964,7 @@ impl<'b, B: Backend> Player<'b, B> {
         let backend = &*self.backend;
         let writes = |pipeline, stage| backend.texture_writes(pipeline, stage);
         self.covers.saw(&resolved, offset, size, writes);
+        self.stale.saw(&resolved, self.report.frames.len() as u64);
         let managed = |texture| backend.managed_texture(texture);
         self.texwrites.saw(&resolved, self.position, managed);
         let object = resolved.result;
@@ -2059,6 +2141,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 Value::Blob(hash) => self.blob(stream, hash)?,
                 _ => return Err(invalid("m2v.write of no data")),
             };
+            self.stale.wrote(target, offset, data.len() as u64);
             self.put(target, offset, data)?;
         }
         Ok(())
@@ -2130,6 +2213,7 @@ impl<'b, B: Backend> Player<'b, B> {
         let bytes = self.uncounted(left_out, |player| player.read_back(object))?;
         self.report.checks.push(Check {
             object,
+            frame: self.report.frames.len() as u64,
             sha256: Sha256::digest(&bytes).into(),
             recorded,
             covered: self.covers.covered(object),

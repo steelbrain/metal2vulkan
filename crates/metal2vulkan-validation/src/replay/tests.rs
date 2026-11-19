@@ -2,6 +2,7 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
+use super::compare::compare_plays;
 use super::covers::SlotStage;
 use super::dumps::{compare_dumps, Difference};
 use super::heaps::HeapSplit;
@@ -3084,4 +3085,178 @@ fn the_dump_compare_agrees_on_alike_plays_and_reports_a_dump_one_play_lacks() {
     let comparison = compare_dumps(a.path(), b.path()).unwrap();
     assert_eq!(comparison.only_one, [("cb21-obj3".to_owned(), 'a')]);
     assert!(!comparison.agrees());
+}
+
+/// A Managed buffer descriptor of `length` bytes made with `contents`, a no-copy one where
+/// `no_copy`.
+fn managed_descriptor(length: u64, contents: Value, no_copy: bool) -> [Value; 1] {
+    let managed = Value::List(vec![map(&[("ResourceOptions", Value::Uint(16))])]);
+    let fields = [
+        ("length", Value::Uint(length)),
+        ("options", managed),
+        ("contents", contents),
+        ("noCopy", Value::Bool(no_copy)),
+    ];
+    [map(&fields)]
+}
+
+/// A command buffer of queue #2, `command_buffer`, whose compute encoder `encoder` binds
+/// `buffers`, committed.
+fn bound(
+    w: &mut StreamWriter<File>,
+    command_buffer: u64,
+    encoder: u64,
+    buffers: &[u64],
+) -> std::io::Result<()> {
+    w.call("commandBuffer", 2, command_buffer, &[], &[])?;
+    w.call("computeCommandEncoder", command_buffer, encoder, &[], &[])?;
+    for (at, &buffer) in buffers.iter().enumerate() {
+        let args = [
+            Value::Object(buffer),
+            Value::Uint(0),
+            Value::Uint(at as u64),
+        ];
+        w.call("setBuffer:offset:atIndex:", encoder, 0, &args, &[])?;
+    }
+    w.call("endEncoding", encoder, 0, &[], &[])?;
+    w.call("commit", command_buffer, 0, &[], &[])
+}
+
+/// The GPU reads of Managed bytes no announcement took to the GPU copy, counted from the stream
+/// alone, under a two-copy identity record: a copied buffer's contents read twice before any
+/// announcement (made-with, served), and a no-copy buffer's write read once before its
+/// `didModifyRange:` and once after (stale once).
+#[test]
+fn a_two_copy_stream_s_managed_reads_are_counted_by_kind() {
+    let mut kept = Kept::default();
+    let write = [Value::Uint(0), Value::Bytes(vec![7; 4])];
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let identity = [("hasUnifiedMemory", Value::Bool(false))];
+        w.call("m2v.deviceIdentity", 1, 0, &[], &identity)?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let copied = managed_descriptor(4, Value::Bytes(vec![9; 4]), false);
+        w.call("newBufferWithDescriptor:", 1, 3, &copied, &[])?;
+        let no_copy = managed_descriptor(4, Value::Nil, true);
+        w.call("newBufferWithDescriptor:", 1, 4, &no_copy, &[])?;
+        w.call("m2v.write", 4, 0, &write, &[])?;
+        bound(w, 10, 11, &[3, 4])?;
+        w.call("m2v.present", 0, 0, &[], &[])?;
+        let whole = map(&[("location", Value::Uint(0)), ("length", Value::Uint(4))]);
+        w.call("didModifyRange:", 4, 0, &[whole], &[])?;
+        bound(w, 12, 13, &[3, 4])
+    });
+    ended.unwrap();
+    let reads = report.managed_reads;
+    assert_eq!((reads.made_with.objects, reads.made_with.uses), (1, 2));
+    assert_eq!((reads.stale.objects, reads.stale.uses), (1, 1));
+    let line = "managed reads on two copies: made-with 1 objects, 2 uses, first at frame 0, \
+                served; stale 1 objects, 1 uses, first at frame 0, played as recorded";
+    assert!(
+        report.lines().iter().any(|l| l == line),
+        "{:?}",
+        report.lines()
+    );
+}
+
+/// With no identity record, a no-copy Managed buffer's writes before the command buffer that
+/// first names it commits are served, not stale; a write after that commit is stale. With a
+/// one-copy identity record nothing is counted.
+#[test]
+fn a_no_copy_buffer_s_writes_before_first_use_are_not_stale_with_no_identity() {
+    let write = [Value::Uint(0), Value::Bytes(vec![7; 4])];
+    let stream = |w: &mut StreamWriter<File>, identity: Option<bool>| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        if let Some(unified) = identity {
+            let answers = [("hasUnifiedMemory", Value::Bool(unified))];
+            w.call("m2v.deviceIdentity", 1, 0, &[], &answers)?;
+        }
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let no_copy = managed_descriptor(4, Value::Nil, true);
+        w.call("newBufferWithDescriptor:", 1, 4, &no_copy, &[])?;
+        w.call("m2v.write", 4, 0, &write, &[])?;
+        bound(w, 10, 11, &[4])?;
+        w.call("m2v.present", 0, 0, &[], &[])?;
+        w.call("m2v.write", 4, 0, &write, &[])?;
+        bound(w, 12, 13, &[4])
+    };
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| stream(w, None));
+    ended.unwrap();
+    let reads = report.managed_reads;
+    assert_eq!(reads.stale.first_frame, Some(1));
+    assert_eq!((reads.stale.objects, reads.stale.uses), (1, 1));
+    let line = "managed reads on two copies: made-with none, served; stale 1 objects, 1 uses, \
+                first at frame 1, played as recorded; writes before first use served (no identity \
+                record)";
+    assert!(
+        report.lines().iter().any(|l| l == line),
+        "{:?}",
+        report.lines()
+    );
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| stream(w, Some(true)));
+    ended.unwrap();
+    let line = "managed reads on two copies: none counted: the stream's identity record keeps one \
+                copy";
+    assert!(
+        report.lines().iter().any(|l| l == line),
+        "{:?}",
+        report.lines()
+    );
+}
+
+/// Two plays' reports compared: a verdict at a frame with equal player-side counts and equal
+/// digests (other executed counts may differ); none where the skips differ, where a frame has no
+/// digest in both, where the digests differ (the stale reads named as the first suspect on a
+/// two-copy play) or where a play's player predates the served read classes.
+#[test]
+fn two_plays_compare_for_a_verdict_only_where_counts_and_digests_agree() {
+    let report = |busy: u64, skipped: u64, sha: &str, extra: &str| {
+        format!(
+            "managed two copies (the stream's device identity): played as recorded\n\
+             managed reads on two copies: made-with none, served; stale 2 objects, 3 uses, first \
+             at frame 1, played as recorded\n\
+             frame 0 stream calls=10 draws=1 dispatches=0 executed barriers={busy} skipped_draws=0\n\
+             end 0 wall_nanos=100 times stream=1 gpu_busy={busy} live\n\
+             check #7 frame 0 aa match\n\
+             frame 1 stream calls=5 draws=1 dispatches=0 executed skipped_draws={skipped}\n\
+             end 1 wall_nanos=90 times gpu_busy=30 live\n\
+             check #7 frame 1 {sha} match\n\
+             frame 2 stream calls=5 draws=1 dispatches=0 executed\n\
+             end 2 wall_nanos=90 times gpu_busy=30 live\n{extra}"
+        )
+    };
+    let a = report(50, 0, "bb", "");
+    let (lines, verdict) = compare_plays(&a, &report(40, 0, "bb", ""), Some(0));
+    assert!(verdict, "{lines:?}");
+    let line = "verdict at frame 0: b is 20.0% faster than a by GPU-busy time (a 50 ns, b 40 ns); \
+                wall a 100 ns, b 100 ns";
+    assert_eq!(lines.last().map(String::as_str), Some(line), "{lines:?}");
+    let (lines, verdict) = compare_plays(&a, &report(50, 1, "bb", ""), Some(1));
+    assert!(!verdict);
+    let line = "no verdict at frame 1: counts differ (executed.skipped_draws a=0 b=1)";
+    assert_eq!(lines.last().map(String::as_str), Some(line), "{lines:?}");
+    let (lines, verdict) = compare_plays(&a, &a, Some(2));
+    assert!(!verdict);
+    let line = "no verdict at frame 2: no digest there in both plays";
+    assert_eq!(lines.last().map(String::as_str), Some(line), "{lines:?}");
+    let (lines, verdict) = compare_plays(&a, &report(50, 0, "cc", ""), Some(1));
+    assert!(!verdict);
+    let line = "no verdict at frame 1: the digests differ; stale reads from frame 1, the first \
+                suspect";
+    assert_eq!(lines.last().map(String::as_str), Some(line), "{lines:?}");
+    let old: String = (a.lines())
+        .filter(|l| !l.starts_with("managed reads"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let (lines, verdict) = compare_plays(&old, &a, Some(0));
+    assert!(!verdict);
+    assert!(lines.contains(
+        &"served a: no: no managed reads line, so a player older than the \
+                              made-with and first-use rules"
+            .to_owned()
+    ));
+    let line = "no verdict at frame 0: a play's player does not serve every read class";
+    assert_eq!(lines.last().map(String::as_str), Some(line), "{lines:?}");
 }

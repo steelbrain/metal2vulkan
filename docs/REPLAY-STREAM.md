@@ -629,6 +629,27 @@ counted from 0), completes the work committed so far, reports as at the stream's
   running on the recording device. It counts them by the presents between the user's commit and the
   write (0, 1, 2, 3 or more), names the first eight (position, texture, user, presents) and counts
   the writes into textures whose storage the backend does not tell. It stops nothing.
+- **Reads of Managed bytes on two copies:** the report's `managed reads on two copies: made-with
+  CLASS, served; stale CLASS, played as recorded` line (`CLASS` `N objects, U uses, first at
+  frame F`, or `none`) counts, from the stream's calls alone and so alike on every runtime and
+  device, the GPU's reads of a Managed object's bytes that no announcement took to its GPU copy,
+  as a play that keeps two copies holds them. A Managed object is a buffer of any maker whose
+  options say Managed, a Managed block and its buffers, and a texture over such a buffer or a view
+  of it. A GPU use is a command that names the object, judged at its command buffer's commit: a
+  blit's source range and a copy to the guest's RAM read; a blit's, a fill's and a guest-RAM
+  copy's destination bytes are a GPU write; every other naming reads the whole object, as the
+  stream carries no buffer access. Made-with reads are of the bytes a buffer was made with (a
+  descriptor's `contents`, a no-copy buffer's pages, `newBufferWithBytes:length:options:`'s bytes;
+  bytes that are all zero left out) before a `didModifyRange:` or a GPU write covered them. The
+  player serves them on both runtimes (section 5: the GPU copy starts from them), so the count
+  says how many reads depend on that, not that any is wrong. Stale reads are of bytes an
+  `m2v.write` put in that no `didModifyRange:` announced and no GPU write covered: what the GPU
+  reads there Metal leaves undefined, and both runtimes play it by one rule, the GPU copy's bytes
+  as the making and the announcements left them. Where the stream has no identity record, a
+  no-copy buffer's writes before its first use reach its GPU copy (section 5) and are not counted;
+  the line ends `; writes before first use served (no identity record)`. Where the guest device's
+  identity record keeps one copy, the line is `managed reads on two copies: none counted: the
+  stream's identity record keeps one copy`. It stops nothing.
 - After each commit, before each write, check and present, and where the program waited, it waits
   for every committed command buffer that can complete: one whose event waits are met by values the
   CPU set or by signals of command buffers that can complete. It never waits on a command buffer
@@ -908,7 +929,7 @@ Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
 `private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),
 `devices apart from the guest's: #ID ...` where the stream recorded devices besides the one the
-guest makes its objects on (section 4), `check ID SHA256 match|differs|unrecorded|covered|receiver`, `id ID RECORDED PLAYED` for each object whose runtime
+guest makes its objects on (section 4), `check ID frame F SHA256 match|differs|unrecorded|covered|receiver` (`F` the frame it was read in, the presents played before it), `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
 runtime's getter raises), `id ID RECORDED PLAYED word WORD` on the new runtime, which lays its IDs
 out as [RESOURCE-ID.md](RESOURCE-ID.md) does: there the ID's low word, its index, is compared with
@@ -949,7 +970,8 @@ runtime's size for each, met the recorded range of a buffer live in the same hea
 not a stop; section 5),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
 offsets it moved in them and the bytes it added to their sizes), `texture_writes ...` (the
-CPU's writes into Managed textures, below), `total COUNTS` (its `calls` the
+CPU's writes into Managed textures, above), `managed reads on two copies: ...` (the reads of
+Managed bytes no announcement took to the GPU copy, above), `total COUNTS` (its `calls` the
 calls played: where
 the play stopped, the stopping call is the next), the new runtime's backend's
 `pipeline I wall_nanos=N kernel=new|again` for each compute pipeline state it made, in order (the
@@ -1015,3 +1037,30 @@ Its exit status is 0 for `agree`, 1 for `DIFFER` and 2 for a bad command line or
 dump. This compare says whether two plays of a range of command buffers agree; a whole-object
 checksum does not, as a buffer partly under a cover would differ under it and a difference outside
 the cover would show only as the same mismatch.
+
+**Two plays compared for a timing verdict.** `command-replay compare-plays --a REPORT --b REPORT
+[--frame F]` reads two plays' reports (each a `report.txt` or the directory holding it), of one
+stream on two runtimes or two commits, and prints `served a|b: yes`, or `no: ...` for a report
+without the `managed reads` line; `frames a N b M; both B; counts equal in E, unequal in U` and
+`unequal frame F: KEY a=X b=Y` for the first eight frames whose player-side counts differ (the
+frame line's `stream` `calls`, `draws` and `dispatches`, and every `executed` count of a skip,
+`skipped_…`, or a refusal, `…_refusals`; a count a report lacks is 0); `digests: D frames with
+checks in both; equal in E, differ in X` and `digests differ at frame F` for the first eight
+frames whose `check` lines differ, ending `; stale reads from frame S, the first suspect` where a
+play kept two copies and its stale reads start at or before `F`. With `--frame F` it ends with
+`verdict at frame F: b is P% faster|slower than a by GPU-busy time (a A ns, b B ns); wall a W ns,
+b V ns` (or `level`), or `no verdict at frame F: WHY`. A timing verdict between two plays needs
+all three of:
+
+1. both plays by a player that serves every read class the stream has, which a report shows by
+   its `managed reads` line: a player that prints none may not serve the made-with reads or, for
+   a stream with no identity record, the writes before first use;
+2. the frame's player-side counts equal in both;
+3. equal digests at the judged frame: its `check` lines alike in both. A frame with no check in
+   both plays gets no verdict until a play adds one.
+
+Stale reads bar no verdict: Metal leaves those bytes undefined and both runtimes play them by one
+rule. Where the digests differ, they are the first suspect, as the old runtime takes a no-copy
+buffer's copy in at its making later than the new runtime does. The exit status is 0 where the
+frame `--frame` names has a verdict (or none is named), 1 where it has none and 2 for a bad
+command line or an unreadable report.

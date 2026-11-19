@@ -63,8 +63,8 @@ use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout, WAIT_TIMEOUT_FLAG};
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
-    compare_dumps, display_library, judged_records, recording_range, segments, Backend,
-    ManagedCopies, NewRuntime, OldRuntime, PlayError, Player, RangeSource, RecordingRange,
+    compare_dumps, compare_plays, display_library, judged_records, recording_range, segments,
+    Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player, RangeSource, RecordingRange,
     StreamError, StreamReader, Value, FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
 };
 use std::collections::BTreeMap;
@@ -78,6 +78,7 @@ const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device
                      [--gpu-wait-timeout SECONDS] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
+                     command-replay compare-plays --a REPORT --b REPORT [--frame F]\n       \
                      command-replay dump \
                      --stream FILE\n       command-replay shapes --stream FILE";
 
@@ -90,6 +91,7 @@ fn main() {
         }
         Some("dump") => with_options(&args[1..], &["stream"], dump),
         Some("compare-dumps") => with_options(&args[1..], &["a", "b"], compare),
+        Some("compare-plays") => with_options(&args[1..], &["a", "b"], compare_two_plays),
         Some("shapes") => with_options(&args[1..], &["stream"], shapes),
         _ => {
             eprintln!("{USAGE}");
@@ -150,6 +152,43 @@ fn compare(options: &BTreeMap<String, String>) -> i32 {
             eprintln!("command-replay: compare-dumps: {error}");
             2
         }
+    }
+}
+
+/// `compare-plays`: two plays' reports (each a `report.txt` or the directory holding it) compared
+/// for a timing verdict, a line each; 0 where the frame `--frame` names has a verdict (or none is
+/// named), 1 where it has none, 2 where a report cannot be read.
+fn compare_two_plays(options: &BTreeMap<String, String>) -> i32 {
+    let frame = match options.get("frame").map(|f| f.parse::<u64>()) {
+        None => None,
+        Some(Ok(frame)) => Some(frame),
+        Some(Err(_)) => {
+            eprintln!("command-replay: --frame takes a frame number\n{USAGE}");
+            return 2;
+        }
+    };
+    let report = |name: &str| {
+        let path = PathBuf::from(&options[name]);
+        let path = match path.is_dir() {
+            true => path.join("report.txt"),
+            false => path,
+        };
+        std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))
+    };
+    let (a, b) = match (report("a"), report("b")) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(why), _) | (_, Err(why)) => {
+            eprintln!("command-replay: compare-plays: {why}");
+            return 2;
+        }
+    };
+    let (lines, verdict) = compare_plays(&a, &b, frame);
+    for line in lines {
+        println!("{line}");
+    }
+    match verdict {
+        true => 0,
+        false => 1,
     }
 }
 
