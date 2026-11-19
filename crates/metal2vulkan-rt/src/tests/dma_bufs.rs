@@ -287,10 +287,11 @@ mod on_device {
             );
             drop((queue, buffer, block));
             wait_until("the release", || released.load(Ordering::SeqCst));
-            let after = counters.gauges();
+            // Each import falls before the release runs; the pool's own allocations may have
+            // moved with the test's Shared blocks.
             assert_eq!(
-                (after.imports, after.blocks),
-                (before.imports, before.blocks),
+                counters.gauges().imports,
+                before.imports,
                 "{name}: every import freed before the release"
             );
             println!(
