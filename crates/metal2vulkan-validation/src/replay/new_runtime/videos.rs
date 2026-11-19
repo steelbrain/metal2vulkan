@@ -10,9 +10,10 @@
 //! read nothing of it.
 //!
 //! The surface's handle is the play's choice of the consumer's decoder route (`--video-handle`):
-//! a dma-buf, the stream's own, with the layout a VA-API import asks (pitch multiple 256, start
-//! multiple 4,096, each plane's rows below it to the luma's rows rounded up to 16), or an opaque
-//! fd with the layout an NVENC input asks (pitch multiple 4, start multiple 1, no rows below).
+//! a dma-buf, the stream's own, with the layout the product passes for a VA-API import (pitch and
+//! start multiples of 256, each plane holding the coded picture's rows: the luma's height rounded
+//! up to 16, the chroma half that), or an opaque fd with the layout it passes for NVIDIA's (pitch
+//! multiple 4, start multiple 1, no rows below).
 //! The planes ask shader read and write, the usage the stream's textures over them ask; a device
 //! whose image in place lacks storage (`rt::Gap::SurfaceUsage`) gets planes of shader read alone,
 //! counted.
@@ -52,7 +53,7 @@ fn plane_formats(raw: u64) -> Option<[rt::PixelFormat; 2]> {
 pub enum VideoHandle {
     /// A dma-buf, as a VA-API decoder imports it.
     DmaBuf,
-    /// An opaque fd, as NVIDIA's encoder and decoder take it.
+    /// An opaque fd, as NVIDIA's route takes it.
     OpaqueFd,
 }
 
@@ -86,11 +87,7 @@ impl VideoHandle {
         match self {
             VideoHandle::DmaBuf => {
                 let rows = height.next_multiple_of(16);
-                (
-                    256,
-                    4096,
-                    [rows - height, (rows / 2).saturating_sub(chroma)],
-                )
+                (256, 256, [rows - height, (rows / 2).saturating_sub(chroma)])
             }
             VideoHandle::OpaqueFd => (4, 1, [0, 0]),
         }
