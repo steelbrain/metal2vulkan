@@ -3116,10 +3116,10 @@ impl Texture {
     /// and writes through either reach the same bytes, as Metal's do.
     ///
     /// Built: the texture's own pixel format or another its image lists, over every slice in the
-    /// texture's own type, a slice subrange of a 1D array, a 2D array or a cube array (whole
-    /// cubes), a 2D texture as a 2D array of its one slice, one slice of a 2D array as a 2D
-    /// texture, and a cube's or a cube array's slices as a 2D texture (one face), a 2D array (any
-    /// faces), a cube (six) or a cube array (whole cubes), each over any level subrange. A texture's image lists the formats Metal views
+    /// texture's own type, a slice subrange of a 1D or 2D array, a 2D texture as a 2D array of its
+    /// one slice, one slice of a 2D array as a 2D texture, and a cube's faces as a 2D texture (one
+    /// face) or a 2D array (any faces), each over any level subrange. A view as a cube array is
+    /// [`Gap::CubeArrayTexture`], as a cube array texture is. A texture's image lists the formats Metal views
     /// it as that the device holds in a viewed form of the image format's compatibility class: its
     /// sRGB sibling whatever its usage, and with `PixelFormatView` usage, or an empty usage
     /// (Metal's `MTLTextureUsageUnknown`, which the runtime takes as every usage), every
@@ -3222,23 +3222,6 @@ impl Texture {
             }));
         }
         let every_slice = slice_count == self::slices(p);
-        // Metal's casts (Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)`): 1D to
-        // 1D, 2D to 2D or a 2D array, a 2D array, a cube or a cube array to any of those four, and
-        // 3D to 3D. A view of each over the same image is Vulkan's on every device: an image made
-        // cube-compatible, as a cube's and a cube array's are, takes a 2D, 2D array, cube or cube
-        // array view of its layers, and any image a 2D array view of one layer.
-        match (p.texture_type, texture_type) {
-            (from, to) if from == to => {
-                let subrange = matches!(to, T::Type1DArray | T::Type2DArray | T::CubeArray);
-                if !every_slice && !subrange {
-                    return gap(TextureViewKind::Slices);
-                }
-            }
-            (T::Type2D, T::Type2DArray) | (T::Type2DArray, T::Type2D) => {}
-            (T::Cube | T::CubeArray, T::Type2D | T::Type2DArray | T::Cube | T::CubeArray) => {}
-            (T::Type2DArray, T::Cube | T::CubeArray) => return gap(TextureViewKind::CubeOfArray),
-            _ => return gap(TextureViewKind::TextureType),
-        }
         let fits = match texture_type {
             T::Type2D => slice_count == 1,
             T::Cube => slice_count == 6,
@@ -3250,6 +3233,23 @@ impl Texture {
                 texture_type,
                 slice_count,
             }));
+        }
+        // Metal's casts (Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)`): 1D to
+        // 1D, 2D to 2D or a 2D array, a 2D array, a cube or a cube array to any of those four, and
+        // 3D to 3D. Vulkan views a cube's image, which is cube-compatible, as a 2D texture or a 2D
+        // array of its layers, and any image as a 2D array of one layer, with no query, so each is
+        // one form on every device. A cube array is not built, nor a view as one.
+        match (p.texture_type, texture_type) {
+            (_, T::CubeArray) => return Err(Error::Unsupported(Gap::CubeArrayTexture)),
+            (from, to) if from == to => {
+                if !every_slice && !matches!(to, T::Type1DArray | T::Type2DArray) {
+                    return gap(TextureViewKind::Slices);
+                }
+            }
+            (T::Type2D, T::Type2DArray) | (T::Type2DArray, T::Type2D) => {}
+            (T::Cube, T::Type2D | T::Type2DArray) => {}
+            (T::Type2DArray, T::Cube) => return gap(TextureViewKind::CubeOfArray),
+            _ => return gap(TextureViewKind::TextureType),
         }
         let mut d = *p;
         d.texture_type = texture_type;

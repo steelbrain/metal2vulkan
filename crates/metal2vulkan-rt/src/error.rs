@@ -1332,12 +1332,11 @@ pub enum TextureViewKind {
     /// Another texture type than the casts built
     /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)).
     TextureType,
-    /// A cube or a cube array view of a 2D array, one of Metal's casts: Vulkan views an image as
-    /// a cube only where the image was made cube-compatible, and a 2D array's image is made
-    /// without it. No stream makes one.
+    /// A cube view of a 2D array, one of Metal's casts: Vulkan views an image as a cube only
+    /// where the image was made cube-compatible, and a 2D array's image is made without it. No
+    /// stream makes one.
     CubeOfArray,
-    /// Some of the slices of a texture that is not an array of 1D or 2D textures or of cubes: a
-    /// 2D multisample array's.
+    /// Some of the slices of a texture that is not a 1D or 2D array: a 2D multisample array's.
     Slices,
 }
 

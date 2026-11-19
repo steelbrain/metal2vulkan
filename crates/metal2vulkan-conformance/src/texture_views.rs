@@ -243,13 +243,19 @@ impl ViewRequest {
                 parent.format.name()
             ));
         }
-        let array = matches!(
-            self.texture_type,
-            TextureType::Type2DArray | TextureType::CubeArray | TextureType::Type1DArray
-        );
-        if !array && self.slice_count != 1 {
+        // Apple's `makeTextureView(pixelFormat:textureType:levels:slices:)`: "The length value of
+        // the sliceRange parameter needs to be 6 if the new texture type value is
+        // MTLTextureType.typeCube, or a multiple of 6 if the new texture type value is
+        // MTLTextureType.typeCubeArray"; a type that is not an array holds one.
+        let fits = match self.texture_type {
+            TextureType::Type2DArray | TextureType::Type1DArray => true,
+            TextureType::Cube => self.slice_count == 6,
+            TextureType::CubeArray => self.slice_count.is_multiple_of(6),
+            _ => self.slice_count == 1,
+        };
+        if !fits {
             return Some(format!(
-                "{:?} holds one slice, not {}",
+                "{:?} holds no view of {} slices",
                 self.texture_type, self.slice_count
             ));
         }

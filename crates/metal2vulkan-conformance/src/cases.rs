@@ -193,6 +193,7 @@ pub mod texture_buffer_fills;
 pub mod texture_buffer_tails;
 pub mod texture_descriptor_pairs;
 pub mod texture_fills;
+pub mod texture_view_casts;
 pub mod texture_views;
 pub mod textures;
 pub mod tile_pipeline_descriptors;
@@ -452,6 +453,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.push(Box::new(mesh_commands::unordered_draws()));
     cases.push(Box::new(surface_fills::over_planes_and_buffers()));
     cases.extend(surface_textures::all());
+    cases.extend(texture_view_casts::all());
     for case in rate_maps::all() {
         cases.push(Box::new(case));
     }

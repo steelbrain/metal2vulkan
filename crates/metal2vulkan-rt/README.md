@@ -1047,10 +1047,10 @@ made, with no lock, and never rewritten for layouts.
   `replace_region` and `get_bytes` through it reach the parent's levels and slices under it, and a
   view of a Managed texture names the parent's bytes of them; its hazards are its parent's. Built:
   the parent's own pixel format, over every slice in the parent's type, a slice subrange of a 1D
-  array, a 2D array or a cube array (whole cubes), a 2D texture as a 2D array of its one slice,
-  one slice of a 2D array as a 2D texture, and a cube's or a cube array's slices as a 2D texture
-  (one face), a 2D array (any faces), a cube (six) or a cube array (whole cubes), each over any
-  level subrange; a view of a view is a view of the first parent. Refused, as Metal's validation
+  or 2D array, a 2D texture as a 2D array of its one slice, one slice of a 2D array as a 2D
+  texture, and a cube's faces as a 2D texture (one face) or a 2D array (any faces), each over any
+  level subrange; a view of a view is a view of the first parent. A view as a cube array is
+  `Gap::CubeArrayTexture`, as a cube array texture is. Refused, as Metal's validation
   stops them: an empty range of levels or slices, or one past the parent's
   (`Refusal::TextureViewRange`), a slice count the view's type does not take
   (`Refusal::TextureViewSlices`), and another pixel format of a texture made without
@@ -1153,8 +1153,8 @@ made, with no lock, and never rewritten for layouts.
 - Texture views that change what the replay streams' views keep are not built
   (`Gap::TextureView`, naming the kind): another pixel format the texture's image does not list,
   another texture type than the casts built above, some of a 2D multisample array's slices, and a
-  cube or a cube array view of a 2D array (`TextureViewKind::CubeOfArray`), which needs a
-  cube-compatible image that a 2D array's is not made as. A view of a pixel format Metal does not
+  cube view of a 2D array (`TextureViewKind::CubeOfArray`), which needs a cube-compatible image
+  that a 2D array's is not made as. A view of a pixel format Metal does not
   view the texture as is `Refusal::TextureViewFormat`.
 - A swizzle reaches a texture's sampled element alone, as Apple defines it for reads and
   samples. A swizzled texture, or a view made with a swizzle or of a swizzled texture, has a
