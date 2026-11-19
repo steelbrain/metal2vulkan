@@ -990,9 +990,9 @@ impl Side for RtSide<'_> {
     ///
     /// The runtime's descriptor has no `allowGPUOptimizedContents`: each texture is in the
     /// device's own layout, which the flag allows, and Metal's texels are the same with it off, so
-    /// the request's flag asks the runtime nothing. A view's swizzle other than each channel's own
-    /// is `newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:`, which the runtime
-    /// does not have; the view of the default swizzle is the call without it.
+    /// the request's flag asks the runtime nothing. A view is
+    /// `newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:` with the request's
+    /// swizzle, the default one's the call without it.
     fn texture(&mut self, request: &crate::texture::TextureRequest<'_>) -> Answer<Handle> {
         use crate::texture::Over;
         let format = PixelFormat::try_from(request.format).map_err(|problem| {
@@ -1030,18 +1030,14 @@ impl Side for RtSide<'_> {
                 offset,
                 bytes_per_row,
             ),
-            Some(Over::View { .. }) if request.swizzle != rt::TextureSwizzleChannels::DEFAULT => {
-                return Err(Failure::unavailable(
-                    "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:",
-                ));
-            }
             Some(Over::View { texture }) => {
                 let parent = self.held_texture(texture)?;
-                parent.new_texture_view(
+                parent.new_texture_view_with_swizzle(
                     format,
                     request.texture_type,
                     0..request.levels.max(1),
                     0..request.slices.max(1),
+                    request.swizzle,
                     index(parent.descriptor().usage),
                 )
             }

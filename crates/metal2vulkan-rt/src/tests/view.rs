@@ -5,11 +5,13 @@
 //! `texture_view_rules.m` in the conformance crate, an Apple M3 Max, macOS 27.0.1, job
 //! m3-max-43677). A view costs no submission, no block and no copied byte. What Metal's validation
 //! stops is `Refusal::TextureViewRange` or `Refusal::TextureViewFormat`, and each kind of view
-//! the runtime does not build `Gap::TextureView` naming it. Every gauge comes back to zero with the
-//! device, the views' image views among them. A view of a Managed texture writes the texture's own
-//! named bytes. A command buffer keeps a view it uses after its parent, as Metal's retains every
-//! object its encoders use: released while the command buffer is pending, the view keeps its image
-//! views and its element of set 1 until it retires.
+//! the runtime does not build `Gap::TextureView` naming it. A view with a swizzle holds Metal's
+//! combination of it over its parent's, in its descriptor and its resource ID's word, over a
+//! texture of any usage. Every gauge comes back to zero with the device, the views' image views
+//! among them. A view of a Managed texture writes the texture's own named bytes. A command buffer
+//! keeps a view it uses after its parent, as Metal's retains every object its encoders use:
+//! released while the command buffer is pending, the view keeps its image views and its element
+//! of set 1 until it retires.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -24,6 +26,7 @@ mod on_device {
         TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
         TextureViewKind,
     };
+    use metal2vulkan::metal::resource_word::TextureWord;
 
     /// FNV-1a 64 of `bytes`.
     fn fnv(bytes: &[u8]) -> u64 {
@@ -241,13 +244,6 @@ mod on_device {
             let mut d = TextureDescriptor::new(Type2D, rgba, 8, 8);
             d.usage = TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW;
             let formats = device.new_texture(&d, Some(4112)).expect("a texture");
-            d.usage = TextureUsage::SHADER_READ;
-            d.swizzle = TextureSwizzleChannels {
-                red: TextureSwizzle::Blue,
-                blue: TextureSwizzle::Red,
-                ..TextureSwizzleChannels::DEFAULT
-            };
-            let swizzled = device.new_texture(&d, Some(4113)).expect("a texture");
             let mut d = TextureDescriptor::new(TextureType::Cube, rgba, 4, 4);
             d.usage = TextureUsage::SHADER_READ;
             let cube = device.new_texture(&d, Some(4114)).expect("a texture");
@@ -256,11 +252,6 @@ mod on_device {
                     "another format",
                     view(&formats, PixelFormat::R32Uint, Type2D, 0..1, 0..1),
                     TextureViewKind::PixelFormat,
-                ),
-                (
-                    "a swizzled texture",
-                    view(&swizzled, rgba, Type2D, 0..1, 0..1),
-                    TextureViewKind::Swizzle,
                 ),
                 (
                     "a 2D array of a 2D texture",
@@ -285,10 +276,62 @@ mod on_device {
                 }
             }
 
+            // A view's swizzle over its parent's is Metal's combination, in its descriptor and in
+            // its resource ID's word; a view without one keeps the parent's; and a texture of
+            // shader-write and render-target usage, whose own descriptor Metal refuses a swizzle,
+            // takes a swizzled view.
+            use TextureSwizzle::{Alpha, Blue, Green, One, Red, Zero};
+            let channels =
+                |[red, green, blue, alpha]: [TextureSwizzle; 4]| TextureSwizzleChannels {
+                    red,
+                    green,
+                    blue,
+                    alpha,
+                };
+            let mut d = TextureDescriptor::new(Type2D, rgba, 8, 8);
+            d.usage = TextureUsage::SHADER_READ;
+            d.swizzle = channels([Red, One, One, Green]);
+            let apple = device.new_texture(&d, Some(4115)).expect("a texture");
+            d.usage = TextureUsage::SHADER_READ
+                | TextureUsage::SHADER_WRITE
+                | TextureUsage::RENDER_TARGET;
+            d.swizzle = TextureSwizzleChannels::DEFAULT;
+            let written = device.new_texture(&d, Some(4116)).expect("a texture");
+            let swizzled_view = |parent: &Texture, swizzle| {
+                parent.new_texture_view_with_swizzle(rgba, Type2D, 0..1, 0..1, swizzle, Some(4117))
+            };
+            for (case, made, wanted) in [
+                (
+                    "Apple's example",
+                    swizzled_view(&apple, channels([Red, Green, Alpha, Blue])),
+                    [Red, One, Green, One],
+                ),
+                (
+                    "a view without a swizzle",
+                    view(&apple, rgba, Type2D, 0..1, 0..1),
+                    [Red, One, One, Green],
+                ),
+                (
+                    "a written texture's",
+                    swizzled_view(&written, channels([Blue, Zero, Red, One])),
+                    [Blue, Zero, Red, One],
+                ),
+            ] {
+                let made = made.unwrap_or_else(|error| panic!("{name}: {case}: {error}"));
+                let wanted = channels(wanted);
+                assert_eq!(made.descriptor().swizzle, wanted, "{name}: {case}");
+                let word = (TextureWord::of(rgba, wanted)).expect("a word").0;
+                assert_eq!(
+                    made.gpu_resource_id().word,
+                    word,
+                    "{name}: {case}: the word"
+                );
+            }
+
             // The views outlive their parents' handles, and every gauge falls with the last.
             drop((flat, array));
             assert_eq!(fnv(&read(&of_view)), 0x5d01_ec06_0898_5ec5);
-            drop((views, of_view, formats, swizzled, cube));
+            drop((views, of_view, formats, cube, apple, written));
             within("the textures freed", || counters.gauges().textures == 0);
         });
     }

@@ -9643,6 +9643,7 @@ method	metal2vulkan-rt::Texture::descriptor	pub fn descriptor(&self) -> &Texture
 method	metal2vulkan-rt::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u32, slice: u32) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
 method	metal2vulkan-rt::Texture::new_texture_view	pub fn new_texture_view(&self, pixel_format: PixelFormat, texture_type: TextureType, levels: Range<u32>, slices: Range<u32>, index: Option<u32>) -> Result<Texture, Error>
+method	metal2vulkan-rt::Texture::new_texture_view_with_swizzle	pub fn new_texture_view_with_swizzle(&self, pixel_format: PixelFormat, texture_type: TextureType, levels: Range<u32>, slices: Range<u32>, swizzle: TextureSwizzleChannels, index: Option<u32>) -> Result<Texture, Error>
 method	metal2vulkan-rt::Texture::replace_region	pub fn replace_region(&self, region: Region, level: u32, slice: u32, bytes: &[u8], bytes_per_row: u64, bytes_per_image: u64) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::upload_region	pub fn upload_region(&self, region: Region, level: u32, slice: u32) -> Result<(), Error>
 method	metal2vulkan-rt::TextureDescriptor::new	pub fn new(texture_type: TextureType, pixel_format: PixelFormat, width: u32, height: u32) -> TextureDescriptor
@@ -13855,7 +13856,6 @@ variant	metal2vulkan-rt::StoreAction::StoreAndMultisampleResolve	StoreAndMultisa
 variant	metal2vulkan-rt::StoreAction::Unknown	Unknown
 variant	metal2vulkan-rt::TextureViewKind::PixelFormat	PixelFormat
 variant	metal2vulkan-rt::TextureViewKind::Slices	Slices
-variant	metal2vulkan-rt::TextureViewKind::Swizzle	Swizzle
 variant	metal2vulkan-rt::TextureViewKind::TextureType	TextureType
 variant	metal2vulkan-rt::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-rt::floor::Missing::Feature	Feature { structure: &'static str, member: String }

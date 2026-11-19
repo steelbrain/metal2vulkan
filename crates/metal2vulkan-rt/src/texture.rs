@@ -781,22 +781,7 @@ impl Device {
         descriptor: &TextureDescriptor,
     ) -> Result<(Shape, Plan, TextureUsage), Error> {
         let d = *descriptor;
-        let shape = shape(&d)?;
-        if d.storage_mode == StorageMode::Memoryless {
-            return Err(Error::Unsupported(Gap::MemorylessTexture));
-        }
-        if d.texture_type == TextureType::CubeArray {
-            return Err(Error::Unsupported(Gap::CubeArrayTexture));
-        }
-        let usage = match d.usage.is_empty() {
-            true => {
-                TextureUsage::SHADER_READ
-                    | TextureUsage::SHADER_WRITE
-                    | TextureUsage::RENDER_TARGET
-                    | TextureUsage::PIXEL_FORMAT_VIEW
-            }
-            false => d.usage,
-        };
+        let (shape, usage) = checked(&d)?;
         if d.swizzle != TextureSwizzleChannels::DEFAULT
             && usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET)
         {
@@ -1252,6 +1237,51 @@ fn linear_layout(
         (layout, requirements)
     };
     Some((layout.row_pitch, layout.size, requirements.alignment))
+}
+
+/// The checks a texture's descriptor and a view's both take, with the shape and the usage taken:
+/// an unknown usage is every usage, as Metal takes it.
+fn checked(d: &TextureDescriptor) -> Result<(Shape, TextureUsage), Error> {
+    let shape = shape(d)?;
+    if d.storage_mode == StorageMode::Memoryless {
+        return Err(Error::Unsupported(Gap::MemorylessTexture));
+    }
+    if d.texture_type == TextureType::CubeArray {
+        return Err(Error::Unsupported(Gap::CubeArrayTexture));
+    }
+    let usage = match d.usage.is_empty() {
+        true => {
+            TextureUsage::SHADER_READ
+                | TextureUsage::SHADER_WRITE
+                | TextureUsage::RENDER_TARGET
+                | TextureUsage::PIXEL_FORMAT_VIEW
+        }
+        false => d.usage,
+    };
+    Ok((shape, usage))
+}
+
+/// `swizzle` over `parent`'s, as Metal combines a view's swizzle with its parent texture's: each
+/// channel the view takes from red, green, blue or alpha is that channel of the parent as the
+/// parent's swizzle reads it, and zero and one stay (Apple's example: `[R, G, A, B]` over
+/// `[R, 1, 1, G]` is `[R, 1, G, 1]`).
+pub(crate) fn combined(
+    parent: TextureSwizzleChannels,
+    swizzle: TextureSwizzleChannels,
+) -> TextureSwizzleChannels {
+    let of = |source| match source {
+        TextureSwizzle::Red => parent.red,
+        TextureSwizzle::Green => parent.green,
+        TextureSwizzle::Blue => parent.blue,
+        TextureSwizzle::Alpha => parent.alpha,
+        other => other,
+    };
+    TextureSwizzleChannels {
+        red: of(swizzle.red),
+        green: of(swizzle.green),
+        blue: of(swizzle.blue),
+        alpha: of(swizzle.alpha),
+    }
 }
 
 /// Checks a descriptor's shape as Metal does.
@@ -2320,7 +2350,7 @@ impl Texture {
     /// Built: the texture's own pixel format, over every slice in the texture's own type, a slice
     /// subrange of a 1D or 2D array, or one slice of a 2D array as a 2D texture, each over any
     /// level subrange. `index` is given exactly where shaders reach the view, as
-    /// [`Device::new_texture`] takes it; its usage, storage mode and sample count are the
+    /// [`Device::new_texture`] takes it; its usage, storage mode, sample count and swizzle are the
     /// texture's.
     ///
     /// Err: [`Refusal::TextureViewRange`] for an empty range of levels or slices or one past the
@@ -2335,6 +2365,43 @@ impl Texture {
         texture_type: TextureType,
         levels: Range<u32>,
         slices: Range<u32>,
+        index: Option<u32>,
+    ) -> Result<Texture, Error> {
+        let swizzle = TextureSwizzleChannels::DEFAULT;
+        self.new_texture_view_with_swizzle(
+            pixel_format,
+            texture_type,
+            levels,
+            slices,
+            swizzle,
+            index,
+        )
+    }
+
+    /// `newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:`: the view
+    /// [`Texture::new_texture_view`] makes, its texels sampled and read through `swizzle`
+    /// combined with this texture's own, as Metal combines them: each channel the view takes from
+    /// red, green, blue or alpha is that channel of this texture as its own swizzle reads it. The
+    /// view's descriptor holds the combined swizzle, and its resource ID the `TextureWord` of it.
+    /// Metal takes the call whatever the texture's usage (its own descriptor refuses a swizzle
+    /// with shader-write or render-target usage), and so does this.
+    ///
+    /// Apple states the swizzle for sampling and reading. The view's sampled element (`sample`,
+    /// and `read` of an `access::read` texture) takes the combined swizzle. Its storage element
+    /// and its attachment views map each channel to itself, as Vulkan requires of a storage image
+    /// and of an attachment: a render pass and a shader's write reach the texels unswizzled, and a
+    /// `read` of an `access::read_write` texture reads them unswizzled, where Metal reads them
+    /// through the swizzle (and, measured, writes through it undone), a known gap.
+    ///
+    /// Err: as [`Texture::new_texture_view`]; [`Gap::TextureFormat`] for a swizzle source this
+    /// crate does not know.
+    pub fn new_texture_view_with_swizzle(
+        &self,
+        pixel_format: PixelFormat,
+        texture_type: TextureType,
+        levels: Range<u32>,
+        slices: Range<u32>,
+        swizzle: TextureSwizzleChannels,
         index: Option<u32>,
     ) -> Result<Texture, Error> {
         use TextureType as T;
@@ -2364,9 +2431,6 @@ impl Texture {
             }
             return gap(TextureViewKind::PixelFormat);
         }
-        if p.swizzle != TextureSwizzleChannels::DEFAULT {
-            return gap(TextureViewKind::Swizzle);
-        }
         let every_slice = slice_count == self::slices(p);
         match (p.texture_type, texture_type) {
             (from, to) if from == to => {
@@ -2386,7 +2450,11 @@ impl Texture {
             T::Cube | T::CubeArray => slice_count / 6,
             _ => slice_count,
         };
-        let (shape, plan, usage) = inner.device.prepare(&d)?;
+        d.swizzle = combined(p.swizzle, swizzle);
+        // A view takes its descriptor's checks but the swizzle's with its usage, which Metal
+        // makes of a texture's own descriptor alone.
+        let (shape, usage) = checked(&d)?;
+        let plan = plan(inner.device.core(), &d, usage, &shape)?;
         let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
         if reached != index.is_some() {
             return Err(Error::Refused(Refusal::TextureIndex { index }));

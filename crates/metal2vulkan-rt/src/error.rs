@@ -901,8 +901,8 @@ pub enum Gap {
     /// the runtime does not build: what `kind` names.
     ///
     /// Basis: ours (the replay streams' views that compute binds are same-format views of every
-    /// slice, 2D views of one slice of a 2D array, and level subranges; each other kind is built
-    /// when a replay stream binds one).
+    /// slice, 2D views of one slice of a 2D array, and level subranges, swizzled or not; each
+    /// other kind is built when a replay stream binds one).
     TextureView {
         /// What the view changes that is not built.
         kind: TextureViewKind,
@@ -1047,8 +1047,6 @@ pub enum TextureViewKind {
     /// Some of the slices of a texture that is not a 1D or 2D array: a cube's faces, or a cube
     /// array's cubes.
     Slices,
-    /// Any view of a texture made with a swizzle.
-    Swizzle,
 }
 
 /// A limit a call ran into, with what it was asked.

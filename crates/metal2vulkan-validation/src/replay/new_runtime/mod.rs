@@ -417,6 +417,19 @@ const TEXTURE_KEYS: [&str; 20] = [
     "outside",
 ];
 
+/// The keys of an `MTLTextureSwizzleChannels`.
+const SWIZZLE_KEYS: [&str; 4] = ["red", "green", "blue", "alpha"];
+
+/// The `MTLTextureSwizzleChannels` `s` holds, each channel set.
+fn swizzle(s: &Fields) -> Result<rt::TextureSwizzleChannels, PlayError> {
+    Ok(rt::TextureSwizzleChannels {
+        red: s.required("red", Fields::metal)?,
+        green: s.required("green", Fields::metal)?,
+        blue: s.required("blue", Fields::metal)?,
+        alpha: s.required("alpha", Fields::metal)?,
+    })
+}
+
 /// `f`'s properties set on `d`. The resource index places the texture (`named_index`); the
 /// GPU-optimized contents are a hint.
 fn texture_fields(call: &Call, f: &Fields, d: &mut rt::TextureDescriptor) -> Result<(), PlayError> {
@@ -448,13 +461,8 @@ fn texture_fields(call: &Call, f: &Fields, d: &mut rt::TextureDescriptor) -> Res
     if let Some(mode) = f.uint("storageMode")? {
         d.storage_mode = storage(call, (mode & 0xf) << 4)?;
     }
-    if let Some(s) = f.fields("swizzle", &["red", "green", "blue", "alpha"])? {
-        d.swizzle = rt::TextureSwizzleChannels {
-            red: s.required("red", Fields::metal)?,
-            green: s.required("green", Fields::metal)?,
-            blue: s.required("blue", Fields::metal)?,
-            alpha: s.required("alpha", Fields::metal)?,
-        };
+    if let Some(s) = f.fields("swizzle", &SWIZZLE_KEYS)? {
+        d.swizzle = swizzle(&s)?;
     }
     f.only("protectionOptions", Fields::uint, 0)?;
     f.only("framebufferOnly", Fields::bool, false)?;
@@ -1029,6 +1037,7 @@ impl NewRuntime {
             }
             "newTextureViewWithPixelFormat:resourceIndex:" => 1,
             "newTextureViewWithPixelFormat:textureType:levels:slices:resourceIndex:" => 4,
+            "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:resourceIndex:" => 5,
             _ => return Ok(None),
         };
         let index = u32::try_from(uint(call, at)?);
@@ -1517,15 +1526,15 @@ impl NewRuntime {
         }
     }
 
-    /// A view of `texture`: `format` and `kind` over its `levels` and `slices`.
+    /// A view of `texture`: `format` and `kind` over its levels and slices, through `swizzle`.
+    /// A substitute holds the parent's swizzle, which its own descriptor takes.
     fn view(
         &mut self,
         call: &Call,
         texture: &rt::Texture,
-        format: rt::PixelFormat,
-        kind: rt::TextureType,
-        levels: Range<u32>,
-        slices: Range<u32>,
+        (format, kind): (rt::PixelFormat, rt::TextureType),
+        [levels, slices]: [Range<u32>; 2],
+        swizzle: rt::TextureSwizzleChannels,
     ) -> Result<Option<(Object, Made)>, PlayError> {
         let parent = *texture.descriptor();
         // A substitute's descriptor: the view's own, at its first level.
@@ -1539,8 +1548,10 @@ impl NewRuntime {
             rt::TextureType::Cube | rt::TextureType::CubeArray => (slices.len() as u32 / 6).max(1),
             _ => (slices.len() as u32).max(1),
         };
-        let make =
-            |index| texture.new_texture_view(format, kind, levels.clone(), slices.clone(), index);
+        let make = |index| {
+            let (levels, slices) = (levels.clone(), slices.clone());
+            texture.new_texture_view_with_swizzle(format, kind, levels, slices, swizzle, index)
+        };
         self.texture_or_substitute(call, parent.usage, &own, make)
     }
 
@@ -1713,18 +1724,14 @@ impl NewRuntime {
             "newTextureViewWithPixelFormat:" | "newTextureViewWithPixelFormat:resourceIndex:" => {
                 let d = *texture.descriptor();
                 let format = metal(call, uint(call, 0)?)?;
-                let slices = whole_slices(&d);
-                return self.view(
-                    call,
-                    texture,
-                    format,
-                    d.texture_type,
-                    0..d.mipmap_level_count,
-                    slices,
-                );
+                let ranges = [0..d.mipmap_level_count, whole_slices(&d)];
+                let swizzle = rt::TextureSwizzleChannels::DEFAULT;
+                return self.view(call, texture, (format, d.texture_type), ranges, swizzle);
             }
             "newTextureViewWithPixelFormat:textureType:levels:slices:"
-            | "newTextureViewWithPixelFormat:textureType:levels:slices:resourceIndex:" => {
+            | "newTextureViewWithPixelFormat:textureType:levels:slices:resourceIndex:"
+            | "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:"
+            | "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:resourceIndex:" => {
                 let format = metal(call, uint(call, 0)?)?;
                 let kind = metal(call, uint(call, 1)?)?;
                 let levels = super::args::range(call, arg(call, 2)?)?;
@@ -1735,14 +1742,12 @@ impl NewRuntime {
                     let end = u32::try_from(r.end).map_err(|_| refuse(call, "a range past u32"))?;
                     Ok(start..end)
                 };
-                return self.view(
-                    call,
-                    texture,
-                    format,
-                    kind,
-                    narrow(levels)?,
-                    narrow(slices)?,
-                );
+                let swizzle = match call.selector.contains("swizzle:") {
+                    true => swizzle(&Fields::arg(call, 4, &SWIZZLE_KEYS)?)?,
+                    false => rt::TextureSwizzleChannels::DEFAULT,
+                };
+                let ranges = [narrow(levels)?, narrow(slices)?];
+                return self.view(call, texture, (format, kind), ranges, swizzle);
             }
             _ => return Err(refuse(call, "not played on a texture")),
         };

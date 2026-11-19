@@ -10,7 +10,9 @@
 //!   an object holds one of its indices (`Refusal::IndicesInUse`); vacated, it is placed at and
 //!   released again.
 //! - A view's components are Metal's swizzle over the format's own mapping: zero and one stay,
-//!   and a channel source reads through the format's mapping.
+//!   and a channel source reads through the format's mapping. A view's swizzle combines with its
+//!   parent's as Metal's does: each channel it names is the parent's as the parent's swizzle
+//!   reads it.
 //! - The linear row rounding starts at the texel's bytes: rows laid at the row itself answer the
 //!   texel's bytes, rows padded to a power of two answer it, and rows padded otherwise answer none.
 //! - Over every venue's linear layout, a render target over a buffer stays in place only where the
@@ -27,7 +29,7 @@
 
 use crate::arrays::Grants;
 use crate::error::{Error, Refusal};
-use crate::texture::{components, linear_rounding, shape};
+use crate::texture::{combined, components, linear_rounding, shape};
 use crate::{IndexClass, PixelFormat, TextureDescriptor, TextureType};
 use ash::vk;
 use metal2vulkan::metal::{TextureSwizzle, TextureSwizzleChannels};
@@ -189,6 +191,33 @@ fn a_views_components_are_the_swizzle_over_the_formats_mapping() {
     assert_eq!(
         components(alpha_in_red, alpha_everywhere),
         parts(Some(mapping(C::R, C::R, C::ZERO, C::ONE)))
+    );
+}
+
+#[test]
+fn a_views_swizzle_reads_its_parents_swizzled_channels() {
+    use TextureSwizzle::{Alpha, Blue, Green, One, Red, Zero};
+    let channels = |[red, green, blue, alpha]: [TextureSwizzle; 4]| TextureSwizzleChannels {
+        red,
+        green,
+        blue,
+        alpha,
+    };
+    let identity = TextureSwizzleChannels::DEFAULT;
+    // Apple's example: `[R, G, A, B]` over `[R, 1, 1, G]` is `[R, 1, G, 1]`.
+    let parent = channels([Red, One, One, Green]);
+    let view = channels([Red, Green, Alpha, Blue]);
+    assert_eq!(combined(parent, view), channels([Red, One, Green, One]));
+    // The identity on either side leaves the other; zero and one stay whatever the parent's.
+    assert_eq!(combined(parent, identity), parent);
+    assert_eq!(combined(identity, view), view);
+    let constants = channels([Zero, One, Zero, One]);
+    assert_eq!(combined(parent, constants), constants);
+    // Taken twice, a rotation's channels move twice.
+    let rotation = channels([Green, Blue, Alpha, Red]);
+    assert_eq!(
+        combined(rotation, rotation),
+        channels([Blue, Alpha, Red, Green])
     );
 }
 
