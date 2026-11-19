@@ -1053,8 +1053,8 @@ def run_cmd(sha, only, dry):
 
 def print_leg(sha, leg_id, leg):
     """SHA's leg's verdict line, then each of its harness rows' times and GPU times, with the
-    frozen arm's move on its base (results.frozen_move, frozen_rebase), and the rows the frozen arm
-    voids."""
+    frozen arm's move on its base (results.frozen_move, frozen_rebase), and the rows each of the
+    frozen arm's two rules voids (results.frozen_void, results.excess_voids)."""
     print(results.verdict_line(leg_id, leg))
     base = leg.get("base") and (note(leg["base"]) or {}).get("legs", {}).get(leg_id)
     rebased = base and frozen_rebase(sha, leg.get("shape"), leg["base"], base)
@@ -1068,6 +1068,9 @@ def print_leg(sha, leg_id, leg):
         print(f"  frozen arm against {leg['base'][:10]}{f', {rebased}' if rebased else ''}: {compared} "
               f"compared, {len(void)} VOID, old moved past {results.FROZEN_DRIFT:.0%}"
               + "".join(f"; {row} {move:+.1%}" for row, _, _, move in void))
+        excess = results.excess_voids(leg_id, leg["records"], base, rebased, leg.get("cpu"))
+        print(f"  frozen arm, past its limit by less than old's own move: {len(excess)} VOID"
+              + "".join(f"; {row} {ratio:.3f} over {limit:.3f}, old {move:+.1%}" for row, ratio, limit, move in excess))
 
 
 def rounds_since(sha, since):

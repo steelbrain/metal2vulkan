@@ -914,6 +914,36 @@ def frozen_void(times, base, rebased=None):
     return [(row, *move) for row, move in moves if move and abs(move[2]) > FROZEN_DRIFT]
 
 
+#: The frozen arm's second rule, beside FROZEN_DRIFT: a row judged by its host time (not by its GPU
+#: time, and not by re-timed pairs, which judge themselves) that is past its limit by less than its
+#: own old time moved from the base in the round is VOID for the round too, as the old runtime's
+#: own drift could carry it there. Its excess is the ratio over the limit less one, the move the
+#: size of frozen_move's. Neither rule makes a row red; a row past its limit is red only after its
+#: paired re-time agrees.
+def excess_void(move, ratio, limit):
+    """Whether a host-time row judged at RATIO past its LIMIT is VOID by its own frozen arm's MOVE
+    (frozen_move, or None): its excess over the limit smaller than the move's size."""
+    return move is not None and ratio > limit and ratio / limit - 1 < abs(move[2])
+
+
+def excess_voids(leg_id, records, base, rebased=None, cpu=None):
+    """The rows of a leg's RECORDS on LEG_ID past their limits by host time (over_rows) that the
+    second rule voids (excess_void) against BASE, the base leg's times, and the first (FROZEN_DRIFT)
+    does not: each `(row, ratio, limit, move)`, in row order; none where REBASED leaves the row
+    uncompared (frozen_rebased) or its re-timed pairs judged it. CPU: the CPU model of the leg's
+    node."""
+    out = []
+    for row, kind, ratio, limit in over_rows(leg_id, records, cpu):
+        if kind == "GPU time" or kind == "count" or frozen_rebased(row, rebased):
+            continue
+        if retimed(records["time"], row) is not None:
+            continue
+        move = frozen_move(records["time"], base, row)
+        if move and abs(move[2]) <= FROZEN_DRIFT and excess_void(move, ratio, limit):
+            out.append((row, ratio, limit, move[2]))
+    return out
+
+
 def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
     """The harness budget on LEG, the parsed leg LEG_ID: each row timed on both runtimes
     (`harness-new/<row>` and `harness-old/<row>`) against its limit, row_limit: HARNESS_BUDGET times
@@ -1002,6 +1032,16 @@ def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
                           f"{move[0]:.1f} us to {move[1]:.1f} us, so the round judges nothing from it: "
                           "re-time it in one process, both runtimes interleaved")
             continue
+
+        def within_drift(line, ratio):
+            """Whether ROW past its limit at RATIO is VOID by the second rule (excess_void),
+            naming it after LINE when it is."""
+            if not excess_void(move, ratio, limit):
+                return False
+            parked.append(f"{line}: VOID: past its limit {limit:.3f} by {ratio / limit - 1:.1%}, less than "
+                          f"old's own move of {move[2]:+.1%} from the base's, so the round judges nothing "
+                          "from it: re-time it in one process, both runtimes interleaved")
+            return True
         if first_row(row):
             samples = first_samples(times, row)
             if samples is None:
@@ -1024,12 +1064,15 @@ def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
                         f"part {own:.1f} us over old's whole {old:.1f} us is {own / old:.3f}; the "
                         f"driver's part {driver:.1f} us, new {new:.1f} us whole is {new / old:.3f}: {gap}")
                 if own / old > limit:
-                    past_its_limit(row, f"{line}, {past_limit(leg_id, row)}: a regression of its own", own / old)
+                    if not within_drift(line, own / old):
+                        past_its_limit(row, f"{line}, {past_limit(leg_id, row)}: a regression of its own",
+                                       own / old)
                 else:
                     parked.append(line)
                 continue
             if new / old > limit:
-                past_its_limit(row, f"{line}, {past_limit(leg_id, row)}", new / old)
+                if not within_drift(line, new / old):
+                    past_its_limit(row, f"{line}, {past_limit(leg_id, row)}", new / old)
             elif listed_row(row) in ceilings:
                 parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
             continue
@@ -1056,6 +1099,8 @@ def harness_budget(leg_id, leg, base=None, rebased=None, cpu=None):
                 if judged <= limit:
                     parked.append(f"{past}, within: judged by the median")
                     continue
+            elif not gpu and within_drift(line, ratio):
+                continue
             if variance:
                 parked.append(f"{past}: the card's own variance, not judged ({variance})")
             else:
@@ -1249,16 +1294,18 @@ def owned_verdict(leg_id, row, ratio):
 def over_lines(leg_id, records, base, rebased, rounds_since, cpu=None):
     """The report's table on LEG_ID: one line per row over its limit in the leg's RECORDS
     (over_rows): its kind, its ratio and limit, the frozen arm's verdict against BASE, the base
-    leg's records (`VOID`, `stands`, `rebased` where REBASED leaves it uncompared, `no base`; `-`
+    leg's records (`VOID` by either of its rules, FROZEN_DRIFT and excess_voids, `stands`,
+    `rebased` where REBASED leaves it uncompared, `no base`; `-`
     for a count; `VOID` on every time where the old runtime's own spread voids the leg,
     base_spread), and its status (row_status). CPU: the CPU model of the leg's node."""
     base_times = base and base["time"]
     before = {(row, kind) for row, kind, _, _ in over_rows(leg_id, base, cpu)} if base else set()
     void = base_spread_void(records["time"], cpu)
     lines = []
+    excess = {row for row, *_ in excess_voids(leg_id, records, base_times, rebased, cpu)} if base else set()
     for row, kind, ratio, limit in over_rows(leg_id, records, cpu):
         move = frozen_move(records["time"], base_times, row)
-        meter = ("-" if kind == "count" else "VOID" if void else "no base" if move is None
+        meter = ("-" if kind == "count" else "VOID" if void or row in excess else "no base" if move is None
                  else "rebased" if frozen_rebased(row, rebased) else "VOID" if abs(move[2]) > FROZEN_DRIFT else "stands")
         status = row_status(leg_id, row, (row, kind) in before, rounds_since, None if kind == "count" else ratio)
         lines.append(f"{leg_id:<24} {row:<36} {kind:<9} {ratio:6.3f} over {limit:.3f}  {meter:<7}  {status}")

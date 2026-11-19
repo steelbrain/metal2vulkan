@@ -302,7 +302,7 @@ CONTRIBUTING.md says how to run it.
 Both end with one table: every harness row over its limit on every leg (the harness budget
 below), with its kind (GPU time, host time, own part for a creation row judged on the new runtime's own
 part, or count for the instructions gate), its ratio and
-limit, the frozen arm's verdict on it (`VOID`, `stands`, `rebased` or `no base`), and its
+limit, the frozen arm's verdict on it (`VOID` by either rule below, `stands`, `rebased` or `no base`), and its
 status, from `scripts/matrix/status.tsv` by card and row: an open record, with its owner, its
 age in rounds and the ratio it was owned at; a known gap, with the place it was ruled; or, for a
 row with neither, `NEW` in the first round it is over and `UNOWNED` after. A row of a card's own
@@ -411,7 +411,11 @@ median of five rounds) is compared with the same time in the leg's base, the pre
 and a row whose old time moved more than 10% either way is VOID for the round on that GPU: it is
 named on the leg's line and judged on nothing, and its comparison comes only from a re-time in
 one process with both runtimes interleaved. The report shows that move on every row the base has
-(`FROZEN_DRIFT` in `scripts/matrix/results.py`). It measures noise only between rounds of one
+(`FROZEN_DRIFT` in `scripts/matrix/results.py`). A second rule voids a row judged by its host time
+and not re-timed in pairs whose excess over its limit (its ratio over the limit, less 1) is
+smaller than its own old time's move in the round, since the old runtime's drift alone could
+carry it there (`excess_void`). The leg's lines name the rows each rule voided. Neither rule makes
+a row red: a row past its limit is red only after its paired re-time agrees. It measures noise only between rounds of one
 harness, one old runtime and one timing shape: where the trees of `crates/metal2vulkan-harness`
 or `crates/metal2vulkan-runtime` differ between the two commits, every row but the creation rows
 reads `rebased` and voids nothing, and where the base was timed in another shape (the note's

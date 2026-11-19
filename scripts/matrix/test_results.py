@@ -859,6 +859,49 @@ class HarnessBudgetTests(unittest.TestCase):
             "1.500, old +25.0% on the base VOID", "1.000, old -20.0% on the base VOID"])
         self.assertEqual(results.harness_rows(recs(time=times)), [line.split(", old ")[0] for line in lines])
 
+    def test_a_host_time_row_past_its_limit_by_less_than_old_s_own_move_is_void(self):
+        first = "create_state/first"
+        times = {"harness-old/alu": 100.0, "harness-new/alu": 106.0,
+                 "harness-old/frame": 100.0, "harness-new/frame": 112.0,
+                 "harness-old/loop": 100.0, "harness-new/loop": 106.0,
+                 "harness-old/sampling": 30.0, "harness-new/sampling": 30.0,
+                 "harness-gpu-old/sampling": 20.0, "harness-gpu-new/sampling": 21.0,
+                 f"harness-old/{first}": 1000.0, f"harness-new/{first}": 1040.0}
+        for n in range(2, results.FIRST_RUNS + 1):
+            times[f"{results.HARNESS_FIRST}{first}/{n}/old"] = 1000.0
+            times[f"{results.HARNESS_FIRST}{first}/{n}/new"] = 1040.0
+        for pair in range(1, results.RETIME_PAIRS + 1):
+            times[f"{results.HARNESS_RETIME}loop/{pair}/old"] = 100.0
+            times[f"{results.HARNESS_RETIME}loop/{pair}/new"] = 106.0
+        # Old moved +5.3% on alu, frame and loop, +2.6% on sampling's GPU time and -4.8% on the
+        # first's median: each under FROZEN_DRIFT, so the first rule voids none.
+        base = dict(times, **{"harness-old/alu": 95.0, "harness-old/frame": 95.0, "harness-old/loop": 95.0,
+                              "harness-gpu-old/sampling": 19.5, f"harness-old/{first}": 1050.0})
+        for n in range(2, results.FIRST_RUNS + 1):
+            base[f"{results.HARNESS_FIRST}{first}/{n}/old"] = 1050.0
+        void = "so the round judges nothing from it: re-time it in one process, both runtimes interleaved"
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}), mock.patch.object(results, "OWN_PART_GATES", {}):
+            problems, parked = results.harness_budget("a", leg_of(recs(time=times)), base)
+            # alu, 2.9% past its limit, and the first, 1.0% past, are within old's own move;
+            # frame, 8.7% past, is not; loop is judged by its re-timed pairs and sampling by its
+            # GPU time, which the second rule never voids.
+            self.assertEqual([line.split(":")[0] for line in problems],
+                             ["harness budget frame", "harness budget loop", "harness budget sampling"])
+            self.assertEqual(parked, [
+                f"harness budget {first}: median of {results.FIRST_RUNS} processes, new 1040.0 us over old "
+                f"1000.0 us is 1.040: VOID: past its limit 1.030 by 1.0%, less than old's own move of -4.8% "
+                f"from the base's, {void}",
+                "harness budget alu: new 106.0 us over old 100.0 us is 1.060: VOID: past its limit 1.030 by "
+                f"2.9%, less than old's own move of +5.3% from the base's, {void}"])
+            self.assertEqual([(row, round(ratio, 3), round(move, 3)) for row, ratio, _, move in
+                              results.excess_voids("a", recs(time=times), base)],
+                             [(first, 1.04, -0.048), ("alu", 1.06, 0.053)])
+            # A base that moved past FROZEN_DRIFT leaves the row to the first rule alone.
+            far = dict(base, **{"harness-old/alu": 80.0})
+            self.assertEqual([row for row, *_ in results.excess_voids("a", recs(time=times), far)], [first])
+            # No base voids nothing.
+            self.assertEqual(len(self.budget("a", times)[0]), 5)
+
     def test_a_re_timed_run_keeps_the_row_s_time_and_gpu_time(self):
         output = ["M2V-MATRIX time harness-new/sampling 36.000", "M2V-MATRIX time harness-gpu-new/sampling 17.600",
                   "M2V-MATRIX time harness-new/alu 10.000", "a table row"]
