@@ -96,6 +96,9 @@ NEXTEST_OUT = "--no-fail-fast --success-output final --failure-output final"
 DEVICE_TEST_PACKAGES = ("metal2vulkan-rt", "metal2vulkan-validation")
 DEVICE_TEST_FILTER = ("package(metal2vulkan-rt) | (package(metal2vulkan-validation)"
                       " & test(/^runtime_lane::(replay_streams|rt_replay)::/))")
+#: The observations a Linux job's tree carries: Metal's alone (37 MiB of the 1.5 GiB), from which
+#: the stream device tests take their public cases' Metal outputs.
+METAL_OBSERVATIONS = "crates/metal2vulkan-validation/corpus/observations/metal"
 #: A failed allocation in a job's output: a device or host allocation Vulkan refused, or Rust's.
 STARVED = re.compile(r"OUT_OF_(DEVICE|HOST)_MEMORY|memory allocation of \d+ bytes failed")
 DEVICE_LINES = (r"""vulkaninfo --summary 2>/dev/null | tr -d '\r' | sed -n 's/^[[:space:]]*\(deviceName\|driverName\|driverInfo\|driverVersion\)[[:space:]]*= */M2V-DEVICE '"{leg}"' \1 /p'""")
@@ -275,14 +278,15 @@ def layer_lines(layer, os_name, leg):
 
 def linux_head(short, setup):
     """Every Linux job: the per-commit source path the GPU legs' archive is built and run at (the
-    archive holds the build's paths, so every node lays the tree out at the same one), without
-    the observations, which nothing it runs reads."""
+    archive holds the build's paths, so every node lays the tree out at the same one), with the
+    Metal observations alone (the stream device tests read the public cases' Metal outputs from
+    them) and none of the other backends', which nothing it runs reads."""
     return f"""set -u
 M="$HOME/.cache/metal2vulkan-matrix"; S="$M/src-{short}"; mkdir -p "$M"
 find "$M" -maxdepth 1 -name 'src-*' ! -name 'src-{short}' -mmin +720 -exec rm -rf {{}} +
 {setup}
 lay_out() {{
-  flock "$M/.lock" sh -c 'test -d "$1" || {{ t="$1.tmp.$$" && rm -rf "$t" && mkdir -p "$t" && git archive HEAD -- . ":(exclude)crates/metal2vulkan-validation/corpus/observations" | tar -x -C "$t" && mv "$t" "$1"; }}' sh "$S"
+  flock "$M/.lock" sh -c 'test -d "$1" || {{ t="$1.tmp.$$" && rm -rf "$t" && mkdir -p "$t" && git archive HEAD -- . ":(exclude)crates/metal2vulkan-validation/corpus/observations" | tar -x -C "$t" && git archive HEAD -- {METAL_OBSERVATIONS} | tar -x -C "$t" && mv "$t" "$1"; }}' sh "$S"
 }}
 """
 

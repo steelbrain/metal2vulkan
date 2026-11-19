@@ -302,6 +302,11 @@ class DeviceTestTests(unittest.TestCase):
         self.assertIn(f"-E '{matrix.DEVICE_TEST_FILTER}'", script)
         self.assertIn("test(/^runtime_lane::(replay_streams|rt_replay)::/)", matrix.DEVICE_TEST_FILTER)
 
+    def test_the_tree_carries_metal_s_observations_and_no_other_backend_s(self):
+        head = matrix.linux_head("abc", "")
+        self.assertIn(f"git archive HEAD -- {matrix.METAL_OBSERVATIONS} | tar -x", head)
+        self.assertIn('":(exclude)crates/metal2vulkan-validation/corpus/observations"', head)
+
     def test_the_harness_suite_takes_no_test_filter(self):
         leg = matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")
         script = matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40, "harness", False)
