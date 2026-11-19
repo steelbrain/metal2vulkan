@@ -6066,8 +6066,8 @@ impl Side for MetalSide {
     ) -> Answer<crate::fence_orders::FenceOrder> {
         use crate::event_orders::{Status, COMPLETION};
         use crate::fence_orders::{
-            written_words, FenceOrder, FenceShape, BUSY, BYTES, HELD_BOUND, LONG_FILLS,
-            LONG_FILL_BYTES, WRITTEN,
+            written_words, FenceOrder, FenceShape, BYTES, HELD_BOUND, LONG_FILLS, LONG_FILL_BYTES,
+            WRITTEN,
         };
         objc2::rc::autoreleasepool(|_| {
             let device = &self.device;
@@ -6116,8 +6116,8 @@ impl Side for MetalSide {
             };
             // The busy command buffers ahead of the updater, each a long job, committed at once.
             let mut busy = Vec::new();
-            if shape == FenceShape::TrackedBehindBusy {
-                for _ in 0..BUSY {
+            if shape.busy() > 0 {
+                for _ in 0..shape.busy() {
                     let ahead = command_buffer(&updating_queue)?;
                     let encoder = blit(&ahead)?;
                     long_job(&encoder);
@@ -6139,7 +6139,7 @@ impl Side for MetalSide {
                 objc2_foundation::NSRange::new(0, BYTES as usize),
                 WRITTEN,
             );
-            if shape != FenceShape::TrackedBehindBusy {
+            if shape.untracked() {
                 encoder.updateFence(&fence);
             }
             encoder.endEncoding();
@@ -6147,7 +6147,7 @@ impl Side for MetalSide {
             updater.commit();
             let waiter = command_buffer(&waiting_queue)?;
             let encoder = blit(&waiter)?;
-            if shape != FenceShape::TrackedBehindBusy {
+            if shape.untracked() {
                 encoder.waitForFence(&fence);
             }
             if shape != FenceShape::EmptyWaiter {

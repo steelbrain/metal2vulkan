@@ -45,10 +45,6 @@ pub const LONG_FILL_BYTES: u64 = 64 << 20;
 /// start it.
 pub const LONG_FILLS: u32 = 32;
 
-/// The command buffers committed on the updater's queue ahead of it in
-/// [`FenceShape::TrackedBehindBusy`], each a long job.
-pub const BUSY: usize = 3;
-
 /// How long [`FenceShape::HeldUpdater`] gives the waiter to complete before the probe raises the
 /// event that holds the updater. Its answer is whether the waiter completed within it.
 pub const HELD_BOUND: Duration = Duration::from_secs(2);
@@ -67,16 +63,25 @@ pub enum FenceShape {
     /// copies nothing. Its completed handler counts X's words then
     /// ([`FenceOrder::source_words_when_the_waiter_completed`]). X is untracked.
     EmptyWaiter,
-    /// No fence. [`BUSY`] command buffers, each a long job, then the updater, which fills X, are
+    /// No fence. `busy` command buffers, each a long job, then the updater, which fills X, are
     /// committed on one queue; the waiter on another copies X into Y. X and Y are tracked, so the
     /// order is Metal's hazard tracking's.
-    TrackedBehindBusy,
+    Tracked { busy: usize },
 }
 
 impl FenceShape {
-    /// Whether X and Y are made untracked (`MTLResourceHazardTrackingModeUntracked`).
+    /// Whether X and Y are made untracked (`MTLResourceHazardTrackingModeUntracked`), which is
+    /// also whether the updater updates a fence the waiter waits on.
     pub fn untracked(self) -> bool {
-        self != FenceShape::TrackedBehindBusy
+        !matches!(self, FenceShape::Tracked { .. })
+    }
+
+    /// The command buffers, each a long job, committed on the updater's queue ahead of it.
+    pub fn busy(self) -> usize {
+        match self {
+            FenceShape::Tracked { busy } => busy,
+            _ => 0,
+        }
     }
 
     /// The bytes a case's inputs hold for the shape: its name and what it is made of.

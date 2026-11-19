@@ -11,8 +11,7 @@ use super::RtSide;
 use crate::case::{Answer, Failure};
 use crate::event_orders::{Status, COMPLETION};
 use crate::fence_orders::{
-    written_words, FenceOrder, FenceShape, BUSY, BYTES, HELD_BOUND, LONG_FILLS, LONG_FILL_BYTES,
-    WRITTEN,
+    written_words, FenceOrder, FenceShape, BYTES, HELD_BOUND, LONG_FILLS, LONG_FILL_BYTES, WRITTEN,
 };
 use metal2vulkan_rt as rt;
 use std::sync::mpsc;
@@ -46,8 +45,8 @@ impl RtSide<'_> {
         let gate = device.new_shared_event().map_err(of_rt)?;
         // The busy command buffers ahead of the updater, each a long job, committed at once.
         let mut busy = Vec::new();
-        if shape == FenceShape::TrackedBehindBusy {
-            for _ in 0..BUSY {
+        if shape.busy() > 0 {
+            for _ in 0..shape.busy() {
                 let ahead = updating_queue.command_buffer().map_err(of_rt)?;
                 let mut encoder = ahead.blit_command_encoder().map_err(of_rt)?;
                 long_job(&mut encoder, &long)?;
@@ -65,7 +64,7 @@ impl RtSide<'_> {
             long_job(&mut encoder, &long)?;
         }
         (encoder.fill_buffer(&x, 0..BYTES, WRITTEN)).map_err(of_rt)?;
-        if shape != FenceShape::TrackedBehindBusy {
+        if shape.untracked() {
             encoder.update_fence(&fence).map_err(of_rt)?;
         }
         encoder.end_encoding();
@@ -74,7 +73,7 @@ impl RtSide<'_> {
         updater.commit().map_err(of_rt)?;
         let waiter = waiting_queue.command_buffer().map_err(of_rt)?;
         let mut encoder = waiter.blit_command_encoder().map_err(of_rt)?;
-        if shape != FenceShape::TrackedBehindBusy {
+        if shape.untracked() {
             encoder.wait_for_fence(&fence).map_err(of_rt)?;
         }
         if shape != FenceShape::EmptyWaiter {

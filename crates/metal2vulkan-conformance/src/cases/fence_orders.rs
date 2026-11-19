@@ -1,7 +1,7 @@
 //! What a fence orders between two queues, measured on Metal, and what Metal's hazard tracking
 //! orders between them with no fence ([`crate::fence_orders`] holds the vocabulary).
 //!
-//! Four cases, each one experiment of an **updater** on one queue, which fills a buffer X, and a
+//! Six cases, each one experiment of an **updater** on one queue, which fills a buffer X, and a
 //! **waiter** on another, committed after it, which copies X into a buffer Y:
 //!
 //! - [`ORDERED`]: X and Y untracked, so only the fence orders the two. The updater runs a long job,
@@ -12,21 +12,20 @@
 //!   before the release, and Y holds the words it held before.
 //! - [`EMPTY_WAITER`]: the waiter's encoder only waits on the fence. It completes after the
 //!   updater: X holds the updater's words when its completed handler runs.
-//! - [`TRACKED_BEHIND_BUSY`]: no fence, X and Y tracked, and the updater committed behind three
-//!   busy command buffers of its queue. Metal's hazard tracking runs the waiter after it: Y holds
-//!   the updater's words.
+//! - [`TRACKED`], [`TRACKED_BEHIND_ONE`], [`TRACKED_BEHIND_BUSY`]: no fence, X and Y tracked, and
+//!   the updater committed behind none, one or three busy command buffers of its queue: what
+//!   Metal's hazard tracking orders between two queues by itself. Behind three, the M3 Max ran the
+//!   waiter without the updater's words.
 //!
-//! These are the answers the probe `probes/cross_queue_fence_held_update.m` measured with compute
-//! dispatches on an Apple M3 Max under macOS 27.0.1; the recordings hold what Metal answers for
-//! this blit form.
+//! The first three are the answers the probe `probes/cross_queue_fence_held_update.m` measured
+//! with compute dispatches on an Apple M3 Max under macOS 27.0.1; the recordings hold what Metal
+//! answers for this blit form.
 //!
 //! Every wait is bounded and the one command buffer held is held by an event the probe raises, so
 //! nothing here can hang; nothing renders, nothing dispatches and no loop runs on the GPU.
 
 use crate::case::{Abort, Case, Input, MetalSource, Side};
-use crate::fence_orders::{
-    FenceShape, BUSY, BYTES, HELD_BOUND, LONG_FILLS, LONG_FILL_BYTES, WRITTEN,
-};
+use crate::fence_orders::{FenceShape, BYTES, HELD_BOUND, LONG_FILLS, LONG_FILL_BYTES, WRITTEN};
 use crate::transcript::{Node, Observed, Sites};
 
 /// A fence update on one queue, waited on by another's command buffer committed after it.
@@ -41,6 +40,12 @@ pub const EMPTY_WAITER: &str = "fence-empty-waiter";
 /// No fence: tracked buffers, the writer behind three busy command buffers of its queue.
 pub const TRACKED_BEHIND_BUSY: &str = "fence-none-tracked-behind-busy";
 
+/// No fence: tracked buffers, the writer behind one busy command buffer of its queue.
+pub const TRACKED_BEHIND_ONE: &str = "fence-none-tracked-behind-one";
+
+/// No fence: tracked buffers, nothing ahead of the writer on its queue.
+pub const TRACKED: &str = "fence-none-tracked";
+
 /// The site each case's answer sits at.
 const AT: &str = "order";
 
@@ -50,13 +55,15 @@ pub struct FenceOrderCase {
     shape: FenceShape,
 }
 
-/// The four cases.
+/// The six cases.
 pub fn all() -> Vec<FenceOrderCase> {
     [
         (ORDERED, FenceShape::Ordered),
         (HELD_UPDATER, FenceShape::HeldUpdater),
         (EMPTY_WAITER, FenceShape::EmptyWaiter),
-        (TRACKED_BEHIND_BUSY, FenceShape::TrackedBehindBusy),
+        (TRACKED, FenceShape::Tracked { busy: 0 }),
+        (TRACKED_BEHIND_ONE, FenceShape::Tracked { busy: 1 }),
+        (TRACKED_BEHIND_BUSY, FenceShape::Tracked { busy: 3 }),
     ]
     .into_iter()
     .map(|(name, shape)| FenceOrderCase { name, shape })
@@ -83,7 +90,6 @@ impl Case for FenceOrderCase {
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let mut job = LONG_FILL_BYTES.to_le_bytes().to_vec();
         job.extend(LONG_FILLS.to_le_bytes());
-        job.extend((BUSY as u64).to_le_bytes());
         job.extend((HELD_BOUND.as_millis() as u64).to_le_bytes());
         Ok(vec![
             Input::bytes("shape", &self.shape.words()),
@@ -92,7 +98,7 @@ impl Case for FenceOrderCase {
                 words.push(WRITTEN);
                 words
             }),
-            Input::bytes("long-job-busy-and-bound", &job),
+            Input::bytes("long-job-and-bound", &job),
         ])
     }
 
