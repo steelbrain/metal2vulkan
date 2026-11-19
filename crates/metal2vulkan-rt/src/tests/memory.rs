@@ -1073,14 +1073,12 @@ mod on_device {
         }
     }
 
-    /// A free that begins on time: once its allocation has been idle for the idle age, and no
-    /// later than the end of the free before it, or that age, and `SLACK`.
-    const SLACK: u64 = 50_000_000;
-
     /// Checks each free of `frees` (when its allocation became idle, when its free began and
-    /// ended) began at its idle age, one at a time, within [`SLACK`] of when it was due.
-    fn assert_freed_at_the_idle_age(name: &str, frees: &[(u64, u64, u64)]) {
-        let mut ended = 0;
+    /// ended) began at its idle age or after, and after the free before it ended: one at a time.
+    /// Returns the latest of them past when it could begin (its idle age, or the end of the free
+    /// before it), in microseconds: a time, which the matrix's GPU legs judge, never this suite.
+    fn assert_freed_at_the_idle_age(name: &str, frees: &[(u64, u64, u64)]) -> f64 {
+        let (mut ended, mut late) = (0, 0);
         for (index, &(since, began, end)) in frees.iter().enumerate() {
             let due = since + IDLE_AGE_NANOS;
             assert!(
@@ -1089,20 +1087,20 @@ mod on_device {
                 (began - since) / 1000
             );
             assert!(
-                began <= due.max(ended) + SLACK,
-                "{name}: free {index} began {} us past its idle age, the free before it ending {} \
-                 us past",
-                (began - due) / 1000,
-                ended.saturating_sub(due) / 1000
+                began >= ended && end >= began,
+                "{name}: free {index} began {} us before the free before it ended",
+                ended.saturating_sub(began) / 1000
             );
+            late = late.max(began - due.max(ended));
             ended = end;
         }
+        late as f64 / 1e3
     }
 
     /// Each idle allocation is freed at its idle age, oldest first: four Shared blocks of 16 MiB,
     /// each with an allocation of its own, taken beside a small block and given back are kept,
-    /// their allocations idle, the oldest idle age gauge under the idle age. 50 ms on, a take of
-    /// their length takes the newest again, counted as taken again between 50 and 250 ms idle,
+    /// their allocations idle, the oldest idle age gauge no older than the first give-back. A take
+    /// of their length right then takes the newest again, counted in the bucket of its idle time,
     /// and holds it for 300 ms: the other three are freed at their idle age, one at a time, after
     /// the hook of the block kept in each, on the block-maker thread. Given back again, the fourth
     /// is freed at its idle age from then. The small block's allocation, once its block is given
@@ -1131,37 +1129,53 @@ mod on_device {
             let mut handed: Vec<BlockId> = taken.iter().map(|block| block.id).collect();
             handed.push(small.id);
             let before = counters.metrics();
+            let releasing = crate::host_time();
             for block in taken {
                 device.release_block(block).expect("a release");
             }
             wait_until("the four kept", || core.pool.kept(MemoryClass::Shared) == 4);
             let gauges = counters.gauges();
+            let read = crate::host_time();
             assert_eq!(gauges.shared_idle_bytes, 4 * len, "{name}: four idle");
             assert!(
                 gauges.shared_idle_age_nanos > 0
-                    && gauges.shared_idle_age_nanos < IDLE_AGE_NANOS + SLACK,
-                "{name}: the oldest idle age, {} us",
-                gauges.shared_idle_age_nanos / 1000
+                    && gauges.shared_idle_age_nanos <= read - releasing,
+                "{name}: the oldest idle age, {} us, {} us after the first give-back",
+                gauges.shared_idle_age_nanos / 1000,
+                (read - releasing) / 1000
             );
 
-            // 50 ms on, the newest taken again: its idle time ends.
-            thread::sleep(Duration::from_millis(50));
+            // The newest taken again: its idle time ends, counted by how long it was idle. The
+            // take must come within the idle age of the give-back, which the test's own clock
+            // reads state: past it, the block-maker may have freed the allocation.
             let again = (device.take_block(MemoryClass::Shared, len))
                 .unwrap_or_else(|error| panic!("{name}: a block: {error}"));
+            let taken = crate::host_time();
+            assert!(
+                taken - releasing < IDLE_AGE_NANOS,
+                "{name}: this test's thread took the block {} us after the give-back, past the \
+                 idle age: the test, not the runtime, was late",
+                (taken - releasing) / 1000
+            );
             assert_eq!(again.id.get(), four[3], "{name}: the newest kept block");
             let reuses = counters.metrics().idle_reuses_by_age;
             let new = |at: usize| reuses[at] - before.idle_reuses_by_age[at];
+            let ages = 0..=reuse_bucket(taken - releasing);
             assert_eq!(
-                (new(0), new(1) + new(2), (3..7).map(new).sum::<u64>()),
-                (0, 1, 0),
-                "{name}: taken again 50 to 250 ms idle: {reuses:?}"
+                (
+                    ages.clone().map(new).sum::<u64>(),
+                    (0..7).map(new).sum::<u64>()
+                ),
+                (1, 1),
+                "{name}: taken again at most {} us idle, buckets {ages:?}: {reuses:?}",
+                (taken - releasing) / 1000
             );
 
             // The other three freed at their idle age, oldest first.
             wait_until("three idle Shared allocations freed", || {
                 core.pool.frees().len() == 3 && !core.pool.freeing()
             });
-            assert_freed_at_the_idle_age(name, &core.pool.frees());
+            let mut late = assert_freed_at_the_idle_age(name, &core.pool.frees());
             let unmapped = hook.unmapped();
             assert_eq!(unmapped.len(), 3, "{name}: {unmapped:?}");
             for (unmapped, block) in unmapped.iter().zip(&four) {
@@ -1187,7 +1201,7 @@ mod on_device {
                 frees[3].0 >= released,
                 "{name}: the fourth's idle time starts at its second give-back"
             );
-            assert_freed_at_the_idle_age(name, &frees[3..]);
+            late = late.max(assert_freed_at_the_idle_age(name, &frees[3..]));
             assert_eq!(hook.unmapped()[3].block, four[3], "{name}: the fourth");
 
             // The small block's allocation is the reserve: kept past the idle age, unweighed.
@@ -1195,7 +1209,7 @@ mod on_device {
             wait_until("the small block kept", || {
                 core.pool.kept(MemoryClass::Shared) == 1
             });
-            thread::sleep(Duration::from_nanos(IDLE_AGE_NANOS + SLACK));
+            thread::sleep(Duration::from_nanos(2 * IDLE_AGE_NANOS));
             let gauges = counters.gauges();
             assert_eq!(
                 (
@@ -1229,7 +1243,17 @@ mod on_device {
                 free_times(&frees),
                 counters.metrics()
             );
+            println!("M2V-MATRIX time idle_frees/latest_past_due {late:.3}");
         }
+    }
+
+    /// The bucket of [`Metrics::idle_reuses_by_age`](crate::Metrics::idle_reuses_by_age) an idle
+    /// time of `nanos` counts in: the runtime's upper bounds, 50, 100, 250, 500, 1000 and
+    /// 2000 ms.
+    fn reuse_bucket(nanos: u64) -> usize {
+        ([50, 100, 250, 500, 1000, 2000].iter())
+            .position(|&ms: &u64| nanos < ms * 1_000_000)
+            .unwrap_or(6)
     }
 
     /// Each free's idle time when it began and its length, in microseconds.
@@ -1240,11 +1264,12 @@ mod on_device {
     }
 
     /// Steady commits hold no idle allocation, and a submission during a free is counted. A
-    /// command buffer is committed every 2 ms for 3 seconds; 0.5 and 1.5 seconds in, a Shared
-    /// block of 16 MiB with an allocation of its own is given back. Each is freed at its idle age
-    /// while the commits go on, so a block made idle is freed within the idle age, one free's
-    /// length and a slack, and by 1.4 seconds in and once the commits stop, the Shared idle bytes
-    /// are the made-ahead amount they were before. Then the free of a third is held open: a
+    /// command buffer is committed every 2 ms; 0.5 seconds in, a Shared block of 16 MiB with an
+    /// allocation of its own is given back, and a second once the first's free ended and the
+    /// Shared idle bytes were seen back at the made-ahead amount; the commits stop once the
+    /// second's free ended. Each is freed at its idle age or after, one at a time, while the
+    /// commits go on, and once they stop the Shared idle bytes are the made-ahead amount they were
+    /// before. Then the free of a third is held open: a
     /// command buffer committed with a fill during it is counted as a submission during a free,
     /// and one committed once the free ended is not.
     #[test]
@@ -1280,19 +1305,25 @@ mod on_device {
             assert_eq!(made_ahead, len, "{name}: one Shared allocation made ahead");
             let before = counters.metrics();
 
-            // Commits every 2 ms for 3 seconds, a block given back 0.5 and 1.5 seconds in.
+            // Commits every 2 ms: a block given back 0.5 seconds in, the second once the first's
+            // free ended, until the second's free ended.
             let started = Instant::now();
             let mut given = Vec::new();
             let mut between = None;
             let mut commits = 0;
-            while started.elapsed() < Duration::from_secs(3) {
-                let at = started.elapsed();
-                if at >= Duration::from_millis(500 + 1000 * given.len() as u64) && given.len() < 2 {
+            let ended = |count: usize| core.pool.frees().len() == count && !core.pool.freeing();
+            while !(given.len() == 2 && ended(2)) {
+                assert!(
+                    started.elapsed() < Duration::from_secs(120),
+                    "{name}: the frees"
+                );
+                if given.is_empty() && started.elapsed() >= Duration::from_millis(500) {
                     given.push(crate::host_time());
                     device.release_block(blocks.remove(0)).expect("a release");
-                }
-                if between.is_none() && at >= Duration::from_millis(1400) {
+                } else if given.len() == 1 && ended(1) {
                     between = Some(counters.gauges().shared_idle_bytes);
+                    given.push(crate::host_time());
+                    device.release_block(blocks.remove(0)).expect("a release");
                 }
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 command_buffer.commit().expect("a commit");
@@ -1302,7 +1333,8 @@ mod on_device {
             let stopped = crate::host_time();
             let frees = core.pool.frees();
             assert_eq!(frees.len(), 2, "{name}: both freed during the commits");
-            assert_freed_at_the_idle_age(name, &frees);
+            let late = assert_freed_at_the_idle_age(name, &frees);
+            println!("M2V-MATRIX time idle_frees_under_commits/latest_past_due {late:.3}");
             for ((since, _, end), given) in frees.iter().zip(&given) {
                 assert!(
                     since >= given && *end < stopped,

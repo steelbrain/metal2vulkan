@@ -537,6 +537,16 @@ impl Work {
         lock(&self.turn)
     }
 
+    /// Whether a commit holds its turn: it began its count of the wait for the work lock
+    /// ([`turn`](Self::turn) is taken after it).
+    #[cfg(test)]
+    pub(crate) fn turn_taken(&self) -> bool {
+        matches!(
+            self.turn.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
+    }
+
     /// At a commit of a command buffer with commands, in the commit's turn
     /// ([`turn`](Self::turn)), on the committing thread, under the work lock `state` (released
     /// while it copies and while it waits): captures every Managed buffer's range named since the

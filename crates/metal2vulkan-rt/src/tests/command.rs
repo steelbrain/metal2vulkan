@@ -1233,8 +1233,8 @@ pub(crate) mod on_device {
     }
 
     /// A commit's wait for the submission lock is counted: one made while another thread holds
-    /// the lock for 20 ms waits at least half that long (the committing thread starts within the
-    /// 20 ms, not before them).
+    /// the lock counts at least the time from its turn (taken after its count began) to the
+    /// lock's release, here 20 ms or more. No clock of the test's bounds it from above.
     #[test]
     fn every_device_counts_a_commits_wait_for_the_submission_lock() {
         each_device("command_lock_wait", |name, _, device| {
@@ -1248,15 +1248,19 @@ pub(crate) mod on_device {
                 let command_buffer = command_buffer.clone();
                 thread::spawn(move || command_buffer.commit().expect("a commit"))
             };
+            within("the commit's turn", || device.core().work.turn_taken());
+            let waiting = host_time();
             thread::sleep(Duration::from_millis(20));
+            let released = host_time();
             drop(held);
             committing.join().expect("the committing thread");
             finished(name, &command_buffer);
             let metrics = device.counters().metrics();
             assert!(
-                metrics.commit_lock_wait_max_nanos >= 10_000_000,
-                "{name}: {}",
-                metrics.commit_lock_wait_max_nanos
+                metrics.commit_lock_wait_max_nanos >= released - waiting,
+                "{name}: {} counted, the lock held {} past the commit's turn",
+                metrics.commit_lock_wait_max_nanos,
+                released - waiting
             );
             assert!(metrics.commit_lock_wait_nanos >= metrics.commit_lock_wait_max_nanos);
             drop((command_buffer, buffer, arena, queue, device));
@@ -1838,11 +1842,10 @@ pub(crate) mod on_device {
                     .expect("the quiescing thread")
             });
             assert!(quiesced, "{name}: idle within the timeout");
-            let started = Instant::now();
-            assert!(device.quiesce(PATIENCE), "{name}: the first call's answer");
+            // With no time to wait, the first call's answer: given at once.
             assert!(
-                started.elapsed() < Duration::from_secs(1),
-                "{name}: at once"
+                device.quiesce(Duration::ZERO),
+                "{name}: the first call's answer, at once"
             );
             assert_eq!(held.error(), Some(CommandBufferError::NotRun), "{name}");
             held.wait_until_completed()
@@ -1974,8 +1977,9 @@ pub(crate) mod on_device {
     }
 
     /// Quiesce in a scheduled handler answers false at once: the submit thread, which runs the
-    /// handler, is not waited for, nor is the completion thread, which it stops as it ends. The
-    /// command buffer still completes, and the device then tears down.
+    /// handler, is not waited for, nor is the completion thread, which it stops as it ends. Its
+    /// deadline is ten times the test's patience, so an answer within that patience was not the
+    /// deadline's. The command buffer still completes, and the device then tears down.
     #[test]
     fn every_device_answers_false_to_a_quiesce_in_a_scheduled_handler() {
         each_device("scheduled_quiesce", |name, _, device| {
@@ -1989,18 +1993,13 @@ pub(crate) mod on_device {
             let quiescing = device.clone();
             command_buffer
                 .add_scheduled_handler(move |_| {
-                    let began = Instant::now();
-                    let idle = quiescing.quiesce(PATIENCE);
-                    let _ = answered.send((idle, began.elapsed()));
+                    let _ = answered.send(quiescing.quiesce(PATIENCE * 10));
                 })
                 .expect("a handler");
             command_buffer.commit().expect("a commit");
-            let (idle, took) = answer.recv_timeout(PATIENCE).expect("the handler's answer");
+            let idle =
+                (answer.recv_timeout(PATIENCE)).expect("the handler's answer, before its deadline");
             assert!(!idle, "{name}: false in a scheduled handler");
-            assert!(
-                took < Duration::from_secs(1),
-                "{name}: at once, took {took:?}"
-            );
             finished(name, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{name}: it ran");
             assert_eq!(word(&a), 9, "{name}");
