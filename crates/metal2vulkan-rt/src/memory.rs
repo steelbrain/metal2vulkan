@@ -796,7 +796,10 @@ impl Pool {
     pub(crate) fn allocations(&self, class: MemoryClass) -> Vec<(AllocationId, u64, usize, u64)> {
         let state = self.lock();
         (state.allocations[class.index()].iter())
-            .map(|a| (a.id, a.len, a.live, a.free.bytes()))
+            .map(|a| {
+                let free = a.free.free().iter().map(|&(start, end)| end - start).sum();
+                (a.id, a.len, a.live, free)
+            })
             .collect()
     }
 

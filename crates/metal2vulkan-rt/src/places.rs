@@ -208,11 +208,6 @@ impl Ranges {
         }
     }
 
-    /// The bytes free.
-    pub(crate) fn bytes(&self) -> u64 {
-        self.free.iter().map(|&(start, end)| end - start).sum()
-    }
-
     /// For the tests: the free ranges.
     #[cfg(test)]
     pub(crate) fn free(&self) -> &[(u64, u64)] {
