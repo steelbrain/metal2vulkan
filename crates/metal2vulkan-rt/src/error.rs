@@ -1340,9 +1340,11 @@ pub enum TextureViewKind {
     /// Another texture type than the casts built
     /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)).
     TextureType,
-    /// A cube view of a 2D array, one of Metal's casts: Vulkan views an image as a cube only
-    /// where the image was made cube-compatible, and a 2D array's image is made without it. No
-    /// stream makes one.
+    /// A cube view of a 2D array whose image is not cube-compatible, one of Metal's casts: Vulkan
+    /// views an image as a cube only where the image was made cube-compatible, which a square 2D
+    /// array of six slices or more is where the device's image format query takes the flag for
+    /// its format and usage. A non-square array's image is not
+    /// (`VUID-VkImageCreateInfo-flags-08865`).
     CubeOfArray,
     /// Some of the slices of a texture that is not a 1D or 2D array: a 2D multisample array's.
     Slices,
@@ -2083,7 +2085,7 @@ impl fmt::Display for Gap {
             Gap::TextureView {
                 kind: TextureViewKind::CubeOfArray,
             } => f.write_str(
-                "a cube view of a 2D array is not built: Vulkan views an image as a cube only where the image was made cube-compatible, and a 2D array's is not",
+                "a cube view of a 2D array whose image is not cube-compatible is not built: Vulkan views an image as a cube only where the image was made cube-compatible, which a non-square array's, or one whose format the device does not make so, is not",
             ),
             Gap::TextureView { kind } => write!(f, "a texture view that changes {kind:?} is not built"),
             Gap::RenderPass { kind } => write!(f, "a render pass with {kind:?} is not built"),

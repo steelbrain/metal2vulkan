@@ -1208,8 +1208,11 @@ made, with no lock, and never rewritten for layouts.
 - Texture views that change what the replay streams' views keep are not built
   (`Gap::TextureView`, naming the kind): another pixel format the texture's image does not list,
   another texture type than the casts built above, some of a 2D multisample array's slices, and a
-  cube view of a 2D array (`TextureViewKind::CubeOfArray`), which needs a cube-compatible image
-  that a 2D array's is not made as. A view of a pixel format Metal does not
+  cube view of a 2D array whose image is not cube-compatible (`TextureViewKind::CubeOfArray`): a
+  square 2D array of six slices or more is made cube-compatible where the device's image format
+  query takes the flag for its format and usage, and its cube views of six slices are built; a
+  non-square array's image is not. A view as a cube array stays `Gap::CubeArrayTexture`, as its
+  view needs `imageCubeArray`, which the floor does not require. A view of a pixel format Metal does not
   view the texture as is `Refusal::TextureViewFormat`.
 - A swizzle reaches a texture's sampled element alone, as Apple defines it for reads and
   samples. A swizzled texture, or a view made with a swizzle or of a swizzled texture, has a

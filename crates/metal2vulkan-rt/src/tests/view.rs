@@ -413,7 +413,9 @@ mod on_device {
             let mut d = TextureDescriptor::new(TextureType::Cube, rgba, 4, 4);
             d.usage = TextureUsage::SHADER_READ;
             let cube = device.new_texture(&d, Some(4114)).expect("a texture");
-            let mut d = TextureDescriptor::new(Type2DArray, rgba, 4, 4);
+            // A non-square 2D array, whose image is not cube-compatible (a square one's cube view
+            // is `tests::cube_views`').
+            let mut d = TextureDescriptor::new(Type2DArray, rgba, 4, 2);
             d.array_length = 6;
             d.usage = TextureUsage::SHADER_READ;
             let six = device.new_texture(&d, Some(4118)).expect("a texture");
@@ -438,7 +440,7 @@ mod on_device {
             }
             for (case, result, kind) in [
                 (
-                    "a cube of a 2D array",
+                    "a cube of a non-square 2D array",
                     view(&six, rgba, TextureType::Cube, 0..1, 0..6),
                     TextureViewKind::CubeOfArray,
                 ),

@@ -384,6 +384,8 @@ pub(crate) struct Image {
     format: vk::Format,
     usage: vk::ImageUsageFlags,
     view_formats: Vec<vk::Format>,
+    /// The image is cube-compatible ([`Plan`]'s `cube`), so a cube view takes six of its layers.
+    cube: bool,
     /// The layout its move home starts from: undefined; preinitialized for a texture over a buffer
     /// in place, whose move home keeps the bytes; zero-initialized for a texture whose memory
     /// reads the driver's zeros, which no resource used, whose move home then zeroes it with no
@@ -703,6 +705,7 @@ impl Image {
             format: plan.format,
             usage: plan.usage,
             view_formats: plan.view_formats.clone(),
+            cube: plan.cube,
             first: vk::ImageLayout::UNDEFINED,
             homed: AtomicBool::new(false),
             zero: None,
@@ -1218,6 +1221,7 @@ impl Device {
             format: plan.format,
             usage: swapchain.image_usage,
             view_formats: Vec::new(),
+            cube: false,
             first: vk::ImageLayout::UNDEFINED,
             // No move home until the consumer acquires it.
             homed: AtomicBool::new(true),
@@ -1416,6 +1420,7 @@ impl Device {
             format: plan.format,
             usage: plan.usage,
             view_formats: plan.view_formats.clone(),
+            cube: plan.cube,
             first,
             homed: AtomicBool::new(false),
             zero,
@@ -1521,6 +1526,13 @@ struct Plan {
     /// format the device holds in the image format's class (`view_formats`); empty where it has no
     /// such view, and the image is not mutable.
     view_formats: Vec<vk::Format>,
+    /// The image is made cube-compatible, so Metal's cube view of six of a 2D array's slices
+    /// views it ([`Texture::new_texture_view`]): a square 2D array of six slices or more whose
+    /// format the device's image format query makes so ([`plan`]). Vulkan takes the flag on such
+    /// an image alone (`VUID-VkImageCreateInfo-flags-08865`, `-08866`); a 2D array is never
+    /// multisample, which `VUID-VkImageCreateInfo-samples-02257` bars. A cube's own image is
+    /// cube-compatible through its shape's flags.
+    cube: bool,
 }
 
 impl Plan {
@@ -1543,12 +1555,17 @@ impl Plan {
         }
     }
 
-    /// The image's create flags over `shape`'s: mutable where it lists formats for its views.
+    /// The image's create flags over `shape`'s: mutable where it lists formats for its views, and
+    /// cube-compatible where the plan makes it so.
     fn flags(&self, shape: &Shape) -> vk::ImageCreateFlags {
-        match self.view_formats.is_empty() {
-            true => shape.flags,
-            false => shape.flags | vk::ImageCreateFlags::MUTABLE_FORMAT,
+        let mut flags = shape.flags;
+        if !self.view_formats.is_empty() {
+            flags |= vk::ImageCreateFlags::MUTABLE_FORMAT;
         }
+        if self.cube {
+            flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
+        }
+        flags
     }
 
     /// The image's format list, which its create info and its format queries chain where it is
@@ -1934,6 +1951,8 @@ fn plan(
     let gap = || Error::Unsupported(Gap::TextureFormat { pixel_format: pf });
     let profile = core.translator.profile();
     plan.view_formats = view_formats(profile, pf, usage, &plan);
+    plan.cube =
+        d.texture_type == TextureType::Type2DArray && d.width == d.height && d.array_length >= 6;
     let read = plan.usage.contains(vk::ImageUsageFlags::SAMPLED);
     let render = plan.usage.intersects(
         vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -1962,6 +1981,13 @@ fn plan(
         info = info.push_next(&mut list);
     }
     let mut properties = core.image_format_properties(&info);
+    // A square 2D array whose format the device does not make cube-compatible is made without
+    // the flag, and a cube view of it is `TextureViewKind::CubeOfArray`.
+    if properties.is_none() && plan.cube {
+        plan.cube = false;
+        info = info.flags(plan.flags(shape));
+        properties = core.image_format_properties(&info);
+    }
     // A format the device makes without the feedback usage alone is made so, and its draws read
     // no attachment of their own pass through it.
     if properties.is_none() && looped {
@@ -2157,6 +2183,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         class: block.class,
         supported,
         view_formats: Vec::new(),
+        cube: false,
     })
 }
 
@@ -3121,8 +3148,10 @@ impl Texture {
     ///
     /// Built: the texture's own pixel format or another its image lists, over every slice in the
     /// texture's own type, a slice subrange of a 1D or 2D array, a 2D texture as a 2D array of its
-    /// one slice, one slice of a 2D array as a 2D texture, and a cube's faces as a 2D texture (one
-    /// face) or a 2D array (any faces), each over any level subrange. A view as a cube array is
+    /// one slice, one slice of a 2D array as a 2D texture, a cube's faces as a 2D texture (one
+    /// face) or a 2D array (any faces), and six slices of a square 2D array as a cube, its image
+    /// made cube-compatible where the device's format query takes the flag, each over any level
+    /// subrange. A view as a cube array is
     /// [`Gap::CubeArrayTexture`], as a cube array texture is. A texture's image lists the formats Metal views
     /// it as that the device holds in a viewed form of the image format's compatibility class: its
     /// sRGB sibling whatever its usage, and with `PixelFormatView` usage, or an empty usage
@@ -3252,6 +3281,7 @@ impl Texture {
             }
             (T::Type2D, T::Type2DArray) | (T::Type2DArray, T::Type2D) => {}
             (T::Cube, T::Type2D | T::Type2DArray) => {}
+            (T::Type2DArray, T::Cube) if inner.image.cube => {}
             (T::Type2DArray, T::Cube) => return gap(TextureViewKind::CubeOfArray),
             _ => return gap(TextureViewKind::TextureType),
         }
@@ -4501,6 +4531,7 @@ impl Device {
             format: made.format,
             usage: made.usage,
             view_formats: made.view_formats,
+            cube: false,
             first: match general {
                 true => home,
                 false => vk::ImageLayout::UNDEFINED,

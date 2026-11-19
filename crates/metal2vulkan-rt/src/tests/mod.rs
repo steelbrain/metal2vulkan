@@ -9,6 +9,7 @@ mod command;
 mod compute;
 mod copy_out;
 mod copy_over;
+mod cube_views;
 mod d3d11;
 mod device;
 mod dma_bufs;
