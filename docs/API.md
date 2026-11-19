@@ -1086,12 +1086,12 @@ through buffer arguments it reads at any index.
   initializer, in every threadgroup of every dispatch. That needs
   `shaderZeroInitializeWorkgroupMemory`, which Vulkan 1.3 requires; a function that uses
   threadgroup memory on a profile without it is `Unsupported` with
-  `Feature::ZeroedThreadgroupMemory`. The translator's own `Workgroup` words (an emulated SIMD
-  group's exchange scratch and vote word, an object function's mesh grid, a mesh function's
-  primitive count and staged indices, an emulated object or mesh function's payload, and the
-  binder's own scan and merge kernels) have none: each is written before any read of it, and an
-  object function's payload "is assumed uninitialized at the entry of the object function" (the
-  Metal Shading Language Specification, the `payload` attribute). Metal's documents give
+  `Feature::ZeroedThreadgroupMemory`. The translator's own `Workgroup` words have none: an
+  emulated SIMD group's exchange scratch and vote word, an object function's mesh grid, a mesh
+  function's primitive count and staged indices, an emulated object or mesh function's payload,
+  and those of the binder's own scan, shadow-merge and index-rewrite kernels. Each is written
+  before any read of it, and an object function's payload "is assumed uninitialized at the entry
+  of the object function" (the Metal Shading Language Specification, the `payload` attribute). Metal's documents give
   threadgroup memory no first contents: `MTLComputeCommandEncoder.h`'s
   `setThreadgroupMemoryLength:atIndex:` reads "Set the threadgroup memory byte length at the
   binding point specified by the index. This applies to all compute kernels.", Apple's page for it
