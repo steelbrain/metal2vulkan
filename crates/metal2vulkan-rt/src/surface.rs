@@ -30,6 +30,7 @@ use crate::hazard::HeapId;
 use crate::memory;
 use crate::submit::Held;
 use crate::texture::{Backing, SurfaceImage, Texture, TextureDescriptor, TextureObject};
+use crate::times::host_time;
 use ash::vk;
 use std::sync::{Arc, Mutex};
 
@@ -661,7 +662,14 @@ impl Device {
         }
         // The images move to the general layout before the handle leaves.
         let value = core.work.flush();
+        let began = host_time();
+        // SAFETY: the progress semaphore is the device's, live while the core is.
+        let reached = unsafe { core.device.get_semaphore_counter_value(core.done.progress) }
+            .map_err(Error::vulkan("vkGetSemaphoreCounterValue"))?;
         core.done.wait(core, value)?;
+        let waited = host_time().saturating_sub(began);
+        core.counters
+            .surface_wait(waited, value.saturating_sub(reached));
         core.counters.count(Metric::SurfacesInPlace);
         let view = View {
             unit,

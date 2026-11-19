@@ -340,6 +340,10 @@ struct Atomics {
     external_releases: AtomicU64,
     surfaces_in_place: AtomicU64,
     surfaces_copied: AtomicU64,
+    surface_waits: AtomicU64,
+    surface_wait_nanos: AtomicU64,
+    surface_wait_max_nanos: AtomicU64,
+    surface_wait_submissions: AtomicU64,
     sparse_binds: AtomicU64,
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
@@ -473,6 +477,16 @@ impl Counters {
         a.first_use_waits.fetch_add(1, Relaxed);
         a.first_use_wait_nanos.fetch_add(nanos, Relaxed);
         a.first_use_wait_max_nanos.fetch_max(nanos, Relaxed);
+    }
+
+    /// One more surface wait ([`Metrics::surface_waits`]): `nanos` nanoseconds, for `submissions`
+    /// of the runtime's submissions.
+    pub(crate) fn surface_wait(&self, nanos: u64, submissions: u64) {
+        let a = &self.atomics;
+        a.surface_waits.fetch_add(1, Relaxed);
+        a.surface_wait_nanos.fetch_add(nanos, Relaxed);
+        a.surface_wait_max_nanos.fetch_max(nanos, Relaxed);
+        a.surface_wait_submissions.fetch_add(submissions, Relaxed);
     }
 
     /// A commit that waited `nanos` nanoseconds to take the submission lock
@@ -894,6 +908,10 @@ impl Counters {
             external_releases: a.external_releases.load(Relaxed),
             surfaces_in_place: a.surfaces_in_place.load(Relaxed),
             surfaces_copied: a.surfaces_copied.load(Relaxed),
+            surface_waits: a.surface_waits.load(Relaxed),
+            surface_wait_nanos: a.surface_wait_nanos.load(Relaxed),
+            surface_wait_max_nanos: a.surface_wait_max_nanos.load(Relaxed),
+            surface_wait_submissions: a.surface_wait_submissions.load(Relaxed),
             sparse_binds: a.sparse_binds.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
             capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
@@ -1290,6 +1308,21 @@ pub struct Metrics {
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),
     /// [`SurfaceForm::Copy`](crate::SurfaceForm::Copy)).
     pub surfaces_copied: u64,
+    /// Waits of surfaces made in place for the submission that moves their planes to the general
+    /// layout, on the making thread, before
+    /// [`Device::new_exported_surface`](crate::Device::new_exported_surface) returns: one per
+    /// surface made in place.
+    pub surface_waits: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) the surface waits took, in total.
+    pub surface_wait_nanos: u64,
+    /// The longest surface wait, in nanoseconds; a maximum since the device was made, so the
+    /// difference of two reads does not apply to it.
+    pub surface_wait_max_nanos: u64,
+    /// The runtime's submissions the surface waits waited for, in total: at each wait's start,
+    /// those of the device not yet complete, through the one that moves the planes, which is
+    /// among them. Another API's work is not counted: a wait much longer than these
+    /// submissions' GPU times waited behind work the runtime did not submit.
+    pub surface_wait_submissions: u64,
     /// `vkQueueBindSparse` calls: one for each import over several dma-bufs
     /// (`Device::import_dma_bufs`, on Unix), binding its imports into its buffer. Each signals a
     /// value the next `vkQueueSubmit2` waits for.

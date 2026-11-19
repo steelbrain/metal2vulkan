@@ -2426,6 +2426,10 @@ field	metal2vulkan-rt::Metrics.stamps_not_available	pub stamps_not_available: u6
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-rt::Metrics.submissions_during_frees	pub submissions_during_frees: u64
 field	metal2vulkan-rt::Metrics.submit_infos	pub submit_infos: u64
+field	metal2vulkan-rt::Metrics.surface_wait_max_nanos	pub surface_wait_max_nanos: u64
+field	metal2vulkan-rt::Metrics.surface_wait_nanos	pub surface_wait_nanos: u64
+field	metal2vulkan-rt::Metrics.surface_wait_submissions	pub surface_wait_submissions: u64
+field	metal2vulkan-rt::Metrics.surface_waits	pub surface_waits: u64
 field	metal2vulkan-rt::Metrics.surfaces_copied	pub surfaces_copied: u64
 field	metal2vulkan-rt::Metrics.surfaces_in_place	pub surfaces_in_place: u64
 field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64

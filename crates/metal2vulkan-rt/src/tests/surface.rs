@@ -526,12 +526,26 @@ mod on_device {
                     let made = began.elapsed();
                     let form = export.form;
                     let after = counters.metrics();
+                    let waited = after.surface_waits - before.surface_waits;
+                    let wait_nanos = after.surface_wait_nanos - before.surface_wait_nanos;
+                    let behind = after.surface_wait_submissions - before.surface_wait_submissions;
                     match form {
                         SurfaceForm::InPlace => {
                             assert_eq!(
                                 after.surfaces_in_place,
                                 before.surfaces_in_place + 1,
                                 "{label}"
+                            );
+                            // The make waits once, for at least the submission of the moves.
+                            assert_eq!(waited, 1, "{label}: the make's wait counted");
+                            assert!(behind >= 1, "{label}: {behind} submissions waited for");
+                            assert!(
+                                wait_nanos <= made.as_nanos() as u64,
+                                "{label}: the wait's {wait_nanos} ns within the make's {made:?}"
+                            );
+                            assert!(
+                                after.surface_wait_max_nanos >= wait_nanos,
+                                "{label}: the longest wait"
                             );
                         }
                         SurfaceForm::Copy(_) => {
@@ -540,17 +554,23 @@ mod on_device {
                                 before.surfaces_copied + 1,
                                 "{label}"
                             );
+                            assert_eq!(
+                                (waited, wait_nanos, behind),
+                                (0, 0, 0),
+                                "{label}: the copy form's make waits for nothing"
+                            );
                         }
                     }
                     let index = export.export.memory_type;
                     let flags =
                         flag_names(kinds.memory_types_as_slice()[index as usize].property_flags);
                     println!(
-                        "surface: {label}: form {form:?}, pitch {}, plane 1 at {}, size {}, memory type {index} ({flags}), made in {:.3} ms",
+                        "surface: {label}: form {form:?}, pitch {}, plane 1 at {}, size {}, memory type {index} ({flags}), made in {:.3} ms, its wait {:.3} ms for {behind} submissions",
                         export.planes[0].row_pitch,
                         export.planes[1].offset,
                         export.export.size,
-                        made.as_secs_f64() * 1e3
+                        made.as_secs_f64() * 1e3,
+                        wait_nanos as f64 / 1e6
                     );
                     check_layout(&label, row, planes, &export);
                     if row.name == "NVIDIA" && form == SurfaceForm::InPlace {
