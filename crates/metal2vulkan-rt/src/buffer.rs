@@ -498,6 +498,15 @@ impl Buffer {
         (&self.inner.block, self.inner.copy.as_ref())
     }
 
+    /// What holds the bytes [`device_range`](Self::device_range) names, for an upload that reads
+    /// them to keep until it retires: a Managed buffer's device copy, else the buffer's block.
+    pub(crate) fn device_held(&self) -> Held {
+        match &self.inner.copy {
+            Some(copy) => Held::Copy(Arc::clone(copy)),
+            None => Held::Block(Arc::clone(&self.inner.block)),
+        }
+    }
+
     /// The `VkBuffer` shaders reach the buffer through and the buffer's offset in it.
     pub(crate) fn device_range(&self) -> (vk::Buffer, u64) {
         match &self.inner.copy {

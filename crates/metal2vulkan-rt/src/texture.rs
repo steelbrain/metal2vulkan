@@ -3264,8 +3264,11 @@ impl Texture {
     /// being 0, which the consumer has written: what Metal does for a Managed texture's CPU write.
     /// The upload copies them from the named buffer straight into the image, with no CPU copy,
     /// ahead of every command buffer committed after this call on every queue; the copy reads the
-    /// bytes when the GPU reaches it. [`Texture::replace_region`] on such a texture writes the named bytes,
-    /// then calls this. An empty region copies nothing.
+    /// bytes when the GPU reaches it, and the upload keeps the image and the bytes it reads (a
+    /// Managed buffer's device copy, where the device keeps one) until it completes, so the
+    /// consumer may release the texture and the buffer once the call returns.
+    /// [`Texture::replace_region`] on such a texture writes the named bytes, then calls this. An
+    /// empty region copies nothing.
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler;
     /// [`Refusal::ManagedTextureBytes`] for a texture without named bytes, or a depth or
@@ -3310,12 +3313,9 @@ impl Texture {
         core.work.upload(
             core,
             None,
-            [
-                Held::Texture(Arc::clone(&inner.image)),
-                Held::Block(Arc::clone(bytes.held().0)),
-            ],
-            // SAFETY: recording under the work lock, the upload holding the image and the
-            // named buffer's block.
+            [Held::Texture(Arc::clone(&inner.image)), bytes.device_held()],
+            // SAFETY: recording under the work lock, the upload holding the image and the bytes
+            // the copy reads, the named buffer's device copy where it has one, else its block.
             |device, command| unsafe {
                 inner.record(device, command, &copy, (buffer, region), true)
             },

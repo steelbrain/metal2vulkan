@@ -19,7 +19,9 @@
 //!
 //! Managed textures, on every device: the image takes the named bytes of a region at its upload
 //! and nothing outside it, `get_bytes` reads the named bytes, `replace_region` writes them and
-//! uploads them, and places that do not lie as a copy reads them are refused.
+//! uploads them, and places that do not lie as a copy reads them are refused. The upload keeps the
+//! bytes it reads, the device copy's where there is one, until it retires, though the texture and
+//! its buffer go right after the call.
 
 use crate::capture::merge;
 
@@ -1084,6 +1086,62 @@ pub(crate) mod on_device {
                     .release_block(block)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             }
+        });
+    }
+
+    /// The upload of a Managed texture's region keeps the bytes it reads until it retires: with
+    /// the texture, its named Managed buffer and their blocks' handles gone right after the call,
+    /// and the upload not yet submitted, the block of those bytes (the device copy's, where the
+    /// device keeps one) stays out of the pool until the upload has run.
+    #[test]
+    fn every_device_keeps_the_bytes_a_managed_texture_s_upload_reads_until_it_retires() {
+        each_device("managed texture upload hold", |name, _, device| {
+            let cpu = (device.take_block(MemoryClass::Shared, NAMED))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // The block the upload reads: the device copy's where the device keeps one.
+            let (named, read) = match device.has_unified_memory() {
+                true => (
+                    device.new_managed_buffer((cpu.id, 0), None, NAMED, 0),
+                    cpu.id,
+                ),
+                false => {
+                    let copy = (device.take_block(MemoryClass::Private, NAMED))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    let named =
+                        device.new_managed_buffer((cpu.id, 0), Some((copy.id, 0)), NAMED, 0);
+                    (named, copy.id)
+                }
+            };
+            let named = named.unwrap_or_else(|error| panic!("{name}: {error}"));
+            // The device copy's zero fill, whose upload holds it, runs and retires first: an
+            // upload leads its submission.
+            let queue = device.new_command_queue(1).expect("a queue");
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.record_for_test(&[&named], |_, _| {})).expect("a recording");
+            first.commit().expect("a commit");
+            finished(name, &first);
+            let places = [BytesPlace {
+                offset: 0,
+                bytes_per_row: PITCH,
+                bytes_per_image: 0,
+            }];
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, SIDE, SIDE);
+            d.usage = TextureUsage::RENDER_TARGET;
+            let texture = (device.new_managed_texture(&d, None, &named, &places))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            (texture.upload_region(whole(SIDE), 0, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            drop((texture, named, cpu));
+            let core = device.core();
+            assert!(
+                !core.pool.holds(read),
+                "{name}: the bytes the pending upload reads went back to the pool"
+            );
+            let value = core.work.flush();
+            (core.done.wait(core, value)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            within("the read bytes' return", || core.pool.holds(read));
+            drop((first, queue));
         });
     }
 }
