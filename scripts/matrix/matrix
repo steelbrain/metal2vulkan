@@ -367,7 +367,10 @@ def harness_runs(manifest_dir, command, leg, windows=False, cpu=None):
     included, is given that size (`--size`), so each runtime times the same work. The process has
     a fresh empty store for its pipelines (`--store`, each runtime's apart in it), so its first
     uses and its `create_state` row are cold for both runtimes; the warm run takes the same store,
-    warm; a re-timed row's runs each take a fresh store of the harness's own."""
+    warm; a re-timed row's runs each take a fresh store of the harness's own. The loader's
+    VK_LOADER_LAYERS_DISABLE (loader 1.3.234 and later) names the validation layer, and that layer
+    alone, since Mesa's device-select layer picks the card: whatever the node has installed, every
+    harness row is a release build without the layer."""
     runtimes = ",".join(HARNESS_RUNTIMES)
     profile = unprofile = ""
     store = '"$(cygpath -w "$store")"' if windows else '"$store"'
@@ -388,6 +391,7 @@ def harness_runs(manifest_dir, command, leg, windows=False, cpu=None):
     return f"""out=$(mktemp -d) || exit 3
     cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
     export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
+    export VK_LOADER_LAYERS_DISABLE=VK_LAYER_KHRONOS_validation
 {profile}    CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime {runtimes} --skip {creates} --store {store} 2>&1 | tee "$out/timed"
     r=${{PIPESTATUS[0]}}
     sizes=$(sed -n "{sized}" "$out/timed" | sort -u | tr '\\n' ' ')
@@ -972,6 +976,7 @@ def run_cmd(sha, only, dry):
     unstable = sum(1 for e in entries.values() if e["verdict"] == "unstable")
     print(f"matrix {sha[:12]}: {len(entries) - failed - unstable} of {len(entries)} legs pass"
           + (f", {unstable} venue unstable" if unstable else "") + f", {wall} min wall; note {NOTES}")
+    print("harness rows: release build, validation layer disabled (VK_LOADER_LAYERS_DISABLE)")
     return 1 if failed else 0
 
 
