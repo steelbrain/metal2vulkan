@@ -350,6 +350,9 @@ pub struct NewRuntime {
     host_alignment: Option<u64>,
     /// The no-copy buffers by how they play, and the recorded ranges of the stream's blocks.
     no_copies: imports::NoCopies,
+    /// The textures over buffers made (not substituted): in place, and held in an image of their
+    /// own (`rt::Gauges::textures_copied_over` rose across the making).
+    textures_over: [u64; 2],
 }
 
 /// The objects `values` name, lists included.
@@ -656,6 +659,7 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
         ("pipeline_cache_bytes", gauges.pipeline_cache_bytes),
         ("shadows", gauges.shadows),
         ("shadow_bytes", gauges.shadow_bytes),
+        ("textures_copied_over", gauges.textures_copied_over),
         ("timestamp_pools", gauges.timestamp_pools),
     ]
 }
@@ -681,6 +685,7 @@ impl NewRuntime {
             places: Places::new(device.clone()),
             host_alignment: imports::host_alignment(&device),
             no_copies: imports::NoCopies::default(),
+            textures_over: [0; 2],
             device,
             objects: HashMap::new(),
             indices: indices::Indices::default(),
@@ -1124,6 +1129,12 @@ impl NewRuntime {
             self.device.release_block(import).map_err(failed(call))?;
         }
         addressed(buffer, place)
+    }
+
+    /// The runtime's live textures over buffers in an image of their own. A copied texture freed
+    /// on another thread between two reads moves it too, so a making counts by it nearly always.
+    fn copied_over(&self) -> u64 {
+        self.device.counters().gauges().textures_copied_over
     }
 
     /// A texture of `descriptor`, at an index where shaders reach it: the next of its class's
@@ -1868,7 +1879,12 @@ impl NewRuntime {
                 }
                 let (offset, bytes_per_row) = (uint(call, 1)?, uint(call, 2)?);
                 let make = |index| buffer.new_texture(&descriptor, index, offset, bytes_per_row);
-                self.texture_or_substitute(call, descriptor.usage, &descriptor, make)
+                let (gaps, copied) = (self.substitutes.gaps, self.copied_over());
+                let made = self.texture_or_substitute(call, descriptor.usage, &descriptor, make)?;
+                if self.substitutes.gaps == gaps {
+                    self.textures_over[usize::from(self.copied_over() > copied)] += 1;
+                }
+                Ok(made)
             }
             "newTiledTextureWithDescriptor:offset:bytesPerRow:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
@@ -2430,6 +2446,7 @@ impl Backend for NewRuntime {
             ("imports", gauges.imports),
             ("buffers", gauges.buffers),
             ("textures", gauges.textures),
+            ("textures_copied_over", gauges.textures_copied_over),
             ("pipelines", gauges.pipelines),
             ("kernels", gauges.kernels),
             ("command_buffers", gauges.command_buffers),
@@ -2510,6 +2527,12 @@ impl Backend for NewRuntime {
             lines.push(self.seconds.line());
         }
         lines.push(self.no_copies.line());
+        let [in_place, copied] = self.textures_over;
+        lines.push(format!(
+            "textures over buffers {}: {in_place} in place, {copied} in an image of their own, \
+             copied at use (the runtime's gauge rose across the making)",
+            in_place + copied
+        ));
         lines.push(self.asides.line());
         lines.push(self.places.line());
         lines.push(self.unwritten.line());

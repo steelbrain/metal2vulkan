@@ -1135,6 +1135,9 @@ fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
         kinds.is_some_and(|line| line.starts_with(counted) && line.contains("; bytes-form 1 (")),
         "{lines:?}"
     );
+    // The texture over the import is held in an image of its own.
+    let over = "textures over buffers 1: 0 in place, 1 in an image of their own";
+    assert!(lines.iter().any(|line| line.starts_with(over)), "{lines:?}");
     // The texture's bytes into its image of its own, once.
     let executed = &report.total.executed;
     assert_eq!(executed["over_copies"], 1, "{executed:?}");

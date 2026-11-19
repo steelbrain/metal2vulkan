@@ -602,6 +602,7 @@ impl Drop for TextureInner {
         // A view's id and image are its parent's, which it keeps.
         if self.view.is_none() {
             if let Some(named) = (self.named.as_ref()).filter(|named| named.form == Form::Copied) {
+                core.counters.fall(Gauge::TexturesCopiedOver);
                 match named.buffer.held().1 {
                     // Its buffer keeps its image where a copy back is owed
                     // (`crate::over::ManagedOvers`).
@@ -1204,6 +1205,9 @@ impl Device {
         // Over a buffer of no device copy, the commands track what they write while it lives
         // (`crate::over`).
         let copied = (inner.named.as_ref()).filter(|named| named.form == Form::Copied);
+        if copied.is_some() {
+            core.counters.rise(Gauge::TexturesCopiedOver);
+        }
         if copied.is_some_and(|named| named.buffer.held().1.is_none()) {
             core.copied_overs.fetch_add(1, Ordering::Relaxed);
         }

@@ -2338,6 +2338,7 @@ field	metal2vulkan-rt::Gauges.stage_entries	pub stage_entries: u64
 field	metal2vulkan-rt::Gauges.stage_entry_bytes	pub stage_entry_bytes: u64
 field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
+field	metal2vulkan-rt::Gauges.textures_copied_over	pub textures_copied_over: u64
 field	metal2vulkan-rt::Gauges.threads	pub threads: [u64; THREADS]
 field	metal2vulkan-rt::Gauges.timestamp_pools	pub timestamp_pools: u64
 field	metal2vulkan-rt::HeapRange.block	pub block: BlockId

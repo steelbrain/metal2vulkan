@@ -203,6 +203,8 @@ pub(crate) enum Gauge {
     Shadows,
     /// [`Gauges::shadow_bytes`].
     ShadowBytes,
+    /// [`Gauges::textures_copied_over`].
+    TexturesCopiedOver,
     /// [`Gauges::timestamp_pools`].
     TimestampPools,
     /// [`Gauges::imports`].
@@ -327,6 +329,7 @@ struct Atomics {
     pipeline_cache_bytes: AtomicU64,
     shadows: AtomicU64,
     shadow_bytes: AtomicU64,
+    textures_copied_over: AtomicU64,
     timestamp_pools: AtomicU64,
     imports: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
@@ -680,6 +683,7 @@ impl Counters {
             Gauge::PipelineCacheBytes => &a.pipeline_cache_bytes,
             Gauge::Shadows => &a.shadows,
             Gauge::ShadowBytes => &a.shadow_bytes,
+            Gauge::TexturesCopiedOver => &a.textures_copied_over,
             Gauge::TimestampPools => &a.timestamp_pools,
             Gauge::Imports => &a.imports,
         }
@@ -808,6 +812,7 @@ impl Counters {
             pipeline_cache_bytes: a.pipeline_cache_bytes.load(Relaxed),
             shadows: a.shadows.load(Relaxed),
             shadow_bytes: a.shadow_bytes.load(Relaxed),
+            textures_copied_over: a.textures_copied_over.load(Relaxed),
             timestamp_pools: a.timestamp_pools.load(Relaxed),
             imports: a.imports.load(Relaxed),
         }
@@ -987,6 +992,7 @@ pub struct Metrics {
     /// and its image of its own ([`Buffer::new_texture`](crate::Buffer::new_texture)): the
     /// buffer's bytes into the image, in the upload that leads a submission or after a command
     /// wrote the buffer, and the image back into the buffer after a command wrote the texture.
+    /// The textures held so are [`Gauges::textures_copied_over`].
     pub over_copies: u64,
     /// The bytes of those copies, which count in [`bytes_copied`](Self::bytes_copied) too.
     pub over_copy_bytes: u64,
@@ -1214,6 +1220,12 @@ pub struct Gauges {
     pub shadows: u64,
     /// The bytes of the shadows' memory.
     pub shadow_bytes: u64,
+    /// Textures over a buffer the runtime holds in an image of their own, where the device's
+    /// linear image does not take the texture or the buffer's bytes are imported
+    /// ([`Buffer::new_texture`](crate::Buffer::new_texture)): the copies between them and their
+    /// buffers are [`Metrics::over_copies`]. A view is its texture's. The rest of the textures over
+    /// buffers are in place.
+    pub textures_copied_over: u64,
     /// The device's timestamp query pools, each of 4096 queries, a pair for each command buffer
     /// from its first record until its times are read at its completion: made as command buffers
     /// need them, and kept until the device drops.
