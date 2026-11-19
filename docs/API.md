@@ -6381,6 +6381,14 @@ each item named states the rule in full.
   reads the bytes as they are when the GPU runs it, so a write the consumer makes after the call
   and before then may be seen. Metal leaves it undefined: an Apple M3 and an Intel UHD 630 take
   the bytes when the GPU reads them, an AMD Radeon Pro 5300M at the commit.
+- **The new runtime's new textures read what their memory last held** (`metal2vulkan-rt`'s
+  `Device::new_texture`). Metal's two texture-making sentences are silent on a new texture's
+  contents: `MTLDevice.h` gives `newTextureWithDescriptor:` "Allocate a new texture with privately
+  owned storage.", and Apple's page for it "Creates a new texture instance.". The page for
+  `newBufferWithLength:options:` promises zeros: "Creates a buffer the method clears with zero
+  values." An Apple M3 Max on macOS 27.0.1 read zero from new `Shared` and `Managed` textures. The
+  new runtime reads what the texture's memory last held, so what a new texture reads moves with
+  what the process made and released before it.
 
 **Function constants**
 

@@ -2957,6 +2957,57 @@ fn a_notice_scoped_to_the_new_runtime_leaves_the_old_runtimes_site_its_one_row()
     assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
 }
 
+/// **A new texture's fresh read is unchecked on the new runtime's run alone.**
+/// [`crate::replay::new_texture_contents`] names an accepted difference
+/// ([`Justification::NewRuntimeAccepted`]) that holds on `metal2vulkan-rt`'s run: there a fresh
+/// read of another process's leftovers, the released texture's `0xa5` bytes as lavapipe read them,
+/// is no divergence. On the old runtime's run it holds nowhere and faults nothing, so the same
+/// bytes are the site's own one row. A slug `docs/API.md` does not hold fails the case on either
+/// run.
+#[test]
+fn a_new_texture_s_fresh_read_is_unchecked_on_the_new_runtime_alone() {
+    let bytes = |byte: u8| Observed::value(Value::Bytes(vec![byte; 4]));
+    let transcript = |fresh: u8, written: u8| {
+        Transcript::new(vec![
+            Node::branch("fresh", vec![Node::leaf("texel", bytes(fresh))]),
+            Node::leaf("written", bytes(written)),
+        ])
+    };
+    let allowances = vec![crate::replay::new_texture_contents("fresh")];
+    let metal = transcript(0, 7);
+    let ours = transcript(0xa5, 7);
+    let paths = |found: &crate::compare::Comparison| -> Vec<String> {
+        found.divergences.iter().map(|at| at.path.clone()).collect()
+    };
+    let old = Offered::notices(&[]);
+    let found = compare(&metal, &ours, &allowances, old);
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+    assert_eq!(paths(&found), ["case/fresh/texel"], "{found:?}");
+    assert_eq!(
+        found.unfired[0].why,
+        Some(Unjustified::OldRuntime.to_string())
+    );
+
+    let rt = old.on_new_runtime(true);
+    let found = compare(&metal, &ours, &allowances, rt);
+    assert!(found.divergences.is_empty(), "{found:?}");
+    assert!(found.bad_allowances.is_empty(), "{found:?}");
+    assert!(found.unfired.is_empty(), "{found:?}");
+
+    // The written site is not the declaration's: a difference there is a row on either run.
+    let found = compare(&metal, &transcript(0xa5, 8), &allowances, rt);
+    assert_eq!(paths(&found), ["case/written"], "{found:?}");
+
+    let unknown = vec![Allowance::new(
+        "case/fresh/*",
+        Loosening::Unchecked,
+        Justification::new_runtime_accepted("no-such-entry"),
+    )];
+    let found = compare(&metal, &ours, &unknown, rt);
+    assert_eq!(found.bad_allowances.len(), 1, "{found:?}");
+    assert!(!Verdict::of(&found, &Validated::NotRun).is_compliant());
+}
+
 /// **A venue's own answer at a site that differs on a venue presenting Metal's compression is the
 /// site's one row.** [`crate::replay::without_compression`] holds only where the venue keeps no
 /// texture compressed; on the Mac that recorded the case (MoltenVK on the M3 Max) it holds

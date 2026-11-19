@@ -72,6 +72,13 @@ pub enum Justification {
     /// runtime's contract, a static note it answers by a format's class on every device, where
     /// the old runtime announces the same notice under other facts.
     NewRuntimeNotice(String),
+    /// **An entry of `docs/API.md`'s accepted differences that holds on `metal2vulkan-rt` alone**,
+    /// by its slug. On the new runtime's run it holds as [`Justification::AcceptedDifference`]
+    /// does; on the old runtime's it holds nowhere and faults nothing
+    /// ([`Unjustified::OldRuntime`]), so the old runtime's answers at the site still compare
+    /// exactly. It is for an answer the new runtime gives where Metal's documentation is silent
+    /// and the old runtime gives Metal's measured one.
+    NewRuntimeAccepted(String),
 }
 
 impl Justification {
@@ -101,6 +108,12 @@ impl Justification {
         Self::NewRuntimeNotice(kind.code().to_owned())
     }
 
+    /// An accepted difference's justification on `metal2vulkan-rt`'s run alone, by its entry's
+    /// slug.
+    pub fn new_runtime_accepted(slug: impl Into<String>) -> Self {
+        Self::NewRuntimeAccepted(slug.into())
+    }
+
     /// What the report prints for it.
     pub fn describe(&self) -> String {
         match self {
@@ -118,6 +131,9 @@ impl Justification {
             Justification::NewRuntimeNotice(code) => {
                 format!("the degrade notice {code}, on metal2vulkan-rt")
             }
+            Justification::NewRuntimeAccepted(slug) => format!(
+                "the accepted difference {slug} (docs/API.md section 10), on metal2vulkan-rt"
+            ),
         }
     }
 
@@ -146,6 +162,12 @@ impl Justification {
             Justification::AcceptedDifference(slug) => {
                 (!accepted_differences().iter().any(|entry| entry == slug))
                     .then(|| Unjustified::NoSuchAcceptedDifference(slug.clone()))
+            }
+            Justification::NewRuntimeAccepted(slug) => {
+                if !accepted_differences().iter().any(|entry| entry == slug) {
+                    return Some(Unjustified::NoSuchAcceptedDifference(slug.clone()));
+                }
+                (!offered.new_runtime).then_some(Unjustified::OldRuntime)
             }
             Justification::MetalValidation { says } => match offered.metal_validation {
                 Validated::Stopped { message, .. } if message.contains(says) => None,
@@ -187,8 +209,9 @@ pub struct Offered<'a> {
     /// `true` unless the run says otherwise ([`Offered::on_venue`]), so a venue's answer justifies
     /// nothing by default.
     pub lossless_compression: bool,
-    /// Whether the run is `metal2vulkan-rt`'s ([`Justification::NewRuntimeNotice`]). `false`
-    /// unless the run says otherwise ([`Offered::on_new_runtime`]).
+    /// Whether the run is `metal2vulkan-rt`'s ([`Justification::NewRuntimeNotice`],
+    /// [`Justification::NewRuntimeAccepted`]). `false` unless the run says otherwise
+    /// ([`Offered::on_new_runtime`]).
     pub new_runtime: bool,
 }
 
@@ -251,8 +274,9 @@ pub enum Unjustified {
     /// The venue presents a Mac that keeps textures compressed, as the recordings' Apple silicon
     /// Mac does, so the answer of a venue that keeps none justifies nothing here.
     VenueCompresses,
-    /// The run is the old runtime's, where a notice the case scopes to `metal2vulkan-rt`
-    /// ([`Justification::NewRuntimeNotice`]) loosens nothing.
+    /// The run is the old runtime's, where a notice or an accepted difference the case scopes to
+    /// `metal2vulkan-rt` ([`Justification::NewRuntimeNotice`],
+    /// [`Justification::NewRuntimeAccepted`]) loosens nothing.
     OldRuntime,
 }
 
@@ -260,8 +284,9 @@ impl Unjustified {
     /// Whether an allowance that does not hold for this reason faults the case. Every reason does
     /// but two: a venue's own answer ([`Justification::WithoutCompression`]) on a venue that
     /// presents Metal's compression holds nowhere, as on the Mac that recorded the case, and a
-    /// notice scoped to `metal2vulkan-rt` ([`Justification::NewRuntimeNotice`]) holds nowhere on
-    /// the old runtime's run, so naming either is no fault there. The site then compares as if the
+    /// notice or accepted difference scoped to `metal2vulkan-rt`
+    /// ([`Justification::NewRuntimeNotice`], [`Justification::NewRuntimeAccepted`]) holds nowhere
+    /// on the old runtime's run, so naming either is no fault there. The site then compares as if the
     /// case loosened nothing, and a difference there is the site's own and nothing more.
     pub fn faults_the_case(&self) -> bool {
         !matches!(self, Unjustified::VenueCompresses | Unjustified::OldRuntime)
@@ -299,8 +324,8 @@ impl std::fmt::Display for Unjustified {
                  does, so the answer of a venue that keeps none justifies nothing here",
             ),
             Unjustified::OldRuntime => out.write_str(
-                "the run is the old runtime's, which a notice scoped to metal2vulkan-rt does not \
-                 loosen",
+                "the run is the old runtime's, which a notice or an accepted difference scoped to \
+                 metal2vulkan-rt does not loosen",
             ),
         }
     }
