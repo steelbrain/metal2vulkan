@@ -84,7 +84,7 @@ mod on_device {
                 "{name}: the take's wait for the block-maker thread"
             );
             park.wait();
-            core.pool.settle();
+            core.pool.await_internals();
             assert_eq!(chunks(core), (2, SPARE), "{name}: the block made");
             for writes in [first, held, waited] {
                 writes.give_back(core);
@@ -93,10 +93,10 @@ mod on_device {
             // block's chunks free ask for none; the next take asks for one.
             let (blocks, free) = chunks(core);
             let again = taken(core, free - SPARE);
-            core.pool.settle();
+            core.pool.await_internals();
             assert_eq!(chunks(core), (blocks, SPARE), "{name}: no block asked");
             let past = taken(core, 1);
-            core.pool.settle();
+            core.pool.await_internals();
             assert_eq!(chunks(core).0, blocks + 1, "{name}: one block past");
             again.give_back(core);
             past.give_back(core);

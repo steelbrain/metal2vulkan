@@ -461,7 +461,7 @@ pub(crate) mod on_device {
                 continue;
             };
             let alignment = *alignment;
-            device.core().pool.settle();
+            device.core().pool.await_internals();
             assert_eq!(
                 counters.gauges().blocks,
                 u64::from(MAX - 1),

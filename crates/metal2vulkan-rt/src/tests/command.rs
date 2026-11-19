@@ -158,7 +158,7 @@ pub(crate) mod on_device {
                 Device::new(physical, options()).unwrap_or_else(|error| panic!("{name}: {error}"));
             // The block-maker thread's first work done, so a body's counts start from a device
             // that holds its fixed-size internals.
-            device.core().pool.settle();
+            device.core().pool.await_internals();
             let counters = device.counters();
             body(name, instance, device);
             within("the teardown", || counters.gauges() == Gauges::default());

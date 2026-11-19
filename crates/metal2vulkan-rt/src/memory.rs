@@ -1083,7 +1083,7 @@ impl Pool {
     /// For the device tests: waits until the block-maker thread has made, or failed to make,
     /// every internal asked of it.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn settle(&self) {
+    pub(crate) fn await_internals(&self) {
         let mut state = self.lock();
         while state.asked.contains(&true) {
             state = self.wait(state);

@@ -378,7 +378,7 @@ mod on_device {
         };
         let device =
             Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"));
-        device.core().pool.settle();
+        device.core().pool.await_internals();
         device
     }
 
@@ -732,7 +732,7 @@ mod on_device {
             let device = Device::new(physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let core = device.core();
-            core.pool.settle();
+            core.pool.await_internals();
             let counters = device.counters();
             let before = counters.metrics();
             let made = before.blocks_made;
@@ -1642,7 +1642,7 @@ mod on_device {
             })
             .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
-            device.core().pool.settle();
+            device.core().pool.await_internals();
             let gauges = counters.gauges();
             assert_eq!(
                 (gauges.blocks, gauges.staging_bytes),
