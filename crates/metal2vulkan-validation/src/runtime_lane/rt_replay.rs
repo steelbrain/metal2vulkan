@@ -17,6 +17,12 @@
 //! - A sampler bound with LOD clamps whose samples read as its own plays with them (its own
 //!   clamps, and (0, 1000) over its (0, FLT_MAX)); one bound with clamps that read otherwise is
 //!   the runtime's typed gap, skipped and counted, and the draw after it is skipped.
+//! - The range forms of buffer and texture binds bind from the range's location, each slot as its
+//!   single-slot form does: vertex buffers at their offsets draw; fragment buffers at location 1
+//!   fill slots 1 and 2 (an offset of slot 2 plays, one of slot 0 is refused); a skipped texture
+//!   bound to the vertex stage at location 1 skips the draws until a nil at location 1 takes it
+//!   off; a fragment function reads the texture at the slot its range names; a kernel reads and
+//!   writes the textures a compute encoder's ranges bind.
 //! - A Managed buffer of a stream recorded with two copies keeps both on any device (the player's
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
@@ -504,6 +510,403 @@ fn a_sampler_bound_with_lod_clamps_plays_where_the_runtime_takes_them() {
     let executed = &report.total.executed;
     assert_eq!(executed["skipped_clamped_samplers"], 1, "{executed:?}");
     assert_eq!(executed["skipped_draws"], 1, "{executed:?}");
+}
+
+/// An `NSRange` of `length` objects from `location`.
+fn range(location: u64, length: u64) -> Value {
+    uints(&[("location", location), ("length", length)])
+}
+
+/// A draw of one triangle from vertex 0: the selector and its arguments.
+const DRAW: &str = "drawPrimitives:vertexStart:vertexCount:";
+const TRIANGLE: [Value; 3] = [Value::Uint(3), Value::Uint(0), Value::Uint(3)];
+
+/// A stream of a draw of `colored_vertex` and `fragment` (a function of the runtime examples) into
+/// a 4 by 4 RGBA8Unorm target (#7) its pass clears to red, the target copied to buffer #10, which
+/// the stream checks against `expected`. The positions (#8) start 16 bytes into their buffer,
+/// after four floats of -1, which as positions draw nothing; the colours (#9) are green. `make`
+/// writes calls before command buffer #12, `encode` those of its render encoder #13 after its
+/// pipeline state (#6): the binds and the draws. Their objects take ids from 15.
+fn range_draw(
+    dir: &ScratchDir,
+    fragment: &'static str,
+    expected: &[u8],
+    make: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
+    encode: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
+) -> PathBuf {
+    written(dir, |w| {
+        let functions = [("colored_vertex", 0, 1), (fragment, 1, 2)];
+        let library = w.blob(&library(dir, &functions))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let data = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &data, &[])?;
+        for (id, name) in [(4, "colored_vertex"), (5, fragment)] {
+            let name = [Value::Str(name.into())];
+            w.call("newFunctionWithName:", 3, id, &name, &[])?;
+        }
+        let pipeline = Value::Map(vec![
+            ("vertex".into(), Value::Object(4)),
+            ("fragment".into(), Value::Object(5)),
+            ("color0PixelFormat".into(), Value::Uint(70)),
+        ]);
+        let made = "newRenderPipelineStateWithDescriptor:error:";
+        w.call(made, 1, 6, &[pipeline], &[])?;
+        let target = uints(&[
+            ("textureType", 2),
+            ("pixelFormat", 70),
+            ("width", 4),
+            ("height", 4),
+            ("usage", 5),
+            ("storageMode", 2),
+        ]);
+        w.call("newTextureWithDescriptor:", 1, 7, &[target], &[])?;
+        let positions = [-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+        let colors = [0.0, 1.0, 0.0, 1.0].repeat(3);
+        for (id, values) in [(8, &positions[..]), (9, &colors[..])] {
+            let bytes = floats(values);
+            let length = Value::Uint(4 * values.len() as u64);
+            let args = [bytes, length, Value::Uint(0)];
+            w.call("newBufferWithBytes:length:options:", 1, id, &args, &[])?;
+        }
+        let shared = [Value::Uint(64), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 10, &shared, &[])?;
+        w.call("MTLRenderPassDescriptor.new", 0, 11, &[], &[])?;
+        let pass = uints(&[("renderTargetWidth", 4), ("renderTargetHeight", 4)]);
+        w.call("m2v.setPass", 11, 0, &[pass], &[])?;
+        let Value::Map(mut color) = uints(&[("level", 0), ("loadAction", 2), ("storeAction", 1)])
+        else {
+            unreachable!("a map");
+        };
+        color.push(("texture".into(), Value::Object(7)));
+        let red = [("red", 1.0), ("green", 0.0), ("blue", 0.0), ("alpha", 1.0)]
+            .map(|(key, value)| (key.into(), Value::F64(value)));
+        color.push(("clearColor".into(), Value::Map(red.to_vec())));
+        let args = [Value::Uint(0), Value::Map(color)];
+        w.call("m2v.setColorAttachment", 11, 0, &args, &[])?;
+        make(w)?;
+        w.call("commandBuffer", 2, 12, &[], &[])?;
+        let pass = [Value::Object(11)];
+        w.call("renderCommandEncoderWithDescriptor:", 12, 13, &pass, &[])?;
+        w.call("setRenderPipelineState:", 13, 0, &[Value::Object(6)], &[])?;
+        encode(w)?;
+        w.call("endEncoding", 13, 0, &[], &[])?;
+        w.call("blitCommandEncoder", 12, 14, &[], &[])?;
+        let copy = [
+            Value::Object(7),
+            Value::Uint(0),
+            Value::Uint(0),
+            uints(&[("x", 0), ("y", 0), ("z", 0)]),
+            uints(&[("width", 4), ("height", 4), ("depth", 1)]),
+            Value::Object(10),
+            Value::Uint(0),
+            Value::Uint(16),
+            Value::Uint(64),
+        ];
+        let selector = "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:\
+                        destinationOffset:destinationBytesPerRow:destinationBytesPerImage:";
+        w.call(selector, 14, 0, &copy, &[])?;
+        w.call("endEncoding", 14, 0, &[], &[])?;
+        w.call("commit", 12, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 12, 0, &[], &[])?;
+        let sum = Value::List(vec![Value::Bytes(Sha256::digest(expected).to_vec())]);
+        w.call("m2v.check", 0, 0, &[Value::Object(10)], &[("sha256", sum)])
+    })
+}
+
+/// [`range_draw`]'s vertices bound one slot at a time: the positions at 16 bytes into theirs.
+fn vertices(w: &mut StreamWriter<File>) -> std::io::Result<()> {
+    for (buffer, offset, index) in [(8, 16, 0), (9, 0, 1)] {
+        let args = [
+            Value::Object(buffer),
+            Value::Uint(offset),
+            Value::Uint(index),
+        ];
+        w.call("setVertexBuffer:offset:atIndex:", 13, 0, &args, &[])?;
+    }
+    Ok(())
+}
+
+/// `setVertexBuffers:offsets:withRange:` binds each buffer at its offset, from the range's
+/// location: the positions 16 bytes into theirs at slot 0 and the colours at slot 1 draw the green
+/// triangle over the whole target.
+#[test]
+fn vertex_buffers_bound_through_a_range_take_their_offsets_and_slots() {
+    let dir = ScratchDir::new("rt-replay-vertex-buffers-range").unwrap();
+    let green = [0u8, 255, 0, 255].repeat(16);
+    let path = range_draw(
+        &dir,
+        "colored_fragment",
+        &green,
+        |_| Ok(()),
+        |w| {
+            let args = [
+                Value::List(vec![Value::Object(8), Value::Object(9)]),
+                Value::List(vec![Value::Uint(16), Value::Uint(0)]),
+                range(0, 2),
+            ];
+            w.call("setVertexBuffers:offsets:withRange:", 13, 0, &args, &[])?;
+            w.call(DRAW, 13, 0, &TRIANGLE, &[])
+        },
+    );
+    let (report, _) = play("vertex-buffers-range", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    assert_eq!(report.first_skip, None);
+}
+
+/// `setFragmentBuffers:offsets:withRange:` binds from the range's location: two buffers at
+/// location 1 fill fragment slots 1 and 2, so a later offset of slot 2 plays, and one of slot 0,
+/// where nothing is bound, is the runtime's refusal.
+#[test]
+fn fragment_buffers_bound_through_a_range_fill_the_slots_from_its_location() {
+    let green = [0u8, 255, 0, 255].repeat(16);
+    let stream = |dir: &ScratchDir, offset_at: u64| {
+        range_draw(
+            dir,
+            "colored_fragment",
+            &green,
+            |_| Ok(()),
+            |w| {
+                vertices(w)?;
+                let args = [
+                    Value::List(vec![Value::Object(8), Value::Object(9)]),
+                    Value::List(vec![Value::Uint(0), Value::Uint(0)]),
+                    range(1, 2),
+                ];
+                w.call("setFragmentBuffers:offsets:withRange:", 13, 0, &args, &[])?;
+                let offset = [Value::Uint(16), Value::Uint(offset_at)];
+                w.call("setFragmentBufferOffset:atIndex:", 13, 0, &offset, &[])?;
+                w.call(DRAW, 13, 0, &TRIANGLE, &[])
+            },
+        )
+    };
+    let dir = ScratchDir::new("rt-replay-fragment-buffers-range").unwrap();
+    let (report, _) = play("fragment-buffers-range", &stream(&dir, 2));
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let dir = ScratchDir::new("rt-replay-fragment-buffers-range-0").unwrap();
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
+    let mut reader = StreamReader::open(&[stream(&dir, 0)], None).unwrap();
+    let (_, ended) = Player::new(&mut backend).play(&mut reader);
+    match ended {
+        Err(PlayError::Runtime { selector, .. }) => {
+            assert_eq!(selector, "setFragmentBufferOffset:atIndex:");
+        }
+        other => panic!("an offset of an empty slot's refusal: {other:?}"),
+    }
+}
+
+/// `setVertexTextures:withRange:` binds from the range's location, each slot apart: a skipped
+/// texture (RGB10A8_2P_XR10 over a surface of two planes, which reads across them) bound at
+/// location 1 skips the draws while its slot holds it, a nil bound at location 0 leaves it there,
+/// and a nil bound at location 1 takes it off, so the second draw plays.
+#[test]
+fn a_skipped_texture_bound_to_the_vertex_stage_through_a_range_skips_draws_while_its_slot_holds_it()
+{
+    let dir = ScratchDir::new("rt-replay-vertex-textures-range").unwrap();
+    let green = [0u8, 255, 0, 255].repeat(16);
+    let make = |w: &mut StreamWriter<File>| {
+        let pages = [Value::Uint(4096), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 15, &pages, &[])?;
+        let texture = uints(&[
+            ("textureType", 2),
+            ("pixelFormat", 550),
+            ("width", 2),
+            ("height", 2),
+            ("usage", 1),
+            ("storageMode", 0),
+        ]);
+        let facts = Value::Map(vec![
+            (
+                "pixelFormat".into(),
+                Value::Uint(u64::from(u32::from_be_bytes(*b"&b3a"))),
+            ),
+            ("planeCount".into(), Value::Uint(2)),
+            ("width".into(), Value::Uint(2)),
+            ("height".into(), Value::Uint(2)),
+            ("chromaOffset".into(), Value::Uint(2048)),
+            ("chromaBytesPerRow".into(), Value::Uint(8)),
+            ("ycbcrMatrix".into(), Value::Nil),
+        ]);
+        let plane = Value::Map(vec![
+            ("plane".into(), Value::Uint(0)),
+            ("offset".into(), Value::Uint(0)),
+            ("bytesPerRow".into(), Value::Uint(8)),
+            ("planar".into(), Value::Bool(true)),
+            ("facts".into(), facts),
+        ]);
+        let surface = "newTextureWithDescriptor:iosurface:plane:";
+        w.call(surface, 15, 16, &[texture, plane], &[])
+    };
+    let path = range_draw(&dir, "colored_fragment", &green, make, |w| {
+        vertices(w)?;
+        let bind = "setVertexTextures:withRange:";
+        let skipped = [Value::List(vec![Value::Object(16)]), range(1, 1)];
+        w.call(bind, 13, 0, &skipped, &[])?;
+        w.call(
+            bind,
+            13,
+            0,
+            &[Value::List(vec![Value::Nil]), range(0, 1)],
+            &[],
+        )?;
+        w.call(DRAW, 13, 0, &TRIANGLE, &[])?;
+        w.call(
+            bind,
+            13,
+            0,
+            &[Value::List(vec![Value::Nil]), range(1, 1)],
+            &[],
+        )?;
+        w.call(DRAW, 13, 0, &TRIANGLE, &[])
+    });
+    let (report, _) = play("vertex-textures-range", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let executed = &report.total.executed;
+    assert_eq!(
+        executed["skipped_surfaces_across_planes"], 1,
+        "{executed:?}"
+    );
+    assert_eq!(executed["skipped_draws"], 1, "{executed:?}");
+}
+
+/// `setFragmentTextures:withRange:` binds from the range's location: of a red texel's texture
+/// bound at location 0 and a blue one's at location 1, `first_texel_fragment` (fragment texture
+/// 0's first texel plus the green colour) reads the red one, so the target is yellow.
+#[test]
+fn fragment_textures_bound_through_a_range_are_read_at_the_slot_its_location_names() {
+    let dir = ScratchDir::new("rt-replay-fragment-textures-range").unwrap();
+    let yellow = [255u8, 255, 0, 255].repeat(16);
+    let make = |w: &mut StreamWriter<File>| {
+        let texel = uints(&[
+            ("textureType", 2),
+            ("pixelFormat", 70),
+            ("width", 1),
+            ("height", 1),
+            ("usage", 1),
+            ("storageMode", 0),
+        ]);
+        let region = Value::Map(vec![
+            ("origin".into(), uints(&[("x", 0), ("y", 0), ("z", 0)])),
+            (
+                "size".into(),
+                uints(&[("width", 1), ("height", 1), ("depth", 1)]),
+            ),
+        ]);
+        for (id, bytes) in [(15, [255, 0, 0, 0]), (16, [0, 0, 255, 0])] {
+            w.call("newTextureWithDescriptor:", 1, id, &[texel.clone()], &[])?;
+            let args = [
+                region.clone(),
+                Value::Uint(0),
+                Value::Bytes(bytes.to_vec()),
+                Value::Uint(4),
+            ];
+            let replace = "replaceRegion:mipmapLevel:withBytes:bytesPerRow:";
+            w.call(replace, id, 0, &args, &[])?;
+        }
+        Ok(())
+    };
+    let path = range_draw(&dir, "first_texel_fragment", &yellow, make, |w| {
+        vertices(w)?;
+        let bind = "setFragmentTextures:withRange:";
+        w.call(
+            bind,
+            13,
+            0,
+            &[Value::List(vec![Value::Object(15)]), range(0, 1)],
+            &[],
+        )?;
+        w.call(
+            bind,
+            13,
+            0,
+            &[Value::List(vec![Value::Object(16)]), range(1, 1)],
+            &[],
+        )?;
+        w.call(DRAW, 13, 0, &TRIANGLE, &[])
+    });
+    let (report, _) = play("fragment-textures-range", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+}
+
+/// A compute encoder's `setTextures:withRange:` binds from the range's location: the destination
+/// bound at location 1, then the source at location 0, and `invert_texels` writes the source's
+/// inverse into the destination.
+#[test]
+fn a_kernel_reads_and_writes_the_textures_a_range_binds() {
+    let dir = ScratchDir::new("rt-replay-kernel-textures-range").unwrap();
+    let source = [0x10, 0x20, 0x30, 0x40].repeat(4);
+    let path = written(&dir, |w| {
+        let library = w.blob(&library(&dir, &[("invert_texels", 2, 0)]))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call(
+            "newLibraryWithData:error:",
+            1,
+            3,
+            &[Value::Blob(library)],
+            &[],
+        )?;
+        let kernel = [Value::Str("invert_texels".into())];
+        w.call("newFunctionWithName:", 3, 4, &kernel, &[])?;
+        let made = "newComputePipelineStateWithFunction:error:";
+        w.call(made, 1, 5, &[Value::Object(4)], &[])?;
+        // Shared RGBA8Unorm, 2 by 2: the source shader-read, the destination shader-write.
+        let texture = |usage| {
+            uints(&[
+                ("textureType", 2),
+                ("pixelFormat", 70),
+                ("width", 2),
+                ("height", 2),
+                ("usage", usage),
+                ("storageMode", 0),
+            ])
+        };
+        w.call("newTextureWithDescriptor:", 1, 7, &[texture(1)], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 8, &[texture(2)], &[])?;
+        let whole = Value::Map(vec![
+            ("origin".into(), uints(&[("x", 0), ("y", 0), ("z", 0)])),
+            (
+                "size".into(),
+                uints(&[("width", 2), ("height", 2), ("depth", 1)]),
+            ),
+        ]);
+        let args = [
+            whole,
+            Value::Uint(0),
+            Value::Bytes(source.clone()),
+            Value::Uint(8),
+        ];
+        let replace = "replaceRegion:mipmapLevel:withBytes:bytesPerRow:";
+        w.call(replace, 7, 0, &args, &[])?;
+        w.call("commandBuffer", 2, 9, &[], &[])?;
+        w.call("computeCommandEncoder", 9, 10, &[], &[])?;
+        w.call("setComputePipelineState:", 10, 0, &[Value::Object(5)], &[])?;
+        for (texture, location) in [(8, 1), (7, 0)] {
+            let bind = [
+                Value::List(vec![Value::Object(texture)]),
+                range(location, 1),
+            ];
+            w.call("setTextures:withRange:", 10, 0, &bind, &[])?;
+        }
+        let size = |n| uints(&[("width", n), ("height", n), ("depth", 1)]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, 10, 0, &[size(1), size(2)], &[])?;
+        w.call("endEncoding", 10, 0, &[], &[])?;
+        w.call("commit", 9, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 9, 0, &[], &[])
+    });
+    // The destination's two rows of two texels, as far apart as half the read's length.
+    let (report, lines, rows) = play_then("kernel-textures-range", &path, |backend| {
+        let bytes = backend.read(8).unwrap();
+        let pitch = bytes.len() / 2;
+        [&bytes[..8], &bytes[pitch..pitch + 8]].concat()
+    });
+    let inverse: Vec<u8> = (source.chunks(4))
+        .flat_map(|t| [0xFF - t[0], 0xFF - t[1], 0xFF - t[2], t[3]])
+        .collect();
+    assert_eq!(rows, inverse, "{lines:?}");
+    assert_eq!(report.first_skip, None);
 }
 
 #[test]
