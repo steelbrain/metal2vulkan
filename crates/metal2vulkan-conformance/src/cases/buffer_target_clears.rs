@@ -88,6 +88,16 @@
 //!   `metal2vulkan-runtime`'s own `kept_bytes` states from its own `DontCare`-store probe, and it
 //!   is now a recorded Metal fact of the suite's rather than a module's prose.
 //!
+//! **What Metal promises of those texels is less than what it did.** Apple's page for
+//! `MTLStoreAction.dontCare`: "The GPU has permission to discard the rendered contents of the
+//! attachment at the end of the render pass, replacing them with arbitrary data." and "Some GPUs
+//! may still store the contents back to the texture, but you can't rely on that behavior."
+//! (`MTLRenderPass.h` says only that it is the default.) The M3 Max's kept bytes are one outcome
+//! of that and the clear another, and `metal2vulkan-rt` stores the clear. So a `DontCare` row's
+//! 64 texel bytes are unchecked on the new runtime's run alone, under the accepted difference
+//! [`DONT_CARE_TEXELS`] names; on the old runtime's, whose answer is the M3's, they compare
+//! exactly, and every byte outside the texels compares on both.
+//!
 //! So a clearing pass treats the inter-row bytes exactly as a blit does, which is what the landed
 //! [`super::buffer_texture_blits`] family measured: the padding keeps its original fill throughout.
 //! The clear adds one fact a blit cannot give — a store action that keeps nothing leaves the
@@ -169,6 +179,11 @@ const CLEAR: [f64; 4] = [0.125, 0.375, 0.625, 0.875];
 /// Its own `const` because the one thing it must not be is the name of another site of the same
 /// case: see where it is pushed.
 const BUFFER_SITE: &str = "buffer-after-the-pass";
+
+/// The slug of `docs/API.md`'s accepted difference that says what a `DontCare` store leaves in the
+/// texels on `metal2vulkan-rt`: what the pass rendered, where Apple's page lets the GPU replace
+/// them with arbitrary data.
+const DONT_CARE_TEXELS: &str = "the-new-runtime-s-dontcare-store-writes-what-the-pass-rendered";
 
 /// The buffer's bytes before anything runs: byte `i` holds `1 + 11i mod 251`.
 ///
@@ -269,6 +284,36 @@ impl Row {
         TargetSpec::plain(FORMAT, [SIDE, SIDE]).over_buffer(self.backing(buffer))
     }
 
+    /// The byte offsets in the buffer of the target's texels: `SIDE` rows of `ROW_BYTES` from
+    /// `OFFSET`, `pitch` apart.
+    fn texel_offsets(&self) -> impl Iterator<Item = u64> + '_ {
+        (0..u64::from(SIDE))
+            .flat_map(move |row| (0..ROW_BYTES).map(move |byte| OFFSET + row * self.pitch + byte))
+    }
+
+    /// A `DontCare` row's declarations of its texels, one a byte of [`BUFFER_SITE`], unchecked on
+    /// `metal2vulkan-rt`'s run alone ([`DONT_CARE_TEXELS`]); none for a `Store` row.
+    ///
+    /// Apple's page for `MTLStoreAction.dontCare` lets the GPU replace the attachment's contents
+    /// with arbitrary data, and Metal's own answer on the M3 Max (the texels keep the buffer's
+    /// bytes) is one outcome of that, the new runtime's (the clear) another. The old runtime gives
+    /// Metal's, so there the texels still compare exactly, and the bytes outside them compare on
+    /// both runtimes.
+    fn dont_care_texels(&self) -> Vec<crate::allowance::Allowance> {
+        if self.store != StoreAction::DontCare {
+            return Vec::new();
+        }
+        self.texel_offsets()
+            .map(|at| {
+                crate::allowance::Allowance::new(
+                    format!("case/{BUFFER_SITE}/{at}"),
+                    crate::allowance::Loosening::Unchecked,
+                    crate::allowance::Justification::new_runtime_accepted(DONT_CARE_TEXELS),
+                )
+            })
+            .collect()
+    }
+
     /// The pass: one color attachment, cleared, stored as the row says, and **no step at all**.
     ///
     /// The empty step list is the case rather than an oversight: a pass with no draw call is one of
@@ -320,8 +365,11 @@ impl Case for BufferTargetClear {
     }
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // Not a byte of the buffer is loosened: the texels and the padding compare exactly,
-        // Metal's against ours. What differs is the **announcing**. Our runtime keeps a target
+        // One set of bytes is loosened, on one runtime: a `DontCare` row's texels on
+        // `metal2vulkan-rt`'s run, which Apple's page lets the GPU replace with arbitrary data
+        // (`DONT_CARE_TEXELS`, `dont_care_texels`). The padding, the bytes before and after the
+        // target, and every texel on the old runtime's run compare exactly, Metal's against ours.
+        // The rest is the **announcing**. Our runtime keeps a target
         // whose rows the device's own linear image does not lay out as Metal does as a shadow
         // image the pass renders into and the encoders copy back, and it announces that once per
         // device (`shadowed-texture`); Metal announces nothing, ever, because nothing of the kind
@@ -363,6 +411,7 @@ impl Case for BufferTargetClear {
                 metal2vulkan_runtime::Degradation::DontCareStandIn.code(),
             ));
         }
+        named.extend(self.row.dont_care_texels());
         named
     }
 
@@ -426,6 +475,74 @@ mod tests {
             code(CLEAR[2]),
             code(CLEAR[3]),
         ]
+    }
+
+    /// **A `DontCare` row's texels are unchecked on the new runtime's run alone, and nothing else
+    /// is.** Against Metal's kept bytes, ours with the clear in every texel is no divergence on
+    /// `metal2vulkan-rt`'s run and 64 on the old runtime's; a padding byte or a byte before the
+    /// target that moved is a divergence on both. A `Store` row declares no byte at all.
+    #[test]
+    fn a_dont_care_row_leaves_its_texels_unchecked_on_the_new_runtime_alone() {
+        use crate::allowance::Offered;
+        use crate::compare::compare;
+        use crate::transcript::Transcript;
+        let site = |row: &Row, bytes: Vec<u8>| {
+            Transcript::new(vec![Node::leaf(
+                BUFFER_SITE,
+                Observed::bytes(bytes, row.layout()),
+            )])
+        };
+        let paths = |found: &crate::compare::Comparison| -> Vec<String> {
+            found.divergences.iter().map(|at| at.path.clone()).collect()
+        };
+        for row in ROWS.iter().filter(|row| row.store == StoreAction::DontCare) {
+            let kept = pattern(LEN as usize);
+            let mut stored = kept.clone();
+            for at in row.texel_offsets() {
+                stored[at as usize] = cleared()[(at - OFFSET) as usize % 4];
+            }
+            let allowances = row.dont_care_texels();
+            assert_eq!(allowances.len(), 64, "{}", row.case);
+            let old = Offered::notices(&[]);
+            let rt = old.on_new_runtime(true);
+            let found = compare(
+                &site(row, kept.clone()),
+                &site(row, stored.clone()),
+                &allowances,
+                rt,
+            );
+            assert!(found.divergences.is_empty(), "{}: {found:?}", row.case);
+            assert!(found.bad_allowances.is_empty(), "{}: {found:?}", row.case);
+            let found = compare(
+                &site(row, kept.clone()),
+                &site(row, stored.clone()),
+                &allowances,
+                old,
+            );
+            assert_eq!(
+                paths(&found),
+                [format!("case/{BUFFER_SITE}")],
+                "{}: {found:?}",
+                row.case
+            );
+            for at in [0, OFFSET - 1, OFFSET + ROW_BYTES, LEN - 1] {
+                if row.texel_offsets().any(|texel| texel == at) {
+                    continue;
+                }
+                let mut moved = stored.clone();
+                moved[at as usize] ^= 0xff;
+                let found = compare(&site(row, kept.clone()), &site(row, moved), &allowances, rt);
+                assert_eq!(
+                    paths(&found),
+                    [format!("case/{BUFFER_SITE}")],
+                    "{} byte {at}: {found:?}",
+                    row.case
+                );
+            }
+        }
+        for row in ROWS.iter().filter(|row| row.store == StoreAction::Store) {
+            assert!(row.dont_care_texels().is_empty(), "{}", row.case);
+        }
     }
 
     /// Every case has a name of its own, so no case's answers are read as another's.

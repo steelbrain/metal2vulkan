@@ -5959,6 +5959,17 @@ each item named states the rule in full.
   own `DontCare` (MoltenVK), which decides it. A pass that renders such a texture in place, as
   the default policy renders a texture's own image, otherwise announces `dont-care-store`.
 
+- **The new runtime's `DontCare` store writes what the pass rendered** (`metal2vulkan-rt`'s
+  render encoder stores a `DontCare` attachment as it stores a `Store` one, its README's render
+  passes). Apple's page for
+  `MTLStoreAction.dontCare`: "The GPU has permission to discard the rendered contents of the
+  attachment at the end of the render pass, replacing them with arbitrary data." and "Some GPUs
+  may still store the contents back to the texture, but you can't rely on that behavior. You need
+  to assume that GPU discarded the texture's contents." `MTLRenderPass.h` states only that it is
+  the default store action. An Apple M3 Max on macOS 27.0.1 leaves the texels of a texture over a
+  buffer as they were before a clearing pass; the new runtime stores the clear there. The bytes
+  of the buffer outside the texels keep what they held on both.
+
 - **Two mesh draws of one pass with no barrier between them run in order.** Where a later draw's
   object or mesh function reads a buffer an earlier draw wrote, and no `memoryBarrier` stands
   between them, Metal orders nothing: on an M3 Max (macOS 27.0.1) the reader read the host's words
