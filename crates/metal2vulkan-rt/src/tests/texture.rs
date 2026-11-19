@@ -83,12 +83,21 @@ fn the_zero_source_s_copies_write_every_element_once() {
             ]
             .map(|at| at as u32);
             let (width, height) = (region.image_extent.width, region.image_extent.height);
-            assert!(width % 4 == 0 || x + width == w, "{extent:?}: {region:?}");
-            assert!(height % 4 == 0 || y + height == h, "{extent:?}: {region:?}");
+            assert!(
+                width % 4 == 0 || x + width == w,
+                "{extent:?}: level {level} at {:?} of {width}x{height}",
+                [x, y, z]
+            );
+            assert!(
+                height % 4 == 0 || y + height == h,
+                "{extent:?}: level {level} at {:?} of {width}x{height}",
+                [x, y, z]
+            );
             let (across, down) = (width.div_ceil(4), height.div_ceil(4));
             assert!(
                 u64::from(across * down) * 16 <= ZEROS,
-                "{extent:?}: {region:?}"
+                "{extent:?}: level {level} at {:?} of {width}x{height}",
+                [x, y, z]
             );
             for row in 0..down {
                 for element in 0..across {
