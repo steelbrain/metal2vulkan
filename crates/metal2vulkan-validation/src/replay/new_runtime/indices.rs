@@ -6,8 +6,9 @@
 //! last, as the runtime's is: a later object at an index an earlier one holds takes it, and the
 //! earlier one's release leaves it.
 //!
-//! An index is owed to the commits that named any object holding it, live or released: a
-//! placement there takes the index's element from under that work, which Metal leaves to the
+//! An index is owed to the commits of the command buffers that named an object while it held the
+//! index, the object live or released since: a placement there takes the index's element from
+//! under that work, which Metal leaves to the
 //! program never to do while the work runs (docs/RESOURCE-ID.md), and the program's own timing
 //! kept that duty. The player keeps it by waiting for those commits to retire before such a
 //! placement, and counts the waits and their time. Where one of them is held on records not yet
@@ -35,16 +36,18 @@ pub(in crate::replay) struct Indices {
     held: [BTreeMap<u32, Option<u64>>; 2],
     /// The indices of each class the program reserved.
     reserved: [BTreeSet<u32>; 2],
-    /// The class slot and index each live object holds.
+    /// The class slot and index each live object was placed at; it holds the index while it is
+    /// the one placed there last (`held`).
     objects: HashMap<u64, (usize, u32)>,
     /// The objects placed at the index the stream named.
     named: u64,
     /// The objects the stream named an index for that the runtime refused (it is outside the
     /// object's class): placed at the lowest free index instead.
     refused: u64,
-    /// Each released object that command buffers not yet committed named: its class slot and
-    /// index, and how many of them.
-    pending: HashMap<u64, ((usize, u32), usize)>,
+    /// The class slots and indices that the objects each command buffer not yet committed named
+    /// held when it named them. An object named after a later one took its index holds it no
+    /// more: the index is the later one's.
+    naming: HashMap<u64, HashSet<(usize, u32)>>,
     /// Each index's last commit that named an object holding it, until a placement there finds
     /// it retired.
     owed: HashMap<(usize, u32), u64>,
@@ -82,15 +85,29 @@ impl Indices {
         }
     }
 
-    /// The index `object` held, free again where no later object was placed there; owed to the
-    /// `users` command buffers not yet committed that named it, once they are.
-    pub(in crate::replay) fn give(&mut self, object: u64, users: usize) {
+    /// The index `object` held, free again where no later object was placed there. The command
+    /// buffers not yet committed that named it while it held the index still owe it once they
+    /// are (`named`).
+    pub(in crate::replay) fn give(&mut self, object: u64) {
         if let Some((slot, index)) = self.objects.remove(&object) {
             if self.held[slot].get(&index) == Some(&Some(object)) {
                 self.held[slot].remove(&index);
             }
-            if users > 0 {
-                self.pending.insert(object, ((slot, index), users));
+        }
+    }
+
+    /// An encoder of `command_buffer`, not yet committed, named `named`: the index each of them
+    /// holds now is owed to its commit, once it is.
+    pub(in crate::replay) fn named(&mut self, command_buffer: u64, named: &[u64]) {
+        for object in named {
+            let Some(&(slot, index)) = self.objects.get(object) else {
+                continue;
+            };
+            if self.held[slot].get(&index) == Some(&Some(*object)) {
+                self.naming
+                    .entry(command_buffer)
+                    .or_default()
+                    .insert((slot, index));
             }
         }
     }
@@ -100,36 +117,17 @@ impl Indices {
         *owed = commit.max(*owed);
     }
 
-    /// A command buffer that named `named` committed as commit `commit`: the index of each
-    /// object among them that holds one, or held one, is owed to it.
-    pub(in crate::replay) fn committed(&mut self, named: &HashSet<u64>, commit: u64) {
-        for object in named {
-            let key = match self.objects.get(object) {
-                Some(&key) => Some(key),
-                None => self.ended_one(*object),
-            };
-            if let Some(key) = key {
-                self.owe(key, commit);
-            }
+    /// `command_buffer` committed as commit `commit`: each index an object it named held when it
+    /// was named is owed to it.
+    pub(in crate::replay) fn committed(&mut self, command_buffer: u64, commit: u64) {
+        for key in self.naming.remove(&command_buffer).unwrap_or_default() {
+            self.owe(key, commit);
         }
     }
 
-    /// A command buffer that named `named` released uncommitted: it runs nothing.
-    pub(in crate::replay) fn ended(&mut self, named: &HashSet<u64>) {
-        for object in named {
-            self.ended_one(*object);
-        }
-    }
-
-    /// One of released `object`'s uncommitted users ended: its index, where it had one.
-    fn ended_one(&mut self, object: u64) -> Option<(usize, u32)> {
-        let (key, users) = self.pending.get_mut(&object)?;
-        let key = *key;
-        *users -= 1;
-        if *users == 0 {
-            self.pending.remove(&object);
-        }
-        Some(key)
+    /// `command_buffer` released uncommitted: it runs nothing, and owes nothing.
+    pub(in crate::replay) fn ended(&mut self, command_buffer: u64) {
+        self.naming.remove(&command_buffer);
     }
 
     /// The commit a placement at `index` of `class` waits for: the last that named an object

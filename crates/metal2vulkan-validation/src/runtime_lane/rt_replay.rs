@@ -34,6 +34,8 @@
 //!   there last, as Metal hands an equal descriptor the same ID; otherwise as the recording
 //!   device's index policy gave the index away before the commit completed, counted on a line of
 //!   its own.
+//! - A command buffer that names a sampler state after a later one took its index owes the index
+//!   nothing: of two live sampler states placed at one index, the index is the later one's.
 //! - A buffer's linear texture (the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:
 //!   bytesPerImage:`) of a 2D descriptor plays as the public texture over the buffer, and one of a
 //!   2D array, whose slices Metal lays out itself, is refused.
@@ -713,8 +715,10 @@ fn surface_textures_take_the_reserved_index_their_descriptor_names() {
 /// A stream of a placement at an index a held commit owes: command buffer #6 of queue #2 waits for
 /// event #4 to reach 1, binds sampler state #5 (the default descriptor, index 16) and is
 /// committed; #5 is released and sampler state #8 made at index 16 with `descriptor`; only then
-/// does command buffer #10 of queue #3 signal #4 to 1, and the CPU waits for #6.
-fn held_placement(dir: &ScratchDir, descriptor: Value) -> PathBuf {
+/// does command buffer #10 of queue #3 signal #4 to 1, and the CPU waits for #6. Where
+/// `displaced`, sampler state #11 (a linear min filter) takes index 16 from #5 before #6 names
+/// #5, and lives on: two live sampler states placed at 16, #5 released after #11 took it.
+fn held_placement(dir: &ScratchDir, descriptor: Value, displaced: bool) -> PathBuf {
     written(dir, |w| {
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
         w.call("newCommandQueue", 1, 2, &[], &[])?;
@@ -724,6 +728,10 @@ fn held_placement(dir: &ScratchDir, descriptor: Value) -> PathBuf {
         let id = [("gpuResourceID", Value::Uint(16))];
         w.call(made, 1, 5, &[sampler(None)], &[])?;
         w.call("gpuResourceID", 5, 0, &[], &id)?;
+        if displaced {
+            w.call(made, 1, 11, &[uints(&[("minFilter", 1)])], &[])?;
+            w.call("gpuResourceID", 11, 0, &[], &id)?;
+        }
         let event = |value| [Value::Object(4), Value::Uint(value)];
         w.call("commandBuffer", 2, 6, &[], &[])?;
         w.call("encodeWaitForEvent:value:", 6, 0, &event(1), &[])?;
@@ -748,7 +756,7 @@ fn held_placement(dir: &ScratchDir, descriptor: Value) -> PathBuf {
 #[test]
 fn an_equal_sampler_state_takes_an_index_a_held_commit_owes_without_waiting() {
     let dir = ScratchDir::new("rt-replay-equal-sampler").unwrap();
-    let path = held_placement(&dir, sampler(None));
+    let path = held_placement(&dir, sampler(None), false);
     let (_, lines) = play("equal-sampler", &path);
     let indices = lines.iter().find(|line| line.starts_with("indices named "));
     let indices = indices.unwrap_or_else(|| panic!("an indices line: {lines:?}"));
@@ -768,7 +776,7 @@ fn a_placement_a_held_commit_owes_takes_the_index_without_waiting_and_is_counted
     // A sampler state of another descriptor at index 16: #6, which reads 16, waits for a signal
     // only a later record makes, so the recording device gave 16 away before #6 completed.
     let other = uints(&[("minFilter", 1), ("magFilter", 1)]);
-    let path = held_placement(&dir, other);
+    let path = held_placement(&dir, other, false);
     let (_, lines, indices) = played("held-placement", &path, &[8]);
     assert_eq!(indices, [16]);
     let unwaited = "indices given while a commit they owe is held 1: placed without waiting at an \
@@ -776,6 +784,27 @@ fn a_placement_a_held_commit_owes_takes_the_index_without_waiting_and_is_counted
                     recording device's index policy gave the index to a new object before that \
                     command buffer completed";
     assert!(lines.iter().any(|line| line == unwaited), "{lines:?}");
+    let indices = lines.iter().find(|line| line.starts_with("indices named "));
+    let indices = indices.unwrap_or_else(|| panic!("an indices line: {lines:?}"));
+    assert!(
+        indices.contains("0 placed at an index whose holders' commits were in flight"),
+        "{indices}"
+    );
+}
+
+#[test]
+fn a_command_buffer_naming_an_object_after_a_later_one_took_its_index_owes_it_nothing() {
+    let dir = ScratchDir::new("rt-replay-displaced").unwrap();
+    // #6 names #5 after #11 took index 16 from it: 16 is #11's, so #8 owes #6 nothing there.
+    let other = uints(&[("minFilter", 1), ("magFilter", 1)]);
+    let path = held_placement(&dir, other, true);
+    let (_, lines, indices) = played("displaced", &path, &[8]);
+    assert_eq!(indices, [16]);
+    let unwaited = "indices given while a commit they owe is held 0:";
+    assert!(
+        lines.iter().any(|line| line.starts_with(unwaited)),
+        "{lines:?}"
+    );
     let indices = lines.iter().find(|line| line.starts_with("indices named "));
     let indices = indices.unwrap_or_else(|| panic!("an indices line: {lines:?}"));
     assert!(

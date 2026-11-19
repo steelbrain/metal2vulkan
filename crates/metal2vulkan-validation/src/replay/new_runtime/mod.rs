@@ -316,10 +316,9 @@ pub struct NewRuntime {
     /// The staging places of each command buffer not yet committed, which hold the bytes of its
     /// guest-RAM copies: given back at its commit, free once it completes.
     staging: HashMap<u64, Vec<Place>>,
-    /// The buffers in a place of the play's own, textures and sampler states that an encoder of
-    /// each command buffer not yet committed named: a release of a buffer waits for those command
-    /// buffers (`Places::give`), and a placement at a texture's or sampler state's index for
-    /// their commits (`Indices::owed`).
+    /// The buffers in a place of the play's own that an encoder of each command buffer not yet
+    /// committed named: a release of a buffer waits for those command buffers (`Places::give`).
+    /// The textures and sampler states they name go to `Indices::named`.
     users: HashMap<u64, HashSet<u64>>,
     /// The CPU copies of a two-copy stream's Managed buffers on a one-copy device
     /// (`second`).
@@ -1781,8 +1780,7 @@ impl Backend for NewRuntime {
                 let users = self.users_of(call.receiver);
                 self.places.give(place, self.commits, users);
             }
-            let users = self.users_of(call.receiver).len();
-            self.indices.give(call.receiver, users);
+            self.indices.give(call.receiver);
             self.resource_indices.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => {
@@ -1804,8 +1802,8 @@ impl Backend for NewRuntime {
                     for place in self.staging.remove(&call.receiver).unwrap_or_default() {
                         self.places.give(place, self.commits, Vec::new());
                     }
-                    if let Some(named) = self.users.remove(&call.receiver) {
-                        self.indices.ended(&named);
+                    self.indices.ended(call.receiver);
+                    if self.users.remove(&call.receiver).is_some() {
                         self.places.ended(call.receiver, self.commits);
                     }
                 }
@@ -1819,12 +1817,8 @@ impl Backend for NewRuntime {
             self.unwritten.encoded(call, command_buffer, compute);
             let mut named = Vec::new();
             objects_named(&call.args, &mut named);
-            named.retain(|id| {
-                matches!(
-                    self.objects.get(id),
-                    Some(Object::Buffer(_, Some(_)) | Object::Texture(_) | Object::Sampler(_))
-                )
-            });
+            self.indices.named(command_buffer, &named);
+            named.retain(|id| matches!(self.objects.get(id), Some(Object::Buffer(_, Some(_)))));
             if !named.is_empty() {
                 self.users.entry(command_buffer).or_default().extend(named);
             }

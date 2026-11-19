@@ -180,8 +180,8 @@ impl NewRuntime {
                 for place in self.staging.remove(&call.receiver).unwrap_or_default() {
                     self.places.give(place, self.commits, Vec::new());
                 }
-                if let Some(named) = self.users.remove(&call.receiver) {
-                    self.indices.committed(&named, self.commits);
+                self.indices.committed(call.receiver, self.commits);
+                if self.users.remove(&call.receiver).is_some() {
                     self.places.ended(call.receiver, self.commits);
                 }
                 Ok(None)
