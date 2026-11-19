@@ -951,9 +951,9 @@ mod on_device {
 
     /// An upload that zeroes two new textures by their clears records one barrier after the
     /// clears, whatever it zeroes (`Metrics::texture_clear_barriers`, also counted in
-    /// `barriers`). Two textures made in the places two written ones gave back, which every
-    /// device clears, are moved home in the upload of the one submission after them: it counts
-    /// two clears and one such barrier, and both read zero.
+    /// `barriers`). Two textures made in the places two written ones gave back once their
+    /// upload completed, which every device clears, are moved home in the upload of the one
+    /// submission after them: it counts two clears and one such barrier, and both read zero.
     #[test]
     fn every_device_counts_one_zeroing_barrier_for_an_upload_that_clears_two_textures() {
         use crate::tests::command::on_device::{finished, within};
@@ -995,7 +995,13 @@ mod on_device {
                 })
                 .collect();
             let places: Vec<_> = written.iter().map(TextureObject::place).collect();
-            drop(written);
+            // The upload of the writes holds the textures until a submission carries it and
+            // completes.
+            let queue = device.new_command_queue(1).expect("a queue");
+            let carrier = queue.command_buffer().expect("a command buffer");
+            carrier.commit().expect("a commit");
+            finished(&name, &carrier);
+            drop((carrier, written));
             within("the written textures' places freed", || {
                 counters.gauges().textures == textures
             });
@@ -1021,7 +1027,6 @@ mod on_device {
             let contents = buffer.contents().expect("a Shared buffer");
             // SAFETY: the buffer is alive, `len` bytes long, and no GPU work uses it.
             unsafe { contents.as_ptr().write_bytes(0x5a, len as usize) };
-            let queue = device.new_command_queue(1).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
             for (at, texture) in new.iter().enumerate() {
