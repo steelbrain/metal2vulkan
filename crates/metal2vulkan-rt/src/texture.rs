@@ -14,9 +14,8 @@
 //! A texture the runtime places (a new texture of [`Device::new_texture`],
 //! [`Device::new_texture_for_views`] or [`Device::new_managed_texture`]) reads zero until written:
 //! that upload clears every subresource of its image between the move from undefined and the
-//! move home ([`Zero`]), unless its memory reads the driver's zeros, which no resource used: on a
-//! device of zeroed allocations its image is made in the zero-initialized layout, and its move
-//! home from there zeroes it with no clear. Metal does not say what a new texture holds. The
+//! move home ([`Zero`]), on every device, its first texture in memory no resource used included.
+//! Metal does not say what a new texture holds. The
 //! runtime's choice is zero, as an Apple M3 Max answered for new Shared and Managed textures,
 //! because programs read textures they never wrote, and the memory's last bytes would follow
 //! process history.
@@ -45,7 +44,6 @@ use crate::copy_out;
 use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
-use crate::floor;
 use crate::hazard::HeapId;
 use crate::host_bytes::HostBytes;
 use crate::memory::{self, Block, BlockId, MemoryClass};
@@ -387,11 +385,7 @@ pub(crate) struct Image {
     /// The image is cube-compatible ([`Plan`]'s `cube`), so a cube view takes six of its layers.
     cube: bool,
     /// The layout its move home starts from: undefined; preinitialized for a texture over a buffer
-    /// in place, whose move home keeps the bytes; zero-initialized for a texture whose memory
-    /// reads the driver's zeros, which no resource used, whose move home then zeroes it with no
-    /// clear. A texture that reads zero is made zero-initialized on a device of zeroed
-    /// allocations even where its memory was used, and its move home then starts from
-    /// undefined, which any layout takes.
+    /// in place, whose move home keeps the bytes.
     first: vk::ImageLayout,
     /// An upload recorded its move from `first` to `home`. Read and set under the work lock.
     homed: AtomicBool,
@@ -687,7 +681,7 @@ impl Image {
         let (d, shape, plan) = &shadowing.made;
         // SAFETY: the device is live, and the texture's plan checked the shadow's usage against
         // its image format query for the shape (`plan`).
-        let (image, backing, bytes, _, _, _) = unsafe { make(core, d, shape, plan, Bind::Pooled) }?;
+        let (image, backing, bytes, _, _) = unsafe { make(core, d, shape, plan, Bind::Pooled) }?;
         core.counters.rise(Gauge::Shadows);
         core.counters.rise_by(Gauge::ShadowBytes, bytes);
         let made = Arc::new(Image {
@@ -1332,7 +1326,7 @@ impl Device {
         // memory or over a buffer's bytes.
         let placed = matches!(source, Source::Plain | Source::Managed(..));
         let (bind, mut block) = match source {
-            Source::Plain | Source::Managed(..) => (Bind::Zeroed, None),
+            Source::Plain | Source::Managed(..) => (Bind::Pooled, None),
             Source::Heap(block, heap, offset) => {
                 let bind = Bind::Heap {
                     memory: block.memory.device_memory(),
@@ -1387,15 +1381,10 @@ impl Device {
             // SAFETY: as above.
             made = unsafe { make(core, &d, &shape, &plan, Bind::Pooled) };
         }
-        let (image, backing, bytes, sampled, storage, driver_zeros) = made?;
+        let (image, backing, bytes, sampled, storage) = made?;
         core.counters.rise(Gauge::Textures);
-        // Its memory reads the driver's zeros, which no resource used: its move home from the
-        // zero-initialized layout zeroes it, with no clear. Else a clear does.
-        if driver_zeros {
-            first = floor::ZERO_INITIALIZED;
-            core.counters.texture_zeroed(bytes);
-        }
-        let zero = (placed && !driver_zeros).then(|| Zero::of(&plan, d.mipmap_level_count, &shape));
+        // A clear zeroes it in its move home.
+        let zero = placed.then(|| Zero::of(&plan, d.mipmap_level_count, &shape));
         let attachment_reads =
             plan.attachment_reads && home == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         // On a device without the feedback loop, a draw reads such an image through its shadow.
@@ -2297,16 +2286,14 @@ fn whole(aspects: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
     }
 }
 
-/// The image, its memory and the memory's bytes, its views (the sampled view and the storage
-/// view), and whether its memory reads the driver's zeros, which no resource used before
-/// ([`Bind::Zeroed`]).
+/// The image, its memory and the memory's bytes, and its views (the sampled view and the storage
+/// view).
 type Objects = (
     vk::Image,
     Backing,
     u64,
     Option<vk::ImageView>,
     Option<vk::ImageView>,
-    bool,
 );
 
 /// Makes the image, binds it to a place in a texture block or to memory of its own, and makes its
@@ -2357,10 +2344,6 @@ enum Source<'a> {
 enum Bind {
     /// A place in a texture block, or memory of its own.
     Pooled,
-    /// As `Pooled`, for a texture that reads zero until written ([`Zero`]): on a device of
-    /// zeroed allocations ([`Capabilities::zero_initialize_memory`](floor::Capabilities::zero_initialize_memory))
-    /// made in the zero-initialized layout, and its memory of its own made zeroed.
-    Zeroed,
     /// A linear image, made preinitialized, at `at` in a block at `base` in the allocation
     /// `memory`, of type `memory_type` and of `block_len` bytes, where the device lays its rows
     /// `bytes_per_row` apart from there; of a render target, where its subresource ends within
@@ -2469,11 +2452,7 @@ impl Made {
                 .tiling(vk::ImageTiling::LINEAR)
                 .usage(plan.linear_usage())
                 .initial_layout(vk::ImageLayout::PREINITIALIZED),
-            // Every image of a texture that reads zero starts in the zero-initialized layout on a
-            // device of zeroed allocations; its move home names that layout only where its
-            // memory reads zero, and undefined elsewhere, which any layout takes.
-            Bind::Zeroed if core.zero_initialize => info.initial_layout(floor::ZERO_INITIALIZED),
-            Bind::Pooled | Bind::Zeroed | Bind::Heap { .. } => info,
+            Bind::Pooled | Bind::Heap { .. } => info,
         };
         // SAFETY: the caller's contract: the device makes such an image.
         let image =
@@ -2492,8 +2471,7 @@ impl Made {
         let placed = dedicated.requires_dedicated_allocation == vk::FALSE
             && bits & (1 << core.memory_type(MemoryClass::Private)) != 0;
         // Where the device-local memory has no texture block left, memory of its own.
-        let zeroed = matches!(bind, Bind::Zeroed) && core.zero_initialize;
-        let pooled = match placed && matches!(bind, Bind::Pooled | Bind::Zeroed) {
+        let pooled = match placed && matches!(bind, Bind::Pooled) {
             true => match (core.places).place(core, requirements.size, requirements.alignment) {
                 Ok(found) => Some(found),
                 Err(error) if error.is_out_of_device_memory() => None,
@@ -2501,8 +2479,6 @@ impl Made {
             },
             false => None,
         };
-        // Whether the image's memory reads the driver's zeros, which no resource used.
-        let mut driver_zeros = false;
         let (backing, memory, offset) = if let Bind::InPlace {
             memory,
             base,
@@ -2560,8 +2536,7 @@ impl Made {
                 (true, Some(at)) => (Backing::InBlock, memory, base + at),
                 _ => return Err(refused),
             }
-        } else if let Some((place, block, fresh)) = pooled {
-            driver_zeros = zeroed && fresh;
+        } else if let Some((place, block)) = pooled {
             (
                 Backing::Placed(place),
                 block.device_memory(),
@@ -2575,17 +2550,10 @@ impl Made {
                 _ => local.trailing_zeros(),
             };
             let mut own = vk::MemoryDedicatedAllocateInfo::default().image(image);
-            // Made zeroed for a texture that reads zero, on a device of zeroed allocations.
-            let mut flags = vk::MemoryAllocateFlagsInfo::default().flags(floor::ZERO_INITIALIZE);
             let allocate = vk::MemoryAllocateInfo::default()
                 .allocation_size(requirements.size)
                 .memory_type_index(memory_type)
                 .push_next(&mut own);
-            let allocate = match zeroed {
-                true => allocate.push_next(&mut flags),
-                false => allocate,
-            };
-            driver_zeros = zeroed;
             // SAFETY: the type, and each a spill takes, is one the image's requirements allow, and
             // the allocation its own.
             let (memory, spilled) = unsafe {
@@ -2611,14 +2579,7 @@ impl Made {
             .map_err(Error::vulkan("vkBindImageMemory"))?;
         // SAFETY: the image is bound, of the plan's format, and has its usage.
         let (sampled, storage) = unsafe { self.views(device, image, shape, plan) }?;
-        Ok((
-            image,
-            backing,
-            requirements.size,
-            sampled,
-            storage,
-            driver_zeros,
-        ))
+        Ok((image, backing, requirements.size, sampled, storage))
     }
 
     /// Makes `image`'s views of `plan`: its sampled view and its storage view, where it has them.

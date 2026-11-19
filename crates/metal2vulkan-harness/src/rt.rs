@@ -7,9 +7,8 @@
 //! allocator takes chunks of that length, and a block of its own for a buffer longer than that. A dropped buffer frees its range at once, or releases its dedicated block: the
 //! harness drops a buffer only once the work that used it has completed, as Metal frees a
 //! buffer's memory only then. So a buffer made after one of the same length was dropped takes
-//! the same range, which the runtime zeroes as `newBufferWithLength:options:` does. A buffer in a
-//! block of its own takes the consumer's one path: zeroed by the runtime unless the take answered
-//! `BlockInfo::zeroed`, the driver's zeros, which nothing wrote before the buffer is made.
+//! the same range, which the runtime zeroes as `newBufferWithLength:options:` does, as it zeroes a
+//! buffer in a block of its own.
 //!
 //! A `Managed` buffer is the runtime's (`Device::new_managed_buffer`) over a range of a Shared
 //! block: its `contents` are the CPU's bytes, which the harness writes and names with
@@ -369,9 +368,8 @@ impl crate::Device for Device {
         self.name.clone()
     }
 
-    /// Placed as the module's docs say, and zeroed by the runtime unless a block of its own
-    /// answered `BlockInfo::zeroed`; a `Managed` buffer's bytes zeroed by the harness, and its
-    /// device copy, where it has one, by the runtime.
+    /// Placed as the module's docs say, and zeroed by the runtime; a `Managed` buffer's bytes
+    /// zeroed by the harness, and its device copy, where it has one, by the runtime.
     fn new_buffer(&self, length: u64, storage: Storage) -> Result<Buffer> {
         let class = match storage {
             Storage::Shared | Storage::Managed => rt::MemoryClass::Shared,
@@ -395,17 +393,12 @@ impl crate::Device for Device {
             _ => None,
         };
         let (block, start) = placed.at();
-        // A block of its own, taken for this buffer, holds the driver's zeros where it answered so.
-        let zero_from = match &placed {
-            Placed::Dedicated(block) if block.zeroed => None,
-            _ => Some(0),
-        };
         let made = match storage {
             Storage::Managed => {
                 self.new_managed_buffer((block, start), copy.as_ref().map(Placed::at), length)
             }
             Storage::Shared | Storage::Private => {
-                self.device.new_buffer(block, start, length, zero_from)
+                self.device.new_buffer(block, start, length, Some(0))
             }
         };
         match made {

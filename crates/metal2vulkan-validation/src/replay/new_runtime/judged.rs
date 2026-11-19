@@ -9,25 +9,16 @@ use crate::replay::range::stem;
 use std::path::Path;
 
 /// Each judged metric: its name, the executed counters it adds and the one it takes away. A new
-/// texture is zeroed by a clear or made zero-initialized, and the split between the two follows
-/// where the pool places it, which may differ between two plays: the two are counted as one, and
-/// the barriers leave out the one after an upload's clears (`texture_clear_barriers`).
+/// texture is zeroed by a clear, and the barriers leave out the one after an upload's clears
+/// (`texture_clear_barriers`).
 const JUDGED: [(&str, &[&str], Option<&str>); 7] = [
     ("submissions", &["submissions"], None),
     ("passes", &["passes"], None),
     ("barriers", &["barriers"], Some("texture_clear_barriers")),
     ("bytes_copied", &["bytes_copied"], None),
     ("pipelines_created", &["pipelines_created"], None),
-    (
-        "new_textures_zeroed",
-        &["texture_clears", "zeroed_textures"],
-        None,
-    ),
-    (
-        "new_texture_zeroed_bytes",
-        &["texture_clear_bytes", "zeroed_texture_bytes"],
-        None,
-    ),
+    ("new_textures_zeroed", &["texture_clears"], None),
+    ("new_texture_zeroed_bytes", &["texture_clear_bytes"], None),
 ];
 
 /// The judged metrics' records of the play of the stream whose first segment is `first`, with

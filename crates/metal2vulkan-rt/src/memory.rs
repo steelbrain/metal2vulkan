@@ -5,12 +5,6 @@
 //! ([`Internal`]); and how memory is made and freed. A block's bytes are undefined: the runtime
 //! zeroes nothing ahead of need. A buffer reads zero where
 //! [`Device::new_buffer`](crate::Device::new_buffer) zeroes its range.
-//!
-//! Where the device enabled `zeroInitializeDeviceMemory`, every allocation of the pool is made
-//! with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, which reads zero until written, and a take
-//! answers whether its block's bytes all lie past every range a block of its allocation held
-//! before ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)): then they read zero as handed out.
-//! The runtime trusts nothing of it after the take, and zeroes every range it is asked to.
 
 use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::{lock, Core};
@@ -186,23 +180,6 @@ pub struct BlockInfo {
     /// block is where the device's Shared type is, and an imported one where the type imported
     /// into is.
     pub device_local: bool,
-    /// Whether every byte of it reads zero as the take hands it out: the device enabled
-    /// `zeroInitializeDeviceMemory`
-    /// ([`floor::Capabilities::zero_initialize_memory`](crate::floor::Capabilities::zero_initialize_memory)),
-    /// so the driver made its allocation zeroed, and no block of that allocation ever held a byte
-    /// at or past this block's first byte (the runtime writes the pool's bytes only through
-    /// blocks). False on a device without the feature, for a block below the furthest range a
-    /// block of its allocation held (one given back and taken again among them), and for an
-    /// imported or exported block. Counted in
-    /// [`Metrics::zeroed_takes`](crate::Metrics::zeroed_takes).
-    ///
-    /// Metal's counterpart is the zeros of a new buffer of `newBufferWithLength:options:`. It is a
-    /// fact at the take: what the consumer or its guest writes through the mapping afterwards is
-    /// the consumer's to know, and a consumer skips its own zeroing only for bytes it has not
-    /// exposed for writing since the take. The runtime zeroes every range it is asked to
-    /// ([`Device::new_buffer`](crate::Device::new_buffer)'s `zero_from`,
-    /// [`Device::zero_block_range`](crate::Device::zero_block_range)) on every device.
-    pub zeroed: bool,
 }
 
 // SAFETY: plain data. `contents` is an address; reading or writing through it is the consumer's
@@ -293,8 +270,6 @@ pub(crate) struct Memory {
     /// An import's block ([`import`]) or an export's ([`export`]): an allocation of its own,
     /// which no pool holds and which is freed once the block is given back.
     pub(crate) own: Option<Own>,
-    /// Its bytes read zero as the take found them ([`BlockInfo::zeroed`]).
-    zeroed: bool,
 }
 
 /// What a block that is an allocation of its own is.
@@ -372,7 +347,6 @@ impl Memory {
             gpu_address: self.address,
             contents: self.mapping.map(Mapping::get),
             device_local: self.device_local,
-            zeroed: self.zeroed,
         }
     }
 }
@@ -506,11 +480,6 @@ struct Allocation {
     /// one it was made for, until it is idle again
     /// ([`Gauges::shared_long_reused_bytes`](crate::Gauges::shared_long_reused_bytes)).
     reused: bool,
-    /// Made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`: its bytes read zero until written.
-    zeroed: bool,
-    /// The end of the furthest range a block of it ever held: past it no block was, so where the
-    /// allocation is [`zeroed`](Self::zeroed) those bytes read zero.
-    taken_to: u64,
 }
 
 impl Allocation {
@@ -679,8 +648,6 @@ struct Carve {
     mapping: Option<Mapping>,
     device_local: bool,
     spilled: bool,
-    /// The range reads zero as taken ([`BlockInfo::zeroed`]).
-    zeroed: bool,
 }
 
 impl Carve {
@@ -699,7 +666,6 @@ impl Carve {
             device_local: self.device_local,
             spilled: self.spilled,
             own: None,
-            zeroed: self.zeroed,
         }
     }
 }
@@ -1169,12 +1135,8 @@ impl State {
 }
 
 impl Allocation {
-    /// What a block of `len` bytes at `base`, a range taken from the free bytes, is. It reads zero
-    /// where the allocation is [`zeroed`](Self::zeroed) and it lies past every range a block held
-    /// before; from now on its bytes are held too.
-    fn carve(&mut self, base: u64, len: u64) -> Carve {
-        let zeroed = self.zeroed && base >= self.taken_to;
-        self.taken_to = self.taken_to.max(base + len);
+    /// What a block of `len` bytes at `base`, a range taken from the free bytes, is.
+    fn carve(&self, base: u64, len: u64) -> Carve {
         Carve {
             allocation: self.id,
             memory: self.memory,
@@ -1187,7 +1149,6 @@ impl Allocation {
                 .map(|mapping| Mapping(unsafe { mapping.at(base) })),
             device_local: self.device_local,
             spilled: self.spilled,
-            zeroed,
         }
     }
 
@@ -1485,10 +1446,8 @@ pub(crate) unsafe fn allocate(
 /// Makes an allocation of `len` bytes of `class` with device addresses, its number, the
 /// `VkBuffer` with every buffer usage that spans it and that buffer's address, mapped whole if
 /// Shared, its free ranges all of it. Nothing of the runtime writes its bytes, and a Shared
-/// allocation's pages become resident as they are first written. Where the device enabled
-/// `zeroInitializeDeviceMemory` it is made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`,
-/// which no import carries (`VUID-VkMemoryAllocateFlagsInfo-flags-10760`), and its bytes read zero
-/// until written; elsewhere they are undefined. Counted at `site`, where it names one.
+/// allocation's pages become resident as they are first written. Its bytes are undefined. Counted
+/// at `site`, where it names one.
 fn make_allocation(
     core: &Core,
     class: MemoryClass,
@@ -1507,12 +1466,8 @@ fn make_allocation(
         unsafe { device.create_buffer(&info, None) }.map_err(Error::vulkan("vkCreateBuffer"))?;
     // SAFETY: the buffer is the device's.
     let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-    let zeroed = core.zero_initialize;
-    let mut flags = vk::MemoryAllocateFlags::DEVICE_ADDRESS;
-    if zeroed {
-        flags |= floor::ZERO_INITIALIZE;
-    }
-    let mut flags = vk::MemoryAllocateFlagsInfo::default().flags(flags);
+    let mut flags =
+        vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
     let allocate_info = vk::MemoryAllocateInfo::default()
         .allocation_size(requirements.size.max(len))
         .memory_type_index(core.memory_type(class))
@@ -1544,8 +1499,6 @@ fn make_allocation(
         idle_since: crate::host_time(),
         retiring: false,
         reused: false,
-        zeroed,
-        taken_to: 0,
     };
     core.counters.count(Metric::BlocksMade);
     core.counters.allocated(len);
@@ -1636,8 +1589,7 @@ impl ImportFailed {
 /// is told of. `mapping` is the host address of its bytes, where the consumer imported them by
 /// address. `own` is [`Own::Import`] for the consumer's import, Shared as Metal's no-copy buffers
 /// are, counted in the imports gauge; or [`Own::Surface`] for a dma-buf surface's buffer
-/// ([`crate::Surface::buffer`]), Private as an export is, counted in the surface gauges. Never
-/// zeroed.
+/// ([`crate::Surface::buffer`]), Private as an export is, counted in the surface gauges.
 ///
 /// # Safety
 ///
@@ -1720,7 +1672,6 @@ pub(crate) unsafe fn import(
         device_local: core.device_local & (1 << info.memory_type_index) != 0,
         spilled: false,
         own: Some(own),
-        zeroed: false,
     })
 }
 
@@ -1757,7 +1708,7 @@ pub(crate) unsafe fn sparse_buffer(
 }
 
 /// Imports one dma-buf of an import over several, `info`'s, with no buffer: counted against the
-/// device's allocations ([`allocate`]) and in the imports gauge. Never zeroed.
+/// device's allocations ([`allocate`]) and in the imports gauge.
 ///
 /// # Safety
 ///
@@ -1812,7 +1763,7 @@ pub(crate) struct SparseParts {
 /// The block of an import over several dma-bufs: Shared, as an import is, over the sparse buffer
 /// from its first byte, at the buffer's device address, never mapped. Each chunk is a block of its
 /// own under it ([`Block::_chunks`]), of the same numbers, its memory and no buffer, the last one
-/// holding `release`. Never zeroed.
+/// holding `release`.
 #[cfg(unix)]
 pub(crate) fn sparse_block(
     core: &Arc<Core>,
@@ -1848,7 +1799,6 @@ pub(crate) fn sparse_block(
             device_local,
             spilled: false,
             own: Some(own),
-            zeroed: false,
         };
     let chunk = |(memory_of, chunk_len): (vk::DeviceMemory, u64), release: Option<Release>| {
         let held = memory(memory_of, chunk_len, vk::Buffer::null(), 0, Own::Chunk);
@@ -1875,7 +1825,7 @@ pub(crate) fn sparse_block(
 /// exports `handle`, its dedicated allocation in the Private memory type, exportable as `handle`
 /// (counted against the device's allocations, [`allocate`]), bound at its first byte, the
 /// buffer's address, and its numbers: the block's, and its allocation's, which no hook is told
-/// of. Private; never zeroed, never mapped. With it, the allocation's size, which an import of
+/// of. Private; never mapped. With it, the allocation's size, which an import of
 /// the handle names.
 ///
 /// Err: [`Limit::BlockLen`] past the device's longest allocation or buffer; [`Limit::ExportType`]
@@ -1973,7 +1923,6 @@ pub(crate) unsafe fn export(
         device_local: core.device_local & (1 << index) != 0,
         spilled: false,
         own: Some(Own::Export(handle)),
-        zeroed: false,
     };
     Ok((memory, needs.size))
 }
@@ -2034,7 +1983,6 @@ pub(crate) unsafe fn export_surface(
         device_local: core.device_local & (1 << index) != 0,
         spilled: false,
         own: Some(Own::Export(handle)),
-        zeroed: false,
     })
 }
 
@@ -2126,7 +2074,6 @@ pub(crate) unsafe fn surface_view(
         device_local: under.memory.device_local,
         spilled: false,
         own: Some(Own::Surface { import: false }),
-        zeroed: false,
     };
     Ok(Block::over(memory, Arc::clone(core), Arc::clone(under)))
 }

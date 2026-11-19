@@ -33,8 +33,8 @@
 //!   layer and slice once, each within the zero source. Under a device cfg, a new texture reads
 //!   zero in every subresource in the place another texture wrote and gave back, Shared and
 //!   Private, colour, depth and block-compressed, and each counts one clear of its image's bytes;
-//!   the device's first texture, in memory no resource used, reads zero too, moved home from the
-//!   zero-initialized layout with no clear on a device of zeroed allocations and cleared elsewhere.
+//!   the device's first texture, in memory no resource used, reads zero too, by one clear on every
+//!   device.
 
 use crate::arrays::Grants;
 use crate::error::{Error, Refusal};
@@ -685,8 +685,8 @@ mod on_device {
     /// and a block-compressed one where the device makes it, each new texture Shared and Private.
     /// The written texture reads its bytes back first, in every subresource, and the new one
     /// takes its place; the device counts one clear for each new texture, of its image's bytes.
-    /// The device's first texture reads zero too: on a device of zeroed allocations with no
-    /// clear, its memory the driver's zeros, counted in `zeroed_textures`; elsewhere cleared.
+    /// The device's first texture reads zero too, by one clear of the runtime's, on every device:
+    /// no device enables `VK_EXT_zero_initialize_device_memory`.
     #[test]
     fn every_device_reads_zero_from_a_new_texture_where_another_was_written() {
         use crate::tests::command::on_device::{finished, within};
@@ -753,9 +753,12 @@ mod on_device {
                     4,
                 ),
             ];
-            // The device's first texture, in a texture block the pool handed out: on a device of
-            // zeroed allocations its memory reads the driver's zeros, and it is moved home from
-            // the zero-initialized layout with no clear; elsewhere it is cleared.
+            // The device's first texture, in a texture block the pool handed out, cleared.
+            let zero_initialize = c"VK_EXT_zero_initialize_device_memory";
+            assert!(
+                !(device.extensions().iter()).any(|e| e.as_c_str() == zero_initialize),
+                "{name}: the zero-initialize extension enabled"
+            );
             let before = counters.metrics();
             let d = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [64, 64, 1]);
             let first = (device.new_texture(&d, Some(4096)))
@@ -772,26 +775,26 @@ mod on_device {
                 "{name}: the first texture"
             );
             let after = counters.metrics();
-            let form = device.core().zero_initialize;
             let size = first.image_size();
             assert_eq!(
                 (
-                    after.zeroed_textures - before.zeroed_textures,
-                    after.zeroed_texture_bytes - before.zeroed_texture_bytes,
                     after.texture_clears - before.texture_clears,
+                    after.texture_clear_bytes - before.texture_clear_bytes,
                 ),
-                match form {
-                    true => (1, size, 0),
-                    false => (0, 0, 1),
-                },
-                "{name}: the first texture's zeros, zero-initialized form {form}"
+                (1, size),
+                "{name}: the first texture's clear"
             );
             let textures = counters.gauges().textures - 1;
             drop(first);
             within("the first texture freed", || {
                 counters.gauges().textures == textures
             });
-            println!("texture zeros: {name}: the first texture, zero-initialized form {form}");
+            println!(
+                "texture zeros: {name}: the first texture cleared by the runtime: texture_clears \
+                 {}, texture_clear_bytes {}",
+                after.texture_clears - before.texture_clears,
+                after.texture_clear_bytes - before.texture_clear_bytes
+            );
             let mut cleared = 0;
             for (format, texture_type, extent, levels, slices, unit, block) in shapes {
                 let mut d = descriptor(texture_type, format, extent);

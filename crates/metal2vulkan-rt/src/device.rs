@@ -253,9 +253,6 @@ pub(crate) struct Core {
     /// requirements allow.
     pub(crate) device_local: u32,
     unified_memory: bool,
-    /// The pool's allocations are made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT` and read
-    /// zero until written (`floor::Capabilities::zero_initialize_memory`).
-    pub(crate) zero_initialize: bool,
     pub(crate) counters: Counters,
     /// What the device's timestamps count.
     pub(crate) ticks: Ticks,
@@ -503,7 +500,6 @@ impl Device {
             mut feedback_loop,
             mut feedback_loop_dynamic,
             mut divisor,
-            mut zero_initialize,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
         // the device's queries offer that import: it changes no other path, as only that import
@@ -547,9 +543,6 @@ impl Device {
             || enabled(ash::ext::vertex_attribute_divisor::NAME)
         {
             features = features.push_next(&mut divisor);
-        }
-        if enabled(floor::ZERO_INITIALIZE_DEVICE_MEMORY) {
-            features = features.push_next(&mut zero_initialize);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
@@ -686,7 +679,6 @@ impl Device {
             memory_types,
             device_local,
             unified_memory,
-            zero_initialize: capabilities.zero_initialize_memory,
             counters,
             ticks,
             calibrated,
@@ -877,12 +869,6 @@ impl Device {
     /// A buffer reads zero where
     /// [`Device::new_buffer`] zeroes its range, as `newBufferWithLength:options:` does in Metal;
     /// Metal is silent on the bytes of a placement heap's memory and of a texture placed there.
-    /// Where the device enabled `zeroInitializeDeviceMemory`
-    /// ([`floor::Capabilities::zero_initialize_memory`]), every allocation of the pool is made
-    /// zeroed by the driver, and a block that no block of its allocation held any byte of before
-    /// reads zero as it is handed out: [`BlockInfo::zeroed`](crate::BlockInfo::zeroed) says so,
-    /// so the consumer may skip the zeroing it would ask for. The runtime still zeroes every
-    /// range it is asked to: it does not see what is written after the take.
     ///
     /// Err: [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's largest allocation or
     /// buffer; [`Limit::BlockIds`](crate::Limit::BlockIds);
@@ -897,9 +883,6 @@ impl Device {
         }
         let memory = core.take_memory(class, len, Site::Take)?;
         let info = memory.info();
-        if info.zeroed {
-            core.counters.zeroed_take(info.len);
-        }
         let block = memory::Block::new(memory, Arc::clone(core));
         Ok(Block::claim(core, info, block))
     }

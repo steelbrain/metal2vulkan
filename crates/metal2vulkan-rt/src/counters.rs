@@ -263,14 +263,10 @@ struct Atomics {
     bytes_copied: AtomicU64,
     bytes_zeroed: AtomicU64,
     takes_from_free_ranges: AtomicU64,
-    zeroed_takes: AtomicU64,
-    zeroed_take_bytes: AtomicU64,
     block_zero_fills: AtomicU64,
     block_zero_fill_bytes: AtomicU64,
     texture_clears: AtomicU64,
     texture_clear_bytes: AtomicU64,
-    zeroed_textures: AtomicU64,
-    zeroed_texture_bytes: AtomicU64,
     texture_clear_barriers: AtomicU64,
     cache_bytes_written: AtomicU64,
     pipelines_created: AtomicU64,
@@ -654,13 +650,6 @@ impl Counters {
         self.atomics.takes_from_free_ranges.fetch_add(1, Relaxed);
     }
 
-    /// A block of `bytes` handed out that reads zero as taken ([`Metrics::zeroed_takes`]).
-    pub(crate) fn zeroed_take(&self, bytes: u64) {
-        let a = &self.atomics;
-        a.zeroed_takes.fetch_add(1, Relaxed);
-        a.zeroed_take_bytes.fetch_add(bytes, Relaxed);
-    }
-
     /// A zero fill of `bytes` the consumer asked of a Private block
     /// ([`Metrics::block_zero_fills`]).
     pub(crate) fn zero_filled(&self, bytes: u64) {
@@ -675,14 +664,6 @@ impl Counters {
         let a = &self.atomics;
         a.texture_clears.fetch_add(1, Relaxed);
         a.texture_clear_bytes.fetch_add(bytes, Relaxed);
-    }
-
-    /// A new texture's image of `bytes` of memory that read the driver's zeros, moved home from the
-    /// zero-initialized layout with no clear ([`Metrics::zeroed_textures`]).
-    pub(crate) fn texture_zeroed(&self, bytes: u64) {
-        let a = &self.atomics;
-        a.zeroed_textures.fetch_add(1, Relaxed);
-        a.zeroed_texture_bytes.fetch_add(bytes, Relaxed);
     }
 
     /// `bytes` more of Managed buffers' bytes a commit's copy-in copies
@@ -827,14 +808,10 @@ impl Counters {
             bytes_copied: a.bytes_copied.load(Relaxed),
             bytes_zeroed: a.bytes_zeroed.load(Relaxed),
             takes_from_free_ranges: a.takes_from_free_ranges.load(Relaxed),
-            zeroed_takes: a.zeroed_takes.load(Relaxed),
-            zeroed_take_bytes: a.zeroed_take_bytes.load(Relaxed),
             block_zero_fills: a.block_zero_fills.load(Relaxed),
             block_zero_fill_bytes: a.block_zero_fill_bytes.load(Relaxed),
             texture_clears: a.texture_clears.load(Relaxed),
             texture_clear_bytes: a.texture_clear_bytes.load(Relaxed),
-            zeroed_textures: a.zeroed_textures.load(Relaxed),
-            zeroed_texture_bytes: a.zeroed_texture_bytes.load(Relaxed),
             texture_clear_barriers: a.texture_clear_barriers.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
             first_use_waits: a.first_use_waits.load(Relaxed),
@@ -1013,13 +990,6 @@ pub struct Metrics {
     /// allocation instead ([`consumer_allocations`](Self::consumer_allocations),
     /// [`allocations_mapped_on_takes`](Self::allocations_mapped_on_takes)).
     pub takes_from_free_ranges: u64,
-    /// Blocks the consumer took that answered
-    /// [`BlockInfo::zeroed`](crate::BlockInfo::zeroed): each byte read zero as handed out, the
-    /// driver having made the allocation zeroed and no block having held the range before. Zero
-    /// on a device without `zeroInitializeDeviceMemory`.
-    pub zeroed_takes: u64,
-    /// The bytes of those blocks.
-    pub zeroed_take_bytes: u64,
     /// Zero fills the consumer asked of Private blocks
     /// ([`Device::zero_block_range`](crate::Device::zero_block_range)).
     pub block_zero_fills: u64,
@@ -1030,26 +1000,13 @@ pub struct Metrics {
     /// [`Device::new_texture_for_views`](crate::Device::new_texture_for_views) and
     /// [`Device::new_managed_texture`](crate::Device::new_managed_texture)): each image's one
     /// clear of every subresource, or its copies from the zero source where its format takes no
-    /// clear. The split between this form and the zero-initialized one
-    /// ([`zeroed_textures`](Self::zeroed_textures)) follows where the pool places a texture, and
-    /// may differ between two runs of one program.
+    /// clear, on every device.
     pub texture_clears: u64,
     /// The bytes of memory of those images.
     pub texture_clear_bytes: u64,
-    /// New textures that read zero until written with no clear: on a device of zeroed
-    /// allocations ([`Capabilities::zero_initialize_memory`](crate::floor::Capabilities::zero_initialize_memory)),
-    /// those whose memory read the driver's zeros, which no resource used (a place in a texture
-    /// block past every place it held before, or memory of its own), each made in the
-    /// zero-initialized layout and moved home from it. The split between this form and the clear
-    /// ([`texture_clears`](Self::texture_clears)) follows where the pool places a texture, and may
-    /// differ between two runs of one program.
-    pub zeroed_textures: u64,
-    /// The bytes of memory of those images.
-    pub zeroed_texture_bytes: u64,
     /// The barriers that move new textures' images home after their zeroing: one for each upload
     /// that zeroed any ([`texture_clears`](Self::texture_clears)), however many it zeroed, also
-    /// counted in [`barriers`](Self::barriers). It follows the clears, so it may differ between
-    /// two runs of one program as they do.
+    /// counted in [`barriers`](Self::barriers).
     pub texture_clear_barriers: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,

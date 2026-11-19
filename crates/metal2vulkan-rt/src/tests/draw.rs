@@ -829,8 +829,8 @@ pub(crate) mod on_device {
             let counters = device.counters();
             // The first command buffer's submission records two barriers more than the second's:
             // its upload's, which moves the two new images from undefined to their home layouts
-            // in one and ends in the other, and one more where it clears a new image (one whose
-            // memory does not read the driver's zeros) between its move and its home.
+            // in one and ends in the other, and one more where it clears a new image the runtime
+            // placed between its move and its home.
             for (load, first, color_of, barriers) in [
                 (crate::LoadAction::Clear, 3, BLUE, 5),
                 (crate::LoadAction::Load, 6, WHITE, 3),

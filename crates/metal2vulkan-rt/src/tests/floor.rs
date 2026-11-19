@@ -1181,7 +1181,7 @@ fn a_set_layout_the_device_does_not_support_is_named() {
 #[test]
 fn the_optional_features_decide_the_capabilities() {
     type Set = fn(&mut Features);
-    let cases: [(Set, &str); 8] = [
+    let cases: [(Set, &str); 7] = [
         (|f| f.vulkan12.shader_float16 = vk::TRUE, "float16"),
         (
             |f| f.core.shader_storage_image_read_without_format = vk::TRUE,
@@ -1207,10 +1207,6 @@ fn the_optional_features_decide_the_capabilities() {
             },
             "subgroup_uniform_control_flow",
         ),
-        (
-            |f| f.zero_initialize.zero_initialize_device_memory = vk::TRUE,
-            "zero_initialize_memory",
-        ),
     ];
     assert_eq!(
         cases.len(),
@@ -1234,10 +1230,6 @@ fn the_optional_features_decide_the_capabilities() {
             (
                 "subgroup_uniform_control_flow",
                 capabilities.subgroup_uniform_control_flow,
-            ),
-            (
-                "zero_initialize_memory",
-                capabilities.zero_initialize_memory,
             ),
         ];
         for (name, value) in answers {
@@ -1434,7 +1426,6 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut feedback_loop,
             mut feedback_loop_dynamic,
             mut divisor,
-            mut zero_initialize,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -1461,9 +1452,6 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             || enabled(ash::ext::vertex_attribute_divisor::NAME)
         {
             features = features.push_next(&mut divisor);
-        }
-        if enabled(crate::floor::ZERO_INITIALIZE_DEVICE_MEMORY) {
-            features = features.push_next(&mut zero_initialize);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

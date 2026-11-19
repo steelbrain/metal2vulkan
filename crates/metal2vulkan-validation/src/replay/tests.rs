@@ -958,9 +958,7 @@ fn judged_counts() -> Counters {
         ("barriers", 5),
         ("texture_clear_barriers", 1),
         ("texture_clears", 2),
-        ("zeroed_textures", 4),
         ("texture_clear_bytes", 100),
-        ("zeroed_texture_bytes", 60),
         ("bytes_copied", 7),
         ("blocks_made", 9),
     ])
@@ -968,8 +966,8 @@ fn judged_counts() -> Counters {
 
 /// The matrix's judged metrics of a play on the new runtime are the play's executed totals, one
 /// record each under the stream's first segment's stem (whitespace made `_`) and its range: the
-/// barriers less the one after each upload's clears, the clears and the zero-initialized textures
-/// as one count and their bytes as one, a counter the backend does not report as 0, and no other
+/// barriers less the one after each upload's clears, the clears and their bytes, a counter the
+/// backend does not report as 0, and no other
 /// counter (here `blocks_made`). A play through a last frame names it.
 #[test]
 fn the_judged_metrics_total_the_play_less_the_zeroing_barrier() {
@@ -987,8 +985,8 @@ fn the_judged_metrics_total_the_play_less_the_zeroing_barrier() {
         "M2V-MATRIX metric replay-rt/a_b/whole/barriers 8",
         "M2V-MATRIX metric replay-rt/a_b/whole/bytes_copied 14",
         "M2V-MATRIX metric replay-rt/a_b/whole/pipelines_created 0",
-        "M2V-MATRIX metric replay-rt/a_b/whole/new_textures_zeroed 12",
-        "M2V-MATRIX metric replay-rt/a_b/whole/new_texture_zeroed_bytes 320",
+        "M2V-MATRIX metric replay-rt/a_b/whole/new_textures_zeroed 4",
+        "M2V-MATRIX metric replay-rt/a_b/whole/new_texture_zeroed_bytes 200",
     ];
     assert_eq!(records, whole);
     let mut kept = Kept {

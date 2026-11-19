@@ -1049,10 +1049,8 @@ finished its range (it ended without an error, through frame `F`'s present where
 metric replay-rt/STEM/RANGE/NAME N` (`STEM` the first segment's stem, whitespace made `_`;
 `RANGE` `through-F` or `whole`; `N` the play's executed total of `submissions`, `passes`,
 `barriers` less `texture_clear_barriers`, `bytes_copied` and `pipelines_created`, and of
-`new_textures_zeroed`, the new textures zeroed by a clear (`texture_clears`) and those made
-zero-initialized (`zeroed_textures`) as one count, the split between the two following where the
-runtime's pool places a texture, which may differ between two plays, and
-`new_texture_zeroed_bytes`, their bytes as one), each one two plays of one stream at one commit
+`new_textures_zeroed`, the new textures zeroed by a clear (`texture_clears`), and
+`new_texture_zeroed_bytes`, their bytes), each one two plays of one stream at one commit
 on one card gave alike, which the matrix's rule (`scripts/matrix/results.py`) holds equal to the
 base's, failing a play whose base has a record it lacks; a play that did not finish its range
 prints none,
