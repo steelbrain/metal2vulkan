@@ -1772,8 +1772,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `[R8Unorm, R32Float]` is 8). No explicit imageblock adds to it, as a state whose fragment
   function reaches one is not made. `imageblock_memory_length_for_dimensions` answers
   `imageblockMemoryLengthForDimensions:`: that length times the width, the height and the raster
-  sample count, none rounded. A color format with no measured place in Metal's record is
-  `Gap::ImageblockLength`.
+  sample count, none rounded, the depth ignored. A color format with no measured place in Metal's
+  record is `Gap::ImageblockLength`. The M3 measurement the rule rests on is the conformance
+  suite's recordings `pipeline-facts-render-plain`, `pipeline-facts-render-two-attachments` and
+  `pipeline-facts-render-multisampled` (an Apple M3 Max, macOS 27.0.1 build 26A434, three runs
+  each): `RGBA8Unorm` answers 4 and 128 at `[8, 4, 3]`; `RGBA8Unorm` then `RGBA16Float` 12 and
+  384; the same at four samples 12 and 1536.
 - A state numbers its functions' samplers as a compute state numbers its kernel's:
   `sampler_ids` takes the vertex function's, then the fragment function's, each in Metal's order,
   and answers the index the consumer gives each. Each constexpr sampler a function samples
