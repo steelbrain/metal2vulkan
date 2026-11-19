@@ -790,6 +790,15 @@ that touch blocks first.
   (15 ms at the 90th). The last command buffer's own report is not late: on the 2080 it came
   97.2-97.5 ms after its commit, where the old runtime's came 94.9-96.4 ms after. The harness prints each command buffer's lateness, from
   its `gpu_end_time` to its completed handler (`late_us`).
+- On NVIDIA, short command buffers committed back to back reach the GPU in more submissions than
+  the old runtime made of them, and such a burst runs behind it. The cost is NVIDIA's latency per
+  submission: the runtime submits sooner, each command buffer as soon as it can. On an RTX 2080
+  (harness row `frame_5cb`: five short command buffers a run, two runs in flight) a run takes
+  about 2.5 submissions against the old runtime's 2.0, each submission boundary leaves the GPU
+  idle for about 20-25 µs, and the row's throughput is about 8% behind. Latency from idle (one
+  run in flight) is equal. A recorded replay stream on the same card plays 1.5 times as fast as on
+  the old runtime; it was recorded before the recorder's completion fix, so that figure compares
+  the two runtimes on the same stream and no more.
 - GPU start and end times are the device's timestamps. On Mesa's Apple-GPU driver a timestamp
   reads the end of the Metal encoder that holds it: the driver writes it with Metal's relaxed
   timestamp granularity into the compute encoder open there, which holds the compute and blit
