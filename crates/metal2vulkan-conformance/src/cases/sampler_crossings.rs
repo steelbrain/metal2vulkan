@@ -966,7 +966,15 @@ impl Case for SamplerCrossings {
         // no value outside it (`restricted-depth-range`). Its depths all lie in [0, 1], so
         // neither moves a sample: measured there, the notices site is the whole of the
         // difference.
-        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        //
+        // Every row samples through the runtime sampler at `[[sampler(0)]]`, which the new
+        // runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice` holds
+        // why). Measured through the rt side on lavapipe, the Radeon 780M and the RX 550: it fired
+        // for every row the side does not refuse (the axis and mip-filter rows).
+        let mut allowances = vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::pixel_sampler_scaling_notice(),
+        ];
         if matches!(self.family, Family::CompareFilters) {
             use metal2vulkan_runtime::Degradation as D;
             for kind in [D::RestrictedDepthUpload, D::RestrictedDepthRange] {

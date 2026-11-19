@@ -869,7 +869,16 @@ impl Case for SamplerFiltering {
         // `sampler-mip-linear` and `sampler-r-address-modes` on llvmpipe and the 5080), the note
         // is the device's own answer, which the suite declares for every case
         // (`crate::replay::NATIVE_NOTES`).
-        let mut named = vec![crate::replay::shared_memory_notice()];
+        //
+        // And every family samples through the runtime sampler at `[[sampler(0)]]`, which the new
+        // runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice` holds
+        // why). Measured through the rt side on lavapipe, the Radeon 780M and the RX 550: it fired
+        // for every row the side does not refuse (the mip, third-address-mode, reduction and
+        // border rows).
+        let mut named = vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::pixel_sampler_scaling_notice(),
+        ];
         if matches!(self.family, Family::Cubic) {
             named.push(notice_allowance(
                 Degradation::BicubicFilterArithmetic.code(),

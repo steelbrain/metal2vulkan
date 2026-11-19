@@ -315,7 +315,16 @@ impl Case for ComputeEncoderCommands {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // A sampling row's kernel samples its texture through the runtime sampler at slot 0,
+        // which the new runtime's pipelines note as scaled
+        // (`crate::replay::pixel_sampler_scaling_notice` holds why). Measured through the rt side
+        // on lavapipe, the Radeon 780M and the RX 550: it fired for both sampling rows.
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if matches!(self.row.resources, Resources::Sampled { .. }) {
+            named.push(crate::replay::pixel_sampler_scaling_notice());
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

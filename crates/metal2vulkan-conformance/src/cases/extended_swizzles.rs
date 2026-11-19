@@ -394,7 +394,15 @@ impl Case for ExtendedSwizzles {
         // An extended-range or padded 10-bit format's linear sample (`sl`) blends its decoded taps
         // in the device's arithmetic, announced as `bicubic-filter-arithmetic` (the M3 Max, each
         // of the four extended-range formats); its values move by it (`known-gaps.tsv`).
-        let mut named = vec![crate::replay::shared_memory_notice()];
+        //
+        // Every kernel samples or gathers through the runtime sampler at `[[sampler(0)]]`, which
+        // the new runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice`
+        // holds why). Measured through the rt side on lavapipe, the Radeon 780M and the RX 550:
+        // it fired for every row the side does not refuse (the four 16-bit packed formats).
+        let mut named = vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::pixel_sampler_scaling_notice(),
+        ];
         if matches!(
             self.format().format,
             PixelFormat::BGRA10XR

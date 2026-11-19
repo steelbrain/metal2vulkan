@@ -310,7 +310,15 @@ impl Case for BorderSwizzles {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // The fixture's float texture is sampled through the runtime sampler at `[[sampler(0)]]`,
+        // which the new runtime's pipelines note as scaled
+        // (`crate::replay::pixel_sampler_scaling_notice` holds why). Measured through the rt side
+        // on lavapipe, the Radeon 780M and the RX 550: it fired for all 8 rows.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::pixel_sampler_scaling_notice(),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
