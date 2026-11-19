@@ -256,12 +256,13 @@ impl Block {
     /// it completes. The call never waits for the GPU. One call is one buffer barrier,
     /// counted in [`Metrics::external_acquires`](crate::Metrics::external_acquires).
     ///
-    /// The contract: between this call and the other API's next write of the whole block, the
-    /// other API does not access the block, to read or to write. The runtime records no release
-    /// back to the other API: one that overwrites the whole block needs nothing the runtime left
-    /// in it, and Vulkan skips the transfer of contents not needed ("If an application does not
-    /// need the contents of a resource to remain valid when transferring from one queue family to
-    /// another, then the ownership transfer should be skipped").
+    /// The contract has three parts: between this call and the other API's next write, the other
+    /// API does not access the block; when it writes again, it reads nothing of the block but
+    /// what it has itself written since; and after each acquire, a byte the other API has not
+    /// written since the previous acquire is undefined to the runtime. The runtime records no
+    /// release back to the other API: without one, Vulkan leaves the block's contents undefined to
+    /// the other API's reads ("the contents of that resource are undefined for any read accesses
+    /// performed by the second queue family"), and that API reads only its own writes.
     ///
     /// Err: [`Refusal::NotExported`] for a block that is not exported;
     /// [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`]; and

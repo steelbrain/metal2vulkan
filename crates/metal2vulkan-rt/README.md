@@ -409,10 +409,12 @@ that use what was written. The call records the block's acquire from the other A
 (`VK_QUEUE_FAMILY_EXTERNAL` for an opaque handle, `VK_QUEUE_FAMILY_FOREIGN_EXT` for a dma-buf) in
 the upload, ahead of every command buffer committed after it, without waiting for the GPU: one
 buffer barrier, counted in `Metrics::external_acquires`. A block that is not exported is
-`Refusal::NotExported`. The contract: between `external_writes_done` and the other API's next
-write of the whole block, the other API does not access the block, to read or to write. The
-runtime records no release back: Vulkan skips an ownership transfer whose contents are not needed,
-and an API that overwrites the whole block needs nothing the runtime left there.
+`Refusal::NotExported`. The contract has three parts: between `external_writes_done` and the
+other API's next write, the other API does not access the block; when it writes again, it reads
+nothing of the block but what it has itself written since; and after each acquire, a byte the
+other API has not written since the previous acquire is undefined to the runtime. The runtime
+records no release back: without one, Vulkan leaves the block's contents undefined to the other
+API's reads (section 7.7.6), and that API reads only its own writes.
 
 ### Known gaps of memory blocks
 
