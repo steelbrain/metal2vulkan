@@ -127,7 +127,7 @@ mod on_device {
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         step(
             name,
-            &device,
+            device,
             "the first fill beside whole words",
             &[("zero source", ZEROS)],
             || {
@@ -137,7 +137,7 @@ mod on_device {
         );
         step(
             name,
-            &device,
+            device,
             "a second fill beside whole words",
             &[],
             || {
@@ -151,7 +151,7 @@ mod on_device {
         // another type the device offers is the texture block's.
         core.fail_private.store(1, Relaxed);
         let before = device.counters().metrics();
-        let own = texture(name, &device, 2048, 3072);
+        let own = texture(name, device, 2048, 3072);
         assert_eq!(
             core.fail_private.load(Relaxed),
             0,
@@ -176,20 +176,20 @@ mod on_device {
         let mut large = None;
         step(
             name,
-            &device,
+            device,
             "a 32 MiB texture",
             &[("texture block", 32 * MIB)],
             || {
-                large = Some(texture(name, &device, 2048, 4096));
+                large = Some(texture(name, device, 2048, 4096));
             },
         );
         let large = large.expect("the 32 MiB texture");
 
         // A texture whose texture block has room allocates nothing.
-        let small = texture(name, &device, 64, 64);
+        let small = texture(name, device, 64, 64);
         let mut placed = None;
-        step(name, &device, "a texture in a block with room", &[], || {
-            placed = Some(texture(name, &device, 64, 64));
+        step(name, device, "a texture in a block with room", &[], || {
+            placed = Some(texture(name, device, 64, 64));
         });
         let placed = placed.expect("the second small texture");
 
@@ -197,21 +197,21 @@ mod on_device {
         // it.
         step(
             name,
-            &device,
+            device,
             "the first small replace",
             &[("staging region", 16 * MIB)],
             || {
                 replace(name, &small, 64, 64);
             },
         );
-        step(name, &device, "a second small replace", &[], || {
+        step(name, device, "a second small replace", &[], || {
             replace(name, &placed, 64, 64);
         });
 
         // A copy larger than the region has a staging buffer of its own.
         step(
             name,
-            &device,
+            device,
             "a 32 MiB replace",
             &[("staging buffer", 32 * MIB)],
             || {
@@ -226,7 +226,7 @@ mod on_device {
         let mut writes = Writes::default();
         step(
             name,
-            &device,
+            device,
             "a ring write past its chunks",
             &[("ring block", 2 * MIB)],
             || {
@@ -239,7 +239,7 @@ mod on_device {
         let mut again = Writes::default();
         step(
             name,
-            &device,
+            device,
             "a ring write into a chunk given back",
             &[],
             || {
@@ -250,20 +250,14 @@ mod on_device {
 
         // A take longer than any free range allocates; a short one fits a free range.
         let mut taken = Vec::new();
-        step(
-            name,
-            &device,
-            "a 64 MiB take",
-            &[("take", 64 * MIB)],
-            || {
-                taken.push(
-                    device
-                        .take_block(MemoryClass::Shared, 64 * MIB)
-                        .expect("a take"),
-                );
-            },
-        );
-        step(name, &device, "a 4 KiB take", &[], || {
+        step(name, device, "a 64 MiB take", &[("take", 64 * MIB)], || {
+            taken.push(
+                device
+                    .take_block(MemoryClass::Shared, 64 * MIB)
+                    .expect("a take"),
+            );
+        });
+        step(name, device, "a 4 KiB take", &[], || {
             taken.push(
                 device
                     .take_block(MemoryClass::Shared, 4096)
@@ -289,7 +283,7 @@ mod on_device {
         };
         step(
             name,
-            &device,
+            device,
             "a Managed buffer's first named range",
             expected,
             || {

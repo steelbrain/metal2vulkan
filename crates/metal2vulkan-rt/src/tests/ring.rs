@@ -11,7 +11,7 @@ mod on_device {
     use crate::device::{lock, Core};
     use crate::memory::MakerTest;
     use crate::ring::{Writes, CHUNK, SPARE};
-    use crate::tests::command::on_device::{each_device, each_device_with};
+    use crate::tests::command::on_device::{each_device, each_device_with, Release};
     use crate::DeviceOptions;
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -58,6 +58,7 @@ mod on_device {
             *lock(&ring.park) = Some(Arc::clone(&park));
             let first = taken(core, 1);
             park.wait();
+            let mut release = Release::of(&park);
             *lock(&ring.park) = None;
             assert_eq!(
                 ring.chunks(),
@@ -83,7 +84,7 @@ mod on_device {
                 waits + 1,
                 "{name}: the take's wait for the block-maker thread"
             );
-            park.wait();
+            release.now();
             core.pool.await_internals();
             assert_eq!(chunks(core), (2, SPARE), "{name}: the block made");
             for writes in [first, held, waited] {
@@ -127,6 +128,7 @@ mod on_device {
             let maker = take_one(core);
             // The take is parked where it makes the block.
             park.wait();
+            let mut release = Release::of(&park);
             *lock(&ring.park) = None;
             assert_eq!(
                 ring.chunks(),
@@ -136,7 +138,7 @@ mod on_device {
             let waiter = take_one(core);
             // A give-back on this thread goes on while the block is made.
             spare.give_back(core);
-            park.wait();
+            release.now();
             let made = maker.join().expect("the maker");
             let waited = waiter.join().expect("the waiter");
             assert_eq!(

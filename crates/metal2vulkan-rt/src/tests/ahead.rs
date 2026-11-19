@@ -12,12 +12,12 @@ mod on_device {
     use crate::device::lock;
     use crate::memory::MakerTest;
     use crate::staging::REGION_LEN;
-    use crate::tests::command::on_device::{each_device, finished, within, Arena};
+    use crate::tests::command::on_device::{each_device, finished, within, Arena, Release};
     use crate::tests::compute::on_device::{add, WORDS};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Device, DeviceOptions, DispatchType, Gauges, HostBytes, MemoryClass, Metrics, PixelFormat,
-        Region, SiteAllocations, StorageMode, TextureDescriptor, TextureType,
+        Region, SiteAllocations, StorageMode, TextureDescriptor, TextureType, TextureUsage,
     };
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -52,7 +52,9 @@ mod on_device {
     fn first_calls(name: &str, device: &Device) -> Vec<Call> {
         let mut calls: Vec<Call> = Vec::new();
 
+        // A render target, which no shader reads, so it takes no texture index.
         let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 64, 64);
+        d.usage = TextureUsage::RENDER_TARGET;
         d.storage_mode = StorageMode::Shared;
         let texture =
             (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -181,6 +183,7 @@ mod on_device {
             let counters = device.counters();
             // Parked before its first work.
             park.wait();
+            let mut release = Release::of(&park);
             let core = device.core();
             assert!(
                 core.filler.get().is_none() && counters.gauges().staging_bytes == 0,
@@ -206,7 +209,7 @@ mod on_device {
                 "{name}: allocated on a caller's thread while parked: {on_caller:?}"
             );
             assert_eq!(parked.maker_waits, 0, "{name}: a wait ended while parked");
-            park.wait();
+            release.now();
             for call in running {
                 call.join().expect("a call");
             }

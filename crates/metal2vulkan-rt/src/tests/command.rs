@@ -97,6 +97,30 @@ pub(crate) mod on_device {
     /// Under this, a call given [`PATIENCE`] answered at once: it waited for nothing.
     const AT_ONCE: Duration = Duration::from_secs(5);
 
+    /// The test's second meeting at a barrier a thread of the runtime is parked at, which releases
+    /// it: made at [`now`](Self::now), or as the test unwinds, so a failed assertion releases the
+    /// thread rather than leaving the device's teardown waiting for it.
+    pub(crate) struct Release(Option<Arc<std::sync::Barrier>>);
+
+    impl Release {
+        /// The release of the thread parked at `park`, once the test has met it there once.
+        pub(crate) fn of(park: &Arc<std::sync::Barrier>) -> Release {
+            Release(Some(Arc::clone(park)))
+        }
+
+        pub(crate) fn now(&mut self) {
+            if let Some(park) = self.0.take() {
+                park.wait();
+            }
+        }
+    }
+
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.now();
+        }
+    }
+
     pub(crate) fn within(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + PATIENCE;
         while !done() {
