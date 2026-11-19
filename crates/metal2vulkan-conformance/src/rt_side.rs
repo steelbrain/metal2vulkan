@@ -1102,10 +1102,19 @@ impl Side for RtSide<'_> {
         grid: [u32; 3],
         threads: [u32; 3],
     ) -> Answer<Handle> {
-        if !stage_in.is_empty() {
-            return Err(Failure::unavailable("set_stage_in_region"));
+        let mut regions = Vec::with_capacity(stage_in.len());
+        for region in stage_in {
+            match *region {
+                StageInRegion::Direct { origin, size } => regions.push(rt::Region { origin, size }),
+                StageInRegion::Indirect { .. } => {
+                    return Err(Failure::unavailable("set_stage_in_region_indirect"))
+                }
+            }
         }
         self.encode(pipeline, bindings, |encoder| {
+            for &region in &regions {
+                encoder.set_stage_in_region(region);
+            }
             encoder.dispatch_threads(grid, threads)
         })
     }

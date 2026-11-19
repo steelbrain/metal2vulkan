@@ -201,6 +201,9 @@ pub struct ComputeCommandEncoder {
     wrote: bool,
     /// What a dispatch of the pipeline state reaches of the bound resources.
     facts: DispatchFacts,
+    /// The stage-in region set ([`ComputeCommandEncoder::set_stage_in_region`]), as the bytes of
+    /// its push field: the origin and the size, each a `uvec4` with a zero `w`.
+    stage_in_region: Option<[u8; 32]>,
 }
 
 /// What a dispatch of the encoder's pipeline state reaches of its bound resources and
@@ -448,6 +451,7 @@ impl CommandBuffer {
             parameters: Parameters::default(),
             wrote: false,
             facts: DispatchFacts::default(),
+            stage_in_region: None,
         })
     }
 }
@@ -610,12 +614,19 @@ impl ComputeCommandEncoder {
         self.set_sampler_state(sampler, index)
     }
 
-    /// `setStageInRegion:`: it changes nothing a dispatch does. The region is what a kernel's
-    /// `[[stage_in]]` argument fetches by, and a kernel with one is [`Gap::KernelInput`] at its
-    /// state's creation, so no state this encoder dispatches has one; a dispatch of a kernel
-    /// without one ignores the region, as Metal's does.
+    /// `setStageInRegion:`: the region a kernel's `[[grid_origin]]` and `[[grid_size]]` read,
+    /// pushed at every later dispatch of the encoder as the origin and the size, each a `uvec4`
+    /// with a zero `w`. A dispatch of a kernel that reads the region on an encoder that set none
+    /// is [`Gap::NoStageInRegion`]. A kernel with a `[[stage_in]]` argument, which fetches by the
+    /// region, is [`Gap::KernelInput`] at its state's creation.
     pub fn set_stage_in_region(&mut self, region: Region) {
-        let _ = region;
+        let mut bytes = [0; 32];
+        let words =
+            (region.origin.into_iter().chain([0])).chain(region.size.into_iter().chain([0]));
+        for (word, at) in words.zip(bytes.as_chunks_mut::<4>().0) {
+            *at = word.to_le_bytes();
+        }
+        self.stage_in_region = Some(bytes);
     }
 
     /// `setBufferOffset:atIndex:`.
@@ -927,6 +938,10 @@ impl ComputeCommandEncoder {
             recording(&mut self.building).count(Metric::DispatchesWithoutEffects);
             return Ok(());
         }
+        // What a kernel reads of a stage-in region the encoder never set is not established.
+        if inner.whole.interface.stage_in_region && self.stage_in_region.is_none() {
+            return Err(Error::Unsupported(Gap::NoStageInRegion));
+        }
         if let Grid::Indirect(buffer, _) = &grid {
             recording(&mut self.building).keep(buffer);
         }
@@ -1110,8 +1125,9 @@ impl ComputeCommandEncoder {
                             });
                             let region = region(base, threads, ragged)?;
                             let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
+                            let regions = (&region, self.stage_in_region.as_ref());
                             self.parameters
-                                .fill(kernel, (bound, self.facts.nil), ids, &region);
+                                .fill(kernel, (bound, self.facts.nil), ids, regions);
                             recording(&mut self.building).record_dispatch(
                                 core,
                                 vk_pipeline,
@@ -1126,8 +1142,9 @@ impl ComputeCommandEncoder {
             (None, Grid::Indirect(buffer, offset)) => {
                 let region = region([0; 3], [0; 3], false)?;
                 let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
+                let regions = (&region, self.stage_in_region.as_ref());
                 self.parameters
-                    .fill(kernel, (bound, self.facts.nil), ids, &region);
+                    .fill(kernel, (bound, self.facts.nil), ids, regions);
                 recording(&mut self.building).record_dispatch(
                     core,
                     vk_pipeline,
@@ -1221,10 +1238,12 @@ type Bound<'a> = (
 
 impl Parameters {
     /// Fills the push window and the ring block of one launch of `kernel` with `bound`, the
-    /// encoder's argument tables, whose region is `region`, the `DispatchRegion` push field's
-    /// bytes, and whose state gave its numbered samplers `sampler_ids`. The block's address is
-    /// written by [`Building::record_dispatch`] once the block is in the ring. A buffer argument
-    /// bound to nothing takes `nil`, the nil buffer's address.
+    /// encoder's argument tables, whose regions are `region`, the `DispatchRegion` push field's
+    /// bytes, and `stage_in`, the `StageInRegion` field's where the encoder set a region (a
+    /// kernel that reads it has one: the dispatch checked first), and whose state gave its
+    /// numbered samplers `sampler_ids`. Only a kernel that reads the stage-in region copies it.
+    /// The block's address is written by [`Building::record_dispatch`] once the block is in the
+    /// ring. A buffer argument bound to nothing takes `nil`, the nil buffer's address.
     ///
     /// Every buffer address is a multiple of the alignment the module takes it to have, which the
     /// dispatch checked first ([`check_alignments`], which gave `nil`).
@@ -1233,7 +1252,7 @@ impl Parameters {
         kernel: &Kernel,
         (bound, nil): (Bound<'_>, u64),
         sampler_ids: &[u32],
-        region: &[u8; 32],
+        (region, stage_in): (&[u8; 32], Option<&[u8; 32]>),
     ) {
         let (slots, textures, samplers) = bound;
         let interface: &Interface = &kernel.interface;
@@ -1286,6 +1305,11 @@ impl Parameters {
                     bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
                 }
                 FieldValue::DispatchRegion => bytes[at..at + 32].copy_from_slice(region),
+                FieldValue::StageInRegion => {
+                    if let Some(stage_in) = stage_in {
+                        bytes[at..at + 32].copy_from_slice(stage_in);
+                    }
+                }
             }
         }
         self.block_address = (interface.block_len > 0).then_some(interface.block_address);

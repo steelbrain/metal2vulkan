@@ -2117,8 +2117,8 @@ fn fill_push(
                 let index = ids.get(place).copied().unwrap_or(0);
                 push[at..at + 4].copy_from_slice(&index.to_le_bytes());
             }
-            // A render content has no dispatch region (`render::draws`).
-            FieldValue::DispatchRegion => {}
+            // A render content has no dispatch or stage-in region (`render::draws`).
+            FieldValue::DispatchRegion | FieldValue::StageInRegion => {}
         }
     }
 }

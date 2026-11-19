@@ -13664,6 +13664,7 @@ variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
 variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
 variant	metal2vulkan-rt::Gap::LodClamps	LodClamps
 variant	metal2vulkan-rt::Gap::MemorylessTexture	MemorylessTexture
+variant	metal2vulkan-rt::Gap::NoStageInRegion	NoStageInRegion
 variant	metal2vulkan-rt::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_threadgroup: [u32; 3], width: u32 }
 variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
 variant	metal2vulkan-rt::Gap::RenderPass	RenderPass { kind: RenderPassKind }

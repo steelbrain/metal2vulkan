@@ -725,7 +725,8 @@ pub enum Gap {
     /// a `[[stage_in]]` fetch, a parameter the runtime does not fill, or a specialization the
     /// runtime does not set. Buffers, `setBytes` data, textures and sampler states by their
     /// resource IDs, constexpr samplers by their indices, an integer write's channel widths,
-    /// threadgroup memory lengths, the dispatch's grid and a pinned subgroup size are supplied.
+    /// threadgroup memory lengths, the dispatch's grid, the stage-in region and a pinned subgroup
+    /// size are supplied.
     ///
     /// Basis: ours (the encoder supplies only those).
     KernelInput,
@@ -764,6 +765,13 @@ pub enum Gap {
         /// The threadgroup size asked for.
         threads_per_threadgroup: [u32; 3],
     },
+    /// A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`)
+    /// on an encoder that never set one
+    /// ([`ComputeCommandEncoder::set_stage_in_region`](crate::ComputeCommandEncoder::set_stage_in_region)):
+    /// what such a kernel reads on Metal is not established, and is not invented.
+    ///
+    /// Basis: ours (no replay stream dispatches such a kernel without setting a region).
+    NoStageInRegion,
     /// A texture of `Memoryless` storage, which only render passes use.
     ///
     /// Basis: ours (render passes are not built).
@@ -1501,6 +1509,9 @@ impl fmt::Display for Gap {
             }
             Gap::KernelInput => {
                 f.write_str("the kernel reads an input the compute encoder does not supply yet")
+            }
+            Gap::NoStageInRegion => {
+                f.write_str("the kernel reads the stage-in region, which the encoder never set")
             }
             Gap::PartialSimdgroups {
                 threads_per_threadgroup,

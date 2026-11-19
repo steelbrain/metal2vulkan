@@ -397,6 +397,9 @@ pub(crate) struct Interface {
     pub(crate) block_address: u32,
     /// The parameters.
     pub(crate) fields: Vec<Field>,
+    /// Whether the kernel reads the stage-in region ([`FieldValue::StageInRegion`]), which a
+    /// dispatch needs the encoder to have set.
+    pub(crate) stage_in_region: bool,
     /// The kernel's specialization constants: each one's id and what sets it.
     pub(crate) constants: Vec<(u32, Constant)>,
     /// The index of each threadgroup memory argument the kernel takes, in the order of
@@ -516,6 +519,9 @@ pub(crate) enum FieldValue {
     /// `dispatch_threads`, threadgroups times their size for `dispatch_threadgroups`, and zeros
     /// for an indirect dispatch, whose kernel takes the grid from its workgroup count) and 0.
     DispatchRegion,
+    /// The compute encoder's stage-in region (`setStageInRegion:`), 32 bytes read as two
+    /// `uvec4`: its origin and its size, each with a zero `w`.
+    StageInRegion,
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
@@ -999,6 +1005,8 @@ fn interface(
             | RuntimeFact::GridTiles
             | RuntimeFact::OneRow
             | RuntimeFact::DeviceAddresses { .. } => {}
+            // The stage-in region, which the encoder pushes (`FieldValue::StageInRegion`).
+            RuntimeFact::StageInRegion => {}
             // What a variant could relieve, which the module runs without: a predicated walk
             // that unit axes would make less divergent, and lockstep barriers a one-row region
             // could skip. Every dispatch runs on this module, keeping its whole groups.
@@ -1103,6 +1111,7 @@ fn interface(
                     FieldValue::ConstexprSampler(at)
                 }
                 (PushField::DispatchRegion, _) => FieldValue::DispatchRegion,
+                (PushField::StageInRegion, _) => FieldValue::StageInRegion,
                 _ => return Err(gap()),
             };
             fields.push(Field { place, value });
@@ -1183,6 +1192,8 @@ fn interface(
         push_len,
         block_len,
         block_address,
+        stage_in_region: (fields.iter())
+            .any(|field| matches!(field.value, FieldValue::StageInRegion)),
         fields,
         constants,
         threadgroups,

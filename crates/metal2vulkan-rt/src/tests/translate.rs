@@ -12,7 +12,8 @@
 //! first-use wait the counters record. Vector accesses through pointers cast from a `uint`
 //! buffer land at their own addresses, 4, 8 or 12 bytes past a multiple of 16, as Metal places them.
 //! An access through a buffer argument at 2 GiB and past lands there, on every device that can
-//! allocate the buffer. A read of a texture the kernel's function constants removed takes zero,
+//! allocate the buffer. A kernel that reads the stage-in region stores the region each dispatch
+//! was encoded under, and is refused where the encoder set none. A read of a texture the kernel's function constants removed takes zero,
 //! and a read through a buffer argument bound to nothing reads the nil buffer's zeros.
 //!
 //! `llvm-as` assembles the kernels; without it a test skips visibly.
@@ -23,8 +24,8 @@ mod on_device {
     use crate::tests::{devices_of_the_cfgs_kind, keeps_a_blob};
     use crate::{
         host_time, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
-        DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Library, Limit,
-        MemoryClass, PrecisionNote, Refusal, StageSource, MAX_BUFFER_LENGTH,
+        DeviceOptions, DispatchType, Error, FunctionDescriptor, Gap, Gauges, Library, Limit,
+        MemoryClass, PrecisionNote, Refusal, Region, StageSource, MAX_BUFFER_LENGTH,
     };
     use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
     use metal2vulkan::Budget;
@@ -1854,6 +1855,74 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                 "{name}: the nil buffer's words"
             );
             println!("{name}: a buffer argument bound to nothing read zeros");
+        });
+    }
+
+    /// `engine/kernel_stage_in`'s `stage_in_region_short`, which reads the stage-in region
+    /// (`[[grid_origin]]` and `[[grid_size]]` as `ushort2`s, with no `[[stage_in]]`), stores at
+    /// each thread `(origin.xy, size.xy)` of the region the encoder set before its dispatch: two
+    /// dispatches under two regions store each its own, and nothing past the grid. A dispatch of
+    /// it before any region is set is `Gap::NoStageInRegion`.
+    #[test]
+    fn every_device_pushes_the_stage_in_region_a_kernel_reads() {
+        let Some(descriptor) = descriptor_of("kernel_stage_in", "stage_in_region_short") else {
+            return;
+        };
+        const THREADS: u32 = 8;
+        let regions = [
+            Region {
+                origin: [3, 5, 7],
+                size: [11, 13, 1],
+            },
+            Region {
+                origin: [17, 0, 2],
+                size: [1, 19, 4],
+            },
+        ];
+        each_device("compute_stage_in_region", |name, _, device| {
+            let state = state(name, &device, &descriptor);
+            let mut buffers = Buffers::new(&device, 4096);
+            // An element, 8 bytes, a thread, and a spare one past the grid.
+            let outs: Vec<Buffer> = (0..2)
+                .map(|_| buffers.buffer(8 * u64::from(THREADS + 1)))
+                .collect();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            encoder.set_buffer(Some(&outs[0]), 0, 0).expect("a buffer");
+            match encoder.dispatch_threads([THREADS, 1, 1], [4, 1, 1]) {
+                Err(Error::Unsupported(Gap::NoStageInRegion)) => {}
+                other => panic!("{name}: a dispatch before any region: {other:?}"),
+            }
+            for (out, &region) in outs.iter().zip(&regions) {
+                encoder.set_buffer(Some(out), 0, 0).expect("a buffer");
+                encoder.set_stage_in_region(region);
+                encoder
+                    .dispatch_threads([THREADS, 1, 1], [4, 1, 1])
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            for (out, region) in outs.iter().zip(&regions) {
+                let pair = |a: u32, b: u32| a | b << 16;
+                let element = [
+                    pair(region.origin[0], region.origin[1]),
+                    pair(region.size[0], region.size[1]),
+                ];
+                let mut expected: Vec<u32> = (0..THREADS).flat_map(|_| element).collect();
+                expected.extend([0, 0]);
+                assert_eq!(
+                    words(out, 0, 2 * (THREADS as usize + 1)),
+                    expected,
+                    "{name}: {region:?}"
+                );
+            }
+            println!("{name}: each dispatch read the stage-in region set before it");
         });
     }
 

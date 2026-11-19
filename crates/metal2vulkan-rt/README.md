@@ -975,9 +975,11 @@ that touch blocks first.
   texture's format (`metal::format::integer_channels_word`); and for each constexpr sampler it
   samples through, the index the consumer gave it at the state's creation. Nothing is written
   into set 1 at bind or dispatch time, and every texture stays in its home layout.
-- `set_stage_in_region` (`setStageInRegion:`) changes nothing a dispatch does: a kernel with a
-  `[[stage_in]]` argument, which fetches by the region, is `Gap::KernelInput` at its state's
-  creation, and a kernel without one ignores the region, as Metal's does.
+- `set_stage_in_region` (`setStageInRegion:`) sets the region a kernel's `[[grid_origin]]` and
+  `[[grid_size]]` read, pushed at each later dispatch. A dispatch of a kernel that reads it on an
+  encoder that set none is `Gap::NoStageInRegion`: what Metal's kernel reads then is not
+  established. A kernel with a `[[stage_in]]` argument, which fetches by the region, is
+  `Gap::KernelInput` at its state's creation.
 - `use_heap` is `useHeap:`, for the block a heap's memory is: the command buffer keeps the block
   until it retires, as it keeps a used buffer's block, so a heap given back while the work runs
   stays valid under it. It declares no access (Metal states no retention for it; keeping is the

@@ -319,6 +319,11 @@ impl NewRuntime {
                     .encoder
                     .set_threadgroup_memory_length(length, at)
             }
+            "setStageInRegion:" => {
+                let at = region(call, arg(call, 0)?)?;
+                self.compute(id).encoder.set_stage_in_region(at);
+                Ok(())
+            }
             "dispatchThreadgroups:threadsPerThreadgroup:"
             | "dispatchThreads:threadsPerThreadgroup:" => {
                 let grid = size(call, arg(call, 0)?)?;

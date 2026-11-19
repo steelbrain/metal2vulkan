@@ -39,7 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 58 | 58 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 23 | 23 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 24 | 24 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -57,7 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 27 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 6 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 23 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 24 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -697,6 +697,7 @@ Columns:
 | `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 2: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`, `crates/metal2vulkan-rt/src/pipeline.rs (of)` | `-` |
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `NoStageInRegion` | A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`) on an encoder that never set one... | every device (a public call's own check of its arguments) | `ours`: no replay stream dispatches such a kernel without setting a region | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 1: `crates/metal2vulkan-rt/src/texture.rs (checked)` | `-` |
 | `TextureBuffer` | A texture buffer (`MTLTextureTypeTextureBuffer`) | every device (a public call's own check of its arguments) | `ours`: no texel-buffer array; no replay stream uses one | 2: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)` | `-` |
 | `CubeArrayTexture` | A cube array texture (`MTLTextureTypeCubeArray`), and so a view of one | every device (a public call's own check of its arguments) | `ours`: no replay stream makes a cube array texture or view; built when one does | 1: `crates/metal2vulkan-rt/src/texture.rs (checked)` | `-` |
@@ -1278,6 +1279,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`; `crates/metal2vulkan-rt/src/pipeline.rs (of)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Gap::NoStageInRegion`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Gap::MemorylessTexture`: `crates/metal2vulkan-rt/src/texture.rs (checked)`
 - `rt:Gap::TextureBuffer`: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)`
 - `rt:Gap::CubeArrayTexture`: `crates/metal2vulkan-rt/src/texture.rs (checked)`

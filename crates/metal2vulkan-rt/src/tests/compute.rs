@@ -5,7 +5,8 @@
 //! request in a concurrent one, end barriers that reach the host only after Shared writes and
 //! signals, a dispatch of a kernel without effects that records nothing, 2,000 dispatches whose
 //! counts reach the device's counters only at their encoder's end, on a GPU the lock budget of
-//! dispatches (`crate::tests::locks`), and Metal's refusals.
+//! dispatches (`crate::tests::locks`), a dispatch's instructions unchanged under a stage-in region
+//! its kernel does not read, and Metal's refusals.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
@@ -49,6 +50,7 @@ pub(crate) mod on_device {
             block_len: 0,
             block_address: 0,
             fields,
+            stage_in_region: false,
             constants: vec![
                 (0, Constant::Size(0)),
                 (1, Constant::Size(1)),
@@ -141,6 +143,77 @@ pub(crate) mod on_device {
             run(name, &command_buffer);
             let expected: Vec<u32> = (0..WORDS as u32).map(|index| 2 * index + 100).collect();
             assert_eq!(words(&o), expected, "{name}");
+        });
+    }
+
+    /// The user-space instructions a dispatch of a kernel that does not read the stage-in region
+    /// (`add`) retires on the encoding thread, with no region set, with `set_stage_in_region`
+    /// called before each, and the setter's own, called as often with no dispatch between: the
+    /// second less the third is the first, within 2% and 16 instructions, so such a kernel pays
+    /// nothing for a region it does not read. Printed per dispatch where the kernel offers the
+    /// counter (Linux).
+    #[test]
+    fn every_device_counts_no_instructions_for_a_stage_in_region_a_kernel_does_not_read() {
+        use crate::Region;
+        use metal2vulkan_devtools::instructions::InstructionCounter;
+        const DISPATCHES: u32 = 512;
+        each_device("compute_stage_in_instructions", |name, _, device| {
+            let Ok(mut counter) = InstructionCounter::new() else {
+                println!("{name}: no instruction counter here");
+                return;
+            };
+            let mut arena = Arena::new(&device);
+            let (a, b, o) = (arena.buffer(), arena.buffer(), arena.buffer());
+            let state = add(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let region = Region {
+                origin: [1, 2, 3],
+                size: [4, 5, 6],
+            };
+            let mut per_dispatch = Vec::new();
+            // No region, a region set before each dispatch, and the setter with no dispatch.
+            for (set, dispatched) in [(false, true), (true, true), (true, false)] {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                for (slot, buffer) in [&a, &b, &o].into_iter().enumerate() {
+                    (encoder.set_buffer(Some(buffer), 0, slot as u32)).expect("a buffer");
+                }
+                let dispatch = |encoder: &mut ComputeCommandEncoder| {
+                    (encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1]))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"))
+                };
+                // One dispatch first, so the counted ones find their facts made.
+                dispatch(&mut encoder);
+                let ((), counted) = (counter.measure(|| {
+                    for _ in 0..DISPATCHES {
+                        if set {
+                            encoder.set_stage_in_region(region);
+                        }
+                        if dispatched {
+                            dispatch(&mut encoder);
+                        }
+                    }
+                }))
+                .expect("a count");
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                per_dispatch.push(counted / u64::from(DISPATCHES));
+            }
+            let [plain, with_region, setter] = per_dispatch[..] else {
+                unreachable!("three arms");
+            };
+            println!(
+                "{name}: user-space instructions a dispatch: {plain} with no stage-in region, \
+                 {with_region} with one set before each, of which the setter alone {setter}"
+            );
+            let paid = with_region.saturating_sub(setter);
+            assert!(
+                paid.abs_diff(plain) <= (plain / 50).max(16),
+                "{name}: a dispatch {plain} instructions, {paid} under a region it does not read"
+            );
         });
     }
 
