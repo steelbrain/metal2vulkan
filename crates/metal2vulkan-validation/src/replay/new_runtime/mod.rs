@@ -1052,10 +1052,11 @@ impl NewRuntime {
         let completed = self.completed();
         // Each copy's place keeps the slack the buffer had in the recording.
         let recorded = granule(call.answer("gpuAddress").and_then(Value::as_address));
-        // A no-copy buffer's memory is host pages imported as a block of their own, as the
-        // product imports the program's (`imports`); any other buffer's, a place of its own.
+        // A bytes-form no-copy buffer's memory is host pages imported as a block of their own, as
+        // the product imports the host's; any other buffer's, a descriptor-form no-copy one's
+        // included (a pool buffer in the product, `imports::NoCopies`), a place of its own.
         let (block, start, import, place) = match no_copy {
-            Some(kind) => {
+            Some(imports::NoCopy::Bytes) => {
                 let alignment = (self.host_alignment).ok_or_else(|| {
                     refuse(
                         call,
@@ -1064,12 +1065,15 @@ impl NewRuntime {
                 })?;
                 let (import, len) =
                     imports::imported(&self.device, length, alignment).map_err(translated(call))?;
-                self.no_copies.imported(kind, len);
+                self.no_copies.imported(len);
                 (import.id, 0, Some(import), None)
             }
-            None => {
+            descriptor => {
                 let place =
                     (self.places.take(class, length, recorded, completed)).map_err(failed(call))?;
+                if let Some(imports::NoCopy::Descriptor { pinned_unzeroed }) = descriptor {
+                    self.no_copies.pooled(length, pinned_unzeroed);
+                }
                 (place.block, place.range.start, None, Some(place))
             }
         };
@@ -1477,7 +1481,9 @@ impl NewRuntime {
                         return self.no_copy_in_block(call, block, offset, length, raw, contents);
                     }
                 }
-                let kind = no_copy.then_some(imports::NoCopy::Descriptor);
+                let pinned_unzeroed =
+                    f.get("pinnedGpuAddress").is_some() && f.get("zeroFrom").is_none();
+                let kind = no_copy.then_some(imports::NoCopy::Descriptor { pinned_unzeroed });
                 self.new_buffer(call, length, storage(call, raw)?, contents, kind)
             }
             "m2v.newBlockWithLength:storageMode:" | "newHeapWithDescriptor:" => {
@@ -2526,7 +2532,7 @@ impl Backend for NewRuntime {
         if self.managed == Some(ManagedCopies::Two) && self.device.has_unified_memory() {
             lines.push(self.seconds.line());
         }
-        lines.push(self.no_copies.line());
+        lines.extend(self.no_copies.lines());
         let [in_place, copied] = self.textures_over;
         lines.push(format!(
             "textures over buffers {}: {in_place} in place, {copied} in an image of their own, \

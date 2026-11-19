@@ -1,9 +1,9 @@
-//! The memory of the stream's no-copy buffers (`newBufferWithBytesNoCopy:length:options:deallocator:`,
-//! and `newBufferWithDescriptor:` with `noCopy`) that are imports in the product: host pages of the
-//! player's own, standing for the program's, imported as a block (`rt::Device::import_host_memory`)
-//! as the product imports the program's pages. A texture over a buffer in such a block is then the
-//! runtime's counted copy (`Metrics::over_copies_imported`). A descriptor-form one inside a
-//! recorded block is that block's storage, and no import ([`NoCopies`]).
+//! The stream's no-copy buffers. A bytes-form one (`newBufferWithBytesNoCopy:length:options:
+//! deallocator:`), the host's own memory in the recordings, is made over host pages of the
+//! player's own, imported as a block (`rt::Device::import_host_memory`) as the product imports
+//! such pages; a texture over it is then the runtime's counted copy
+//! (`Metrics::over_copies_imported`). A descriptor-form one (`newBufferWithDescriptor:` with
+//! `noCopy`) is a pool buffer, with no import ([`NoCopies`]).
 
 use metal2vulkan_rt as rt;
 use std::alloc::Layout;
@@ -98,14 +98,20 @@ pub(super) enum NoCopy {
     /// `newBufferWithBytesNoCopy:length:options:deallocator:`: in the recordings, the host's own
     /// buffers, never one of the program's objects.
     Bytes,
-    /// `newBufferWithDescriptor:` with `noCopy`.
-    Descriptor,
+    /// `newBufferWithDescriptor:` with `noCopy`; `pinned_unzeroed` where its descriptor has a
+    /// `pinnedGpuAddress` and no `zeroFrom`, the one kind the host's recorder makes over the
+    /// program's own no-copy memory (one with `zeroFrom` or no pinned address is the host's own).
+    Descriptor { pinned_unzeroed: bool },
 }
 
 /// The stream's no-copy buffers by how they play, and the recorded ranges of the stream's blocks
-/// (`m2v.newBlockWithLength:storageMode:`) a descriptor-form one may lie in: one whose recorded
-/// address and length lie inside a live block's recorded range is the program's buffer in that
-/// block's storage, and plays as a buffer of the block at that offset; any other is imported.
+/// (`m2v.newBlockWithLength:storageMode:`) a descriptor-form one may lie in. A descriptor-form one
+/// is a pool buffer in the product, the program's buffer in a block's storage: where its recorded
+/// address and length lie inside a live block's recorded range it plays as a buffer of the block
+/// at that offset, and elsewhere in a place of its own. The recordings do not tell the program's
+/// own no-copy memory, which the product imports, from these, so such memory plays as a pool
+/// buffer too (the report's gap line, bounded by the pinned ones with no `zeroFrom` outside every
+/// block). A bytes-form one, the host's own, is imported.
 #[derive(Default)]
 pub(super) struct NoCopies {
     /// Each live block's recorded range by its first byte: its end and its object.
@@ -114,9 +120,13 @@ pub(super) struct NoCopies {
     starts: HashMap<u64, u64>,
     /// Descriptor-form ones played as buffers of a block.
     in_block: u64,
-    /// Descriptor-form ones outside every block, imported, and their bytes imported.
+    /// Descriptor-form ones outside every block, each in a place of its own, and their bytes.
     outside: u64,
     outside_bytes: u64,
+    /// Of those, the ones that may be the program's own memory (`NoCopy::Descriptor`'s
+    /// `pinned_unzeroed`), and their bytes.
+    may_be_programs: u64,
+    may_be_programs_bytes: u64,
     /// Bytes-form ones, imported, and their bytes imported.
     bytes_form: u64,
     bytes_form_bytes: u64,
@@ -151,24 +161,42 @@ impl NoCopies {
         self.in_block += 1;
     }
 
-    /// One of `kind` imported, `bytes` bytes.
-    pub(super) fn imported(&mut self, kind: NoCopy, bytes: u64) {
-        let (count, sum) = match kind {
-            NoCopy::Bytes => (&mut self.bytes_form, &mut self.bytes_form_bytes),
-            NoCopy::Descriptor => (&mut self.outside, &mut self.outside_bytes),
-        };
-        *count += 1;
-        *sum += bytes;
+    /// A bytes-form one imported, `bytes` bytes.
+    pub(super) fn imported(&mut self, bytes: u64) {
+        self.bytes_form += 1;
+        self.bytes_form_bytes += bytes;
     }
 
-    /// The report's line.
-    pub(super) fn line(&self) -> String {
-        format!(
-            "no-copy buffers: descriptor-form {} in a recorded block (buffers of it, no import), \
-             {} outside every block (each imported, {} bytes in all); bytes-form {} (the host's \
-             own objects, each imported, {} bytes in all); a texture over an imported one is the \
-             runtime's counted copy (over_copies_imported, over_copy_bytes_imported)",
+    /// A descriptor-form one outside every block, in a place of its own, `bytes` long; one that
+    /// may be the program's own memory where `pinned_unzeroed`.
+    pub(super) fn pooled(&mut self, bytes: u64, pinned_unzeroed: bool) {
+        self.outside += 1;
+        self.outside_bytes += bytes;
+        if pinned_unzeroed {
+            self.may_be_programs += 1;
+            self.may_be_programs_bytes += bytes;
+        }
+    }
+
+    /// The report's lines: the counts, and where a descriptor-form one that may be the program's
+    /// own memory played outside every block, the gap and its bound.
+    pub(super) fn lines(&self) -> Vec<String> {
+        let mut lines = vec![format!(
+            "no-copy buffers: descriptor-form {} in a recorded block (buffers of it) and {} \
+             outside every block (places of their own, {} bytes in all), pool buffers with no \
+             import; bytes-form {} (the host's own objects, each imported, {} bytes in all); a \
+             texture over an imported one is the runtime's counted copy (over_copies_imported, \
+             over_copy_bytes_imported)",
             self.in_block, self.outside, self.outside_bytes, self.bytes_form, self.bytes_form_bytes
-        )
+        )];
+        if self.may_be_programs > 0 {
+            lines.push(format!(
+                "gap: descriptor-form buffers that may be the app's own no-copy memory are played \
+                 as pool buffers, count unknown: at most {}, those outside every block with a \
+                 pinnedGpuAddress and no zeroFrom ({} bytes in all)",
+                self.may_be_programs, self.may_be_programs_bytes
+            ));
+        }
+        lines
     }
 }

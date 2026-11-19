@@ -548,33 +548,35 @@ counted from 0), completes the work committed so far, reports as at the stream's
   played and from what, counts the Managed buffers and the no-copy ones whose contents came from
   first use, not from create, and says where a two-copy recording played as one copy.
 - **No-copy buffers** (the new runtime) play as the product makes them, by creator:
-  - A `newBufferWithDescriptor:` with `noCopy` whose recorded address and length lie inside a
-    live block's recorded range (`m2v.newBlockWithLength:storageMode:`) is the program's buffer in
-    that block's storage, and plays as a buffer of the block at that offset, as
-    `m2v.newBufferInBlock:offset:length:options:` does, its bytes at its making (`contents`, where
-    the stream gives them) first put there. No import.
-  - Any other `newBufferWithDescriptor:` with `noCopy`, the program's own no-copy memory, and every
-    `newBufferWithBytesNoCopy:length:options:deallocator:`, which in the recordings is the host's
-    own buffer and never the program's, is made over zeroed host pages of the player's own,
-    standing for that memory: its length rounded up to the device's
-    `minImportedHostPointerAlignment`, imported as a block of its own
-    (`Device::import_host_memory`), as the product imports such pages, and freed once the runtime
-    frees the import. Where the buffer plays with two copies, the import holds the copy the CPU
-    writes where the runtime keeps a GPU copy, and the copy shaders and textures reach where the
-    player keeps the second copy itself. On a device that imports no host memory such a buffer
-    stops the play with a refusal that says so.
+  - A `newBufferWithDescriptor:` with `noCopy` is a pool buffer in the product: a guest buffer's
+    storage in one of the host's blocks. Where its recorded address and length lie inside a live
+    block's recorded range (`m2v.newBlockWithLength:storageMode:`) it plays as a buffer of the
+    block at that offset, as `m2v.newBufferInBlock:offset:length:options:` does, its bytes at its
+    making (`contents`, where the stream gives them) first put there; elsewhere, in a place of its
+    own, as any other buffer. No import. The recordings do not tell the program's own no-copy
+    memory, which the product imports, from these, so it plays as a pool buffer too: a known gap.
+    The host's recorder makes such a buffer over the program's own memory only with a
+    `pinnedGpuAddress` and no `zeroFrom`, so the report's `gap: descriptor-form buffers that may
+    be the app's own no-copy memory are played as pool buffers, count unknown: at most N, ...`
+    line bounds the gap by those outside every block and their bytes, wherever there are any.
+  - A `newBufferWithBytesNoCopy:length:options:deallocator:`, which in the recordings is the host's
+    own buffer and never the program's, is made over zeroed host pages of the player's own: its
+    length rounded up to the device's `minImportedHostPointerAlignment`, imported as a block of its
+    own (`Device::import_host_memory`), as the product imports such pages, and freed once the
+    runtime frees the import. Where the buffer plays with two copies, the import holds the copy
+    the CPU writes where the runtime keeps a GPU copy, and the copy shaders and textures reach
+    where the player keeps the second copy itself. On a device that imports no host memory such a
+    buffer stops the play with a refusal that says so.
 
   A texture over an imported buffer is the runtime's counted copy. Each frame's `over_copies` and
   `over_copy_bytes` count every copy of a texture over a buffer, and its `over_copies_imported` and
   `over_copy_bytes_imported` those over an imported one alone; the rest are over the runtime's own
   blocks, where the device's linear image does not take the texture. The report's `no-copy
   buffers` line counts the descriptor-form ones in a block, those outside every block and their
-  bytes imported, and the bytes-form ones and theirs, apart; its `textures over buffers` line
+  bytes, and the bytes-form ones and their bytes imported, apart; its `textures over buffers` line
   counts the textures over buffers it made (not substituted), in place and in an image of their
   own, by whether the runtime's `textures_copied_over` gauge rose across the making (a copied
-  texture freed on another thread in that moment hides one). The stream records no no-copy
-  buffer's host address (section 5), so whether two of the program's shared pages is not known to
-  the player; its own never do.
+  texture freed on another thread in that moment hides one).
 - **Announced bytes** (both runtimes' backends). On a stream whose header has bit 0 set (section
   6), a `synchronizeResource:` of a buffer played with two copies leaves the CPU's copy as the
   stream's writes made it, so the next `didModifyRange:` puts the stream's bytes into the GPU's

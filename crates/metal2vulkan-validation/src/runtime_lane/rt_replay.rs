@@ -46,12 +46,14 @@
 //! - A buffer's linear texture (the SPI `newLinearTextureWithDescriptor:offset:bytesPerRow:
 //!   bytesPerImage:`) of a 2D descriptor plays as the public texture over the buffer, and one of a
 //!   2D array, whose slices Metal lays out itself, is refused.
-//! - A no-copy buffer is made over host pages the player imports where the product's is an import
-//!   (a bytes-form one, and a descriptor-form one outside every recorded block): a texture over
-//!   one is the runtime's counted copy (one copy of its 64 bytes, on the imported side), a blit of
-//!   the texture reads the stream's bytes, and the imports end with the device. A descriptor-form
-//!   one recorded inside a block's recorded range is a buffer of the block, which reads the bytes
-//!   written into the block there, with no import.
+//! - A no-copy buffer plays by its creator. A bytes-form one is made over host pages the player
+//!   imports: a texture over it is the runtime's counted copy (one copy of its 64 bytes, on the
+//!   imported side), a blit of the texture reads the stream's bytes, and the imports end with the
+//!   device. A descriptor-form one is a pool buffer with no import: recorded inside a block's
+//!   recorded range, a buffer of the block, which reads the bytes written into the block there;
+//!   outside every block, a place of its own, a texture over which reads the stream's bytes with
+//!   no copy on the imported side. The report's gap line bounds the ones that may be the program's
+//!   own memory by those outside every block with a pinned address and no `zeroFrom`.
 //! - Buffers keep the slack of their recorded granule: two recorded at addresses of 32 KiB and
 //!   64 KiB granules take places that span their lengths rounded up to those granules, the slack
 //!   the places hold the sum of both.
@@ -1003,13 +1005,15 @@ fn a_linear_texture_over_a_buffer_plays_where_2d_and_is_refused_as_an_array() {
     }
 }
 
-/// A no-copy buffer is an import where the product's is: a bytes-form one, and a descriptor-form
-/// one outside every recorded block. A texture over one is the runtime's counted copy, which a
-/// blit of the texture reads the stream's bytes through, and the imports end with the device. A
-/// descriptor-form one recorded inside a block's recorded range is a buffer of that block, which
-/// reads the bytes written into the block there, and no import.
+/// A bytes-form no-copy buffer is an import: a texture over it is the runtime's counted copy,
+/// which a blit of the texture reads the stream's bytes through, and the imports end with the
+/// device. A descriptor-form one is a pool buffer with no import: recorded inside a block's
+/// recorded range, a buffer of that block, which reads the bytes written into the block there;
+/// outside every block, a place of its own, a texture over which reads the stream's bytes and is
+/// no copy on the imported side. The gap line counts, of those outside, the pinned ones with no
+/// `zeroFrom`.
 #[test]
-fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
+fn a_bytes_form_no_copy_buffer_is_an_import_and_a_descriptor_form_one_a_pool_buffer() {
     let dir = ScratchDir::new("rt-replay-no-copy").unwrap();
     // An RGBA8Unorm 4 by 4 texture's rows, 16 bytes each, 256 bytes apart in the buffer.
     let texels: Vec<u8> = (0..64).collect();
@@ -1028,18 +1032,50 @@ fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
             "m2v.write",
             3,
             0,
+            &[Value::Uint(0), Value::Bytes(pages.clone())],
+            &[],
+        )?;
+        // Descriptor-form no-copy buffers outside every block, 4096 bytes each: #4 pinned with no
+        // zeroFrom (one that may be the program's own memory), its bytes as #3's; #12 with no
+        // pinned address and #15 pinned with zeroFrom (the host's own).
+        let outside = |pinned: Option<u64>, zero_from: Option<u64>| {
+            let fields = [
+                ("length", Value::Uint(4096)),
+                ("options", Value::List(Vec::new())),
+                (
+                    "pinnedGpuAddress",
+                    pinned.map_or(Value::Nil, Value::Address),
+                ),
+                ("contents", Value::Nil),
+                ("noCopy", Value::Bool(true)),
+                ("zeroFrom", zero_from.map_or(Value::Nil, Value::Uint)),
+            ];
+            Value::Map(Vec::from(fields.map(|(key, value)| (key.into(), value))))
+        };
+        const ELSEWHERE: u64 = 0x20_0000_0000;
+        w.call(
+            "newBufferWithDescriptor:",
+            1,
+            4,
+            &[outside(Some(ELSEWHERE), None)],
+            &[],
+        )?;
+        w.call(
+            "m2v.write",
+            4,
+            0,
             &[Value::Uint(0), Value::Bytes(pages)],
             &[],
         )?;
-        // #4 the descriptor's no-copy buffer, which nothing reads.
-        let fields = [
-            ("length", Value::Uint(4096)),
-            ("options", Value::List(Vec::new())),
-            ("contents", Value::Nil),
-            ("noCopy", Value::Bool(true)),
-        ];
-        let descriptor = Value::Map(Vec::from(fields.map(|(key, value)| (key.into(), value))));
-        w.call("newBufferWithDescriptor:", 1, 4, &[descriptor], &[])?;
+        w.call(
+            "newBufferWithDescriptor:",
+            1,
+            12,
+            &[outside(None, None)],
+            &[],
+        )?;
+        let zeroed = outside(Some(ELSEWHERE + 8192), Some(1024));
+        w.call("newBufferWithDescriptor:", 1, 15, &[zeroed], &[])?;
         // #10 a Shared block recorded at BASE, and #11 a descriptor-form no-copy buffer recorded
         // 8 KiB into it, whose first bytes a write into the block sets.
         const BASE: u64 = 0x10_0000_0000;
@@ -1079,31 +1115,48 @@ fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
             &over,
             &[],
         )?;
+        w.call(
+            "newTextureWithDescriptor:offset:bytesPerRow:",
+            4,
+            13,
+            &over,
+            &[],
+        )?;
         let made = [Value::Uint(64), Value::Uint(0)];
         w.call("newBufferWithLength:options:", 1, 7, &made, &[])?;
-        // The texture, packed into #7.
+        w.call("newBufferWithLength:options:", 1, 14, &made, &[])?;
+        // The textures, packed into #7 and #14.
         w.call("commandBuffer", 2, 8, &[], &[])?;
         w.call("blitCommandEncoder", 8, 9, &[], &[])?;
-        let copy = [
-            Value::Object(6),
-            Value::Uint(0),
-            Value::Uint(0),
-            uints(&[("x", 0), ("y", 0), ("z", 0)]),
-            uints(&[("width", 4), ("height", 4), ("depth", 1)]),
-            Value::Object(7),
-            Value::Uint(0),
-            Value::Uint(16),
-            Value::Uint(64),
-        ];
         let selector = "copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:\
                         toBuffer:destinationOffset:destinationBytesPerRow:\
                         destinationBytesPerImage:";
-        w.call(selector, 9, 0, &copy, &[])?;
+        for (texture, buffer) in [(6, 7), (13, 14)] {
+            let copy = [
+                Value::Object(texture),
+                Value::Uint(0),
+                Value::Uint(0),
+                uints(&[("x", 0), ("y", 0), ("z", 0)]),
+                uints(&[("width", 4), ("height", 4), ("depth", 1)]),
+                Value::Object(buffer),
+                Value::Uint(0),
+                Value::Uint(16),
+                Value::Uint(64),
+            ];
+            w.call(selector, 9, 0, &copy, &[])?;
+        }
         w.call("endEncoding", 9, 0, &[], &[])?;
         w.call("commit", 8, 0, &[], &[])?;
         w.call(WAIT_COMPLETED, 8, 0, &[], &[])?;
         let sum = Value::List(vec![Value::Bytes(Sha256::digest(&texels).to_vec())]);
-        w.call("m2v.check", 0, 0, &[Value::Object(7)], &[("sha256", sum)])?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(7)],
+            &[("sha256", sum.clone())],
+        )?;
+        w.call("m2v.check", 0, 0, &[Value::Object(14)], &[("sha256", sum)])?;
         let mut held = vec![0u8; 4096];
         held[..4].copy_from_slice(&[1, 2, 3, 4]);
         let sum = Value::List(vec![Value::Bytes(Sha256::digest(&held).to_vec())]);
@@ -1120,29 +1173,31 @@ fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
         eprintln!("REPLAY no-copy {line}");
     }
     ended.unwrap();
-    assert_eq!(report.checks.len(), 2, "{lines:?}");
+    assert_eq!(report.checks.len(), 3, "{lines:?}");
     for check in &report.checks {
         let object = check.object;
         assert_eq!(Some(check.sha256), check.recorded, "#{object}");
     }
-    // #4 and #3 imported; #11 a buffer of block #10.
-    let kinds = lines
-        .iter()
-        .find(|line| line.starts_with("no-copy buffers: "));
-    let counted = "no-copy buffers: descriptor-form 1 in a recorded block (buffers of it, no \
-                   import), 1 outside every block (each imported, ";
+    // #3 imported; #11 a buffer of block #10; #4, #12 and #15 places of their own, #4 alone
+    // within the gap's bound.
+    let counted = "no-copy buffers: descriptor-form 1 in a recorded block (buffers of it) and 3 \
+                   outside every block (places of their own, 12288 bytes in all), pool buffers \
+                   with no import; bytes-form 1 (the host's own objects, each imported, ";
     assert!(
-        kinds.is_some_and(|line| line.starts_with(counted) && line.contains("; bytes-form 1 (")),
+        lines.iter().any(|line| line.starts_with(counted)),
         "{lines:?}"
     );
-    // The texture over the import is held in an image of its own.
-    let over = "textures over buffers 1: 0 in place, 1 in an image of their own";
+    let gap = "gap: descriptor-form buffers that may be the app's own no-copy memory are played \
+               as pool buffers, count unknown: at most 1, those outside every block with a \
+               pinnedGpuAddress and no zeroFrom (4096 bytes in all)";
+    assert!(lines.iter().any(|line| line == gap), "{lines:?}");
+    // The texture over the import is held in an image of its own; the one over #4 is in place
+    // where the device's linear image takes it, and else the runtime's copy of a pool buffer's.
+    let over = "textures over buffers 2: ";
     assert!(lines.iter().any(|line| line.starts_with(over)), "{lines:?}");
-    // The texture's bytes into its image of its own, once.
+    // The import's texture's bytes into its image of its own, once, on the imported side; #4's,
+    // if copied, on the pool side.
     let executed = &report.total.executed;
-    assert_eq!(executed["over_copies"], 1, "{executed:?}");
-    assert_eq!(executed["over_copy_bytes"], 64, "{executed:?}");
-    // On the imported side.
     assert_eq!(executed["over_copies_imported"], 1, "{executed:?}");
     assert_eq!(executed["over_copy_bytes_imported"], 64, "{executed:?}");
     let ended = backend.end();
