@@ -937,9 +937,10 @@ mod on_device {
         });
     }
 
-    /// The user-space instructions a draw retires on the encoding thread, under a depth test whose
-    /// state and bias change every draw beside the plain draw path (no depth attachment, Metal's
-    /// default depth-stencil state), printed per draw where the kernel offers the counter (Linux).
+    /// The user-space instructions a draw retires on the encoding thread: on the draw path with no
+    /// depth attachment (Metal's default depth-stencil state), under a depth test set once, and
+    /// under one whose state and bias change every draw, printed per draw where the kernel offers
+    /// the counter (Linux).
     #[test]
     fn every_device_counts_a_depth_tested_draw_s_instructions() {
         use metal2vulkan_devtools::instructions::InstructionCounter;
@@ -982,7 +983,9 @@ mod on_device {
             let queue = device.new_command_queue(4).expect("a queue");
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
             let mut per_draw = Vec::new();
-            for tested in [false, true] {
+            // The draw path with no depth attachment, a depth-tested draw whose state is set
+            // once, and one whose depth-stencil state and bias change every draw.
+            for (tested, changing) in [(false, false), (true, false), (true, true)] {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut p = pass(&color, None);
                 if tested {
@@ -996,11 +999,14 @@ mod on_device {
                 }));
                 draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
                 draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                if tested {
+                    draw(encoder.set_depth_stencil_state(Some(&states[0])));
+                }
                 // One draw first, so the counted ones record what changed alone.
                 draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
                 let ((), counted) = (counter.measure(|| {
                     for at in 0..DRAWS {
-                        if tested {
+                        if changing {
                             let state = &states[at as usize % 2];
                             draw(encoder.set_depth_stencil_state(Some(state)));
                             draw(encoder.set_depth_bias(at as f32, 0.0, 0.0));
@@ -1014,9 +1020,9 @@ mod on_device {
                 per_draw.push(counted / u64::from(DRAWS));
             }
             println!(
-                "{name}: user-space instructions a draw: {} plain, {} under a depth test whose \
-                 state and bias change every draw",
-                per_draw[0], per_draw[1]
+                "{name}: user-space instructions a draw: {} with no depth attachment, {} under a \
+                 depth test set once, {} under a depth test whose state and bias change every draw",
+                per_draw[0], per_draw[1], per_draw[2]
             );
         });
     }
