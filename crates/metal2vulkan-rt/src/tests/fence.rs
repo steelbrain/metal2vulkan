@@ -209,59 +209,85 @@ mod on_device {
         });
     }
 
-    /// An update on queue A that the submit thread holds in a group, behind as many busy
-    /// submissions of A as it keeps in flight, which wait for the host, as Metal would have
-    /// submitted it at its commit: (1) a wait on queue B committed after it reads its write; (2)
-    /// a wait of B held at a shared event's value, committed before it and released once it is
-    /// in the group, reads it too, as Metal evaluates a wait at its submission; (3) a wait of B
-    /// with nothing for the GPU does not complete before the busy work is let go, and completes
-    /// after the update. Each wait's own queue has nothing in flight, so without the fence its
-    /// submission would go first.
+    /// An update on queue A held in a group behind as many busy submissions of A as it keeps in
+    /// flight, which wait for the host, and a wait on queue B, which has nothing in flight:
+    /// `body` commits both and returns them, the update first. Once the busy work is let go, the
+    /// wait completes, the update having completed before it.
+    fn behind_held_update(
+        name: &str,
+        device: &Device,
+        body: impl FnOnce(&CommandQueue, &CommandQueue) -> (CommandBuffer, CommandBuffer),
+    ) {
+        let a = device.new_command_queue(8).expect("a queue");
+        let b = device.new_command_queue(8).expect("a queue");
+        behind_busy(name, device, &a, |busy, _, _| {
+            let (updater, waiter) = body(&a, &b);
+            busy.open();
+            finished(name, &waiter);
+            assert_eq!(
+                updater.status(),
+                CommandBufferStatus::Completed,
+                "{name}: the update completed before the wait"
+            );
+            finished(name, &updater);
+        });
+    }
+
+    /// An update on queue A that the submit thread holds in a group, behind A's submissions in
+    /// flight, which Metal would have submitted at its commit: a wait on queue B committed after
+    /// it, staged at once as B has nothing in flight, reads its write. Without the held group
+    /// going first, the wait's submission goes ahead of it and reads the words before the fill.
     #[test]
     fn every_device_orders_a_wait_on_another_queue_after_an_update_held_in_a_group() {
-        each_device("fence_queues", |name, _, device| {
-            let a = device.new_command_queue(8).expect("a queue");
-            let b = device.new_command_queue(8).expect("a queue");
+        each_device("fence_group", |name, _, device| {
             let (written, copy) = written_and_copy(&device);
             let fence = device.new_fence();
-            behind_busy(name, &device, &a, |busy, _, _| {
-                let updater = update(&a, &written, &fence);
+            behind_held_update(name, &device, |a, b| {
+                let updater = update(a, &written, &fence);
                 staged(name, &updater);
-                let waiter = wait(&b, &written, &copy, &fence, None);
+                let waiter = wait(b, &written, &copy, &fence, None);
                 waiter.commit().expect("a commit");
                 staged(name, &waiter);
-                busy.open();
-                finished(name, &waiter);
-                finished(name, &updater);
+                (updater, waiter)
             });
-            assert_eq!(
-                word(&copy),
-                0x5a5a_5a5a,
-                "{name}: (1) the wait reads the update's fill"
-            );
+            assert_eq!(word(&copy), 0x5a5a_5a5a, "{name}: the wait reads the fill");
+        });
+    }
+
+    /// A wait on queue B held at a shared event's value, committed before an update on queue A
+    /// that then joins a group A holds, and released after: Metal evaluates a wait at its kernel
+    /// submission, which comes once the event's value is reached, so it waits for the update
+    /// submitted by then. The held group goes first and the wait reads the update's write.
+    #[test]
+    fn every_device_orders_a_wait_released_from_an_event_after_an_update_held_in_a_group_since() {
+        each_device("fence_group_later", |name, _, device| {
             let (written, copy) = written_and_copy(&device);
             let fence = device.new_fence();
             let event = device.new_shared_event().expect("a shared event");
-            behind_busy(name, &device, &a, |busy, _, _| {
-                let waiter = wait(&b, &written, &copy, &fence, Some(&event));
+            behind_held_update(name, &device, |a, b| {
+                let waiter = wait(b, &written, &copy, &fence, Some(&event));
                 waiter.commit().expect("a commit");
-                let updater = update(&a, &written, &fence);
+                let updater = update(a, &written, &fence);
                 staged(name, &updater);
                 event.set_signaled_value(1);
                 staged(name, &waiter);
-                busy.open();
-                finished(name, &waiter);
-                finished(name, &updater);
+                (updater, waiter)
             });
-            assert_eq!(
-                word(&copy),
-                0x5a5a_5a5a,
-                "{name}: (2) the wait released after the update joined a group reads its fill"
-            );
+            assert_eq!(word(&copy), 0x5a5a_5a5a, "{name}: the wait reads the fill");
+        });
+    }
+
+    /// A wait on queue B with nothing for the GPU (an encoder that only waits) after an update on
+    /// queue A held in a group: it completes no sooner than the update, as Metal's does (job
+    /// m3-max-52194: its completed handler 0.11 to 0.16 ms after the update's GPU end on an M3
+    /// Max). It takes no submission, so without the fence it would complete at once.
+    #[test]
+    fn every_device_completes_an_empty_wait_on_another_queue_after_the_update() {
+        each_device("fence_empty_wait", |name, _, device| {
             let (written, _) = written_and_copy(&device);
             let fence = device.new_fence();
-            behind_busy(name, &device, &a, |busy, _, _| {
-                let updater = update(&a, &written, &fence);
+            behind_held_update(name, &device, |a, b| {
+                let updater = update(a, &written, &fence);
                 staged(name, &updater);
                 let waiter = b.command_buffer().expect("a command buffer");
                 let mut compute =
@@ -273,41 +299,38 @@ mod on_device {
                 assert_ne!(
                     waiter.status(),
                     CommandBufferStatus::Completed,
-                    "{name}: (3) a wait with nothing for the GPU, before the update ran"
+                    "{name}: the wait, before the update ran"
                 );
-                busy.open();
-                finished(name, &waiter);
-                assert_eq!(
-                    updater.status(),
-                    CommandBufferStatus::Completed,
-                    "{name}: (3) the update completed before the wait"
-                );
-                finished(name, &updater);
+                (updater, waiter)
             });
         });
     }
 
-    /// An update on queue A held at a shared event's wait, or behind a command buffer of A
-    /// enqueued and not committed, is not waited for by a wait on queue B committed after it: the
-    /// wait completes while the update is held, without its write, as on an M3 Max (probe
-    /// `cross_queue_fence_held_update.m` in the conformance crate), and the update runs once let
-    /// go.
+    /// Metal's rule, measured on an M3 Max under macOS 27.0.1 (probe
+    /// `cross_queue_fence_held_update.m` in the conformance crate, jobs m3-max-52186 and
+    /// m3-max-52188): a wait binds to the updates already submitted, and an update in a command
+    /// buffer Metal holds is not waited for. So a wait on queue B committed after an update on
+    /// queue A held at a shared event's wait, or behind a command buffer of A enqueued and not
+    /// committed, completes while the update is held, without its write, and the update runs
+    /// once let go. Holding the wait behind it instead would end in a deadlock Metal does not
+    /// have: with A waiting for an event that a command buffer B commits after the wait
+    /// signals, every one of the three completes, the wait first.
     #[test]
     fn every_device_runs_a_wait_on_another_queue_before_an_update_held_at_an_event_or_an_enqueue() {
         each_device("fence_held", |name, _, device| {
             let a = device.new_command_queue(8).expect("a queue");
             let b = device.new_command_queue(8).expect("a queue");
-            let event = device.new_shared_event().expect("a shared event");
             let enqueued = a.command_buffer().expect("a command buffer");
-            for at_event in [true, false] {
+            for held in ["an event", "an enqueue", "an event B signals"] {
                 let (written, copy) = written_and_copy(&device);
                 let fence = device.new_fence();
+                let event = device.new_shared_event().expect("a shared event");
                 let updater = a.command_buffer().expect("a command buffer");
-                match at_event {
-                    true => {
+                match held {
+                    "an enqueue" => enqueued.enqueue().expect("an enqueue"),
+                    _ => {
                         (updater.encode_wait_for_event(event.as_event(), 1)).expect("an event wait")
                     }
-                    false => enqueued.enqueue().expect("an enqueue"),
                 }
                 let mut blit = updater.blit_command_encoder().expect("an encoder");
                 blit.fill_buffer(&written, 0..64, 0x5a).expect("a fill");
@@ -315,21 +338,35 @@ mod on_device {
                 blit.end_encoding();
                 updater.commit().expect("a commit");
                 let waiter = wait(&b, &written, &copy, &fence, None);
-                run(name, &waiter);
-                assert_eq!(
-                    (updater.status(), word(&copy)),
-                    (CommandBufferStatus::Committed, 0),
-                    "{name}: at an event {at_event}: the wait ran, the update held"
-                );
-                match at_event {
-                    true => event.set_signaled_value(1),
-                    false => enqueued.commit().expect("a commit"),
+                match held {
+                    "an event B signals" => {
+                        waiter.commit().expect("a commit");
+                        let signal = b.command_buffer().expect("a command buffer");
+                        (signal.encode_signal_event(event.as_event(), 1)).expect("a signal");
+                        run(name, &signal);
+                        finished(name, &waiter);
+                        assert_eq!(waiter.error(), None, "{name}");
+                    }
+                    _ => {
+                        run(name, &waiter);
+                        assert_eq!(
+                            updater.status(),
+                            CommandBufferStatus::Committed,
+                            "{name}: held at {held}, the update waits"
+                        );
+                    }
+                }
+                assert_eq!(word(&copy), 0, "{name}: held at {held}, the wait ran first");
+                match held {
+                    "an event" => event.set_signaled_value(1),
+                    "an enqueue" => enqueued.commit().expect("a commit"),
+                    _ => {}
                 }
                 finished(name, &updater);
                 assert_eq!(
-                    word(&written),
-                    0x5a5a_5a5a,
-                    "{name}: the update ran once let go"
+                    (updater.error(), word(&written)),
+                    (None, 0x5a5a_5a5a),
+                    "{name}: held at {held}, the update ran once let go"
                 );
             }
             finished(name, &enqueued);
