@@ -445,6 +445,7 @@ def case_families(
                         "notice": "Degradation",
                         "accepted": "AcceptedDifference",
                         "new_runtime_notice": "NewRuntimeNotice",
+                        "new_runtime_accepted": "NewRuntimeAccepted",
                     }.get(name, name)
                     for name in re.findall(r"\bJustification::([A-Za-z_]+)", text)
                 }

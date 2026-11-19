@@ -38,8 +38,8 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 815 |
 | of the reachable, not exercised | 163 |
 | share of the reachable exercised | 83% |
-| of those exercised, no case reaching it loosens anything | 561 |
-| of those exercised, a case reaching it loosens some site | 254 |
+| of those exercised, no case reaching it loosens anything | 557 |
+| of those exercised, a case reaching it loosens some site | 258 |
 | case modules | 172 |
 | committed recordings | 1297 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
@@ -536,11 +536,11 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1213 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 15 |
-| tolerances in all | 16 |
+| modules that loosen a measured value | 16 |
+| tolerances in all | 18 |
 | modules declaring a notice (loosening no value) | 138 |
-| loosenings used | `Unchecked`, `Absolute`, `AnyOf`, `Nonzero` |
-| justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression`, `NewRuntimeNotice`, `NewRuntimeAccepted` |
+| loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
+| justifications named | `Degradation`, `AcceptedDifference`, `NewRuntimeAccepted`, `WithoutCompression`, `NewRuntimeNotice` |
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 130 |
 | `Side` methods the Metal leg reaches an SDK item through | 125 |
@@ -600,7 +600,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `dynamic_libraries` | 3 | 3 | every field | 15 |
 | `empty_command_buffers` | 1 | 1 | every field | 20 |
 | `etc_textures` | 10 | 10 | 1 tolerance(s): `Degradation` | 43 |
-| `event_orders` | 5 | 5 | every field | 27 |
+| `event_orders` | 5 | 5 | 2 tolerance(s): `NewRuntimeAccepted` | 27 |
 | `extended_range_blends` | 18 | 18 | every field | 133 |
 | `extended_range_gamut` | 39 | 39 | every field | 123 |
 | `extended_range_gradients` | 8 | 8 | every field | 124 |
