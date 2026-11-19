@@ -110,6 +110,9 @@ struct CbState {
     encoding: bool,
     /// From its commit until it retires: its pair of timestamp queries, where it took one.
     stamps: Option<Pair>,
+    /// It presents a drawable, and the submission that signals the consumer's semaphore has not
+    /// passed `vkQueueSubmit2` yet: [`CommandBuffer::wait_until_scheduled`] waits for that.
+    signal_unsubmitted: bool,
 }
 
 impl CbState {
@@ -160,6 +163,9 @@ pub(crate) struct Building {
     /// What the encoders counted since the last one ended, added to the device's counters as each
     /// ends ([`CommandBuffer::close_encoder`]).
     tally: Tally,
+    /// The drawables it presents, each with the consumer's semaphore its end signals
+    /// ([`CommandBuffer::present_drawable`]).
+    presents: Vec<(Texture, vk::Semaphore)>,
 }
 
 /// The push constant bytes a command buffer holds, from offset 0, as its pushes left them.
@@ -215,7 +221,10 @@ impl Gpu {
     /// records no timestamps, takes no submission and captures nothing.
     pub(crate) fn is_empty(&self) -> bool {
         (self.segments.iter()).all(|segment| {
-            segment.command.is_none() && segment.waits.is_empty() && segment.signals.is_empty()
+            segment.command.is_none()
+                && segment.waits.is_empty()
+                && segment.signals.is_empty()
+                && segment.binary.is_empty()
         })
     }
 }
@@ -227,6 +236,9 @@ pub(crate) struct Segment {
     pub(crate) command: Option<vk::CommandBuffer>,
     /// At most one per event, the highest value.
     pub(crate) signals: Vec<(Arc<EventInner>, u64)>,
+    /// The consumer's binary semaphores it signals after its commands: of the last segment of a
+    /// command buffer that presents drawables ([`CommandBuffer::present_drawable`]).
+    pub(crate) binary: Vec<vk::Semaphore>,
     /// What its commands did to textures over a buffer in an image of their own; once it ends,
     /// what the submit thread needs of that (`crate::over`).
     pub(crate) overs: Overs,
@@ -321,11 +333,13 @@ impl CommandBuffer {
                         host_written: false,
                         vertex: Vec::new(),
                         tally: Tally::default(),
+                        presents: Vec::new(),
                     }),
                     ended: None,
                     times: Times::default(),
                     encoding: false,
                     stamps: None,
+                    signal_unsubmitted: false,
                 }),
                 changed: Condvar::new(),
             }),
@@ -393,6 +407,52 @@ impl CommandBuffer {
         self.building(|building| {
             building.check(event)?;
             building.wait(event.inner(), value)
+        })
+    }
+
+    /// `presentDrawable:`, the part of it that is the runtime's: once every command of the command
+    /// buffer has run, wherever it was encoded, the drawable's image is in the present layout and
+    /// `ready`, the consumer's binary semaphore, is signalled, in the submission of the command
+    /// buffer's last commands, which goes to the driver at once rather than waiting in a group.
+    /// The consumer presents the image itself, its present waiting on `ready`, on the presenting
+    /// queue ([`Device::with_present_queue`](crate::Device::with_present_queue)) once
+    /// [`wait_until_scheduled`](Self::wait_until_scheduled) has returned with the command
+    /// buffer's status not [`CommandBufferStatus::Error`]: for such a command buffer it returns
+    /// once that submission has passed `vkQueueSubmit2`, as Vulkan requires of a present's wait.
+    /// Not in the command buffer's own scheduled handler, which runs before its submission. Metal
+    /// presents the drawable itself once the command buffer is scheduled; pacing and the window
+    /// stay the consumer's here.
+    ///
+    /// The drawable is presented at the commit: from then it is the presentation engine's, until
+    /// the consumer acquires it again ([`Texture::drawable_acquired`]). A command buffer dropped
+    /// uncommitted leaves it acquired. One that ends without running
+    /// ([`CommandBufferError::NotRun`], [`CommandBufferError::DeviceLost`]) signals nothing and
+    /// leaves the image acquired, in its home layout or not yet moved there: the consumer makes
+    /// its swapchain again.
+    ///
+    /// Err: [`Refusal::Committed`]; [`Refusal::EncoderOpen`]; [`Refusal::OtherDevice`] for
+    /// another device's texture; [`Refusal::NotDrawable`] for a texture not over a swapchain's
+    /// image; [`Refusal::DrawableNotAcquired`] for a drawable not acquired since its last
+    /// present, or one a command buffer already presents.
+    ///
+    /// # Safety
+    ///
+    /// `ready` is a binary semaphore of the device, unsignalled with no signal pending when the
+    /// command buffer's last commands run, and lives until the command buffer completes; only the
+    /// consumer's present waits on its signal.
+    pub unsafe fn present_drawable(
+        &self,
+        drawable: &Texture,
+        ready: vk::Semaphore,
+    ) -> Result<(), Error> {
+        self.building(|building| {
+            if !drawable.is_of(building.device.core()) {
+                return Err(Error::Refused(Refusal::OtherDevice));
+            }
+            drawable.present_turn()?;
+            building.keep_texture(drawable);
+            building.presents.push((drawable.clone(), ready));
+            Ok(())
         })
     }
 
@@ -482,7 +542,7 @@ impl CommandBuffer {
         }
         // With commands, it takes the Managed buffers' ranges named since the last capture
         // (`crate::capture`); one with none leaves them for the next.
-        let empty = self.state().open()?.gpu.is_empty();
+        let empty = self.state().open()?.nothing_for_gpu();
         let (mut work, copy_ins) = match empty || work.lost() {
             true => (work, Vec::new()),
             false => core.work.capture(&core, work)?,
@@ -507,11 +567,17 @@ impl CommandBuffer {
             mut gpu,
             handlers,
             stamps,
+            presents,
             ..
         } = building;
         gpu.segments[0].copy_ins = copy_ins;
         state.times.kernel_start = times::host_time();
         state.stamps = stamps;
+        // Its drawables are presented: the presentation engine's once it has run.
+        for (drawable, _) in &presents {
+            drawable.presented();
+        }
+        state.signal_unsubmitted = !presents.is_empty();
         let pending = Pending {
             seq: work.seq(),
             next: 0,
@@ -544,7 +610,10 @@ impl CommandBuffer {
     }
 
     /// `waitUntilScheduled`: returns once the command buffer is scheduled, or has completed or
-    /// ended. It sends nothing: a command buffer held in a group is scheduled already.
+    /// ended. It sends nothing: a command buffer held in a group is scheduled already. One that
+    /// presents a drawable ([`present_drawable`](Self::present_drawable)) goes to the driver at
+    /// once, and the wait returns once its submission has passed `vkQueueSubmit2`, after its
+    /// scheduled handlers, so a present waits only on a signal already submitted.
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Refusal::WaitOnOwnThread`]
     /// in a completed handler or a listener of its device for one not yet scheduled.
@@ -552,12 +621,11 @@ impl CommandBuffer {
         not_in_scheduled_handler()?;
         let own = self.on_completion_thread();
         let mut state = self.state();
-        while !matches!(
-            state.status,
-            CommandBufferStatus::Scheduled
-                | CommandBufferStatus::Completed
-                | CommandBufferStatus::Error
-        ) {
+        while !match state.status {
+            CommandBufferStatus::Scheduled => !state.signal_unsubmitted,
+            CommandBufferStatus::Completed | CommandBufferStatus::Error => true,
+            _ => false,
+        } {
             if own {
                 return Err(Error::Refused(Refusal::WaitOnOwnThread));
             }
@@ -715,20 +783,36 @@ impl Building {
     /// At commit: records the end timestamp into the last segment, beginning a command buffer for
     /// it where the segment has none, and ends it; nothing where the command buffer has nothing
     /// for the GPU, and no timestamp where it runs untimed.
+    /// A command buffer that presents drawables records the moves of their images to the present
+    /// layout in its last segment's end barrier, a command buffer begun for them where the
+    /// segment has none, and the segment signals their semaphores.
     fn finish(&mut self) -> Result<(), Error> {
-        if self.gpu.is_empty() {
+        if self.nothing_for_gpu() {
             return Ok(());
         }
         let last = self.last().command;
         let command = match last {
             Some(command) => command,
-            None if self.started && self.stamps.is_none() => return self.close(),
+            None if self.started && self.stamps.is_none() && self.presents.is_empty() => {
+                return self.close(&[]);
+            }
             None => self.begin()?,
         };
         if let Some(pair) = self.stamps {
             times::write_end(&self.device.core().device, command, pair.pool, pair.first);
         }
-        self.close()
+        let moves: Vec<vk::ImageMemoryBarrier2<'static>> = (self.presents.iter())
+            .map(|(drawable, _)| drawable.present_barrier())
+            .collect();
+        let ready: Vec<vk::Semaphore> = self.presents.iter().map(|&(_, ready)| ready).collect();
+        self.last().binary = ready;
+        self.close(&moves)
+    }
+
+    /// Nothing for the GPU: no segment holds commands, a wait or a signal, and no drawable is
+    /// presented.
+    fn nothing_for_gpu(&self) -> bool {
+        self.gpu.is_empty() && self.presents.is_empty()
     }
 
     /// Begins the last segment's command buffer. The command buffer's first takes its pair of
@@ -758,8 +842,8 @@ impl Building {
         Ok(command)
     }
 
-    /// Ends the last segment's commands, if it has any.
-    fn close(&mut self) -> Result<(), Error> {
+    /// Ends the last segment's commands, if it has any, `moves` in its end barrier.
+    fn close(&mut self, moves: &[vk::ImageMemoryBarrier2<'_>]) -> Result<(), Error> {
         let core = Arc::clone(self.device.core());
         match self.last().command {
             Some(command) => {
@@ -785,7 +869,7 @@ impl Building {
                 // completes, and may read after an event the segment signals.
                 let host = self.host_written || !self.last().signals.is_empty();
                 self.host_written = false;
-                record::end(&core.device, command, host, &core.counters)
+                record::end(&core.device, command, host, moves, &core.counters)
             }
             None => Ok(()),
         }
@@ -793,7 +877,7 @@ impl Building {
 
     /// Starts a new segment after the last one.
     fn split(&mut self) -> Result<(), Error> {
-        self.close()?;
+        self.close(&[])?;
         self.gpu.segments.push(Segment::default());
         Ok(())
     }
@@ -1222,6 +1306,13 @@ impl CbInner {
         self.changed.notify_all();
     }
 
+    /// The submission that signals its drawables' semaphores has passed `vkQueueSubmit2`.
+    pub(crate) fn signal_submitted(&self) {
+        let mut state = lock(&self.state);
+        state.signal_unsubmitted = false;
+        self.changed.notify_all();
+    }
+
     /// Ended while enqueued and not committed: the commit ends it with `error`.
     pub(crate) fn end_uncommitted(&self, error: CommandBufferError) {
         lock(&self.state).ended = Some(error);
@@ -1354,9 +1445,14 @@ impl Drop for CbInner {
             device,
             gpu,
             stamps,
+            presents,
             ..
         }) = state.building.take()
         {
+            // Its drawables stay acquired, for another present.
+            for (drawable, _) in &presents {
+                drawable.unpresent();
+            }
             let core = device.core();
             let Gpu {
                 recorder,

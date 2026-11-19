@@ -129,19 +129,27 @@ pub(crate) fn memory_barrier(reach: Reach) -> vk::MemoryBarrier2<'static> {
 /// Ends a segment's command buffer after its one barrier: a later command buffer's commands run
 /// after this one's, as Metal orders the command buffers of a queue, and where `host` (the segment
 /// wrote Shared memory, or signals an event) the barrier also reaches the host, so Shared memory
-/// reads the GPU's writes once the command buffer completes or the host sees the event. A segment
-/// begins with no barrier: the one ending each earlier segment, upload and fill covers it.
+/// reads the GPU's writes once the command buffer completes or the host sees the event. The
+/// barrier also makes the image moves `images`: a presenting command buffer's drawables' moves to
+/// the present layout. A segment begins with no barrier: the one ending each earlier segment,
+/// upload and fill covers it.
 pub(crate) fn end(
     device: &ash::Device,
     buffer: vk::CommandBuffer,
     host: bool,
+    images: &[vk::ImageMemoryBarrier2<'_>],
     counters: &Counters,
 ) -> Result<(), Error> {
-    barrier(
-        device,
-        buffer,
-        if host { Reach::Host } else { Reach::Commands },
-    );
+    let barrier = [memory_barrier(match host {
+        true => Reach::Host,
+        false => Reach::Commands,
+    })];
+    let dependency = vk::DependencyInfo::default()
+        .memory_barriers(&barrier)
+        .image_memory_barriers(images);
+    // SAFETY: the buffer is recording, outside any rendering; each image is the device's, in the
+    // layout its move names.
+    unsafe { device.cmd_pipeline_barrier2(buffer, &dependency) };
     counters.count(Metric::Barriers);
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     if host {

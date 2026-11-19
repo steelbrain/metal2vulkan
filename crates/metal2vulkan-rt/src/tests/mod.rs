@@ -34,6 +34,7 @@ mod pass;
 mod patch;
 mod pixel_format_info;
 mod places;
+mod present;
 mod push_window;
 mod readback;
 mod render;

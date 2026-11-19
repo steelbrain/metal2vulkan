@@ -1056,9 +1056,10 @@ impl Work {
         state.region.take()
     }
 
-    /// A new texture's `image`: the next submission's upload moves it to its home layout where it
-    /// still lives, holding it from then; until then nothing holds it. An upload is begun now if
-    /// none is pending, so that the submission has one to record into.
+    /// A new texture's `image`, or a drawable's acquired again: the next submission's upload moves
+    /// it to its home layout where it still lives, holding it from then; until then nothing holds
+    /// it. An upload is begun now if none is pending, so that the submission has one to record
+    /// into.
     ///
     /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made.
     pub(crate) fn home(&self, core: &Core, image: &Arc<Image>) -> Result<(), Error> {
@@ -1069,6 +1070,7 @@ impl Work {
         if state.upload.is_none() {
             state.upload = Some(Upload::begin(core)?);
         }
+        image.owe_home();
         if state.homes.len() >= state.prune_at {
             state.homes.retain(|home| home.strong_count() > 0);
             state.prune_at = (state.homes.len() * 2).max(HOMES_PRUNE);
@@ -1598,7 +1600,9 @@ impl WorkState {
             command,
             signals,
         };
-        // An event's signal goes at once: nothing waits on it behind a held group.
+        // An event's signal goes at once: nothing waits on it behind a held group. So does a
+        // presenting command buffer's signal of the consumer's semaphore, which its present waits on
+        // once the command buffer is scheduled.
         let signals = !staged.signals.is_empty();
         group.segments.push(staged);
         pending.next += 1;
@@ -1766,6 +1770,8 @@ fn ready(segment: &Segment) -> bool {
 
 /// A ready segment's submit info. A wait the host's value meets submits no semaphore wait; a
 /// signal not above the highest value submitted or set is left out, so the semaphore only rises.
+/// The consumer's binary semaphores of a presenting command buffer's last segment are signalled
+/// with it.
 fn stage(segment: &Segment, watch: &mut Vec<Arc<EventInner>>) -> Staged {
     let mut staged = Staged {
         command: segment
@@ -1799,6 +1805,13 @@ fn stage(segment: &Segment, watch: &mut Vec<Arc<EventInner>>) -> Staged {
             vk::SemaphoreSubmitInfo::default()
                 .semaphore(event.semaphore)
                 .value(*value)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
+        );
+    }
+    for &ready in &segment.binary {
+        staged.signals.push(
+            vk::SemaphoreSubmitInfo::default()
+                .semaphore(ready)
                 .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
         );
     }
@@ -2106,7 +2119,16 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         }
         drop(queue);
     }
-    if !ok {
+    if ok {
+        // A presenting command buffer's semaphores are signalled by what was just submitted: a
+        // present may wait on them from now (`CommandBuffer::wait_until_scheduled`).
+        for (cb, pending, error) in &finished {
+            let last = pending.gpu.segments.last();
+            if error.is_none() && last.is_some_and(|segment| !segment.binary.is_empty()) {
+                cb.signal_submitted();
+            }
+        }
+    } else {
         complete::lose(core);
     }
     core.done.submitted(core, value, upload, finished, watch);

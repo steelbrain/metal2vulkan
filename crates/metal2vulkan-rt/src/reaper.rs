@@ -51,7 +51,8 @@ pub(crate) enum Free {
     /// The shader module of a dropped pipeline state.
     ShaderModule(vk::ShaderModule),
     /// A dropped texture's views, image and memory: its place is freed, or its allocation of its
-    /// own with the blocks gauge. The textures gauge falls with it.
+    /// own with the blocks gauge; a drawable's views alone, its image being the consumer's
+    /// swapchain's. The textures gauge falls with it.
     Texture {
         views: [Option<vk::ImageView>; 2],
         image: vk::Image,
@@ -154,7 +155,7 @@ unsafe fn free_backing(core: &Core, backing: Backing) {
             core.counters.fall_by(Gauge::SpilledBytes, spilled);
         }
         Backing::Placed(place) => core.places.release(core, place),
-        Backing::InBlock => {}
+        Backing::InBlock | Backing::Drawable => {}
     }
 }
 
@@ -188,7 +189,10 @@ fn free(core: &Core, object: Free) {
                 for view in views.into_iter().flatten() {
                     device.destroy_image_view(view, None);
                 }
-                device.destroy_image(image, None);
+                // A drawable's image is the consumer's swapchain's, which destroys it.
+                if !matches!(backing, Backing::Drawable) {
+                    device.destroy_image(image, None);
+                }
                 // SAFETY: the image bound to it is destroyed.
                 free_backing(core, backing);
             }

@@ -612,6 +612,56 @@ pub enum Refusal {
         /// The heap's bytes.
         heap_len: u64,
     },
+    /// A drawable's texture ([`Device::new_drawable_texture`](crate::Device::new_drawable_texture))
+    /// of a descriptor that is not a 2D texture of one level of the swapchain's image extent, or
+    /// over a swapchain whose images have more than one array layer. Metal has no counterpart: a
+    /// `CAMetalLayer` makes its drawables' textures itself, each a 2D texture of the layer's
+    /// drawable size.
+    ///
+    /// Basis: ours (the texture is the swapchain's image, which the descriptor states).
+    DrawableDescriptor,
+    /// A drawable's texture ([`Device::new_drawable_texture`](crate::Device::new_drawable_texture))
+    /// over a swapchain whose image format is not the one the runtime holds the descriptor's pixel
+    /// format in on this device. The formats are `VkFormat` values.
+    ///
+    /// Basis: ours (the texture's views and copies read the image in the format the runtime holds
+    /// the pixel format in).
+    DrawableFormat {
+        /// The descriptor's pixel format.
+        pixel_format: PixelFormat,
+        /// The format the runtime holds it in.
+        held: i32,
+        /// The swapchain's image format.
+        swapchain: i32,
+    },
+    /// A drawable's texture ([`Device::new_drawable_texture`](crate::Device::new_drawable_texture))
+    /// over a swapchain whose image usage lacks some of what the runtime's own texture of the
+    /// descriptor has: transfer source and destination always, as the CPU and blits reach any
+    /// Metal texture, and the sampled, storage and colour attachment usage of its shader-read,
+    /// shader-write and render-target usage. `missing` is a `VkImageUsageFlags` value.
+    ///
+    /// Basis: ours (each of the texture's uses takes its image's usage).
+    DrawableUsage {
+        /// The usage the swapchain's images lack.
+        missing: u32,
+    },
+    /// [`Texture::drawable_acquired`](crate::Texture::drawable_acquired) or
+    /// [`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable) of a texture
+    /// that is not over a swapchain's image, or a view of one.
+    ///
+    /// Basis: ours (only a swapchain's image is acquired and presented).
+    NotDrawable,
+    /// [`Texture::drawable_acquired`](crate::Texture::drawable_acquired) of a drawable acquired
+    /// and not presented since.
+    ///
+    /// Basis: ours (a swapchain's image is acquired again only once it was presented).
+    DrawableAcquired,
+    /// [`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable) of a drawable
+    /// not acquired since its last present, or one a command buffer not yet committed already
+    /// presents.
+    ///
+    /// Basis: ours (a swapchain's image is presented once for each acquire).
+    DrawableNotAcquired,
     /// A copy between buffers
     /// ([`BlitCommandEncoder::copy_from_buffer_to_buffer`](crate::BlitCommandEncoder::copy_from_buffer_to_buffer))
     /// whose range, `size` bytes from `offset`, leaves the source or the destination.
@@ -1582,6 +1632,28 @@ impl fmt::Display for Refusal {
             } => write!(
                 f,
                 "a heap texture of {size} bytes aligned to {align} does not lie at offset {offset} of a heap of {heap_len} bytes"
+            ),
+            Refusal::DrawableDescriptor => f.write_str(
+                "a drawable's texture is a 2D texture of one level of its swapchain's image extent, over images of one layer",
+            ),
+            Refusal::DrawableFormat {
+                pixel_format,
+                held,
+                swapchain,
+            } => write!(
+                f,
+                "{pixel_format:?} is held in VkFormat {held}, and the swapchain's images are of VkFormat {swapchain}"
+            ),
+            Refusal::DrawableUsage { missing } => write!(
+                f,
+                "the swapchain's images lack usage {missing:#x} the drawable's texture takes"
+            ),
+            Refusal::NotDrawable => f.write_str("the texture is not over a swapchain's image"),
+            Refusal::DrawableAcquired => {
+                f.write_str("the drawable is acquired and not presented since")
+            }
+            Refusal::DrawableNotAcquired => f.write_str(
+                "the drawable is not acquired since its last present, or a command buffer presents it already",
             ),
             Refusal::BufferCopyRange { offset, size, len } => write!(
                 f,

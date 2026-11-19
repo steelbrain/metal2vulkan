@@ -5,8 +5,9 @@ takes its name when it does; until then it is unpublished.
 
 Its public API so far: the instance and the device, memory blocks (taken, or imported from the
 consumer's memory) and the buffers in them, the grants of texture and sampler indices, textures,
-sampler states, command queues, command buffers and events, compute and blit encoders, the
-device's counters, and `floor`, the check of a Vulkan device against the floor below.
+drawables' textures and their presents, sampler states, command queues, command buffers and
+events, compute and blit encoders, the device's counters, and `floor`, the check of a Vulkan
+device against the floor below.
 
 ## What the consumer implements
 
@@ -71,8 +72,8 @@ them over this crate's items:
   cache directory"). With `None`, every boot lowers every function and compiles every pipeline
   cold, so a consumer should pass a directory.
 - `Device::raw` gives the instance, physical device, device and queue family handles, and
-  `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock.
-  The runtime keeps owning every handle.
+  `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock
+  (see "Presenting"). The runtime keeps owning every handle.
 - `Device::has_unified_memory` is true where Vulkan's device type is integrated or CPU.
 
 ### Teardown
@@ -745,8 +746,10 @@ made, with no lock, and never rewritten for layouts.
   changes: its read would answer the texel unswizzled, where Metal reads it through the swizzle. A texture's
   own descriptor takes a swizzle only without shader-write and render-target usage
   (`Refusal::TextureSwizzleWithWrites`), so this reaches views alone.
-- Textures over a swapchain image are not built yet. Heap textures are placed only in Private
-  heaps (`Gap::HeapTexture` for a Shared block).
+- A drawable's texture (see "Presenting") has no view of another pixel format
+  (`Gap::TextureView`), and a draw that reads it as an attachment of its own pass is `Gap::Draw`
+  of `AttachmentRead`: the swapchain's image lists no other format and has no feedback usage.
+  Heap textures are placed only in Private heaps (`Gap::HeapTexture` for a Shared block).
 
 ## Sampler states
 
@@ -815,7 +818,8 @@ made, with no lock, and never rewritten for layouts.
   wait is needed), when the host is to wait for one of them (`wait_until_completed`, or
   `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. Waiting
   for a place in the queue sends nothing. A segment that signals an event ends its group, which goes
-  at once; one that waits on an event's semaphore leads a new group, the one held going first. The
+  at once, and so does a presenting command buffer's last (see "Presenting"); one that waits on an
+  event's semaphore leads a new group, the one held going first. The
   driver runs a submission's command buffers as one kernel job, which a job timeout ends as a whole
   (Linux's amdgpu ends a job past its timeout and resets the ring), so a group is bounded by its
   expected GPU run, as the old runtime's are: a queue's expected run follows its command buffers'
@@ -1070,7 +1074,6 @@ that touch blocks first.
   and Metal leaves a resource ID that names no live resource of the access undefined; here it can
   fault as a bad address does, with the same consequences. An index within an array that no live
   object owns reads its null descriptor or default sampler, with no fault.
-- Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 - A fence orders the encoders of one queue: an encoder of another queue that updates or waits on
   it is refused (`Gap::FenceOtherQueue`), as Metal's fence orders one queue and `MTLEvent` orders
   queues.
@@ -1995,6 +1998,57 @@ or does not check is rebuilt from the generations' names, with young counted ful
   target faster after a barrier (4,836.4 µs against 5,429.4 µs) and at the first read of a pass
   that loads it (3,849.6 µs against 4,218.2 µs), and within 1% at the first read of a pass that
   clears it (4,200.8 µs against 4,159.4 µs; at 1920 × 1080, 1,095.3 µs against 1,109.1 µs).
+
+## Presenting
+
+The consumer presents on the runtime's own device, in its process: it owns the surface, the
+swapchain, the acquires, the presents, their pacing and the window's recovery, and the runtime
+renders into the swapchain's images. Nothing is exported, imported or copied.
+
+- `Device::new_drawable_texture` (unsafe) is the texture a `CAMetalDrawable` answers, over one of
+  the swapchain's images, which the runtime never destroys: the consumer destroys its swapchain
+  once the texture and every command buffer that used it are gone. The consumer gives the
+  swapchain's create info and a texture descriptor: a 2D texture of one level of the swapchain's
+  image extent (else `Refusal::DrawableDescriptor`, as for a swapchain of more than one array
+  layer), of a pixel format the runtime holds in the swapchain's image format
+  (`Refusal::DrawableFormat`; `BGRA8Unorm` in `B8G8R8A8_UNORM`), and of a usage whose image usage
+  the swapchain's images have: transfer source and destination always, as the CPU and blits reach
+  any Metal texture, and sampled, storage and colour attachment for shader-read, shader-write and
+  render-target usage (`Refusal::DrawableUsage`, naming what they lack). Its home layout, views,
+  elements of set 1 at its index and hazards are a texture's of its usage.
+- `Texture::drawable_acquired` (unsafe) is the runtime's part of `nextDrawable`, called once the
+  consumer has acquired the image with a fence (`vkAcquireNextImageKHR`) and waited for the fence.
+  The image moves to its home layout in the upload of the next submission, ahead of every command
+  buffer committed after the call, as a new texture's does: from undefined the first time, and
+  from the present layout after a present, which keeps its texels as Vulkan keeps a presented
+  image's. A second acquire before a present is `Refusal::DrawableAcquired`.
+- `CommandBuffer::present_drawable` (unsafe) is the runtime's part of `presentDrawable:`: once
+  every command of the command buffer has run, wherever it was encoded, the image is in the present
+  layout, moved in the last segment's end barrier, and the consumer's binary semaphore is
+  signalled, in that segment's submit info beside the progress semaphore. The group with it goes
+  to the driver at once. Its `wait_until_scheduled` returns once that submission has passed
+  `vkQueueSubmit2` (its scheduled handlers run before that), so the consumer's present, on the
+  presenting queue under `Device::with_present_queue`, waits on a signal already submitted, as
+  Vulkan requires. The drawable is presented at the commit, the presentation engine's until the
+  next acquire. A present of a drawable not acquired since its last present, or that another
+  command buffer already presents, is `Refusal::DrawableNotAcquired`; of a texture not over a
+  swapchain's image, `Refusal::NotDrawable`. A command buffer dropped uncommitted leaves its
+  drawable acquired.
+- The consumer's order: one drawable texture per swapchain image; then each frame the acquire and
+  its fence, `drawable_acquired`, the encoders into the texture, `present_drawable` with the
+  image's semaphore, `commit`, `wait_until_scheduled`, and, where the status is not `Error`,
+  `vkQueuePresentKHR` waiting on the semaphore inside `with_present_queue`.
+
+### Known gaps of presenting
+
+- The move home after an acquire waits on no semaphore: the consumer acquires with a fence and
+  waits for it first. A binary semaphore wait is not built.
+- A present must not be made in the presenting command buffer's own scheduled handler, which runs
+  before its submission; Metal's `presentDrawable:` presents from a scheduled handler of its own
+  (Apple's documentation of the call).
+- A presenting command buffer that ends without running (`NotRun`, `DeviceLost`) signals nothing
+  and leaves the image acquired, possibly not in the present layout: the consumer makes its
+  swapchain again.
 
 ## One path for every device
 

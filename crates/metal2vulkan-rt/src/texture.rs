@@ -20,6 +20,14 @@
 //! in its Shared buffer as it lays them out; [`Texture::upload_region`] copies a region of them
 //! into the image by the device, and [`Texture::replace_region`] and [`Texture::get_bytes`] write
 //! and read them there.
+//!
+//! A drawable's texture ([`Device::new_drawable_texture`]) is over an image of the consumer's
+//! swapchain, which the runtime never destroys. Its home layout is a texture's of its usage; it
+//! moves there only once the consumer acquired it ([`Texture::drawable_acquired`]), in the upload
+//! of the next submission as a new texture's image does, from undefined the first time and from
+//! the present layout after a present, which keeps its texels. The command buffer that presents
+//! it moves it from home to the present layout at its end
+//! ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)).
 
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::Buffer;
@@ -357,9 +365,32 @@ pub(crate) struct Image {
     first: vk::ImageLayout,
     /// An upload recorded its move from `first` to `home`. Read and set under the work lock.
     homed: AtomicBool,
+    /// A drawable's image ([`Device::new_drawable_texture`]): whose turn it is between the
+    /// consumer's acquires and presents. `None` for every other image.
+    drawable: Option<Drawable>,
     /// What holds the memory the image lies in, where it is not the image's own, while anything
     /// holds the image.
     _under: Option<Under>,
+}
+
+/// A drawable's image's turn, between the consumer's acquires and presents.
+struct Drawable {
+    turn: Mutex<Turn>,
+    /// A command buffer that presents the image was committed: its move home after the next
+    /// acquire starts in the present layout, which keeps its texels; before the first, it starts
+    /// undefined, as a swapchain's new image is.
+    presented: AtomicBool,
+}
+
+/// Whose a drawable's image is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Turn {
+    /// The presentation engine's: never acquired, or presented since its last acquire.
+    Engine,
+    /// The runtime's, acquired: in its home layout from the next upload on.
+    Acquired,
+    /// A command buffer not yet committed presents it.
+    Presenting,
 }
 
 /// The usage of an image's shadow: sampled through its textures' views of it, and copied into.
@@ -383,25 +414,41 @@ enum Under {
 }
 
 impl Image {
-    /// The image's move from undefined to its home layout, where no upload has recorded it yet:
-    /// recorded once, by the upload that is to hold the image. Under the work lock.
+    /// The image's move from the layout it is made in to its home layout, where no upload has
+    /// recorded it yet: recorded once, by the upload that is to hold the image (a drawable's once
+    /// for each acquire, [`Work::home`](crate::submit::Work::home)). Under the work lock.
     pub(crate) fn homing(&self) -> Option<vk::ImageMemoryBarrier2<'static>> {
         if self.homed.swap(true, Ordering::Relaxed) {
             return None;
         }
+        // A drawable's image moves home at each acquire: from the present layout once presented.
+        // The consumer waited for the acquire's fence, so the presentation engine's reads are
+        // done and nothing earlier needs waiting for.
+        let presented = (self.drawable.as_ref())
+            .is_some_and(|drawable| drawable.presented.load(Ordering::Relaxed));
+        let first = match presented {
+            true => vk::ImageLayout::PRESENT_SRC_KHR,
+            false => self.first,
+        };
         Some(
             vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::NONE)
                 .src_access_mask(vk::AccessFlags2::NONE)
                 .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
                 .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
-                .old_layout(self.first)
+                .old_layout(first)
                 .new_layout(self.home)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(self.image)
                 .subresource_range(whole(self.aspects)),
         )
+    }
+
+    /// Its move home is owed, recorded by the next upload that holds it ([`homing`](Self::homing)):
+    /// a new image's, or a drawable's at each acquire. Under the work lock.
+    pub(crate) fn owe_home(&self) {
+        self.homed.store(false, Ordering::Relaxed);
     }
 
     /// The layout a copy names the image in, for `transfer`, its role's transfer layout: home,
@@ -461,6 +508,7 @@ impl Image {
             view_formats: plan.view_formats.clone(),
             first: vk::ImageLayout::UNDEFINED,
             homed: AtomicBool::new(false),
+            drawable: None,
             _under: None,
         });
         core.work.home(core, &made)?;
@@ -498,6 +546,9 @@ pub(crate) enum Backing {
     /// A place in a block the image holds: a heap's range ([`Device::new_heap_texture`]), or a
     /// buffer's bytes ([`Buffer::new_texture`]).
     InBlock,
+    /// The consumer's swapchain's ([`Device::new_drawable_texture`]): neither the image nor its
+    /// memory is the runtime's to free.
+    Drawable,
 }
 
 /// The unit of a copy between an image and bytes or another image: the aspect, an element's
@@ -798,14 +849,156 @@ impl Device {
         descriptor: &TextureDescriptor,
     ) -> Result<(Shape, Plan, TextureUsage), Error> {
         let d = *descriptor;
-        let (shape, usage) = checked(&d)?;
-        if d.swizzle != TextureSwizzleChannels::DEFAULT
-            && usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET)
-        {
-            return Err(Error::Refused(Refusal::TextureSwizzleWithWrites));
-        }
+        let (shape, usage) = own_checks(&d)?;
         let plan = plan(self.core(), &d, usage, &shape)?;
         Ok((shape, plan, usage))
+    }
+
+    /// No Metal counterpart of its making: the texture a `CAMetalDrawable` answers (`texture`),
+    /// at `index`, over `image`, an image of the consumer's swapchain, made with `swapchain` on
+    /// this device. The runtime never destroys the image or frees its memory: the consumer does,
+    /// with its swapchain, once the texture and every command buffer that used it are gone. The
+    /// texture's descriptor is a 2D texture of one level of the swapchain's image extent, its
+    /// image's format the one the runtime holds the pixel format in, and its home layout, views,
+    /// elements of set 1 and hazards a texture's of its usage, as [`Device::new_texture`] makes
+    /// them. Its other-format views are [`Gap::TextureView`], and a draw that reads it as an
+    /// attachment of its own pass is a [`Gap::Draw`], as the swapchain's image has no format list
+    /// and no feedback usage.
+    ///
+    /// The image is the presentation engine's until the consumer acquires it: it is used from
+    /// [`Texture::drawable_acquired`] to the commit of the command buffer that presents it
+    /// ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)), and then
+    /// again after the next acquire. Metal hands a drawable out from `nextDrawable` and takes it
+    /// back at its present; here the consumer owns the swapchain, the acquires and the presents.
+    ///
+    /// Err: what [`Device::new_texture`] refuses of the descriptor but the device's image format
+    /// query, which the swapchain's creation answered; [`Refusal::DrawableDescriptor`] for a
+    /// descriptor that is not a 2D texture of one level of the swapchain's image extent, or a
+    /// swapchain of more than one array layer; [`Refusal::DrawableFormat`] for a swapchain of
+    /// another image format; [`Refusal::DrawableUsage`] for a swapchain whose image usage lacks
+    /// some of the texture's; [`Refusal::TextureIndex`], [`Refusal::IndicesNotGranted`] as
+    /// [`Device::new_texture`]; [`Error::Vulkan`] where a view cannot be made.
+    ///
+    /// # Safety
+    ///
+    /// - `image` is one of the images `vkGetSwapchainImagesKHR` gives of a swapchain made on this
+    ///   device with `swapchain` (its `pNext` chain is not read), whose sharing takes the device's
+    ///   queue family ([`RawDevice::queue_family_index`](crate::RawDevice::queue_family_index)), and no drawable texture
+    ///   is over it while this one lives. It is not acquired, or acquired and in the undefined
+    ///   layout, as `vkGetSwapchainImagesKHR` gives it.
+    /// - The swapchain outlives the texture, every view of it, and every command buffer that used
+    ///   them.
+    pub unsafe fn new_drawable_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        index: Option<u32>,
+        image: vk::Image,
+        swapchain: &vk::SwapchainCreateInfoKHR<'_>,
+    ) -> Result<Texture, Error> {
+        let d = *descriptor;
+        let (shape, usage) = own_checks(&d)?;
+        let extent = swapchain.image_extent;
+        if d.texture_type != TextureType::Type2D
+            || d.mipmap_level_count != 1
+            || [d.width, d.height] != [extent.width, extent.height]
+            || swapchain.image_array_layers != 1
+        {
+            return Err(Error::Refused(Refusal::DrawableDescriptor));
+        }
+        let core = self.core();
+        let plan = form(core, &d, usage)?;
+        if plan.format != swapchain.image_format {
+            return Err(Error::Refused(Refusal::DrawableFormat {
+                pixel_format: d.pixel_format,
+                held: plan.format.as_raw(),
+                swapchain: swapchain.image_format.as_raw(),
+            }));
+        }
+        let missing = plan.usage & !swapchain.image_usage;
+        if !missing.is_empty() {
+            return Err(Error::Refused(Refusal::DrawableUsage {
+                missing: missing.as_raw(),
+            }));
+        }
+        let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
+        if reached != index.is_some() {
+            return Err(Error::Refused(Refusal::TextureIndex { index }));
+        }
+        // Views of the image's own format take its whole usage, which the swapchain's creation
+        // checked against the format (`VUID-VkSwapchainCreateInfoKHR-imageFormat-01778`).
+        let mut made = Made::default();
+        // SAFETY: the image is the device's and bound (the caller's contract), of the plan's
+        // format, and has the plan's usage.
+        let views = unsafe { made.views(&core.device, image, &shape, &plan) };
+        if views.is_err() {
+            // SAFETY: nothing else holds the views; `made` holds no image.
+            unsafe { made.destroy(core) };
+        }
+        let (sampled, storage) = views?;
+        core.counters.rise(Gauge::Textures);
+        let image = Arc::new(Image {
+            core: Arc::clone(core),
+            image,
+            backing: Backing::Drawable,
+            bytes: 0,
+            sampled,
+            storage,
+            home: plan.home,
+            attachment_reads: false,
+            shadowing: None,
+            shadow: false,
+            aspects: plan.aspects,
+            format: plan.format,
+            usage: swapchain.image_usage,
+            view_formats: Vec::new(),
+            first: vk::ImageLayout::UNDEFINED,
+            // No move home until the consumer acquires it.
+            homed: AtomicBool::new(true),
+            drawable: Some(Drawable {
+                turn: Mutex::new(Turn::Engine),
+                presented: AtomicBool::new(false),
+            }),
+            _under: None,
+        });
+        // The texture's elements of set 1, written as it takes its index; a refusal frees the
+        // views as `image` drops.
+        let index = match index {
+            Some(index) => {
+                let sampled = sampled.map(|view| (view, plan.home));
+                // SAFETY: the texture's views are live; its image is in its home layout whenever
+                // work uses it, from the upload after each acquire to its present.
+                let owner = unsafe {
+                    (core.arrays).place_texture(
+                        &core.device,
+                        &core.counters,
+                        index,
+                        (sampled, storage),
+                        false,
+                    )
+                }?;
+                Some((index, owner))
+            }
+            None => None,
+        };
+        let inner = TextureInner {
+            device: self.clone(),
+            descriptor: d,
+            image,
+            format: plan.format,
+            views_usage: None,
+            unit: plan.unit,
+            index,
+            word: plan.word,
+            id: core.ids.take(),
+            named: None,
+            view: None,
+            emulation: plan.emulation,
+            attachments: Mutex::new(Vec::new()),
+            shadow: None,
+        };
+        Ok(Texture {
+            inner: Arc::new(inner),
+        })
     }
 
     /// A texture of `descriptor` at `index`, its image made as `source` says.
@@ -936,6 +1129,7 @@ impl Device {
             view_formats: plan.view_formats.clone(),
             first,
             homed: AtomicBool::new(false),
+            drawable: None,
             _under: block,
         });
         let shadow = ShadowView::of(&image, &plan, index, shape.view_type, whole);
@@ -1312,6 +1506,18 @@ fn checked(d: &TextureDescriptor) -> Result<(Shape, TextureUsage), Error> {
         }
         false => d.usage,
     };
+    Ok((shape, usage))
+}
+
+/// The checks a texture's own descriptor takes, Metal's: [`checked`]'s, and a swizzle only of
+/// read usage. With the shape and the usage taken.
+fn own_checks(d: &TextureDescriptor) -> Result<(Shape, TextureUsage), Error> {
+    let (shape, usage) = checked(d)?;
+    if d.swizzle != TextureSwizzleChannels::DEFAULT
+        && usage.intersects(TextureUsage::SHADER_WRITE | TextureUsage::RENDER_TARGET)
+    {
+        return Err(Error::Refused(Refusal::TextureSwizzleWithWrites));
+    }
     Ok((shape, usage))
 }
 
@@ -2024,9 +2230,26 @@ impl Made {
         // type its requirements allow.
         unsafe { device.bind_image_memory(image, memory, offset) }
             .map_err(Error::vulkan("vkBindImageMemory"))?;
+        // SAFETY: the image is bound, of the plan's format, and has its usage.
+        let (sampled, storage) = unsafe { self.views(device, image, shape, plan) }?;
+        Ok((image, backing, requirements.size, sampled, storage))
+    }
+
+    /// Makes `image`'s views of `plan`: its sampled view and its storage view, where it has them.
+    ///
+    /// # Safety
+    ///
+    /// `image` is the device's, bound, of the plan's format, and has the plan's usage.
+    unsafe fn views(
+        &mut self,
+        device: &ash::Device,
+        image: vk::Image,
+        shape: &Shape,
+        plan: &Plan,
+    ) -> Result<(Option<vk::ImageView>, Option<vk::ImageView>), Error> {
         let mut view = |components, aspect| {
             let (view_type, format) = (shape.view_type, plan.format);
-            // SAFETY: the image is bound, of the view's format, and has the view's usage.
+            // SAFETY: the caller's contract.
             let range = whole(aspect);
             let view =
                 unsafe { image_view(device, image, view_type, format, components, range, None) }?;
@@ -2044,7 +2267,7 @@ impl Made {
             )?),
             false => None,
         };
-        Ok((image, backing, requirements.size, sampled, storage))
+        Ok((sampled, storage))
     }
 
     /// Destroys what was made, the allocation's gauge falling with it.
@@ -2069,7 +2292,7 @@ impl Made {
                     core.counters.fall_by(Gauge::SpilledBytes, spilled);
                 }
                 Some(Backing::Placed(place)) => core.places.release(core, place),
-                Some(Backing::InBlock) | None => {}
+                Some(Backing::InBlock | Backing::Drawable) | None => {}
             }
         }
     }
@@ -3095,6 +3318,93 @@ impl Texture {
         layout: vk::ImageLayout,
     ) -> vk::ImageMemoryBarrier2<'static> {
         self.inner.back(placed, layout)
+    }
+
+    /// No Metal counterpart: the runtime's part of `CAMetalLayer`'s `nextDrawable`, for a
+    /// drawable's texture ([`Device::new_drawable_texture`]) whose swapchain image the consumer has
+    /// acquired. The image moves to its home layout in the upload of the next submission, ahead of
+    /// every command buffer committed after the call: from the present layout where a command
+    /// buffer presented it, which keeps its texels as Vulkan keeps a presented image's, else from
+    /// undefined. The texture is used from here until the commit of the command buffer that
+    /// presents it ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)).
+    ///
+    /// The consumer acquires with a fence and waits for it before the call: the move waits on no
+    /// semaphore, so the presentation engine's reads of the image are to be done.
+    ///
+    /// Err: [`Refusal::NotDrawable`] for a texture not over a swapchain's image;
+    /// [`Refusal::DrawableAcquired`] for a drawable acquired and not presented since;
+    /// [`Error::Quiesced`]; [`Error::Vulkan`] where the upload cannot be begun.
+    ///
+    /// # Safety
+    ///
+    /// The consumer acquired the image (`vkAcquireNextImageKHR`) since its texture was made or
+    /// last presented, and waited for the acquire's fence.
+    pub unsafe fn drawable_acquired(&self) -> Result<(), Error> {
+        let image = &self.inner.image;
+        let drawable = (image.drawable.as_ref()).ok_or(Error::Refused(Refusal::NotDrawable))?;
+        {
+            let mut turn = lock(&drawable.turn);
+            if *turn != Turn::Engine {
+                return Err(Error::Refused(Refusal::DrawableAcquired));
+            }
+            *turn = Turn::Acquired;
+        }
+        let core = self.inner.device.core();
+        let homed = core.work.home(core, image);
+        if homed.is_err() {
+            *lock(&drawable.turn) = Turn::Engine;
+        }
+        homed
+    }
+
+    /// A command buffer presents the drawable: it is the runtime's, acquired, from now presented
+    /// by that command buffer.
+    ///
+    /// Err: [`Refusal::NotDrawable`]; [`Refusal::DrawableNotAcquired`].
+    pub(crate) fn present_turn(&self) -> Result<(), Error> {
+        let drawable =
+            (self.inner.image.drawable.as_ref()).ok_or(Error::Refused(Refusal::NotDrawable))?;
+        let mut turn = lock(&drawable.turn);
+        if *turn != Turn::Acquired {
+            return Err(Error::Refused(Refusal::DrawableNotAcquired));
+        }
+        *turn = Turn::Presenting;
+        Ok(())
+    }
+
+    /// The command buffer that presents the drawable was dropped uncommitted: it is acquired
+    /// again, for another present.
+    pub(crate) fn unpresent(&self) {
+        if let Some(drawable) = &self.inner.image.drawable {
+            *lock(&drawable.turn) = Turn::Acquired;
+        }
+    }
+
+    /// The command buffer that presents the drawable is committed: the image is the presentation
+    /// engine's once that command buffer has run, in the present layout.
+    pub(crate) fn presented(&self) {
+        if let Some(drawable) = &self.inner.image.drawable {
+            drawable.presented.store(true, Ordering::Relaxed);
+            *lock(&drawable.turn) = Turn::Engine;
+        }
+    }
+
+    /// The move of its whole image from home to the present layout, after every earlier command's
+    /// writes. It delays nothing after it: the present's semaphore wait and its own visibility
+    /// operations order the presentation engine's reads (Vulkan's note on `VkPresentInfoKHR`).
+    pub(crate) fn present_barrier(&self) -> vk::ImageMemoryBarrier2<'static> {
+        let image = &self.inner.image;
+        vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::NONE)
+            .old_layout(image.home)
+            .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image.image)
+            .subresource_range(whole(image.aspects))
     }
 
     /// `gpuResourceID`: its index (0 for a texture no shader reaches) and the translator's

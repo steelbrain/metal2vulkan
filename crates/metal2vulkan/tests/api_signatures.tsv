@@ -9542,6 +9542,7 @@ method	metal2vulkan-rt::CommandBuffer::gpu_end_time	pub fn gpu_end_time(&self) -
 method	metal2vulkan-rt::CommandBuffer::gpu_start_time	pub fn gpu_start_time(&self) -> u64
 method	metal2vulkan-rt::CommandBuffer::kernel_end_time	pub fn kernel_end_time(&self) -> u64
 method	metal2vulkan-rt::CommandBuffer::kernel_start_time	pub fn kernel_start_time(&self) -> u64
+method	metal2vulkan-rt::CommandBuffer::present_drawable	pub unsafe fn present_drawable(&self, drawable: &Texture, ready: vk::Semaphore) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::render_command_encoder	pub fn render_command_encoder(&self, descriptor: &RenderPassDescriptor) -> Result<RenderCommandEncoder, Error>
 method	metal2vulkan-rt::CommandBuffer::status	pub fn status(&self) -> CommandBufferStatus
 method	metal2vulkan-rt::CommandBuffer::wait_until_completed	pub fn wait_until_completed(&self) -> Result<(), Error>
@@ -9594,6 +9595,7 @@ method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice, option
 method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: BlockId, offset: u64, length: u64, zero_from: Option<u64>) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
 method	metal2vulkan-rt::Device::new_depth_stencil_state	pub fn new_depth_stencil_state(&self, descriptor: &DepthStencilDescriptor) -> DepthStencilState
+method	metal2vulkan-rt::Device::new_drawable_texture	pub unsafe fn new_drawable_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, image: vk::Image, swapchain: &vk::SwapchainCreateInfoKHR<'_>) -> Result<Texture, Error>
 method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
 method	metal2vulkan-rt::Device::new_fence	pub fn new_fence(&self) -> Fence
 method	metal2vulkan-rt::Device::new_heap_texture	pub fn new_heap_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, heap: HeapRange, offset: u64) -> Result<Texture, Error>
@@ -9703,6 +9705,7 @@ method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_valu
 method	metal2vulkan-rt::SharedEvent::signaled_value	pub fn signaled_value(&self) -> u64
 method	metal2vulkan-rt::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> Result<bool, Error>
 method	metal2vulkan-rt::Texture::descriptor	pub fn descriptor(&self) -> &TextureDescriptor
+method	metal2vulkan-rt::Texture::drawable_acquired	pub unsafe fn drawable_acquired(&self) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u32, slice: u32) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
 method	metal2vulkan-rt::Texture::new_texture_view	pub fn new_texture_view(&self, pixel_format: PixelFormat, texture_type: TextureType, levels: Range<u32>, slices: Range<u32>, index: Option<u32>) -> Result<Texture, Error>
@@ -13861,6 +13864,11 @@ variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64,
 variant	metal2vulkan-rt::Refusal::BufferTextureLayout	BufferTextureLayout { offset: u64, bytes_per_row: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferTooLong	BufferTooLong { length: u64, max: u64 }
 variant	metal2vulkan-rt::Refusal::Committed	Committed
+variant	metal2vulkan-rt::Refusal::DrawableAcquired	DrawableAcquired
+variant	metal2vulkan-rt::Refusal::DrawableDescriptor	DrawableDescriptor
+variant	metal2vulkan-rt::Refusal::DrawableFormat	DrawableFormat { pixel_format: PixelFormat, held: i32, swapchain: i32 }
+variant	metal2vulkan-rt::Refusal::DrawableNotAcquired	DrawableNotAcquired
+variant	metal2vulkan-rt::Refusal::DrawableUsage	DrawableUsage { missing: u32 }
 variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
 variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen
 variant	metal2vulkan-rt::Refusal::FillRange	FillRange { start: u64, end: u64, len: u64 }
@@ -13882,6 +13890,7 @@ variant	metal2vulkan-rt::Refusal::NoBufferAtIndex	NoBufferAtIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::NoCommandBuffers	NoCommandBuffers
 variant	metal2vulkan-rt::Refusal::NoPipeline	NoPipeline
 variant	metal2vulkan-rt::Refusal::NoTessellationFactorBuffer	NoTessellationFactorBuffer
+variant	metal2vulkan-rt::Refusal::NotDrawable	NotDrawable
 variant	metal2vulkan-rt::Refusal::OtherDevice	OtherDevice
 variant	metal2vulkan-rt::Refusal::PatchDraw	PatchDraw
 variant	metal2vulkan-rt::Refusal::SamplerArgumentIndex	SamplerArgumentIndex { index: u32 }
