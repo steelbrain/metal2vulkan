@@ -930,7 +930,7 @@ impl BlitCommandEncoder {
         if buffer.is_some() {
             building.overs_after(&overs, false);
         }
-        let family = surface.handle().family();
+        let family = surface.family();
         let buffers: Vec<vk::BufferMemoryBarrier2<'static>> = (buffer.iter())
             .map(|buffer| {
                 vk::BufferMemoryBarrier2::default()

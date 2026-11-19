@@ -40,6 +40,9 @@ pub enum ImportHandle {
     DmaBufs,
     /// Host memory by its address ([`Device::import_host_memory`]).
     HostMemory,
+    /// A Direct3D 11 texture by its NT handle (`D3d11Plane`, of `Device::import_d3d11_surface`,
+    /// on Windows).
+    D3d11Texture,
 }
 
 impl ImportHandle {
@@ -49,6 +52,7 @@ impl ImportHandle {
                 vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT
             }
             ImportHandle::HostMemory => vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT,
+            ImportHandle::D3d11Texture => vk::ExternalMemoryHandleTypeFlags::D3D11_TEXTURE,
         }
     }
 }

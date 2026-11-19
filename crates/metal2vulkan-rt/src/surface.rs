@@ -35,7 +35,7 @@ use ash::vk;
 use std::sync::{Arc, Mutex};
 
 /// The most planes a surface has: a DRM format's memory planes.
-const MAX_PLANES: usize = 4;
+pub(crate) const MAX_PLANES: usize = 4;
 
 /// The image usage a plane's image in place takes in every case: sampled, rendered, copied from
 /// and into. Storage joins it where the query offers it.
@@ -149,10 +149,11 @@ pub struct SurfaceExport {
 }
 
 /// No Metal counterpart: a picture's planes as textures over memory shared with another API
-/// ([`Device::new_exported_surface`]).
+/// ([`Device::new_exported_surface`], and `Device::import_d3d11_surface` on Windows).
 pub struct Surface {
     device: Device,
-    handle: ExportHandle,
+    /// The handle an exported surface's memory is shared through; `None` for an import.
+    handle: Option<ExportHandle>,
     planes: Vec<Texture>,
     kind: Kind,
 }
@@ -163,6 +164,9 @@ enum Kind {
     InPlace(View),
     /// The copy form's block and its buffer, the surface's buffer.
     Copy(Block, Buffer),
+    /// Imported planes, each in memory of its own (`Device::import_d3d11_surface`): no buffer.
+    #[cfg(windows)]
+    Imported,
 }
 
 /// An in-place surface's buffer: made at its first call, on the surface's own memory.
@@ -183,8 +187,9 @@ enum ViewState {
 
 /// The memory an in-place surface's buffer is made on.
 enum Source {
-    /// The opaque handle's one allocation, which the planes are bound in, and its memory type.
-    Opaque(Arc<memory::Block>, u32),
+    /// The opaque handle's one allocation, which the planes are bound in, the handle and the
+    /// memory type.
+    Opaque(Arc<memory::Block>, ExportHandle, u32),
     /// The runtime's own fd of the dma-buf, and the memory type the planes' imports took.
     #[cfg(unix)]
     DmaBuf(std::os::fd::OwnedFd, u32),
@@ -195,7 +200,7 @@ impl std::fmt::Debug for Surface {
         f.debug_struct("Surface")
             .field("handle", &self.handle)
             .field("planes", &self.planes.len())
-            .field("in_place", &matches!(self.kind, Kind::InPlace(_)))
+            .field("in_place", &!matches!(self.kind, Kind::Copy(..)))
             .finish()
     }
 }
@@ -437,6 +442,7 @@ pub(crate) fn type_of(bits: &[u32], private: u32, device_local: u32) -> Option<u
 /// A plane image made for the surface, not yet bound.
 struct Made {
     image: vk::Image,
+    format: vk::Format,
     usage: vk::ImageUsageFlags,
     list: Vec<vk::Format>,
     needs: vk::MemoryRequirements,
@@ -531,6 +537,7 @@ unsafe fn make_image(
     let layout = unsafe { device.get_image_subresource_layout(image, sub) };
     Ok(Made {
         image,
+        format,
         usage,
         list: list.to_vec(),
         needs: needs.memory_requirements,
@@ -678,7 +685,7 @@ impl Device {
         };
         let surface = Surface {
             device: self.clone(),
-            handle,
+            handle: Some(handle),
             planes,
             kind: Kind::InPlace(view),
         };
@@ -725,7 +732,7 @@ impl Device {
             .collect();
         let surface = Surface {
             device: self.clone(),
-            handle: spec.handle,
+            handle: Some(spec.handle),
             planes,
             kind: Kind::Copy(block, buffer),
         };
@@ -847,15 +854,17 @@ impl Device {
             size: block.memory.len,
             memory_type: index,
         };
-        let source = Source::Opaque(Arc::clone(&block), index);
+        let source = Source::Opaque(Arc::clone(&block), spec.handle, index);
         let images = (made.into_iter())
             .map(|m| SurfaceImage {
                 image: m.image,
                 backing: Backing::InBlock,
                 bytes: m.needs.size,
                 usage: m.usage,
+                format: m.format,
                 view_formats: m.list,
                 block: Some(Arc::clone(&block)),
+                general: false,
             })
             .collect();
         let planes = (starts.iter())
@@ -1125,8 +1134,10 @@ impl Device {
                 backing: Backing::Import(memory),
                 bytes: size,
                 usage: m.usage,
+                format: m.format,
                 view_formats: m.list,
                 block: None,
+                general: false,
             });
         }
         let export = Export {
@@ -1155,9 +1166,29 @@ impl Surface {
         &self.planes
     }
 
-    /// The handle the surface's memory is shared through.
-    pub fn handle(&self) -> ExportHandle {
+    /// The handle an exported surface's memory is shared through; `None` for an import of
+    /// Direct3D 11 textures (`Device::import_d3d11_surface`, on Windows).
+    pub fn handle(&self) -> Option<ExportHandle> {
         self.handle
+    }
+
+    /// The other API's queue family, which the surface's acquires and releases name: the
+    /// export's handle's, and `VK_QUEUE_FAMILY_EXTERNAL` for an import of Direct3D 11 textures.
+    pub(crate) fn family(&self) -> u32 {
+        self.handle
+            .map_or(vk::QUEUE_FAMILY_EXTERNAL, ExportHandle::family)
+    }
+
+    /// The surface of Direct3D 11 textures' `planes`, each in memory of its own
+    /// (`Device::import_d3d11_surface`).
+    #[cfg(windows)]
+    pub(crate) fn imported(device: Device, planes: Vec<Texture>) -> Surface {
+        Surface {
+            device,
+            handle: None,
+            planes,
+            kind: Kind::Imported,
+        }
     }
 
     /// The copy form's buffer, over the whole block; `None` in place.
@@ -1165,6 +1196,8 @@ impl Surface {
         match &self.kind {
             Kind::Copy(_, buffer) => Some(buffer),
             Kind::InPlace(_) => None,
+            #[cfg(windows)]
+            Kind::Imported => None,
         }
     }
 
@@ -1176,6 +1209,8 @@ impl Surface {
                 ViewState::Source(_) => None,
             },
             Kind::Copy(..) => None,
+            #[cfg(windows)]
+            Kind::Imported => None,
         }
     }
 
@@ -1252,6 +1287,8 @@ impl Surface {
         let view = match &self.kind {
             Kind::Copy(_, buffer) => return Ok(buffer.clone()),
             Kind::InPlace(view) => view,
+            #[cfg(windows)]
+            Kind::Imported => return Err(Error::Unsupported(Gap::D3d11SurfaceBuffer)),
         };
         let mut state = lock(&view.state);
         let source = match &*state {
@@ -1264,17 +1301,17 @@ impl Surface {
             return Err(Error::Quiesced);
         }
         let block = match source {
-            Source::Opaque(under, index) => {
+            Source::Opaque(under, handle, index) => {
                 // SAFETY: the allocation is the opaque handle's surface allocation, of type
                 // `index`, exportable as the surface's handle.
-                unsafe { memory::surface_view(core, under, self.handle, *index) }?
+                unsafe { memory::surface_view(core, under, *handle, *index) }?
             }
             #[cfg(unix)]
             Source::DmaBuf(fd, index) => crate::import::surface_import(core, fd, view.len, *index)?,
         };
         let block = Arc::new(block);
         let (raw, _) = block.memory.range(0);
-        let acquire = [acquire(self.handle.family(), core.family, raw)];
+        let acquire = [acquire(self.family(), core.family, raw)];
         let held = [Held::Block(Arc::clone(&block))];
         core.work.upload(core, None, held, |device, command| {
             let dependency = vk::DependencyInfo::default().buffer_memory_barriers(&acquire);
@@ -1318,7 +1355,7 @@ impl Surface {
             return Err(Error::Quiesced);
         }
         let images: Vec<_> = self.planes.iter().map(Texture::held_image).collect();
-        let family = self.handle.family();
+        let family = self.family();
         let acquires: Vec<vk::ImageMemoryBarrier2<'static>> = (self.planes.iter())
             .map(|texture| {
                 vk::ImageMemoryBarrier2::default()

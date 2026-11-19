@@ -747,10 +747,9 @@ pub(crate) enum Backing {
     /// The consumer's swapchain's ([`Device::new_drawable_texture`]): neither the image nor its
     /// memory is the runtime's to free.
     Drawable,
-    /// A surface plane's own dedicated import of the surface's dma-buf
-    /// ([`Device::new_exported_surface`]), counted in the surface imports gauge: a Unix host's
-    /// alone, as the dma-buf is.
-    #[cfg(unix)]
+    /// A surface plane's own dedicated import: of the surface's dma-buf
+    /// ([`Device::new_exported_surface`]), or of a Direct3D 11 texture's handle
+    /// (`Device::import_d3d11_surface`, on Windows), counted in the surface imports gauge.
     Import(vk::DeviceMemory),
 }
 
@@ -2645,8 +2644,8 @@ impl Made {
                     core.counters.fall_by(Gauge::SpilledBytes, spilled);
                 }
                 Some(Backing::Placed(place)) => core.places.release(core, place),
-                // A surface's plane images are made by `crate::surface`, never here.
-                #[cfg(unix)]
+                // A surface's plane images are made by `crate::surface` and `crate::d3d11`,
+                // never here.
                 Some(Backing::Import(_)) => {}
                 Some(Backing::InBlock | Backing::Drawable) | None => {}
             }
@@ -4378,8 +4377,15 @@ pub(crate) struct SurfaceImage {
     pub(crate) backing: Backing,
     pub(crate) bytes: u64,
     pub(crate) usage: vk::ImageUsageFlags,
+    /// The image's own format: the texture's, or one its texture views as the texture's, which
+    /// `view_formats` then lists with it.
+    pub(crate) format: vk::Format,
     pub(crate) view_formats: Vec<vk::Format>,
     pub(crate) block: Option<Arc<Block>>,
+    /// The image is in the general layout from its first use, with no move from undefined: a
+    /// Direct3D 11 texture's, which Vulkan takes as general after Direct3D 11's access (section
+    /// 12.5.2).
+    pub(crate) general: bool,
 }
 
 /// Destroys a surface plane's image not wrapped in a texture, and frees its own import.
@@ -4390,7 +4396,6 @@ pub(crate) struct SurfaceImage {
 pub(crate) unsafe fn discard_surface_image(core: &Core, made: SurfaceImage) {
     // SAFETY: the caller's contract.
     unsafe { core.device.destroy_image(made.image, None) };
-    #[cfg(unix)]
     if let Backing::Import(memory) = made.backing {
         // SAFETY: the image bound to it is destroyed.
         unsafe { core.device.free_memory(memory, None) };
@@ -4417,10 +4422,12 @@ impl Device {
         })
     }
 
-    /// The texture of a surface plane's image in place, at `index` as for [`Device::new_texture`]:
-    /// its home layout general, from undefined in the next upload, which the surface's make
-    /// submits and waits for. The texture holds the image, which its drop frees with its memory.
-    /// It takes `unit`'s id in the hazard sets, the surface's ([`HeapId::unit`]).
+    /// The texture of a surface plane's image, at `index` as for [`Device::new_texture`]: its
+    /// home layout general, from undefined in the next upload, which the surface's make submits
+    /// and waits for, or already general where the image is (a Direct3D 11 texture's). Its
+    /// format is the descriptor's, a view of the image's own where they differ. The texture holds
+    /// the image, which its drop frees with its memory. It takes `unit`'s id in the hazard sets,
+    /// the surface's ([`HeapId::unit`]).
     ///
     /// Err: [`Refusal::TextureIndex`]; [`Gap::SurfaceUsage`] for a usage the texture's uses ask
     /// that the image lacks; [`Error::Vulkan`] where a view cannot be made; what the texture's
@@ -4458,8 +4465,8 @@ impl Device {
             }
         };
         let mut views = Made::default();
-        // SAFETY: the image is the device's and bound, of the plan's format, with the plan's
-        // usage and more.
+        // SAFETY: the image is the device's and bound, of the plan's format or mutable with it
+        // listed, with the plan's usage and more, which the plan's format's features hold.
         let made_views = unsafe { views.views(&core.device, made.image, &shape, &plan) };
         let (sampled, storage) = match made_views {
             Ok(made_views) => made_views,
@@ -4475,6 +4482,10 @@ impl Device {
         };
         core.counters.rise(Gauge::Textures);
         let home = vk::ImageLayout::GENERAL;
+        let general = made.general;
+        // A view of the image's format as the texture's takes the image's usage that its own
+        // format's features hold, as a texture view of another format does.
+        let views_usage = (made.format != plan.format).then_some(made.usage & plan.supported);
         let image = Arc::new(Image {
             core: Arc::clone(core),
             image: made.image,
@@ -4487,11 +4498,15 @@ impl Device {
             shadowing: None,
             shadow: false,
             aspects: plan.aspects,
-            format: plan.format,
+            format: made.format,
             usage: made.usage,
             view_formats: made.view_formats,
-            first: vk::ImageLayout::UNDEFINED,
-            homed: AtomicBool::new(false),
+            first: match general {
+                true => home,
+                false => vk::ImageLayout::UNDEFINED,
+            },
+            // An image already general owes no move.
+            homed: AtomicBool::new(general),
             zero: None,
             drawable: None,
             _under: Some(Under::Surface { _block: made.block }),
@@ -4502,7 +4517,8 @@ impl Device {
             Some(index) => {
                 let sampled = sampled.map(|view| (view, home));
                 // SAFETY: the texture's views are live; its image is in its home layout whenever
-                // work uses it, the waited upload of its make going first.
+                // work uses it: the waited upload of its make goes first, or it is general after
+                // the other API's access.
                 let owner = unsafe {
                     (core.arrays).place_texture(
                         &core.device,
@@ -4521,7 +4537,7 @@ impl Device {
             descriptor: d,
             image,
             format: plan.format,
-            views_usage: None,
+            views_usage,
             unit: plan.unit,
             index,
             word: plan.word,
@@ -4537,7 +4553,9 @@ impl Device {
             inner: Arc::new(inner),
             device: self.clone(),
         };
-        core.work.home(core, &texture.inner.image)?;
+        if !general {
+            core.work.home(core, &texture.inner.image)?;
+        }
         Ok(texture)
     }
 }

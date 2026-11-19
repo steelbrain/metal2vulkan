@@ -222,8 +222,7 @@ pub(crate) enum Gauge {
     Imports,
     /// [`Gauges::exports`].
     Exports,
-    /// [`Gauges::surface_imports`]: a Unix host's alone, as the dma-buf is.
-    #[cfg(unix)]
+    /// [`Gauges::surface_imports`].
     SurfaceImports,
     /// [`Gauges::surface_buffers`].
     SurfaceBuffers,
@@ -825,7 +824,6 @@ impl Counters {
             Gauge::TimestampPools => &a.timestamp_pools,
             Gauge::Imports => &a.imports,
             Gauge::Exports => &a.exports,
-            #[cfg(unix)]
             Gauge::SurfaceImports => &a.surface_imports,
             Gauge::SurfaceBuffers => &a.surface_buffers,
         }
@@ -1553,11 +1551,12 @@ pub struct Gauges {
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)): each is also one
     /// of [`blocks`](Self::blocks).
     pub exports: u64,
-    /// A dma-buf surface's plane imports in place
+    /// Surface plane imports whose memory is not yet freed, each also one of
+    /// [`blocks`](Self::blocks): a dma-buf surface's in place
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), each its own
-    /// dedicated import of the surface's dma-buf, whose memory is not yet freed: each is also one
-    /// of [`blocks`](Self::blocks), a dma-buf surface's buffer among them. Always 0 on a host
-    /// without dma-bufs (Windows).
+    /// dedicated import of the surface's dma-buf, a dma-buf surface's buffer among them, on Unix;
+    /// and a Direct3D 11 texture's (`Device::import_d3d11_surface`), each its own dedicated
+    /// import of the plane's handle, on Windows.
     pub surface_imports: u64,
     /// Surfaces' buffers in place ([`Surface::buffer`](crate::Surface::buffer)) not yet freed:
     /// an opaque handle's, a buffer on the surface's one allocation, and a dma-buf's, on one more

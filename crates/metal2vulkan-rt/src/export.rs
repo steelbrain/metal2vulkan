@@ -327,6 +327,12 @@ impl Exports {
         Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
     }
 
+    /// `VK_KHR_external_memory_win32`, where it is enabled.
+    #[cfg(windows)]
+    pub(crate) fn win32(&self) -> Option<&ash::khr::external_memory_win32::Device> {
+        self.win32.as_ref()
+    }
+
     /// A new NT handle of `memory`, exported as `handle`.
     #[cfg(windows)]
     pub(crate) fn handle(

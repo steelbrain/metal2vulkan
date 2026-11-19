@@ -851,7 +851,7 @@ mod on_device {
         assert_eq!(
             made.surface_imports,
             gauges.surface_imports
-                + u64::from(in_place && surface.handle() == ExportHandle::DmaBuf),
+                + u64::from(in_place && surface.handle() == Some(ExportHandle::DmaBuf)),
             "{label}: a dma-buf's buffer's import counted"
         );
         assert_eq!(

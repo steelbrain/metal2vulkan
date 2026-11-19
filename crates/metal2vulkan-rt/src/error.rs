@@ -182,7 +182,9 @@ pub enum Refusal {
     },
     /// A surface ([`Device::new_exported_surface`](crate::Device::new_exported_surface)) of no
     /// plane or of more than four, or whose pitch or start multiple is 0, or whose multiples and
-    /// texels have no common multiple in 64 bits. Metal has no counterpart.
+    /// texels have no common multiple in 64 bits; an import of Direct3D 11 textures as a surface
+    /// (`Device::import_d3d11_surface`, on Windows) of no plane or of more than four, which names
+    /// multiples of 1. Metal has no counterpart.
     ///
     /// Basis: ours (a DRM format has at most four memory planes, and a layout needs a nonzero
     /// multiple).
@@ -1070,12 +1072,13 @@ pub enum Gap {
         /// The `VkImageUsageFlags` bits the tiling lacks.
         missing: u32,
     },
-    /// An import of a picture's Direct3D 11 textures as a surface (`Device::import_d3d11_surface`,
-    /// a Windows host's): not built yet, so every call refuses. Metal's counterpart is a texture
-    /// over an IOSurface's plane (`newTextureWithDescriptor:iosurface:plane:`).
+    /// The buffer of a surface of Direct3D 11 textures ([`Surface::buffer`](crate::Surface::buffer)
+    /// of `Device::import_d3d11_surface`'s, a Windows host's). Metal's counterpart is a buffer
+    /// backed by the IOSurface whose planes the textures are over.
     ///
-    /// Basis: ours (the import is not built).
-    D3d11Surface,
+    /// Basis: ours (each plane is a Direct3D 11 texture of its own, imported into memory of its
+    /// own as an optimal image, so no one memory holds the picture's bytes for a buffer).
+    D3d11SurfaceBuffer,
     /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) or
     /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
     /// whose bytes no copy command in the floor addresses, though Metal takes them: an image's
@@ -1462,11 +1465,15 @@ pub enum Limit {
     },
     /// An import of a handle the device does not take
     /// (`Device::import_dma_buf` and `Device::import_dma_bufs` on Unix,
-    /// [`Device::import_host_memory`](crate::Device::import_host_memory), and a dma-buf surface's
-    /// buffer, [`Surface::buffer`](crate::Surface::buffer)): it does not list the
-    /// handle's extensions (`VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` for a
-    /// dma-buf, `VK_EXT_external_memory_host` for host memory), or its buffers do not import the
-    /// handle (`vkGetPhysicalDeviceExternalBufferProperties`). For several dma-bufs, also where
+    /// [`Device::import_host_memory`](crate::Device::import_host_memory), a dma-buf surface's
+    /// buffer, [`Surface::buffer`](crate::Surface::buffer), and `Device::import_d3d11_surface`
+    /// on Windows): it does not list the handle's extensions (`VK_KHR_external_memory_fd` and
+    /// `VK_EXT_external_memory_dma_buf` for a dma-buf, `VK_EXT_external_memory_host` for host
+    /// memory, `VK_KHR_external_memory_win32` for a Direct3D 11 texture), or its buffers do not
+    /// import the handle (`vkGetPhysicalDeviceExternalBufferProperties`); for a Direct3D 11
+    /// texture, its optimal images of the plane's formats import the handle with no usage the
+    /// plane's view format holds, or not with all of them
+    /// (`vkGetPhysicalDeviceImageFormatProperties2`). For several dma-bufs, also where
     /// the device does not bind them into one sparse buffer: it lacks `sparseBinding`, its queue
     /// family binds no sparse memory, its sparse buffers import no dma-buf or only dedicated, or
     /// such a buffer does not take every host-visible, host-coherent type a plain one takes
@@ -1485,16 +1492,19 @@ pub enum Limit {
     /// host-coherent, or the buffer's memory requirements do not list it; for several, that holds
     /// of one fd, or one fd's type is not the first fd's, which `listed` then names alone; for
     /// host memory, the pointer's query offers no type that is both and that the requirements
-    /// list. Metal's counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes
-    /// any page-aligned memory.
+    /// list; for a Direct3D 11 texture, the handle's properties
+    /// (`vkGetMemoryWin32HandlePropertiesKHR`) and the plane image's requirements share no type.
+    /// Metal's counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any
+    /// page-aligned memory.
     ///
-    /// Basis: device (the handle's memory type query and the buffer's memory requirements).
+    /// Basis: device (the handle's memory type query and the buffer's or image's memory
+    /// requirements).
     ImportType {
         /// The handle asked for.
         handle: ImportHandle,
         /// The types the handle's query offered, one bit each.
         offered: u32,
-        /// The types the buffer's memory requirements list, one bit each.
+        /// The types the buffer's (or plane image's) memory requirements list, one bit each.
         listed: u32,
     },
     /// An import of no bytes, or one whose address or length is not a multiple of `alignment`:
@@ -2026,9 +2036,10 @@ impl fmt::Display for Gap {
                 "a surface plane of {pixel_format:?} in place lacks image usage {missing:#x} on \
                  this device"
             ),
-            Gap::D3d11Surface => {
-                f.write_str("an import of Direct3D 11 textures as a surface is not built")
-            }
+            Gap::D3d11SurfaceBuffer => f.write_str(
+                "a surface of Direct3D 11 textures has no buffer: its planes lie in memories of \
+                 their own",
+            ),
             Gap::BufferCopyAlignment {
                 pixel_format,
                 offset,

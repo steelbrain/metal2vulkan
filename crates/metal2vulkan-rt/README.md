@@ -686,8 +686,28 @@ the global memory barrier rt records between them. `Surface::buffer`'s doc comme
 sections.
 
 On Windows, `Device::import_d3d11_surface(&[D3d11Plane])` takes a picture's planes the other API
-made as Direct3D 11 textures, each by its shared handle, its own format and the texture rt makes
-over it. It is not built yet: every call is `Gap::D3d11Surface`.
+made as Direct3D 11 textures, each by its NT handle (`IDXGIResource1::CreateSharedHandle`), its
+own format and the texture rt makes over it, and returns a `Surface` whose planes rt's shaders
+read and write in place. Each plane is an optimal image of the Direct3D 11 texture's format, of
+the descriptor's width and height, mutable and listing the descriptor's format where the two
+differ (a chroma plane of `R16Uint` under an `RG8Unorm` texture, the same bytes per texel in
+Metal's same view class), on a dedicated import of its handle, counted in
+`Gauges::surface_imports`. Its usage is each of sampled, rendered, copied and storage that the
+import offers and the descriptor's format holds. The consumer keeps and closes the handles.
+
+The import submits nothing and waits for nothing. Vulkan 1.4's section 12.5.2 says "When images
+created with external memory handle types listed in the external image implied layouts table are
+accessed outside of Vulkan, they must be in the layout specified in the table, and can be assumed
+to be in that layout when they are accessed in Vulkan after external access", and the table's row
+for `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` is `VK_IMAGE_LAYOUT_GENERAL`. So the
+consumer's precondition is that Direct3D 11 has written each plane before rt's first use of it,
+and that `Surface::external_writes_done()` follows that work's completion: it records each
+plane's acquire from `VK_QUEUE_FAMILY_EXTERNAL` in the general layout, and
+`BlitCommandEncoder::release_surface_to_external(&surface)` each plane's release to it, as for an
+exported surface. No keyed mutex is used; the consumer orders the two APIs' work by its waits. A
+plane rt uses before any Direct3D 11 access has undefined contents, as a Metal texture nothing
+wrote does. The surface has no buffer: `Surface::buffer()` is `Gap::D3d11SurfaceBuffer`, as its
+planes lie in memories of their own, and `Surface::handle()` is `None`.
 
 ### Known gaps of memory blocks
 

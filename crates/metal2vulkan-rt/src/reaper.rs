@@ -154,7 +154,6 @@ unsafe fn free_backing(core: &Core, backing: Backing) {
             core.counters.fall(Gauge::Blocks);
             core.counters.fall_by(Gauge::SpilledBytes, spilled);
         }
-        #[cfg(unix)]
         Backing::Import(memory) => {
             // SAFETY: the caller's contract.
             unsafe { core.device.free_memory(memory, None) };
