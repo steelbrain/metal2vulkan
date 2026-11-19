@@ -9,7 +9,8 @@
 //! upload that used it retired. One empty block of the block length is kept for the next place;
 //! another block that empties goes back to the pool, whose free ranges its bytes join.
 //! A place's bytes are what its last resource left; a new texture's move home zeroes its image
-//! ([`crate::texture::Zero`]).
+//! ([`crate::texture::Zero`]), unless the place answers that its bytes read zero: a place in a
+//! block the pool handed out zeroed, past every place the block held before.
 //!
 //! An image in a texture block is optimal. The `VkBuffer` of the block's allocation, which spans
 //! it, aliases the images (Vulkan's memory aliasing), and nothing records through it in a texture
@@ -35,6 +36,10 @@ struct PlaceBlock {
     free: Ranges,
     /// The places taken in it.
     live: usize,
+    /// Its bytes read zero as the pool handed it out ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)).
+    zeroed: bool,
+    /// The end of the furthest place taken in it: a place past it is bytes no place held.
+    taken_to: u64,
 }
 
 /// A resource's place: `len` bytes at `offset` in a block of a set.
@@ -60,9 +65,11 @@ impl Places {
         }
     }
 
-    /// A place of `len` bytes at a multiple of `align`, a power of two, and its block. Where no
-    /// block has room, a Private block is taken from the pool, without the lock: of the block
-    /// length, or of `len` where that is longer.
+    /// A place of `len` bytes at a multiple of `align`, a power of two, its block, and whether
+    /// its bytes read zero: true where the block read zero as the pool handed it out and no place
+    /// of it ever held a byte at or past the place's first byte. Where no block has room, a
+    /// Private block is taken from the pool, without the lock: of the block length, or of `len`
+    /// where that is longer.
     ///
     /// Err: what [`Core::take_memory`] returns.
     pub(crate) fn place(
@@ -70,19 +77,21 @@ impl Places {
         core: &Core,
         len: u64,
         align: u64,
-    ) -> Result<(Place, Memory), Error> {
+    ) -> Result<(Place, Memory, bool), Error> {
         let mut blocks = lock(&self.blocks);
         loop {
             for block in blocks.iter_mut() {
                 // The image's alignment holds in the allocation the block is a range of.
                 if let Some(offset) = block.free.take_from(len, align, block.memory.base()) {
                     block.live += 1;
+                    let zeroed = block.zeroed && offset >= block.taken_to;
+                    block.taken_to = block.taken_to.max(offset + len);
                     let place = Place {
                         block: block.memory.id,
                         offset,
                         len,
                     };
-                    return Ok((place, block.memory));
+                    return Ok((place, block.memory, zeroed));
                 }
             }
             drop(blocks);
@@ -99,6 +108,8 @@ impl Places {
                 memory,
                 free: Ranges::new(memory.len),
                 live: 0,
+                zeroed: memory.info().zeroed,
+                taken_to: 0,
             });
         }
     }

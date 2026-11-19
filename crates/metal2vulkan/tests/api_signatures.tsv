@@ -2437,6 +2437,8 @@ field	metal2vulkan-rt::Metrics.waits_behind_counter	pub waits_behind_counter: u6
 field	metal2vulkan-rt::Metrics.zero_source_allocations	pub zero_source_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.zeroed_take_bytes	pub zeroed_take_bytes: u64
 field	metal2vulkan-rt::Metrics.zeroed_takes	pub zeroed_takes: u64
+field	metal2vulkan-rt::Metrics.zeroed_texture_bytes	pub zeroed_texture_bytes: u64
+field	metal2vulkan-rt::Metrics.zeroed_textures	pub zeroed_textures: u64
 field	metal2vulkan-rt::PixelFormatInfo.cast_class	pub cast_class: u64
 field	metal2vulkan-rt::PixelFormatInfo.flags	pub flags: u64
 field	metal2vulkan-rt::PixelFormatInfo.name	pub name: &'static str

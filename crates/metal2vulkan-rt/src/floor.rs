@@ -76,6 +76,12 @@ pub(crate) const ZERO_INITIALIZE_DEVICE_MEMORY: &CStr = c"VK_EXT_zero_initialize
 /// by the implementation before the application can access it.
 pub(crate) const ZERO_INITIALIZE: vk::MemoryAllocateFlags = vk::MemoryAllocateFlags::from_raw(0x8);
 
+/// `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT`, which `ash 0.38` predates: an image's initial layout
+/// whose first move away interprets its data as zeroed, which its memory must be
+/// (`VUID-VkImageCreateInfo-initialLayout-10765`; a barrier from it names every subresource,
+/// `VUID-VkImageMemoryBarrier2-oldLayout-10768`).
+pub(crate) const ZERO_INITIALIZED: vk::ImageLayout = vk::ImageLayout::from_raw(1_000_620_000);
+
 /// `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT`, of
 /// `VK_EXT_zero_initialize_device_memory`, which `ash 0.38` predates, laid out as the registry
 /// defines it (extension number 621).

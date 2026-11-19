@@ -246,9 +246,14 @@ in its memory.
   texture with privately owned storage."). The runtime chose zero because programs read
   textures they never wrote, an Apple M3 Max answered zero for new Shared and Managed textures,
   and the memory's last bytes would follow process history. `Metrics::texture_clears` and
-  `texture_clear_bytes` count the clears. A texture in a heap's memory, over a buffer, of a
-  surface's plane, or a drawable's is not cleared: it reads its memory's bytes, or the
-  swapchain's. A view reads its parent's image.
+  `texture_clear_bytes` count the clears. Where the device has the zeroed allocations above, a
+  texture whose memory reads the driver's zeros, which no resource used (a place in a texture
+  block past every place the block held, or memory of its own, made zeroed), is made in
+  `VK_IMAGE_LAYOUT_ZERO_INITIALIZED_EXT` and its move home from that layout, over every
+  subresource, is its zeroing, with no clear ("the image data is interpreted to be zeroed");
+  `Metrics::zeroed_textures` and `zeroed_texture_bytes` count those. A texture in a heap's
+  memory, over a buffer, of a surface's plane, or a drawable's is not cleared: it reads its
+  memory's bytes, or the swapchain's. A view reads its parent's image.
 - `Device::zero_block_range(block, offset, length)` zeroes a range of a Private block the
   consumer holds, where it places a buffer Metal zeroes: by a GPU fill in the upload, ahead of
   every command buffer committed after the call, as a zeroed Private buffer's fill is. The

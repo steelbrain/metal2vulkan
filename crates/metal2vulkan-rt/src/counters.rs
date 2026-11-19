@@ -275,6 +275,8 @@ struct Atomics {
     block_zero_fill_bytes: AtomicU64,
     texture_clears: AtomicU64,
     texture_clear_bytes: AtomicU64,
+    zeroed_textures: AtomicU64,
+    zeroed_texture_bytes: AtomicU64,
     cache_bytes_written: AtomicU64,
     pipelines_created: AtomicU64,
     first_use_waits: AtomicU64,
@@ -642,6 +644,14 @@ impl Counters {
         a.texture_clear_bytes.fetch_add(bytes, Relaxed);
     }
 
+    /// A new texture's image of `bytes` of memory that read the driver's zeros, moved home from the
+    /// zero-initialized layout with no clear ([`Metrics::zeroed_textures`]).
+    pub(crate) fn texture_zeroed(&self, bytes: u64) {
+        let a = &self.atomics;
+        a.zeroed_textures.fetch_add(1, Relaxed);
+        a.zeroed_texture_bytes.fetch_add(bytes, Relaxed);
+    }
+
     /// `bytes` more of Managed buffers' bytes a commit copied ([`Metrics::managed_bytes_captured`]).
     pub(crate) fn captured(&self, bytes: u64) {
         self.atomics
@@ -808,6 +818,8 @@ impl Counters {
             block_zero_fill_bytes: a.block_zero_fill_bytes.load(Relaxed),
             texture_clears: a.texture_clears.load(Relaxed),
             texture_clear_bytes: a.texture_clear_bytes.load(Relaxed),
+            zeroed_textures: a.zeroed_textures.load(Relaxed),
+            zeroed_texture_bytes: a.zeroed_texture_bytes.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
             first_use_waits: a.first_use_waits.load(Relaxed),
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
@@ -1002,6 +1014,14 @@ pub struct Metrics {
     pub texture_clears: u64,
     /// The bytes of memory of those images.
     pub texture_clear_bytes: u64,
+    /// New textures that read zero until written with no clear: on a device of zeroed
+    /// allocations ([`Capabilities::zero_initialize_memory`](crate::floor::Capabilities::zero_initialize_memory)),
+    /// those whose memory read the driver's zeros, which no resource used (a place in a texture
+    /// block past every place it held before, or memory of its own), each made in the
+    /// zero-initialized layout and moved home from it.
+    pub zeroed_textures: u64,
+    /// The bytes of memory of those images.
+    pub zeroed_texture_bytes: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
