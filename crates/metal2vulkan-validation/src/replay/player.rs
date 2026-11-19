@@ -1068,6 +1068,9 @@ pub struct Player<'b, B: Backend> {
     report: Report,
     /// The last frame to play (`until_frame`), counted from 0 as `Report::frames` counts them.
     last_frame: Option<usize>,
+    /// The frames whose shown texture the player checks at their `m2v.present`
+    /// (`checking_presents`), counted as `last_frame` is.
+    checked_presents: BTreeSet<u64>,
     /// Where each frame's lines go as it ends (`with_frame_lines`).
     frame_out: Option<&'b mut dyn Write>,
     /// The CPU's writes into Managed textures and their textures' users.
@@ -1296,6 +1299,7 @@ impl<'b, B: Backend> Player<'b, B> {
             resources: HashSet::new(),
             report,
             last_frame: None,
+            checked_presents: BTreeSet::new(),
             frame_out: None,
             texwrites: TexWrites::default(),
             covers: Covers::default(),
@@ -1311,6 +1315,16 @@ impl<'b, B: Backend> Player<'b, B> {
     /// stream's end.
     pub fn until_frame(mut self, last: usize) -> Self {
         self.last_frame = Some(last);
+        self
+    }
+
+    /// The player that, at the `m2v.present` of each frame in `frames` (counted from 0 as
+    /// `Report::frames` counts them), checks the texture the present shows as an `m2v.check` of
+    /// it with no recorded checksum would: a `Check` of that frame, so two plays' pictures there
+    /// compare by digest (`compare_plays`). The readback is the player's own work, out of every
+    /// count, and its time is the frame's `read`: a play timed for a verdict checks no present.
+    pub fn checking_presents(mut self, frames: impl IntoIterator<Item = u64>) -> Self {
+        self.checked_presents = frames.into_iter().collect();
         self
     }
 
@@ -1657,6 +1671,11 @@ impl<'b, B: Backend> Player<'b, B> {
             }
             "m2v.present" => {
                 self.drain()?;
+                let frame = self.report.frames.len() as u64;
+                let shown = call.args.first().and_then(Value::as_object);
+                if let (true, Some(shown)) = (self.checked_presents.contains(&frame), shown) {
+                    self.check(shown, None, left_out)?;
+                }
                 self.texwrites.presented();
                 self.report.frames.push(self.frame.clone());
                 self.frame = Counts::default();

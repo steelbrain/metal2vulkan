@@ -4,7 +4,7 @@
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
 //! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
-//! [--video-handle dma-buf|opaque-fd]` plays the stream whose
+//! [--video-handle dma-buf|opaque-fd] [--check-presents F,...]` plays the stream whose
 //! first segment is `FILE` through the old runtime (the default) or the new one (`rt`), with
 //! `--video-handle dma-buf|opaque-fd` telling the new runtime the consumer's decoder route, the
 //! handle its video surfaces are made with (a dma-buf unless it says otherwise), and
@@ -13,8 +13,11 @@
 //! `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), `--managed`
 //! telling either runtime how the recording device kept Managed buffers where the stream has no
 //! `m2v.deviceIdentity` record (one copy: unified memory; two copies: a GPU copy; with neither, a
-//! Managed buffer stops the new runtime's play and plays as the old runtime's own), and `--until-frame` stopping the play after frame `F`'s present
-//! (frames counted from 0). The play ends at the stream's recording range (its sidecar's, else
+//! Managed buffer stops the new runtime's play and plays as the old runtime's own), `--until-frame` stopping the play after frame `F`'s present
+//! (frames counted from 0), and `--check-presents` checking the texture each listed frame's
+//! present shows, at that present, as a recorded check of it would (a `check` line of the
+//! frame, compared by `compare-plays`; its readback's time is the frame's, so a timed play lists
+//! none). The play ends at the stream's recording range (its sidecar's, else
 //! its row of `RECORDED_RANGES`, else the whole stream) unless `--past-range yes` takes it past.
 //! It writes `DIR/report.txt`, each line to the standard error too: first, where the stream's
 //! header lacks `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's
@@ -79,6 +82,7 @@ const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
                      [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd] \
+                     [--check-presents F,...] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
                      command-replay compare-plays --a REPORT --b REPORT [--frame F]\n       \
@@ -457,6 +461,20 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         }
     };
     let until = range.last_frame(past, until);
+    let presents = match options.get("check-presents").map(|listed| {
+        let frames = listed.split(',').map(|frame| frame.parse::<u64>());
+        frames.collect::<Result<Vec<_>, _>>()
+    }) {
+        None => Vec::new(),
+        Some(Ok(frames)) => frames,
+        Some(Err(_)) => {
+            report.line(&format!(
+                "error check-presents: {} is no list of frame numbers",
+                options["check-presents"]
+            ));
+            return 2;
+        }
+    };
     let dump = match (options.get("dump-command-buffers"), options.get("dump-dir")) {
         (None, None) => None,
         (Some(listed), Some(dir)) => {
@@ -511,7 +529,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                 &mut backend,
                 &mut reader,
                 &mut report,
-                (snapshots, until, dump, None),
+                (snapshots, until, dump, presents, None),
             )
         }
         Some("rt") => {
@@ -538,7 +556,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                 &mut backend,
                 &mut reader,
                 &mut report,
-                (snapshots, until, dump, Some(&first)),
+                (snapshots, until, dump, presents, Some(&first)),
             );
             // The device ends here, not in `exit()`, where the driver's own exit teardown would
             // run beside the runtime's threads. Its gauges read after it dropped go out as the
@@ -616,14 +634,21 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
 type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
 
 /// Play `reader` through `backend` into `report`, taking snapshots or not, to the last frame where
-/// one is given, dumping the command buffers where asked, and on the new runtime, where `judged`
+/// one is given, dumping the command buffers where asked, checking the shown texture at the
+/// listed frames' presents, and on the new runtime, where `judged`
 /// names the stream's first segment, writing the matrix's judged metrics of a play that finished
 /// its range (`judged_records`): the exit status.
 fn run<B: Backend>(
     backend: &mut B,
     reader: &mut StreamReader,
     report: &mut ReportFile,
-    (snapshots, until, dump, judged): (bool, Option<usize>, Dumped, Option<&Path>),
+    (snapshots, until, dump, presents, judged): (
+        bool,
+        Option<usize>,
+        Dumped,
+        Vec<u64>,
+        Option<&Path>,
+    ),
 ) -> i32 {
     let player = Player::new(backend).with_frame_lines(&mut *report);
     let player = match snapshots {
@@ -638,6 +663,7 @@ fn run<B: Backend>(
         Some((command_buffers, dir)) => player.dumping(command_buffers, dir),
         None => player,
     };
+    let player = player.checking_presents(presents);
     let (played, ended) = player.play(reader);
     let counters = backend.counters();
     // The objects whose ID the program saw that the runtime gives otherwise: a word that names one

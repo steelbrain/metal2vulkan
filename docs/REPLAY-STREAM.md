@@ -506,7 +506,7 @@ and the (name id, value) answer pairs.
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
 [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
-[--video-handle dma-buf|opaque-fd]` plays a stream (its first segment) on one device through the
+[--video-handle dma-buf|opaque-fd] [--check-presents F,...]` plays a stream (its first segment) on one device through the
 old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `--video-handle`
 names the consumer's decoder route on the new runtime, the handle its video surfaces are made
 with (a dma-buf where it is not given; below). Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
@@ -518,7 +518,13 @@ With `--snapshots no` it takes no `m2v.privateBytes` snapshot on either runtime:
 plays as it is, counted on the `unsnapshotted` line, so two runtimes' plays do the same work and
 their times and memory compare. With `--until-frame F` it stops after frame `F`'s present (frames
 counted from 0), completes the work committed so far, reports as at the stream's end and says
-`until-frame F`. `command-replay dump --stream FILE` prints the call records as text, and
+`until-frame F`. With `--check-presents F,...` it checks, at the `m2v.present` of each listed frame (counted from
+0), the texture the present shows, as an `m2v.check` of it with no recorded checksum would: a
+`check ID frame F SHA256 unrecorded` line, which `compare-plays` reads as the frame's digest
+(below). A present of nil checks nothing. The readback is the player's own work, in none of the
+counts, and its time is the frame's `read`, so a play timed for a verdict lists no frame and the
+digests come from a play of their own. `command-replay dump --stream FILE` prints the call
+records as text, and
 `command-replay shapes --stream FILE` each selector's argument shapes, with no data.
 
 - **The recording range.** A play ends at the stream's recording range by default: through the
@@ -1098,7 +1104,9 @@ all three of:
    a stream with no identity record, the writes before first use;
 2. the frame's player-side counts equal in both;
 3. equal digests at the judged frame: its `check` lines alike in both. A frame with no check in
-   both plays gets no verdict until a play adds one.
+   both plays gets no verdict until a play adds one: a stream's own `m2v.check`, or the shown
+   texture that `--check-presents` checks at the frame's present, in a play of each arm apart
+   from the timed ones.
 
 Stale reads bar no verdict: Metal leaves those bytes undefined and both runtimes play them by one
 rule. Where the digests differ, they are the first suspect, as the old runtime takes a no-copy

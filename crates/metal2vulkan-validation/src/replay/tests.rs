@@ -2934,6 +2934,51 @@ fn a_surface_s_receiver_buffer_is_not_compared() {
         .any(|l| l.starts_with("check #2 ") && l.ends_with(" receiver")));
 }
 
+/// A listed frame's present checks the texture it shows, at that present, as a check with no
+/// recorded checksum: a check of that frame, which two plays' digests compare by
+/// (`compare_plays`); an unlisted present, and a listed one of nil, read nothing.
+#[test]
+fn a_listed_present_checks_the_shown_texture() {
+    let build = |w: &mut StreamWriter<File>| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 2, &[map(&[])], &[])?;
+        for shown in [
+            Value::Object(2),
+            Value::Object(2),
+            Value::Nil,
+            Value::Object(2),
+        ] {
+            w.call("m2v.present", 1, 0, &[shown], &[])?;
+        }
+        Ok(())
+    };
+    let dir = ScratchDir::new("replay-presents").unwrap();
+    let path = written(&dir, "s.m2vr", build);
+    let play = |frames: &[u64]| {
+        let mut kept = Kept::default();
+        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
+        let player = Player::new(&mut kept).checking_presents(frames.iter().copied());
+        let (report, ended) = player.play(&mut reader);
+        ended.unwrap();
+        report
+    };
+    assert!(
+        play(&[]).checks.is_empty(),
+        "a present reads nothing unlisted"
+    );
+    let report = play(&[1, 2, 3]);
+    let checked: Vec<(u64, u64, Option<[u8; 32]>)> = (report.checks.iter())
+        .map(|check| (check.object, check.frame, check.recorded))
+        .collect();
+    assert_eq!(checked, [(2, 1, None), (2, 3, None)]);
+    // The backend's bytes of the texture: `Kept` reads an object it holds no memory of as its id.
+    let sha: [u8; 32] = Sha256::digest(2u64.to_le_bytes()).into();
+    let line = format!("check #2 frame 1 {} unrecorded", hex(&sha));
+    let lines = report.lines();
+    assert!(lines.contains(&line), "{lines:?}");
+    assert_eq!(report.frames.len(), 4, "every present still ends its frame");
+}
+
 /// A play of `build` on `backend` that dumps command buffers 20 to 29 into `dir`.
 fn dumped(
     backend: &mut Kept,
