@@ -909,7 +909,8 @@ impl Shared {
 
     /// The threads a stop left running, kept for the teardown to join.
     fn keep_threads(&self, left: Threads) {
-        let mut threads = lock(&self.threads);
+        let mut guard = lock(&self.threads);
+        let threads = &mut *guard;
         let Threads {
             blocks,
             submit,
