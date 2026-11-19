@@ -1,0 +1,1314 @@
+{
+  "format": 1,
+  "case": "texture-view-casts-2d-array-as-cube",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "tvc_samples.ll",
+      "entry": "tvc_2d_array+tvc_cube",
+      "source_sha256": "92e70cc075dc6f17ca06a5a7afbc55eb6c5466a3e278a8c03a2fac4b7ac5ade6"
+    },
+    {
+      "fixture": "tvc_samples.air.ll",
+      "entry": "tvc_2d_array+tvc_cube",
+      "source_sha256": "00c083bfe52df58b68baacf739fc05ea080809eb75d9463baaee862148badbdc"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "92e70cc075dc6f17ca06a5a7afbc55eb6c5466a3e278a8c03a2fac4b7ac5ade6"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "00c083bfe52df58b68baacf739fc05ea080809eb75d9463baaee862148badbdc"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:parent",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "c81517941c4a9adada04ad88fd328450663e3b294192df60f89b79e7be83cc3d"
+                        }
+                      }
+                    },
+                    {
+                      "name": "view",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "1ca5371f37b97328aefee9a3738ed4f2fb3cfc005c52bdfe4013605d4bf82485"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-view:clears",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "a0f0f7ae8feb1283acc12726af9cc39c2e91d9aca0c86b7b55d634030ccafa91"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-view:points",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "7f65d43db073379bee5e6af2adaf7a83ecd392da471e0797b866512f8dd47232"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-parent:clears",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "b033e5fe9714321c121b33babac3e9220022a89aeeb1ddf4e1ececa96e4a8aa8"
+                        }
+                      }
+                    },
+                    {
+                      "name": "into-the-parent:points",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3610940304432f28ee8f9c30e48633211349e43d5bbce87e2a020c71be31242f"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:parent",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline:view",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "parent",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view-facts",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "view-descriptor",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "texture_type",
+                      "observed": {
+                        "value": {
+                          "uint": 5
+                        }
+                      }
+                    },
+                    {
+                      "name": "pixel_format",
+                      "observed": {
+                        "value": {
+                          "uint": 115
+                        }
+                      }
+                    },
+                    {
+                      "name": "mipmap_level_count",
+                      "observed": {
+                        "value": {
+                          "uint": 2
+                        }
+                      }
+                    },
+                    {
+                      "name": "array_length",
+                      "observed": {
+                        "value": {
+                          "uint": 1
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "into-the-view:points",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:sample",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view:read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-view",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "level-1-slice-1",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPwAAgD0AAAA+AACAPgAAgD8AAIA9AAAAPgAAgD4AAIA/AACAPQAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-2",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPwAAAD4AAAA+AACAPgAAgD8AAAA+AAAAPgAAgD4AAIA/AAAAPgAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 256,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-3",
+                      "observed": {
+                        "value": {
+                          "bytes": "AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPwAAQD4AAAA+AACAPgAAgD8AAEA+AAAAPgAAgD4AAIA/AABAPgAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 512,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-4",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPgAAAD4AAIA+AACAPwAAgD4AAAA+AACAPgAAgD8AAIA+AAAAPgAAgD4AAIA/AACAPgAAAD4AAIA+AACAPwAAgD4AAAA+AACAPgAAgD8AAIA+AAAAPgAAgD4AAIA/AACAPgAAAD4AAIA+AACAPwAAgD4AAAA+AACAPgAAgD8AAIA+AAAAPgAAgD4AAIA/AACAPgAAAD4AAIA+AACAPwAAgD4AAAA+AACAPgAAgD8AAIA+AAAAPgAAgD4AAIA/AACAPgAAAD4AAIA+AACAPwAAgD4AAAA+AACAPgAAgD8AAIA+AAAAPgAAgD4AAIA/AACAPgAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 768,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-5",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACgPgAAAD4AAIA+AACAPwAAoD4AAAA+AACAPgAAgD8AAKA+AAAAPgAAgD4AAIA/AACgPgAAAD4AAIA+AACAPwAAoD4AAAA+AACAPgAAgD8AAKA+AAAAPgAAgD4AAIA/AACgPgAAAD4AAIA+AACAPwAAoD4AAAA+AACAPgAAgD8AAKA+AAAAPgAAgD4AAIA/AACgPgAAAD4AAIA+AACAPwAAoD4AAAA+AACAPgAAgD8AAKA+AAAAPgAAgD4AAIA/AACgPgAAAD4AAIA+AACAPwAAoD4AAAA+AACAPgAAgD8AAKA+AAAAPgAAgD4AAIA/AACgPgAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1024,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-6",
+                      "observed": {
+                        "value": {
+                          "bytes": "AADAPgAAAD4AAIA+AACAPwAAwD4AAAA+AACAPgAAgD8AAMA+AAAAPgAAgD4AAIA/AADAPgAAAD4AAIA+AACAPwAAwD4AAAA+AACAPgAAgD8AAMA+AAAAPgAAgD4AAIA/AADAPgAAAD4AAIA+AACAPwAAwD4AAAA+AACAPgAAgD8AAMA+AAAAPgAAgD4AAIA/AADAPgAAAD4AAIA+AACAPwAAwD4AAAA+AACAPgAAgD8AAMA+AAAAPgAAgD4AAIA/AADAPgAAAD4AAIA+AACAPwAAwD4AAAA+AACAPgAAgD8AAMA+AAAAPgAAgD4AAIA/AADAPgAAAD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1280,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-1",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPQAAgD4AAIA+AACAPwAAgD0AAIA+AACAPgAAgD8AAIA9AACAPgAAgD4AAIA/AACAPQAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1536,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-2",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPgAAgD4AAIA+AACAPwAAAD4AAIA+AACAPgAAgD8AAAA+AACAPgAAgD4AAIA/AAAAPgAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1600,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-3",
+                      "observed": {
+                        "value": {
+                          "bytes": "AABAPgAAgD4AAIA+AACAPwAAQD4AAIA+AACAPgAAgD8AAEA+AACAPgAAgD4AAIA/AABAPgAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1664,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-4",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPgAAgD4AAIA+AACAPwAAgD4AAIA+AACAPgAAgD8AAIA+AACAPgAAgD4AAIA/AACAPgAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1728,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-5",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACgPgAAgD4AAIA+AACAPwAAoD4AAIA+AACAPgAAgD8AAKA+AACAPgAAgD4AAIA/AACgPgAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1792,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-2-slice-6",
+                      "observed": {
+                        "value": {
+                          "bytes": "AADAPgAAgD4AAIA+AACAPwAAwD4AAIA+AACAPgAAgD8AAMA+AACAPgAAgD4AAIA/AADAPgAAgD4AAIA+AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1856,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "into-the-parent:points",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:samples",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:render",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:sample",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent:read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "into-the-parent",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "level-0-slice-0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPgAAgD4AAEA/AACAPwAAAD4AAIA+AABAPwAAgD8AAAA+AACAPgAAQD8AAIA/AAAAPgAAgD4AAEA/AACAPwAAAD4AAIA+AABAPwAAgD8AAAA+AACAPgAAQD8AAIA/AAAAPgAAgD4AAEA/AACAPwAAAD4AAIA+AABAPwAAgD8AAAA+AACAPgAAQD8AAIA/AAAAPgAAgD4AAEA/AACAPwAAAD4AAIA+AABAPwAAgD8AAAA+AACAPgAAQD8AAIA/AAAAPgAAgD4AAEA/AACAPwAAAD4AAIA+AABAPwAAgD8AAAA+AACAPgAAQD8AAIA/AAAAPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 0,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-0-slice-1",
+                      "observed": {
+                        "value": {
+                          "bytes": "AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPwAAQD4AAIA+AABAPwAAgD8AAEA+AACAPgAAQD8AAIA/AABAPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 256,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-0-slice-2",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPwAAgD4AAIA+AABAPwAAgD8AAIA+AACAPgAAQD8AAIA/AACAPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 512,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-0-slice-3",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPwAAoD4AAIA+AABAPwAAgD8AAKA+AACAPgAAQD8AAIA/AACgPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 768,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-0-slice-4",
+                      "observed": {
+                        "value": {
+                          "bytes": "AADAPgAAgD4AAEA/AACAPwAAwD4AAIA+AABAPwAAgD8AAMA+AACAPgAAQD8AAIA/AADAPgAAgD4AAEA/AACAPwAAwD4AAIA+AABAPwAAgD8AAMA+AACAPgAAQD8AAIA/AADAPgAAgD4AAEA/AACAPwAAwD4AAIA+AABAPwAAgD8AAMA+AACAPgAAQD8AAIA/AADAPgAAgD4AAEA/AACAPwAAwD4AAIA+AABAPwAAgD8AAMA+AACAPgAAQD8AAIA/AADAPgAAgD4AAEA/AACAPwAAwD4AAIA+AABAPwAAgD8AAMA+AACAPgAAQD8AAIA/AADAPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1024,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-0-slice-5",
+                      "observed": {
+                        "value": {
+                          "bytes": "AADgPgAAgD4AAEA/AACAPwAA4D4AAIA+AABAPwAAgD8AAOA+AACAPgAAQD8AAIA/AADgPgAAgD4AAEA/AACAPwAA4D4AAIA+AABAPwAAgD8AAOA+AACAPgAAQD8AAIA/AADgPgAAgD4AAEA/AACAPwAA4D4AAIA+AABAPwAAgD8AAOA+AACAPgAAQD8AAIA/AADgPgAAgD4AAEA/AACAPwAA4D4AAIA+AABAPwAAgD8AAOA+AACAPgAAQD8AAIA/AADgPgAAgD4AAEA/AACAPwAA4D4AAIA+AABAPwAAgD8AAOA+AACAPgAAQD8AAIA/AADgPgAAgD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1280,
+                                "length": 256
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 16,
+                            "row_pitch": 64,
+                            "rows": 4,
+                            "image_pitch": 256,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-0",
+                      "observed": {
+                        "value": {
+                          "bytes": "AAAAPgAAwD4AAEA/AACAPwAAAD4AAMA+AABAPwAAgD8AAAA+AADAPgAAQD8AAIA/AAAAPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1536,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-1",
+                      "observed": {
+                        "value": {
+                          "bytes": "AABAPgAAwD4AAEA/AACAPwAAQD4AAMA+AABAPwAAgD8AAEA+AADAPgAAQD8AAIA/AABAPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1600,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-2",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACAPgAAwD4AAEA/AACAPwAAgD4AAMA+AABAPwAAgD8AAIA+AADAPgAAQD8AAIA/AACAPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1664,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-3",
+                      "observed": {
+                        "value": {
+                          "bytes": "AACgPgAAwD4AAEA/AACAPwAAoD4AAMA+AABAPwAAgD8AAKA+AADAPgAAQD8AAIA/AACgPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1728,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-4",
+                      "observed": {
+                        "value": {
+                          "bytes": "AADAPgAAwD4AAEA/AACAPwAAwD4AAMA+AABAPwAAgD8AAMA+AADAPgAAQD8AAIA/AADAPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1792,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "name": "level-1-slice-5",
+                      "observed": {
+                        "value": {
+                          "bytes": "AADgPgAAwD4AAEA/AACAPwAA4D4AAMA+AABAPwAAgD8AAOA+AADAPgAAQD8AAIA/AADgPgAAwD4AAEA/AACAPw=="
+                        },
+                        "shape": {
+                          "bytes": {
+                            "region": {
+                              "buffer": {
+                                "offset": 1856,
+                                "length": 64
+                              }
+                            },
+                            "element": "f32",
+                            "row_offset": 0,
+                            "row_elements": 8,
+                            "row_pitch": 32,
+                            "rows": 2,
+                            "image_pitch": 64,
+                            "images": 1,
+                            "gaps": "compared"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ],
+  "times": [
+    {
+      "leg": "metal",
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 5.49 and ours at 5.47; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 294,
+      "times": {
+        "case": "texture-view-casts-2d-array-as-cube",
+        "calls": 16,
+        "in_calls": 39252080,
+        "on_cpu": 2838459,
+        "blocked": 36396457,
+        "elsewhere": 8064958,
+        "spend": 47317038,
+        "spend_least": 45806081,
+        "spend_most": 49684583,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 14791,
+            "on_cpu": 15000,
+            "blocked": 0,
+            "wall_least": 13583,
+            "wall_most": 20500,
+            "wall_total": 40583,
+            "on_cpu_total": 40958,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 42875,
+            "on_cpu": 43125,
+            "blocked": 0,
+            "wall_least": 41000,
+            "wall_most": 61375,
+            "wall_total": 160584,
+            "on_cpu_total": 161417,
+            "blocked_total": 0
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 26650625,
+            "on_cpu": 771041,
+            "blocked": 25879584,
+            "wall_least": 25857458,
+            "wall_most": 28556417,
+            "wall_total": 26650625,
+            "on_cpu_total": 771041,
+            "blocked_total": 25879584
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 5000,
+            "on_cpu": 5333,
+            "blocked": 0,
+            "wall_least": 4541,
+            "wall_most": 6209,
+            "wall_total": 12917,
+            "on_cpu_total": 13499,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 4,
+            "most_calls": 4,
+            "wall": 2011125,
+            "on_cpu": 122458,
+            "blocked": 1124875,
+            "wall_least": 1951041,
+            "wall_most": 2237250,
+            "wall_total": 11979749,
+            "on_cpu_total": 1677332,
+            "blocked_total": 10243624
+          },
+          {
+            "call": "texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 72500,
+            "on_cpu": 72750,
+            "blocked": 0,
+            "wall_least": 65417,
+            "wall_most": 97042,
+            "wall_total": 72500,
+            "on_cpu_total": 72750,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 13083,
+            "on_cpu": 13250,
+            "blocked": 0,
+            "wall_least": 11916,
+            "wall_most": 21958,
+            "wall_total": 13083,
+            "on_cpu_total": 13250,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 17750,
+            "on_cpu": 17834,
+            "blocked": 0,
+            "wall_least": 16917,
+            "wall_most": 22209,
+            "wall_total": 17750,
+            "on_cpu_total": 17834,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 5084,
+            "on_cpu": 5209,
+            "blocked": 0,
+            "wall_least": 4750,
+            "wall_most": 6083,
+            "wall_total": 10666,
+            "on_cpu_total": 11042,
+            "blocked_total": 0
+          }
+        ]
+      }
+    },
+    {
+      "leg": "ours",
+      "venue": "Apple M3 Max",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order, each round on a fresh device, our shader cache carried over between the cases of a round; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 5.49 and ours at 5.47; the legs run one after the other, so the per-call margin is judged only when both are 26.0 or under and within 2.0x of each other",
+      "instrument": 291,
+      "times": {
+        "case": "texture-view-casts-2d-array-as-cube",
+        "calls": 16,
+        "in_calls": 30478876,
+        "on_cpu": 13333709,
+        "blocked": 16996168,
+        "elsewhere": 29561375,
+        "spend": 60026584,
+        "spend_least": 59391290,
+        "spend_most": 229150501,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 41958,
+            "on_cpu": 42208,
+            "blocked": 0,
+            "wall_least": 38208,
+            "wall_most": 75417,
+            "wall_total": 103625,
+            "on_cpu_total": 104166,
+            "blocked_total": 0
+          },
+          {
+            "call": "compute_pipeline",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 3017958,
+            "on_cpu": 3018750,
+            "blocked": 0,
+            "wall_least": 2679917,
+            "wall_most": 4076000,
+            "wall_total": 6915624,
+            "on_cpu_total": 6779875,
+            "blocked_total": 160958
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 1142375,
+            "on_cpu": 1143667,
+            "blocked": 0,
+            "wall_least": 1098583,
+            "wall_most": 2887000,
+            "wall_total": 1142375,
+            "on_cpu_total": 1143667,
+            "blocked_total": 0
+          },
+          {
+            "call": "read_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 1833,
+            "on_cpu": 2041,
+            "blocked": 0,
+            "wall_least": 1541,
+            "wall_most": 3875,
+            "wall_total": 4874,
+            "on_cpu_total": 5333,
+            "blocked_total": 0
+          },
+          {
+            "call": "render",
+            "least_calls": 4,
+            "most_calls": 4,
+            "wall": 2212375,
+            "on_cpu": 781083,
+            "blocked": 1549584,
+            "wall_least": 2076875,
+            "wall_most": 12361000,
+            "wall_total": 21924750,
+            "on_cpu_total": 4853625,
+            "blocked_total": 16833418
+          },
+          {
+            "call": "texture",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 173000,
+            "on_cpu": 173375,
+            "blocked": 0,
+            "wall_least": 165875,
+            "wall_most": 1156750,
+            "wall_total": 173000,
+            "on_cpu_total": 173375,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 19209,
+            "on_cpu": 19417,
+            "blocked": 0,
+            "wall_least": 18417,
+            "wall_most": 47417,
+            "wall_total": 19209,
+            "on_cpu_total": 19417,
+            "blocked_total": 0
+          },
+          {
+            "call": "texture_view_facts",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 2667,
+            "on_cpu": 2833,
+            "blocked": 0,
+            "wall_least": 2541,
+            "wall_most": 3000,
+            "wall_total": 2667,
+            "on_cpu_total": 2833,
+            "blocked_total": 0
+          },
+          {
+            "call": "zeroed_buffer",
+            "least_calls": 2,
+            "most_calls": 2,
+            "wall": 16750,
+            "on_cpu": 16958,
+            "blocked": 0,
+            "wall_least": 15542,
+            "wall_most": 17583,
+            "wall_total": 35333,
+            "on_cpu_total": 35875,
+            "blocked_total": 0
+          }
+        ]
+      }
+    }
+  ]
+}
