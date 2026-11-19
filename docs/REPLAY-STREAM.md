@@ -671,7 +671,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
     plays can move a few draws and barriers from one group or frame to another. Only the stream's
     counts are compared between plays.
 
-  Its own readbacks are not counted. Its own work around a dispatch an `m2v.privateBytes` record
+  Its own readbacks are not counted. The new runtime's backend reads a Private buffer, which has
+  no CPU mapping, through a blit copy of it into a Shared buffer of the play's own, on a queue of
+  the play's own, and waits for the copy. Its own work around a dispatch an `m2v.privateBytes` record
   names (its buffer, fence and blits and the encoders it ends and makes again) is in none of the
   stream's counts. The runtime's work for it cannot be told apart from the program's (a runtime
   may record the barriers a split needs at the program's next command or at the commit), so a

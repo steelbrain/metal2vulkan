@@ -27,6 +27,8 @@
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
 //!   commit, and a synchronize brings the GPU's bytes into the CPU's copy.
+//! - A Private buffer, which has no CPU mapping, reads back through a copy into a Shared buffer of
+//!   the play's own: a blit's fill of it reads as the fill's bytes.
 //! - In a stream whose header marks its announced bytes recorded, an announcement after a
 //!   read-back puts the stream's bytes into the GPU's copy, not the bytes read back, which a check
 //!   reads until then; without the mark it puts the bytes read back.
@@ -1085,6 +1087,29 @@ fn a_two_copy_stream_s_managed_buffer_keeps_both_copies() {
         let object = check.object;
         assert_eq!(Some(check.sha256), check.recorded, "#{object}: {lines:?}");
     }
+}
+
+#[test]
+fn a_private_buffer_reads_back_through_a_copy() {
+    let dir = ScratchDir::new("rt-replay-private-read").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // #3 Private (MTLResourceStorageModePrivate, 2 << 4), 16 bytes, filled with 0x5a.
+        let made = [Value::Uint(16), Value::Uint(32)];
+        w.call("newBufferWithLength:options:", 1, 3, &made, &[])?;
+        w.call("commandBuffer", 2, 10, &[], &[])?;
+        w.call("blitCommandEncoder", 10, 11, &[], &[])?;
+        let range = uints(&[("location", 0), ("length", 16)]);
+        let fill = [Value::Object(3), range, Value::Uint(0x5a)];
+        w.call("fillBuffer:range:value:", 11, 0, &fill, &[])?;
+        w.call("endEncoding", 11, 0, &[], &[])?;
+        w.call("commit", 10, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 10, 0, &[], &[])
+    });
+    let (_, lines, bytes) = play_then("private-read", &path, |backend| backend.read(3));
+    let bytes = bytes.unwrap_or_else(|error| panic!("#3 read back: {error}: {lines:?}"));
+    assert_eq!(bytes, vec![0x5a; 16]);
 }
 
 /// A two-copy stream's Managed buffer #3 of 4 bytes, its header's flags `flags`: the program

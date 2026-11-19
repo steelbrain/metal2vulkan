@@ -363,6 +363,9 @@ pub struct NewRuntime {
     staged_bytes: u64,
     /// The bytes the host's copies back to the guest's RAM copied into the play's own sinks.
     copied_back_bytes: u64,
+    /// The queue of the play's own that reads a Private buffer back (`private_bytes`), made at
+    /// the first such read.
+    reads: Option<rt::CommandQueue>,
     /// The compute pipeline states whose `gpuResourceID` the player asked, which the runtime does
     /// not give: a typed gap, counted.
     unanswered_pipeline_ids: u64,
@@ -752,6 +755,7 @@ impl NewRuntime {
             queue_of: HashMap::new(),
             staged_bytes: 0,
             copied_back_bytes: 0,
+            reads: None,
             unanswered_pipeline_ids: 0,
             block_bytes: [0; 2],
             creations: Vec::new(),
@@ -915,6 +919,37 @@ impl NewRuntime {
             at += piece;
         }
         Ok(())
+    }
+
+    /// The bytes of `buffer`, a Private buffer, which has no `contents`: a blit copies them into
+    /// a Shared buffer of the play's own, on a queue of its own (`reads`), and the read waits for
+    /// it. The player reads only after the work that writes the buffer completed. A length that is
+    /// not a multiple of 4 is the copy's own refusal (`rt::Refusal::BufferCopyUnaligned`).
+    fn private_bytes(&mut self, buffer: &rt::Buffer) -> Result<Vec<u8>, rt::Error> {
+        let length = buffer.length();
+        if length == 0 {
+            return Ok(Vec::new());
+        }
+        let queue = match &self.reads {
+            Some(queue) => queue.clone(),
+            None => (self.reads.insert(self.device.new_command_queue(1)?)).clone(),
+        };
+        let block = self.device.take_block(rt::MemoryClass::Shared, length)?;
+        let copied = (|| {
+            let into = self.device.new_buffer(block.id, 0, length, None)?;
+            let command_buffer = queue.command_buffer()?;
+            let mut blit = command_buffer.blit_command_encoder()?;
+            blit.copy_from_buffer_to_buffer(buffer, 0, &into, 0, length)?;
+            blit.end_encoding();
+            command_buffer.commit()?;
+            command_buffer.wait_until_completed()?;
+            let contents = into.contents().expect("a Shared buffer is mapped");
+            // SAFETY: the mapping holds `length` bytes, and the copy into them completed.
+            let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), length as usize) };
+            Ok(bytes.to_vec())
+        })();
+        self.device.release_block(block)?;
+        copied
     }
 
     /// Commits `command_buffer`, of `queue` and the stream's `id` (0 for one of the play's own), as
@@ -2388,18 +2423,22 @@ impl Backend for NewRuntime {
             (None, Some(Object::Buffer(buffer, _))) => Some(buffer),
             _ => None,
         };
-        match buffer {
-            Some(buffer) => {
-                let contents = buffer
-                    .contents()
-                    .ok_or_else(|| unread("a Private buffer"))?;
-                let length = usize::try_from(buffer.length()).map_err(|_| unread("its length"))?;
-                // SAFETY: the buffer's mapping holds its length, and the player waited for the
-                // work that writes it.
-                Ok(unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) }.to_vec())
-            }
-            _ => Err(unread("no buffer or texture")),
-        }
+        let Some(buffer) = buffer else {
+            return Err(unread("no buffer or texture"));
+        };
+        let length = usize::try_from(buffer.length()).map_err(|_| unread("its length"))?;
+        let Some(contents) = buffer.contents() else {
+            let buffer = buffer.clone();
+            return self
+                .private_bytes(&buffer)
+                .map_err(|error| PlayError::Runtime {
+                    selector: "m2v.check".into(),
+                    error: error.to_string(),
+                });
+        };
+        // SAFETY: the buffer's mapping holds its length, and the player waited for the work that
+        // writes it.
+        Ok(unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) }.to_vec())
     }
 
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError> {
