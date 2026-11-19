@@ -46,6 +46,7 @@ use std::time::Duration;
 mod compute;
 mod events;
 mod render;
+mod states;
 mod work;
 
 /// How long a wait for a command buffer waits before the side records that it never returned:
@@ -1382,6 +1383,42 @@ impl Side for RtSide<'_> {
         self.scheduled_handler_order_probe()
     }
 
+    fn compute_pipeline_limits(
+        &mut self,
+        library: Handle,
+        spec: &crate::pipeline_limits::ComputeLimitsSpec<'_>,
+    ) -> Answer<crate::pipeline_limits::Creation<crate::pipeline_limits::ComputeStateLimits>> {
+        self.compute_limits(library, spec)
+    }
+
+    fn compute_pipeline_for_commands(
+        &mut self,
+        library: Handle,
+        entry: &str,
+        stage_input: Option<&StageInput>,
+    ) -> Answer<Handle> {
+        self.compute_state_for_commands(library, entry, stage_input)
+    }
+
+    fn queue_slots(
+        &mut self,
+        max: Option<u32>,
+        cap: u32,
+    ) -> Answer<crate::queue_slots::QueueSlots> {
+        self.slots(max, cap)
+    }
+
+    fn fragment_fill(
+        &mut self,
+        fill: &crate::case::FragmentFill<'_>,
+    ) -> Answer<crate::case::FragmentFilled> {
+        self.fill(fill)
+    }
+
+    fn render_target(&mut self, width: u32, height: u32) -> Answer<Handle> {
+        self.mesh_target(width, height)
+    }
+
     fn empty_command_buffers(&mut self) -> Answer<EmptyCommandBuffers> {
         let of_rt = |error: rt::Error| Failure::of_rt(&error);
         let order: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -1480,7 +1517,7 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 7] = [
+    const CALLS: [(&str, &str); 11] = [
         (
             "heap_buffer_size_and_align",
             crate::cases::device_queries::HEAP_BUFFERS,
@@ -1509,6 +1546,13 @@ mod answered {
             "scheduled_handler_order",
             crate::cases::scheduled_handlers::SCHEDULED_HANDLER_ORDER,
         ),
+        ("compute_pipeline_limits", "compute-limits-plain-max-96"),
+        (
+            "compute_pipeline_for_commands",
+            crate::cases::indirect_commands::COMPUTE_EXECUTED,
+        ),
+        ("queue_slots", crate::cases::command_queues::QUEUE_SLOTS),
+        ("fragment_fill", "rgb10a2-srgb-stores-f"),
     ];
 
     /// The calls `value` records as unavailable, wherever in it they sit.
