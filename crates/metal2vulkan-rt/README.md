@@ -601,8 +601,9 @@ made, with no lock, and never rewritten for layouts.
   an optimal image of its own, and the device copies the bytes shaders reach into it and back,
   one `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, the buffer's rows
   `bytes_per_row` apart, with no CPU copy. Each copy counts in `Metrics::over_copies` and its
-  bytes in `Metrics::over_copy_bytes` and `Metrics::bytes_copied`. When is decided by the buffer's
-  storage:
+  bytes in `Metrics::over_copy_bytes` and `Metrics::bytes_copied`; one over a buffer in an
+  imported block counts in `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported`
+  too. When is decided by the buffer's storage:
   - Over a Shared buffer (or a Managed one without a device copy), once a submission: the upload
     that leads it copies the bytes into every such texture a segment of it uses before any command
     of the segment wrote the buffer, between one pair of barriers. Inside a segment a command that

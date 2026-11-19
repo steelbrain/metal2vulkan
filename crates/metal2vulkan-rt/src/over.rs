@@ -26,8 +26,9 @@
 //!   edge, so the next submission's leading copy reads what the image held.
 //!
 //! Each copy is counted (`Metrics::over_copies`, and its bytes in `Metrics::over_copy_bytes`
-//! and `Metrics::bytes_copied`). The tracking is by buffer: a write of any of a buffer's bytes
-//! makes every such texture over it stale.
+//! and `Metrics::bytes_copied`; a copy over a buffer in an imported block in
+//! `Metrics::over_copies_imported` and `Metrics::over_copy_bytes_imported` too). The tracking is
+//! by buffer: a write of any of a buffer's bytes makes every such texture over it stale.
 
 use crate::buffer::Buffer;
 use crate::counters::{Counters, Metric};
@@ -338,7 +339,7 @@ pub(crate) unsafe fn record_side(
                     &[copy.region],
                 ),
             }
-            counters.over_copied(copy.bytes);
+            counters.over_copied(copy.bytes, copy.imported);
         }
         device.cmd_pipeline_barrier2(
             command,

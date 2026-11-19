@@ -192,6 +192,12 @@ mod on_device {
                     bytes,
                     "{name}: round {round}: its bytes copied"
                 );
+                // The buffer is in a block of the runtime's own: no imported copy.
+                assert_eq!(
+                    (after.over_copies_imported, after.over_copy_bytes_imported),
+                    (before.over_copies_imported, before.over_copy_bytes_imported),
+                    "{name}: round {round}: not imported"
+                );
                 assert!(
                     image(name, &scratch) == rows(&now, 0, pitch),
                     "{name}: round {round}: the image takes the host's bytes"

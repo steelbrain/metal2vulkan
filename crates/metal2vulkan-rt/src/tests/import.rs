@@ -194,7 +194,8 @@ mod on_device {
     /// A texture over a buffer in an imported block of host memory, read and written by shaders,
     /// is the counted copy on every device: a blit's read of it into a Shared buffer finds the
     /// host's rows, a blit's write to it reaches the host's memory, and the copies between the
-    /// buffer and its image count in `Metrics::over_copies`.
+    /// buffer and its image count in `Metrics::over_copies` and, being over an imported block, in
+    /// `Metrics::over_copies_imported`, each its texels' bytes.
     #[test]
     fn every_device_makes_a_texture_over_an_imported_buffer() {
         each_device("import_texture", |name, _, device| {
@@ -231,6 +232,7 @@ mod on_device {
             );
             assert!(texture.copied_over().is_some(), "{name}: copied");
             let copies = || device.counters().metrics().over_copies;
+            let start = device.counters().metrics();
             let before = copies();
             // The host's rows, as the image's texels.
             let host = |at: u64| {
@@ -320,6 +322,17 @@ mod on_device {
                 "{name}: the image copied back, counted"
             );
             let counted = copies() - before;
+            // Each copy is over the imported block: counted on the imported side too, each of
+            // the texture's texels.
+            let end = device.counters().metrics();
+            let imported = end.over_copies_imported - start.over_copies_imported;
+            let imported_bytes = end.over_copy_bytes_imported - start.over_copy_bytes_imported;
+            assert_eq!(imported, counted, "{name}: imported copies");
+            assert_eq!(
+                (imported_bytes, end.over_copy_bytes - start.over_copy_bytes),
+                (counted * row * rows, counted * row * rows),
+                "{name}: imported bytes"
+            );
             drop((
                 command_buffer,
                 queue,

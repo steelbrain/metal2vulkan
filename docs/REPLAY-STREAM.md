@@ -555,7 +555,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   the runtime frees the import. Where the buffer plays with two copies, the import holds the copy
   the CPU writes where the runtime keeps a GPU copy, and the copy shaders and textures reach where
   the player keeps the second copy itself. A texture over such a buffer is the runtime's counted
-  copy, which each frame's `over_copies` and `over_copy_bytes` count. On a device that imports no
+  copy, which each frame's `over_copies` and `over_copy_bytes` count with every copy of a texture
+  over a buffer, and its `over_copies_imported` and `over_copy_bytes_imported` alone (the rest are
+  over the runtime's own blocks, where the device's linear image does not take the texture). On a
+  device that imports no
   host memory a no-copy buffer stops the play with a refusal that says so. The report's `no-copy
   imports` line counts the imports and their bytes. The stream records no no-copy buffer's host
   address (section 5), so whether two of the program's shared pages is not known to the player;

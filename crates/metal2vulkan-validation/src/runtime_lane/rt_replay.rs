@@ -1100,6 +1100,9 @@ fn a_no_copy_buffer_is_an_import_and_a_texture_over_it_the_counted_copy() {
     let executed = &report.total.executed;
     assert_eq!(executed["over_copies"], 1, "{executed:?}");
     assert_eq!(executed["over_copy_bytes"], 64, "{executed:?}");
+    // On the imported side.
+    assert_eq!(executed["over_copies_imported"], 1, "{executed:?}");
+    assert_eq!(executed["over_copy_bytes_imported"], 64, "{executed:?}");
     let ended = backend.end();
     ended.result().unwrap();
     assert!(ended.gauges.contains(&("imports", 0)), "{:?}", ended.gauges);

@@ -3510,6 +3510,7 @@ impl Texture {
         let place = named.places[0];
         let d = &inner.descriptor;
         let (buffer, at) = named.buffer.device_range();
+        let (block, device_copy) = named.buffer.held();
         let region = vk::BufferImageCopy {
             buffer_offset: at + place.offset,
             buffer_row_length: u32::try_from(place.bytes_per_row / u64::from(unit.bytes)).ok()?,
@@ -3535,6 +3536,7 @@ impl Texture {
             region,
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
+            imported: device_copy.is_none() && block.memory.imported,
         };
         Some((&named.buffer, copy))
     }
@@ -3886,6 +3888,8 @@ pub(crate) struct OverCopy {
     pub(crate) bytes: u64,
     /// The buffer is Shared: the host reads what a copy back writes.
     pub(crate) shared: bool,
+    /// The bytes shaders reach are in an imported block (`Metrics::over_copies_imported`).
+    pub(crate) imported: bool,
 }
 
 impl crate::kept::Handle for Texture {
