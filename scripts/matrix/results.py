@@ -609,11 +609,12 @@ SHOWN_FIRST = {
     "/device_first": "the warm-up, the first object of its kind on the device",
     "/first_one_thread": "a first dispatched as one thread, a size of few dispatches",
 }
-#: The sed program the first creation process's output goes through: its devices' gauges at drop
-#: become `harness-<runtime>/creates/device/...`, apart from the other rows' process's, so each
-#: key is recorded once.
-CREATES_APART = (r"s#^M2V-MATRIX gauge harness-\([a-z]*\)/device/#"
-                 r"M2V-MATRIX gauge harness-\1/creates/device/#")
+#: The sed program the first creation round's outputs go through: every record of the device's
+#: life, of any kind (the runtime's totals, its gauges at drop), becomes
+#: `harness-<runtime>/creates/device/...`, apart from the other rows' process's, so each key is
+#: recorded once.
+CREATES_APART = (r"s#^M2V-MATRIX \([a-z]*\) harness-\([a-z]*\)/device/#"
+                 r"M2V-MATRIX \1 harness-\2/creates/device/#")
 #: The sed program (`sed -n`) each later creation process's output goes through: its first samples
 #: alone, each runtime's as `harness-first/<row>/<n>/<runtime>`, the shell giving `$n`.
 FIRST_KEEP = (r"s#^M2V-MATRIX time harness-\([a-z]*\)/\(create_[A-Za-z0-9_]*/[a-z_]*\) #"

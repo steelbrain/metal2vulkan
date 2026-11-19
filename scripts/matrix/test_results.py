@@ -603,13 +603,18 @@ class HarnessBudgetTests(unittest.TestCase):
                 "shown, not judged: a first dispatched as one thread, a size of few dispatches"]))
 
     def test_the_creation_processes_record_each_key_once_beside_the_other_rows(self):
-        others = ["M2V-MATRIX time harness-new/alu 10.000", "M2V-MATRIX gauge harness-new/device/blocks@drop 0"]
+        # Each harness process prints its device's totals and gauges at drop, the creation process
+        # as well as the other rows'.
+        others = ["M2V-MATRIX time harness-new/alu 10.000",
+                  "M2V-MATRIX metric harness-new/device/stamps_not_available 0",
+                  "M2V-MATRIX gauge harness-new/device/blocks@drop 0"]
         creates = ["M2V-MATRIX time harness-new/create_64MiB 700.000",
                    "M2V-MATRIX time harness-new/create_64MiB/first_take 900.000",
                    "M2V-MATRIX time harness-old/create_64MiB/first_take 950.000",
                    "M2V-MATRIX time harness-gpu-old/create_64MiB/first_take 5.000",
                    "M2V-MATRIX metric harness-new/create_64MiB/first_allocations 1",
                    "M2V-MATRIX gauge harness-new/create_64MiB/buffers@100 0",
+                   "M2V-MATRIX metric harness-new/device/stamps_not_available 0",
                    "M2V-MATRIX gauge harness-new/device/blocks@drop 0", "a table row"]
 
         def sed(program, lines, quiet=False):
@@ -629,8 +634,14 @@ class HarnessBudgetTests(unittest.TestCase):
         self.assertEqual(suite["records"]["gauge"], {"harness-new/device/blocks@drop": 0,
                                                      "harness-new/creates/device/blocks@drop": 0,
                                                      "harness-new/create_64MiB/buffers@100": 0})
-        # Without the program, the device's gauges would be recorded twice.
-        self.assertIn(("gauge", "harness-new/device/blocks@drop"), results.parse_suite(others + creates)["duplicated"])
+        self.assertEqual(suite["records"]["metric"], {"harness-new/device/stamps_not_available": 0,
+                                                      "harness-new/creates/device/stamps_not_available": 0,
+                                                      "harness-new/create_64MiB/first_allocations": 1})
+        # Without the program, the device's totals and gauges would be recorded twice.
+        unrenamed = results.parse_suite(others + creates)
+        self.assertIn(("gauge", "harness-new/device/blocks@drop"), unrenamed["duplicated"])
+        self.assertIn(("metric", "harness-new/device/stamps_not_available"), unrenamed["duplicated"])
+        self.assertIn("record metric harness-new/device/stamps_not_available: recorded twice", unrenamed["problems"])
 
     def test_the_floors_table_reads_per_leg_and_row(self):
         text = "# a comment\nrow  a  b\nframe  1.10  -\nalu  1.00  1.02\n"

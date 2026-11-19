@@ -355,8 +355,8 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     cold: no row before it, and no work of the other runtime in its process, warms the driver
     for it (a driver's process-wide setup, paid by whichever runtime makes the process's first
     pipeline, took one runtime's first state from 16.7 ms cold to 5.3 ms behind the other's on an
-    Iris Xe). The first round's two outputs are kept whole, their devices' gauges apart
-    (results.CREATES_APART); of each later process's, only the first samples
+    Iris Xe). The first round's two outputs are kept whole, their devices' records (totals and
+    gauges at drop) apart (results.CREATES_APART); of each later process's, only the first samples
     (results.FIRST_KEEP), which results.harness_budget judges by the median of the rounds. Then the rows over their limits (results.RETIME_SELECT, at most
     results.RETIME_ROWS, the furthest over first) are each re-timed alone in results.RETIME_PAIRS
     pairs, old then new, then new then old, their times and GPU times kept (results.RETIME_KEEP)
