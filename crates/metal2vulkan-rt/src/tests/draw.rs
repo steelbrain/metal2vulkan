@@ -939,8 +939,10 @@ mod on_device {
 
     /// The user-space instructions a draw retires on the encoding thread: on the draw path with no
     /// depth attachment (Metal's default depth-stencil state), under a depth test set once, and
-    /// under one whose state and bias change every draw, printed per draw where the kernel offers
-    /// the counter (Linux).
+    /// under one whose state and bias change every draw; and the two setters' own, called as
+    /// often with no draw between, so that the third less the second and the fourth is what a
+    /// draw records of the changed state (ten dynamic-state commands for the depth-stencil state,
+    /// two for the bias). Printed per draw where the kernel offers the counter (Linux).
     #[test]
     fn every_device_counts_a_depth_tested_draw_s_instructions() {
         use metal2vulkan_devtools::instructions::InstructionCounter;
@@ -984,8 +986,15 @@ mod on_device {
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
             let mut per_draw = Vec::new();
             // The draw path with no depth attachment, a depth-tested draw whose state is set
-            // once, and one whose depth-stencil state and bias change every draw.
-            for (tested, changing) in [(false, false), (true, false), (true, true)] {
+            // once, one whose depth-stencil state and bias change every draw, and the changes
+            // with no draw.
+            let arms = [
+                (false, false, true),
+                (true, false, true),
+                (true, true, true),
+                (true, true, false),
+            ];
+            for (tested, changing, drawn) in arms {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut p = pass(&color, None);
                 if tested {
@@ -1011,7 +1020,9 @@ mod on_device {
                             draw(encoder.set_depth_stencil_state(Some(state)));
                             draw(encoder.set_depth_bias(at as f32, 0.0, 0.0));
                         }
-                        draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                        if drawn {
+                            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                        }
                     }
                 }))
                 .expect("a count");
@@ -1021,8 +1032,9 @@ mod on_device {
             }
             println!(
                 "{name}: user-space instructions a draw: {} with no depth attachment, {} under a \
-                 depth test set once, {} under a depth test whose state and bias change every draw",
-                per_draw[0], per_draw[1], per_draw[2]
+                 depth test set once, {} under a depth test whose state and bias change every \
+                 draw, of which the two setters alone {}",
+                per_draw[0], per_draw[1], per_draw[2], per_draw[3]
             );
         });
     }
