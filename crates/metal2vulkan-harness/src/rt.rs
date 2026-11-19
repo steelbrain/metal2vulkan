@@ -431,10 +431,14 @@ impl crate::Device for Device {
     }
 
     /// `Metrics::stamps_not_available`: command buffers whose GPU times read none though their
-    /// submission signalled.
+    /// submission signalled; `Metrics::waits_behind_counter`: rounds in which the completion
+    /// thread's host wait had not yet seen the value its counter read.
     fn totals(&self) -> Vec<(&'static str, u64)> {
         let metrics = self.device.counters().metrics();
-        vec![("stamps_not_available", metrics.stamps_not_available)]
+        vec![
+            ("stamps_not_available", metrics.stamps_not_available),
+            ("waits_behind_counter", metrics.waits_behind_counter),
+        ]
     }
 
     /// `Metrics::pipelines_created`.

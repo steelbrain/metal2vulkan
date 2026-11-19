@@ -874,13 +874,16 @@ that touch blocks first.
   then refuses a new pool, runs untimed: its `gpu_start_time` and `gpu_end_time` are 0, and
   `Metrics::untimed_command_buffers` counts it. Once the device refuses a pool it asks for none
   again. A command buffer whose pair reads as not available once its submission signalled has
-  times of 0 too, and `Metrics::stamps_not_available` counts it: a submission the device
-  cancelled at a reset, or a driver that makes timestamps available only after the signal. The
-  device tests, the harness and the replay player report the count. Vulkan states no most queries a pool may hold or most pools a device may make; the
-  runtime's 4,096 a pool is the smallest met: Mesa's Apple-GPU driver makes each pool a Metal
-  counter heap, of at most 4,096 entries and at most 32 live in a process, so there at most
-  65,536 command buffers of a process are timed at once, fewer where other devices of the
-  process hold heaps.
+  times of 0 too, and `Metrics::stamps_not_available` counts it: a submission the device cancelled
+  at a reset, or a driver that makes timestamps available only after the signal. A command buffer
+  retires only once a host wait has seen its submission's progress value: where the semaphore's
+  counter read runs ahead of that wait, `Metrics::waits_behind_counter` counts the round, and
+  nothing retires until the wait agrees. The device tests, the harness and the replay player
+  report both counts. Vulkan states no most queries a pool may hold or most pools a device may
+  make; the runtime's 4,096 a pool is the smallest met: Mesa's Apple-GPU driver makes each pool a
+  Metal counter heap, of at most 4,096 entries and at most 32 live in a process, so there at most
+  65,536 command buffers of a process are timed at once, fewer where other devices of the process
+  hold heaps.
 - On NVIDIA's Linux driver 620.70.06 (an RTX 3090), a process that makes and destroys a Vulkan
   instance and a device over and over gets `VK_ERROR_INCOMPATIBLE_DRIVER` from its 27th
   `vkCreateInstance`, with no runtime in the process: a bare loop made and destroyed 26, twice
@@ -891,7 +894,7 @@ that touch blocks first.
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through
   arithmetic defined for every value and never later than its `gpu_end_time`, read with no wait
-  once the completion thread has seen its submission's progress value, so a pair the device never
+  once a host wait has seen its submission's progress value, so a pair the device never
   wrote (a submission it cancelled at a reset) reads as no times at once; and
   `Texture::get_bytes`'s copy out of its staging span, whose bytes reach only the caller's
   buffer, at offsets and lengths from the call's checked region. The parameter ring

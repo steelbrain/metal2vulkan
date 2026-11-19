@@ -83,10 +83,12 @@ pub(crate) enum Metric {
     SamplerElementWrites,
     /// [`Metrics::stamps_not_available`].
     StampsNotAvailable,
+    /// [`Metrics::waits_behind_counter`].
+    WaitsBehindCounter,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::StampsNotAvailable as usize + 1;
+const METRICS: usize = Metric::WaitsBehindCounter as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -119,6 +121,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::UntimedCommandBuffers,
     Metric::SamplerElementWrites,
     Metric::StampsNotAvailable,
+    Metric::WaitsBehindCounter,
 ];
 
 // Each metric of the order is at its own index.
@@ -278,6 +281,7 @@ struct Atomics {
     untimed_command_buffers: AtomicU64,
     sampler_element_writes: AtomicU64,
     stamps_not_available: AtomicU64,
+    waits_behind_counter: AtomicU64,
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
     capture_wait_nanos: AtomicU64,
@@ -381,6 +385,7 @@ impl Counters {
             Metric::UntimedCommandBuffers => &a.untimed_command_buffers,
             Metric::SamplerElementWrites => &a.sampler_element_writes,
             Metric::StampsNotAvailable => &a.stamps_not_available,
+            Metric::WaitsBehindCounter => &a.waits_behind_counter,
         }
     }
 
@@ -691,6 +696,7 @@ impl Counters {
             untimed_command_buffers: a.untimed_command_buffers.load(Relaxed),
             sampler_element_writes: a.sampler_element_writes.load(Relaxed),
             stamps_not_available: a.stamps_not_available.load(Relaxed),
+            waits_behind_counter: a.waits_behind_counter.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
             capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
             capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
@@ -987,6 +993,12 @@ pub struct Metrics {
     /// command buffer here; a submission the device cancelled at a reset, which signals having run
     /// nothing, counts too.
     pub stamps_not_available: u64,
+    /// Rounds of the completion thread in which the progress semaphore's counter read a value
+    /// that a host wait on it with a timeout of 0 then reported not reached, so nothing retired in
+    /// that round. A command buffer retires only once a host wait has seen its submission's
+    /// value, the order Vulkan defines for what the guest then reads; this counts a driver whose
+    /// counter runs ahead of its wait.
+    pub waits_behind_counter: u64,
 }
 
 /// A thread's slot in [`Gauges::threads`], given back as it drops.

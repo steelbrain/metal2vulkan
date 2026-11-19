@@ -3,6 +3,7 @@
 //! flight at a loss.
 
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handlers, Pending};
+use crate::counters::Metric;
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
@@ -322,6 +323,25 @@ impl Retiree {
     }
 }
 
+/// Whether a host wait on `semaphore` for `value`, with a timeout of 0, reports it reached.
+pub(crate) fn reached_by_wait(
+    device: &ash::Device,
+    semaphore: vk::Semaphore,
+    value: u64,
+) -> Result<bool, vk::Result> {
+    let semaphores = [semaphore];
+    let values = [value];
+    let wait = vk::SemaphoreWaitInfo::default()
+        .semaphores(&semaphores)
+        .values(&values);
+    // SAFETY: the semaphore is a timeline semaphore of the device.
+    match unsafe { device.wait_semaphores(&wait, 0) } {
+        Ok(()) => Ok(true),
+        Err(vk::Result::TIMEOUT) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// The completion thread, until it is stopped.
 pub(crate) fn run(core: Arc<Core>) {
     let done = &core.done;
@@ -329,6 +349,9 @@ pub(crate) fn run(core: Arc<Core>) {
     // The GPU clock on the host's: read as the device starts, and again at a completion once the
     // period has passed since the last reading.
     let mut calibration = Calibration::read(&core);
+    // A value the counter read and the host wait then reported not reached: the next wait is for
+    // it, so the thread sleeps until the wait agrees rather than reading the counter again.
+    let mut behind: Option<u64> = None;
     let mut state = done.lock();
     loop {
         let mut retire = std::mem::take(&mut state.ended);
@@ -351,8 +374,22 @@ pub(crate) fn run(core: Arc<Core>) {
         } else {
             if !state.flight.is_empty() {
                 // SAFETY: the progress semaphore is the device's.
-                match unsafe { device.get_semaphore_counter_value(done.progress) } {
-                    Ok(reached) => {
+                let read = unsafe { device.get_semaphore_counter_value(done.progress) };
+                // A retirement tells the guest its command buffer completed and lets it read
+                // what the GPU wrote, which Vulkan orders after the signal only through a host
+                // wait on it ("signal operations happening before host operations that wait on
+                // them"); the counter read states no such order. So nothing at or below the value
+                // read retires until a wait on that value, with a timeout of 0, says it is
+                // reached.
+                let due = |reached: u64| {
+                    (state.flight.front()).is_some_and(|retiree| retiree.value <= reached)
+                };
+                match read.and_then(|reached| match due(reached) {
+                    true => reached_by_wait(device, done.progress, reached).map(|by| (reached, by)),
+                    false => Ok((reached, true)),
+                }) {
+                    Ok((reached, true)) => {
+                        behind = None;
                         // Before the submit thread's mark is read (`Work::completed`).
                         done.completed.fetch_max(reached, Ordering::SeqCst);
                         while state
@@ -362,6 +399,11 @@ pub(crate) fn run(core: Arc<Core>) {
                         {
                             retire.extend(state.flight.pop_front());
                         }
+                    }
+                    Ok((reached, false)) => {
+                        // Nothing retires this round: the thread waits for the value again.
+                        behind = Some(reached);
+                        core.counters.count(Metric::WaitsBehindCounter);
                     }
                     Err(_) => {
                         state.lost = true;
@@ -432,7 +474,7 @@ pub(crate) fn run(core: Arc<Core>) {
         }
         let mut semaphores = Vec::new();
         let mut values = Vec::new();
-        let target = state.flight.front().map(|retiree| retiree.value);
+        let target = (state.flight.front()).map(|retiree| retiree.value.max(behind.unwrap_or(0)));
         if let Some(value) = target {
             semaphores.push(done.progress);
             values.push(value);

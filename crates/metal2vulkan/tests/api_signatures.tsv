@@ -2389,6 +2389,7 @@ field	metal2vulkan-rt::Metrics.translations	pub translations: u64
 field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-rt::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
 field	metal2vulkan-rt::Metrics.upload_waits	pub upload_waits: u64
+field	metal2vulkan-rt::Metrics.waits_behind_counter	pub waits_behind_counter: u64
 field	metal2vulkan-rt::Metrics.zeroed_bytes_freed	pub zeroed_bytes_freed: u64
 field	metal2vulkan-rt::Metrics.zeroed_bytes_taken	pub zeroed_bytes_taken: u64
 field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device

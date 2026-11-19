@@ -16,18 +16,17 @@ use ash::vk;
 /// ("`vkGetQueryPoolResults` may return `VK_NOT_READY` if there are queries in the unavailable
 /// state").
 ///
-/// The caller reads a pair only once the completion thread has seen its submission's progress
-/// value. The signal's first synchronization scope "includes every command in the same batch that
+/// The caller reads a pair only once a host wait of the completion thread has seen its submission's
+/// progress value (a wait with a timeout of 0 after the counter read, where the counter told it
+/// first). The signal's first synchronization scope "includes every command in the same batch that
 /// the signal operation is defined in, and all commands that occur earlier in submission order"
 /// (`vkQueueSubmit2`), "a query is made available by the operation of ... `vkCmdWriteTimestamp2`",
-/// and a host wait that sees the value happens after the signal ("signal operations happening
-/// before host operations that wait on them"): the pair of a submission that ran is available at
-/// the read. The completion thread also learns values from `vkGetSemaphoreCounterValue`, for which
-/// the specification states no such ordering. A driver that makes timestamps available only
-/// after the signal (MoltenVK 1.4.2 on an M3 Max did, for most command buffers; it is below the
-/// floor) would read none here and leave the GPU times 0 with no other sign, so the caller counts
-/// each pair that reads as not available (`Metrics::stamps_not_available`), and every play and
-/// suite leg reports the count.
+/// and the host wait happens after the signal ("signal operations happening before host operations
+/// that wait on them"): the pair of a submission that ran is available at the read. A driver that
+/// makes timestamps available only after the signal (MoltenVK 1.4.2 on an M3 Max did, for most
+/// command buffers; it is below the floor) would read none here and leave the GPU times 0 with no
+/// other sign, so the caller counts each pair that reads as not available
+/// (`Metrics::stamps_not_available`), and every play and suite leg reports the count.
 ///
 /// Bound: the values only decide that command buffer's `GPUStartTime`, through arithmetic defined
 /// for every value that gives a time no later than its `GPUEndTime`.

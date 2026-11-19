@@ -85,9 +85,12 @@ pub(crate) mod on_device {
             body(name, instance, device);
             within("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop(test, counters.gauges());
-            // The matrix holds this at 0 (`readback::timestamps`).
-            let unavailable = counters.metrics().stamps_not_available;
+            // The matrix holds these at 0 (`readback::timestamps`, the completion thread's wait).
+            let metrics = counters.metrics();
+            let unavailable = metrics.stamps_not_available;
             println!("M2V-MATRIX metric {test}/stamps_not_available {unavailable}");
+            let behind = metrics.waits_behind_counter;
+            println!("M2V-MATRIX metric {test}/waits_behind_counter {behind}");
         }
     }
 
@@ -179,6 +182,35 @@ pub(crate) mod on_device {
                 })
                 .expect("a completed handler");
         }
+    }
+
+    /// The completion thread's host wait with a timeout of 0, which every retirement rests on
+    /// (`complete::reached_by_wait`), reports the progress value the semaphore holds as reached,
+    /// and a value no submission has yet signalled as not reached, at once.
+    #[test]
+    fn every_device_tells_a_reached_progress_value_from_one_to_come_without_blocking() {
+        each_device("zero_timeout_wait", |name, _, device| {
+            let core = Arc::clone(device.core());
+            let progress = core.done.progress;
+            // SAFETY: the progress semaphore is the device's.
+            let held = unsafe { core.device.get_semaphore_counter_value(progress) }
+                .unwrap_or_else(|error| panic!("{name}: the progress counter: {error}"));
+            let wait = |value| crate::complete::reached_by_wait(&core.device, progress, value);
+            assert_eq!(
+                wait(held),
+                Ok(true),
+                "{name}: the value the semaphore holds"
+            );
+            // Far past any value the device's own work signals while the test runs.
+            let to_come = held + (1 << 32);
+            let started = Instant::now();
+            assert_eq!(wait(to_come), Ok(false), "{name}: a value to come");
+            assert!(
+                started.elapsed() < PATIENCE,
+                "{name}: the wait for a value to come took {:?}",
+                started.elapsed()
+            );
+        });
     }
 
     /// A command buffer goes through Metal's states, runs its handlers in order (its scheduled
