@@ -16,8 +16,9 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, within};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        BufferLayout, Device, Error, Export, ExportHandle, Gap, HeapRange, Limit, MemoryClass,
-        PixelFormat, Refusal, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
+        BufferLayout, Device, Error, Export, ExportHandle, Gap, HeapRange, IndexClass, Limit,
+        MemoryClass, PixelFormat, Refusal, TextureDescriptor, TexturePlace, TextureType,
+        TextureUsage,
     };
     use ash::vk;
     use std::time::Instant;
@@ -402,7 +403,9 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"))
                 .max(256);
             let buffer = (device.new_buffer(block.id, 0, LEN, None)).expect("a buffer");
-            let texture = (buffer.new_texture(&d, None, 0, pitch))
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            let texture = (buffer.new_texture(&d, Some(first), 0, pitch))
                 .unwrap_or_else(|error| panic!("{name}: a texture over the export: {error}"));
             assert!(texture.copied_over().is_some(), "{name}: copied");
             // A read of the texture copies the buffer in, counted.
