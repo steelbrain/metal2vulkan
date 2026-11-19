@@ -1,4 +1,4 @@
-//! Texture slots that hold no texture, read by every stage of a draw.
+//! Texture slots that hold no texture, beside the live work of every stage of a draw.
 //!
 //! Under a device cfg, on every device of the cfg's kind, the owned fixture
 //! `engine/nil_slots.ll`'s vertex, post-tessellation vertex and fragment functions, in a plain
@@ -8,14 +8,15 @@
 //! also sample, and the four textures of an argument buffer whose IDs are 0, an index of the
 //! consumer's grant that no texture ever took, the index of a texture a draw read and that then
 //! went, and a live texture (not sampled: the runtime refuses a sample of an argument buffer's
-//! texture, a known gap of its README). No command buffer ends in an error. Metal's answer, measured on an M3 Max under macOS
-//! 27.0.1 for the nil slot and the ID 0 (the same in all three functions and both draws): a sample
-//! and a read give the zero texel, and the width, the height and the level count are each 1. The
-//! runtime's contract is that an element no live object owns answers as Metal's nil texture does
-//! (`crate::arrays`), so the never-taken and the gone IDs are held to the same answer. The live
-//! texture gives its texel, 4, 4 and 1 level; the patch's function its control points and tint as
-//! bound. Metal's documents state no answer for a nil texture: `setVertexTexture:atIndex:` takes a
-//! `nullable` texture, and the shading language gives `is_null_texture`.
+//! texture, a known gap of its README).
+//!
+//! The test holds what Metal defines: every command buffer completes without an error, and the
+//! live work beside the nil forms answers exactly, in every stage of both draws: the live
+//! texture's texel, its width, height and level count, the patch's control points and tint as
+//! bound, and the stage words. It holds nothing about what a member function of a texture that
+//! is not there returns: "The behavior of calling any texture member function with a null
+//! texture is undefined." (Metal Shading Language Specification, section 6.13.18, Null Texture
+//! Functions). A device fault or a lost device fails a command buffer here.
 //!
 //! `llvm-as` assembles the fixture; without it the test skips visibly.
 
@@ -54,16 +55,12 @@ mod on_device {
     const NEVER: u32 = 6;
     const GONE: u32 = 7;
 
-    /// The record a stage writes (`stage`: 1 vertex, 2 post-tessellation, 3 fragment), as Metal
-    /// answers it: each of the four textures that hold none the zero texel at the sample and the
-    /// read and 1, 1 and 1 level; the live one its texel at the read (its sample words 0, as the
-    /// fixture samples no argument buffer's texture), 4, 4 and 1 level; the post-tessellation
-    /// function its control points and tint.
-    fn record(stage: u32) -> Vec<u32> {
+    /// The words a stage writes (`stage`: 1 vertex, 2 post-tessellation, 3 fragment) that Metal
+    /// defines, from the live texture's probe on: the live texture's texel at the read (its sample
+    /// words 0, as the fixture samples no argument buffer's texture), 4, 4 and 1 level; the
+    /// post-tessellation function's control points and tint; the stage word.
+    fn defined(stage: u32) -> Vec<u32> {
         let mut r = vec![0; RECORD];
-        for source in 0..4 {
-            r[source * PROBE + 8..source * PROBE + 11].copy_from_slice(&[1, 1, 1]);
-        }
         let live = 4 * PROBE;
         for c in 0..4 {
             r[live + 4 + c] = TEXEL[c].to_bits();
@@ -75,13 +72,12 @@ mod on_device {
             }
         }
         r[72] = stage;
-        r
+        r.split_off(LIVE_PROBE)
     }
 
-    /// Whether word `w` of a record is a size or level query's answer.
-    fn query(w: usize) -> bool {
-        w < 5 * PROBE && w % PROBE >= 8
-    }
+    /// The first word of the live texture's probe in a record; the four probes before it read
+    /// textures that are not there.
+    const LIVE_PROBE: usize = 4 * PROBE;
 
     /// The fixture's library, or None where `llvm-as` is missing.
     fn fixture() -> Option<Library> {
@@ -194,11 +190,11 @@ mod on_device {
         run(name, &command_buffer);
     }
 
-    /// The plain draw and the patch draw each answer [`record`] in both of their stages, with the
-    /// argument buffer's IDs nil, never taken, gone and live; the gone texture's index answered
-    /// its texel to a draw before it went.
+    /// The plain draw and the patch draw each answer [`defined`] in both of their stages, with
+    /// the argument buffer's IDs nil, never taken, gone and live; the gone texture's index
+    /// answered its texel to a draw before it went.
     #[test]
-    fn every_device_reads_zeros_from_texture_slots_that_hold_no_texture() {
+    fn every_stage_runs_its_live_work_beside_texture_slots_that_hold_no_texture() {
         let Some(library) = fixture() else {
             return;
         };
@@ -244,10 +240,9 @@ mod on_device {
                 (&ab, &out),
                 None,
             );
-            let third = 3 * PROBE..4 * PROBE;
             assert_eq!(
-                words(&out, RECORD)[third.clone()],
-                record(1)[4 * PROBE..5 * PROBE],
+                words(&out, RECORD)[3 * PROBE..LIVE_PROBE],
+                defined(1)[..PROBE],
                 "{name}: the gone texture's probe while it lived"
             );
             let counters = device.counters();
@@ -256,9 +251,6 @@ mod on_device {
             within("the gone texture's index", || {
                 counters.gauges().descriptor_slots < slots
             });
-            // Both draws run before anything is held, so a difference in one does not hide what
-            // the other does.
-            let mut got = Vec::new();
             for (what, state, factors, stage) in [
                 ("the plain draw", &plain_state, None, 1),
                 ("the patch draw", &patch_state, Some(&factors), 2),
@@ -268,39 +260,19 @@ mod on_device {
                 let both = words(&out, 2 * RECORD);
                 let (first, second) = both.split_at(RECORD);
                 for (record, stage) in [(first, stage), (second, 3)] {
-                    let queries: Vec<u32> = (0..5 * PROBE)
-                        .filter(|&w| query(w))
-                        .map(|w| record[w])
-                        .collect();
-                    println!("{name}: {what}, stage {stage}: size and level answers {queries:?}");
-                    got.push((what, stage, record.to_vec()));
+                    assert_eq!(
+                        record[LIVE_PROBE..],
+                        defined(stage),
+                        "{name}: {what}, stage {stage}: the live texture's probe (texel, width, \
+                         height, levels), the control points, the tint and the stage word"
+                    );
                 }
             }
-            for (what, stage, record) in &got {
-                let want = self::record(*stage);
-                let texels = |r: &[u32]| -> Vec<u32> {
-                    (0..RECORD).filter(|&w| !query(w)).map(|w| r[w]).collect()
-                };
-                assert_eq!(
-                    texels(record),
-                    texels(&want),
-                    "{name}: {what}, stage {stage}: the texels, control points, tint and stage \
-                     (11 words a texture: nil slot, ID 0, never taken, gone, live)"
-                );
-            }
-            for (what, stage, record) in &got {
-                assert_eq!(
-                    record,
-                    &self::record(*stage),
-                    "{name}: {what}, stage {stage}: the size and level answers (Metal's nil \
-                     texture answers 1, 1 and 1)"
-                );
-            }
             println!(
-                "{name}: a plain draw and a patch draw read zeros in their vertex, \
-                 post-tessellation and fragment functions from a nil texture slot and from \
-                 argument-buffer IDs nil, never taken and gone, and answered Metal's sizes; the live \
-                 texture answered its texel"
+                "{name}: a plain draw and a patch draw completed with their vertex, \
+                 post-tessellation and fragment functions reading a nil texture slot and \
+                 argument-buffer IDs nil, never taken and gone, and their live work answered \
+                 exactly"
             );
         });
     }

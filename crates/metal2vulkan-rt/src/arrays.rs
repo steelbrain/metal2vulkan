@@ -12,8 +12,10 @@
 //!
 //! Every element no live object owns holds a defined value, so a nil, stale or forged index reads
 //! zeros or samples plainly on every device, where an element never written would be undefined
-//! behaviour. A texture element is a null descriptor (`nullDescriptor`), which reads zeros,
-//! answers 0 to its size queries and drops its writes, as Metal's nil texture does. A sampler
+//! behaviour. A texture element is a null descriptor (`nullDescriptor`): it reads zeros, answers
+//! 0 to its size and level queries and drops its writes. The Metal Shading Language leaves every
+//! member function of a null texture undefined (section 6.13.18), so these are the runtime's
+//! answers, not Metal's. A sampler
 //! element is its array's default sampler, nearest and clamped to the edge; the comparison
 //! array's compares with `NEVER`, so a comparison through it answers 0, as Metal's default
 //! comparison (`MTLCompareFunctionNever`) does. Vulkan has no null sampler. The device writes
