@@ -710,9 +710,11 @@ mod on_device {
             let queue = device.new_command_queue(4).expect("a queue");
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
             let counters = device.counters();
-            for (load, first, color_of) in [
-                (crate::LoadAction::Clear, 3, BLUE),
-                (crate::LoadAction::Load, 6, WHITE),
+            // The first command buffer records one barrier more than the second: the two new
+            // images' moves from undefined to their home layouts.
+            for (load, first, color_of, barriers) in [
+                (crate::LoadAction::Clear, 3, BLUE, 4),
+                (crate::LoadAction::Load, 6, WHITE, 3),
             ] {
                 settled(&device);
                 let before = counters.metrics();
@@ -733,8 +735,9 @@ mod on_device {
                         after.passes - before.passes,
                         after.bytes_copied - before.bytes_copied,
                     ),
-                    (1, 3, 1, 0),
-                    "{name}: {load:?}: submissions, barriers, passes, bytes copied"
+                    (1, barriers, 1, 0),
+                    "{name}: {load:?}: submissions, barriers (the first command buffer's fourth \
+                     moves the new images from undefined to home), passes, bytes copied"
                 );
                 assert_eq!(read(&color, 4), texels(|_, _| color_of), "{name}: {load:?}");
                 if depth.unit().is_some() {
