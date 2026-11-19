@@ -3264,6 +3264,115 @@ pub(crate) mod on_device {
         );
     }
 
+    /// The variable that makes [`teardown_child`] a consumer of the shape it names.
+    const TEARDOWN_CHILD: &str = "M2V_TEARDOWN_CHILD";
+
+    /// The child of `every_device_ends_its_teardown_before_the_process_exits`, run in a process of
+    /// its own: a consumer that makes a device, drops every handle it holds, and returns from
+    /// `main`, which exits the process. In the shape `listener`, a shared event's listener holds a
+    /// handle of the device, and the host value that runs it is set before the consumer's drops;
+    /// in the shape `kept`, a committed command buffer keeps a buffer of the device. It reports
+    /// whether any gauge was still above zero as it returned. Without its variable, it does
+    /// nothing.
+    #[test]
+    fn teardown_child() {
+        let Ok(shape) = std::env::var(TEARDOWN_CHILD) else {
+            return;
+        };
+        let instance = crate::tests::validation::bare(&[]);
+        let (_, physical) = (devices_of_the_cfgs_kind(&instance).into_iter().next())
+            .expect("a device of this cfg's kind");
+        let device = Device::new(&physical, DeviceOptions::default()).expect("a device");
+        let counters = device.counters();
+        match shape.as_str() {
+            "listener" => {
+                let event = shared_event(&device);
+                let held = device.clone();
+                event
+                    .notify_listener(1, move |_| drop(held))
+                    .expect("a listener");
+                event.set_signaled_value(1);
+            }
+            "kept" => {
+                let mut arena = Arena::new(&device);
+                let a = arena.buffer();
+                let command_buffer = (queue(&device).command_buffer()).expect("a command buffer");
+                fill(&command_buffer, &a, 1);
+                command_buffer.commit().expect("a commit");
+            }
+            _ => panic!("{shape}: no such shape"),
+        }
+        drop((device, physical, instance));
+        let live = counters.gauges() != Gauges::default();
+        println!("M2V teardown child: live at return {live}");
+    }
+
+    /// In processes of their own, eight at a time, a consumer makes a device, drops every handle
+    /// it holds and returns from `main` ([`teardown_child`], each shape): each exits 0, with every
+    /// gauge at zero as it returned. `M2V_TEARDOWN_RUNS` runs each shape that many times (16 by
+    /// default).
+    #[test]
+    fn every_device_ends_its_teardown_before_the_process_exits() {
+        let runs: usize = std::env::var("M2V_TEARDOWN_RUNS")
+            .ok()
+            .and_then(|runs| runs.parse().ok())
+            .unwrap_or(16);
+        let executable = std::env::current_exe().expect("the test executable");
+        let mut failed = Vec::new();
+        for shape in ["listener", "kept"] {
+            let (mut clean, mut live, mut died) = (0, 0, Vec::new());
+            let mut left = runs;
+            while left > 0 {
+                let children: Vec<_> = (0..left.min(8))
+                    .map(|_| {
+                        std::process::Command::new(&executable)
+                            .args([
+                                "--exact",
+                                "tests::command::on_device::teardown_child",
+                                "--nocapture",
+                                "--test-threads=1",
+                            ])
+                            .env(TEARDOWN_CHILD, shape)
+                            .env_remove("VK_INSTANCE_LAYERS")
+                            .stdout(std::process::Stdio::piped())
+                            .stderr(std::process::Stdio::piped())
+                            .spawn()
+                            .expect("a child")
+                    })
+                    .collect();
+                left -= children.len();
+                for child in children {
+                    let output = child.wait_with_output().expect("the child's output");
+                    let text = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    if !output.status.success() {
+                        println!("M2V teardown {shape}: {:?}\n{text}", output.status);
+                        died.push(format!("{:?}", output.status));
+                    } else if text.contains("live at return false") {
+                        clean += 1;
+                    } else if text.contains("live at return true") {
+                        live += 1;
+                    } else {
+                        println!("M2V teardown {shape}: no report\n{text}");
+                        died.push("no report".to_string());
+                    }
+                }
+            }
+            println!(
+                "M2V teardown {shape}: {clean} clean, {live} live at return, {} died of {runs}: \
+                 {died:?}",
+                died.len()
+            );
+            if clean != runs {
+                failed.push(shape);
+            }
+        }
+        assert!(failed.is_empty(), "shapes with a run not clean: {failed:?}");
+    }
+
     /// A command buffer with nothing for the GPU takes no submission. Committed behind busy work
     /// on its queue and before more, it completes between them, its completed handler between
     /// theirs, its GPU start and end equal and at the busy one's end; committed alone, it
