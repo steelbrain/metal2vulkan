@@ -11,7 +11,7 @@ use crate::export::Exports;
 use crate::extension::{self, ConsumerFeature, DeviceExtension};
 use crate::fill::Filler;
 use crate::floor;
-use crate::hazard::Ids;
+use crate::hazard::{HeapIds, Ids};
 use crate::import::Imports;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::kernel_map::KernelMap;
@@ -238,6 +238,8 @@ pub(crate) struct Core {
     pub(crate) ring: Ring,
     /// Resource ids, for the hazard sets.
     pub(crate) ids: Ids,
+    /// The heaps' ids in the hazard sets, which their resources take.
+    pub(crate) heap_ids: HeapIds,
     /// The translator, for what device creation enables, under the identity domains.
     pub(crate) translator: metal2vulkan::device::Device,
     /// The lowered kernels on disk, and the `VkPipelineCache` every pipeline is made through with
@@ -577,6 +579,7 @@ impl Device {
             limits,
             ring: Ring::new(),
             ids: Ids::new(),
+            heap_ids: HeapIds::default(),
             translator,
             caches,
             kernels: KernelMap::new(),

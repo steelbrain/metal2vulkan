@@ -16,7 +16,7 @@ pub(crate) mod on_device {
     use crate::tests::kernels;
     use crate::{
         Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipelineState, Device, DispatchType,
-        Error, Gap, MemoryClass, Refusal,
+        Error, Gap, HeapRange, MemoryClass, Refusal,
     };
 
     /// Words in each test buffer: 256 bytes.
@@ -394,6 +394,85 @@ pub(crate) mod on_device {
             );
             let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
             assert_eq!(words(&x), expected, "{name}: concurrent");
+        });
+    }
+
+    /// A heap's resources are one resource in the hazard sets, as Metal tracks a heap's: in a
+    /// serial encoder, a dispatch that uses a heap's buffer after one that wrote another of the
+    /// heap gets a barrier, the two over the same bytes or apart, and the second sees the first's
+    /// writes; two heaps' buffers get none. A buffer past its heap's end is refused, and the
+    /// device's map of heaps stays bounded as heaps come and go.
+    #[test]
+    fn every_device_orders_a_heap_s_resources_as_one() {
+        each_device("compute_heap_ids", |name, _, device| {
+            let state = step(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let block = (device.take_block(MemoryClass::Shared, 8192)).expect("a Shared block");
+            let heap = |offset, len| HeapRange {
+                block: block.id,
+                offset,
+                len,
+            };
+            let placed = |at: HeapRange, offset| {
+                (device.new_heap_buffer(at, offset, WORDS as u64 * 4))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            };
+            // Two dispatches of `step`, each over one buffer: the barriers they take, the
+            // segment's end among them.
+            let barriers = |buffers: [&Buffer; 2]| -> u64 {
+                let before = device.counters().metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                for buffer in buffers {
+                    encoder.set_buffer(Some(buffer), 0, 0).expect("a buffer");
+                    encoder
+                        .dispatch_threadgroups([4, 1, 1], [16, 1, 1])
+                        .expect("a dispatch");
+                }
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                device.counters().metrics().barriers - before.barriers
+            };
+            let (a, b) = (placed(heap(0, 1024), 0), placed(heap(0, 1024), 0));
+            let apart = placed(heap(0, 1024), 512);
+            let other = placed(heap(4096, 1024), 0);
+
+            // Over the same bytes: the second step reads the first's words.
+            write_words(&a, |index| index);
+            assert_eq!(barriers([&a, &b]), 2, "{name}: one heap, the same bytes");
+            let twice: Vec<u32> = (0..WORDS as u32).map(|x| (x * 2 + 1) * 2 + 1).collect();
+            assert_eq!(words(&b), twice, "{name}: one heap, the same bytes");
+
+            // Apart in one heap: still one resource.
+            assert_eq!(barriers([&a, &apart]), 2, "{name}: one heap, apart");
+            // Two heaps of one block: two resources.
+            assert_eq!(barriers([&apart, &other]), 1, "{name}: two heaps");
+
+            match device.new_heap_buffer(heap(0, 1024), 1000, 256) {
+                Err(Error::Refused(refusal)) => assert_eq!(
+                    refusal,
+                    Refusal::HeapBufferPlace {
+                        offset: 1000,
+                        length: 256,
+                        heap_len: 1024
+                    },
+                    "{name}: a buffer past its heap's end"
+                ),
+                other => panic!("{name}: a buffer past its heap's end: {:?}", other.err()),
+            }
+
+            // Heaps that come and go: the map drops the gone ones.
+            for at in 0..200 {
+                drop(placed(heap(at * 32, 32 + WORDS as u64 * 4), 0));
+            }
+            let entries = device.core().heap_ids.entries();
+            assert!(
+                entries <= 64 + 4,
+                "{name}: {entries} heaps mapped after 200 came and went"
+            );
         });
     }
 

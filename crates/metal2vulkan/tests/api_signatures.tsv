@@ -9619,6 +9619,7 @@ method	metal2vulkan-rt::Device::new_drawable_texture	pub unsafe fn new_drawable_
 method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
 method	metal2vulkan-rt::Device::new_exported_block	pub fn new_exported_block(&self, handle: ExportHandle, len: u64) -> Result<(Block, Export), Error>
 method	metal2vulkan-rt::Device::new_fence	pub fn new_fence(&self) -> Fence
+method	metal2vulkan-rt::Device::new_heap_buffer	pub fn new_heap_buffer(&self, heap: HeapRange, offset: u64, length: u64) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Device::new_heap_texture	pub fn new_heap_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, heap: HeapRange, offset: u64) -> Result<Texture, Error>
 method	metal2vulkan-rt::Device::new_managed_buffer	pub fn new_managed_buffer(&self, bytes: (BlockId, u64), copy: Option<(BlockId, u64)>, length: u64, copied: u64) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Device::new_managed_texture	pub fn new_managed_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, bytes: &Buffer, places: &[BytesPlace]) -> Result<Texture, Error>
@@ -13905,6 +13906,7 @@ variant	metal2vulkan-rt::Refusal::DrawableUsage	DrawableUsage { missing: u32 }
 variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
 variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen
 variant	metal2vulkan-rt::Refusal::FillRange	FillRange { start: u64, end: u64, len: u64 }
+variant	metal2vulkan-rt::Refusal::HeapBufferPlace	HeapBufferPlace { offset: u64, length: u64, heap_len: u64 }
 variant	metal2vulkan-rt::Refusal::HeapTexturePlace	HeapTexturePlace { offset: u64, size: u64, align: u64, heap_len: u64 }
 variant	metal2vulkan-rt::Refusal::InScheduledHandler	InScheduledHandler
 variant	metal2vulkan-rt::Refusal::IndexBufferOffset	IndexBufferOffset { offset: u64, length: u64 }

@@ -97,6 +97,20 @@ pub enum Refusal {
         /// The block's length.
         block_len: u64,
     },
+    /// A heap buffer whose range leaves its heap
+    /// ([`Device::new_heap_buffer`](crate::Device::new_heap_buffer)). Metal answers nil for a
+    /// buffer placed past the end of its heap.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil
+    /// for a 4096-byte buffer at offset 1,047,552).
+    HeapBufferPlace {
+        /// The buffer's offset in the heap.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+        /// The heap's bytes.
+        heap_len: u64,
+    },
     /// A Managed buffer whose bytes are in a block the host does not map, a Private block
     /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
     ///
@@ -1495,6 +1509,14 @@ impl fmt::Display for Refusal {
             } => write!(
                 f,
                 "a buffer of {length} bytes at offset {offset} leaves its block of {block_len} bytes"
+            ),
+            Refusal::HeapBufferPlace {
+                offset,
+                length,
+                heap_len,
+            } => write!(
+                f,
+                "a heap buffer of {length} bytes at offset {offset} leaves its heap of {heap_len} bytes"
             ),
             Refusal::ManagedBlockNotShared { block } => write!(
                 f,

@@ -620,6 +620,12 @@ made, with no lock, and never rewritten for layouts.
   block off the image's alignment, or a heap range past its block is refused
   (`Refusal::HeapTexturePlace`); the image is never bound outside its heap. The texture holds
   the block, so a released block goes back to the pool only once its textures' images are gone.
+  `Device::new_heap_buffer(heap, offset, length)` is `newBufferWithLength:options:offset:` of a
+  heap: `Device::new_buffer` at the heap's offset plus `offset` in its block, none of its bytes
+  zeroed, and a range past the heap's end refused (`Refusal::HeapBufferPlace`). The heap is the
+  one at its offset in its block, and every buffer and texture placed in it takes its id in the
+  compute encoders' hazard sets (below). A buffer the consumer places with `Device::new_buffer`
+  is no heap's, and keeps its own.
 - `Buffer::new_texture(descriptor, index, offset, bytes_per_row)` is
   `newTextureWithDescriptor:offset:bytesPerRow:`: a texture whose texels are the buffer's bytes
   from `offset`, rows `bytes_per_row` apart, of the buffer's storage mode. Any pitch of whole texels at least a row long is taken; rows closer than a row or not a
@@ -1217,7 +1223,11 @@ that touch blocks first.
   slots, with the access the translator states for each (a texture's sample and read are reads),
   the `use_resource` declarations, and an indirect dispatch's arguments buffer (a read). The
   hazard sets (resources read and resources written since the last barrier) are kept by resource,
-  a buffer or a texture being one resource, in a table indexed by
+  a buffer or a texture being one resource, and every resource placed in one heap
+  (`Device::new_heap_buffer`, `Device::new_heap_texture`) being that heap, whatever its tracking
+  mode and whatever bytes each reaches: Metal tracks a heap's resources as one ("tracking is done
+  at the granularity of the heap", `MTLHeap.h`'s `hazardTrackingMode`), so a write through one
+  orders every later use of another. They are a table indexed by
   a small resource id with a generation counter, so clearing them is one increment. They carry
   across the encoders of a command buffer until a barrier.
 - A `Serial` encoder places one global memory barrier before a dispatch that reads or writes a

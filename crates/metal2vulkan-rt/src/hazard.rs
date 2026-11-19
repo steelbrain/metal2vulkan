@@ -1,10 +1,15 @@
 //! The hazard sets of a command buffer's compute encoders: the resources read and the resources
-//! written since the last barrier, by resource as Metal tracks them, not by byte range. They are a
+//! written since the last barrier, by resource as Metal tracks them (a heap's resources as one, the
+//! heap's: [`HeapId`]), not by byte range. They are a
 //! table indexed by resource id with a generation counter, so starting the sets again costs one
 //! increment. They carry across the encoders of a command buffer until a barrier, so a write after
 //! an encoder that only read still finds the read.
 
+use crate::device::Core;
+use crate::memory::BlockId;
 use metal2vulkan::metal::BindingAccess;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, Weak};
 
 /// How a dispatch uses a resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,5 +159,71 @@ impl Ids {
 
     pub(crate) fn give_back(&self, id: u32) {
         crate::device::lock(&self.state).free.push(id);
+    }
+}
+
+/// A heap's id in the hazard sets, which every resource placed in the heap takes there in place
+/// of its own: Metal tracks a heap's resources as one ("tracking is done at the granularity of the
+/// heap", `MTLHeap.h`'s `hazardTrackingMode`), so a write through any of them orders every later
+/// use of any other, whether or not their bytes meet. Its id goes back once no resource holds it.
+pub(crate) struct HeapId {
+    core: Arc<Core>,
+    id: u32,
+}
+
+impl HeapId {
+    /// The id.
+    pub(crate) fn get(&self) -> u32 {
+        self.id
+    }
+}
+
+impl Drop for HeapId {
+    fn drop(&mut self) {
+        self.core.ids.give_back(self.id);
+    }
+}
+
+/// The heaps that hold a resource, by their block and their offset in it, each held weakly by
+/// the device and strongly by its resources: the entries of heaps gone are dropped once there are
+/// as many as there were entries at the last such pass, so the map stays within twice the live
+/// heaps (and [`HEAP_IDS_PRUNE`]).
+#[derive(Default)]
+pub(crate) struct HeapIds {
+    state: Mutex<HeapIdState>,
+}
+
+#[derive(Default)]
+struct HeapIdState {
+    heaps: HashMap<(BlockId, u64), Weak<HeapId>>,
+    prune_at: usize,
+}
+
+/// The entries at which [`HeapIds`] first drops the gone heaps'.
+const HEAP_IDS_PRUNE: usize = 64;
+
+impl HeapIds {
+    /// The id of the heap at `offset` in `block`, a new one where no resource of it lives.
+    pub(crate) fn of(&self, core: &Arc<Core>, block: BlockId, offset: u64) -> Arc<HeapId> {
+        let mut state = crate::device::lock(&self.state);
+        if let Some(id) = (state.heaps.get(&(block, offset))).and_then(Weak::upgrade) {
+            return id;
+        }
+        if state.heaps.len() >= state.prune_at.max(HEAP_IDS_PRUNE) {
+            state.heaps.retain(|_, id| id.strong_count() > 0);
+            state.prune_at = state.heaps.len() * 2;
+        }
+        let id = Arc::new(HeapId {
+            core: Arc::clone(core),
+            id: core.ids.take(),
+        });
+        state.heaps.insert((block, offset), Arc::downgrade(&id));
+        id
+    }
+
+    /// For the tests: the entries the map holds, gone heaps' among them.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn entries(&self) -> usize {
+        crate::device::lock(&self.state).heaps.len()
     }
 }

@@ -6,10 +6,11 @@ use crate::counters::Gauge;
 use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
 use crate::fill;
+use crate::hazard::HeapId;
 use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
 use crate::over::ManagedOvers;
 use crate::submit::Held;
-use crate::texture::SizeAndAlign;
+use crate::texture::{HeapRange, SizeAndAlign};
 use ash::vk;
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -58,6 +59,9 @@ struct Inner {
     device: Device,
     /// Its resource id, for the hazard sets.
     id: u32,
+    /// The heap the consumer placed it in ([`Device::new_heap_buffer`]), whose id its uses take in
+    /// the hazard sets.
+    heap: Option<Arc<HeapId>>,
     /// The block the consumer placed it in: of a Managed buffer, the block of its bytes.
     block: Arc<Block>,
     offset: u64,
@@ -162,6 +166,48 @@ impl Device {
         length: u64,
         zero_from: Option<u64>,
     ) -> Result<Buffer, Error> {
+        self.placed_buffer(block, offset, length, zero_from, None)
+    }
+
+    /// `MTLHeap`'s `newBufferWithLength:options:offset:`: a buffer of `length` bytes at `offset`
+    /// in `heap`, where the consumer's own placement put it
+    /// ([`Device::heap_buffer_size_and_align`]), made as [`Device::new_buffer`] makes one at the
+    /// heap's offset plus `offset` in its block, with none of its bytes zeroed: Metal does not zero
+    /// a heap's memory. Its uses take the heap's id in the compute encoders' hazard sets, as the
+    /// uses of a texture placed in the heap do ([`Device::new_heap_texture`]): Metal tracks a
+    /// heap's resources as one, so within a command buffer a write through any of them orders
+    /// every later use of any other, whatever bytes each reaches. The heap is the one at its
+    /// offset in its block; its id lives while a resource placed in it does.
+    ///
+    /// Err: [`Refusal::HeapBufferPlace`] for a range that leaves the heap; as
+    /// [`Device::new_buffer`] otherwise.
+    pub fn new_heap_buffer(
+        &self,
+        heap: HeapRange,
+        offset: u64,
+        length: u64,
+    ) -> Result<Buffer, Error> {
+        if offset.checked_add(length).is_none_or(|end| end > heap.len) {
+            return Err(Error::Refused(Refusal::HeapBufferPlace {
+                offset,
+                length,
+                heap_len: heap.len,
+            }));
+        }
+        let id = (self.core().heap_ids).of(self.core(), heap.block, heap.offset);
+        let at = heap.offset.saturating_add(offset);
+        self.placed_buffer(heap.block, at, length, None, Some(id))
+    }
+
+    /// [`Device::new_buffer`], the buffer taking `heap`'s id in the hazard sets where it has one.
+    fn placed_buffer(
+        &self,
+        block: BlockId,
+        offset: u64,
+        length: u64,
+        zero_from: Option<u64>,
+        heap: Option<Arc<HeapId>>,
+    ) -> Result<Buffer, Error> {
         if length == 0 {
             return Err(Error::Refused(Refusal::EmptyBuffer));
         }
@@ -193,7 +239,7 @@ impl Device {
             }
             self.core().counters.zeroed(length - from);
         }
-        Ok(self.buffer(block, offset, length, contents, None))
+        Ok(self.buffer(block, offset, length, contents, None, heap))
     }
 
     /// `newBufferWithLength:options:`, `newBufferWithBytes:length:options:` and
@@ -275,7 +321,7 @@ impl Device {
         // SAFETY: `offset` is inside the block.
         let contents = Some(Mapping::new(unsafe { mapping.at(offset) }));
         let Some((copy_block, copy_offset)) = copy else {
-            return Ok(self.buffer(block, offset, length, contents, None));
+            return Ok(self.buffer(block, offset, length, contents, None, None));
         };
         if copy_block.memory.spilled() {
             core.counters.rise_by(Gauge::ManagedSpilledBytes, length);
@@ -310,7 +356,7 @@ impl Device {
             )?;
             core.counters.zeroed(length - copied);
         }
-        let buffer = self.buffer(block, offset, length, contents, Some(copy));
+        let buffer = self.buffer(block, offset, length, contents, Some(copy), None);
         if copied > 0 {
             buffer.did_modify_range(0, copied)?;
         }
@@ -379,7 +425,8 @@ impl Device {
         Ok(block)
     }
 
-    /// A new buffer's handle, counted in [`Gauges::buffers`](crate::Gauges::buffers).
+    /// A new buffer's handle, counted in [`Gauges::buffers`](crate::Gauges::buffers), placed in
+    /// `heap` where it has one.
     fn buffer(
         &self,
         block: Arc<Block>,
@@ -387,12 +434,14 @@ impl Device {
         length: u64,
         contents: Option<Mapping>,
         copy: Option<Arc<DeviceCopy>>,
+        heap: Option<Arc<HeapId>>,
     ) -> Buffer {
         self.core().counters.rise(Gauge::Buffers);
         Buffer {
             inner: Arc::new(Inner {
                 device: self.clone(),
                 id: self.core().ids.take(),
+                heap,
                 block,
                 offset,
                 length,
@@ -529,9 +578,15 @@ impl Buffer {
         }
     }
 
-    /// Its resource id, for the hazard sets.
+    /// Its own resource id, whatever heap it is in.
     pub(crate) fn id(&self) -> u32 {
         self.inner.id
+    }
+
+    /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a
+    /// heap ([`Device::new_heap_buffer`]), its own elsewhere.
+    pub(crate) fn tracked_id(&self) -> u32 {
+        (self.inner.heap.as_ref()).map_or(self.inner.id, |heap| heap.get())
     }
 
     /// Whether `other` is the device this buffer was made on.

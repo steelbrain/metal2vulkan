@@ -34,6 +34,7 @@ use crate::buffer::Buffer;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
+use crate::hazard::HeapId;
 use crate::memory::{self, Block, BlockId, MemoryClass};
 use crate::places::Place;
 use crate::reaper::{Free, Job};
@@ -138,8 +139,10 @@ pub struct BytesPlace {
     pub bytes_per_image: u64,
 }
 
-/// No Metal counterpart: a heap's memory, `len` bytes at `offset` in a Private block the consumer
-/// holds, taken at the heap's creation; [`Device::new_heap_texture`] places textures in it.
+/// No Metal counterpart: a heap's memory, `len` bytes at `offset` in a block the consumer holds,
+/// taken at the heap's creation; [`Device::new_heap_texture`] places textures in it (in a Private
+/// block) and [`Device::new_heap_buffer`] buffers. The heap is the one at `offset` in `block`:
+/// every resource placed in it takes one id in the compute encoders' hazard sets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HeapRange {
     /// The block.
@@ -202,6 +205,9 @@ struct TextureInner {
     word: u32,
     /// Its resource id in the encoders' hazard sets.
     id: u32,
+    /// The heap it was placed in ([`Device::new_heap_texture`]), whose id its uses take in the
+    /// compute encoders' hazard sets; a view's is its parent's.
+    heap: Option<Arc<HeapId>>,
     /// The bytes the host reaches in a buffer: a Managed texture's, or a texture over a buffer's.
     named: Option<Named>,
     /// A view's parent and place in the image ([`Texture::new_texture_view`]); `None` for a
@@ -808,7 +814,9 @@ impl Device {
     /// by [`Device::heap_texture_size_and_align`]. Nothing is allocated, and the bytes are those
     /// the heap's memory holds there, as Metal's heap textures are not zeroed. Textures may alias
     /// one another and the heap's buffers, as Metal's aliasable heap resources do; what one reads
-    /// after another wrote is undefined, as in Metal. The texture holds the block.
+    /// after another wrote is undefined, as in Metal. Its uses take the heap's id in the compute
+    /// encoders' hazard sets, as a heap buffer's do ([`Device::new_heap_buffer`]). The texture
+    /// holds the block.
     ///
     /// Err: as [`Device::new_texture`]; [`Error::NoSuchBlock`] for a block the consumer does not
     /// hold; [`Gap::HeapTexture`] for a Shared block or an exported one
@@ -1021,6 +1029,7 @@ impl Device {
             index,
             word: plan.word,
             id: core.ids.take(),
+            heap: None,
             named: None,
             view: None,
             emulation: plan.emulation,
@@ -1050,6 +1059,11 @@ impl Device {
             Reach::Views => None,
         };
         let core = self.core();
+        // A heap's texture takes the heap's id in the hazard sets.
+        let heap_id = match &source {
+            Source::Heap(_, heap, _) => Some(core.heap_ids.of(core, heap.block, heap.offset)),
+            _ => None,
+        };
         let (named, first, home) = match &source {
             Source::Plain | Source::Heap(..) => (None, vk::ImageLayout::UNDEFINED, plan.home),
             Source::Managed(bytes, places) => {
@@ -1198,6 +1212,7 @@ impl Device {
             index,
             word: plan.word,
             id: core.ids.take(),
+            heap: heap_id,
             named,
             view: None,
             emulation: plan.emulation,
@@ -3060,6 +3075,7 @@ impl Texture {
             index,
             word: plan.word,
             id: inner.id,
+            heap: inner.heap.clone(),
             named,
             view: Some(View {
                 parent,
@@ -3471,11 +3487,23 @@ impl Texture {
         }
     }
 
-    /// Its id in the encoders' hazard sets: a texture over a buffer in place's is the buffer's,
-    /// as the two are the same bytes and a use of either is a use of both.
+    /// Its id as bytes, which a pass's attachments and the copies over buffers name it by: a
+    /// texture over a buffer in place's is the buffer's, as the two are the same bytes and a use
+    /// of either is a use of both.
     pub(crate) fn hazard_id(&self) -> u32 {
         match &self.inner.named {
             Some(named) if named.form == Form::InPlace => named.buffer.id(),
+            _ => self.inner.id,
+        }
+    }
+
+    /// Its id in the compute encoders' hazard sets: its heap's where the consumer placed it in a
+    /// heap ([`Device::new_heap_texture`]), its buffer's there for one in place over a buffer, and
+    /// [`hazard_id`](Self::hazard_id) elsewhere.
+    pub(crate) fn tracked_id(&self) -> u32 {
+        match (&self.inner.heap, &self.inner.named) {
+            (Some(heap), _) => heap.get(),
+            (None, Some(named)) if named.form == Form::InPlace => named.buffer.tracked_id(),
             _ => self.inner.id,
         }
     }

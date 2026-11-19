@@ -301,9 +301,8 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
             offset,
         } => {
             let range = heap_at(*heap)?;
-            let at = range.offset + offset;
             // A heap's memory is not zeroed for a buffer placed in it, as Metal's is not.
-            let buffer = (device.new_buffer(range.block, at, *length, None)).map_err(of_rt)?;
+            let buffer = (device.new_heap_buffer(range, *offset, *length)).map_err(of_rt)?;
             Ok(Made::Buffer {
                 buffer,
                 _blocks: Vec::new(),

@@ -188,8 +188,8 @@ pub struct ComputeCommandEncoder {
     threadgroup_lengths: Vec<(u32, u32)>,
     /// The lengths of the last variant looked up, in its kernel's order, kept to reuse.
     lengths: Vec<u32>,
-    /// `use_resource` declarations, by resource id.
-    declared: Vec<(u32, Access)>,
+    /// `use_resource` declarations, by resource id: its own and its id in the hazard sets.
+    declared: Vec<([u32; 2], Access)>,
     /// A `use_resource` declaration writes a Shared buffer.
     declared_shared_write: bool,
     /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state and the
@@ -704,7 +704,7 @@ impl ComputeCommandEncoder {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 building.keep(buffer);
-                (buffer.id(), buffer.is_shared())
+                ([buffer.id(), buffer.tracked_id()], buffer.is_shared())
             }
             Resource::Texture(texture) => {
                 if !texture.is_of(building.device.core()) {
@@ -713,7 +713,10 @@ impl ComputeCommandEncoder {
                 building.keep_texture(texture);
                 // The host reads a texture's bytes through a copy that makes them visible to it
                 // itself (`Texture::get_bytes`), but for a texture over a Shared buffer.
-                (texture.hazard_id(), texture.host_reads())
+                (
+                    [texture.hazard_id(), texture.tracked_id()],
+                    texture.host_reads(),
+                )
             }
         };
         let Some(access) = usage.access() else {
@@ -1066,15 +1069,15 @@ impl ComputeCommandEncoder {
                 textures: &self.textures,
                 declared: &self.declared,
                 indirect: match grid {
-                    Grid::Indirect(buffer, _) => Some(buffer.id()),
+                    Grid::Indirect(buffer, _) => Some([buffer.id(), buffer.tracked_id()]),
                     Grid::Direct { .. } => None,
                 },
             };
             let building = recording(&mut self.building);
             // Textures over a buffer in an image of their own take their copies first
             // (`crate::over`).
-            let overs =
-                (building.copies_over()).then(|| accesses.each(interface).collect::<Vec<_>>());
+            let overs = (building.copies_over())
+                .then(|| accesses.each(interface, false).collect::<Vec<_>>());
             if let Some(overs) = &overs {
                 let unbound = interface.reads_unbound || interface.writes_unbound;
                 building.overs_before(overs, unbound)?;
@@ -1360,30 +1363,44 @@ fn merge(a: Access, b: Access) -> Access {
 pub(crate) struct Accesses<'a> {
     slots: &'a [Slot],
     textures: &'a [Option<Lent<Texture>>],
-    declared: &'a [(u32, Access)],
-    indirect: Option<u32>,
+    declared: &'a [([u32; 2], Access)],
+    indirect: Option<[u32; 2]>,
 }
 
 impl Accesses<'_> {
-    /// Each resource the dispatch of a kernel of `interface` touches, by id, with its access.
+    /// Each resource the dispatch of a kernel of `interface` touches, with its access: by its own
+    /// id ([`Buffer::id`], [`Texture::hazard_id`]), which the copies over buffers name it by, or,
+    /// where `tracked`, by its id in the hazard sets ([`Buffer::tracked_id`],
+    /// [`Texture::tracked_id`]: a heap's resources take the heap's).
     pub(crate) fn each<'b>(
         &'b self,
         interface: &'b Interface,
+        tracked: bool,
     ) -> impl Iterator<Item = (u32, Access)> + 'b {
-        let slots = interface.buffers.iter().filter_map(|&(slot, access)| {
+        let at = usize::from(tracked);
+        let slots = interface.buffers.iter().filter_map(move |&(slot, access)| {
             match self.slots.get(slot as usize) {
-                Some(Slot::Buffer { buffer, .. }) => Some((buffer.id(), access)),
+                Some(Slot::Buffer { buffer, .. }) => {
+                    Some(([buffer.id(), buffer.tracked_id()][at], access))
+                }
                 _ => None,
             }
         });
-        let textures = interface.textures.iter().filter_map(|&(slot, access)| {
-            let texture = self.textures.get(slot as usize)?.as_ref()?;
-            Some((texture.hazard_id(), access))
-        });
+        let textures = interface
+            .textures
+            .iter()
+            .filter_map(move |&(slot, access)| {
+                let texture = self.textures.get(slot as usize)?.as_ref()?;
+                Some(([texture.hazard_id(), texture.tracked_id()][at], access))
+            });
         slots
             .chain(textures)
-            .chain(self.declared.iter().copied())
-            .chain(self.indirect.map(|id| (id, Access::Read)))
+            .chain(
+                self.declared
+                    .iter()
+                    .map(move |&(ids, access)| (ids[at], access)),
+            )
+            .chain(self.indirect.map(|ids| (ids[at], Access::Read)))
     }
 }
 
@@ -1402,7 +1419,7 @@ impl Building {
         let hazards = self.hazards();
         let conflict = serial
             && (accesses
-                .each(interface)
+                .each(interface, true)
                 .any(|(id, access)| hazards.conflicts(id, access))
                 || (interface.reads_unbound && hazards.wrote())
                 || (interface.writes_unbound && hazards.touched()));
@@ -1414,7 +1431,7 @@ impl Building {
         }
         let hazards = self.hazards();
         let mut wrote = false;
-        for (id, access) in accesses.each(interface) {
+        for (id, access) in accesses.each(interface, true) {
             hazards.mark(id, access);
             wrote |= access.writes();
         }

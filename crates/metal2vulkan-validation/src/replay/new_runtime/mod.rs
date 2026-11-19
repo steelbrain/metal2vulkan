@@ -1820,6 +1820,11 @@ impl NewRuntime {
                     }
                 }
             }
+            // A heap's buffer takes the heap's id in the hazard sets, as its textures do; a
+            // stream block's buffers are no heap's.
+            _ if &*call.selector == "newBufferWithLength:options:offset:" => {
+                device.new_heap_buffer(range, offset, length)
+            }
             _ => device.new_buffer(range.block, at, length, None),
         };
         let buffer = buffer.map_err(failed(call))?;
