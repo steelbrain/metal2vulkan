@@ -606,10 +606,6 @@ def instruction_gate(leg_id, row, records):
 #: to the ratio the row then reaches, and a row within HARNESS_BUDGET leaves the list. A row over
 #: HARNESS_BUDGET with no ceiling fails its leg.
 HARNESS_CEILINGS = {
-    # Ruled by the planner on the rows' measured medians, 1.20: a kernel over a grid one row high
-    # and one deep pays for running in tiles and for the RX 550's 64-bit address per read (the rt
-    # README's known gaps of pipeline states), from a Private table and from a Managed one alike.
-    "1002:699f": {"constant_managed": 1.20, "constant_private": 1.20},
     # Ruled by the planner, 1.05, on the rows' medians of 1.040 and 1.032 (e632e01478): a second
     # Shared buffer of 64 MiB on the 780M is rt's memset of the memory the first gave back
     # against old's import of fresh pages, the same zeroing by another hand.
