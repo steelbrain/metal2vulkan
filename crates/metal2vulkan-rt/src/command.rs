@@ -570,7 +570,9 @@ impl CommandBuffer {
     /// handlers have run. A command buffer held in a group goes at once, as
     /// [`CommandQueue::send_now`](crate::CommandQueue::send_now) sends it. In a completed handler
     /// or a listener of its device, on the completion thread, which runs the handlers: at once
-    /// for one completed or ended, its own handler's command buffer among them.
+    /// for one completed or ended, its own handler's command buffer among them, where Metal's
+    /// call never returns (Metal's wait is for the command buffer's completion handlers too, the
+    /// one it is called from among them).
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Refusal::WaitOnOwnThread`]
     /// in a completed handler or a listener of its device for one not yet completed or ended.

@@ -53,6 +53,9 @@ const WAIT: Duration = Duration::from_secs(60);
 /// The bytes the command-buffer facts' one blit fills, as the other sides fill.
 const TIMED_BYTES: usize = 256;
 
+/// The bytes the command buffer of a handler's own wait fills, as the old runtime's side fills.
+const HANDLER_FILL: usize = 64;
+
 /// Why the command-buffer facts' queue label and getters are not this side's to answer.
 const THE_CONSUMERS: &str = "a queue's label and a command buffer's device and commandQueue \
                              never reach the GPU: metal2vulkan-rt leaves them to its consumer";
@@ -1275,6 +1278,47 @@ impl Side for RtSide<'_> {
         Ok(facts
             .the_consumers(THE_CONSUMERS)
             .without_resource_state_encoder(Failure::unavailable("resource_state_command_encoder")))
+    }
+
+    /// A wait made from a command buffer's own handler, as the old runtime's side makes it: a
+    /// command buffer with one small fill, whose handler `wait.from` names makes the wait
+    /// `wait.wait` names on that same command buffer, and sends back what the wait answered. Both
+    /// waits here are bounded, so a wait the runtime neither refused nor returned from is recorded
+    /// as never returning instead of hanging the suite: the handler would still be inside it and
+    /// the command buffer would never complete.
+    fn handler_wait(&mut self, wait: crate::handler_waits::OwnWait) -> Answer<Value> {
+        use crate::handler_waits::{HandlerKind, WaitKind};
+        let of_rt = |error: rt::Error| Failure::of_rt(&error);
+        let filled = self.buffer(&[0u8; HANDLER_FILL])?;
+        let target = self.held(filled)?.clone();
+        let queue = self.queue()?.clone();
+        let command_buffer = queue.command_buffer().map_err(of_rt)?;
+        let mut blit = command_buffer.blit_command_encoder().map_err(of_rt)?;
+        (blit.fill_buffer(&target, 0..HANDLER_FILL as u64, 0x11)).map_err(of_rt)?;
+        blit.end_encoding();
+        let (sender, answer) = mpsc::channel();
+        let kind = wait.wait;
+        let handler = move |own: &rt::CommandBuffer| {
+            let answered = match kind {
+                WaitKind::UntilCompleted => own.wait_until_completed(),
+                WaitKind::UntilScheduled => own.wait_until_scheduled(),
+            };
+            let _ = sender.send(answered.err().map(|error| Failure::of_rt(&error)));
+        };
+        match wait.from {
+            HandlerKind::Scheduled => command_buffer.add_scheduled_handler(handler),
+            HandlerKind::Completed => command_buffer.add_completed_handler(handler),
+        }
+        .map_err(of_rt)?;
+        command_buffer.commit().map_err(of_rt)?;
+        if waited_for(&command_buffer, WAIT).is_none() {
+            return Ok(Value::Nothing(Negative::NeverReturned));
+        }
+        match answer.recv_timeout(WAIT) {
+            Ok(None) => Ok(Value::ok(Value::Absent)),
+            Ok(Some(failure)) => Err(failure),
+            Err(_) => Ok(Value::Nothing(Negative::NeverReturned)),
+        }
     }
 
     fn empty_command_buffers(&mut self) -> Answer<EmptyCommandBuffers> {
