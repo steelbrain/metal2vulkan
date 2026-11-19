@@ -16,7 +16,7 @@ pub(crate) mod on_device {
     use crate::tests::kernels;
     use crate::{
         Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipelineState, Device, DispatchType,
-        Error, Gap, HeapRange, MemoryClass, Refusal,
+        Error, Gap, HeapRange, Limit, MemoryClass, Refusal,
     };
 
     /// Words in each test buffer: 256 bytes.
@@ -58,6 +58,7 @@ pub(crate) mod on_device {
             ],
             threadgroups: Vec::new(),
             max_total_threads: 1024,
+            metal_max_total_threads: 1024,
             memory: Memory {
                 own: OwnMemory::Static(0),
                 vote: 0,
@@ -70,6 +71,12 @@ pub(crate) mod on_device {
 
     /// `o = a + b` over slots 0, 1 and 2.
     pub(crate) fn add(device: &Device) -> ComputePipelineState {
+        add_capped(device, 1024)
+    }
+
+    /// [`add`] with `max` as its `maxTotalThreadsPerThreadgroup` on this device, Metal's for the
+    /// kernel staying 1024.
+    fn add_capped(device: &Device, max: u32) -> ComputePipelineState {
         let fields = vec![
             region(),
             address(0, Place::Push(32)),
@@ -77,8 +84,9 @@ pub(crate) mod on_device {
             address(2, Place::Push(48)),
         ];
         let buffers = vec![(0, Access::Read), (1, Access::Read), (2, Access::Write)];
-        ComputePipelineState::for_test(device, &kernels::ADD, interface(buffers, fields, 56))
-            .expect("the add kernel")
+        let mut interface = interface(buffers, fields, 56);
+        interface.max_total_threads = max;
+        ComputePipelineState::for_test(device, &kernels::ADD, interface).expect("the add kernel")
     }
 
     /// `x = x * 2 + 1` over slot 0.
@@ -986,6 +994,20 @@ pub(crate) mod on_device {
                     max: 1024
                 }
             );
+            // Within Metal's limit for the kernel and past the state's on this device, the
+            // threadgroup is the device's limit, not Metal's refusal.
+            let capped = add_capped(&device, 256);
+            encoder
+                .set_compute_pipeline_state(&capped)
+                .expect("a capped state");
+            assert!(matches!(
+                encoder.dispatch_threadgroups([1, 1, 1], [32, 16, 1]),
+                Err(Error::Limit(Limit::ThreadgroupThreads {
+                    size: [32, 16, 1],
+                    max: 256
+                }))
+            ));
+            encoder.set_compute_pipeline_state(&state).expect("a state");
             // A kernel without a partial-threadgroups variant runs no partial threadgroup.
             assert!(matches!(
                 encoder.dispatch_threads([60, 1, 1], [16, 1, 1]),
