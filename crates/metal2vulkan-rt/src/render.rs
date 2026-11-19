@@ -60,6 +60,7 @@ use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::EnabledCaps;
+use metal2vulkan::metal::BindingAccess;
 use metal2vulkan::pipeline::{
     BufferKind, CombinedSampler, NumberedSampler, PrecisionNote, PushField, PushLoc,
     RenderPipeline, RenderPipelineDescriptor, RenderPipelineKeys, RuntimeFact, SamplerRef,
@@ -920,6 +921,27 @@ impl RenderPipelineState {
     /// from Metal's, of its modules ([`PrecisionNote`]); empty where they match.
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
         self.inner.compiled.notes.clone()
+    }
+
+    /// No Metal counterpart as such: each texture slot `stage`'s function uses
+    /// ([`Stage::Vertex`] or [`Stage::Fragment`]; none for another stage), by index, ascending,
+    /// with the access a draw of the state marks in its encoder's hazards for the texture bound
+    /// there, read from the same interface, as
+    /// [`ComputePipelineState::texture_accesses`](crate::ComputePipelineState::texture_accesses)
+    /// answers a kernel's: what the function's operations do, not the argument's `access::`
+    /// qualifier. Metal's counterpart is reflection's `MTLBinding.access` of a texture binding in
+    /// `vertexBindings` or `fragmentBindings`, the declared access; the consumer builds
+    /// reflection itself.
+    pub fn texture_accesses(&self, stage: Stage) -> Vec<(u32, BindingAccess)> {
+        let table = match stage {
+            Stage::Vertex => VERTEX,
+            Stage::Fragment => FRAGMENT,
+            _ => return Vec::new(),
+        };
+        (self.inner.compiled.draws.textures.iter())
+            .filter(|&&(at, _, _)| at == table)
+            .map(|&(_, slot, access)| (slot, access.binding()))
+            .collect()
     }
 
     /// Whether two handles are one state.

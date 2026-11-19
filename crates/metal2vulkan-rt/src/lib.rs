@@ -77,6 +77,8 @@ pub use metal2vulkan::bind::SamplerDescriptor;
 pub use metal2vulkan::library::Library;
 /// `MTLDepthStencilDescriptor` and its `MTLStencilDescriptor`: the translator's.
 pub use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
+/// `MTLBindingAccess`, which a pipeline state's texture slots answer: the translator's.
+pub use metal2vulkan::metal::BindingAccess;
 /// `MTLSamplerMinMagFilter`, `MTLSamplerMipFilter`, `MTLSamplerAddressMode`,
 /// `MTLSamplerBorderColor`, `MTLCompareFunction` and `MTLSamplerReductionMode`: the translator's.
 pub use metal2vulkan::metal::{
@@ -94,6 +96,9 @@ pub use metal2vulkan::metal::{
 pub use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
 };
+/// A function's stage, which a render pipeline state's texture slots are asked by: the
+/// translator's.
+pub use metal2vulkan::pipeline::Stage;
 /// `MTLRenderPipelineDescriptor`, its `MTLRenderPipelineColorAttachmentDescriptor` and its
 /// `MTLVertexDescriptor`: the translator's.
 pub use metal2vulkan::pipeline::{

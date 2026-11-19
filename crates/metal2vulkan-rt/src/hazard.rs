@@ -4,6 +4,8 @@
 //! increment. They carry across the encoders of a command buffer until a barrier, so a write after
 //! an encoder that only read still finds the read.
 
+use metal2vulkan::metal::BindingAccess;
+
 /// How a dispatch uses a resource.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Access {
@@ -19,6 +21,15 @@ impl Access {
 
     pub(crate) fn reads(self) -> bool {
         matches!(self, Access::Read | Access::ReadWrite)
+    }
+
+    /// Metal's name of it: `MTLBindingAccess`.
+    pub(crate) fn binding(self) -> BindingAccess {
+        match self {
+            Access::Read => BindingAccess::ReadOnly,
+            Access::Write => BindingAccess::WriteOnly,
+            Access::ReadWrite => BindingAccess::ReadWrite,
+        }
     }
 }
 

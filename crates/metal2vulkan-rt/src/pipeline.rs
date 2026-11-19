@@ -63,6 +63,7 @@ use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::error::{Error as TranslationError, Feature};
 use metal2vulkan::library::CompiledFunction;
+use metal2vulkan::metal::BindingAccess;
 use metal2vulkan::pipeline::{
     arena_bytes, AccessSet, Axis, BindingSource, BufferKind, CombinedSampler, ComputePipeline,
     ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, LoweringInputs,
@@ -135,9 +136,12 @@ pub(crate) struct Numbered {
 
 /// Whether a state of the module `whole` holds every constexpr sampler use of `later`, a module
 /// of the same entry lowered later: the samplers it numbers are its, and each use it samples
-/// through is one of its, as a state holds the uses of its module ([`number`]).
+/// through is one of its, as a state holds the uses of its module ([`number`]); and whether its
+/// texture slots' accesses are `whole`'s, which the state answers
+/// ([`ComputePipelineState::texture_accesses`]) for every dispatch's hazards.
 fn covers(whole: &Interface, later: &Interface) -> bool {
     later.numbered == whole.numbered
+        && later.textures == whole.textures
         && later.constexprs.iter().all(|(at, sampler)| {
             (whole.constexprs.iter())
                 .any(|(held, used)| held == at && sampler_array(used) == sampler_array(sampler))
@@ -1255,6 +1259,22 @@ impl ComputePipelineState {
     /// another size within it runs at the size it gives, where Metal's validation stops it.
     pub fn max_total_threads_per_threadgroup(&self) -> u32 {
         self.inner.compiled.whole.interface.max_total_threads
+    }
+
+    /// No Metal counterpart as such: each texture slot the kernel uses, by index, ascending, with
+    /// the access a dispatch of the state marks in its encoder's hazards for the texture bound
+    /// there, read from the same interface: `ReadOnly` where the kernel samples, reads or only
+    /// queries it, `WriteOnly` where it writes it and does not read it, `ReadWrite` where it does
+    /// both (an atomic does both). It is what the kernel's operations do, not the argument's
+    /// `access::` qualifier: a `read_write` slot the kernel only writes is `WriteOnly`. A texture
+    /// an argument buffer, a heap or a resource ID reaches is in no slot. Metal's counterpart is
+    /// reflection's `MTLBinding.access` of a texture binding, the declared access; the consumer
+    /// builds reflection itself.
+    pub fn texture_accesses(&self) -> Vec<(u32, BindingAccess)> {
+        let interface = &self.inner.compiled.whole.interface;
+        (interface.textures.iter())
+            .map(|&(slot, access)| (slot, access.binding()))
+            .collect()
     }
 
     /// No Metal counterpart: where the kernel's answers may differ from Metal's on this device,

@@ -1439,6 +1439,7 @@ enum	metal2vulkan-rt::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non
 enum	metal2vulkan-rt::RenderPassKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderPassKind
 enum	metal2vulkan-rt::RenderPipelineKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderPipelineKind
 enum	metal2vulkan-rt::Resource	#[derive(Clone, Copy)] #[non_exhaustive] pub enum Resource<'a>
+enum	metal2vulkan-rt::Stage	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Stage
 enum	metal2vulkan-rt::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
 enum	metal2vulkan-rt::StorageMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum StorageMode
 enum	metal2vulkan-rt::StoreAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StoreAction
@@ -6272,6 +6273,7 @@ macro-decl	metal2vulkan-air::ir::Sym	ir_id! Sym
 macro-decl	metal2vulkan-air::ir::TypeId	id_type! TypeId
 macro-decl	metal2vulkan-air::ir::TypeId	ir_id! TypeId
 macro-decl	metal2vulkan-air::metal::DataType	metal_enum! DataType
+macro-decl	metal2vulkan-rt::BindingAccess	metal_enum! BindingAccess
 macro-decl	metal2vulkan-rt::CompareFunction	metal_enum! CompareFunction
 macro-decl	metal2vulkan-rt::CullMode	metal_enum! CullMode
 macro-decl	metal2vulkan-rt::DepthClipMode	metal_enum! DepthClipMode
@@ -6510,6 +6512,11 @@ macro-member	metal2vulkan-air::metal::DataType::UShort3	UShort3 = 43, "MTLDataTy
 macro-member	metal2vulkan-air::metal::DataType::UShort4	UShort4 = 44, "MTLDataTypeUShort4";
 macro-member	metal2vulkan-air::metal::DataType::VisibleFunctionTable	VisibleFunctionTable = 115, "MTLDataTypeVisibleFunctionTable";
 macro-member	metal2vulkan-air::metal::DataType::aliases	aliases
+macro-member	metal2vulkan-rt::BindingAccess::BindingAccess	BindingAccess = "MTLBindingAccess"
+macro-member	metal2vulkan-rt::BindingAccess::ReadOnly	ReadOnly = 0, "MTLBindingAccessReadOnly";
+macro-member	metal2vulkan-rt::BindingAccess::ReadWrite	ReadWrite = 1, "MTLBindingAccessReadWrite";
+macro-member	metal2vulkan-rt::BindingAccess::WriteOnly	WriteOnly = 2, "MTLBindingAccessWriteOnly";
+macro-member	metal2vulkan-rt::BindingAccess::aliases	aliases
 macro-member	metal2vulkan-rt::CompareFunction::Always	Always = 7, "MTLCompareFunctionAlways";
 macro-member	metal2vulkan-rt::CompareFunction::CompareFunction	CompareFunction = "MTLCompareFunction"
 macro-member	metal2vulkan-rt::CompareFunction::Equal	Equal = 2, "MTLCompareFunctionEqual";
@@ -9577,6 +9584,7 @@ method	metal2vulkan-rt::ComputePipelineDescriptor::slot_writes	pub fn slot_write
 method	metal2vulkan-rt::ComputePipelineDescriptor::uses_direct_arguments	pub fn uses_direct_arguments(&self, budget: &crate::Budget) -> Result<bool, Error>
 method	metal2vulkan-rt::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
 method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
+method	metal2vulkan-rt::ComputePipelineState::texture_accesses	pub fn texture_accesses(&self) -> Vec<(u32, BindingAccess)>
 method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
 method	metal2vulkan-rt::DepthStencilState::descriptor	pub fn descriptor(&self) -> &DepthStencilDescriptor
@@ -9696,6 +9704,7 @@ method	metal2vulkan-rt::RenderPipelineDescriptor::stages_using_direct_arguments	
 method	metal2vulkan-rt::RenderPipelineDescriptor::unwritten_fragment_inputs	pub fn unwritten_fragment_inputs(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Option<UnwrittenFragmentInputs>, Error>
 method	metal2vulkan-rt::RenderPipelineDescriptor::vertex_returns_value	pub fn vertex_returns_value(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
 method	metal2vulkan-rt::RenderPipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
+method	metal2vulkan-rt::RenderPipelineState::texture_accesses	pub fn texture_accesses(&self, stage: Stage) -> Vec<(u32, BindingAccess)>
 method	metal2vulkan-rt::ResourceId::to_bits	pub fn to_bits(self) -> u64
 method	metal2vulkan-rt::SamplerDescriptor::new	pub fn new() -> SamplerDescriptor
 method	metal2vulkan-rt::SamplerDescriptor::shape	pub fn shape(&self) -> SamplerShape
@@ -13945,6 +13954,11 @@ variant	metal2vulkan-rt::RenderPipelineKind::Tessellation	Tessellation
 variant	metal2vulkan-rt::RenderPipelineKind::VertexAmplification	VertexAmplification
 variant	metal2vulkan-rt::Resource::Buffer	Buffer(&'a Buffer)
 variant	metal2vulkan-rt::Resource::Texture	Texture(&'a Texture)
+variant	metal2vulkan-rt::Stage::Fragment	Fragment
+variant	metal2vulkan-rt::Stage::Kernel	Kernel
+variant	metal2vulkan-rt::Stage::Mesh	Mesh
+variant	metal2vulkan-rt::Stage::Object	Object
+variant	metal2vulkan-rt::Stage::Vertex	Vertex
 variant	metal2vulkan-rt::StageSource::Compiled	Compiled(CompiledFunction)
 variant	metal2vulkan-rt::StageSource::Function	Function(FunctionDescriptor)
 variant	metal2vulkan-rt::StorageMode::Managed	Managed

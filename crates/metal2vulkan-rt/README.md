@@ -1409,6 +1409,16 @@ that touch blocks first.
   with the state, and the emulated-SIMD-group module's once it is lowered. A kernel compiled
   with fast math carries `FastMathRewrites`: a driver may fold its arithmetic differently per
   `VkPipeline`, so its answers in a tile and at another size may differ in the last place.
+- `ComputePipelineState::texture_accesses` answers each texture slot the kernel uses, by index,
+  with the access a dispatch of the state marks in its hazards for the texture bound there, read
+  from the same interface, as a `BindingAccess` (`MTLBindingAccess`): `ReadOnly` where the
+  kernel samples, reads or only queries the texture, `WriteOnly` where it writes it and does not
+  read it, `ReadWrite` where it does both, an atomic included. A module the state lowers later,
+  for a dispatch that needs it, takes those slots and accesses or is refused, so no dispatch
+  marks others. The access is what the kernel's operations do, not the argument's `access::`
+  qualifier, which Metal's reflection answers (`MTLBinding.access`): a `read_write` slot the
+  kernel only writes is `WriteOnly`. A texture an argument buffer, a heap or a resource ID
+  reaches is in no slot.
 
 ### The cache directory
 
@@ -1625,6 +1635,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   compute state. A refusal of the translator is `Error::Translation`.
 - rt builds no pipeline reflection and acts on no `MTLPipelineOption`; its consumer builds
   reflection from the library's AIR, as for a compute state.
+- `RenderPipelineState::texture_accesses(stage)` answers each texture slot the vertex
+  (`Stage::Vertex`) or fragment (`Stage::Fragment`) function uses, by index, with the access a
+  draw of the state marks in its hazards for the texture bound there, as a compute state's
+  `texture_accesses` answers a kernel's; nothing for another stage.
 - A state numbers its functions' samplers as a compute state numbers its kernel's:
   `sampler_ids` takes the vertex function's, then the fragment function's, each in Metal's order,
   and answers the index the consumer gives each. Each constexpr sampler a function samples
