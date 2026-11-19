@@ -1120,10 +1120,10 @@ mod on_device {
 
     /// Checks each free of `frees` (when its allocation became idle, when its free began and
     /// ended) began at its idle age or after, and after the free before it ended: one at a time.
-    /// Returns the latest of them past when it could begin (its idle age, or the end of the free
-    /// before it), in microseconds: a time, which the matrix's GPU legs judge, never this suite.
-    fn assert_freed_at_the_idle_age(name: &str, frees: &[(u64, u64, u64)]) -> f64 {
-        let (mut ended, mut late) = (0, 0);
+    /// How long past its idle age a free begins is a time, which this suite does not judge: the
+    /// harness's own rows `idle_frees` and `idle_frees_under_commits` judge it, each alone.
+    fn assert_freed_at_the_idle_age(name: &str, frees: &[(u64, u64, u64)]) {
+        let mut ended = 0;
         for (index, &(since, began, end)) in frees.iter().enumerate() {
             let due = since + IDLE_AGE_NANOS;
             assert!(
@@ -1136,10 +1136,8 @@ mod on_device {
                 "{name}: free {index} began {} us before the free before it ended",
                 ended.saturating_sub(began) / 1000
             );
-            late = late.max(began - due.max(ended));
             ended = end;
         }
-        late as f64 / 1e3
     }
 
     /// Each idle allocation is freed at its idle age, oldest first: four Shared blocks of 16 MiB,
@@ -1226,7 +1224,7 @@ mod on_device {
             wait_until("three idle Shared allocations freed", || {
                 core.pool.frees().len() == 3 && !core.pool.freeing()
             });
-            let mut late = assert_freed_at_the_idle_age(name, &core.pool.frees());
+            assert_freed_at_the_idle_age(name, &core.pool.frees());
             let unmapped = hook.unmapped();
             assert_eq!(unmapped.len(), 3, "{name}: {unmapped:?}");
             for (unmapped, allocation) in unmapped.iter().zip(&four[1..]) {
@@ -1251,7 +1249,7 @@ mod on_device {
                 frees[3].0 >= released,
                 "{name}: the fourth's idle time starts at its second give-back"
             );
-            late = late.max(assert_freed_at_the_idle_age(name, &frees[3..]));
+            assert_freed_at_the_idle_age(name, &frees[3..]);
             assert_eq!(hook.unmapped()[3].allocation, four[0], "{name}: the first");
 
             // The small block's allocation is the reserve: kept past the idle age, unweighed.
@@ -1291,7 +1289,6 @@ mod on_device {
                 free_times(&frees),
                 counters.metrics()
             );
-            println!("M2V-MATRIX time idle_frees/latest_past_due {late:.3}");
         }
     }
 
@@ -1445,8 +1442,7 @@ mod on_device {
             let stopped = crate::host_time();
             let frees = core.pool.frees();
             assert_eq!(frees.len(), 2, "{name}: both freed during the commits");
-            let late = assert_freed_at_the_idle_age(name, &frees);
-            println!("M2V-MATRIX time idle_frees_under_commits/latest_past_due {late:.3}");
+            assert_freed_at_the_idle_age(name, &frees);
             for ((_, began, end), given) in frees.iter().zip(&given) {
                 assert!(
                     began >= given && *end < stopped,

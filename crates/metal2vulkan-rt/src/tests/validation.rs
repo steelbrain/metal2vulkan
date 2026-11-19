@@ -1,7 +1,5 @@
 //! The Khronos validation layer under every instance the device tests open, and its log; but the
-//! lock budget's (`crate::tests::locks`), whose count the layer's own locks would be, and the
-//! exports' submit cost's (`crate::tests::export`), whose time the layer's own checks would be
-//! part of ([`bare`]).
+//! lock budget's (`crate::tests::locks`), whose count the layer's own locks would be ([`bare`]).
 //!
 //! The job points the loader at the layer's directory (`VK_LAYER_PATH`; `scripts/validation-layer`
 //! makes it). [`instance`] enables the layer for its own process through the loader's and the

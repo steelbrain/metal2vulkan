@@ -220,6 +220,55 @@ pub enum Makes {
     },
 }
 
+/// A row of one runtime's own: its name in reports and in `--only`, and what it runs.
+#[derive(Clone, Copy, Debug)]
+pub struct Own {
+    /// Its name in reports and in `--only`.
+    pub name: &'static str,
+    /// What it runs.
+    pub row: OwnRow,
+}
+
+/// What a row of one runtime's own runs: calls with no Metal counterpart, of what the runtime
+/// does beside a program's Metal calls ([`crate::Device::own_row`]). Each runs on a device of its
+/// own on the session's GPU, so that nothing another workload left runs beside it, and checks
+/// what it measured before it reports. A runtime without the row answers none, and the command
+/// names it as not compared there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnRow {
+    /// Idle memory freed at its idle age, alone: Shared blocks of [`MemoryClass::block_len`]
+    /// bytes, each in an allocation of its own, given back far enough apart that no free waits
+    /// for another, each freed within 25 ms of its idle age (10% of it), as the runtime counts
+    /// each free's idle time at its start. A free that began later fails the row.
+    ///
+    /// [`MemoryClass::block_len`]: metal2vulkan_rt::MemoryClass::block_len
+    IdleFrees,
+    /// [`IdleFrees`](Self::IdleFrees) while command buffers are committed every 2 ms, the
+    /// second block given back once the first's free ended.
+    IdleFreesUnderCommits,
+    /// What live exports cost a submission: one small command buffer submitted on the
+    /// presenting queue and waited for, with no export and with 64 live (the consumer's cap of
+    /// surface caches), in rounds that take turns; the medians of each kind, in microseconds,
+    /// are its times.
+    ExportSubmitCost,
+}
+
+/// The rows of one runtime's own.
+pub const OWN_ROWS: [Own; 3] = [
+    Own {
+        name: "idle_frees",
+        row: OwnRow::IdleFrees,
+    },
+    Own {
+        name: "idle_frees_under_commits",
+        row: OwnRow::IdleFreesUnderCommits,
+    },
+    Own {
+        name: "export_submit_cost",
+        row: OwnRow::ExportSubmitCost,
+    },
+];
+
 /// The kernel of a compute pipeline state row's warm-up
 /// ([`CreateReport::device_first_us`](crate::run::CreateReport::device_first_us)): another of the
 /// authored library's, bound as the row's own is (16 bytes it writes at buffer 0, a `uint` at

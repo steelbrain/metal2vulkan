@@ -200,7 +200,9 @@ in its memory.
   comes back, and only a take that lands in it again ends it. The idle age is 250 ms, on every
   device: the block-maker thread frees each allocation idle that long, one at a time, after
   `BlockMappings::unmap` of it, whatever the device's queues are doing, so a program that keeps
-  committing gives back what it stopped using within 250 ms plus the frees ahead of it. It frees
+  committing gives back what it stopped using within 250 ms plus the frees ahead of it. The
+  harness's own rows `idle_frees` and `idle_frees_under_commits` hold each free, measured alone,
+  to begin within 25 ms of its idle age, with no commits and with one every 2 ms. It frees
   between the allocations it makes, never beside one. Each class keeps a reserve that the idle
   rule does not free: the newest idle 16 MiB allocation with free bytes while the class's free
   bytes need it to stay at 8 MiB or more. An idle allocation's bytes are all free, so the reserve
@@ -391,7 +393,8 @@ with the exports live, and the consumer's picture set bounds it: the consumer ke
 its device caches exported at once, a few decoders' output pools. On RADV each live export adds
 about 0.37 µs to every submission's host time (the Radeon RX 7900 XTX, without the validation
 layer: 6.7 µs with none, 30.1 µs with 64); under the validation layer the RTX 2080, the RTX 3090
-and the Iris Xe added at most 1.6 µs with 64. A handle is offered where the device lists its
+and the Iris Xe added at most 1.6 µs with 64. The harness's own row `export_submit_cost` times
+it alone, without the layer. A handle is offered where the device lists its
 extensions, which device creation enables where listed, and its buffers export it
 (`vkGetPhysicalDeviceExternalBufferProperties`); elsewhere the call refuses with
 `Limit::NoExport`, before anything is allocated.

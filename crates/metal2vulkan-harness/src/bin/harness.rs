@@ -31,7 +31,7 @@
 //! themselves. The command exits 0 when every workload matched or was refused, 1 when one did
 //! not match or failed, and 2 when it could not start.
 
-use metal2vulkan_harness::authored::{Create, Makes, FIRST_THREADGROUP};
+use metal2vulkan_harness::authored::{Create, Makes, Own, FIRST_THREADGROUP};
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
     count_instructions, matrix_time, percentile, run_each, steady, CreateReport, Harness, Report,
@@ -178,33 +178,39 @@ fn session(name: &str, authored: &[u8], store: &Path) -> Result<Box<dyn Session>
 /// is made when it runs.
 type Workload = (String, Box<dyn Fn() -> Result<Plan>>);
 
-/// The workloads the arguments select, and the creation workloads (with the authored ones only).
-fn workloads(args: &Args) -> Result<(Vec<Workload>, Vec<Create>)> {
-    let (all, creates): (Vec<Workload>, Vec<Create>) = match (&args.workloads, &args.description) {
-        (Some(directory), Some(file)) => {
-            let text = std::fs::read_to_string(file)
-                .map_err(|why| format!("read {}: {why}", file.display()))?;
-            let described = (description::parse(&text, directory)?.into_iter())
-                .map(|described| {
-                    let name = described.name.clone();
-                    (name, Box::new(move || described.plan()) as Box<_>)
-                })
-                .collect();
-            (described, Vec::new())
-        }
-        _ => {
-            let authored = (authored::WORKLOADS.iter())
-                .map(|workload| {
-                    let plan = workload.plan;
-                    (
-                        workload.name.to_owned(),
-                        Box::new(move || Ok(plan())) as Box<_>,
-                    )
-                })
-                .collect();
-            (authored, authored::CREATES.to_vec())
-        }
-    };
+/// The workloads the arguments select, and the creation workloads and the rows of a runtime's own
+/// (with the authored ones only).
+fn workloads(args: &Args) -> Result<(Vec<Workload>, Vec<Create>, Vec<Own>)> {
+    let (all, creates, owns): (Vec<Workload>, Vec<Create>, Vec<Own>) =
+        match (&args.workloads, &args.description) {
+            (Some(directory), Some(file)) => {
+                let text = std::fs::read_to_string(file)
+                    .map_err(|why| format!("read {}: {why}", file.display()))?;
+                let described = (description::parse(&text, directory)?.into_iter())
+                    .map(|described| {
+                        let name = described.name.clone();
+                        (name, Box::new(move || described.plan()) as Box<_>)
+                    })
+                    .collect();
+                (described, Vec::new(), Vec::new())
+            }
+            _ => {
+                let authored = (authored::WORKLOADS.iter())
+                    .map(|workload| {
+                        let plan = workload.plan;
+                        (
+                            workload.name.to_owned(),
+                            Box::new(move || Ok(plan())) as Box<_>,
+                        )
+                    })
+                    .collect();
+                (
+                    authored,
+                    authored::CREATES.to_vec(),
+                    authored::OWN_ROWS.to_vec(),
+                )
+            }
+        };
     if let Some((name, _)) =
         (args.sizes.iter()).find(|(name, _)| !all.iter().any(|(known, _)| known == name))
     {
@@ -212,6 +218,7 @@ fn workloads(args: &Args) -> Result<(Vec<Workload>, Vec<Create>)> {
     }
     let known: Vec<&str> = (all.iter().map(|(known, _)| known.as_str()))
         .chain(creates.iter().map(|create| create.name))
+        .chain(owns.iter().map(|own| own.name))
         .collect();
     if let Some(given) = (args.only.iter().flatten())
         .chain(&args.skip)
@@ -234,6 +241,9 @@ fn workloads(args: &Args) -> Result<(Vec<Workload>, Vec<Create>)> {
         (creates.into_iter())
             .filter(|create| selected(create.name))
             .collect(),
+        (owns.into_iter())
+            .filter(|own| selected(own.name))
+            .collect(),
     ))
 }
 
@@ -248,7 +258,7 @@ fn names(given: &str, name: &str) -> bool {
 
 /// Every selected workload on every runtime named; whether each matched.
 fn run_all(args: &Args) -> Result<bool> {
-    let (workloads, creates) = workloads(args)?;
+    let (workloads, creates, owns) = workloads(args)?;
     let air = authored::library_air()?;
     let stores = Stores::of(args.store.as_deref());
     let mut stored = Vec::with_capacity(args.runtimes.len());
@@ -383,6 +393,27 @@ fn run_all(args: &Args) -> Result<bool> {
                 println!("{}: FAILED: {why}", create.name);
                 failed(&why, &sessions, create.name);
                 matched = false;
+            }
+        }
+    }
+    for own in &owns {
+        for (runtime, session) in &mut sessions {
+            let name = own.name;
+            match session.own_row(own.row) {
+                None => println!("{name:<17} {runtime:<8} not compared: not a row of its own"),
+                Some(Ok(report)) => {
+                    for line in &report.lines {
+                        println!("{name:<17} {runtime:<8} {line}");
+                    }
+                    for (key, us) in &report.times {
+                        println!("M2V-MATRIX time harness-{runtime}/{name}/{key} {us:.3}");
+                    }
+                }
+                Some(Err(why)) => {
+                    println!("{name}: FAILED: {runtime}: {why}");
+                    println!("M2V-FAILED harness-{runtime}/{name}");
+                    matched = false;
+                }
             }
         }
     }
@@ -714,13 +745,14 @@ mod tests {
     use super::{names, parse, workloads};
     use metal2vulkan_harness::authored;
 
-    /// The workloads and creation rows that ARGS select, by name.
-    fn selected(args: &[&str]) -> (Vec<String>, Vec<&'static str>) {
+    /// The workloads, creation rows and rows of a runtime's own that ARGS select, by name.
+    fn selected(args: &[&str]) -> (Vec<String>, Vec<&'static str>, Vec<&'static str>) {
         let args = parse(args.iter().map(|arg| arg.to_string())).expect("the arguments");
-        let (all, creates) = workloads(&args).expect("a selection");
+        let (all, creates, owns) = workloads(&args).expect("a selection");
         (
             all.into_iter().map(|(name, _)| name).collect(),
             creates.iter().map(|create| create.name).collect(),
+            owns.iter().map(|own| own.name).collect(),
         )
     }
 
@@ -738,19 +770,28 @@ mod tests {
             .map(|workload| workload.name.to_owned())
             .collect();
         let creates: Vec<&str> = authored::CREATES.iter().map(|create| create.name).collect();
+        let owns: Vec<&str> = authored::OWN_ROWS.iter().map(|own| own.name).collect();
         assert_eq!(
             selected(&["--runtime", "new", "--skip", "create_*"]),
-            (every.clone(), Vec::new())
+            (every.clone(), Vec::new(), owns.clone())
         );
         assert_eq!(
             selected(&["--runtime", "new", "--only", "create_*"]),
-            (Vec::new(), creates.clone())
+            (Vec::new(), creates.clone(), Vec::new())
         );
-        assert_eq!(selected(&["--runtime", "new"]), (every, creates));
+        assert_eq!(
+            selected(&["--runtime", "new", "--only", "idle_frees*"]),
+            (
+                Vec::new(),
+                Vec::new(),
+                vec!["idle_frees", "idle_frees_under_commits"]
+            )
+        );
+        assert_eq!(selected(&["--runtime", "new"]), (every, creates, owns));
         let first = authored::WORKLOADS[0].name;
         assert_eq!(
             selected(&["--runtime", "new", "--only", first, "--skip", first]),
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), Vec::new())
         );
         // A name that names no workload is an error, in either flag.
         for flag in ["--only", "--skip"] {

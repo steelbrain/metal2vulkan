@@ -6,8 +6,8 @@
 //! (`Block::external_writes_done`) and reads; an acquire or a release of a block that is not
 //! exported is refused; each handle the device does not export is
 //! refused typed; an exported block holds no image (a texture
-//! over a buffer in it is the counted copy, and a heap texture in it is refused); and what 64 live
-//! exports cost each submission, timed without the validation layer.
+//! over a buffer in it is the counted copy, and a heap texture in it is refused); and submissions
+//! beside 64 live exports, whose cost the harness's own row `export_submit_cost` times.
 //!
 //! The second device stands in for the other API (a video decoder): a device of another instance
 //! cannot run under the validation layer, whose log is one file per test process
@@ -15,16 +15,14 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::{each_device, finished, on_each_device, within};
+    use crate::tests::command::on_device::{each_device, finished, within};
     use crate::tests::devices_of_the_cfgs_kind;
-    use crate::tests::validation::{bare, validation_tool};
     use crate::{
         BufferLayout, Device, Error, Export, ExportHandle, Gap, HeapRange, IndexClass, Limit,
         MemoryClass, PixelFormat, Refusal, TextureDescriptor, TexturePlace, TextureType,
         TextureUsage,
     };
     use ash::vk;
-    use std::time::Instant;
 
     /// The length of each export the tests make.
     const LEN: u64 = 1 << 20;
@@ -461,26 +459,17 @@ mod on_device {
         });
     }
 
-    /// What live exports cost each submission: `vkQueueSubmit2` of one small fill, timed on the
-    /// host, with no export and with 64 live (the consumer's cap of surface caches), in rounds
-    /// that take turns. Printed only; one GPU's exclusive run is the measurement. The instance has
-    /// no validation layer, whose own checks of each submission would be part of the time: the
-    /// test fails where a device lists it active.
+    /// Submissions beside 64 live exports (the consumer's cap of surface caches): a small fill
+    /// submitted on the presenting queue, waited for by a fence, with no export and with 64 live,
+    /// in rounds that take turns, the exports counted live in `Gauges::exports` and freed between
+    /// rounds. What the exports cost each submission is the harness's own row
+    /// `export_submit_cost`, timed alone without the validation layer.
     #[test]
-    fn exported_blocks_submit_cost() {
+    fn every_device_submits_beside_64_live_exports() {
         const EXPORTS: usize = 64;
-        const SUBMITS: usize = 200;
-        const ROUNDS: usize = 3;
-        let instance = bare(&[]);
-        for (name, physical) in devices_of_the_cfgs_kind(&instance) {
-            let tool = validation_tool(&instance, &name, physical.raw());
-            assert!(
-                tool.is_none(),
-                "{name} lists {tool:?} active: the time is the runtime's and the driver's, \
-                 without the layer"
-            );
-        }
-        on_each_device("export_submit_cost", &instance, |name, _, device| {
+        const SUBMITS: usize = 4;
+        const ROUNDS: usize = 2;
+        each_device("export_submits", |name, _, device| {
             let Some(handle) = (ExportHandle::ALL.into_iter()).find(|&handle| {
                 device.core().exports.offers(handle)
                     && (!handle.foreign() || enabled(&device, ash::ext::queue_family_foreign::NAME))
@@ -514,41 +503,30 @@ mod on_device {
             // SAFETY: the device is live.
             let fence = unsafe { ash.create_fence(&vk::FenceCreateInfo::default(), None) }
                 .expect("a fence");
-            // The median nanoseconds of one submit.
             let submits = || {
-                let mut times: Vec<u64> = (0..SUBMITS)
-                    .map(|_| {
-                        let commands =
-                            [vk::CommandBufferSubmitInfo::default().command_buffer(command)];
-                        let submit = [vk::SubmitInfo2::default().command_buffer_infos(&commands)];
-                        let start = Instant::now();
-                        device.with_present_queue(|queue| {
-                            // SAFETY: the command buffer is executable and not pending (the
-                            // fence waited for its last submission); the queue is held.
-                            unsafe { ash.queue_submit2(queue, &submit, fence) }.expect("a submit")
-                        });
-                        let took = start.elapsed().as_nanos() as u64;
-                        // SAFETY: the fence was submitted.
-                        unsafe {
-                            ash.wait_for_fences(&[fence], true, u64::MAX)
-                                .expect("a wait");
-                            ash.reset_fences(&[fence]).expect("a reset");
-                        }
-                        took
-                    })
-                    .collect();
-                times.sort_unstable();
-                times[SUBMITS / 2]
+                for _ in 0..SUBMITS {
+                    let commands = [vk::CommandBufferSubmitInfo::default().command_buffer(command)];
+                    let submit = [vk::SubmitInfo2::default().command_buffer_infos(&commands)];
+                    device.with_present_queue(|queue| {
+                        // SAFETY: the command buffer is executable and not pending (the fence
+                        // waited for its last submission); the queue is held.
+                        unsafe { ash.queue_submit2(queue, &submit, fence) }.expect("a submit")
+                    });
+                    // SAFETY: the fence was submitted.
+                    unsafe {
+                        ash.wait_for_fences(&[fence], true, u64::MAX)
+                            .expect("a wait");
+                        ash.reset_fences(&[fence]).expect("a reset");
+                    }
+                }
             };
-            let mut none = Vec::new();
-            let mut live = Vec::new();
             for _ in 0..ROUNDS {
-                none.push(submits());
+                submits();
                 let exports: Vec<_> = (0..EXPORTS)
                     .map(|_| (device.new_exported_block(handle, 1 << 16)).expect("an export"))
                     .collect();
                 assert_eq!(device.counters().gauges().exports, EXPORTS as u64, "{name}");
-                live.push(submits());
+                submits();
                 drop(exports);
                 within("the exports' frees", || {
                     device.counters().gauges().exports == 0
@@ -560,15 +538,10 @@ mod on_device {
                 ash.destroy_command_pool(pool, None);
             }
             drop(target);
-            none.sort_unstable();
-            live.sort_unstable();
-            let (none, live) = (none[ROUNDS / 2], live[ROUNDS / 2]);
             println!(
-                "export: {name}: {handle:?}: a submit takes {none} ns with no export and {live} ns \
-                 with {EXPORTS} live"
+                "export: {name}: {handle:?}: {ROUNDS} rounds of {SUBMITS} submits with no export \
+                 and with {EXPORTS} live"
             );
-            println!("M2V-MATRIX metric export_submit_cost/none_ns {none}");
-            println!("M2V-MATRIX metric export_submit_cost/exports_{EXPORTS}_ns {live}");
         });
     }
 }

@@ -1,6 +1,6 @@
 //! The harness's CPU-side parts: its statistics, its comparisons and its plans.
 
-use crate::authored::{Makes, WORKLOADS};
+use crate::authored::{Makes, OwnRow, WORKLOADS};
 use crate::description;
 use crate::plan::{
     Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Filter, Grid, Output, Plan,
@@ -9,7 +9,7 @@ use crate::plan::{
 use crate::rt::{self, Ranges};
 use crate::run::{
     compare_outputs, copy_dispatches, create, matrix_time, parts, percentile, run_each, settled,
-    steady, warm_up, zeroed, CreateReport, Handled, Report, Runs, Session,
+    steady, warm_up, zeroed, CreateReport, Handled, OwnReport, Report, Runs, Session,
 };
 use crate::{Buffer, Device, Failed, GaugeReader, Refused, Result, Storage, Waits};
 use metal2vulkan::metal::TextureUsage;
@@ -978,6 +978,10 @@ impl Device for HostDevice {
     fn allocations(&self) -> Option<Waits> {
         None
     }
+
+    fn own_row(&self, _: OwnRow) -> Option<Result<OwnReport>> {
+        None
+    }
 }
 
 #[test]
@@ -1165,6 +1169,10 @@ impl Session for Answers {
     }
 
     fn first_use_waits(&self) -> Option<Waits> {
+        None
+    }
+
+    fn own_row(&mut self, _: OwnRow) -> Option<Result<OwnReport>> {
         None
     }
 }

@@ -29,7 +29,11 @@
 //! The new runtime makes no heap and no texture over a buffer yet: a plan with such a texture is
 //! refused ([`Refused`]).
 
+mod own;
+
+use crate::authored::OwnRow;
 use crate::plan::{self, Constant, TextureSource};
+use crate::run::OwnReport;
 use crate::{Code, Refused, Result, Size, Storage, Waits};
 use ash::vk;
 use metal2vulkan_rt as rt;
@@ -105,6 +109,7 @@ pub fn system_default(store: Option<&Path>) -> Result<Device> {
                     device.grant_indices(class, range.start, range.end - range.start)?;
                 }
                 return Ok(Device {
+                    physical,
                     indices: RefCell::new(Indices::default()),
                     heap: Rc::new(RefCell::new(Heap {
                         device: device.clone(),
@@ -123,6 +128,8 @@ pub fn system_default(store: Option<&Path>) -> Result<Device> {
 /// The new runtime's device, with the harness's placements in its blocks.
 pub struct Device {
     device: rt::Device,
+    /// Its physical device, which each row of the runtime's own opens a device of its own on.
+    physical: rt::PhysicalDevice,
     name: String,
     heap: Rc<RefCell<Heap>>,
     indices: RefCell<Indices>,
@@ -484,6 +491,11 @@ impl crate::Device for Device {
             nanos: metrics.first_use_wait_nanos,
             longest_nanos: metrics.first_use_wait_max_nanos,
         })
+    }
+
+    /// Each row of the runtime's own, on a device of its own (this module's `own`).
+    fn own_row(&self, row: OwnRow) -> Option<Result<OwnReport>> {
+        Some(own::run(&self.physical, row))
     }
 }
 

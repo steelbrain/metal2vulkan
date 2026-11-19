@@ -1,6 +1,8 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
-use crate::authored::{Makes, FIRST_THREADGROUP, STATE_CREATIONS, WARM_FRAGMENT, WARM_KERNEL};
+use crate::authored::{
+    Makes, OwnRow, FIRST_THREADGROUP, STATE_CREATIONS, WARM_FRAGMENT, WARM_KERNEL,
+};
 use crate::plan::{
     Binding, Blit, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
     TextureSource,
@@ -400,6 +402,9 @@ pub trait Session {
     /// follows a warm-up of its kind ([`CreateReport::device_first_us`]).
     fn create(&mut self, makes: Makes, runs: Runs) -> Result<CreateReport>;
 
+    /// The device's [`Device::own_row`] of `row`.
+    fn own_row(&mut self, row: OwnRow) -> Option<Result<OwnReport>>;
+
     /// Drops the session, its device last; the device's gauges after that, where the runtime's
     /// gauges outlive the device.
     fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>>;
@@ -514,6 +519,15 @@ fn run_scaled(
     let mut report = session.run(&(scaled.build)(to.size), runs)?;
     report.scaled_to = Some(to);
     Ok(report)
+}
+
+/// What a row of one runtime's own ([`crate::authored::OwnRow`]) measured and checked.
+#[derive(Clone, Debug, Default)]
+pub struct OwnReport {
+    /// Its lines, which the command prints under the row's name.
+    pub lines: Vec<String>,
+    /// Its times, each the last part of its matrix key under the row and microseconds.
+    pub times: Vec<(&'static str, f64)>,
 }
 
 /// What the timed creations measured.
@@ -1276,6 +1290,10 @@ impl<D: ComputeDevice> Session for Harness<D> {
 
     fn first_use_waits(&self) -> Option<Waits> {
         self.device.first_use_waits()
+    }
+
+    fn own_row(&mut self, row: OwnRow) -> Option<Result<OwnReport>> {
+        self.device.own_row(row)
     }
 }
 

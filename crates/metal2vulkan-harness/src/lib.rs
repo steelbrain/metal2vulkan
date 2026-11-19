@@ -139,6 +139,19 @@
 //! `M2V-MATRIX gauge harness-<runtime>/device/<gauge>@drop <value>` read after the device dropped.
 //! A workload that fails prints `M2V-FAILED harness-<runtime>/<workload>` beside its `FAILED`
 //! line, for the runtime it failed on ([`Failed`]), or for each runtime where it names none.
+//!
+//! The rows of a runtime's own ([`authored::OWN_ROWS`]) run last, after the creation workloads:
+//! calls with no Metal counterpart that measure what a runtime does beside a program's Metal
+//! calls ([`authored::OwnRow`]), each on a device of its own on the session's GPU, each checked
+//! before it reports ([`Device::own_row`]). A runtime without the row prints `not compared` on its
+//! line. A row prints its lines under its name and its times as
+//! `M2V-MATRIX time harness-<runtime>/<row>/<what> <us>`; one whose check failed prints
+//! `M2V-FAILED harness-<runtime>/<row>`, which fails the matrix's leg. `idle_frees` and
+//! `idle_frees_under_commits` hold the idle age's bound as their check, absolute: a free that
+//! began 25 ms or more past its allocation's idle age fails the row, and they record no time.
+//! `export_submit_cost` records a submission's median time with no export and with 64 live
+//! (`none` and `exports_64`), which the matrix judges as it judges a time of one runtime: as a
+//! cross-GPU outlier against the leg's base; with no old runtime's row it has no harness budget.
 
 use std::ptr::NonNull;
 
@@ -283,6 +296,11 @@ pub trait Device: Sized {
     /// the device was made, as a count, their time and the longest; `None` where it does not
     /// count them. No Metal counterpart.
     fn allocations(&self) -> Option<Waits>;
+
+    /// `row`, a row of the runtime's own ([`authored::OwnRow`]), on a device of its own on this
+    /// device's GPU: what it measured, an error where what it measured failed its check, or
+    /// `None` where the runtime has no such row. No Metal counterpart.
+    fn own_row(&self, row: authored::OwnRow) -> Option<Result<run::OwnReport>>;
 }
 
 /// A reader of a runtime's gauges that outlives its device ([`Device::gauges_after_drop`]).

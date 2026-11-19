@@ -98,6 +98,11 @@ impl crate::Device for runtime::Device {
     fn allocations(&self) -> Option<crate::Waits> {
         None
     }
+
+    /// `None`: the old runtime has no rows of its own.
+    fn own_row(&self, _: crate::authored::OwnRow) -> Option<Result<crate::run::OwnReport>> {
+        None
+    }
 }
 
 impl crate::ComputeDevice for runtime::Device {
