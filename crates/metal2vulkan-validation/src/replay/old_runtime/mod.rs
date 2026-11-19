@@ -9,6 +9,7 @@ mod descriptors;
 mod encoders;
 
 use super::heaps::HeapSplit;
+use super::new_runtime::ManagedCopies;
 use super::player::{Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::value::Value;
@@ -92,6 +93,12 @@ pub struct OldRuntime {
     read_backs_left_out: u64,
     /// The heap the next call makes and how the player split it (`Backend::split_heap`).
     split: Cell<Option<(u64, HeapSplit)>>,
+    /// How the stream's recording device kept Managed buffers, and whether its identity record
+    /// said so (else the player's setting, `with_managed`).
+    managed: Option<ManagedCopies>,
+    identity: bool,
+    /// The Managed buffers and blocks a one-copy stream made, played as Shared.
+    managed_shared: Cell<u64>,
 }
 
 /// A made object with no address.
@@ -189,6 +196,33 @@ impl OldRuntime {
             read_backs_left_out: 0,
             display: None,
             split: Cell::new(None),
+            managed: None,
+            identity: false,
+            managed_shared: Cell::new(0),
+        }
+    }
+
+    /// The backend told how the stream's recording device kept Managed buffers, where the stream
+    /// has no identity record that says (`--managed`).
+    pub fn with_managed(mut self, copies: ManagedCopies) -> Self {
+        self.managed = Some(copies);
+        self
+    }
+
+    /// The options a buffer or block of `options` is made with: Shared where `options` are
+    /// Managed and the stream was recorded with one copy, as the new runtime's backend plays them
+    /// (`docs/REPLAY-STREAM.md`, Managed buffers), so a CPU write reaches the GPU as it reached
+    /// the recording device's; else as recorded, the runtime's Managed buffer keeping two copies
+    /// where the device does.
+    fn played(&self, call: &Call, options: ResourceOptions) -> Result<ResourceOptions, PlayError> {
+        match (self.managed, options.storage_mode()) {
+            (Some(ManagedCopies::One), Ok(StorageMode::Managed)) => {
+                self.managed_shared.set(self.managed_shared.get() + 1);
+                let storage = 0xf << 4;
+                let shared = StorageMode::Shared.raw() << 4;
+                args::options(call, options.raw() & !storage | shared)
+            }
+            _ => Ok(options),
         }
     }
 
@@ -344,12 +378,13 @@ impl OldRuntime {
                 unaddressed(Object::Queue(queue))
             }
             "newBufferWithLength:options:" => {
-                let options = options(call, uint(call, 1)?)?;
+                let options = self.played(call, options(call, uint(call, 1)?)?)?;
                 placed(device, call, uint(call, 0)?, options, BufferContents::Zero)?
             }
             "newBufferWithBytesNoCopy:length:options:deallocator:" => {
                 // Played as a buffer of its length: without the read-only option (`buffer`).
                 let options = options(call, uint(call, 2)? & !ResourceOptions::PRIVATE_BIT)?;
+                let options = self.played(call, options)?;
                 placed(device, call, uint(call, 1)?, options, BufferContents::Zero)?
             }
             "newBufferWithBytes:length:options:" => {
@@ -359,17 +394,19 @@ impl OldRuntime {
                     .ok()
                     .and_then(|length| bytes.get(..length))
                     .ok_or_else(|| refuse(call, "fewer bytes than its length"))?;
-                let options = options(call, uint(call, 2)?)?;
+                let options = self.played(call, options(call, uint(call, 2)?)?)?;
                 placed(device, call, length, options, BufferContents::Copy(bytes))?
             }
             "newBufferWithDescriptor:" => {
                 let (length, options) = descriptors::buffer(call)?;
+                let options = self.played(call, options)?;
                 placed(device, call, length, options, BufferContents::Zero)?
             }
             "m2v.newBlockWithLength:storageMode:" => {
                 let length = uint(call, 0)?;
                 let mode = StorageMode::from_raw(uint(call, 1)?).map_err(failed(call))?;
-                let options = options(call, mode.raw() << 4)?;
+                let options = self.played(call, options(call, mode.raw() << 4)?)?;
+                let mode = options.storage_mode().map_err(failed(call))?;
                 let at = address_placement(call)?;
                 let descriptor = HeapDescriptor::new(HeapType::Placement, length, options);
                 let descriptor = descriptor.with_placement(at);
@@ -570,7 +607,7 @@ impl OldRuntime {
                 if Self::id(call, 0)? != call.receiver {
                     return Err(refuse(call, "a block other than its receiver"));
                 }
-                let options = options(call, uint(call, 3)?)?;
+                let options = self.played(call, options(call, uint(call, 3)?)?)?;
                 let buffer = heap.new_buffer_at_offset(uint(call, 2)?, options, uint(call, 1)?);
                 Ok(addressed(buffer.map_err(failed(call))?))
             }
@@ -1096,10 +1133,32 @@ impl Backend for OldRuntime {
             true => "the stream's (header flag bit 0)",
             false => "the CPU copy's, read-backs included (no header flag)",
         };
-        vec![format!(
+        let mut lines = vec![format!(
             "announced bytes: {rule}; {} buffer read-backs left out of the CPU copies",
             self.read_backs_left_out
-        )]
+        )];
+        if let Some(copies) = self.managed {
+            let from = match self.identity {
+                true => "the stream's device identity",
+                false => "the player's setting",
+            };
+            lines.push(match copies {
+                ManagedCopies::One => format!(
+                    "managed one copy ({from}): {} Managed buffers and blocks played as Shared",
+                    self.managed_shared.get()
+                ),
+                ManagedCopies::Two => format!("managed two copies ({from}): played as recorded"),
+            });
+        }
+        lines
+    }
+
+    fn recorded_unified_memory(&mut self, unified: bool) {
+        self.identity = true;
+        self.managed = Some(match unified {
+            true => ManagedCopies::One,
+            false => ManagedCopies::Two,
+        });
     }
 
     fn announced_bytes_recorded(&mut self) {

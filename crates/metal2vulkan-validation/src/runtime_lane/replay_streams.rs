@@ -20,6 +20,9 @@
 //! - A render pass its setter records describe clears a drawable the stream never saw made.
 //! - The copies from the guest's RAM and a device copy's fill land where their pieces say.
 //! - A pass setter's object 0 clears the attachment's texture it sets to nil.
+//! - A one-copy stream's Managed buffer plays as Shared: a CPU write with no `didModifyRange:`
+//!   reaches a blit's read of it, on a device that keeps Managed buffers in two copies as on one
+//!   that keeps one.
 //! - A buffer made as a copy of host memory starts with its contents, and the IDs the program saw
 //!   are compared with the runtime's.
 //! - A texture its descriptor marks `outside` takes none of the program's IDs.
@@ -1663,5 +1666,56 @@ fn render_encoder_setters_play_with_their_effects() {
         for check in &report.checks {
             assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
         }
+    });
+}
+
+/// A stream recorded with one copy (`hasUnifiedMemory` true): Managed buffer #3, 4 bytes, takes a
+/// CPU write of 7s with no `didModifyRange:`, and a blit copies it into Shared #4, which a check
+/// reads. The recording device's GPU read the 7s, so the play does on every device: the report's
+/// `managed` line says one copy, from the stream's identity, one buffer played as Shared.
+#[test]
+fn a_one_copy_stream_s_managed_buffer_plays_as_shared() {
+    let dir = ScratchDir::new("replay-one-copy").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let identity = [("hasUnifiedMemory", Value::Bool(true))];
+        w.call("m2v.deviceIdentity", 1, 0, &[], &identity)?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // #3 Managed (MTLResourceStorageModeManaged, 1 << 4), #4 Shared.
+        for (id, options) in [(3, 16), (4, 0)] {
+            let made = [Value::Uint(4), Value::Uint(options)];
+            w.call("newBufferWithLength:options:", 1, id, &made, &[])?;
+        }
+        let pairs = [Value::Uint(0), Value::Bytes(vec![7; 4])];
+        w.call("m2v.write", 3, 0, &pairs, &[])?;
+        w.call("commandBuffer", 2, 10, &[], &[])?;
+        w.call("blitCommandEncoder", 10, 11, &[], &[])?;
+        let (zero, four) = (Value::Uint(0), Value::Uint(4));
+        let copy = [Value::Object(3), zero.clone(), Value::Object(4), zero, four];
+        let copy_from = "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:";
+        w.call(copy_from, 11, 0, &copy, &[])?;
+        w.call("endEncoding", 11, 0, &[], &[])?;
+        w.call("commit", 10, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 10, 0, &[], &[])?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(4)],
+            &[("sha256", sha(&[7; 4]))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("one-copy", device, &path);
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(
+            Some(report.checks[0].sha256),
+            report.checks[0].recorded,
+            "the blit read the CPU's write"
+        );
+        let lines = report.lines();
+        let managed = "managed one copy (the stream's device identity): 1 Managed buffers and \
+                       blocks played as Shared";
+        assert!(lines.iter().any(|l| l == managed), "{lines:?}");
     });
 }

@@ -8,9 +8,9 @@
 //! `--gpu-wait-timeout` bounding each device wait (10 s unless it says otherwise; a CPU device's
 //! work can take longer than a GPU's), with `--snapshots no` taking no
 //! `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), `--managed`
-//! telling the new runtime how the recording device kept Managed buffers where the stream has no
+//! telling either runtime how the recording device kept Managed buffers where the stream has no
 //! `m2v.deviceIdentity` record (one copy: unified memory; two copies: a GPU copy; with neither, a
-//! Managed buffer stops the play), and `--until-frame` stopping the play after frame `F`'s present
+//! Managed buffer stops the new runtime's play and plays as the old runtime's own), and `--until-frame` stopping the play after frame `F`'s present
 //! (frames counted from 0). The play ends at the stream's recording range (its sidecar's, else
 //! its row of `RECORDED_RANGES`, else the whole stream) unless `--past-range yes` takes it past.
 //! It writes `DIR/report.txt`, each line to the standard error too: first, where the stream's
@@ -445,6 +445,9 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             };
             report.line(&format!("device {} runtime old {mode}", device.name()));
             let mut backend = OldRuntime::new(device, device_type);
+            if let Some(copies) = managed {
+                backend = backend.with_managed(copies);
+            }
             if let Some(metallib) = display {
                 backend = backend.with_display_library(metallib);
             }

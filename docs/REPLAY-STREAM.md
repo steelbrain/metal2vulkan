@@ -550,6 +550,12 @@ counted from 0), completes the work committed so far, reports as at the stream's
   On a device with unified memory the runtime keeps one copy anyway. The report's `managed` line says which form
   played and from what, counts the Managed buffers and the no-copy ones whose contents came from
   first use, not from create, and says where a two-copy recording played as one copy.
+- **Managed buffers on the old runtime** take the same one-copy rule: under a one-copy identity
+  record (or `--managed one-copy`), every Managed buffer and block plays as a Shared one, so a CPU
+  write reaches the GPU as it reached the recording device's, with or without a
+  `didModifyRange:`. Otherwise a Managed buffer plays as the old runtime's, which keeps a GPU copy
+  on a device without unified memory. Its report's `managed` line says which form played, from
+  what, and counts the buffers and blocks played as Shared.
 - **No-copy buffers** (the new runtime) play as the product makes them, by creator:
   - A `newBufferWithDescriptor:` with `noCopy` is a pool buffer in the product: a guest buffer's
     storage in one of the host's blocks. Where its recorded address and length lie inside a live
