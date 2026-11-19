@@ -803,6 +803,21 @@ over it. It is not built yet: every call is `Gap::D3d11Surface`.
   allocations took 0.90 to 0.93 s in two plays, under 1% of the play. On three loading frames of
   1.3 to 3.6 s they are 6 to 8.3% of the frame (at most 301 ms of 3.64 s); in the play that
   listed every frame, they are at most 1.7% of any other.
+- On NVIDIA's Linux driver each make or free of memory also holds every other thread's submits
+  for the length of the call, so a consumer's submits beside the block-maker thread's make of a
+  unit, or its free of an idle one, wait for it. reims's measurements on driver 620.70.06, each the
+  longest submission beside the call, against an empty submission's 1.76 ms on the RTX 3090 and
+  2.08 ms on the RTX 2080:
+  - device-local memory: 16 MiB at the baseline; 256 MiB 6.6 to 8 ms beside a make and about
+    5 ms beside a free;
+  - host-visible, coherent and cached memory (the Shared class): 16 MiB 3.3 ms at the median and
+    4.5 ms at most beside a make, and beside a free 4.1 ms at the median, up to 15.4 ms on the
+    2080 and 19 ms on the 3090; 64 MiB 15.2 ms beside a make and 69.5 ms beside a free on the
+    2080; 256 MiB 51 ms on the 3090 and 58 ms on the 2080 beside a make, and beside a free 93 ms
+    at the median, up to 207 ms on the 3090 and 242 ms on the 2080.
+
+  rt's Shared units are the driver's own memory on every device, so these holds are what the
+  consumer sees beside each one made or freed.
 - On a full discrete card a Private block the consumer takes goes to another memory type, host
   memory where the card has no other device-local type, and the kernels that read a Managed
   buffer's device copy placed there read it across the host link:

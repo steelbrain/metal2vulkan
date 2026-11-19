@@ -29,15 +29,16 @@ use std::time::Duration;
 ///
 /// A driver may hold the device's other calls (pipeline creation, submissions, other allocations)
 /// for the whole of an allocation's `vkAllocateMemory` and `vkFreeMemory`, and the hold grows with
-/// the bytes. reims measured it on an RTX 3090 and an RTX 2080 (NVIDIA's Linux driver 620.70.06),
-/// five runs each: one thread allocating memory with a device address while another times empty
-/// `vkQueueSubmit`s in a loop, the longest of which takes about 1.8 to 2 ms with no allocation
-/// beside it. A 16 MiB Private allocation holds no submission past that, and one of 256 MiB holds
-/// one for 6.55 ms on the 3090 and 8.0 ms on the 2080. A 16 MiB Shared allocation (host-visible,
-/// host-coherent and host-cached) holds one for 7.8 and 9.0 ms, and one of 256 MiB for 51 and
-/// 78 ms. Freeing 16 MiB of Private memory holds none past the baseline, and 256 MiB about 5 ms;
-/// freeing 16 MiB of Shared memory holds one up to 19 ms, and 256 MiB 93 ms at the median and 178
-/// to 207 ms at most. So allocations are short, and a take longer than one pays its own length
+/// the bytes. reims measured it on an RTX 3090 and an RTX 2080 (NVIDIA's Linux driver 620.70.06):
+/// one thread allocating memory with a device address while another times empty
+/// `vkQueueSubmit`s in a loop, the longest of which takes 1.76 ms on the 3090 and 2.08 ms on the
+/// 2080 with no allocation beside it. A 16 MiB Private allocation holds no submission past that,
+/// and one of 256 MiB holds one for 6.6 to 8 ms. A 16 MiB Shared allocation (host-visible,
+/// host-coherent and host-cached) holds one for 3.3 ms at the median and 4.5 ms at most, and one
+/// of 256 MiB for 51 ms on the 3090 and 58 ms on the 2080. Freeing 16 MiB of Private memory holds
+/// none past the baseline, and 256 MiB about 5 ms; freeing 16 MiB of Shared memory holds one for
+/// 4.1 ms at the median and up to 19 ms, and 256 MiB for 93 ms at the median and up to 242 ms. So
+/// allocations are short, and a take longer than one pays its own length
 /// once: the allocation it makes, a long allocation, serves later takes of that length.
 const ALLOCATION_LEN: u64 = 16 << 20;
 
