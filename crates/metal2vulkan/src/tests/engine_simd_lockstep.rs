@@ -3101,12 +3101,14 @@ target triple = "air64_v28-apple-macosx26.0.0"
 }
 
 /// What compiling `grow` of [`barrier_free_steps`] for the RTX 5080 laptop profile spent under
-/// the standard budget: its work units and ledger peak, and whether it compiled. `None` where
-/// `llvm-as` is missing.
+/// the standard work and ledger caps: its work units and ledger peak, and whether it compiled.
+/// `None` where `llvm-as` is missing. The meter has no deadline: these tests judge the work and
+/// the ledger, which stand for the 20 s and 500 MiB ceilings, and the clock of a suite that runs
+/// beside other jobs says nothing of the first (a loaded debug run took more than 20 s).
 fn steps_cost(steps: usize, accs: usize, pointers: bool) -> Option<(u64, u64, Result<(), Error>)> {
     let bc = assemble_text("grow", &barrier_free_steps(steps, accs, pointers))?;
     let p = profile("nvidia-rtx5080-laptop", DevicePolicy::default()).expect("profile");
-    let mut m = Meter::new(&Budget::standard());
+    let mut m = Meter::new(&Budget::default());
     let compiled = compile_bitcode(
         &bc,
         EntryRef::Name("grow"),
@@ -3155,7 +3157,7 @@ fn a_long_barrier_free_kernel_s_work_grows_with_its_blocks() {
     let Some((long, _, compiled)) = steps_cost(4096, 1, false) else {
         return;
     };
-    compiled.expect("4096 steps inside the standard budget");
+    compiled.expect("4096 steps inside the standard caps");
     eprintln!("BARRIER-FREE-STEPS: work {short} at 1024 steps, {long} at 4096");
     assert!(
         long <= 6 * short,
@@ -3164,8 +3166,8 @@ fn a_long_barrier_free_kernel_s_work_grows_with_its_blocks() {
 }
 
 /// The authored kernel of 4,096 steps through loaded pointers, 16 accumulators (about 258,000
-/// instructions and 12,000 blocks), compiles inside the standard budget's work and ledger bounds,
-/// which stand for the 20 s and 500 MiB ceilings. The search that tried every reached pair
+/// instructions and 12,000 blocks), compiles inside the standard work and ledger caps, which
+/// stand for the 20 s and 500 MiB ceilings. The search that tried every reached pair
 /// refused it past the work cap, and the one before refused 2,048 steps past the ledger's bound.
 ///
 /// Its work stands for its time: it takes 2.4 s in a release build on the slowest CPU measured,
@@ -3177,7 +3179,7 @@ fn the_authored_4096_step_kernel_compiles_inside_the_budget() {
         return;
     };
     eprintln!("BARRIER-FREE-STEPS: 4096 steps: {work} work units, ledger peak {peak}");
-    compiled.expect("4096 steps inside the standard budget");
+    compiled.expect("4096 steps inside the standard caps");
     assert!(
         work.saturating_mul(5) <= crate::budget::WORK_UNITS,
         "{work} work units for 2.4 s of the slowest CPU's lowering"
