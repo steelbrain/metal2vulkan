@@ -182,6 +182,7 @@ pub mod stencil_resolved_sample;
 pub mod surface_fills;
 pub mod swizzled_storage;
 pub mod tessellation_crossings;
+pub mod tessellation_rendered;
 pub mod tessellation_sweeps;
 pub mod texel_swizzles;
 pub mod texture_accesses;
@@ -343,6 +344,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
     }
     cases.extend(tessellation_sweeps::boxed());
     cases.extend(tessellation_crossings::boxed());
+    for case in tessellation_rendered::all() {
+        cases.push(Box::new(case));
+    }
     for case in attribute_formats::all() {
         cases.push(Box::new(case));
     }
