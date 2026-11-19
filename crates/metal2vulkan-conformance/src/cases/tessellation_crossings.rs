@@ -88,7 +88,7 @@ use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Handle, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{RenderPass, RenderStep, RenderWork, TessellationState};
-use crate::transcript::{Node, Observed, Sites, Value};
+use crate::transcript::{Node, Observed, Sites};
 use metal2vulkan::metal::{
     PatchType, TessellationFactorStepFunction as Step, TessellationPartitionMode as Partition,
 };
@@ -866,6 +866,7 @@ pub fn boxed() -> Vec<Box<dyn Case>> {
 mod tests {
     use super::super::tessellation_sweeps::to_words;
     use super::*;
+    use crate::transcript::Value;
 
     /// The bytes the recording of `case` holds at the leaf `path` (node names from the root,
     /// `/`-separated, the reserved `case` root left out), or `None` where it holds no such leaf.
