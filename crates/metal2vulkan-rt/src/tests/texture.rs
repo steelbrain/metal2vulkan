@@ -13,6 +13,9 @@
 //!   and a channel source reads through the format's mapping.
 //! - The linear row rounding starts at the texel's bytes: rows laid at the row itself answer the
 //!   texel's bytes, rows padded to a power of two answer it, and rows padded otherwise answer none.
+//! - Over every venue's linear layout, a render target over a buffer stays in place only where the
+//!   subresource the device advertises ends within its own rows and the buffer; a sampled texture
+//!   keeps the bound of its texels.
 //! - Under a device cfg, on every device of the cfg's kind: bytes written with `replace_region`
 //!   read back with `get_bytes`, the same, for a level of a 2D texture, rows apart at a pitch with
 //!   padding, a 3D region two images deep, a slice of an array, a cube's face, a depth texture,
@@ -528,4 +531,115 @@ fn the_linear_row_rounding_starts_at_the_texel() {
     assert_eq!(rounding(4, |row| row.next_multiple_of(256)), Some(256));
     assert_eq!(rounding(8, |row| row.next_multiple_of(512)), Some(512));
     assert_eq!(rounding(4, |row| row.max(64)), None);
+}
+
+/// A device's linear image of a 2D color format: the pitch it lays a row of `width` texels of
+/// `texel` bytes at, and the bytes from the first texel its subresource advertises
+/// (`VkSubresourceLayout::size`) for `height` rows.
+struct Venue {
+    name: &'static str,
+    pitch: fn(width: u64, texel: u64) -> u64,
+    size: fn(height: u64, pitch: u64, row: u64) -> u64,
+}
+
+/// The venues' layouts, as each answered `vkGetImageSubresourceLayout` for linear images over the
+/// formats and extents the over tests make: rows to the row rounded up to the device's answer,
+/// and a subresource that ends at the rows' end, but on ANV, which lays a row at the row itself
+/// and ends at the last texel, and llvmpipe, which lays a row of a width rounded up to 4 texels
+/// to a multiple of 64 bytes and advertises a height rounded up to 4 rows.
+const VENUES: [Venue; 7] = [
+    Venue {
+        name: "RADV (780M, XTX)",
+        pitch: |width, texel| (width * texel).next_multiple_of(256),
+        size: |height, pitch, _| height * pitch,
+    },
+    Venue {
+        name: "RADV (RX 550)",
+        pitch: |width, texel| (width * texel).next_multiple_of(64 * texel.max(4)),
+        size: |height, pitch, _| height * pitch,
+    },
+    Venue {
+        name: "NVIDIA",
+        pitch: |width, texel| (width * texel).next_multiple_of(128),
+        size: |height, pitch, _| height * pitch,
+    },
+    Venue {
+        name: "ANV (UHD 630)",
+        pitch: |width, texel| (width * texel).next_multiple_of(if texel == 8 { 128 } else { 64 }),
+        size: |height, pitch, _| height * pitch,
+    },
+    Venue {
+        name: "ANV (Iris Xe)",
+        pitch: |width, texel| width * texel,
+        size: |height, pitch, row| (height - 1) * pitch + row,
+    },
+    Venue {
+        name: "KosmicKrisp (M3)",
+        pitch: |width, texel| (width * texel).next_multiple_of(16),
+        size: |height, pitch, _| height * pitch,
+    },
+    Venue {
+        name: "llvmpipe",
+        pitch: |width, texel| (width.next_multiple_of(4) * texel).next_multiple_of(64),
+        size: |height, pitch, _| height.next_multiple_of(4) * pitch,
+    },
+];
+
+/// A render target over a buffer is in place only where the subresource the device advertises
+/// ends within its own rows and the buffer (an attachment's store, clear or resolve may write
+/// back any byte of it); a texture of any other usage keeps the bound of its texels. Over every
+/// venue's layout, at the device's own pitch, for the render targets over buffers the recorded
+/// streams make (texel bytes, width, height) and heights of 3 and 4:
+/// - in a buffer that ends at the rows' end, as every one of those streams' does, a render target
+///   stays in place on every venue but llvmpipe, which copies those whose height is not a
+///   multiple of 4, as it does in a buffer longer than its rounded rows;
+/// - in a buffer that ends at the last texel, one whose pitch is wider than its row is copied, and
+///   one whose rows have no padding stays in place;
+/// - a sampled texture stays in place on every venue in each.
+#[test]
+fn a_render_target_in_place_ends_within_its_rows_and_its_buffer() {
+    use crate::texture::{in_reach, render_reach};
+    const SHAPES: [(u64, u64, u64); 12] = [
+        (4, 130, 130),
+        (4, 128, 128),
+        (1, 128, 128),
+        (1, 48, 48),
+        (4, 50, 50),
+        (4, 34, 34),
+        (1, 32, 32),
+        (4, 48, 48),
+        (4, 258, 258),
+        (1, 256, 256),
+        (4, 16, 3),
+        (4, 16, 4),
+    ];
+    for venue in &VENUES {
+        for (texel, width, height) in SHAPES {
+            let pitch = (venue.pitch)(width, texel);
+            let row = width * texel;
+            let size = (venue.size)(height, pitch, row);
+            let rows = height * pitch;
+            let llvmpipe = venue.name == "llvmpipe";
+            let shape = format!("{}: {texel}-byte texels, {width} x {height}", venue.name);
+            // A buffer that ends at the rows' end, and one longer than the rounded rows.
+            for rest in [rows, height.next_multiple_of(4) * pitch + 4096] {
+                let render = in_reach(size, Some(render_reach(rows, rest)));
+                assert_eq!(
+                    render,
+                    !llvmpipe || height.is_multiple_of(4),
+                    "{shape}, {rest} bytes"
+                );
+                assert!(in_reach(size, None), "{shape}, {rest} bytes");
+            }
+            // A buffer that ends at the last texel.
+            let rest = (height - 1) * pitch + row;
+            let render = in_reach(size, Some(render_reach(rows, rest)));
+            assert_eq!(
+                render,
+                pitch == row && (!llvmpipe || height.is_multiple_of(4)),
+                "{shape}"
+            );
+            assert!(in_reach(size, None), "{shape}");
+        }
+    }
 }

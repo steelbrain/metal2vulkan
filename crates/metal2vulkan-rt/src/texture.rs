@@ -682,7 +682,7 @@ impl Device {
                 let Some(unit) = plan.unit.filter(|unit| unit.block == [1, 1]) else {
                     break;
                 };
-                let Some((pitch, _)) = linear_layout(core, &d, &shape, &plan) else {
+                let Some((pitch, _, _)) = linear_layout(core, &d, &shape, &plan) else {
                     break;
                 };
                 texel = u64::from(unit.bytes);
@@ -703,7 +703,15 @@ impl Device {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn linear_memory_alignment(&self, d: &TextureDescriptor) -> Option<u64> {
         let (shape, plan, _) = self.prepare(d).ok()?;
-        linear_layout(self.core(), d, &shape, &plan).map(|(_, align)| align)
+        linear_layout(self.core(), d, &shape, &plan).map(|(_, _, align)| align)
+    }
+
+    /// For the device tests: the bytes from its first texel that the device's linear image of `d`
+    /// advertises for its subresource (`VkSubresourceLayout::size`), `None` where it makes none.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn linear_subresource_size(&self, d: &TextureDescriptor) -> Option<u64> {
+        let (shape, plan, _) = self.prepare(d).ok()?;
+        linear_layout(self.core(), d, &shape, &plan).map(|(_, size, _)| size)
     }
 
     /// `MTLHeap`'s `newTextureWithDescriptor:`, at `index`: a texture as [`Device::new_texture`]
@@ -866,6 +874,9 @@ impl Device {
                     (_, Some(copy)) => (copy.memory(), MemoryClass::Private, copy.offset()),
                     (block, None) => (&block.memory, block.memory.class, buffer.offset()),
                 };
+                let rows = u64::from(d.height) * bytes_per_row;
+                let reach = (usage.contains(TextureUsage::RENDER_TARGET))
+                    .then(|| render_reach(rows, buffer.length() - offset));
                 let bind = Bind::InPlace {
                     memory: memory.device_memory(),
                     base: memory.base(),
@@ -873,6 +884,7 @@ impl Device {
                     block_len: memory.len,
                     at: at + offset,
                     bytes_per_row,
+                    reach,
                 };
                 let under = Under::Buffer {
                     _buffer: buffer.clone(),
@@ -1178,8 +1190,6 @@ fn linear_extent(core: &Core, shape: &Shape, plan: &Plan) -> Option<vk::Extent3D
         .map(|properties| properties.max_extent)
 }
 
-/// The row pitch and memory alignment of a linear image of `d`, `shape` and `plan`, where the
-/// device makes one: the image is made, read and destroyed, never bound.
 /// The smallest power of two from `texel` (a texel's bytes, rounded up to one) to 4,096 at which
 /// every `(row, pitch)`, a linear image's row bytes and the pitch the device lays it at, has its
 /// pitch at the row rounded up to it; `None` where none has. A device that lays a row at the row
@@ -1192,12 +1202,31 @@ pub(crate) fn linear_rounding(rows: &[(u64, u64)], texel: u64) -> Option<u64> {
     })
 }
 
+/// The bytes from its first texel that a render target over a buffer may reach in place: its own
+/// `rows` (its height times its pitch) or the buffer's `rest` from it, the fewer. A store, a clear
+/// or a resolve of an attachment may read and write back any byte of the subresource bound for it
+/// (Vulkan's load and store operations), the bytes of its rows that are not texels among them, so
+/// that subresource is to lie within the texture's own rows and the buffer.
+pub(crate) fn render_reach(rows: u64, rest: u64) -> u64 {
+    rows.min(rest)
+}
+
+/// Whether a linear image whose subresource the device advertises as `size` bytes from its place
+/// lies in place within `reach`, a render target's ([`render_reach`]); a texture of any other
+/// usage, `None`, writes its texels alone, and its subresource may end past them.
+pub(crate) fn in_reach(size: u64, reach: Option<u64>) -> bool {
+    reach.is_none_or(|reach| size <= reach)
+}
+
+/// The row pitch, the subresource's size and the memory alignment of a linear image of `d`,
+/// `shape` and `plan`, where the device makes one: the image is made, read and destroyed, never
+/// bound.
 fn linear_layout(
     core: &Core,
     d: &TextureDescriptor,
     shape: &Shape,
     plan: &Plan,
-) -> Option<(u64, u64)> {
+) -> Option<(u64, u64, u64)> {
     let max = linear_extent(core, shape, plan)?;
     if d.width > max.width || d.height > max.height {
         return None;
@@ -1222,7 +1251,7 @@ fn linear_layout(
         device.destroy_image(image, None);
         (layout, requirements)
     };
-    Some((layout.row_pitch, requirements.alignment))
+    Some((layout.row_pitch, layout.size, requirements.alignment))
 }
 
 /// Checks a descriptor's shape as Metal does.
@@ -1591,7 +1620,8 @@ enum Bind {
     Pooled,
     /// A linear image, made preinitialized, at `at` in a block at `base` in the allocation
     /// `memory`, of type `memory_type` and of `block_len` bytes, where the device lays its rows
-    /// `bytes_per_row` apart from there.
+    /// `bytes_per_row` apart from there; of a render target, where its subresource ends within
+    /// `reach` bytes of there ([`in_reach`]).
     InPlace {
         memory: vk::DeviceMemory,
         base: u64,
@@ -1599,6 +1629,7 @@ enum Bind {
         block_len: u64,
         at: u64,
         bytes_per_row: u64,
+        reach: Option<u64>,
     },
     /// `offset` in `heap`, whose block of `block_len` bytes lies at `base` in the allocation
     /// `memory`.
@@ -1718,6 +1749,7 @@ impl Made {
             block_len,
             at,
             bytes_per_row,
+            reach,
         } = bind
         {
             let color = vk::ImageSubresource {
@@ -1729,6 +1761,7 @@ impl Made {
             let layout = unsafe { device.get_image_subresource_layout(image, color) };
             let fits = layout.offset == 0
                 && layout.row_pitch == bytes_per_row
+                && in_reach(layout.size, reach)
                 && dedicated.requires_dedicated_allocation == vk::FALSE
                 && bits & (1 << memory_type) != 0
                 && (base + at).is_multiple_of(requirements.alignment)
@@ -3079,8 +3112,13 @@ impl Buffer {
     /// image is a linear image in the bytes shaders reach (a Managed buffer's device copy, where
     /// it has one), made preinitialized so that its move home keeps the bytes, in the general
     /// layout, where the device lays such an image's rows at `bytes_per_row` and the place meets
-    /// its memory alignment: the GPU reaches the buffer's bytes, and nothing is copied that the
-    /// buffer does not copy. [`Device::minimum_linear_texture_alignment`] answers the offset and
+    /// its memory alignment, and, of a texture with render-target usage, where the subresource
+    /// the device advertises ends within the texture's own rows (`height` rows of
+    /// `bytes_per_row`) and the buffer: the GPU reaches the buffer's bytes, and nothing is copied
+    /// that the buffer does not copy. What differs: the bytes of a render-target texture's rows
+    /// that are not texels may be rewritten with their earlier values while a pass renders it, as
+    /// an attachment's store, clear or resolve may write back any byte of its subresource.
+    /// [`Device::minimum_linear_texture_alignment`] answers the offset and
     /// pitch at which a texture is so. [`Texture::replace_region`] writes the buffer's bytes, and
     /// of a Managed buffer's device copy copies the rows' span into it as
     /// [`Buffer::did_modify_range`] does; [`Texture::get_bytes`] reads the buffer's bytes, of a
@@ -3088,7 +3126,8 @@ impl Buffer {
     /// holds the buffer.
     ///
     /// Where the device's linear image does not take the texture (another pitch, an offset off
-    /// its memory alignment, a format or usage its linear tiling lacks, memory that spilled), the
+    /// its memory alignment, a format or usage its linear tiling lacks, memory that spilled, a
+    /// render target whose advertised subresource passes its rows or the buffer), the
     /// texture is an optimal image of its own, which the device copies the bytes shaders reach
     /// into and back (`crate::over`): over a Shared buffer once a submission, over a Managed
     /// buffer's device copy only at Metal's Managed events. Each copy counts in

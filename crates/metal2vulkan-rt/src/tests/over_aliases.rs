@@ -14,8 +14,10 @@
 //! - a kernel's writes through a texture of a format with storage over the same bytes.
 //!
 //! The texture is a `BGRA8Unorm` 1,000 by 3 texture, read and rendered to (the usage of a stream's
-//! textures over buffers) where the device's linear tiling takes the render usage in place, else
-//! read only (the clear and the draw then run on no texture in place, as the test prints). It
+//! textures over buffers) where the device takes the render target in place (its linear tiling
+//! takes the render usage, and the subresource it advertises ends within the texture's rows and
+//! its buffer), else read only (the clear and the draw then run on no texture in place, as the
+//! test prints). It
 //! stays in place, with no copy counted. Two places:
 //!
 //! - (a) rows of a taller surface at the device's own pitch, from a row whose place meets the
@@ -231,7 +233,8 @@ mod on_device {
             texture = made(&d, first);
             println!(
                 "over aliases: {name}: {label}: no render target over a buffer in place (the \
-                 linear tiling's answer): the clear and the draw are not run"
+                 linear tiling's answer, or a subresource past its rows or its buffer): the \
+                 clear and the draw are not run"
             );
         }
         assert!(texture.copied_over().is_none(), "{name}: {label}: in place");

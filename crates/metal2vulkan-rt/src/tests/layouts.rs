@@ -9,7 +9,7 @@
 //! Under a device cfg, on every device of the cfg's kind: one command buffer runs every blit
 //! entry that takes a texture over a texture over a Shared buffer in place (a copy from and to
 //! another texture, from and to a buffer, and a fill of its buffer), then a pass that clears it as
-//! its colour attachment where the device's linear tiling takes the render usage in place; then a
+//! its colour attachment where the device takes the render target in place; then a
 //! read of its image, and every layout recorded for the image, its descriptor's included, is the
 //! general layout but the move home's old one, preinitialized. The image is host-accessible at
 //! every moment, so it and the buffer are aliases that interpret their bytes alike (Vulkan's
@@ -476,7 +476,7 @@ mod on_device {
             let mut d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
             forget();
-            // A render target where the device's linear tiling takes one in place.
+            // A render target where the device takes one in place.
             d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
             let mut texture = (buffer.new_texture(&d, Some(first), 0, pitch))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));

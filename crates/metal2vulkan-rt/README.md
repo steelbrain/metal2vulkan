@@ -473,12 +473,19 @@ made, with no lock, and never rewritten for layouts.
   where it has one), made preinitialized so its move home keeps the bytes, and kept in the general
   layout through every use, copies included, so that it and the buffer stay host-accessible
   aliases, which Vulkan's memory aliasing says interpret their bytes alike: a write through the
-  image touches only its texels' bytes, and nothing is copied that the buffer does not copy. It is made so where the device's linear image of the texture's extent,
+  image touches only its texels' bytes, and nothing is copied that the buffer does not copy.
+  The bytes of a render-target texture's rows that are not texels may be rewritten with their
+  earlier values while a pass renders it: an attachment's store, clear or resolve may read and
+  write back any byte of the subresource bound for it. It is made so where the device's linear image of the texture's extent,
   format and usage lays its rows at `bytes_per_row` from the image's start
   (`vkGetImageSubresourceLayout`), the place meets the image's memory alignment and memory type,
-  and the format's linear tiling has every feature of its optimal tiling that the usage uses
+  the format's linear tiling has every feature of its optimal tiling that the usage uses
   (copies, which a blit encoder's copies and fills are, sampling and linear filtering, a
-  shader's reads, writes and atomics without a format, rendering and blending). `replace_region` writes the buffer's bytes, and copies the
+  shader's reads, writes and atomics without a format, rendering and blending), and, for a
+  texture with render-target usage, the subresource the device advertises (its offset and size)
+  ends at or before both the texture's own rows' end (`offset` plus `height` rows of
+  `bytes_per_row`) and the buffer's end. A texture of any other usage writes its texels alone,
+  and its subresource may end past them inside the buffer's block. `replace_region` writes the buffer's bytes, and copies the
   rows' span into a Managed buffer's device copy as `did_modify_range` does; `get_bytes` reads
   the buffer's bytes, with no submission; a dispatch's use of the texture is a use of the buffer in the
   hazard sets, and a write to it reaches the host as a write to a Shared buffer does. The texture
@@ -591,7 +598,14 @@ made, with no lock, and never rewritten for layouts.
   device's own (`Device::minimum_linear_texture_alignment`), or offsets its texture off the
   image's memory alignment, takes them: NVIDIA lays a linear image's rows at the row
   rounded to 128 bytes, AMD to 256, so a pitch rounded to 256 is copied on NVIDIA. A render
-  target over a buffer is copied on NVIDIA, whose linear tiling does not take it in place.
+  target over a buffer is copied on NVIDIA, whose linear tiling does not take it in place. A
+  render target whose advertised subresource ends past its own rows or its buffer is copied too:
+  llvmpipe (lavapipe) advertises a linear image's height rounded up to 4 rows and stores whole
+  blocks of 4 by 4 texels, so a render target over a buffer whose height is not a multiple of 4
+  is copied there. So is one that ends at its buffer's last texel with a pitch wider than its
+  row, on the devices we measured but the Iris Xe: their subresource ends at the last row's
+  pitch. In the replay streams we counted, every render target over a buffer starts at its
+  buffer's first byte and its rows end at the buffer's end.
 - Such a texture over a Managed buffer's device copy takes its copy in only from the upload
   that leads a submission. A command that writes the buffer, or another texture over a range
   that meets its, reaches it from the next submission: a later command of the same command

@@ -10,15 +10,20 @@
 //! buffer, and a blit's write to the texture reaches the host in the buffer. Over a Managed buffer
 //! the image is the bytes shaders reach, which `replace_region` changes. Rows past the buffer,
 //! closer than a row or off a texel, and an offset off a texel, are refused; a 3D texture or one
-//! of two levels over a buffer is the gap; and every gauge reads zero after teardown.
+//! of two levels over a buffer is the gap; and every gauge reads zero after teardown. A render
+//! target over a buffer whose subresource the device advertises past its own rows is copied (on
+//! lavapipe one of 3 rows; one of 4 stays in place), its copies counted, and a pass that clears
+//! it leaves every byte but its texels as the host wrote them; a sampled texture over the same
+//! buffer stays in place.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::device::Core;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        Buffer, Error, Gap, IndexClass, MemoryClass, PixelFormat, Refusal, Region, StorageMode,
-        Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
+        Buffer, ClearColor, Error, Gap, IndexClass, LoadAction, MemoryClass, PixelFormat, Refusal,
+        Region, RenderPassDescriptor, StorageMode, StoreAction, Texture, TextureDescriptor,
+        TexturePlace, TextureType, TextureUsage,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -336,6 +341,121 @@ mod on_device {
 
             drop((texture, plain, buffer, command_buffer, queue, over, managed));
             (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// A render target over a buffer is in place only where the subresource the device
+    /// advertises ends within its own rows and the buffer: an RGBA8Unorm render target 16 texels
+    /// wide at the device's own pitch, 3 and then 4 rows high, in a buffer that ends at its rows'
+    /// end, every byte of the span to 64 KiB past it holding a sentinel. Where its subresource
+    /// passes its rows it is copied; on lavapipe, whose llvmpipe advertises a height rounded up to
+    /// 4 rows, the 3-row one is copied and the 4-row one in place. A pass that clears it and
+    /// stores leaves its texels the clear's and every other byte of the span the sentinel, and
+    /// where it is copied, its copies are counted. A sampled texture over the same buffer stays in
+    /// place on every device, at either height.
+    #[test]
+    fn a_render_target_over_a_buffer_is_in_place_only_within_its_rows() {
+        const SIDE: u32 = 16;
+        const SIDE_ROW: u64 = SIDE as u64 * 4;
+        const TAIL: u64 = 65_536;
+        const SENTINEL: u8 = 0xC3;
+        const RED: [u8; 4] = [255, 0, 0, 255];
+        each_device("over reach", |name, _, device| {
+            let answer = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let pitch = SIDE_ROW.next_multiple_of(answer);
+            let counters = device.counters();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            for height in [3, 4] {
+                let rows = u64::from(height) * pitch;
+                let block = (device.take_block(MemoryClass::Shared, AT + rows + TAIL))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let span = (device.new_buffer(block.id, AT, rows + TAIL, None))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let buffer = (device.new_buffer(block.id, AT, rows, None))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let mut now = vec![SENTINEL; (rows + TAIL) as usize];
+                write(&span, &now);
+                let mut d = TextureDescriptor::new(
+                    TextureType::Type2D,
+                    PixelFormat::RGBA8Unorm,
+                    SIDE,
+                    height,
+                );
+                d.usage = TextureUsage::SHADER_READ;
+                let sampled = (buffer.new_texture(&d, Some(first), 0, pitch))
+                    .unwrap_or_else(|error| panic!("{name}: {height} rows: {error}"));
+                assert!(
+                    sampled.copied_over().is_none(),
+                    "{name}: a sampled texture of {height} rows is in place"
+                );
+                d.usage = TextureUsage::RENDER_TARGET;
+                let size = device.linear_subresource_size(&d);
+                let target = (buffer.new_texture(&d, None, 0, pitch))
+                    .unwrap_or_else(|error| panic!("{name}: {height} rows: {error}"));
+                let copied = target.copied_over().is_some();
+                let past = size.is_some_and(|size| size > rows);
+                assert!(
+                    copied || !past,
+                    "{name}: {height} rows advertised as {size:?} bytes past its {rows} is copied"
+                );
+                if cfg!(m2v_cpu_icd) {
+                    assert_eq!(
+                        copied,
+                        height == 3,
+                        "{name}: on lavapipe, {height} rows advertised as {size:?} bytes"
+                    );
+                }
+
+                let copies = counters.metrics().over_copies;
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut pass = RenderPassDescriptor::default();
+                let color = &mut pass.color_attachments[0];
+                color.texture = Some(target.clone());
+                color.load_action = LoadAction::Clear;
+                color.store_action = StoreAction::Store;
+                color.clear_color = ClearColor {
+                    red: 1.0,
+                    green: 0.0,
+                    blue: 0.0,
+                    alpha: 1.0,
+                };
+                let encoder = (command_buffer.render_command_encoder(&pass))
+                    .unwrap_or_else(|error| panic!("{name}: {height} rows: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}: {height} rows");
+                let moved = counters.metrics().over_copies - copies;
+                assert_eq!(
+                    moved > 0,
+                    copied,
+                    "{name}: {height} rows: {moved} copies counted"
+                );
+                for y in 0..u64::from(height) {
+                    let at = (y * pitch) as usize;
+                    now[at..at + SIDE_ROW as usize]
+                        .chunks_exact_mut(4)
+                        .for_each(|texel| texel.copy_from_slice(&RED));
+                }
+                assert!(
+                    held(&span) == now.as_slice(),
+                    "{name}: {height} rows: the texels cleared, every other byte the sentinel"
+                );
+                println!(
+                    "over reach: {name}: {height} rows at pitch {pitch}, advertised as {size:?} \
+                     bytes against {rows}: {}, {moved} copies counted; the sampled one in place",
+                    match copied {
+                        true => "copied",
+                        false => "in place",
+                    }
+                );
+                drop((target, sampled, command_buffer, buffer, span));
+                (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            drop(queue);
         });
     }
 }
