@@ -1,0 +1,198 @@
+target triple = "air64_v28-apple-macosx26.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t2 = type [2048 x i32]
+%t6 = type void (ptr addrspace(1), ptr addrspace(3), i32, i32, i32)
+%t7 = type void (i32, i32)
+%t9 = type i1 ()
+%t10 = type i32 (i32)
+%t11 = type i32 (ptr addrspace(1), i32, i32, i32, i1)
+%t13 = type [2 x i32]
+%t16 = type { i32 } ; "struct.metal::_atomic"
+c11 = %t13 [27, 2]
+@g0 "_ZZ9tgz_readsPU9MTLdeviceN5metal7_atomicIjvEEPU14MTLthreadgroupjjjjE4decl" = internal addrspace(3) global %t2 undef, align 4
+
+define %t6 @f0 "tgz_reads" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( nocapture "air-buffer-no-alias"="" ) %a1( nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = icmp ult %a2, i32 2048
+  br %i0, bb3, bb1
+bb1:
+  %i2 = phi i32 [i32 0, bb0], [%i17, bb3]
+  %i3 = phi i32 [i32 0, bb0], [%i14, bb3]
+  tail call void @f1 [air Sync(Barrier { name: Threadgroup, flags: MemFlags { device: false, threadgroup: true, texture: false, threadgroup_imageblock: false, object_data: false }, order: None, scope: Threadgroup, memory: Threadgroup })](i32 2, i32 1) convergent
+  br %i0, bb2, bb4
+bb2:
+  %i6 = shl i32 %a3, i32 11
+  br bb5
+bb3:
+  %i8 = phi i32 [%i14, bb3], [i32 0, bb0]
+  %i9 = phi i32 [%i17, bb3], [i32 0, bb0]
+  %i10 = phi i32 [%i18, bb3], [%a2, bb0]
+  %i11 = zext %i10 to i64
+  %i12 = getelementptr inbounds %t2, ptr addrspace(3) @g0, i64 0, %i11
+  %i13 = load i32, %i12, align 4
+  %i14 = or i32 %i13, %i8
+  %i15 = getelementptr inbounds i32, %a1, %i11
+  %i16 = load i32, %i15, align 4
+  %i17 = or i32 %i16, %i9
+  %i18 = add i32 %i10, %a4
+  %i19 = icmp ult %i18, i32 2048
+  br %i19, bb3, bb1, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb4:
+  tail call void @f1 [air Sync(Barrier { name: Threadgroup, flags: MemFlags { device: false, threadgroup: true, texture: false, threadgroup_imageblock: false, object_data: false }, order: None, scope: Threadgroup, memory: Threadgroup })](i32 2, i32 1) convergent
+  %i22 = add i32 %a2, i32 1
+  %i23 = urem i32 %i22, %a4
+  %i24 = icmp ult %i23, i32 2048
+  br %i24, bb7, bb6
+bb5:
+  %i26 = phi i32 [%a2, bb2], [%i36, bb5]
+  %i27 = add nuw i32 %i26, %i6
+  %i28 = and i32 %i27, i32 1073741823
+  %i29 = or i32 %i28, i32 2147483648
+  %i30 = zext %i26 to i64
+  %i31 = getelementptr inbounds %t2, ptr addrspace(3) @g0, i64 0, %i30
+  store %i29, %i31, align 4
+  %i33 = or i32 %i27, i32 3221225472
+  %i34 = getelementptr inbounds i32, %a1, %i30
+  store %i33, %i34, align 4
+  %i36 = add i32 %i26, %a4
+  %i37 = icmp ult %i36, i32 2048
+  br %i37, bb5, bb4, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb6:
+  %i39 = phi i32 [i32 0, bb4], [%i59, bb7]
+  %i40 = icmp ne %i3, i32 0
+  %i41 = zext %i40 to i32
+  %i42 = tail call i32 @f3 [air Group(Group { scope: Simdgroup, op: Or, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i41) convergent
+  %i43 = icmp ne %i2, i32 0
+  %i44 = zext %i43 to i32
+  %i45 = tail call i32 @f3 [air Group(Group { scope: Simdgroup, op: Or, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i44) convergent
+  %i46 = tail call i32 @f4 [air Group(Group { scope: Simdgroup, op: Sum, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i39) convergent
+  %i47 = tail call i32 @f4 [air Group(Group { scope: Simdgroup, op: Sum, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](i32 1) convergent
+  %i48 = tail call i1 @f2 [air Group(Group { scope: Simdgroup, op: IsFirst, ty: None, sign: None })]() convergent
+  br %i48, bb8, bb13
+bb7:
+  %i50 = phi i32 [%i60, bb7], [%i23, bb4]
+  %i51 = phi i32 [%i59, bb7], [i32 0, bb4]
+  %i52 = zext %i50 to i64
+  %i53 = getelementptr inbounds %t2, ptr addrspace(3) @g0, i64 0, %i52
+  %i54 = load i32, %i53, align 4
+  %i55 = getelementptr inbounds i32, %a1, %i52
+  %i56 = load i32, %i55, align 4
+  %i57 = shl i32 %i56, i32 1
+  %i58 = add i32 %i54, %i51
+  %i59 = add i32 %i58, %i57
+  %i60 = add i32 %i50, %a4
+  %i61 = icmp ult %i60, i32 2048
+  br %i61, bb7, bb6, !llvm.loop LoopHints { unroll: Default, must_progress: true }
+bb8:
+  %i63 = icmp eq %i42, i32 0
+  br %i63, bb10, bb9
+bb9:
+  %i65 = getelementptr inbounds %t16, %a0, i64 0, i32 0
+  %i66 = tail call i32 @f5 [air Atomic(Atomic { space: Global, op: Or, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i65, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
+  br bb10
+bb10:
+  %i68 = icmp eq %i45, i32 0
+  br %i68, bb12, bb11
+bb11:
+  %i70 = getelementptr inbounds %t16, %a0, i64 1, i32 0
+  %i71 = tail call i32 @f5 [air Atomic(Atomic { space: Global, op: Or, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i70, i32 1, i32 0, i32 2, i1 1) arg0( nocapture )
+  br bb12
+bb12:
+  %i73 = getelementptr inbounds %t16, %a0, i64 2, i32 0
+  %i74 = tail call i32 @f6 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i73, %i46, i32 0, i32 2, i1 1) arg0( nocapture )
+  %i75 = mul i32 %i47, %i47
+  %i76 = getelementptr inbounds %t16, %a0, i64 3, i32 0
+  %i77 = tail call i32 @f6 [air Atomic(Atomic { space: Global, op: Add, sign: Some(Unsigned), ty: NumTy { elem: I32, lanes: 1 }, order: Relaxed, failure: None, scope: Device, volatile: true, fetch: true, flags: None, stated_volatile: true })](%i76, %i75, i32 0, i32 2, i1 1) arg0( nocapture )
+  br bb13
+bb13:
+  ret void
+}
+
+declare %t7 @f1 "air.wg.barrier" convergent
+
+declare %t9 @f2 "air.simd_is_first" convergent
+
+declare %t10 @f3 "air.simd_or.u.i32" convergent
+
+declare %t10 @f4 "air.simd_sum.u.i32" convergent
+
+declare %t11 @f5 "air.atomic.global.or.u.i32" %a0( nocapture )
+
+declare %t11 @f6 "air.atomic.global.add.u.i32" %a0( nocapture )
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.buffer"
+!md10 = !"air.location_index"
+!md11 = !"air.read_write"
+!md12 = !"air.address_space"
+!md13 = !"air.struct_type_info"
+!md14 = !"uint"
+!md15 = !"__s"
+!md16 = !"air.arg_type_size"
+!md17 = !"air.arg_type_align_size"
+!md18 = !"air.arg_type_name"
+!md19 = !"metal::_atomic"
+!md20 = !"air.arg_name"
+!md21 = !"out"
+!md22 = !"arg"
+!md23 = !"air.thread_index_in_threadgroup"
+!md24 = !"t"
+!md25 = !"air.threadgroup_position_in_grid"
+!md26 = !"g"
+!md27 = !"air.threads_per_threadgroup"
+!md28 = !"n"
+!md29 = !"air.compile.denorms_disable"
+!md30 = !"air.compile.fast_math_enable"
+!md31 = !"air.compile.framebuffer_fetch_enable"
+!md32 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md33 = !"Metal"
+!md34 = i32 2
+!md35 = %t13 c11
+!md36 = i32 1
+!md37 = i32 4
+!md38 = i32 7
+!md39 = i32 31
+!md40 = i32 128
+!md41 = i32 8
+!md42 = i32 16
+!md43 = ptr addrspace(0) @f0
+!md44 = i32 0
+!md45 = i32 3
+!md46 = !{!md34, !md0, !md35}
+!md47 = !{!md36, !md1, !md37}
+!md48 = !{!md38, !md2, !md34}
+!md49 = !{!md38, !md3, !md39}
+!md50 = !{!md38, !md4, !md39}
+!md51 = !{!md38, !md5, !md39}
+!md52 = !{!md38, !md6, !md40}
+!md53 = !{!md38, !md7, !md41}
+!md54 = !{!md38, !md8, !md42}
+!md55 = !{}
+!md56 = !{!md44, !md37, !md44, !md14, !md15}
+!md57 = !{!md44, !md9, !md10, !md44, !md36, !md11, !md12, !md36, !md13, !md56, !md16, !md37, !md17, !md37, !md18, !md19, !md20, !md21}
+!md58 = !{!md36, !md9, !md10, !md44, !md36, !md11, !md12, !md45, !md16, !md37, !md17, !md37, !md18, !md14, !md20, !md22}
+!md59 = !{!md34, !md23, !md18, !md14, !md20, !md24}
+!md60 = !{!md45, !md25, !md18, !md14, !md20, !md26}
+!md61 = !{!md37, !md27, !md18, !md14, !md20, !md28}
+!md62 = !{!md57, !md58, !md59, !md60, !md61}
+!md63 = !{!md43, !md55, !md62}
+!md64 = !{!md29}
+!md65 = !{!md30}
+!md66 = !{!md31}
+!md67 = !{!md32}
+!md68 = !{!md34, !md41, !md44}
+!md69 = !{!md33, !md37, !md44, !md44}
+!"llvm.module.flags" = !{!md46, !md47, !md48, !md49, !md50, !md51, !md52, !md53, !md54}
+!"air.kernel" = !{!md63}
+!"air.compile_options" = !{!md64, !md65, !md66}
+!"llvm.ident" = !{!md67}
+!"air.version" = !{!md68}
+!"air.language_version" = !{!md69}
