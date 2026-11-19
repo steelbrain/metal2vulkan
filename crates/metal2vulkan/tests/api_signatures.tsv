@@ -2418,6 +2418,7 @@ field	metal2vulkan-rt::Metrics.ring_block_allocations	pub ring_block_allocations
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.sampler_element_writes	pub sampler_element_writes: u64
 field	metal2vulkan-rt::Metrics.shared_long_reuses	pub shared_long_reuses: u64
+field	metal2vulkan-rt::Metrics.sparse_binds	pub sparse_binds: u64
 field	metal2vulkan-rt::Metrics.staging_buffer_allocations	pub staging_buffer_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.staging_region_allocations	pub staging_region_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.staging_sleeps	pub staging_sleeps: u64
@@ -9667,6 +9668,7 @@ method	metal2vulkan-rt::DepthStencilState::descriptor	pub fn descriptor(&self) -
 method	metal2vulkan-rt::DepthStencilState::precision_note	pub fn precision_note(&self) -> Option<PrecisionNote>
 method	metal2vulkan-rt::Device::argument_buffers_support	pub fn argument_buffers_support(&self) -> ArgumentBuffersTier
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
+method	metal2vulkan-rt::Device::dma_buf_granule	#[cfg(unix)] pub fn dma_buf_granule(&self) -> Option<u64>
 method	metal2vulkan-rt::Device::extensions	pub fn extensions(&self) -> &[CString]
 method	metal2vulkan-rt::Device::features	pub fn features(&self) -> &[ConsumerFeature]
 method	metal2vulkan-rt::Device::grant_indices	pub fn grant_indices(&self, class: IndexClass, first: u32, count: u32) -> Result<IndexGrant, Error>
@@ -9675,6 +9677,7 @@ method	metal2vulkan-rt::Device::heap_buffer_size_and_align	pub fn heap_buffer_si
 method	metal2vulkan-rt::Device::heap_texture_size_and_align	pub fn heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<SizeAndAlign, Error>
 method	metal2vulkan-rt::Device::import_d3d11_surface	pub fn import_d3d11_surface(&self, _planes: &[D3d11Plane<'_>]) -> Result<Surface, Error>
 method	metal2vulkan-rt::Device::import_dma_buf	#[cfg(unix)] pub fn import_dma_buf(&self, fd: std::os::fd::OwnedFd, len: u64, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
+method	metal2vulkan-rt::Device::import_dma_bufs	#[cfg(unix)] pub fn import_dma_bufs(&self, chunks: Vec<(std::os::fd::OwnedFd, u64)>, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
 method	metal2vulkan-rt::Device::import_host_memory	pub unsafe fn import_host_memory(&self, pointer: NonNull<u8>, len: u64, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
 method	metal2vulkan-rt::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-rt::Device::minimum_linear_texture_alignment	pub fn minimum_linear_texture_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>
@@ -13881,6 +13884,7 @@ variant	metal2vulkan-rt::Gap::TextureFormat	TextureFormat { pixel_format: PixelF
 variant	metal2vulkan-rt::Gap::TextureOverBuffer	TextureOverBuffer { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureView	TextureView { kind: TextureViewKind }
 variant	metal2vulkan-rt::ImportHandle::DmaBuf	DmaBuf
+variant	metal2vulkan-rt::ImportHandle::DmaBufs	DmaBufs
 variant	metal2vulkan-rt::ImportHandle::HostMemory	HostMemory
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
 variant	metal2vulkan-rt::IndexClass::Texture	Texture
@@ -13896,6 +13900,7 @@ variant	metal2vulkan-rt::Limit::IndexRange	IndexRange { class: IndexClass, first
 variant	metal2vulkan-rt::Limit::MemoryAllocations	MemoryAllocations { max: u32 }
 variant	metal2vulkan-rt::Limit::NoExport	NoExport { handle: ExportHandle }
 variant	metal2vulkan-rt::Limit::NoImport	NoImport { handle: ImportHandle }
+variant	metal2vulkan-rt::Limit::SparseAddressSpace	SparseAddressSpace { len: u64, live: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::TextureSamples	TextureSamples { sample_count: u32, counts: u32 }
 variant	metal2vulkan-rt::Limit::TextureSize	TextureSize { extent: [u32; 3], layers: u32, max_extent: [u32; 3], max_layers: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32 }

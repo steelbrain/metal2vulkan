@@ -56,7 +56,7 @@ fn host_memory_takes_the_first_coherent_listed_type_offered() {
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use crate::memory::Release;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::devices_of_the_cfgs_kind;
@@ -76,7 +76,7 @@ mod on_device {
     /// The runtime's own allocation besides the pool's: the zero source of Private fills.
     const ZERO_SOURCE: u32 = 1;
 
-    fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    pub(crate) fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(120);
         while !done() {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
@@ -103,7 +103,7 @@ mod on_device {
     }
 
     /// A release that sets a flag, and the flag.
-    fn releasing() -> (Option<Release>, Arc<AtomicBool>) {
+    pub(crate) fn releasing() -> (Option<Release>, Arc<AtomicBool>) {
         let ran = Arc::new(AtomicBool::new(false));
         let set = Arc::clone(&ran);
         let release: Release = Box::new(move || set.store(true, Ordering::SeqCst));
@@ -487,26 +487,18 @@ mod on_device {
         }
     }
 
-    /// A dma-buf of 16 pages of a memfd, through `/dev/udmabuf`, and the memfd; `None` where the
-    /// kernel offers no `/dev/udmabuf` to this process.
+    /// A dma-buf of the first `len` bytes of a memfd of that length, through `/dev/udmabuf`, and
+    /// the memfd; `None` where the kernel offers no `/dev/udmabuf` to this process.
     #[cfg(target_os = "linux")]
     fn dma_buf(len: u64) -> Option<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+        let memfd = memfd(len);
+        Some((udmabuf(&memfd, 0, len)?, memfd))
+    }
+
+    /// A memfd of `len` bytes, sealed against shrinking, as `/dev/udmabuf` takes one.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn memfd(len: u64) -> std::os::fd::OwnedFd {
         use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-        #[repr(C)]
-        struct Create {
-            memfd: u32,
-            flags: u32,
-            offset: u64,
-            size: u64,
-        }
-        // `_IOW('u', 0x42, struct udmabuf_create)`.
-        const UDMABUF_CREATE: libc::c_ulong = 0x4018_7542;
-        const UDMABUF_FLAGS_CLOEXEC: u32 = 1;
-        let device = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/udmabuf")
-            .ok()?;
         // SAFETY: a new memfd, owned at once.
         let memfd = unsafe {
             let fd = libc::memfd_create(
@@ -524,10 +516,37 @@ mod on_device {
                 0
             );
         }
+        memfd
+    }
+
+    /// A dma-buf of the `len` bytes at `offset` of `memfd`, through `/dev/udmabuf`; `None` where
+    /// the kernel offers no `/dev/udmabuf` to this process.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn udmabuf(
+        memfd: &std::os::fd::OwnedFd,
+        offset: u64,
+        len: u64,
+    ) -> Option<std::os::fd::OwnedFd> {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        #[repr(C)]
+        struct Create {
+            memfd: u32,
+            flags: u32,
+            offset: u64,
+            size: u64,
+        }
+        // `_IOW('u', 0x42, struct udmabuf_create)`.
+        const UDMABUF_CREATE: libc::c_ulong = 0x4018_7542;
+        const UDMABUF_FLAGS_CLOEXEC: u32 = 1;
+        let device = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/udmabuf")
+            .ok()?;
         let create = Create {
             memfd: memfd.as_raw_fd() as u32,
             flags: UDMABUF_FLAGS_CLOEXEC,
-            offset: 0,
+            offset,
             size: len,
         };
         // SAFETY: the ioctl reads `create`, which lives through it.
@@ -540,7 +559,7 @@ mod on_device {
         };
         assert!(fd >= 0, "a dma-buf: {}", std::io::Error::last_os_error());
         // SAFETY: the ioctl returned a new fd.
-        Some((unsafe { OwnedFd::from_raw_fd(fd) }, memfd))
+        Some(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
     /// A dma-buf is imported where the first type its fd's query offers is host-visible and

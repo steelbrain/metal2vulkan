@@ -242,10 +242,8 @@ impl Sparse {
         let handle = ImportHandle::DmaBufs.vk();
         let plain = requirements(device, crate::memory::GRANULE, handle, false);
         let sparse = requirements(device, crate::memory::GRANULE, handle, true);
-        let granule = (sparse.alignment.max(1).checked_next_multiple_of(page))
-            .filter(|granule| granule.is_multiple_of(sparse.alignment.max(1)))?;
-        (plain.memory_type_bits & coherent & !sparse.memory_type_bits == 0).then(|| Sparse {
-            granule,
+        Some(Sparse {
+            granule: granule(&plain, &sparse, coherent, page)?,
             space,
             live: AtomicU64::new(0),
             timeline: OnceLock::new(),
@@ -258,7 +256,7 @@ impl Sparse {
     /// name them. Err: [`Limit::SparseAddressSpace`].
     fn reserve(&self, len: u64) -> Result<(), Error> {
         (self.live)
-            .fetch_update(Relaxed, Relaxed, |live| {
+            .try_update(Relaxed, Relaxed, |live| {
                 live.checked_add(len).filter(|&total| total <= self.space)
             })
             .map(drop)
@@ -356,6 +354,23 @@ impl Sparse {
         // device fails the wait, and then nothing is pending.
         let _ = unsafe { device.wait_semaphores(&info, u64::MAX) };
     }
+}
+
+/// The granule of imports over several dma-bufs, from the memory requirements of a `plain` and a
+/// `sparse` buffer for dma-bufs, the `coherent` types and the host's `page`: the sparse buffer's
+/// alignment rounded up to the page, where the sparse buffer lists every coherent type the plain
+/// one lists; `None` elsewhere.
+#[cfg(unix)]
+pub(crate) fn granule(
+    plain: &vk::MemoryRequirements,
+    sparse: &vk::MemoryRequirements,
+    coherent: u32,
+    page: u64,
+) -> Option<u64> {
+    let alignment = sparse.alignment.max(1);
+    let granule = (alignment.checked_next_multiple_of(page))
+        .filter(|granule| granule.is_multiple_of(alignment))?;
+    (plain.memory_type_bits & coherent & !sparse.memory_type_bits == 0).then_some(granule)
 }
 
 /// The memory requirements of a buffer of `len` bytes and the floor's usage for `handle`, made

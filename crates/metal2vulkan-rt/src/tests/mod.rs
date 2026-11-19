@@ -10,6 +10,7 @@ mod copy_out;
 mod copy_over;
 mod d3d11;
 mod device;
+mod dma_bufs;
 mod draw;
 mod export;
 mod fence;

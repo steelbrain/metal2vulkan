@@ -408,8 +408,9 @@ answers `BlockInfo::zeroed`.
 
 A no-copy buffer (`newBufferWithBytesNoCopy:length:options:deallocator:`) is the memory it was made
 over. The consumer imports that memory as a block and places the buffer in it with
-`Device::new_buffer`, as in a block it took. There are two calls, one per handle; which to try
-first, and what to do where both refuse, is the consumer's.
+`Device::new_buffer`, as in a block it took. There are three calls: one per handle, and one for
+pages that take several dma-bufs; which to try first, and what to do where they refuse, is the
+consumer's.
 
 - `Device::import_host_memory(pointer, len, release)` (unsafe) imports host memory by its address
   (`VK_EXT_external_memory_host`), at a multiple of the device's
@@ -429,9 +430,33 @@ first, and what to do where both refuse, is the consumer's.
   no driver was given it; after a failed import it closes it only where it still names the same
   file, as a driver may have closed it and the number may name another file since. The block's
   `contents` is `None`: the consumer reaches the pages through its own mappings.
+- `Device::import_dma_bufs(chunks, release)` (unix) imports several dma-bufs, each fd with its
+  length, as one block over them in order, for pages more than one dma-buf holds (a udmabuf takes
+  a bounded number of a memfd's ranges). Each length is a multiple of `Device::dma_buf_granule()`,
+  where the consumer cuts the pages, the last padded; the granule is `None` where the call refuses
+  (`Limit::NoImport`). The block's buffer is one sparse buffer (`VK_BUFFER_CREATE_SPARSE_BINDING_BIT`)
+  with each dma-buf's import bound at its offset, so the block's `gpu_address` and its buffers run
+  across the dma-bufs as over one range, and its `contents` is `None` as for one dma-buf. Each fd
+  takes the dma-buf rule's type of the sparse buffer's types, and every fd the same one. One
+  `vkQueueBindSparse` on the runtime's queue binds the imports (`Metrics::sparse_binds`); the call
+  does not wait for it. Vulkan orders no sparse bind against command buffers, so the runtime's next
+  `vkQueueSubmit2` waits for it, once: a semaphore wait orders every later command in submission
+  order. The free, on the block-maker thread, waits for it too before the buffer goes, then frees
+  each import, and `release` runs after the last. Each dma-buf's import is one allocation, counted
+  in `Gauges::imports` and `Gauges::blocks`. The fds are taken as `import_dma_buf` takes its one.
 
 Each call returns the block and the index of the memory type it imported into, and refuses before
 any allocation is attempted.
+
+The granule is the alignment in which the device binds a sparse buffer's memory, rounded up to the
+host's page, offered where the device has `sparseBinding`, the runtime's queue family binds sparse
+memory, a sparse buffer of the floor's usage imports a dma-buf with no dedicated allocation, and
+such a buffer takes every host-visible, host-coherent type a plain one takes, so that wherever
+`import_dma_buf` takes a type for an fd, `import_dma_bufs` takes the same. Measured: 64 KiB on the
+Radeon 780M and the RX 550 (RADV, Mesa 26.2.6) and 4 KiB on lavapipe; none on the Iris Xe (ANV,
+Mesa 26.2.6) and the RTX 3090 (NVIDIA 620.70.06), whose sparse buffers import no dma-buf. A
+device's live sparse buffers stay within its `sparseAddressSpaceSize` (2 GiB on lavapipe), past
+which the call is `Limit::SparseAddressSpace`.
 
 The no-copy imports have no read-only form: `import_host_memory` takes pages mapped readable and
 writable, and Vulkan defines no read-only import. Metal's private read-only option (bit 24 of
@@ -640,6 +665,10 @@ over it. It is not built yet: every call is `Gap::D3d11Surface`.
 
 ### Known gaps of memory blocks
 
+- On the Iris Xe (ANV, Mesa 26.2.6) the dma-buf query offers a device-local-only type first, so
+  its dma-bufs are refused with `Limit::ImportType`, and a consumer imports those pages by pointer.
+  Its sparse buffers import no dma-buf either, so `Device::import_dma_bufs` refuses there, as it
+  does on the RTX 3090 (NVIDIA 620.70.06).
 - An exported surface takes the copy form, its planes copied at each acquire and release, in
   three cases the build found. A copy form's planes are textures over a buffer in the exported
   block, which is Private, so the CPU's `replace_region` and `get_bytes` on them are refused
@@ -2668,7 +2697,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_vertex_attribute_divisor` | device, where listed | the same, on a device that lists only this extension, which the KHR was promoted from with the same feature and pipeline structures |
 | `VK_EXT_external_memory_host` | device, where listed | importing host memory by its address (`Device::import_host_memory`) |
 | `VK_KHR_external_memory_fd` | device, where listed | importing a dma-buf by its fd, with the extension below, and exporting a block as an opaque fd or, with it, a dma-buf (`Device::new_exported_block`) |
-| `VK_EXT_external_memory_dma_buf` | device, where listed | importing a dma-buf (`Device::import_dma_buf`), and exporting a block as one |
+| `VK_EXT_external_memory_dma_buf` | device, where listed | importing a dma-buf (`Device::import_dma_buf`) or several behind one buffer (`Device::import_dma_bufs`), and exporting a block as one |
 | `VK_KHR_external_memory_win32` | device, where listed | exporting a block as an NT handle (`Device::new_exported_block`) |
 | `VK_EXT_queue_family_foreign` | device, where listed | the foreign queue family that a dma-buf export's ownership transfers name |
 | `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
@@ -2871,6 +2900,10 @@ The other five are one feature each:
 | `shaderMaximalReconvergence` | `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR` | SIMD groups that reconverge as Metal's do |
 | `shaderSubgroupUniformControlFlow` | `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR` | SIMD groups' reconvergence where maximal reconvergence is not offered |
 | `zeroInitializeDeviceMemory` | `VkPhysicalDeviceZeroInitializeDeviceMemoryFeaturesEXT` | the pool's allocations made with `VK_MEMORY_ALLOCATE_ZERO_INITIALIZE_BIT_EXT`, where the device also lists `VK_EXT_zero_initialize_device_memory`: a take of a range no block held before answers `BlockInfo::zeroed` (Memory blocks and buffers); elsewhere every take answers false |
+
+`sparseBinding` (`VkPhysicalDeviceFeatures`) chooses no form: device creation enables it only
+where the device offers imports over several dma-bufs (`Device::import_dma_bufs`, Imported
+blocks), and only that call makes a sparse buffer. Elsewhere the call refuses.
 
 ### Attachment reads
 

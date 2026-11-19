@@ -38,7 +38,7 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 72 | 72 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 28 | 28 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -56,7 +56,7 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 20 | 16 | 0 | 0 | 36 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 12 | 4 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 1 | 27 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -703,9 +703,10 @@ Columns:
 | `DeviceSamplers` | A sampler state whose device samplers would take the device past its `maxSamplerAllocationCount`, less the sampler arrays' two defaults... | at the device's limit | `device`: the device's `maxSamplerAllocationCount` | 1: `crates/metal2vulkan-rt/src/sampler.rs (take)` | `-` |
 | `MemoryAllocations` | A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones, refused before the driver is called | at the device's limit | `device`: the device's `maxMemoryAllocationCount` | 1: `crates/metal2vulkan-rt/src/memory.rs (allocate)` | `-` |
 | `AllocationNotMapped` | A take that no free range fits made an allocation that the consumer's `BlockMappings::map` did not map | every device (a public call's own check of its arguments) | `ours`: the consumer's hook gave the allocation no place in its own address range | 1: `crates/metal2vulkan-rt/src/memory.rs (own)` | `-` |
-| `NoImport` | An import of a handle the device does not take (`Device::import_dma_buf` on Unix, `Device::import_host_memory`, and a dma-buf surface's buffer,... | at the device's limit | `device`: the device's extensions and its external buffer properties | 3: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`, `crates/metal2vulkan-rt/src/import.rs (import_host_memory)` (+1) | `-` |
-| `ImportType` | An import whose handle's memory type query offers no type the import takes, so nothing is imported | at the device's limit | `device`: the handle's memory type query and the buffer's memory requirements | 2: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`, `crates/metal2vulkan-rt/src/import.rs (import_host_memory)` | `-` |
-| `ImportAlignment` | An import of no bytes, or one whose address or length is not a multiple of `alignment` | at the device's limit | `device`: `minImportedHostPointerAlignment` and the buffer's memory requirements | 3: `crates/metal2vulkan-rt/src/import.rs (check_len)`, `crates/metal2vulkan-rt/src/import.rs (check_size)` (+1) | `-` |
+| `NoImport` | An import of a handle the device does not take (`Device::import_dma_buf` and `Device::import_dma_bufs` on Unix, `Device::import_host_memory`, and... | at the device's limit | `device`: the device's extensions, features, queue family and external buffer properties | 4: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`, `crates/metal2vulkan-rt/src/import.rs (import_dma_bufs)` (+2) | `-` |
+| `ImportType` | An import whose handle's memory type query offers no type the import takes, so nothing is imported | at the device's limit | `device`: the handle's memory type query and the buffer's memory requirements | 3: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`, `crates/metal2vulkan-rt/src/import.rs (import_dma_bufs)` (+1) | `-` |
+| `ImportAlignment` | An import of no bytes, or one whose address or length is not a multiple of `alignment` | at the device's limit | `device`: `minImportedHostPointerAlignment` and the buffer's memory requirements | 4: `crates/metal2vulkan-rt/src/import.rs (check_len)`, `crates/metal2vulkan-rt/src/import.rs (check_size)` (+2) | `-` |
+| `SparseAddressSpace` | An import over several dma-bufs (`Device::import_dma_bufs`) whose sparse buffer would take the device's sparse address space past its... | at the device's limit | `device`: `sparseAddressSpaceSize` | 1: `crates/metal2vulkan-rt/src/import.rs (reserve)` | `-` |
 | `NoExport` | An export of a handle the device does not give (`Device::new_exported_block`) | at the device's limit | `device`: the device's extensions and its external buffer properties | 5: `crates/metal2vulkan-rt/src/export.rs (handle, 2 sites)`, `crates/metal2vulkan-rt/src/export.rs (new_exported_block)` (+2) | `-` |
 | `ExportType` | An export of a handle the device gives, but not in the one form an export takes (`Device::new_exported_block`) | at the device's limit | `device`: its extensions and the buffer's memory requirements | 6: `crates/metal2vulkan-rt/src/export.rs (new_exported_block)`, `crates/metal2vulkan-rt/src/import.rs (surface_import)` (+4) | `-` |
 | `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
@@ -1315,9 +1316,10 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-rt/src/sampler.rs (take)`
 - `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-rt/src/memory.rs (allocate)`
 - `rt:Limit::AllocationNotMapped`: `crates/metal2vulkan-rt/src/memory.rs (own)`
-- `rt:Limit::NoImport`: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`; `crates/metal2vulkan-rt/src/import.rs (surface_import)`
-- `rt:Limit::ImportType`: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
-- `rt:Limit::ImportAlignment`: `crates/metal2vulkan-rt/src/import.rs (check_len)`; `crates/metal2vulkan-rt/src/import.rs (check_size)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
+- `rt:Limit::NoImport`: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-rt/src/import.rs (import_dma_bufs)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`; `crates/metal2vulkan-rt/src/import.rs (surface_import)`
+- `rt:Limit::ImportType`: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-rt/src/import.rs (import_dma_bufs)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
+- `rt:Limit::ImportAlignment`: `crates/metal2vulkan-rt/src/import.rs (check_len)`; `crates/metal2vulkan-rt/src/import.rs (check_size)`; `crates/metal2vulkan-rt/src/import.rs (import_dma_bufs)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
+- `rt:Limit::SparseAddressSpace`: `crates/metal2vulkan-rt/src/import.rs (reserve)`
 - `rt:Limit::NoExport`: `crates/metal2vulkan-rt/src/export.rs (handle, 2 sites)`; `crates/metal2vulkan-rt/src/export.rs (new_exported_block)`; `crates/metal2vulkan-rt/src/surface.rs (dma_buf_in_place)`; `crates/metal2vulkan-rt/src/surface.rs (new_exported_surface)`
 - `rt:Limit::ExportType`: `crates/metal2vulkan-rt/src/export.rs (new_exported_block)`; `crates/metal2vulkan-rt/src/import.rs (surface_import)`; `crates/metal2vulkan-rt/src/memory.rs (export)`; `crates/metal2vulkan-rt/src/memory.rs (surface_view)`; `crates/metal2vulkan-rt/src/surface.rs (dma_buf_in_place)`; `crates/metal2vulkan-rt/src/surface.rs (new_exported_surface)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
