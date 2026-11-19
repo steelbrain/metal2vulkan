@@ -980,9 +980,13 @@ fn a_detach_between_submissions_detaches_at_once_and_fails_only_the_later_submis
                 |cb| fill(cb, used, 0x5c),
                 |cb| fill(cb, &other, 0x5d),
             );
-            let started = Instant::now();
             assert_eq!(detach(), Ok(true), "{form}: used before the wait");
-            assert!(started.elapsed() < EARLY, "{form}: the detach waited");
+            // Returned while the gate is unraised: the detach did not wait for the command buffer.
+            assert_ne!(
+                command_buffer.status(),
+                CommandBufferStatus::Completed,
+                "{form}: the detach waited"
+            );
             gate.set_signaled_value(1);
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             assert_eq!(command_buffer.error(), None, "{form}: used before the wait");
@@ -997,9 +1001,12 @@ fn a_detach_between_submissions_detaches_at_once_and_fails_only_the_later_submis
                 |cb| fill(cb, &other, 0x5c),
                 |cb| fill(cb, used, 0x5d),
             );
-            let started = Instant::now();
             assert_eq!(detach(), Ok(true), "{form}: used behind the wait");
-            assert!(started.elapsed() < EARLY, "{form}: the detach waited");
+            assert_ne!(
+                command_buffer.status(),
+                CommandBufferStatus::Completed,
+                "{form}: the detach waited"
+            );
             gate.set_signaled_value(1);
             command_buffer.wait_until_completed_for(WAIT).unwrap();
             detached_backing(&command_buffer, form);
