@@ -75,6 +75,7 @@ fn a_push_of_the_bytes_a_command_buffer_holds_records_nothing() {
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
+    use crate::buffer::BufferObject;
     use crate::device::lock;
     use crate::submit::{GROUP_RUN, IN_FLIGHT, UNSEEN_JOINS};
     use crate::tests::devices_of_the_cfgs_kind;
@@ -2733,7 +2734,8 @@ pub(crate) mod on_device {
     /// drops its handles of them, of the queue and of the command buffer, the device's handles are
     /// the test's two (the device and the event). The test's last drop, the command buffer then
     /// free to run, tears the device down in that drop, with no wait: every gauge reads zero as it
-    /// returns.
+    /// returns, and the instance's wait for its devices, with nothing pending, answers true at
+    /// once.
     #[test]
     fn every_device_counts_nothing_a_command_buffer_keeps_as_a_handle() {
         use crate::{PixelFormat, SamplerDescriptor, TextureDescriptor, TextureType};
@@ -2769,6 +2771,12 @@ pub(crate) mod on_device {
                 Gauges::default(),
                 "{name}: every gauge zero as the drop returns"
             );
+            let began = Instant::now();
+            assert!(
+                instance.wait_until_devices_torn_down(PATIENCE),
+                "{name}: nothing pending"
+            );
+            assert!(began.elapsed() < AT_ONCE, "{name}: at once");
         }
     }
 

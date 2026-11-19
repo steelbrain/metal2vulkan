@@ -125,6 +125,7 @@ mod on_device {
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::{each_device, finished, within, Arena};
     use crate::tests::compute::on_device::step;
+    use crate::texture::TextureObject;
     use crate::{
         ClearColor, CommandBuffer, Device, DispatchType, Error, Gap, IndexClass, LoadAction,
         PixelFormat, Refusal, Region, RenderPassDescriptor, RenderPassKind, StorageMode,

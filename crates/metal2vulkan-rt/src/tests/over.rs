@@ -20,6 +20,7 @@
 mod on_device {
     use crate::device::Core;
     use crate::tests::command::on_device::{each_device, finished};
+    use crate::texture::TextureObject;
     use crate::{
         Buffer, ClearColor, Error, Gap, IndexClass, LoadAction, MemoryClass, PixelFormat, Refusal,
         Region, RenderPassDescriptor, StorageMode, StoreAction, Texture, TextureDescriptor,

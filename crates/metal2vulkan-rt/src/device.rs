@@ -348,9 +348,9 @@ pub(crate) struct Core {
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
     halt: AtomicU8,
-    /// Its count among its instance's devices not yet torn down: the last field, so it drops
-    /// once every other field has.
-    live: Live,
+    /// Its count among its instance's devices not yet torn down, which only its drop reads: the
+    /// last field, so it drops once every other field has.
+    _live: Live,
 }
 
 /// No stop has begun.
@@ -682,7 +682,7 @@ impl Device {
             entries: metal2vulkan::pipeline::StageEntries::new(),
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
-            live,
+            _live: live,
         });
         let device = Device {
             shared: Arc::new(Shared {

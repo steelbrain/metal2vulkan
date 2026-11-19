@@ -11,6 +11,7 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::each_device;
+    use crate::texture::TextureObject;
     use crate::{
         DispatchType, Error, Gap, HeapRange, MemoryClass, PixelFormat, Refusal, Region,
         StorageMode, TextureDescriptor, TextureType, TextureUsage,

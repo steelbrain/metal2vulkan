@@ -32,6 +32,7 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
+    use crate::texture::TextureObject;
     use crate::{
         Buffer, ClearColor, ColorAttachmentDescriptor, CommandBuffer, CommandQueue,
         ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType, FunctionDescriptor,

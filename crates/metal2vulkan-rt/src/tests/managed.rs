@@ -56,6 +56,7 @@ fn changed_ranges_merge_where_they_overlap_or_touch() {
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
+    use crate::buffer::BufferObject;
     use crate::capture::CAPTURE_LEN;
     use crate::device::lock;
     use crate::tests::command::on_device::{each_device, finished, within, Arena};

@@ -476,6 +476,7 @@ unsafe extern "system" fn cmd_begin_rendering(
 mod on_device {
     use super::{forget, named, RECORDING};
     use crate::tests::command::on_device::{each_device, finished};
+    use crate::texture::TextureObject;
     use crate::{
         BufferLayout, ClearColor, IndexClass, LoadAction, MemoryClass, PixelFormat, Region,
         RenderPassDescriptor, StorageMode, StoreAction, TextureDescriptor, TexturePlace,

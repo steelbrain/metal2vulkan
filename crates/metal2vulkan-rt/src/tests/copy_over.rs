@@ -25,6 +25,7 @@
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::compute::on_device::{add, step, WORDS};
+    use crate::texture::TextureObject;
     use crate::{
         Buffer, BufferLayout, CommandBuffer, CommandQueue, ComputePipelineDescriptor, Device,
         DispatchType, FunctionDescriptor, Library, MemoryClass, PixelFormat, Region, Resource,

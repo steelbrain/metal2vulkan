@@ -25,6 +25,7 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
+    use crate::texture::TextureObject;
     use crate::{
         Buffer, ComputeCommandEncoder, ComputePipelineDescriptor, ComputePipelineState, Device,
         DispatchType, Error, FunctionDescriptor, Gap, HeapRange, IndexClass, Library, MemoryClass,

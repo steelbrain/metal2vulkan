@@ -60,6 +60,7 @@ mod on_device {
     use crate::memory::Release;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::devices_of_the_cfgs_kind;
+    use crate::texture::TextureObject;
     use crate::{
         BufferLayout, Device, DeviceOptions, Error, ImportHandle, IndexClass, Limit, MemoryClass,
         PixelFormat, Region, StorageMode, TextureDescriptor, TexturePlace, TextureType,

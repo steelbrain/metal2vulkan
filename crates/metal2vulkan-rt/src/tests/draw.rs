@@ -116,6 +116,7 @@ fn a_viewport_is_vulkans_flipped_and_covers_its_own_pixels() {
 pub(crate) mod on_device {
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::{each_device, finished, within};
+    use crate::texture::TextureObject;
     use crate::{
         Block, Buffer, ColorAttachmentDescriptor, CommandBuffer, CompareFunction, CullMode,
         DepthStencilDescriptor, Device, DrawKind, Error, FunctionDescriptor, Gap, IndexBuffer,

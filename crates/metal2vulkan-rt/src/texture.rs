@@ -614,6 +614,10 @@ pub(crate) struct Shape {
     pub(crate) layers: u32,
 }
 
+/// A Managed texture's named bytes of one region ([`TextureInner::named`]): the copy as they lie,
+/// the buffer, the place, and the region's first element's offset in the buffer.
+type NamedPart<'a> = (Transfer, &'a Arc<BufferInner>, BytesPlace, u64);
+
 impl Drop for TextureInner {
     fn drop(&mut self) {
         let core = &self.core;
@@ -2678,7 +2682,7 @@ impl TextureInner {
         region: Region,
         level: u32,
         slice: u32,
-    ) -> Result<Option<(Transfer, &Arc<BufferInner>, BytesPlace, u64)>, Error> {
+    ) -> Result<Option<NamedPart<'_>>, Error> {
         let refused = || Error::Refused(Refusal::ManagedTextureBytes { level, slice });
         let named = self.named.as_ref().ok_or_else(refused)?;
         let (bytes, places) = (&named.buffer, &named.places);

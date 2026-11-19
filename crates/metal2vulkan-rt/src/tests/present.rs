@@ -43,6 +43,7 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::buffer::BufferObject;
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::{
         each_device, finished, on_each_device, within, Arena, PATIENCE,
