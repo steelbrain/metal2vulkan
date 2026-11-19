@@ -27,6 +27,7 @@ mod fence;
 mod fill;
 pub mod floor;
 mod hazard;
+mod import;
 mod instance;
 mod kept;
 mod kernel_map;
@@ -67,6 +68,7 @@ pub use error::{
 pub use event::{Event, SharedEvent};
 pub use extension::{ConsumerFeature, DeviceExtension};
 pub use fence::Fence;
+pub use import::ImportHandle;
 pub use instance::{Instance, PhysicalDevice};
 pub use memory::{AllocationId, AllocationInfo, BlockId, BlockInfo, BlockMappings, MemoryClass};
 /// `MTLLibrary`: the translator's, read from AIR or a metallib.

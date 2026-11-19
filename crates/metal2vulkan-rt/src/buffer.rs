@@ -141,19 +141,20 @@ impl Device {
     /// bytes from that offset in it to its end: `Some(0)` all of them, as
     /// `newBufferWithLength:options:` zeroes a new buffer in Metal, and `None` none, for a buffer
     /// placed in a heap, whose memory Metal does not zero, or one whose bytes the consumer writes
-    /// itself. An offset at or past the length zeroes nothing. In a Shared block the bytes are
-    /// zeroed through the mapping, before the call returns; in a Private block by a GPU fill in
-    /// the upload, which is submitted ahead of every command buffer committed after this call and ends
-    /// with a barrier that orders the fill before every later command (a copy into the buffer
+    /// itself. An offset at or past the length zeroes nothing. In a block the host maps (Shared,
+    /// or host memory imported by its address) the bytes are zeroed through the mapping, before
+    /// the call returns; in one it does not map (Private, or an imported dma-buf) by a GPU fill in
+    /// the upload, which is submitted ahead of every command buffer committed after this call and
+    /// ends with a barrier that orders the fill before every later command (a copy into the buffer
     /// among them), and which holds the block until it completes. The bytes zeroed are counted in
     /// [`Metrics::bytes_zeroed`](crate::Metrics::bytes_zeroed).
     ///
     /// Err: [`Refusal::EmptyBuffer`] for a length of 0, [`Refusal::BufferTooLong`] for a length
     /// past [`MAX_BUFFER_LENGTH`] and [`Refusal::BufferPastBlock`] for a range that leaves the
     /// block, where Metal answers nil; [`Error::NoSuchBlock`] for a block the
-    /// consumer does not hold; for a zeroed Private buffer, [`Refusal::InScheduledHandler`] in a
-    /// scheduled handler, [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command
-    /// buffer cannot be made.
+    /// consumer does not hold; for a buffer zeroed by a GPU fill, [`Refusal::InScheduledHandler`]
+    /// in a scheduled handler, [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's
+    /// command buffer cannot be made.
     pub fn new_buffer(
         &self,
         block: BlockId,
@@ -171,8 +172,8 @@ impl Device {
             }));
         }
         let block = self.placed(block, offset, length)?;
-        if block.memory.class == MemoryClass::Private && zero_from.is_some_and(|from| from < length)
-        {
+        // A block the host does not map (Private, or an imported dma-buf) is zeroed by a GPU fill.
+        if block.memory.mapping.is_none() && zero_from.is_some_and(|from| from < length) {
             crate::command::not_in_scheduled_handler()?;
         }
         let end = offset + length;

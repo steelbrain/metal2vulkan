@@ -3,10 +3,10 @@
 The Metal API on Vulkan, with one path for every device. It replaces `metal2vulkan-runtime` and
 takes its name when it does; until then it is unpublished.
 
-Its public API so far: the instance and the device, memory blocks and the buffers in them, the
-grants of texture and sampler indices, textures, sampler states, command queues, command buffers
-and events, compute and blit encoders, the device's counters, and `floor`, the check of a Vulkan
-device against the floor below.
+Its public API so far: the instance and the device, memory blocks (taken, or imported from the
+consumer's memory) and the buffers in them, the grants of texture and sampler indices, textures,
+sampler states, command queues, command buffers and events, compute and blit encoders, the
+device's counters, and `floor`, the check of a Vulkan device against the floor below.
 
 ## What the consumer implements
 
@@ -317,10 +317,54 @@ with its allocation, and the block-maker thread zeroes free Shared bytes while t
 mappings of them stand: from a block's give-back to the next take that lands on its bytes, they are
 the runtime's. A guest kernel that writes a free range damages only its own later buffers.
 
+### Imported blocks
+
+A no-copy buffer (`newBufferWithBytesNoCopy:length:options:deallocator:`) is the memory it was made
+over. The consumer imports that memory as a block and places the buffer in it with
+`Device::new_buffer`, as in a block it took. There are two calls, one per handle; which to try
+first, and what to do where both refuse, is the consumer's.
+
+- `Device::import_host_memory(pointer, len, release)` (unsafe) imports host memory by its address
+  (`VK_EXT_external_memory_host`), at a multiple of the device's
+  `minImportedHostPointerAlignment`, into the first memory type the pointer's query offers that is
+  host-visible and host-coherent and that the buffer's requirements list. The block's `contents`
+  is the pointer.
+- `Device::import_dma_buf(fd, len, release)` (unix) imports a dma-buf
+  (`VK_EXT_external_memory_dma_buf`) only into the first memory type the fd's query offers, and
+  only where that type is host-visible and host-coherent and the buffer's requirements list it;
+  anything else is `Limit::ImportType`, with nothing imported. It takes the fd (the consumer's
+  dup): after `Ok` the driver owns it; after a refusal or a failed query the runtime closes it, as
+  no driver was given it; after a failed import it closes it only where it still names the same
+  file, as a driver may have closed it and the number may name another file since. The block's
+  `contents` is `None`: the consumer reaches the pages through its own mappings.
+
+Each call returns the block and the index of the memory type it imported into, and refuses before
+any allocation is attempted.
+
+The two rules differ because a failed dma-buf import is not harmless: on NVIDIA's Linux driver
+(620.70.06, an RTX 3090) one failed dma-buf import into a later type the query offered broke every
+later allocation of that type, the Shared type among them, so the dma-buf rule attempts nothing it
+is not sure of. The host-memory rule takes the first host-visible, host-coherent type offered:
+where RADV (Mesa 26.2, an RX 7900 XTX) refused the pages of a shared mapping of a memfd at the
+import, its Shared allocations and a dma-buf import still worked after it. A device that does not
+list a handle's extensions, or whose buffers do not import it, refuses that call with
+`Limit::NoImport`, and an address or length off the device's alignment is `Limit::ImportAlignment`.
+
+An imported block is Shared, and is the whole of an allocation of its own, whose number
+(`BlockInfo::allocation`) no hook is told of. Each import is one `VkDeviceMemory` allocation and
+counts against the device's allocations; `Gauges::imports` counts those live. The block lives
+until its last handle and its last buffer, command buffer or upload are gone; then the block-maker
+thread frees its memory, which ends the import, and runs `release`, Metal's deallocator, after it
+(at teardown, on the thread that tears down). Neither `BlockMappings` hook runs for an imported
+block. A texture over a buffer in an imported block is `Gap::TextureOverBuffer`: an image bound to
+imported memory must be made for its handle, which the runtime does not do.
+
 ### Known gaps of memory blocks
 
 - A shader uses a buffer's `gpuAddress` directly, unchecked: a stale one, of a released buffer, can
   still fault the device.
+- An app buffer too large for the consumer's map budget is copied, on drivers whose dma-buf query
+  offers a non-host-visible type first.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
   block that is not a multiple of 4, or of the index size, is refused (`Refusal::ArgumentPlace`).
   Metal's offset rules keep both at that multiple of the buffer's start, so only a buffer that
@@ -1994,6 +2038,9 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_attachment_feedback_loop_dynamic_state` | device, with the feedback loop | the feedback loop's enable as dynamic state of every render pipeline |
 | `VK_KHR_vertex_attribute_divisor` | device, where listed | a vertex layout stepped per instance at a rate above 1, through the step-rate feature below |
 | `VK_EXT_vertex_attribute_divisor` | device, where listed | the same, on a device that lists only this extension, which the KHR was promoted from with the same feature and pipeline structures |
+| `VK_EXT_external_memory_host` | device, where listed | importing host memory by its address (`Device::import_host_memory`) |
+| `VK_KHR_external_memory_fd` | device, where listed | importing a dma-buf by its fd, with the extension below |
+| `VK_EXT_external_memory_dma_buf` | device, where listed | importing a dma-buf (`Device::import_dma_buf`) |
 
 ### Features
 

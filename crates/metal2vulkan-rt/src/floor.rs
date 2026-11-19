@@ -40,15 +40,20 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// The device extensions device creation enables where the device lists them: the SIMD groups'
 /// reconvergence modes, each for the optional features of its own, the portability subset, which
 /// Vulkan requires enabled where a device lists it, with the portability features the floor asks
-/// of such a device, and the vertex attribute divisor's two extensions, for the step-rate feature
+/// of such a device, the vertex attribute divisor's two extensions, for the step-rate feature
 /// of their own: the KHR, and the EXT it was promoted from, whose feature and pipeline structures
-/// are the same and which a device may list alone.
+/// are the same and which a device may list alone, and the imports' three: host memory by its
+/// address ([`Device::import_host_memory`](crate::Device::import_host_memory)), and a dma-buf
+/// ([`Device::import_dma_buf`](crate::Device::import_dma_buf)) through the fd's.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
     ash::khr::portability_subset::NAME,
     ash::khr::vertex_attribute_divisor::NAME,
     ash::ext::vertex_attribute_divisor::NAME,
+    ash::ext::external_memory_host::NAME,
+    ash::khr::external_memory_fd::NAME,
+    ash::ext::external_memory_dma_buf::NAME,
 ];
 
 /// The device extensions of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`

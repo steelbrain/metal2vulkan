@@ -1213,7 +1213,7 @@ const-value	metal2vulkan-rt::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attac
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
-const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME]
+const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME]
 const-value	metal2vulkan-rt::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-rt::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-rt::floor::VERSION	vk::API_VERSION_1_3
@@ -1428,6 +1428,7 @@ enum	metal2vulkan-rt::DispatchType	#[derive(Clone, Copy, Debug, PartialEq, Eq)] 
 enum	metal2vulkan-rt::DrawKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DrawKind
 enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
 enum	metal2vulkan-rt::Gap	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Gap
+enum	metal2vulkan-rt::ImportHandle	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum ImportHandle
 enum	metal2vulkan-rt::IndexClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndexClass
 enum	metal2vulkan-rt::Limit	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Limit
 enum	metal2vulkan-rt::LoadAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LoadAction
@@ -2311,6 +2312,7 @@ field	metal2vulkan-rt::Gauges.command_buffers	pub command_buffers: u64
 field	metal2vulkan-rt::Gauges.descriptor_slots	pub descriptor_slots: u64
 field	metal2vulkan-rt::Gauges.device_samplers	pub device_samplers: u64
 field	metal2vulkan-rt::Gauges.events	pub events: u64
+field	metal2vulkan-rt::Gauges.imports	pub imports: u64
 field	metal2vulkan-rt::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
 field	metal2vulkan-rt::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64
@@ -9584,6 +9586,8 @@ method	metal2vulkan-rt::Device::grant_indices	pub fn grant_indices(&self, class:
 method	metal2vulkan-rt::Device::has_unified_memory	pub fn has_unified_memory(&self) -> bool
 method	metal2vulkan-rt::Device::heap_buffer_size_and_align	pub fn heap_buffer_size_and_align(&self, length: u64, _options: u64) -> SizeAndAlign
 method	metal2vulkan-rt::Device::heap_texture_size_and_align	pub fn heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<SizeAndAlign, Error>
+method	metal2vulkan-rt::Device::import_dma_buf	#[cfg(unix)] pub fn import_dma_buf(&self, fd: std::os::fd::OwnedFd, len: u64, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
+method	metal2vulkan-rt::Device::import_host_memory	pub unsafe fn import_host_memory(&self, pointer: NonNull<u8>, len: u64, release: Option<Box<dyn FnOnce() + Send>>) -> Result<(Block, u32), Error>
 method	metal2vulkan-rt::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-rt::Device::minimum_linear_texture_alignment	pub fn minimum_linear_texture_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error>
@@ -13734,6 +13738,8 @@ variant	metal2vulkan-rt::Gap::TextureCopy	TextureCopy { source: PixelFormat, des
 variant	metal2vulkan-rt::Gap::TextureFormat	TextureFormat { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureOverBuffer	TextureOverBuffer { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureView	TextureView { kind: TextureViewKind }
+variant	metal2vulkan-rt::ImportHandle::DmaBuf	DmaBuf
+variant	metal2vulkan-rt::ImportHandle::HostMemory	HostMemory
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
 variant	metal2vulkan-rt::IndexClass::Texture	Texture
 variant	metal2vulkan-rt::Limit::AllocationNotMapped	AllocationNotMapped { class: MemoryClass, len: u64 }
@@ -13741,8 +13747,11 @@ variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::DeviceSamplers	DeviceSamplers { max: u32 }
+variant	metal2vulkan-rt::Limit::ImportAlignment	ImportAlignment { handle: ImportHandle, len: u64, alignment: u64 }
+variant	metal2vulkan-rt::Limit::ImportType	ImportType { handle: ImportHandle, offered: u32, listed: u32 }
 variant	metal2vulkan-rt::Limit::IndexRange	IndexRange { class: IndexClass, first: u32, count: u32 }
 variant	metal2vulkan-rt::Limit::MemoryAllocations	MemoryAllocations { max: u32 }
+variant	metal2vulkan-rt::Limit::NoImport	NoImport { handle: ImportHandle }
 variant	metal2vulkan-rt::Limit::TextureSamples	TextureSamples { sample_count: u32, counts: u32 }
 variant	metal2vulkan-rt::Limit::TextureSize	TextureSize { extent: [u32; 3], layers: u32, max_extent: [u32; 3], max_layers: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32 }

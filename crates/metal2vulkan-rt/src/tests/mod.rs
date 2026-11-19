@@ -12,6 +12,7 @@ mod floor;
 mod hazard;
 mod heap;
 mod image_reads;
+mod import;
 mod kept;
 mod kernel_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

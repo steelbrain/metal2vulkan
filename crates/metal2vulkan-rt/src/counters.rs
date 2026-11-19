@@ -208,6 +208,8 @@ pub(crate) enum Gauge {
     ShadowBytes,
     /// [`Gauges::timestamp_pools`].
     TimestampPools,
+    /// [`Gauges::imports`].
+    Imports,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -326,6 +328,7 @@ struct Atomics {
     shadows: AtomicU64,
     shadow_bytes: AtomicU64,
     timestamp_pools: AtomicU64,
+    imports: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -663,6 +666,7 @@ impl Counters {
             Gauge::Shadows => &a.shadows,
             Gauge::ShadowBytes => &a.shadow_bytes,
             Gauge::TimestampPools => &a.timestamp_pools,
+            Gauge::Imports => &a.imports,
         }
     }
 
@@ -787,6 +791,7 @@ impl Counters {
             shadows: a.shadows.load(Relaxed),
             shadow_bytes: a.shadow_bytes.load(Relaxed),
             timestamp_pools: a.timestamp_pools.load(Relaxed),
+            imports: a.imports.load(Relaxed),
         }
     }
 }
@@ -1109,7 +1114,8 @@ pub struct Gauges {
     /// constexpr sampler owns. A placement that takes an index from another object adds none.
     pub descriptor_slots: u64,
     /// Live `VkDeviceMemory` allocations: those blocks are ranges of, the idle ones among them,
-    /// and the runtime's own.
+    /// each imported block's, and the runtime's own. Each counts against the device's
+    /// `maxMemoryAllocationCount` ([`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations)).
     pub blocks: u64,
     /// Events and shared events (timeline semaphores).
     pub events: u64,
@@ -1185,4 +1191,8 @@ pub struct Gauges {
     /// from its first record until its times are read at its completion: made as command buffers
     /// need them, and kept until the device drops.
     pub timestamp_pools: u64,
+    /// Imported blocks ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
+    /// [`Device::import_host_memory`](crate::Device::import_host_memory)) whose memory is not yet
+    /// freed: each is also one of [`blocks`](Self::blocks).
+    pub imports: u64,
 }

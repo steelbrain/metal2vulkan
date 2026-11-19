@@ -11,6 +11,7 @@ use crate::extension::{self, ConsumerFeature, DeviceExtension};
 use crate::fill::Filler;
 use crate::floor;
 use crate::hazard::Ids;
+use crate::import::Imports;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::kernel_map::KernelMap;
 use crate::memory::{self, BlockId, BlockMappings, Memory, MemoryClass, Pool};
@@ -171,7 +172,7 @@ pub(crate) struct Core {
     pub(crate) attachment_reads: bool,
     /// The longest block: the device's `maxMemoryAllocationSize` or `maxBufferSize`, whichever is
     /// less.
-    max_block_len: u64,
+    pub(crate) max_block_len: u64,
     /// The device's `maxMemoryAllocationCount`: the most allocations live at once
     /// ([`memory::allocate`]).
     pub(crate) max_allocations: u32,
@@ -191,6 +192,8 @@ pub(crate) struct Core {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) hold_completions: std::sync::RwLock<()>,
     pub(crate) pool: Pool,
+    /// What the device imports ([`Device::import_dma_buf`], [`Device::import_host_memory`]).
+    pub(crate) imports: Imports,
     /// The blocks the consumer holds handles of, by number ([`Block`]): each claim goes once its
     /// last handle drops, or at teardown.
     pub(crate) claims: Mutex<HashMap<BlockId, Weak<Claim>>>,
@@ -470,6 +473,16 @@ impl Device {
             families[family as usize].timestamp_valid_bits,
         );
         let calibrated = ash::ext::calibrated_timestamps::Device::new(vk_instance, &device);
+        // SAFETY: the device was made from `raw` with `capabilities.extensions`.
+        let imports = unsafe {
+            Imports::new(
+                vk_instance,
+                raw,
+                &device,
+                &capabilities.extensions,
+                &capabilities.memory,
+            )
+        };
         let feedback = (capabilities.feedback_loop).then(|| {
             ash::ext::attachment_feedback_loop_dynamic_state::Device::new(vk_instance, &device)
         });
@@ -527,6 +540,7 @@ impl Device {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             hold_completions: std::sync::RwLock::new(()),
             pool,
+            imports,
             claims: Mutex::new(HashMap::new()),
             places: Places::new(),
             filler,

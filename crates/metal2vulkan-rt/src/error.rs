@@ -2,6 +2,7 @@
 
 use crate::arrays::IndexClass;
 use crate::floor::BelowFloor;
+use crate::import::ImportHandle;
 use crate::memory::{BlockId, MemoryClass};
 use ash::vk;
 use metal2vulkan::metal::PixelFormat;
@@ -902,10 +903,12 @@ pub enum Gap {
     },
     /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) the runtime
     /// does not make: other than 2D of one level, sample and slice; of a format of other than
-    /// one color texel an element; or whose first texel in the bytes shaders reach is not a whole
-    /// number of texels in, which no copy addresses.
+    /// one color texel an element; whose first texel in the bytes shaders reach is not a whole
+    /// number of texels in, which no copy addresses; or over a buffer in an imported block, whose
+    /// memory no image made without its handle may be bound to.
     ///
-    /// Basis: ours (the in-place linear image and the copy form take one 2D color image).
+    /// Basis: ours (the in-place linear image and the copy form take one 2D color image, and
+    /// neither an image of an imported handle).
     TextureOverBuffer {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
@@ -1239,10 +1242,11 @@ pub enum Limit {
         max: u32,
     },
     /// A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones,
-    /// refused before the driver is called: each block, each texture's own memory, each staging
-    /// buffer of [`Texture::replace_region`](crate::Texture::replace_region) and
-    /// [`Texture::get_bytes`](crate::Texture::get_bytes), the parameter ring's blocks and the zero
-    /// source count one while they live ([`Gauges::blocks`](crate::Gauges::blocks)). Metal has no
+    /// refused before the driver is called: each block, each imported block, each texture's own
+    /// memory, each staging buffer of [`Texture::replace_region`](crate::Texture::replace_region)
+    /// and [`Texture::get_bytes`](crate::Texture::get_bytes), the parameter ring's blocks and the
+    /// zero source count one while they live ([`Gauges::blocks`](crate::Gauges::blocks)). Vulkan
+    /// leaves an allocation past the count undefined, so the runtime counts its own. Metal has no
     /// counterpart: its allocations are bounded by memory alone.
     ///
     /// Basis: device (the device's `maxMemoryAllocationCount`).
@@ -1260,6 +1264,50 @@ pub enum Limit {
         class: MemoryClass,
         /// The length of the block the take asked for.
         len: u64,
+    },
+    /// An import of a handle the device does not take
+    /// ([`Device::import_dma_buf`](crate::Device::import_dma_buf),
+    /// [`Device::import_host_memory`](crate::Device::import_host_memory)): it does not list the
+    /// handle's extensions (`VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` for a
+    /// dma-buf, `VK_EXT_external_memory_host` for host memory), or its buffers do not import the
+    /// handle (`vkGetPhysicalDeviceExternalBufferProperties`). Metal's counterpart,
+    /// `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned memory.
+    ///
+    /// Basis: device (the device's extensions and its external buffer properties).
+    NoImport {
+        /// The handle asked for.
+        handle: ImportHandle,
+    },
+    /// An import whose handle's memory type query offers no type the import takes, so nothing is
+    /// imported: for a dma-buf, the first type the fd's query offers is not host-visible and
+    /// host-coherent, or the buffer's memory requirements do not list it; for host memory, the
+    /// pointer's query offers no type that is both and that the requirements list. Metal's
+    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned
+    /// memory.
+    ///
+    /// Basis: device (the handle's memory type query and the buffer's memory requirements).
+    ImportType {
+        /// The handle asked for.
+        handle: ImportHandle,
+        /// The types the handle's query offered, one bit each.
+        offered: u32,
+        /// The types the buffer's memory requirements list, one bit each.
+        listed: u32,
+    },
+    /// An import of no bytes, or one whose address or length is not a multiple of `alignment`:
+    /// for host memory the device's `minImportedHostPointerAlignment`, and for either handle the
+    /// alignment of the buffer's memory requirements where their size is past the length. Metal's
+    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes memory of a
+    /// whole number of pages at a page's first byte.
+    ///
+    /// Basis: device (`minImportedHostPointerAlignment` and the buffer's memory requirements).
+    ImportAlignment {
+        /// The handle asked for.
+        handle: ImportHandle,
+        /// The length asked for.
+        len: u64,
+        /// The multiple the device takes.
+        alignment: u64,
     },
     /// A multisample texture of a sample count the device does not make for its format, type and
     /// usage.
@@ -1730,6 +1778,24 @@ impl fmt::Display for Limit {
             Limit::AllocationNotMapped { class, len } => write!(
                 f,
                 "the consumer did not map the {class:?} allocation made for a block of {len} bytes"
+            ),
+            Limit::NoImport { handle } => write!(f, "the device imports no {handle:?}"),
+            Limit::ImportType {
+                handle,
+                offered,
+                listed,
+            } => write!(
+                f,
+                "the {handle:?}'s query offers types {offered:#x}, and no host-visible, \
+                 host-coherent type the import takes of the buffer's {listed:#x}"
+            ),
+            Limit::ImportAlignment {
+                handle,
+                len,
+                alignment,
+            } => write!(
+                f,
+                "an import of {len} bytes of {handle:?} at no multiple of {alignment} bytes"
             ),
             Limit::TextureSamples {
                 sample_count,

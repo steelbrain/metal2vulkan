@@ -1177,6 +1177,10 @@ fn check_over(
         return Err(gap());
     }
     let (block, copy) = buffer.held();
+    // An imported block's memory takes no image made without its handle.
+    if copy.is_none() && block.memory.imported {
+        return Err(gap());
+    }
     let spilled = copy.is_none() && block.memory.spilled();
     let extent = linear_extent(core, shape, plan)
         .is_some_and(|max| d.width <= max.width && d.height <= max.height);
