@@ -14,8 +14,11 @@
 //!   updater: X holds the updater's words when its completed handler runs.
 //! - [`TRACKED`], [`TRACKED_BEHIND_ONE`], [`TRACKED_BEHIND_BUSY`]: no fence, X and Y tracked, and
 //!   the updater committed behind none, one or three busy command buffers of its queue: what
-//!   Metal's hazard tracking orders between two queues by itself. Behind three, the M3 Max ran the
-//!   waiter without the updater's words.
+//!   Metal's hazard tracking orders between two queues by itself. Behind one or three, the M3 Max
+//!   ran the waiter without the updater's words: its tracking orders only against work already
+//!   submitted. Behind one, the new runtime submits the updater at once, as its queue holds nothing
+//!   back, and the waiter copies every word; [`TRACKED_BEHIND_ONE`] declares that count on its run
+//!   (docs/API.md section 10).
 //!
 //! The first three are the answers the probe `probes/cross_queue_fence_held_update.m` measured
 //! with compute dispatches on an Apple M3 Max under macOS 27.0.1; the recordings hold what Metal
@@ -24,9 +27,12 @@
 //! Every wait is bounded and the one command buffer held is held by an event the probe raises, so
 //! nothing here can hang; nothing renders, nothing dispatches and no loop runs on the GPU.
 
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Input, MetalSource, Side};
-use crate::fence_orders::{FenceShape, BYTES, HELD_BOUND, LONG_FILLS, LONG_FILL_BYTES, WRITTEN};
-use crate::transcript::{Node, Observed, Sites};
+use crate::fence_orders::{
+    FenceShape, BYTES, HELD_BOUND, LONG_FILLS, LONG_FILL_BYTES, WORDS, WRITTEN,
+};
+use crate::transcript::{Node, Observed, Sites, Value};
 
 /// A fence update on one queue, waited on by another's command buffer committed after it.
 pub const ORDERED: &str = "fence-across-queues";
@@ -48,6 +54,11 @@ pub const TRACKED: &str = "fence-none-tracked";
 
 /// The site each case's answer sits at.
 const AT: &str = "order";
+
+/// The accepted difference of a tracked write another queue's later command buffer sees where
+/// the writer's queue holds nothing back (docs/API.md section 10), by its slug.
+const SEEN_ACROSS_QUEUES: &str =
+    "a-write-whose-queue-holds-nothing-back-is-seen-by-another-queue-s-command-buffer-committed-after-it";
 
 /// A case over one fence experiment.
 pub struct FenceOrderCase {
@@ -79,12 +90,25 @@ impl Case for FenceOrderCase {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+    fn allowances(&self) -> Vec<Allowance> {
         // X and Y are `Shared` buffers the answer is read back out of, and on a device without
         // unified memory the runtime announces `shared-in-system-memory` for them
         // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
         // site alone: every word count and status still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
+        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        // Behind one busy command buffer, Metal's answer is timing: its tracking orders the copy
+        // only after work already submitted, and it ran the copy first. The new runtime submits
+        // the fill at once, as its queue holds nothing back, and the copy reads all of it, the
+        // order Apple describes for a tracked write (docs/API.md section 10). Either count holds;
+        // the statuses still compare exactly.
+        if self.name == TRACKED_BEHIND_ONE {
+            allowances.push(Allowance::new(
+                "case/order/y/words-written",
+                Loosening::AnyOf(vec![Value::Uint(0), Value::Uint(WORDS)]),
+                Justification::new_runtime_accepted(SEEN_ACROSS_QUEUES),
+            ));
+        }
+        allowances
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

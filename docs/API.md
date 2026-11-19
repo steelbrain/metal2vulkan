@@ -6785,3 +6785,17 @@ each item named states the rule in full.
 - **A pass over a map of a zero screen extent is refused**, `RegionError::RegionExtent` on that
   axis: the layer has no physical pixel there, so no attachment of the map's physical size can be
   made, and what Metal rasterizes in such a pass is not measured.
+
+**Command queues**
+
+- **A write whose queue holds nothing back is seen by another queue's command buffer committed
+  after it** (`metal2vulkan-rt`). The runtime submits a queue's command buffer at once while fewer
+  than three of the queue's submissions run, ahead of every command buffer committed after it on
+  any queue, so a later reader on another queue sees the write, as Apple describes a tracked
+  resource: the framework prevents subsequent commands from running until write operations finish.
+  Metal's tracking orders only against work it has already submitted: on an M3 Max with macOS
+  27.0.1, a blit fill of a tracked buffer committed behind one long command buffer of its queue ran
+  after a copy of that buffer on another queue committed after it, which read none of the fill in 5
+  runs of 5 (job m3-max-52432; the conformance case `fence-none-tracked-behind-one`). The runtime's
+  README states what was measured (`crates/metal2vulkan-rt/README.md`, "Queues, command buffers and
+  events").
