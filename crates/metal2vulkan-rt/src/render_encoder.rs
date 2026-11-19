@@ -235,7 +235,8 @@ impl Facts {
     /// draw checks after its attachment reads.
     ///
     /// Err: [`Refusal::VertexBufferOffset`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the
-    /// vertex descriptor reads that is not bound; [`Gap::SwizzledReadWrite`].
+    /// vertex descriptor reads that is not bound; [`Gap::SwizzledReadWrite`];
+    /// [`Gap::StorageElement`].
     fn find(&mut self, draws: &Draws, tables: &[Tables; 2], pass: &Pass) -> Result<(), Error> {
         self.vertex.clear();
         for &(binding, index) in &draws.bindings {
@@ -261,6 +262,19 @@ impl Facts {
         for &(table, slot) in &draws.storage_reads {
             if tables[table].texture(slot).is_some_and(Texture::swizzled) {
                 return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
+            }
+        }
+        for &(table, slot, access) in &draws.textures {
+            let stored = access != Access::Read || draws.storage_reads.contains(&(table, slot));
+            let unstored = match tables[table].texture(slot) {
+                Some(texture) if stored => texture.unstored(),
+                _ => None,
+            };
+            if let Some(pixel_format) = unstored {
+                return Err(Error::Unsupported(Gap::StorageElement {
+                    slot,
+                    pixel_format,
+                }));
             }
         }
         self.attachments = (draws.textures.iter()).any(|&(table, slot, _)| {

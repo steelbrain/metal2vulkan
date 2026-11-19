@@ -705,9 +705,13 @@ made, with no lock, and never rewritten for layouts.
 
 - `replace_region` and `get_bytes` of a texture without named bytes go through the staging region:
   a copy Metal does not make, counted in `Metrics::bytes_copied`.
-- A texture whose format the device does not store through a storage image without a format has
-  no storage element, so a shader write through its index is dropped, as a write to a nil
-  texture is.
+- A texture made for shader writes whose format the device does not store through a storage
+  image without a format (the 8-bit sRGB formats, `RGB9E5Float` or `BGR10A2Unorm` where the
+  device lacks their storage), or holds through a view of another (an `A8Unorm` held in red, the
+  extended-range formats), has no storage element. A draw or dispatch whose function writes such
+  a texture bound to a slot, or reads it there through its storage image (`access::read_write`),
+  is `Gap::StorageElement`. One an argument buffer reaches by its resource ID is not seen at the
+  bind: its writes are dropped and its storage reads answer zeros.
 - `replace_region` takes no bytes into a 32-bit float depth (`Gap::FloatDepthUpload`): Metal
   keeps any `float` there, Vulkan copies no depth outside `[0, 1]` into a depth aspect without
   `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor

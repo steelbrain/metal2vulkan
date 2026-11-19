@@ -927,6 +927,20 @@ impl ComputeCommandEncoder {
                     return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
                 }
             }
+            let interface = &inner.whole.interface;
+            for &(slot, access) in &interface.textures {
+                let stored = access != Access::Read || interface.storage_reads.contains(&slot);
+                let unstored = match self.textures.get(slot as usize) {
+                    Some(Some(texture)) if stored => texture.unstored(),
+                    _ => None,
+                };
+                if let Some(pixel_format) = unstored {
+                    return Err(Error::Unsupported(Gap::StorageElement {
+                        slot,
+                        pixel_format,
+                    }));
+                }
+            }
             self.facts.aligned = true;
         }
         let core = &*self.core;

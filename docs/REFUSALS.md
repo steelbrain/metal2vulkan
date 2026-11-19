@@ -39,7 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 69 | 69 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 25 | 25 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 26 | 26 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -57,7 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 19 | 16 | 0 | 0 | 34 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 9 | 4 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 25 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 26 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -730,6 +730,7 @@ Columns:
 | `RenderPipeline` | A render pipeline state of something the runtime does not build yet | every device (a public call's own check of its arguments) | `ours`: the replay streams' render pipelines draw into colour, depth and stencil attachments of one sample, with no tessellation and no framebuffer fetch; each other kind is built when a replay stream makes one | 5: `crates/metal2vulkan-rt/src/render.rs (draw_input)`, `crates/metal2vulkan-rt/src/render.rs (of, 3 sites)` (+1) | `-` |
 | `FenceOtherQueue` | A `Fence` updated or waited on by an encoder of a queue other than the first that used it | every device (a public call's own check of its arguments) | `ours`: a fence is built for one queue; the replay streams use each on one queue | 1: `crates/metal2vulkan-rt/src/fence.rs (used_on)` | `-` |
 | `SwizzledReadWrite` | A draw or dispatch whose function declares `access::read_write` at texture slot `slot` and reads it, where the texture bound there has a swizzle... | every device (a public call's own check of its arguments) | `ours`: built when a replay stream counts one | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`, `crates/metal2vulkan-rt/src/render_encoder.rs (find)` | `-` |
+| `StorageElement` | A draw or dispatch whose function writes a texture slot, or reads one through its storage image (`access::read_write`), bound to a texture made... | every device (a public call's own check of its arguments) | `ours`: the storage element through a view of the nearest format whose storage Vulkan requires of every device, with the translator's conversion, is the form to build | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`, `crates/metal2vulkan-rt/src/render_encoder.rs (find)` | `-` |
 | `TextureView` | `Texture::new_texture_view` of a kind Metal makes and the runtime does not build | every device (a public call's own check of its arguments) | `ours`: the replay streams' views that compute binds are same-format views of every slice, 2D views of one slice of a 2D array, and level subranges, swizzled or not; each other kind is built when a replay stream binds one | 1: `crates/metal2vulkan-rt/src/texture.rs (view)` | `-` |
 | `RenderPass` | A render pass of something the runtime does not build yet (`CommandBuffer::render_command_encoder`) | every device (a public call's own check of its arguments) | `ours`: the replay streams' passes render into one to two color attachments and a stencil or a depth attachment, each a level of a 2D texture of one sample, with no resolve and a clear depth of 1, none naming two textures for its depth and stencil; each other kind is built when a replay stream makes one; `DepthStencilViews` and `ClearDepth` are what Vulkan's rendering under the floor takes no form of | 3: `crates/metal2vulkan-rt/src/pass.rs (check)`, `crates/metal2vulkan-rt/src/pass.rs (ops)` (+1) | `-` |
 | `Draw` | A draw or render encoder state the runtime does not build yet (`RenderCommandEncoder`) | every device (a public call's own check of its arguments) | `ours`: the replay streams draw lines and triangles through one viewport Vulkan's is, with pipeline states of their pass's formats, under depth biases with no clamp, filled and clipped; each other kind is built when a replay stream draws one), and device for [`DrawKind::DividedBaseInstance`] (a device that does not report `supportsNonZeroFirstInstance` | 11: `crates/metal2vulkan-rt/src/render_encoder.rs (attachment_reads)`, `crates/metal2vulkan-rt/src/render_encoder.rs (draw)` (+9) | `-` |
@@ -1328,6 +1329,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::RenderPipeline`: `crates/metal2vulkan-rt/src/render.rs (draw_input)`; `crates/metal2vulkan-rt/src/render.rs (of, 3 sites)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::FenceOtherQueue`: `crates/metal2vulkan-rt/src/fence.rs (used_on)`
 - `rt:Gap::SwizzledReadWrite`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`; `crates/metal2vulkan-rt/src/render_encoder.rs (find)`
+- `rt:Gap::StorageElement`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`; `crates/metal2vulkan-rt/src/render_encoder.rs (find)`
 - `rt:Gap::TextureView`: `crates/metal2vulkan-rt/src/texture.rs (view)`
 - `rt:Gap::RenderPass`: `crates/metal2vulkan-rt/src/pass.rs (check)`; `crates/metal2vulkan-rt/src/pass.rs (ops)`; `crates/metal2vulkan-rt/src/texture.rs (attachment)`
 - `rt:Gap::Draw`: `crates/metal2vulkan-rt/src/render_encoder.rs (attachment_reads)`; `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`; `crates/metal2vulkan-rt/src/render_encoder.rs (draw_patches)`; `crates/metal2vulkan-rt/src/render_encoder.rs (primitives)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_depth_bias)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_depth_clip_mode)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_scissor_rects)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_triangle_fill_mode)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_viewport)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_viewports)`; `crates/metal2vulkan-rt/src/render_encoder.rs (shadow_copies)`

@@ -308,7 +308,7 @@ struct View {
     /// The swizzle its texels are sampled and read through: the one it was made with over its
     /// parent's, as Metal combines them, or its parent's where it was made with none.
     reads: TextureSwizzleChannels,
-    _views: Views,
+    views: Views,
 }
 
 /// A texture view's image views, which the reaper frees once the view is gone.
@@ -3058,7 +3058,7 @@ impl Texture {
                 parent,
                 base,
                 reads,
-                _views: views,
+                views,
             }),
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
@@ -3471,6 +3471,19 @@ impl Texture {
             Some(named) if named.form == Form::InPlace => named.buffer.id(),
             _ => self.inner.id,
         }
+    }
+
+    /// Where it is made for shader writes (`ShaderWrite`, or Metal's unknown usage) but has no
+    /// storage element, which shaders write it and read it as storage through
+    /// (`Arrays::place_texture`): its pixel format, which [`Gap::StorageElement`] names.
+    pub(crate) fn unstored(&self) -> Option<PixelFormat> {
+        let d = &self.inner.descriptor;
+        let written = d.usage.is_empty() || d.usage.contains(TextureUsage::SHADER_WRITE);
+        let storage = match &self.inner.view {
+            Some(view) => view.views.storage,
+            None => self.inner.image.storage,
+        };
+        (written && storage.is_none()).then_some(d.pixel_format)
     }
 
     /// Whether it reads through a swizzle other than each channel's own.

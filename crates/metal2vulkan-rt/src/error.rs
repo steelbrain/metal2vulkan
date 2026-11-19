@@ -1044,6 +1044,23 @@ pub enum Gap {
         /// The function's texture slot.
         slot: u32,
     },
+    /// A draw or dispatch whose function writes a texture slot, or reads one through its storage
+    /// image (`access::read_write`), bound to a texture made for shader writes with no storage
+    /// element: one whose format the device does not store through a storage image without a
+    /// format (an 8-bit sRGB format, `RGB9E5Float` or `BGR10A2Unorm` where the device lacks its
+    /// storage), or holds through a view of another (an `A8Unorm` held in red, an extended-range
+    /// format). Metal writes and reads such a texture; the runtime would drop the writes and read
+    /// zeros. Found at the bind, so a texture an argument buffer reaches by its resource ID is
+    /// not: its writes are dropped, a known gap.
+    ///
+    /// Basis: ours (the storage element through a view of the nearest format whose storage Vulkan
+    /// requires of every device, with the translator's conversion, is the form to build).
+    StorageElement {
+        /// The function's texture slot.
+        slot: u32,
+        /// The bound texture's pixel format.
+        pixel_format: PixelFormat,
+    },
     /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a kind Metal makes and
     /// the runtime does not build: what `kind` names.
     ///
@@ -1807,6 +1824,11 @@ impl fmt::Display for Gap {
             Gap::SwizzledReadWrite { slot } => write!(
                 f,
                 "a read_write texture slot {slot} bound to a swizzled texture is not built"
+            ),
+            Gap::StorageElement { slot, pixel_format } => write!(
+                f,
+                "texture slot {slot}, which a function writes or reads as storage, bound to a \
+                 {pixel_format:?} texture with no storage element on this device is not built"
             ),
             Gap::RenderPipeline { kind } => {
                 write!(f, "a render pipeline state with {kind:?} is not built")
