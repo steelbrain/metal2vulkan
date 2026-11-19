@@ -32,9 +32,13 @@
 //! # On Windows
 //!
 //! The two CPU clocks are `GetThreadTimes` and `GetProcessTimes`, kernel and user time summed,
-//! which Windows counts in 100 ns units; their step there was not measured, and the table above is
-//! the M3's. Windows keeps no load average, so [`host_load`] answers `None` there and a timing
-//! report says the host answers none.
+//! which Windows counts in 100 ns units but moves by the scheduler's tick: on an Intel UHD 630
+//! host under Windows 11, one `times` run read the thread clock as 0 for five calls and exactly
+//! 15,625 us (1/64 s) for a compute pipeline whose call took 8,465 us. So the per-call `on cpu`
+//! column there reads 0 or whole ticks, not the call's CPU time, and only a figure of many ticks
+//! means anything.
+//! Windows keeps no load average, so [`host_load`] answers `None` there and a timing report says
+//! the host answers none.
 
 /// The calling thread's CPU time, user and system, in nanoseconds, or `None` where the host does
 /// not answer the clock.
