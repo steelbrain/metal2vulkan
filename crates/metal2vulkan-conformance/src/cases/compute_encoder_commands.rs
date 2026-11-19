@@ -995,36 +995,51 @@ mod tests {
         assert_eq!(rows, named);
     }
 
-    /// Every case states its inputs and loosens no value: its one declaration is the notice a
-    /// device without unified memory announces for the `Shared` buffer the case reads back
-    /// through, at the notices site.
+    /// Every case states its inputs and loosens no value: its declarations are notices at the
+    /// notices site alone, the one a device without unified memory announces for the `Shared`
+    /// buffer the case reads back through, and on a sampling row the static note of its runtime
+    /// sampler slot, `pixel-sampler-scaling`.
     #[test]
     fn every_case_states_its_inputs_and_loosens_nothing() {
-        for case in all() {
+        use metal2vulkan_runtime::Degradation as D;
+        let cases = [
+            threadgroup_memory_and_grid(),
+            plural_buffer_binding(),
+            resource_residency(),
+            indirect_threadgroup_grid(),
+            scope_barrier(),
+            resource_barrier(),
+            plural_texture_and_sampler_binding(),
+            inline_bytes(),
+        ];
+        assert_eq!(cases.len(), all().len());
+        for case in cases {
             let inputs = case
                 .inputs()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
             assert!(!inputs.is_empty(), "{}", case.name());
-            // The venue's own memory notice and nothing else: no value of the family is loosened,
-            // and the one declaration is a notice declaration at `case/notices/*`.
-            let allowances = case.allowances();
-            assert_eq!(allowances.len(), 1, "{}", case.name());
-            assert_eq!(
-                allowances[0].justified_by,
-                crate::allowance::Justification::Degradation(
-                    metal2vulkan_runtime::Degradation::SharedInSystemMemory
-                        .code()
-                        .to_owned()
-                ),
-                "{}",
-                case.name()
-            );
-            assert_eq!(
-                allowances[0].path,
-                format!("case/{}/*", crate::replay::NOTICES_SITE),
-                "{}",
-                case.name()
-            );
+            let mut wanted = vec![D::SharedInSystemMemory];
+            if matches!(case.row.resources, Resources::Sampled { .. }) {
+                wanted.push(D::PixelSamplerScaling);
+            }
+            let named: Vec<_> = case
+                .allowances()
+                .into_iter()
+                .map(|allowance| {
+                    assert_eq!(
+                        allowance.path,
+                        format!("case/{}/*", crate::replay::NOTICES_SITE),
+                        "{}",
+                        case.name()
+                    );
+                    allowance.justified_by
+                })
+                .collect();
+            let wanted: Vec<_> = wanted
+                .into_iter()
+                .map(|d| crate::allowance::Justification::Degradation(d.code().to_owned()))
+                .collect();
+            assert_eq!(named, wanted, "{}", case.name());
         }
     }
 
