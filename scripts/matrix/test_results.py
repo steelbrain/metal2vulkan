@@ -888,14 +888,14 @@ class HarnessBudgetTests(unittest.TestCase):
             self.assertEqual([line.split(":")[0] for line in problems],
                              ["harness budget frame", "harness budget loop", "harness budget sampling"])
             self.assertEqual(parked, [
+                "harness budget alu: new 106.0 us over old 100.0 us is 1.060: VOID: past its limit 1.030 by "
+                f"2.9%, less than old's own move of +5.3% from the base's, {void}",
                 f"harness budget {first}: median of {results.FIRST_RUNS} processes, new 1040.0 us over old "
                 f"1000.0 us is 1.040: VOID: past its limit 1.030 by 1.0%, less than old's own move of -4.8% "
-                f"from the base's, {void}",
-                "harness budget alu: new 106.0 us over old 100.0 us is 1.060: VOID: past its limit 1.030 by "
-                f"2.9%, less than old's own move of +5.3% from the base's, {void}"])
+                f"from the base's, {void}"])
             self.assertEqual([(row, round(ratio, 3), round(move, 3)) for row, ratio, _, move in
                               results.excess_voids("a", recs(time=times), base)],
-                             [(first, 1.04, -0.048), ("alu", 1.06, 0.053)])
+                             [("alu", 1.06, 0.053), (first, 1.04, -0.048)])
             # A base that moved past FROZEN_DRIFT leaves the row to the first rule alone.
             far = dict(base, **{"harness-old/alu": 80.0})
             self.assertEqual([row for row, *_ in results.excess_voids("a", recs(time=times), far)], [first])
