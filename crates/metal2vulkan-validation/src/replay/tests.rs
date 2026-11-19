@@ -2,6 +2,7 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
+use super::covers::SlotStage;
 use super::heaps::HeapSplit;
 use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
@@ -498,6 +499,8 @@ struct Kept {
     pins: bool,
     /// The heaps it was told how to split, in order.
     splits: Vec<(u64, HeapSplit)>,
+    /// The texture slots each compute pipeline state's kernel writes; one not here answers none.
+    kernel_writes: HashMap<u64, Vec<u64>>,
 }
 
 impl Backend for Kept {
@@ -648,6 +651,10 @@ impl Backend for Kept {
 
     fn split_heap(&mut self, heap: u64, split: HeapSplit) {
         self.splits.push((heap, split));
+    }
+
+    fn texture_writes(&self, pipeline: u64, stage: SlotStage) -> Option<Vec<u64>> {
+        (stage == SlotStage::Kernel).then(|| self.kernel_writes.get(&pipeline).cloned())?
     }
 }
 
@@ -1997,6 +2004,7 @@ fn a_dispatch_plays_between_its_private_bytes() {
         location,
         length,
         differing,
+        covered: false,
     };
     assert_eq!(report.private, [compared(8, 24, 2), compared(0, 4, 0)]);
     let lines = report.lines();
@@ -2528,4 +2536,97 @@ fn named_ranges_merge_where_they_overlap_or_touch() {
     assert_eq!(ranges, vec![(0, 8), (100, 300), (512, 516)]);
     merge(&mut ranges, 8, 100);
     assert_eq!(ranges, vec![(0, 300), (512, 516)]);
+}
+
+/// A dispatch whose pipeline state writes texture slot 0 covers what the texture there meets in
+/// its placement heap: a buffer and a texture placed at offset 0 too. A check of either is not
+/// compared until it is written again: the buffer, written whole, is compared again. A dispatch
+/// of a state that only reads the slot covers nothing.
+#[test]
+fn a_heap_texture_write_covers_the_buffer_and_texture_it_meets_until_they_are_written() {
+    let mut kept = Kept::default();
+    kept.heap_answers.insert(4, (0x1000, 0x1000));
+    kept.kernel_writes.insert(9, vec![0]);
+    kept.kernel_writes.insert(11, Vec::new());
+    let encoded = |w: &mut StreamWriter<File>, at: u64, state: u64| {
+        w.call("commandBuffer", 6, at, &[], &[])?;
+        w.call("computeCommandEncoder", at, at + 1, &[], &[])?;
+        w.call(
+            "setComputePipelineState:",
+            at + 1,
+            0,
+            &[Value::Object(state)],
+            &[],
+        )?;
+        let slot = [Value::Object(5), Value::Uint(0)];
+        w.call("setTexture:atIndex:", at + 1, 0, &slot, &[])?;
+        let size = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+        let groups = [size.clone(), size];
+        w.call(
+            "dispatchThreadgroups:threadsPerThreadgroup:",
+            at + 1,
+            0,
+            &groups,
+            &[],
+        )?;
+        w.call("endEncoding", at + 1, 0, &[], &[])?;
+        w.call("commit", at, 0, &[], &[])
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newHeapWithDescriptor:", 1, 2, &heap_of(0x1_0000, 1), &[])?;
+        let buffer = [Value::Uint(0x1000), Value::Uint(0), Value::Uint(0)];
+        w.call("newBufferWithLength:options:offset:", 2, 3, &buffer, &[])?;
+        w.call("m2v.textureDescriptor", 0, 4, &[map(&[])], &[])?;
+        let texture = [Value::Object(4), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 2, 5, &texture, &[])?;
+        w.call("newTextureWithDescriptor:offset:", 2, 10, &texture, &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        w.call("newComputePipelineStateWithFunction:error:", 1, 9, &[], &[])?;
+        w.call(
+            "newComputePipelineStateWithFunction:error:",
+            1,
+            11,
+            &[],
+            &[],
+        )?;
+        encoded(w, 20, 9)?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(3), Value::Object(10)],
+            &[],
+        )?;
+        let whole = [Value::Uint(0), Value::Bytes(vec![7; 0x1000])];
+        w.call("m2v.write", 3, 0, &whole, &[])?;
+        encoded(w, 30, 11)?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(3), Value::Object(10)],
+            &[],
+        )
+    });
+    ended.unwrap();
+    let covered: Vec<(u64, bool)> = (report.checks.iter())
+        .map(|check| (check.object, check.covered))
+        .collect();
+    assert_eq!(covered, [(3, true), (10, true), (3, false), (10, true)]);
+    assert_eq!(
+        report.covered, 2,
+        "the one write covers the buffer and the other texture"
+    );
+    let lines = report.lines();
+    let line = "covered 2: texture writes over other objects of a placement heap; 3 checks and 0 \
+                snapshot ranges they covered not compared";
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.starts_with("check #") && l.ends_with(" covered"))
+            .count(),
+        3
+    );
 }

@@ -807,14 +807,28 @@ Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
 `private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),
 `devices apart from the guest's: #ID ...` where the stream recorded devices besides the one the
-guest makes its objects on (section 4), `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
+guest makes its objects on (section 4), `check ID SHA256 match|differs|unrecorded|covered`, `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
 runtime's getter raises), `id ID RECORDED PLAYED word WORD` on the new runtime, which lays its IDs
 out as [RESOURCE-ID.md](RESOURCE-ID.md) does: there the ID's low word, its index, is compared with
 the recording's, and its high word with `WORD`, the document's own function of the descriptor the
 object was made of (a texture's `TextureWord`, a sampler state's `SamplerWord`), never with the
-recording's high word, which is the recording runtime's own; `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
-`m2v.privateBytes` range compared, `split N executed COUNTS` where the player split compute
+recording's high word, which is the recording runtime's own; `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS|covered` for each
+`m2v.privateBytes` range compared, `covered N: texture writes over other objects of a placement
+heap; C checks and R snapshot ranges they covered not compared` where a texture write covered
+bytes of another object the stream placed in its placement heap (`N` the times one did): Metal
+leaves an aliased resource's contents undefined once another resource is written over its
+memory, so from that write until the object is written again its check (`covered`) and the
+snapshot ranges that meet those bytes (`covered`) are not compared. The ranges are the stream's
+offsets in the heap with a buffer's length and a texture's size as the runtime answers it, and
+the writes are found by structure: a draw's or a dispatch's to the texture slots the pipeline
+state's interface marks written (the new runtime's; the old runtime answers no slot access, so
+there only the following count), a render pass's to the textures its descriptor names, a blit's
+to its destination, `generateMipmapsForTexture:`, a `useResource:usage:` with write usage and the
+CPU's `replaceRegion:…`; a write of a texture over a buffer is the buffer's. An object is written
+again by the player's writes into it, a blit into it, and, as the stream carries no buffer
+access, any binding of it to an encoder, a `useResource:usage:` with write usage or a `useHeap:`
+of its heap. `split N executed COUNTS` where the player split compute
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
 `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),
@@ -842,8 +856,10 @@ met, a draw the runtime does not build among them (`GAP` the runtime's gap as Ru
 debugging, such as `Draw { kind: Points }`, `N` the commands skipped, `F`
 and `C` the first one's frame and stream position), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
-anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute
-pipeline states whose `gpuResourceID` the player asked, which the new runtime does not give),
+anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute and
+render pipeline states whose `gpuResourceID` the player asked, which the new runtime does not
+give; bookkeeping: no draw or dispatch is skipped for it, and only an indirect command buffer,
+which the runtime does not build, would read such an ID),
 then `ok`, `ids: played to the end; N objects' gpuResourceID differ from the recording's` where
 the play ended but objects whose ID the program saw have other IDs in the runtime, or
 `error WHAT`. Where the backend skipped anything, the `skipped` line and the last

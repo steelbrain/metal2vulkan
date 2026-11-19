@@ -6,6 +6,7 @@
 //! a dispatch compared.
 
 use super::addresses::AddressMap;
+use super::covers::{Covers, SlotStage};
 use super::heaps::{
     heap_size, placement_heap, placement_offset, places_buffer, places_texture, recorded_range,
     relay, HeapSplit, Layout, Overlaps, Placements,
@@ -151,6 +152,15 @@ pub trait Backend {
     /// how it kept Managed buffers. A backend with one form of Managed buffer ignores it.
     fn recorded_unified_memory(&mut self, _unified: bool) {}
 
+    /// The texture slots a draw or dispatch of pipeline state `pipeline` writes in `stage`, by
+    /// index, from the runtime's interface of the state, which says what the function does to
+    /// each texture it binds; the player's compares leave out what such a write covers in a
+    /// placement heap (`Report::covered`). None where the runtime answers no access: the player
+    /// then counts no slot of the state written.
+    fn texture_writes(&self, _pipeline: u64, _stage: SlotStage) -> Option<Vec<u64>> {
+        None
+    }
+
     /// Whether texture `texture` (not a view) is Managed, where the backend knows
     /// (`Report::texture_writes`).
     fn managed_texture(&self, _texture: u64) -> Option<bool> {
@@ -270,6 +280,9 @@ pub struct Check {
     pub sha256: Hash,
     /// The recording's own checksum, where the stream holds one.
     pub recorded: Option<Hash>,
+    /// A texture write in its placement heap covered some of its bytes since it was last
+    /// written (`Report::covered`): not compared.
+    pub covered: bool,
 }
 
 /// An object whose `gpuResourceID` in the runtime is not the one the program saw: the bytes that
@@ -296,6 +309,9 @@ pub struct PrivateBytes {
     pub location: u64,
     pub length: u64,
     pub differing: u64,
+    /// A texture write in its placement heap covered some of the range since it was last
+    /// written (`Report::covered`): not compared.
+    pub covered: bool,
 }
 
 /// What one span of a play counted.
@@ -360,6 +376,12 @@ pub struct Report {
     /// heap, read ahead (`Overlaps`): memory they shared in the recording and no longer share.
     /// Reported, not a stop.
     pub textures_met: u64,
+    /// The times a texture write covered bytes of another object placed in its placement heap
+    /// (`covers`): the checks of such an object and the snapshot ranges that meet such bytes,
+    /// until the object is written again, are not compared (`Check::covered`,
+    /// `PrivateBytes::covered`). Texture writes count from the slots the backend answers
+    /// (`Backend::texture_writes`), render passes, blits and the CPU.
+    pub covered: u64,
     /// The placement heaps the player laid out again for the runtime's sizes and alignments
     /// (`relay`).
     pub relaid: Relaid,
@@ -692,6 +714,7 @@ impl Report {
         }
         for check in &self.checks {
             let verdict = match check.recorded {
+                _ if check.covered => "covered",
                 None => "unrecorded",
                 Some(recorded) if recorded == check.sha256 => "match",
                 Some(_) => "differs",
@@ -719,6 +742,7 @@ impl Report {
         }
         for private in &self.private {
             let verdict = match private.differing {
+                _ if private.covered => "covered".to_owned(),
                 0 => "match".to_owned(),
                 differing => format!("differs {differing}/{}", private.length.div_ceil(4)),
             };
@@ -737,6 +761,19 @@ impl Report {
         }
         if self.unsnapshotted > 0 {
             lines.push(format!("unsnapshotted {}", self.unsnapshotted));
+        }
+        if self.covered > 0 {
+            let checks = self.checks.iter().filter(|check| check.covered).count();
+            let ranges = self
+                .private
+                .iter()
+                .filter(|private| private.covered)
+                .count();
+            lines.push(format!(
+                "covered {}: texture writes over other objects of a placement heap; {checks} \
+                 checks and {ranges} snapshot ranges they covered not compared",
+                self.covered
+            ));
         }
         if self.parted > 0 {
             lines.push(format!("parted {}", self.parted));
@@ -844,6 +881,9 @@ struct Snapshot {
     half: u64,
     /// Each range and where its bytes lie in each half.
     ranges: Vec<(Around, u64)>,
+    /// Whether a texture write covered bytes of each range (`Covers::meets`) by the dispatch's
+    /// end.
+    covered: Vec<bool>,
 }
 
 /// Whether `selector` makes a texture descriptor (`docs/REPLAY-STREAM.md`, section 9).
@@ -916,6 +956,11 @@ pub struct Player<'b, B: Backend> {
     frame_out: Option<&'b mut dyn Write>,
     /// The CPU's writes into Managed textures and their textures' users.
     texwrites: TexWrites,
+    /// What texture writes covered in placement heaps (`Report::covered`).
+    covers: Covers,
+    /// The runtime's size of each texture the stream places in a placement heap, read ahead, by
+    /// the texture and the position of the call that places it.
+    placed_sizes: HashMap<(u64, u64), u64>,
 }
 
 /// `now` past `base`, key by key.
@@ -1124,6 +1169,8 @@ impl<'b, B: Backend> Player<'b, B> {
             last_frame: None,
             frame_out: None,
             texwrites: TexWrites::default(),
+            covers: Covers::default(),
+            placed_sizes: HashMap::new(),
         }
     }
 
@@ -1174,6 +1221,7 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         self.report.total = Counts { stream, executed };
         self.report.texture_writes = self.texwrites.counts();
+        self.report.covered = self.covers.covers;
         (self.report, ended)
     }
 
@@ -1308,6 +1356,9 @@ impl<'b, B: Backend> Player<'b, B> {
                         let answer = self.backend.heap_size_and_align(&call, descriptor);
                         let answer = answer.ok();
                         let texture = places_texture(selector);
+                        if let (true, Some((bytes, _))) = (texture, answer) {
+                            self.placed_sizes.insert((call.result, position), bytes);
+                        }
                         if let (Some(offset), Some((bytes, align))) = (offset, answer) {
                             let most = placed.entry(offset).or_default();
                             *most = (most.0.max(bytes), most.1.max(align));
@@ -1560,6 +1611,7 @@ impl<'b, B: Backend> Player<'b, B> {
             }
             "release" => {
                 self.texwrites.released(call.receiver);
+                self.covers.released(call.receiver);
                 self.release(call.receiver)
             }
             _ => self.make(stream, call),
@@ -1658,6 +1710,10 @@ impl<'b, B: Backend> Player<'b, B> {
         let Some(call) = plain(call) else {
             return Ok(());
         };
+        // The offset the stream places the result at in a placement heap, before the heap's
+        // layout on the runtime moves it (`placed`).
+        let offset = placement_offset(&call.selector).and_then(|at| call.args.get(at));
+        let offset = offset.and_then(Value::as_uint);
         let mut relocated = 0;
         let mut args = Vec::with_capacity(call.args.len());
         let mut contents = None;
@@ -1693,7 +1749,10 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         let made = self.run(&resolved)?;
         self.track(&resolved);
+        let size = self.placed_sizes.remove(&(resolved.result, self.position));
         let backend = &*self.backend;
+        let writes = |pipeline, stage| backend.texture_writes(pipeline, stage);
+        self.covers.saw(&resolved, offset, size, writes);
         let managed = |texture| backend.managed_texture(texture);
         self.texwrites.saw(&resolved, self.position, managed);
         let object = resolved.result;
@@ -1766,6 +1825,7 @@ impl<'b, B: Backend> Player<'b, B> {
             if censused {
                 self.census(upload.target, data, at)?;
             }
+            (self.covers).written(upload.target, Some((at, data.len() as u64)));
             *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         }
         Ok(call)
@@ -1881,6 +1941,8 @@ impl<'b, B: Backend> Player<'b, B> {
             self.census(target, &data, offset)?;
         }
         *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
+        self.covers
+            .written(target, Some((offset, data.len() as u64)));
         self.write_bytes(target, offset, &data)
     }
 
@@ -1940,6 +2002,7 @@ impl<'b, B: Backend> Player<'b, B> {
             object,
             sha256: Sha256::digest(&bytes).into(),
             recorded,
+            covered: self.covers.covered(object),
         });
         Ok(())
     }
@@ -2051,9 +2114,15 @@ impl<'b, B: Backend> Player<'b, B> {
             }
             *self.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
             self.write_bytes(staging, at, &before)?;
+            // The copy in writes the range again.
+            (self.covers).written(around.buffer, Some((around.location, around.length)));
         }
         self.blit_between(&made, fence, placed.iter().map(copy_in))?;
         self.step(stream, call, left_out)?;
+        let covers = &self.covers;
+        let covered = (placed.iter())
+            .map(|(around, _)| covers.meets(around.buffer, around.location, around.length))
+            .collect();
         let copy_out = |&(around, at): &(Around, u64)| {
             let (buffer, location) = (around.buffer, around.location);
             [buffer, location, staging, half + at, around.length]
@@ -2067,6 +2136,7 @@ impl<'b, B: Backend> Player<'b, B> {
             fence,
             half,
             ranges: placed,
+            covered,
         });
         Ok(())
     }
@@ -2132,7 +2202,8 @@ impl<'b, B: Backend> Player<'b, B> {
                 player.backend_release(fence)?;
                 Ok(bytes)
             })?;
-            for (around, at) in snapshot.ranges {
+            let covered = snapshot.covered.into_iter();
+            for ((around, at), covered) in snapshot.ranges.into_iter().zip(covered) {
                 let after = stream.blob(&around.after)?;
                 sized(&around, &after)?;
                 let start = (snapshot.half + at) as usize;
@@ -2149,6 +2220,7 @@ impl<'b, B: Backend> Player<'b, B> {
                     location: around.location,
                     length: around.length,
                     differing: differing as u64,
+                    covered,
                 });
             }
         }
@@ -2177,6 +2249,7 @@ impl<'b, B: Backend> Player<'b, B> {
 
     fn drop_object(&mut self, object: u64) -> Result<(), PlayError> {
         self.encoders.remove(&object);
+        self.covers.released(object);
         self.addresses.remove(object);
         self.escaped.remove(&object);
         self.owner.remove(&object);

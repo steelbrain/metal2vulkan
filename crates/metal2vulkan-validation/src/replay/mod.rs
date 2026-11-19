@@ -3,6 +3,7 @@
 
 mod addresses;
 mod args;
+mod covers;
 mod heaps;
 mod new_runtime;
 mod old_runtime;
@@ -13,6 +14,7 @@ mod texwrites;
 mod translator;
 mod value;
 
+pub use covers::SlotStage;
 pub use heaps::HeapSplit;
 pub use new_runtime::{Ended, ManagedCopies, NewRuntime};
 pub use old_runtime::OldRuntime;

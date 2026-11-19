@@ -19,6 +19,7 @@ pub(super) mod second;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
+use super::covers::SlotStage;
 use super::player::{Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::translator;
@@ -2583,6 +2584,22 @@ impl Backend for NewRuntime {
 
     fn recorded_id(&mut self, object: u64, id: u64) {
         self.recorded = Some((object, id));
+    }
+
+    fn texture_writes(&self, pipeline: u64, stage: SlotStage) -> Option<Vec<u64>> {
+        let accesses = match (self.objects.get(&pipeline)?, stage) {
+            (Object::ComputePipeline(state), SlotStage::Kernel) => state.texture_accesses(),
+            (Object::RenderPipeline(state), SlotStage::Vertex) => {
+                state.texture_accesses(rt::Stage::Vertex)
+            }
+            (Object::RenderPipeline(state), SlotStage::Fragment) => {
+                state.texture_accesses(rt::Stage::Fragment)
+            }
+            _ => return None,
+        };
+        let written = accesses.into_iter();
+        let written = written.filter(|(_, access)| !matches!(access, rt::BindingAccess::ReadOnly));
+        Some(written.map(|(slot, _)| u64::from(slot)).collect())
     }
 
     fn managed_texture(&self, texture: u64) -> Option<bool> {
