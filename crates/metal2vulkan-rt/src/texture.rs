@@ -297,6 +297,9 @@ struct View {
     parent: Texture,
     /// The view's first level and array layer in the image.
     base: [u32; 2],
+    /// The swizzle its texels are sampled and read through: the one it was made with over its
+    /// parent's, as Metal combines them, or its parent's where it was made with none.
+    reads: TextureSwizzleChannels,
     _views: Views,
 }
 
@@ -2479,6 +2482,12 @@ impl TextureInner {
         self.view.as_ref().map_or([0, 0], |view| view.base)
     }
 
+    /// The swizzle its texels are sampled and read through: a view's over its parent's, else its
+    /// descriptor's.
+    fn reads(&self) -> TextureSwizzleChannels {
+        (self.view.as_ref()).map_or(self.descriptor.swizzle, |view| view.reads)
+    }
+
     /// A layout change of the texture's levels `levels`, counted from its first, over each of its
     /// slices and every aspect, from `old` to `new`, `None` naming the image's home layout, with
     /// no scopes yet.
@@ -2554,23 +2563,17 @@ impl Texture {
         slices: Range<u32>,
         index: Option<u32>,
     ) -> Result<Texture, Error> {
-        let swizzle = TextureSwizzleChannels::DEFAULT;
-        self.new_texture_view_with_swizzle(
-            pixel_format,
-            texture_type,
-            levels,
-            slices,
-            swizzle,
-            index,
-        )
+        self.view(pixel_format, texture_type, levels, slices, None, index)
     }
 
     /// `newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:`: the view
     /// [`Texture::new_texture_view`] makes, its texels sampled and read through `swizzle`
     /// combined with this texture's own, as Metal combines them: each channel the view takes from
     /// red, green, blue or alpha is that channel of this texture as its own swizzle reads it. The
-    /// view's descriptor holds the combined swizzle, and its resource ID the `TextureWord` of it.
-    /// Metal takes the call whatever the texture's usage (its own descriptor refuses a swizzle
+    /// view's descriptor holds `swizzle` as given, which is what Metal's `swizzle` answers of the
+    /// view, and its resource ID the `TextureWord` of the combined one; a view made without a
+    /// swizzle ([`Texture::new_texture_view`]) holds this texture's, and reads as it does. Metal
+    /// takes the call whatever the texture's usage (its own descriptor refuses a swizzle
     /// with shader-write or render-target usage), and so does this.
     ///
     /// Apple defines the swizzle for sampling and reading. The view's sampled element (`sample`,
@@ -2589,6 +2592,21 @@ impl Texture {
         levels: Range<u32>,
         slices: Range<u32>,
         swizzle: TextureSwizzleChannels,
+        index: Option<u32>,
+    ) -> Result<Texture, Error> {
+        let swizzle = Some(swizzle);
+        self.view(pixel_format, texture_type, levels, slices, swizzle, index)
+    }
+
+    /// The view [`Texture::new_texture_view_with_swizzle`] makes, of `swizzle` where the call
+    /// states one, else reading as this texture does ([`Texture::new_texture_view`]).
+    fn view(
+        &self,
+        pixel_format: PixelFormat,
+        texture_type: TextureType,
+        levels: Range<u32>,
+        slices: Range<u32>,
+        swizzle: Option<TextureSwizzleChannels>,
         index: Option<u32>,
     ) -> Result<Texture, Error> {
         use TextureType as T;
@@ -2640,7 +2658,10 @@ impl Texture {
             _ => slice_count,
         };
         d.pixel_format = pixel_format;
-        d.swizzle = combined(p.swizzle, swizzle);
+        // The view reads through its swizzle over this texture's, and its descriptor answers the
+        // swizzle it was made with.
+        let reads = swizzle.map_or(inner.reads(), |swizzle| combined(inner.reads(), swizzle));
+        d.swizzle = reads;
         // A view takes its descriptor's checks but the swizzle's with its usage, which Metal
         // makes of a texture's own descriptor alone.
         let (shape, usage) = checked(&d)?;
@@ -2754,7 +2775,10 @@ impl Texture {
         });
         let view = TextureInner {
             device: inner.device.clone(),
-            descriptor: d,
+            descriptor: TextureDescriptor {
+                swizzle: swizzle.unwrap_or(p.swizzle),
+                ..d
+            },
             image: Arc::clone(&inner.image),
             format: plan.format,
             views_usage,
@@ -2766,6 +2790,7 @@ impl Texture {
             view: Some(View {
                 parent,
                 base,
+                reads,
                 _views: views,
             }),
             emulation: plan.emulation,
@@ -3088,7 +3113,7 @@ impl Texture {
 
     /// Whether it reads through a swizzle other than each channel's own.
     pub(crate) fn swizzled(&self) -> bool {
-        self.inner.descriptor.swizzle != TextureSwizzleChannels::DEFAULT
+        self.inner.reads() != TextureSwizzleChannels::DEFAULT
     }
 
     /// Whether the host reads the GPU's writes to it with no copy: a texture in place over a

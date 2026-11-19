@@ -302,10 +302,11 @@ mod on_device {
                 }
             }
 
-            // A view's swizzle over its parent's is Metal's combination, in its descriptor and in
-            // its resource ID's word; a view without one keeps the parent's; and a texture of
-            // shader-write and render-target usage, whose own descriptor Metal refuses a swizzle,
-            // takes a swizzled view.
+            // A view's swizzle over its parent's is Metal's combination in its resource ID's word,
+            // and its descriptor holds the swizzle it was made with, as Metal's getter answers; a
+            // view without one keeps the parent's in both; and a texture of shader-write and
+            // render-target usage, whose own descriptor Metal refuses a swizzle, takes a swizzled
+            // view.
             use TextureSwizzle::{Alpha, Blue, Green, One, Red, Zero};
             let channels =
                 |[red, green, blue, alpha]: [TextureSwizzle; 4]| TextureSwizzleChannels {
@@ -326,27 +327,30 @@ mod on_device {
             let swizzled_view = |parent: &Texture, swizzle| {
                 parent.new_texture_view_with_swizzle(rgba, Type2D, 0..1, 0..1, swizzle, Some(4117))
             };
-            for (case, made, wanted) in [
+            for (case, made, answered, reads) in [
                 (
                     "Apple's example",
                     swizzled_view(&apple, channels([Red, Green, Alpha, Blue])),
+                    [Red, Green, Alpha, Blue],
                     [Red, One, Green, One],
                 ),
                 (
                     "a view without a swizzle",
                     view(&apple, rgba, Type2D, 0..1, 0..1),
                     [Red, One, One, Green],
+                    [Red, One, One, Green],
                 ),
                 (
                     "a written texture's",
                     swizzled_view(&written, channels([Blue, Zero, Red, One])),
                     [Blue, Zero, Red, One],
+                    [Blue, Zero, Red, One],
                 ),
             ] {
                 let made = made.unwrap_or_else(|error| panic!("{name}: {case}: {error}"));
-                let wanted = channels(wanted);
-                assert_eq!(made.descriptor().swizzle, wanted, "{name}: {case}");
-                let word = (TextureWord::of(rgba, wanted)).expect("a word").0;
+                let answered = channels(answered);
+                assert_eq!(made.descriptor().swizzle, answered, "{name}: {case}");
+                let word = (TextureWord::of(rgba, channels(reads))).expect("a word").0;
                 assert_eq!(
                     made.gpu_resource_id().word,
                     word,
