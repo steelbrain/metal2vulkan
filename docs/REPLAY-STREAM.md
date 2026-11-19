@@ -139,9 +139,9 @@ and the (name id, value) answer pairs.
 |---|---|---|---|
 | `m2v.newBufferOfLengthPaddingUnobserved` | `[length, options, alignedByte]` | `newBufferWithLength:options:`, whose texture rows may keep or change the bytes between them; `alignedByte` (or nil) is the buffer's byte the host put on a 256-byte boundary | `newBufferWithLength:options:` `[length, options]` |
 | `m2v.newExportableBufferOfLength` | `[length, options, alignedByte]` | the same buffer in an allocation of its own, which another API imports; result 0 where the host made none | the same, and nothing at result 0 |
-| `m2v.newDmaBufBufferOfLengthPaddingUnobserved` | `[length, options, alignedByte]` | the same, also exported as a dma-buf for video decoding; the video's writes arrive as a later commit's writes (section 6); result 0 where the host made none | the same, and nothing at result 0 |
+| `m2v.newDmaBufBufferOfLengthPaddingUnobserved` | `[length, options, alignedByte]` | the same, also exported as a dma-buf for video decoding; the video's writes arrive as a later commit's writes (section 6); result 0 where the host made none | the same, and nothing at result 0; the new runtime's backend makes its textures through the surface call (section 10) |
 | `m2v.newCommandQueueUnshared` | `[]` | a queue the host kept apart | `newCommandQueue` |
-| `m2v.externalWriteDone` | `[]`, on an exported buffer | another API's write into the buffer landed (a decoded picture) | nothing where the textures over the buffer read it in place; the new runtime's backend fills the textures over it at their next use (section 10) |
+| `m2v.externalWriteDone` | `[]`, on an exported buffer | another API's write into the buffer landed (a decoded picture) | nothing where the textures over the buffer read it in place; the new runtime's backend fills the textures over it at their next use, or on a video surface's pages acquires its surface (section 10) |
 
 ## 5. Memory and addresses
 
@@ -505,9 +505,11 @@ and the (name id, value) answer pairs.
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
-[--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]` plays a stream (its first
-segment) on one device through the old runtime (the default) or the new one (`rt`), and writes
-`DIR/report.txt`. Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
+[--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
+[--video-handle dma-buf|opaque-fd]` plays a stream (its first segment) on one device through the
+old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `--video-handle`
+names the consumer's decoder route on the new runtime, the handle its video surfaces are made
+with (a dma-buf where it is not given; below). Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
 by default; docs/VALIDATION.md, the hang tripwire), which a play on a CPU device raises. It
 writes each frame's `frame` and `end` lines as the frame ends, flushed, so a play that never ends
 leaves every frame it finished. Every line it writes to `report.txt`, the frame lines among them, it writes to
@@ -854,6 +856,34 @@ counted from 0), completes the work committed so far, reports as at the stream's
   executed counters; `surface_refill_gpu_nanos` is the GPU time of the refills' command buffers, counted in the frame whose end first sees each
   complete. The report's `surfaces` line gives them with the longest refill command buffer. A
   check of a texture reads its first level and slice as the old runtime's backend lays them out.
+
+  A buffer made as a video surface's pages (`m2v.newDmaBufBufferOfLengthPaddingUnobserved`, section
+  4), which another API decodes pictures into, plays instead as the product makes it: one surface
+  of the runtime's (`Device::new_exported_surface`) for the buffer, made at its first texture from
+  what that texture reads of the surface (its pixel format, width and height), and every texture
+  over a plane a view of that plane's texture at the texture's own index. A picture landed
+  (`m2v.externalWriteDone`) is the surface's acquire (`Surface::external_writes_done`). The stream
+  holds no bytes of the pictures (the buffer is Private and another API wrote it), so the play
+  writes none, and no shape, fill or refill stands in for such a buffer. `--video-handle` picks
+  the surface's handle and layout: `dma-buf` (the default, the stream's own) with the layout the
+  product passes for a VA-API import (pitch and plane starts multiples of 256, each plane holding
+  the coded picture's rows: the luma's height rounded up to 16, the chroma half that), or
+  `opaque-fd` with the layout it passes for NVIDIA's route (pitch a multiple of 4, no rows below).
+  The planes ask shader read and write; where the device's image in place lacks storage
+  (`Gap::SurfaceUsage`) they take shader read alone, counted. The formats played so are the
+  two-plane 4:2:0 ones, 8-bit (`420v`, `420f`: R8 and RG8 planes) and 10-bit in 16 (`x420`,
+  `xf20`: R16 and RG16); a buffer whose first texture reads no facts or another format plays as
+  any surface's pages do (above), counted. The report's `video surfaces through the surface call
+  (HANDLE): ...` line counts the surfaces made in place and in the copy form (with the runtime's
+  reasons), those whose planes take shader read alone, the textures over their planes, the
+  acquires, the pictures landed in a buffer before its first texture (no surface to acquire) and
+  the buffers played as any surface's pages; the executed counters `video_surfaces_in_place`,
+  `video_surfaces_copied`, `video_surface_textures`, `video_surface_acquires`,
+  `video_pictures_before_surface` and `video_buffers_otherwise` give them by frame, beside the
+  runtime's own `surfaces_in_place` and `surfaces_copied`, and the gauges add `surface_imports`.
+  The old runtime's backend plays such a buffer as any surface's pages: a buffer of its length
+  (section 4), the textures over its planes the old runtime's textures over the buffer, which read
+  it in place, and `m2v.externalWriteDone` as nothing.
 
   The counts are among its executed counters; a `skipped_` one above zero makes the play no gate
   result, and `report.txt` says so on a `skipped` line. It places buffers of their own, and the GPU
