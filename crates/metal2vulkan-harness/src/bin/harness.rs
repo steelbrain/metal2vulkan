@@ -26,7 +26,9 @@
 //! twice. A workload's rows print once its first run matched its CPU reference on every runtime
 //! and every runtime's outputs matched the first runtime's. The creation workloads run after the
 //! authored ones (not with a description); their rows print once every buffer each runtime made
-//! started zero. A workload a runtime refuses with a typed refusal prints `REFUSED` and the
+//! started zero. The rows of a runtime's own run last (not with a description either), each
+//! printing its lines once its check passed, or `not compared` on a runtime without the row. A
+//! workload a runtime refuses with a typed refusal prints `REFUSED` and the
 //! refusal on that runtime's row, and the other runtimes' outputs are compared among
 //! themselves. The command exits 0 when every workload matched or was refused, 1 when one did
 //! not match or failed, and 2 when it could not start.
