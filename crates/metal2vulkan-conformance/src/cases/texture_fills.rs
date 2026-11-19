@@ -738,10 +738,11 @@ impl Case for TextureFills {
         // difference is justified where one of these fired. A fill and its read-back by copies
         // move a carried texture's blocks and read no twin, so its precision
         // (`decoded-texel-precision`, announced at a command's first read of the twin) is not
-        // among them. A BC texture's device decode and a float depth's denormals are the device's
-        // own answers, which the suite declares for every case (`crate::replay::NATIVE_NOTES`).
-        // The format's own digest still compares, and only the 32-bit float depth formats' go
-        // unchecked, above.
+        // among them. A block-compressed texture's device decode, announced where the runtime
+        // makes it (`compressed-texel-decode`), is among them too: the fill reads bytes. A float
+        // depth's denormals are the device's own answer, which the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`). The format's own digest still compares, and only the
+        // 32-bit float depth formats' go unchecked, above.
         use metal2vulkan_runtime::Degradation as D;
         for kind in [
             D::UnpackedFillColor,
@@ -749,6 +750,7 @@ impl Case for TextureFills {
             D::HeapTwoPlaneLayout,
             D::RestrictedDepthUpload,
             D::CarriedDecodedTwin,
+            D::CompressedTexelDecode,
             D::SharedInSystemMemory,
         ] {
             allowances.push(notice_allowance(kind.code()));

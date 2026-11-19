@@ -237,19 +237,23 @@ impl CompressedDecode {
     /// or BC2 channel 4/255 and BC3's 6/255 (its alpha), a BC4 or BC5 channel 7.4/255 and a signed
     /// one 0.065, all on NVIDIA. An sRGB form's colour is the device's sRGB decode of a code within
     /// 4/255 of Metal's, so its bound is that decode's largest step over 4/255, at the top of the
-    /// curve, which also covers its alpha.
+    /// curve, which also covers its alpha. Both texels are `float`s, each its decode rounded by
+    /// up to half an ulp of a value below 1, so the bound takes that rounding of both on top: two
+    /// codes 6/255 apart can read 6/255 and a few billionths apart.
     fn decode_bound(&self) -> f64 {
         let format = self.format();
+        let rounding = f64::from(f32::EPSILON) / 2.0;
         if model::srgb(format.format) {
             let decode = |value: f64| ((value + 0.055) / 1.055).powf(2.4);
-            return decode(1.0) - decode(1.0 - 4.0 / 255.0);
+            return decode(1.0) - decode(1.0 - 4.0 / 255.0) + rounding;
         }
-        match format.kind {
+        let bound = match format.kind {
             Kind::Bc1 | Kind::Bc2 => 4.0 / 255.0,
             Kind::Bc3 => 6.0 / 255.0,
             Kind::Channels { signed: false, .. } => 7.4 / 255.0,
             Kind::Channels { signed: true, .. } => 0.065,
-        }
+        };
+        bound + rounding
     }
 
     /// The bytes a row of blocks takes: four blocks of a 16-texel row.

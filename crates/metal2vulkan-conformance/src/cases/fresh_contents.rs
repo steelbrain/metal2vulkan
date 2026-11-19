@@ -1111,6 +1111,14 @@ impl Case for FreshTexture {
                 metal2vulkan_runtime::Degradation::RestrictedDepthUpload.code(),
             ));
         }
+        // A shape of blocks more than one texel square (`BC1_RGBA`) is a block-compressed
+        // texture, whose device decode the runtime announces where it makes it
+        // (`compressed-texel-decode`). At the notices site alone: the case reads bytes.
+        if self.row.shape.block.1 > 1 {
+            allowances.push(crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::CompressedTexelDecode.code(),
+            ));
+        }
         allowances
     }
 
