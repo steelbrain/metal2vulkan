@@ -381,7 +381,14 @@ and the (name id, value) answer pairs.
   - `newRenderPipelineStateWithDescriptor:error:`: `{label, vertex, fragment, vertexDescriptor,
     colors, depthPixelFormat, stencilPixelFormat, rasterSampleCount, alphaToCoverage, alphaToOne,
     rasterizationEnabled, inputPrimitiveTopology, maxVertexAmplificationCount,
-    supportIndirectCommandBuffers, vertexLinked, fragmentLinked, privateState}`. The vertex
+    supportIndirectCommandBuffers, vertexLinked, fragmentLinked, privateState, tessellation,
+    maxVertexCallStackDepth, maxFragmentCallStackDepth}`. The last three are always written where
+    a recorder carries them: `tessellation` is `{partitionMode, maxFactor, factorScaleEnabled,
+    factorFormat, controlPointIndexType, factorStepFunction, outputWinding}`, Metal's raw values,
+    and the depths are uints. A record without them, as every stream recorded before the recorder
+    carried them, means Metal's defaults: `{0, 16, false, 0, 0, 0, 0}` and depths 1 and 1. A player
+    gives the tessellation state to the pipeline only where the vertex function is a
+    post-tessellation one (`patchType` not `None`); any other ignores it, as Metal does. The vertex
     descriptor is `{layouts: [{bufferIndex, stride, stepFunction, stepRate}], attributes:
     [{attributeIndex, format, offset, bufferIndex}]}` (a stride of 2^64 - 1 is
     `MTLBufferLayoutStrideDynamic`); `colors` is `[[index, {pixelFormat, blendingEnabled,
@@ -406,6 +413,7 @@ and the (name id, value) answer pairs.
 | `vertexLinked`, `fragmentLinked`, `linked` | `vertexLinkedFunctions`, `fragmentLinkedFunctions`, `linkedFunctions` |
 | `libraries` | `preloadedLibraries` and the libraries the functions load |
 | `alphaToCoverage`, `alphaToOne` | `alphaToCoverageEnabled`, `alphaToOneEnabled` |
+| `tessellation` | the tessellation properties: `partitionMode`, `maxFactor`, `factorScaleEnabled`, `factorFormat`, `controlPointIndexType`, `factorStepFunction`, `outputWinding` are `tessellationPartitionMode`, `maxTessellationFactor`, `tessellationFactorScaleEnabled`, `tessellationFactorFormat`, `tessellationControlPointIndexType`, `tessellationFactorStepFunction`, `tessellationOutputWindingOrder` |
 | `front`, `back` | `frontFaceStencil`, `backFaceStencil` |
 | `heapType` | `type` |
 | `options` | the setters of `resourceOptions`, `storageMode` and `hazardTrackingMode` |

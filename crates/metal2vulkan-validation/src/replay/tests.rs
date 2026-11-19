@@ -237,6 +237,83 @@ fn a_play_ends_at_the_recording_range_unless_asked_past_it() {
     assert_eq!(Whole.last_frame(false, Some(5)), Some(5));
 }
 
+/// A render pipeline record's tessellation state and call-stack depths: the recorder's pinned
+/// record (`recorder::tests::on_vulkan_a_render_pipeline_record_carries_its_tessellation_state`)
+/// parses to its values; a record without the keys, as every stream before them, to Metal's
+/// defaults; a key the layout does not hold, at the top or in the tessellation map, is refused.
+#[test]
+fn a_render_pipeline_record_s_tessellation_state_and_depths_are_read() {
+    use super::args::Fields;
+    use super::translator::{stages_state, StagesState, RENDER_PIPELINE_KEYS};
+    use metal2vulkan::metal::{
+        TessellationControlPointIndexType, TessellationFactorStepFunction,
+        TessellationPartitionMode, Winding,
+    };
+    use metal2vulkan::pipeline::TessellationDescriptor;
+    let call = |fields: Vec<(&str, Value)>| Call {
+        selector: "newRenderPipelineStateWithDescriptor:error:".into(),
+        receiver: 1,
+        result: 2,
+        args: vec![Value::Map(
+            fields.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        )],
+        answers: Vec::new(),
+    };
+    let read = |call: &Call| -> Result<StagesState, PlayError> {
+        stages_state(&Fields::arg(call, 0, &RENDER_PIPELINE_KEYS)?)
+    };
+    let tessellation = |extra: Option<(&str, Value)>| {
+        let mut keys = vec![
+            ("partitionMode", Value::Uint(3)),
+            ("maxFactor", Value::Uint(32)),
+            ("factorScaleEnabled", Value::Bool(true)),
+            ("factorFormat", Value::Uint(0)),
+            ("controlPointIndexType", Value::Uint(2)),
+            ("factorStepFunction", Value::Uint(1)),
+            ("outputWinding", Value::Uint(1)),
+        ];
+        keys.extend(extra);
+        Value::Map(keys.into_iter().map(|(k, v)| (k.into(), v)).collect())
+    };
+    let pinned = call(vec![
+        ("tessellation", tessellation(None)),
+        ("maxVertexCallStackDepth", Value::Uint(2)),
+        ("maxFragmentCallStackDepth", Value::Uint(3)),
+    ]);
+    let mut expected = TessellationDescriptor::default();
+    expected.partition_mode = TessellationPartitionMode::FractionalEven;
+    expected.max_tessellation_factor = 32;
+    expected.factor_scale_enabled = true;
+    expected.control_point_index_type = TessellationControlPointIndexType::UInt32;
+    expected.factor_step_function = TessellationFactorStepFunction::PerPatch;
+    expected.output_winding_order = Winding::CounterClockwise;
+    let state = read(&pinned).unwrap();
+    assert_eq!(
+        state,
+        StagesState {
+            tessellation: expected,
+            vertex_call_stack_depth: 2,
+            fragment_call_stack_depth: 3,
+        }
+    );
+    let before = call(vec![("label", Value::Nil)]);
+    assert_eq!(
+        read(&before).unwrap(),
+        StagesState {
+            tessellation: TessellationDescriptor::default(),
+            vertex_call_stack_depth: 1,
+            fragment_call_stack_depth: 1,
+        }
+    );
+    let inner = call(vec![(
+        "tessellation",
+        tessellation(Some(("stepRate", Value::Uint(1)))),
+    )]);
+    assert!(matches!(read(&inner), Err(PlayError::Refused { .. })));
+    let outer = call(vec![("maxTileCallStackDepth", Value::Uint(1))]);
+    assert!(matches!(read(&outer), Err(PlayError::Refused { .. })));
+}
+
 /// The header's flags, the same in every segment, are the stream's; a segment with another bit,
 /// or with flags unlike the first segment's, is refused.
 #[test]
