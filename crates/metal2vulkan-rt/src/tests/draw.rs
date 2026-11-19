@@ -28,6 +28,9 @@
 //!     consumer gave it: each pixel reads its own texel.
 //!   - a fragment function's second output for colour attachment 0 (the owned fixture
 //!     `engine/stage_io.ll`'s `stage_io_fragment_dual_source`) is the blend's second source.
+//!   - a vertex function stores to device memory (the owned fixture `engine/rvc_draw_bases.ll`'s
+//!     `draw_bases_in_a_vertex_function`), its state's rasterization disabled: each vertex of each
+//!     instance writes its slot.
 //!   - four samples (the owned fixture `engine/psc_sample_coverage.ll`'s `psc_read_samples`): a
 //!     triangle drawn by a state of `rasterSampleCount` 4 into a 4-sample target covers, per
 //!     sample as a kernel reads them, every pixel on one side of its edge, none on the other and,
@@ -1170,6 +1173,59 @@ pub(crate) mod on_device {
                 got.len() == want.len() && got.iter().zip(&want).all(|(g, w)| g.abs_diff(*w) <= 1);
             assert!(near, "{name}: the texels {got:?}, against {want:?}");
             println!("{name}: a fragment function's second output blended as the second source");
+        });
+    }
+
+    /// A vertex function stores to device memory (the owned fixture `engine/rvc_draw_bases.ll`'s
+    /// `draw_bases_in_a_vertex_function`, its state's rasterization disabled): vertex `vid` of
+    /// instance `iid` writes `vid`, `iid` and the draw's base vertex and base instance to the
+    /// four words of slot `(iid % 4) * 8 + vid % 8`, and no other slot is written. A device
+    /// without `vertexPipelineStoresAndAtomics` is below the floor, so every device makes the state.
+    #[test]
+    fn every_device_runs_a_vertex_function_that_stores() {
+        let Some(engine) = library(&engine_dir().join("rvc_draw_bases.ll")) else {
+            return;
+        };
+        let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
+            (engine.function("draw_bases_in_a_vertex_function")).expect("the function"),
+        )));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        d.rasterization_enabled = false;
+        // Three vertices from 2, two instances from 1: slots 10 to 12 and 18 to 20.
+        let (start, count, instances, base) = (2u32, 3u32, 2u32, 1u32);
+        each_device("draw_vertex_stores", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let out = buffers.of(&device, &[0u8; 32 * 16]);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&out), 0, 0));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, start, count, instances, base));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let contents = out.contents().expect("a Shared buffer");
+            // SAFETY: the buffer holds 32 slots of four words, which the finished draw wrote and
+            // whose writes reach the host.
+            let words =
+                unsafe { std::slice::from_raw_parts(contents.as_ptr().cast::<u32>(), 32 * 4) };
+            let mut want = [0u32; 32 * 4];
+            for iid in base..base + instances {
+                for vid in start..start + count {
+                    let slot = ((iid % 4) * 8 + vid % 8) as usize;
+                    want[slot * 4..slot * 4 + 4].copy_from_slice(&[vid, iid, start, base]);
+                }
+            }
+            assert_eq!(words, want, "{name}: the slots");
+            println!("{name}: a vertex function's stores reached its buffer");
         });
     }
 

@@ -324,6 +324,9 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // blends with its first, as Metal's dual-source blending does. A device without it is below
     // the floor.
     feature!(core.dual_src_blend => DualSrcBlend),
+    // A vertex or post-tessellation vertex function writes and atomically updates device memory,
+    // as Metal's may. A device without it is below the floor.
+    feature!(core.vertex_pipeline_stores_and_atomics => VertexPipelineStoresAndAtomics),
     // What Vulkan 1.1 to 1.3 require of every device and the translator's shaders use where they
     // are enabled: multiview, subgroup operations on 8-, 16- and 64-bit values, a fragment's
     // demotion to a helper and its termination, and workgroup memory zeroed at its declaration.

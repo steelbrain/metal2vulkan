@@ -72,6 +72,7 @@ fn at_the_floor() -> Queried {
     features.core.fragment_stores_and_atomics = vk::TRUE;
     features.core.tessellation_shader = vk::TRUE;
     features.core.dual_src_blend = vk::TRUE;
+    features.core.vertex_pipeline_stores_and_atomics = vk::TRUE;
     features.vulkan11.multiview = vk::TRUE;
     features.vulkan11.shader_draw_parameters = vk::TRUE;
     features.vulkan12.shader_subgroup_extended_types = vk::TRUE;
@@ -238,6 +239,9 @@ fn the_translator_sees_only_what_device_creation_enables() {
         .contains(&VkFeature::FragmentStoresAndAtomics));
     assert!(enables.features.contains(&VkFeature::TessellationShader));
     assert!(enables.features.contains(&VkFeature::DualSrcBlend));
+    assert!(enables
+        .features
+        .contains(&VkFeature::VertexPipelineStoresAndAtomics));
     assert!(enables.features.contains(&VkFeature::Multiview));
     assert!(enables
         .features
@@ -308,6 +312,7 @@ fn a_device_at_the_floor_is_above_it() {
     assert_eq!(enabled.core.fragment_stores_and_atomics, vk::TRUE);
     assert_eq!(enabled.core.tessellation_shader, vk::TRUE);
     assert_eq!(enabled.core.dual_src_blend, vk::TRUE);
+    assert_eq!(enabled.core.vertex_pipeline_stores_and_atomics, vk::TRUE);
     assert_eq!(enabled.vulkan11.multiview, vk::TRUE);
     assert_eq!(enabled.vulkan11.shader_draw_parameters, vk::TRUE);
     assert_eq!(enabled.vulkan12.shader_subgroup_extended_types, vk::TRUE);
@@ -330,7 +335,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 40] = [
+    let cases: [(Clear, Missing); 41] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -452,6 +457,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.dual_src_blend = vk::FALSE,
             feature(CORE, "dualSrcBlend"),
+        ),
+        (
+            |f| f.core.vertex_pipeline_stores_and_atomics = vk::FALSE,
+            feature(CORE, "vertexPipelineStoresAndAtomics"),
         ),
         (
             |f| f.vulkan11.multiview = vk::FALSE,
