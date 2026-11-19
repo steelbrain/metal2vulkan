@@ -1265,9 +1265,9 @@ impl<D: ComputeDevice> Session for Harness<D> {
                 let fragment = library.new_function(fragment, &[])?;
                 let warm = library.new_function(WARM_FRAGMENT, &[])?;
                 let started = Instant::now();
-                let warm = (self.device).new_render_pipeline_state(&vertex, &warm, color)?;
+                let warm = (self.device).new_render_pipeline_state(&vertex, &warm, color, 1)?;
                 let device_first = started.elapsed().as_secs_f64() * 1e6;
-                let make = || (self.device).new_render_pipeline_state(&vertex, &fragment, color);
+                let make = || (self.device).new_render_pipeline_state(&vertex, &fragment, color, 1);
                 let started = Instant::now();
                 let state = make()?;
                 let first = started.elapsed().as_secs_f64() * 1e6;
