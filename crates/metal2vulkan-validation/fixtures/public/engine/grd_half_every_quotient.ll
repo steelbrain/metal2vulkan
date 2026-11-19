@@ -6,6 +6,10 @@ target triple = "air64_v28-apple-macosx26.0.0"
 
 %"struct.metal::_atomic" = type { i32 }
 
+@_ZL4base = internal unnamed_addr addrspace(2) global i32 undef, align 4
+@_Z4base.MTL_FC_INIT_0_j = linkonce_odr hidden local_unnamed_addr addrspace(2) externally_initialized constant i32 undef, section "air.fc_initializer", align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @_GLOBAL__sub_I__, ptr null }]
+
 ; Function Attrs: mustprogress nounwind
 define void @grd_half_every_quotient(ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %0, <2 x i32> noundef %1) local_unnamed_addr #0 {
   %3 = extractelement <2 x i32> %1, i64 1
@@ -13,63 +17,74 @@ define void @grd_half_every_quotient(ptr addrspace(1) noundef captures(none) "ai
   %5 = extractelement <2 x i32> %1, i64 0
   %6 = lshr i32 %5, 4
   %7 = add i32 %4, %6
-  %8 = trunc i32 %7 to i16
-  %9 = bitcast i16 %8 to half
-  %10 = shl i32 %5, 12
-  br label %15
+  %8 = load i32, ptr addrspace(2) @_ZL4base, align 4, !tbaa !22
+  %9 = add i32 %8, %7
+  %10 = trunc i32 %9 to i16
+  %11 = bitcast i16 %10 to half
+  %12 = shl i32 %5, 12
+  br label %17
 
-11:                                               ; preds = %20
-  %12 = zext i32 %7 to i64
-  %13 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %0, i64 %12, i32 0
-  %14 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %13, i32 %36, i32 0, i32 2, i1 true) #2
+13:                                               ; preds = %22
+  %14 = zext i32 %7 to i64
+  %15 = getelementptr inbounds %"struct.metal::_atomic", ptr addrspace(1) %0, i64 %14, i32 0
+  %16 = tail call i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none) %15, i32 %38, i32 0, i32 2, i1 true) #3
   ret void
 
-15:                                               ; preds = %20, %2
-  %16 = phi i32 [ -2128831035, %2 ], [ %36, %20 ]
-  %17 = phi i32 [ 0, %2 ], [ %21, %20 ]
-  %18 = shl nuw nsw i32 %17, 10
-  %19 = add nuw nsw i32 %18, %10
-  br label %23
+17:                                               ; preds = %22, %2
+  %18 = phi i32 [ -2128831035, %2 ], [ %38, %22 ]
+  %19 = phi i32 [ 0, %2 ], [ %23, %22 ]
+  %20 = shl nuw nsw i32 %19, 10
+  %21 = add nuw nsw i32 %20, %12
+  br label %25
 
-20:                                               ; preds = %23
-  %21 = add nuw nsw i32 %17, 1
-  %22 = icmp eq i32 %21, 4
-  br i1 %22, label %11, label %15, !llvm.loop !21
+22:                                               ; preds = %25
+  %23 = add nuw nsw i32 %19, 1
+  %24 = icmp eq i32 %23, 4
+  br i1 %24, label %13, label %17, !llvm.loop !26
 
-23:                                               ; preds = %23, %15
-  %24 = phi i32 [ %16, %15 ], [ %36, %23 ]
-  %25 = phi i32 [ 0, %15 ], [ %37, %23 ]
-  %26 = add nuw nsw i32 %19, %25
-  %27 = trunc i32 %26 to i16
-  %28 = bitcast i16 %27 to half
-  %29 = fdiv half %9, %28
-  %30 = bitcast half %29 to i16
-  %31 = and i16 %30, 32767
-  %32 = icmp ugt i16 %31, 31744
-  %33 = select i1 %32, i16 32256, i16 %30
-  %34 = zext i16 %33 to i32
-  %35 = xor i32 %24, %34
-  %36 = mul i32 %35, 16777619
-  %37 = add nuw nsw i32 %25, 1
-  %38 = icmp eq i32 %37, 1024
-  br i1 %38, label %20, label %23, !llvm.loop !23
+25:                                               ; preds = %25, %17
+  %26 = phi i32 [ %18, %17 ], [ %38, %25 ]
+  %27 = phi i32 [ 0, %17 ], [ %39, %25 ]
+  %28 = add nuw nsw i32 %21, %27
+  %29 = trunc i32 %28 to i16
+  %30 = bitcast i16 %29 to half
+  %31 = fdiv half %11, %30
+  %32 = bitcast half %31 to i16
+  %33 = and i16 %32, 32767
+  %34 = icmp ugt i16 %33, 31744
+  %35 = select i1 %34, i16 32256, i16 %32
+  %36 = zext i16 %35 to i32
+  %37 = xor i32 %26, %36
+  %38 = mul i32 %37, 16777619
+  %39 = add nuw nsw i32 %27, 1
+  %40 = icmp eq i32 %39, 1024
+  br i1 %40, label %22, label %25, !llvm.loop !28
 }
 
 ; Function Attrs: mustprogress nounwind willreturn
 declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1) captures(none), i32, i32, i32, i1) local_unnamed_addr #1
 
+; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(write)
+define internal void @_GLOBAL__sub_I__() #2 section "air.static_init" {
+  %1 = load i32, ptr addrspace(2) @_Z4base.MTL_FC_INIT_0_j, align 4, !tbaa !22
+  store i32 %1, ptr addrspace(2) @_ZL4base, align 4, !tbaa !22
+  ret void
+}
+
 attributes #0 = { mustprogress nounwind "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" }
 attributes #1 = { mustprogress nounwind willreturn }
-attributes #2 = { nounwind willreturn }
+attributes #2 = { mustprogress nofree norecurse nosync nounwind willreturn memory(write) "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-trapping-math"="true" "stack-protector-buffer-size"="8" }
+attributes #3 = { nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
 !air.kernel = !{!9}
 !air.compile_options = !{!15, !16, !17}
-!llvm.ident = !{!18}
-!air.version = !{!19}
-!air.language_version = !{!20}
+!air.function_constants = !{!18}
+!llvm.ident = !{!19}
+!air.version = !{!20}
+!air.language_version = !{!21}
 
-!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 0]}
+!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
 !2 = !{i32 7, !"frame-pointer", i32 2}
 !3 = !{i32 7, !"air.max_device_buffers", i32 31}
@@ -87,9 +102,14 @@ attributes #2 = { nounwind willreturn }
 !15 = !{!"air.compile.denorms_disable"}
 !16 = !{!"air.compile.fast_math_disable"}
 !17 = !{!"air.compile.framebuffer_fetch_enable"}
-!18 = !{!"Apple metal version 32023.921 (metalfe-32023.921.6)"}
-!19 = !{i32 2, i32 8, i32 0}
-!20 = !{!"Metal", i32 4, i32 0, i32 0}
-!21 = distinct !{!21, !22}
-!22 = !{!"llvm.loop.mustprogress"}
-!23 = distinct !{!23, !22}
+!18 = !{ptr addrspace(2) @_Z4base.MTL_FC_INIT_0_j, !"uint", !"base", i32 0}
+!19 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!20 = !{i32 2, i32 8, i32 0}
+!21 = !{!"Metal", i32 4, i32 0, i32 0}
+!22 = !{!23, !23, i64 0}
+!23 = !{!"int", !24, i64 0}
+!24 = !{!"omnipotent char", !25, i64 0}
+!25 = !{!"Simple C++ TBAA"}
+!26 = distinct !{!26, !27}
+!27 = !{!"llvm.loop.mustprogress"}
+!28 = distinct !{!28, !27}
