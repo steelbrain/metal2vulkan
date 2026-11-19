@@ -89,8 +89,8 @@ them over this crate's items:
   floor, which holds buffer device addresses and the set-1 arrays' runtime descriptor arrays,
   partial binding and update-after-bind of sampled and storage images. The device tests
   `argument_tier` read and write the writable textures an argument buffer holds, and read
-  through an argument buffer a kernel wrote, a Private one and the array a pointer member
-  indexes.
+  through an argument buffer a kernel wrote and a Private one. Some forms both tiers promise are
+  refused at the making of a state (the known gaps of pipeline states).
 
 ### Teardown
 
@@ -1686,6 +1686,24 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of pipeline states
 
+- Some forms argument buffers take under `MTLArgumentBuffersTier1` or `MTLArgumentBuffersTier2`,
+  which `Device::argument_buffers_support` answers, are not lowered by the translator's identity
+  domains, which every state is translated under: a state over a function that holds one is
+  `Error::Translation` of `Unsupported{IdentityDomains}`, not implemented, whose symbol names the
+  first form it holds. By form:
+  - tier 2's pointer indexing to a texture: reading the texture of an argument buffer that a
+    pointer another argument buffer holds reaches, whose plan reads the root table ("an encoder
+    value the function reads as RootTableAddress"). The translator test
+    `a_texture_of_an_argument_buffer_a_pointer_member_reaches_is_refused_under_the_identity_domains`
+    and the device test `argument_tier` assert it;
+  - a sample, gather or comparison of an argument buffer's texture, and a depth texture of one
+    both compared and sampled without comparison: no test yet;
+  - an argument buffer's sampler, and an array of samplers: no test yet;
+  - an argument buffer's texture of a type the identity arrays hold no element of (a texture
+    buffer, a cube read as an array, level views, a two-plane, extended-range, RGBX or `ulong`
+    form, or a storage texture with a format), one read through another numeric type than its
+    own or as the raw texels of an extended-range member, and a handle that reads its table
+    entry beyond its element: no test yet.
 - No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it: a
   state reads only its lowerings from the cache directory, each variant is lowered at the first
   dispatch that needs it, and each `VkPipeline` past the first tile is made at its first dispatch,
