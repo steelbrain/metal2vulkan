@@ -982,6 +982,43 @@ mod on_device {
                 origin: [0; 3],
                 size: [SIDE, SIDE, 1],
             };
+            // A Shared buffer each blit copies textures into, prefilled with other bytes first,
+            // so a read is a copy that ran.
+            let len = 2 * ROW * u64::from(SIDE);
+            let block = (device.take_block(MemoryClass::Shared, len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let buffer = (device.new_buffer(block.id, 0, len, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let contents = buffer.contents().expect("a Shared buffer");
+            let queue = device.new_command_queue(1).expect("a queue");
+            // One submission, a blit of each of `of` into the buffer: the bytes it read.
+            let read = |of: &[Texture]| -> Vec<u8> {
+                // SAFETY: the buffer is alive, `len` bytes long, and no GPU work uses it.
+                unsafe { contents.as_ptr().write_bytes(0x5a, len as usize) };
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                for (at, texture) in of.iter().enumerate() {
+                    let from = TexturePlace {
+                        slice: 0,
+                        level: 0,
+                        origin: [0; 3],
+                    };
+                    let layout = BufferLayout {
+                        offset: at as u64 * len / 2,
+                        bytes_per_row: ROW,
+                        bytes_per_image: 0,
+                    };
+                    (encoder
+                        .copy_from_texture_to_buffer(texture, from, whole.size, &buffer, layout))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                }
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(&name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                // SAFETY: the buffer is alive, `len` bytes long, and its copies completed.
+                unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) }.to_vec()
+            };
             let textures = counters.gauges().textures;
             let bytes = vec![0xa5; (ROW * u64::from(SIDE)) as usize];
             let written: Vec<Texture> = (0..2)
@@ -996,12 +1033,12 @@ mod on_device {
                 .collect();
             let places: Vec<_> = written.iter().map(TextureObject::place).collect();
             // The upload of the writes holds the textures until a submission carries it and
-            // completes.
-            let queue = device.new_command_queue(1).expect("a queue");
-            let carrier = queue.command_buffer().expect("a command buffer");
-            carrier.commit().expect("a commit");
-            finished(&name, &carrier);
-            drop((carrier, written));
+            // completes: the blit that reads them back.
+            assert!(
+                read(&written).iter().all(|&byte| byte == 0xa5),
+                "{name}: the written textures"
+            );
+            drop(written);
             within("the written textures' places freed", || {
                 counters.gauges().textures == textures
             });
@@ -1018,39 +1055,8 @@ mod on_device {
                     "{name}: a new texture in a place a written one gave back"
                 );
             }
-            // One submission: a blit of both into a Shared buffer prefilled with other bytes.
-            let len = 2 * ROW * u64::from(SIDE);
-            let block = (device.take_block(MemoryClass::Shared, len))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let buffer = (device.new_buffer(block.id, 0, len, None))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let contents = buffer.contents().expect("a Shared buffer");
-            // SAFETY: the buffer is alive, `len` bytes long, and no GPU work uses it.
-            unsafe { contents.as_ptr().write_bytes(0x5a, len as usize) };
-            let command_buffer = queue.command_buffer().expect("a command buffer");
-            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
-            for (at, texture) in new.iter().enumerate() {
-                let from = TexturePlace {
-                    slice: 0,
-                    level: 0,
-                    origin: [0; 3],
-                };
-                let layout = BufferLayout {
-                    offset: at as u64 * len / 2,
-                    bytes_per_row: ROW,
-                    bytes_per_image: 0,
-                };
-                (encoder.copy_from_texture_to_buffer(texture, from, whole.size, &buffer, layout))
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
-            encoder.end_encoding();
-            command_buffer.commit().expect("a commit");
-            finished(&name, &command_buffer);
-            assert_eq!(command_buffer.error(), None, "{name}");
-            // SAFETY: the buffer is alive, `len` bytes long, and its copies completed.
-            let read = unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) };
             assert!(
-                read.iter().all(|&byte| byte == 0),
+                read(&new).iter().all(|&byte| byte == 0),
                 "{name}: the new textures"
             );
             let after = counters.metrics();
@@ -1067,7 +1073,7 @@ mod on_device {
                 barriers >= 2,
                 "{name}: {barriers} barriers, the moves home and the zeroing's among them"
             );
-            drop((buffer, block, new, command_buffer, queue));
+            drop((buffer, block, new, queue));
             device
                 .release_indices(grant)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
