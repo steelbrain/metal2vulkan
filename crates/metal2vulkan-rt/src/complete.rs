@@ -8,6 +8,7 @@ use crate::counters::Metric;
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
+use crate::queue::QueueInner;
 use crate::submit::{Ended, Finished, Upload};
 use crate::times::{self, Calibration};
 use ash::vk;
@@ -41,8 +42,9 @@ struct DoneState {
     watched: Vec<Arc<EventInner>>,
     /// Events whose listeners, or whose held command buffers' waits, a host value may reach.
     fire: Vec<Arc<EventInner>>,
-    /// Submitted command buffers held at `Committed` for a shared event's value
-    /// (`Pending::held`), each scheduled once its waits are reached, or as it retires.
+    /// Submitted command buffers held at `Committed` (`Pending::held`), in their submission order:
+    /// each scheduled once its waits are reached and its queue's held ones before it are
+    /// scheduled, or as it retires.
     held: Vec<Held>,
     waiting: Waiting,
     /// The wake semaphore's last value.
@@ -68,8 +70,28 @@ struct Retiree {
     item: Item,
 }
 
-/// A command buffer held at `Committed` for a shared event's value: its waits and its scheduled
-/// handlers.
+impl DoneState {
+    /// `cb`, held at `Committed` with `waits`, taking its scheduled handlers from `handlers`: the
+    /// thread looks at it from its next round.
+    fn hold(
+        &mut self,
+        cb: &Arc<CbInner>,
+        waits: Vec<(Arc<EventInner>, u64)>,
+        handlers: &mut Handlers,
+    ) {
+        for (event, _) in &waits {
+            lock(&event.state).holds += 1;
+        }
+        self.held.push(Held {
+            cb: Arc::clone(cb),
+            waits,
+            scheduled: std::mem::take(&mut handlers.scheduled),
+        });
+    }
+}
+
+/// A command buffer held at `Committed`: its waits for a shared event's value (none for one held
+/// only behind an earlier one of its queue) and its scheduled handlers.
 struct Held {
     cb: Arc<CbInner>,
     waits: Vec<(Arc<EventInner>, u64)>,
@@ -83,14 +105,26 @@ impl Held {
     }
 }
 
-/// Takes out of `held` the command buffers to schedule now: those whose waits are reached, and
-/// those that retire in `retire`, which are scheduled, where they ran, before they complete. Each
-/// event's count of held waits falls with them.
+/// Takes out of `held` the command buffers to schedule now, in order: those whose waits are
+/// reached with no held one of their queue left before them, and those that retire in `retire`,
+/// which are scheduled, where they ran, before they complete. Each event's count of held waits
+/// falls with them; each queue's count of held command buffers falls once each is scheduled.
 fn due(held: &mut Vec<Held>, retire: &[Retiree]) -> Vec<Held> {
-    let due: Vec<Held> = (held.extract_if(.., |entry| {
-        entry.reached() || retire.iter().any(|retiree| retiree.is(&entry.cb))
-    }))
-    .collect();
+    // The queues with a held command buffer left, by address: a later one of each waits for it.
+    let mut blocked: Vec<*const QueueInner> = Vec::new();
+    let mut due = Vec::new();
+    let mut index = 0;
+    while index < held.len() {
+        let entry = &held[index];
+        let queue = Arc::as_ptr(&entry.cb.queue);
+        let retires = retire.iter().any(|retiree| retiree.is(&entry.cb));
+        if retires || (entry.reached() && !blocked.contains(&queue)) {
+            due.push(held.remove(index));
+        } else {
+            blocked.push(queue);
+            index += 1;
+        }
+    }
     for (event, _) in due.iter().flat_map(|entry| &entry.waits) {
         lock(&event.state).holds -= 1;
     }
@@ -244,16 +278,8 @@ impl Done {
                 held,
                 ..
             } = pending;
-            // Held at `Committed`: the thread looks at its waits from its next round.
-            if !held.is_empty() {
-                for (event, _) in &held {
-                    lock(&event.state).holds += 1;
-                }
-                state.held.push(Held {
-                    cb: Arc::clone(&cb),
-                    waits: held,
-                    scheduled: std::mem::take(&mut handlers.scheduled),
-                });
+            if let Some(waits) = held {
+                state.hold(&cb, waits, &mut handlers);
                 flight_only = false;
             }
             state.flight.push_back(Retiree {
@@ -284,9 +310,13 @@ impl Done {
             let Pending {
                 value,
                 gpu,
-                handlers,
+                mut handlers,
+                held,
                 ..
             } = pending;
+            if let Some(waits) = held {
+                state.hold(&cb, waits, &mut handlers);
+            }
             let retiree = Retiree {
                 value,
                 item: Item::Command {
@@ -536,8 +566,10 @@ pub(crate) fn run(core: Arc<Core>) {
             }
             // Each held command buffer whose waits are reached, or that retires now, is scheduled
             // before any retires, so before it completes. One that retires with an error is not:
-            // its scheduled handlers run as it retires, as a failed submission's do.
+            // its scheduled handlers run as it retires, as a failed submission's do. Its queue's
+            // later command buffers are held behind it until then, its handlers run.
             for Held { cb, scheduled, .. } in due {
+                let queue = Arc::clone(&cb.queue);
                 match retire.iter_mut().find_map(|retiree| retiree.failed(&cb)) {
                     Some(handlers) => handlers.scheduled = scheduled,
                     None => {
@@ -547,6 +579,7 @@ pub(crate) fn run(core: Arc<Core>) {
                         }
                     }
                 }
+                queue.held.fetch_sub(1, Ordering::SeqCst);
             }
             // Handlers and listeners run with no lock held.
             // Each completed command buffer's timestamps are placed on the host clock by the

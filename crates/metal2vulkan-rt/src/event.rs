@@ -111,7 +111,9 @@ impl Device {
     /// runs alike), a command buffer committed on another queue behind one whose signal still runs
     /// (that one `Scheduled`, its signal not landed) reads `Scheduled` with its scheduled handler
     /// run where it waits for an `MTLEvent`, and `Committed` with no handler run and the value 0
-    /// where it waits for an `MTLSharedEvent`.
+    /// where it waits for an `MTLSharedEvent`. The next command buffer on its queue, which waits
+    /// for nothing, reads the same as it, six runs of six: so a queue's later command buffers are
+    /// scheduled after a held one here, in order.
     ///
     /// Err: [`Error::Vulkan`] where the semaphore cannot be made.
     pub fn new_shared_event(&self) -> Result<SharedEvent, Error> {

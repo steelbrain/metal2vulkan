@@ -64,8 +64,9 @@ pub enum CommandBufferStatus {
     /// has passed `vkQueueSubmit2`. One that waits for a [`SharedEvent`](crate::SharedEvent)'s
     /// value not yet reached when its last segment joins a submission is scheduled once the value
     /// is, as the completion thread sees the signal or the host's set, and always before it
-    /// completes. Apple defines the status as "All dependencies have been resolved and the command
-    /// buffer has been scheduled for execution"; Metal applies that to a shared event's wait only
+    /// completes; its queue's later command buffers are scheduled after it, in order. Apple
+    /// defines the status as "All dependencies have been resolved and the command buffer has been
+    /// scheduled for execution"; Metal applies that to a shared event's wait only
     /// ([`Device::new_shared_event`](crate::Device::new_shared_event)).
     Scheduled,
     /// `MTLCommandBufferStatusCompleted`.
@@ -282,9 +283,11 @@ pub(crate) struct Pending {
     pub(crate) handlers: Handlers,
     /// It took a pair of timestamp queries.
     pub(crate) timed: bool,
-    /// Its waits for a shared event's value not reached when its last segment joined a
-    /// submission: it is scheduled once they are (`crate::complete`), not as it joins.
-    pub(crate) held: Vec<(Arc<EventInner>, u64)>,
+    /// Where it is held at `Committed` as its last segment joins a submission, scheduled by the
+    /// completion thread rather than as it joins (`crate::complete`): its waits for a shared
+    /// event's value not reached then, none where it is held only behind an earlier command
+    /// buffer of its queue that is held.
+    pub(crate) held: Option<Vec<(Arc<EventInner>, u64)>>,
 }
 
 impl Pending {
@@ -616,7 +619,7 @@ impl CommandBuffer {
             gpu,
             handlers,
             timed: stamps.is_some(),
-            held: Vec::new(),
+            held: None,
         };
         state.status = CommandBufferStatus::Committed;
         self.inner.changed.notify_all();

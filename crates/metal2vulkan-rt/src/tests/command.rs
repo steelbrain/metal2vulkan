@@ -894,15 +894,24 @@ pub(crate) mod on_device {
     /// stays `Committed`, no scheduled handler run, until the value is reached, and is scheduled
     /// before it completes: by the host's set of the value, while its GPU wait still holds it, and
     /// where the value arrives only as it completes (the completion thread held meanwhile), in
-    /// the round that retires it. A wait for a plain event's value submitted so is scheduled as
-    /// it is submitted. Metal answers so (`event-wait-behind-a-running-signal`, recorded on the M3
-    /// Max): `Committed` with no handler for an `MTLSharedEvent`, `Scheduled` with its scheduled
-    /// handler run for an `MTLEvent`.
+    /// the round that retires it. The queue's next command buffer, which waits for nothing, stays
+    /// `Committed` with it and is scheduled after it. A wait for a plain event's value submitted
+    /// so is scheduled as it is submitted, and so is the next command buffer. Metal answers so
+    /// (`event-wait-behind-a-running-signal`, recorded on the M3 Max, and the next command buffer
+    /// read by probe 0f13fbc709, job m3-max-50646): `Committed` with no handler, the next one too,
+    /// for an `MTLSharedEvent`; `Scheduled` with its scheduled handler run, the next one too, for
+    /// an `MTLEvent`.
     #[test]
     fn every_device_schedules_a_wait_for_a_shared_event_once_its_value_is_reached() {
         each_device("shared_wait_scheduled", |name, _, device| {
             let mut arena = Arena::new(&device);
-            let (a, b, c) = (arena.buffer(), arena.buffer(), arena.buffer());
+            let (a, b, c, d, e) = (
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+            );
             let queue = queue(&device);
             let log = Log::default();
             let signal = |semaphore: vk::Semaphore| {
@@ -912,11 +921,13 @@ pub(crate) mod on_device {
                 // SAFETY: the semaphore is the device's, and 1 is above its value.
                 unsafe { device.raw().device.signal_semaphore(&signal) }.expect("a host signal");
             };
-            // Commits a command buffer that waits for `event` at 1 and fills `buffer`, and
-            // returns it once its submission is counted.
-            let waiting = |label: &str, event: &crate::Event, buffer: &Buffer, word| {
+            // Commits a command buffer that waits for `event` at 1, where there is one, and fills
+            // `buffer`, and returns it once its submission is counted.
+            let waiting = |label: &str, event: Option<&crate::Event>, buffer: &Buffer, word| {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
-                (command_buffer.encode_wait_for_event(event, 1)).expect("a wait");
+                if let Some(event) = event {
+                    (command_buffer.encode_wait_for_event(event, 1)).expect("a wait");
+                }
                 fill(&command_buffer, buffer, word);
                 log.handlers(label, &command_buffer);
                 let before = device.counters().metrics().submissions;
@@ -928,29 +939,61 @@ pub(crate) mod on_device {
             // A plain event's wait: scheduled as it is submitted.
             let plain = device.new_event().expect("an event");
             plain.pretend_submitted_for_test(1);
-            let on_plain = waiting("plain", &plain, &a, 1);
-            assert_eq!(on_plain.status(), CommandBufferStatus::Scheduled, "{name}");
-            assert_eq!(log.lines(), ["plain scheduled Scheduled"], "{name}");
+            let on_plain = waiting("plain", Some(&plain), &a, 1);
+            let next = waiting("plain next", None, &d, 4);
+            assert_eq!(
+                (on_plain.status(), next.status()),
+                (
+                    CommandBufferStatus::Scheduled,
+                    CommandBufferStatus::Scheduled
+                ),
+                "{name}"
+            );
+            assert_eq!(
+                log.lines(),
+                [
+                    "plain scheduled Scheduled",
+                    "plain next scheduled Scheduled"
+                ],
+                "{name}"
+            );
             signal(plain.inner().semaphore);
             finished(name, &on_plain);
+            finished(name, &next);
 
             // A shared event's: held at `Committed` until the host sets the value, then scheduled
             // while its GPU wait, on the semaphore, still holds it.
             let shared = shared_event(&device);
             shared.pretend_submitted_for_test(1);
-            let on_set = waiting("set", shared.as_event(), &b, 2);
+            let on_set = waiting("set", Some(shared.as_event()), &b, 2);
+            let next = waiting("set next", None, &e, 5);
             assert_eq!(
-                on_set.status(),
-                CommandBufferStatus::Committed,
-                "{name}: held"
+                (on_set.status(), next.status()),
+                (
+                    CommandBufferStatus::Committed,
+                    CommandBufferStatus::Committed
+                ),
+                "{name}: held, and the next one behind it"
             );
-            assert_eq!(log.lines().len(), 2, "{name}: no scheduled handler");
+            assert_eq!(log.lines().len(), 4, "{name}: no scheduled handler");
             shared.set_signaled_value(1);
-            (on_set.wait_until_scheduled()).expect("a wait outside a scheduled handler");
-            assert_eq!(on_set.status(), CommandBufferStatus::Scheduled, "{name}");
-            assert_eq!(log.lines()[2..], ["set scheduled Scheduled"], "{name}");
+            (next.wait_until_scheduled()).expect("a wait outside a scheduled handler");
+            assert_eq!(
+                (on_set.status(), next.status()),
+                (
+                    CommandBufferStatus::Scheduled,
+                    CommandBufferStatus::Scheduled
+                ),
+                "{name}: their GPU waits, on the semaphore, still hold them"
+            );
+            assert_eq!(
+                log.lines()[4..],
+                ["set scheduled Scheduled", "set next scheduled Scheduled"],
+                "{name}"
+            );
             signal(shared.as_event().inner().semaphore);
             finished(name, &on_set);
+            finished(name, &next);
 
             // A shared event's value that arrives only as the command buffer completes: the
             // completion thread, held meanwhile, schedules it in the round that retires it.
@@ -958,7 +1001,7 @@ pub(crate) mod on_device {
             late.pretend_submitted_for_test(1);
             let core = device.core();
             let hold = core.hold_completions.write().expect("the hold");
-            let on_late = waiting("late", late.as_event(), &c, 3);
+            let on_late = waiting("late", Some(late.as_event()), &c, 3);
             assert_eq!(
                 on_late.status(),
                 CommandBufferStatus::Committed,
@@ -981,16 +1024,24 @@ pub(crate) mod on_device {
                 log.lines(),
                 [
                     "plain scheduled Scheduled",
+                    "plain next scheduled Scheduled",
                     "plain completed Completed None",
+                    "plain next completed Completed None",
                     "set scheduled Scheduled",
+                    "set next scheduled Scheduled",
                     "set completed Completed None",
+                    "set next completed Completed None",
                     "late scheduled Scheduled",
                     "late completed Completed None",
                 ],
                 "{name}"
             );
-            assert_eq!((word(&a), word(&b), word(&c)), (1, 2, 3), "{name}");
-            drop((a, b, c, arena, plain, shared, late, queue, device));
+            assert_eq!(
+                [&a, &b, &c, &d, &e].map(word),
+                [1, 2, 3, 4, 5],
+                "{name}: every fill ran"
+            );
+            drop((a, b, c, d, e, arena, plain, shared, late, queue, device));
         });
     }
 
