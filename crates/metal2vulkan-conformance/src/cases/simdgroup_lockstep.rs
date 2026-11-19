@@ -147,10 +147,23 @@ impl Case for Lockstep {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the buffer each dispatch writes its per-lane record into is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
+        // Two declarations and no tolerance, each loosening the notices site alone, so every word
+        // this case reads still compares exactly. The buffer each dispatch writes its per-lane
+        // record into is `Shared`, which is what [`crate::replay::shared_memory_notice`] is for.
+        // And both kernels hold simdgroup-scoped accesses inside divergent loops, so on a device
+        // whose answer lacks maximal reconvergence (`shaderMaximalReconvergence`, the SIMD groups'
+        // query form) the stage carries its static note, `DeviceReconvergence`, which the sides
+        // announce as `implementation-defined-reconvergence`. The device's answer decides it: a
+        // device with maximal reconvergence announces nothing, and this declaration then holds
+        // nowhere. Measured on the UHD 630 under Intel's Windows driver, which lacks it, through
+        // the rt side: the words matched Metal's, and the undeclared notice was the case's one
+        // divergence.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::ImplementationDefinedReconvergence.code(),
+            ),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

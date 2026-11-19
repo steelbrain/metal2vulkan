@@ -1039,6 +1039,44 @@ fn a_notice_we_announce_and_metal_does_not_is_divergent_until_it_is_named() {
     );
 }
 
+/// **The lockstep cases declare the SIMD groups' static note.** A device whose answer lacks maximal
+/// reconvergence announces `implementation-defined-reconvergence` for both kernels, as Intel's
+/// Windows driver on the UHD 630 does through the rt side; with Metal's own words that is each case
+/// announced, by that notice, where it read divergent at its notices site before the cases declared
+/// it. A device with maximal reconvergence announces nothing, and the words still compare exactly.
+#[test]
+fn the_lockstep_cases_declare_the_reconvergence_note() {
+    let code = Degradation::ImplementationDefinedReconvergence.code();
+    for case in crate::cases::simdgroup_lockstep::all() {
+        let recording = crate::recording::read(case.name())
+            .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
+        let output = recording.answers[0].outcomes[0]
+            .transcript
+            .root
+            .child("output")
+            .expect("the recording holds the output");
+        let Value::Bytes(words) = &output.observed.value else {
+            panic!("{}: the recording holds no bytes", case.name());
+        };
+        let mut side = StubSide::new(words.clone())
+            .announcing(&[Degradation::ImplementationDefinedReconvergence]);
+        let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
+        let Verdict::Announced { fields } = &replayed.verdict else {
+            panic!("{}: not announced: {}", case.name(), replayed.verdict);
+        };
+        assert!(
+            fields.iter().any(|field| field.contains(code)),
+            "{}: {fields:?}",
+            case.name()
+        );
+        // The words compare exactly either way: on a device that announces nothing the case is
+        // exact.
+        let mut side = StubSide::new(words.clone());
+        let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
+        assert_eq!(replayed.verdict, Verdict::Exact, "{}", case.name());
+    }
+}
+
 /// The suite's central claim, at the one site it is stated: a difference is a bug unless we
 /// announced it. A notice declaration is an allowance at `case/notices/*` loosened `Unchecked`,
 /// and the notices site holds the whole announced set as one value, so until the subset check
