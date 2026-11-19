@@ -111,7 +111,7 @@ mod on_device {
     }
 
     /// A release that sets a flag, and the flag.
-    fn release() -> (Option<Box<dyn FnOnce() + Send>>, Arc<AtomicBool>) {
+    fn releasing() -> (Option<Box<dyn FnOnce() + Send>>, Arc<AtomicBool>) {
         let ran = Arc::new(AtomicBool::new(false));
         let set = Arc::clone(&ran);
         let release: Box<dyn FnOnce() + Send> = Box::new(move || set.store(true, Ordering::SeqCst));
@@ -128,7 +128,7 @@ mod on_device {
             let counters = device.counters();
             let Some((_, alignment)) = device.core().imports.host.as_ref() else {
                 let (pointer, mapping) = anonymous(64 << 10, 4096);
-                let (release, _) = release();
+                let (release, _) = releasing();
                 // SAFETY: the memory is the test's, mapped until it unmaps it below.
                 match unsafe { device.import_host_memory(pointer, 64 << 10, release) } {
                     Err(Error::Limit(Limit::NoImport {
@@ -144,7 +144,7 @@ mod on_device {
             let len = (64u64 << 10).next_multiple_of(alignment);
             let (pointer, mapping) = anonymous(len, alignment);
             let before = counters.gauges();
-            let (release, released) = release();
+            let (release, released) = releasing();
             // SAFETY: the memory is the test's, mapped until it unmaps it after the release.
             let (block, memory_type) = unsafe { device.import_host_memory(pointer, len, release) }
                 .unwrap_or_else(|error| panic!("{name}: an import: {error}"));
@@ -231,7 +231,7 @@ mod on_device {
             assert_ne!(base, libc::MAP_FAILED, "{name}: a shared mapping");
             let pointer = NonNull::new(base.cast::<u8>()).expect("a mapping's address");
             let before = counters.gauges();
-            let (release, released) = release();
+            let (release, released) = releasing();
             // SAFETY: the memory is the test's, mapped until it unmaps it below.
             let answer = unsafe { device.import_host_memory(pointer, len, release) };
             let answered = match answer {
@@ -310,12 +310,12 @@ mod on_device {
             let len = (64u64 << 10).next_multiple_of(alignment);
             let (first, first_mapping) = anonymous(len, alignment);
             let (second, second_mapping) = anonymous(len, alignment);
-            let (release, first_released) = release();
+            let (release, first_released) = releasing();
             // SAFETY: the memory is the test's, mapped until it unmaps it after the release.
             let (block, _) = unsafe { device.import_host_memory(first, len, release) }
                 .unwrap_or_else(|error| panic!("{name}: the first import: {error}"));
             assert_eq!(counters.gauges().blocks, u64::from(MAX), "{name}");
-            let (release, second_released) = release();
+            let (release, second_released) = releasing();
             // SAFETY: as above.
             match unsafe { device.import_host_memory(second, len, release) } {
                 Err(Error::Limit(Limit::MemoryAllocations { max: MAX })) => {}
@@ -414,7 +414,7 @@ mod on_device {
                 println!("import: {name}: imports no dma-buf, refused typed");
                 return;
             }
-            let (release, released) = release();
+            let (release, released) = releasing();
             match device.import_dma_buf(fd, LEN, release) {
                 Ok((block, memory_type)) => {
                     assert_eq!(
@@ -464,7 +464,7 @@ mod on_device {
                     if let Some((_, alignment)) = device.core().imports.host.as_ref() {
                         let len = LEN.next_multiple_of(*alignment);
                         let (pointer, mapping) = anonymous(len, *alignment);
-                        let (release, host_released) = release();
+                        let (release, host_released) = releasing();
                         // SAFETY: the memory is the test's, mapped until it unmaps it below.
                         let (block, _) =
                             unsafe { device.import_host_memory(pointer, len, release) }
