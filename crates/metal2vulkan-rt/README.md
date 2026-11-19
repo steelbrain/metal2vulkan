@@ -11,7 +11,7 @@ device against the floor below.
 
 ## What the consumer implements
 
-Eight of Metal's objects and getters have no counterpart here by design. The consumer implements
+Nine of Metal's objects and getters have no counterpart here by design. The consumer implements
 them over this crate's items:
 
 - `MTLRenderPassDescriptor`'s read-back of its own fields. `RenderPassDescriptor` is a value the
@@ -37,6 +37,8 @@ them over this crate's items:
   label it set.
 - The `device` of a library and of a function. Both are the translator's, which keep no device;
   the consumer knows which device it made each on.
+- `MTLBinaryArchive` and a pipeline descriptor's `binaryArchives`. The consumer keeps its archives
+  in its own bundle; nothing of an archive reaches this crate.
 
 ## Instance and device
 

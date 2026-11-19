@@ -221,11 +221,15 @@ pub enum ConsumerObject {
     /// The `device` of a library or a function: the runtime's library and functions are the
     /// translator's, which keep no device, and its consumer knows which device it made each on.
     Device,
+    /// `MTLBinaryArchive` and a pipeline descriptor's `binaryArchives`: the consumer keeps its
+    /// archives in its own bundle, and the device's archive holds only each added function's
+    /// lookup key, so nothing of an archive reaches the runtime.
+    BinaryArchive,
 }
 
 impl ConsumerObject {
     /// Every object, in the order the count line names them.
-    pub const ALL: [ConsumerObject; 8] = [
+    pub const ALL: [ConsumerObject; 9] = [
         ConsumerObject::RenderPassDescriptor,
         ConsumerObject::Heap,
         ConsumerObject::DispatchType,
@@ -234,6 +238,7 @@ impl ConsumerObject {
         ConsumerObject::TextureViewParents,
         ConsumerObject::Label,
         ConsumerObject::Device,
+        ConsumerObject::BinaryArchive,
     ];
 
     /// The name a row states in its parentheses.
@@ -255,6 +260,7 @@ impl ConsumerObject {
             }
             ConsumerObject::Label => "label",
             ConsumerObject::Device => "device",
+            ConsumerObject::BinaryArchive => "MTLBinaryArchive, binaryArchives",
         }
     }
 

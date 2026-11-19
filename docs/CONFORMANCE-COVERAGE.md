@@ -2250,10 +2250,10 @@ A facts call answers many getters at once, and a side answers or refuses each of
 
 | type | fields | refusable | refusable field: its leaf, the new runtime's refusal rows (every venue), cases |
 |---|---|---|---|
-| `ComputeDescriptorFacts` | 11 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 0 (0), 0 |
+| `ComputeDescriptorFacts` | 11 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `FunctionFacts` | 9 | 2 | `options`: `options`, 0 (0), 0; `device_is_the_cases`: `device`, 0 (0), 0 |
 | `LibraryFacts` | 4 | 1 | `device_is_the_cases`: `device`, 0 (0), 0 |
-| `RenderDescriptorFacts` | 30 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 0 (0), 0 |
+| `RenderDescriptorFacts` | 30 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `EventRise` | 7 | 1 | `label`: `label`, 1 (1), 1 |
 
 ## The ledger
