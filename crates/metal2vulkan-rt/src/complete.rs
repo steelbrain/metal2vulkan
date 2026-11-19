@@ -362,6 +362,12 @@ pub(crate) fn run(core: Arc<Core>) {
     let mut behind: Option<u64> = None;
     let mut state = done.lock();
     loop {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if !state.flight.is_empty() && core.hold_completions.try_read().is_err() {
+            drop(state);
+            drop(core.hold_completions.read());
+            state = done.lock();
+        }
         let mut retire = std::mem::take(&mut state.ended);
         let fired = std::mem::take(&mut state.fire);
         let mut fire: Vec<(Listener, u64)> = Vec::new();

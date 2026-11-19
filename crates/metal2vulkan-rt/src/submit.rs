@@ -650,6 +650,10 @@ impl Work {
         let mut captured = 0;
         let mut piece = 0;
         let mut at = pieces.first().map_or(0, |&(_, start, _)| start);
+        // The progress value known complete: what the completion thread has seen, or what this
+        // capture waited for. A wait frees the spans of the submission it waited for at once,
+        // before the completion thread has retired it, so the capture waits once for each.
+        let mut completed = 0;
         while let Some(&(index, _, end)) = pieces.get(piece) {
             if at == end {
                 piece += 1;
@@ -661,7 +665,7 @@ impl Work {
             let Some(region) = state.changes.region.as_mut() else {
                 unreachable!("the first named range made the ring, freed only at the device's end");
             };
-            region.ring.reclaim(core.done.completed());
+            region.ring.reclaim(completed.max(core.done.completed()));
             if let Some((number, offset)) = region.ring.take(len, false) {
                 let (host, ring) = (region.host(offset), region.buffer);
                 drop(state);
@@ -704,7 +708,10 @@ impl Work {
                     } else {
                         Ok(())
                     }) {
-                        Ok(()) => continue,
+                        Ok(()) => {
+                            completed = completed.max(value);
+                            continue;
+                        }
                         Err(error) => {
                             let spans = chunk.give_up(core);
                             return Err(self.unwind(state, spans, &named, error));
@@ -777,6 +784,7 @@ impl Work {
                     let spans = chunk.give_up(core);
                     return Err(self.unwind(state, spans, &named, error));
                 }
+                completed = completed.max(value);
                 continue;
             }
             // A command buffer committed before is held on the host: the rest takes staging of

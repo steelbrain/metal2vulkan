@@ -830,6 +830,53 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A commit naming three times the capture ring waits once for each ring-full it sends, though
+    /// the completion thread sees no completion meanwhile (as on a loaded host): the wait frees the
+    /// spans of the submission it waited for, so the capture never waits again for one that has
+    /// completed. The bytes arrive whole.
+    #[test]
+    fn every_device_waits_once_for_each_ring_full_while_completions_lag() {
+        each_device("one wait a ring-full", |name, _, device| {
+            if device.core().unified_memory() {
+                println!("one wait a ring-full: {name}: no device copy");
+                return;
+            }
+            let counters = device.counters();
+            let len = 3 * CAPTURE_LEN;
+            let bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let (managed, into, blocks) = named_whole(&device, name, len, &bytes);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            copy_out(&command_buffer, &managed, &into, 0, len);
+            // Another thread holds the completion thread for a while; the commit runs inside it.
+            let core = Arc::clone(device.core());
+            let (held, holding) = std::sync::mpsc::channel();
+            let holder = thread::spawn(move || {
+                let hold = core.hold_completions.write().expect("the hold");
+                held.send(()).expect("the test");
+                thread::sleep(std::time::Duration::from_millis(300));
+                drop(hold);
+            });
+            holding.recv().expect("the hold taken");
+            let before = counters.metrics();
+            command_buffer.commit().expect("a commit");
+            let metrics = counters.metrics();
+            holder.join().expect("the holder");
+            finished("the copy", &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let delta = |of: fn(&crate::Metrics) -> u64| of(&metrics) - of(&before);
+            let (streams, waits) = (delta(|m| m.capture_streams), delta(|m| m.capture_waits));
+            println!("one wait a ring-full: {name}: streams {streams}, waits {waits}");
+            assert!(streams >= 2, "{name}: streamed");
+            assert_eq!(waits, streams, "{name}: one wait a ring-full");
+            assert!(read(&into, len as usize) == bytes, "{name}: the bytes");
+            drop((managed, into, command_buffer, queue));
+            for block in blocks {
+                (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
     /// A commit naming more than the ring behind a command buffer that waits on an event the host
     /// has not signalled, committed before the bytes were named, cannot send its ring-full ahead:
     /// the rest takes staging of its own, the

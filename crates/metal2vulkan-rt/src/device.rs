@@ -186,6 +186,10 @@ pub(crate) struct Core {
     /// the barrier twice before it allocates, once parked and once released.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) park_region: Mutex<Option<Arc<std::sync::Barrier>>>,
+    /// For the device tests: while a test holds it for writing, the completion thread, with work
+    /// in flight, waits at the top of its round, so no completion is seen, as on a loaded host.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) hold_completions: std::sync::RwLock<()>,
     pub(crate) pool: Pool,
     /// The blocks the consumer holds handles of, by number ([`Block`]): each claim goes once its
     /// last handle drops, or at teardown.
@@ -520,6 +524,8 @@ impl Device {
             fail_private: std::sync::atomic::AtomicU32::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             park_region: Mutex::new(None),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            hold_completions: std::sync::RwLock::new(()),
             pool,
             claims: Mutex::new(HashMap::new()),
             places: Places::new(),
