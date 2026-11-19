@@ -2059,6 +2059,74 @@ pub fn srgb_raw_twin(pf: PixelFormat) -> Option<PixelFormat> {
     })
 }
 
+/// The other member of `pf`'s sRGB pair, the same bits read as linear values or as sRGB codes:
+/// an 8-bit format and its sRGB form, a compressed format and its sRGB form, an extended-range
+/// format and its sRGB form. Metal views a texture as it whatever the texture's usage (Apple's
+/// `MTLTextureUsage.pixelFormatView`: "Don't set this option if your texture view only converts
+/// between linear space and sRGB"). `None` for a format with no such pair.
+pub fn srgb_sibling(pf: PixelFormat) -> Option<PixelFormat> {
+    use PixelFormat as P;
+    // The pairs `srgb_raw_twin` leaves out, linear first: ASTC's LDR and sRGB forms decode the
+    // same blocks, and the extended-range formats are no twin of a unorm format.
+    const PAIRS: [(PixelFormat, PixelFormat); 17] = [
+        (P::ASTC4x4LDR, P::ASTC4x4SRGB),
+        (P::ASTC5x4LDR, P::ASTC5x4SRGB),
+        (P::ASTC5x5LDR, P::ASTC5x5SRGB),
+        (P::ASTC6x5LDR, P::ASTC6x5SRGB),
+        (P::ASTC6x6LDR, P::ASTC6x6SRGB),
+        (P::ASTC8x5LDR, P::ASTC8x5SRGB),
+        (P::ASTC8x6LDR, P::ASTC8x6SRGB),
+        (P::ASTC8x8LDR, P::ASTC8x8SRGB),
+        (P::ASTC10x5LDR, P::ASTC10x5SRGB),
+        (P::ASTC10x6LDR, P::ASTC10x6SRGB),
+        (P::ASTC10x8LDR, P::ASTC10x8SRGB),
+        (P::ASTC10x10LDR, P::ASTC10x10SRGB),
+        (P::ASTC12x10LDR, P::ASTC12x10SRGB),
+        (P::ASTC12x12LDR, P::ASTC12x12SRGB),
+        (P::BGR10XR, P::BGR10XRSRGB),
+        (P::BGRA10XR, P::BGRA10XRSRGB),
+        (P::RGB10A82PXR10, P::RGB10A82PXR10SRGB),
+    ];
+    if let Some(linear) = srgb_raw_twin(pf) {
+        return Some(linear);
+    }
+    if let Some(&srgb) = (P::ALL.iter()).find(|&&srgb| srgb_raw_twin(srgb) == Some(pf)) {
+        return Some(srgb);
+    }
+    PAIRS.iter().find_map(|&(linear, srgb)| match pf {
+        _ if pf == linear => Some(srgb),
+        _ if pf == srgb => Some(linear),
+        _ => None,
+    })
+}
+
+/// Whether Metal views a texture of `pf` as `view` with no usage asked: `pf` itself, its sRGB
+/// sibling ([`srgb_sibling`]), or the stencil format of a combined depth and stencil format
+/// (`Depth32Float_Stencil8` as `X32_Stencil8`, `Depth24Unorm_Stencil8` as `X24_Stencil8`).
+pub fn views_without_usage(pf: PixelFormat, view: PixelFormat) -> bool {
+    use PixelFormat as P;
+    pf == view
+        || srgb_sibling(pf) == Some(view)
+        || matches!(
+            (pf, view),
+            (P::Depth32FloatStencil8, P::X32Stencil8) | (P::Depth24UnormStencil8, P::X24Stencil8)
+        )
+}
+
+/// Whether Metal views a texture of `pf` made with `PixelFormatView` usage as `view`: as
+/// [`views_without_usage`], or both uncompressed color formats whose images hold Metal's bytes
+/// ([`byte_format`]) with the same bytes a texel (Apple's `makeTextureView(pixelFormat:)`: "All
+/// 8-, 16-, 32-, 64-, and 128-bit color formats are compatible with other formats with the same
+/// bit length").
+pub fn views_with_usage(pf: PixelFormat, view: PixelFormat) -> bool {
+    let color = |pf| {
+        let block = byte_format(pf)?.block()?;
+        let color = block.texels == 1 && block.color.is_some();
+        (color && block.depth.is_none() && block.stencil.is_none()).then_some(block.size)
+    };
+    views_without_usage(pf, view) || color(pf).is_some_and(|size| color(view) == Some(size))
+}
+
 /// The bit width of each channel of integer format `f`, red to alpha (a channel `f` lacks takes
 /// the first one's width; nothing is stored there): the ranges into which Metal saturates each
 /// channel of an integer texel's write, as the format's signedness reads the word. `None` for a

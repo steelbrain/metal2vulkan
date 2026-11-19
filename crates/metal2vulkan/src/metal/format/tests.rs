@@ -3331,3 +3331,70 @@ fn the_packed_four_bit_straggler_converts_writes_through_a_half() {
     assert_eq!(half_unorm_code(f32::INFINITY, 4), 15);
     assert_eq!(half_unorm_code(f32::NEG_INFINITY, 4), 0);
 }
+
+/// An sRGB sibling is mutual and of one other format, linear to sRGB and back, for the 8-bit,
+/// compressed (ASTC's LDR forms included) and extended-range pairs; a format of no pair has none.
+#[test]
+fn an_srgb_sibling_is_mutual() {
+    use PixelFormat as P;
+    for (linear, srgb) in [
+        (P::BGRA8Unorm, P::BGRA8UnormSRGB),
+        (P::R8Unorm, P::R8UnormSRGB),
+        (P::BC7RGBAUnorm, P::BC7RGBAUnormSRGB),
+        (P::ASTC6x6LDR, P::ASTC6x6SRGB),
+        (P::BGR10XR, P::BGR10XRSRGB),
+    ] {
+        assert_eq!(srgb_sibling(linear), Some(srgb), "{linear:?}");
+        assert_eq!(srgb_sibling(srgb), Some(linear), "{srgb:?}");
+    }
+    for &pf in P::ALL {
+        if let Some(sibling) = srgb_sibling(pf) {
+            assert_ne!(sibling, pf, "{pf:?}");
+            assert_eq!(srgb_sibling(sibling), Some(pf), "{pf:?} and {sibling:?}");
+        }
+    }
+    for pf in [
+        P::R32Float,
+        P::RGBA16Float,
+        P::ASTC4x4HDR,
+        P::BC4RUnorm,
+        P::Depth32Float,
+    ] {
+        assert_eq!(srgb_sibling(pf), None, "{pf:?}");
+    }
+}
+
+/// Metal's view rules: the sRGB sibling and a combined format's stencil with no usage asked; with
+/// `PixelFormatView` usage, any uncompressed color format of the same bytes a texel too, and no
+/// compressed, depth or other-sized one.
+#[test]
+fn views_follow_metals_compatibility_rules() {
+    use PixelFormat as P;
+    for (pf, view) in [
+        (P::BGRA8UnormSRGB, P::BGRA8Unorm),
+        (P::BC1RGBA, P::BC1RGBASRGB),
+        (P::Depth32FloatStencil8, P::X32Stencil8),
+    ] {
+        assert!(views_without_usage(pf, view), "{pf:?} as {view:?}");
+        assert!(views_with_usage(pf, view), "{pf:?} as {view:?}");
+    }
+    for (pf, view) in [
+        (P::RGBA8Unorm, P::R32Uint),
+        (P::BGRA8UnormSRGB, P::RG16Float),
+        (P::RGBA16Float, P::RG32Uint),
+        (P::R8Unorm, P::R8Sint),
+        (P::RGBA32Float, P::RGBA32Uint),
+    ] {
+        assert!(!views_without_usage(pf, view), "{pf:?} as {view:?}");
+        assert!(views_with_usage(pf, view), "{pf:?} as {view:?}");
+    }
+    for (pf, view) in [
+        (P::RGBA8Unorm, P::R16Float),
+        (P::BC1RGBA, P::RG32Uint),
+        (P::Depth32Float, P::R32Float),
+        (P::RGBA8Unorm, P::BC1RGBA),
+        (P::BC1RGBA, P::BC2RGBA),
+    ] {
+        assert!(!views_with_usage(pf, view), "{pf:?} as {view:?}");
+    }
+}

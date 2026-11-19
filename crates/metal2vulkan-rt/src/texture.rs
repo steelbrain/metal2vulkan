@@ -179,8 +179,11 @@ struct TextureInner {
     device: Device,
     descriptor: TextureDescriptor,
     image: Arc<Image>,
-    /// The image's format.
+    /// The format of its views: the image's, or a view's own.
     format: vk::Format,
+    /// The usage its views take where their format is not the image's (`VkImageViewUsageCreateInfo`):
+    /// the image's that the format's features hold. `None` where its views take the image's.
+    views_usage: Option<vk::ImageUsageFlags>,
     /// How bytes move between the image and the CPU or another image; `None` where no copy is
     /// built.
     unit: Option<CopyUnit>,
@@ -339,6 +342,11 @@ pub(crate) struct Image {
     shadow: bool,
     /// Every aspect of the image's format, which a change of layout names.
     aspects: vk::ImageAspectFlags,
+    /// The image's format and usage, and the formats it lists for views of another format (empty
+    /// where it is not mutable).
+    format: vk::Format,
+    usage: vk::ImageUsageFlags,
+    view_formats: Vec<vk::Format>,
     /// The layout the image is made in: undefined, or preinitialized for a texture over a buffer
     /// in place, whose move home keeps the bytes.
     first: vk::ImageLayout,
@@ -443,6 +451,9 @@ impl Image {
             shadowing: None,
             shadow: true,
             aspects: self.aspects,
+            format: plan.format,
+            usage: plan.usage,
+            view_formats: plan.view_formats.clone(),
             first: vk::ImageLayout::UNDEFINED,
             homed: AtomicBool::new(false),
             _under: None,
@@ -626,7 +637,8 @@ impl Device {
     ) -> Result<SizeAndAlign, Error> {
         let (shape, plan, _) = self.prepare(descriptor)?;
         let core = self.core();
-        let info = image_info(descriptor, &shape, &plan);
+        let mut list = plan.format_list();
+        let info = image_info(descriptor, &shape, &plan, &mut list);
         let mut dedicated = vk::MemoryDedicatedRequirements::default();
         let mut needs = vk::MemoryRequirements2::default().push_next(&mut dedicated);
         let query = vk::DeviceImageMemoryRequirements::default().create_info(&info);
@@ -914,6 +926,9 @@ impl Device {
             shadowing,
             shadow: false,
             aspects: plan.aspects,
+            format: plan.format,
+            usage: plan.usage,
+            view_formats: plan.view_formats.clone(),
             first,
             homed: AtomicBool::new(false),
             _under: block,
@@ -944,6 +959,7 @@ impl Device {
             descriptor: d,
             image,
             format: plan.format,
+            views_usage: None,
             unit: plan.unit,
             index,
             word: plan.word,
@@ -1002,6 +1018,15 @@ struct Plan {
     unit: Option<CopyUnit>,
     word: u32,
     emulation: FormatEmulation,
+    /// The format's compatibility class, which every format the image lists shares.
+    class: &'static str,
+    /// The usage a view in the plan's format takes: of sampling, storage and attachments, those
+    /// the format's features hold.
+    supported: vk::ImageUsageFlags,
+    /// The formats the image lists for its views, its own first, where Metal views it as another
+    /// format the device holds in the image format's class (`view_formats`); empty where it has no
+    /// such view, and the image is not mutable.
+    view_formats: Vec<vk::Format>,
 }
 
 impl Plan {
@@ -1019,8 +1044,23 @@ impl Plan {
             sampled: None,
             storage: false,
             attachment_reads: false,
+            view_formats: self.view_formats.clone(),
             ..*self
         }
+    }
+
+    /// The image's create flags over `shape`'s: mutable where it lists formats for its views.
+    fn flags(&self, shape: &Shape) -> vk::ImageCreateFlags {
+        match self.view_formats.is_empty() {
+            true => shape.flags,
+            false => shape.flags | vk::ImageCreateFlags::MUTABLE_FORMAT,
+        }
+    }
+
+    /// The image's format list, which its create info and its format queries chain where it is
+    /// mutable.
+    fn format_list(&self) -> vk::ImageFormatListCreateInfo<'_> {
+        vk::ImageFormatListCreateInfo::default().view_formats(&self.view_formats)
     }
 }
 
@@ -1165,12 +1205,16 @@ fn kept_features(usage: vk::ImageUsageFlags) -> vk::FormatFeatureFlags2 {
 /// The largest extent of a linear image of `plan`'s format and usage of `shape`'s type, where the
 /// device makes one.
 fn linear_extent(core: &Core, shape: &Shape, plan: &Plan) -> Option<vk::Extent3D> {
-    let linear = vk::PhysicalDeviceImageFormatInfo2::default()
+    let mut list = plan.format_list();
+    let mut linear = vk::PhysicalDeviceImageFormatInfo2::default()
         .format(plan.format)
         .ty(shape.image_type)
         .tiling(vk::ImageTiling::LINEAR)
         .usage(plan.linear_usage())
-        .flags(shape.flags);
+        .flags(plan.flags(shape));
+    if !plan.view_formats.is_empty() {
+        linear = linear.push_next(&mut list);
+    }
     core.image_format_properties(&linear)
         .map(|properties| properties.max_extent)
 }
@@ -1216,7 +1260,8 @@ fn linear_layout(
     if d.width > max.width || d.height > max.height {
         return None;
     }
-    let info = image_info(d, shape, plan)
+    let mut list = plan.format_list();
+    let info = image_info(d, shape, plan, &mut list)
         .tiling(vk::ImageTiling::LINEAR)
         .usage(plan.linear_usage())
         .initial_layout(vk::ImageLayout::PREINITIALIZED);
@@ -1360,85 +1405,38 @@ fn plan(
     usage: TextureUsage,
     shape: &Shape,
 ) -> Result<Plan, Error> {
+    let mut plan = form(core, d, usage)?;
     let pf = d.pixel_format;
     let gap = || Error::Unsupported(Gap::TextureFormat { pixel_format: pf });
-    let word = TextureWord::of(pf, d.swizzle).ok_or_else(gap)?.0;
     let profile = core.translator.profile();
-    let mapping =
-        formats::vk_format(pf, &formats::texture_usages(pf, usage), profile).map_err(|_| gap())?;
-    // The forms whose view gives Metal's values with no conversion in the shader.
-    let viewed = matches!(
-        mapping.emulation,
-        FormatEmulation::Direct
-            | FormatEmulation::SwizzledView
-            | FormatEmulation::AlphaInRed
-            | FormatEmulation::RotatedView
-            | FormatEmulation::XChannel
-            | FormatEmulation::DepthInCombined
-            | FormatEmulation::StencilInCombined
+    plan.view_formats = view_formats(profile, pf, usage, &plan);
+    let read = plan.usage.contains(vk::ImageUsageFlags::SAMPLED);
+    let render = plan.usage.intersects(
+        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
     );
-    if !viewed {
-        return Err(gap());
-    }
-    let block = mapping.format.block().ok_or_else(gap)?;
-    let format: vk::Format = mapping.format.into();
-    let metal_aspects: vk::ImageAspectFlags = mapping.aspects.into();
-    let mut aspects = vk::ImageAspectFlags::empty();
-    if block.depth.is_some() {
-        aspects |= vk::ImageAspectFlags::DEPTH;
-    }
-    if block.stencil.is_some() {
-        aspects |= vk::ImageAspectFlags::STENCIL;
-    }
-    if aspects.is_empty() {
-        aspects = vk::ImageAspectFlags::COLOR;
-    }
-    let read = usage.contains(TextureUsage::SHADER_READ);
-    let storage = usage.contains(TextureUsage::SHADER_WRITE)
-        && mapping.emulation == FormatEmulation::Direct
-        && profile.supports_format(mapping.format, FormatUsage::StorageImage)
-        && profile.supports_format(mapping.format, FormatUsage::StorageImageWriteWithoutFormat);
-    let render = usage.contains(TextureUsage::RENDER_TARGET);
-    let mut image_usage = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
-    if read {
-        image_usage |= vk::ImageUsageFlags::SAMPLED;
-    }
-    if storage {
-        image_usage |= vk::ImageUsageFlags::STORAGE;
-    }
-    if render {
-        image_usage |= match metal_aspects
-            .intersects(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
-        {
-            true => vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-            false => vk::ImageUsageFlags::COLOR_ATTACHMENT,
-        };
-    }
     // A draw may read an attachment of its own pass through such a texture
     // (`crate::render_encoder`), where the device reads attachments: in the feedback layout where
     // it has the attachment feedback loop, else through a copy into the image's shadow.
     let mut attachment_reads = core.attachment_reads
         && read
         && render
-        && !storage
-        && aspects == vk::ImageAspectFlags::COLOR;
+        && !plan.storage
+        && plan.aspects == vk::ImageAspectFlags::COLOR;
     let looped = attachment_reads && core.feedback.is_some();
+    let mut image_usage = plan.usage;
     if looped {
         image_usage |= vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
     }
-    let home = match (storage, read, render) {
-        (true, _, _) => vk::ImageLayout::GENERAL,
-        (false, true, _) => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        (false, false, true) => vk::ImageLayout::ATTACHMENT_OPTIMAL,
-        (false, false, false) => vk::ImageLayout::GENERAL,
-    };
-    let samples = vk::SampleCountFlags::from_raw(d.sample_count);
-    let info = vk::PhysicalDeviceImageFormatInfo2::default()
-        .format(format)
+    let mut list = plan.format_list();
+    let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
+        .format(plan.format)
         .ty(shape.image_type)
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(image_usage)
-        .flags(shape.flags);
+        .flags(plan.flags(shape));
+    if !plan.view_formats.is_empty() {
+        info = info.push_next(&mut list);
+    }
     let mut properties = core.image_format_properties(&info);
     // A format the device makes without the feedback usage alone is made so, and its draws read
     // no attachment of their own pass through it.
@@ -1466,12 +1464,144 @@ fn plan(
             max_layers: properties.max_array_layers,
         }));
     }
-    if !d.sample_count.is_power_of_two() || !properties.sample_counts.contains(samples) {
+    if !d.sample_count.is_power_of_two() || !properties.sample_counts.contains(plan.samples) {
         return Err(Error::Limit(Limit::TextureSamples {
             sample_count: d.sample_count,
             counts: properties.sample_counts.as_raw(),
         }));
     }
+    plan.usage = image_usage;
+    plan.attachment_reads = attachment_reads;
+    Ok(plan)
+}
+
+/// Whether a format held so gives Metal's values through its view, with no conversion in the
+/// shader.
+fn viewed(emulation: FormatEmulation) -> bool {
+    matches!(
+        emulation,
+        FormatEmulation::Direct
+            | FormatEmulation::SwizzledView
+            | FormatEmulation::AlphaInRed
+            | FormatEmulation::RotatedView
+            | FormatEmulation::XChannel
+            | FormatEmulation::DepthInCombined
+            | FormatEmulation::StencilInCombined
+    )
+}
+
+/// The formats an image of `plan`, of a texture of `pf` and `usage`, lists for its views, its own
+/// first: those Metal views such a texture as (its sRGB sibling, and with `PixelFormatView` usage
+/// every format `metal::format::views_with_usage` takes) that the device holds for the usage in a
+/// viewed form of the image format's class. Empty where there is none but its own: the image is
+/// then not mutable.
+fn view_formats(
+    profile: &metal2vulkan::device::DeviceProfile,
+    pf: PixelFormat,
+    usage: TextureUsage,
+    plan: &Plan,
+) -> Vec<vk::Format> {
+    let others: Vec<PixelFormat> = match usage.contains(TextureUsage::PIXEL_FORMAT_VIEW) {
+        true => (PixelFormat::ALL.iter().copied())
+            .filter(|&view| view != pf && formats::views_with_usage(pf, view))
+            .collect(),
+        false => formats::srgb_sibling(pf).into_iter().collect(),
+    };
+    let mut list = vec![plan.format];
+    for view in others {
+        let usages = formats::texture_usages(view, usage);
+        let Ok(mapping) = formats::vk_format(view, &usages, profile) else {
+            continue;
+        };
+        let class = mapping.format.block().map(|block| block.class);
+        let format: vk::Format = mapping.format.into();
+        if viewed(mapping.emulation) && class == Some(plan.class) && !list.contains(&format) {
+            list.push(format);
+        }
+    }
+    if list.len() == 1 {
+        list.clear();
+    }
+    list
+}
+
+/// What a texture of `d` and `usage` holds in its views, as its own image or as a view of
+/// another's: the format and how it holds Metal's, the aspects, the sampled view's components and
+/// aspect, whether it has a storage view, the image usage its uses ask, its home layout, the copy
+/// unit and the word. An image's own parts, its format list, the feedback usage and the format
+/// query's checks, are `plan`'s.
+fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan, Error> {
+    let pf = d.pixel_format;
+    let gap = || Error::Unsupported(Gap::TextureFormat { pixel_format: pf });
+    let word = TextureWord::of(pf, d.swizzle).ok_or_else(gap)?.0;
+    let profile = core.translator.profile();
+    let mapping =
+        formats::vk_format(pf, &formats::texture_usages(pf, usage), profile).map_err(|_| gap())?;
+    if !viewed(mapping.emulation) {
+        return Err(gap());
+    }
+    let block = mapping.format.block().ok_or_else(gap)?;
+    let format: vk::Format = mapping.format.into();
+    let metal_aspects: vk::ImageAspectFlags = mapping.aspects.into();
+    let mut aspects = vk::ImageAspectFlags::empty();
+    if block.depth.is_some() {
+        aspects |= vk::ImageAspectFlags::DEPTH;
+    }
+    if block.stencil.is_some() {
+        aspects |= vk::ImageAspectFlags::STENCIL;
+    }
+    if aspects.is_empty() {
+        aspects = vk::ImageAspectFlags::COLOR;
+    }
+    let read = usage.contains(TextureUsage::SHADER_READ);
+    let storage = usage.contains(TextureUsage::SHADER_WRITE)
+        && mapping.emulation == FormatEmulation::Direct
+        && profile.supports_format(mapping.format, FormatUsage::StorageImage)
+        && profile.supports_format(mapping.format, FormatUsage::StorageImageWriteWithoutFormat);
+    let render = usage.contains(TextureUsage::RENDER_TARGET);
+    let supports = |use_| profile.supports_format(mapping.format, use_);
+    let mut supported = vk::ImageUsageFlags::empty();
+    for (use_, flag) in [
+        (FormatUsage::SampledImage, vk::ImageUsageFlags::SAMPLED),
+        (FormatUsage::StorageImage, vk::ImageUsageFlags::STORAGE),
+        (
+            FormatUsage::ColorAttachment,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        ),
+        (
+            FormatUsage::DepthStencilAttachment,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        ),
+    ] {
+        if supports(use_) {
+            supported |= flag;
+        }
+    }
+    if supported.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT) {
+        supported |= vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+    }
+    let mut image_usage = vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
+    if read {
+        image_usage |= vk::ImageUsageFlags::SAMPLED;
+    }
+    if storage {
+        image_usage |= vk::ImageUsageFlags::STORAGE;
+    }
+    if render {
+        image_usage |= match metal_aspects
+            .intersects(vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL)
+        {
+            true => vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            false => vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        };
+    }
+    let home = match (storage, read, render) {
+        (true, _, _) => vk::ImageLayout::GENERAL,
+        (false, true, _) => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        (false, false, true) => vk::ImageLayout::ATTACHMENT_OPTIMAL,
+        (false, false, false) => vk::ImageLayout::GENERAL,
+    };
+    let samples = vk::SampleCountFlags::from_raw(d.sample_count);
     // A sampled view selects one aspect: depth where the format has it, else stencil.
     let view_aspect = if metal_aspects.contains(vk::ImageAspectFlags::DEPTH) {
         vk::ImageAspectFlags::DEPTH
@@ -1495,11 +1625,14 @@ fn plan(
         sampled,
         storage,
         home,
-        attachment_reads,
+        attachment_reads: false,
         aspects,
         unit,
         word,
         emulation: mapping.emulation,
+        class: block.class,
+        supported,
+        view_formats: Vec::new(),
     })
 }
 
@@ -1564,7 +1697,9 @@ pub(crate) fn components(
     })
 }
 
-/// An image view of `range` of `image`, of `view_type` and `format`, with `components`.
+/// An image view of `range` of `image`, of `view_type` and `format`, with `components`, and with
+/// `usage` where its format is another than the image's (`VkImageViewUsageCreateInfo`: the image's
+/// usage that the format's features hold), else the image's.
 ///
 /// # Safety
 ///
@@ -1576,13 +1711,19 @@ unsafe fn image_view(
     format: vk::Format,
     components: vk::ComponentMapping,
     range: vk::ImageSubresourceRange,
+    usage: Option<vk::ImageUsageFlags>,
 ) -> Result<vk::ImageView, Error> {
-    let info = vk::ImageViewCreateInfo::default()
+    let mut usage_info = vk::ImageViewUsageCreateInfo::default();
+    let mut info = vk::ImageViewCreateInfo::default()
         .image(image)
         .view_type(view_type)
         .format(format)
         .components(components)
         .subresource_range(range);
+    if let Some(usage) = usage {
+        usage_info = usage_info.usage(usage);
+        info = info.push_next(&mut usage_info);
+    }
     // SAFETY: the caller's contract.
     unsafe { device.create_image_view(&info, None) }.map_err(Error::vulkan("vkCreateImageView"))
 }
@@ -1673,10 +1814,15 @@ enum Bind {
 }
 
 /// The image of a texture of `d`, of `shape`, as `plan` makes it.
-fn image_info(d: &TextureDescriptor, shape: &Shape, plan: &Plan) -> vk::ImageCreateInfo<'static> {
+fn image_info<'a, 'b: 'a>(
+    d: &TextureDescriptor,
+    shape: &Shape,
+    plan: &Plan,
+    list: &'a mut vk::ImageFormatListCreateInfo<'b>,
+) -> vk::ImageCreateInfo<'a> {
     let [width, height, depth] = shape.extent;
-    vk::ImageCreateInfo::default()
-        .flags(shape.flags)
+    let info = vk::ImageCreateInfo::default()
+        .flags(plan.flags(shape))
         .image_type(shape.image_type)
         .format(plan.format)
         .extent(vk::Extent3D {
@@ -1690,7 +1836,11 @@ fn image_info(d: &TextureDescriptor, shape: &Shape, plan: &Plan) -> vk::ImageCre
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(plan.usage)
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .initial_layout(vk::ImageLayout::UNDEFINED);
+    match plan.view_formats.is_empty() {
+        true => info,
+        false => info.push_next(list),
+    }
 }
 
 /// A heap texture's size and alignment from its image's `requirements`: rounded to the device's
@@ -1740,12 +1890,14 @@ impl Made {
         bind: Bind,
     ) -> Result<Objects, Error> {
         let device = &core.device;
+        let mut list = plan.format_list();
+        let info = image_info(d, shape, plan, &mut list);
         let info = match bind {
-            Bind::InPlace { .. } => image_info(d, shape, plan)
+            Bind::InPlace { .. } => info
                 .tiling(vk::ImageTiling::LINEAR)
                 .usage(plan.linear_usage())
                 .initial_layout(vk::ImageLayout::PREINITIALIZED),
-            Bind::Pooled | Bind::Heap { .. } => image_info(d, shape, plan),
+            Bind::Pooled | Bind::Heap { .. } => info,
         };
         // SAFETY: the caller's contract: the device makes such an image.
         let image =
@@ -1866,8 +2018,9 @@ impl Made {
         let mut view = |components, aspect| {
             let (view_type, format) = (shape.view_type, plan.format);
             // SAFETY: the image is bound, of the view's format, and has the view's usage.
+            let range = whole(aspect);
             let view =
-                unsafe { image_view(device, image, view_type, format, components, whole(aspect)) }?;
+                unsafe { image_view(device, image, view_type, format, components, range, None) }?;
             self.views.push(view);
             Ok::<_, Error>(view)
         };
@@ -2347,9 +2500,15 @@ impl Texture {
     /// Managed texture names the texture's bytes of those levels and slices, so the CPU's reads
     /// and writes through either reach the same bytes, as Metal's do.
     ///
-    /// Built: the texture's own pixel format, over every slice in the texture's own type, a slice
-    /// subrange of a 1D or 2D array, or one slice of a 2D array as a 2D texture, each over any
-    /// level subrange. `index` is given exactly where shaders reach the view, as
+    /// Built: the texture's own pixel format or another its image lists, over every slice in the
+    /// texture's own type, a slice subrange of a 1D or 2D array, or one slice of a 2D array as a
+    /// 2D texture, each over any level subrange. A texture's image lists the formats Metal views
+    /// it as that the device holds in a viewed form of the image format's compatibility class: its
+    /// sRGB sibling whatever its usage, and with `PixelFormatView` usage every uncompressed colour
+    /// format of the same bytes a texel; such an image is mutable, with that format list. A view
+    /// of another format takes the image's usage that its format's features hold: it has no
+    /// storage element where the image has no storage usage, and renders where its format holds
+    /// an attachment, else [`Gap::TextureFormat`] at the pass. `index` is given exactly where shaders reach the view, as
     /// [`Device::new_texture`] takes it; its usage, storage mode, sample count and swizzle are the
     /// texture's.
     ///
@@ -2422,14 +2581,16 @@ impl Texture {
             }));
         }
         let gap = |kind| Err(Error::Unsupported(Gap::TextureView { kind }));
-        if pixel_format != p.pixel_format {
-            if !p.usage.is_empty() && !p.usage.contains(TextureUsage::PIXEL_FORMAT_VIEW) {
-                return Err(Error::Refused(Refusal::TextureViewFormat {
-                    texture: p.pixel_format,
-                    view: pixel_format,
-                }));
-            }
-            return gap(TextureViewKind::PixelFormat);
+        let viewable = match p.usage.is_empty() || p.usage.contains(TextureUsage::PIXEL_FORMAT_VIEW)
+        {
+            true => formats::views_with_usage(p.pixel_format, pixel_format),
+            false => formats::views_without_usage(p.pixel_format, pixel_format),
+        };
+        if !viewable {
+            return Err(Error::Refused(Refusal::TextureViewFormat {
+                texture: p.pixel_format,
+                view: pixel_format,
+            }));
         }
         let every_slice = slice_count == self::slices(p);
         match (p.texture_type, texture_type) {
@@ -2450,11 +2611,27 @@ impl Texture {
             T::Cube | T::CubeArray => slice_count / 6,
             _ => slice_count,
         };
+        d.pixel_format = pixel_format;
         d.swizzle = combined(p.swizzle, swizzle);
         // A view takes its descriptor's checks but the swizzle's with its usage, which Metal
         // makes of a texture's own descriptor alone.
         let (shape, usage) = checked(&d)?;
-        let plan = plan(inner.device.core(), &d, usage, &shape)?;
+        let mut plan = form(inner.device.core(), &d, usage)?;
+        // Another format is built where the image lists it; its views take the image's usage
+        // that the format's features hold.
+        let image = &inner.image;
+        let views_usage = match plan.format == image.format {
+            true => None,
+            false if image.view_formats.contains(&plan.format) => {
+                Some(image.usage & plan.supported)
+            }
+            false => return gap(TextureViewKind::PixelFormat),
+        };
+        let usable = views_usage.unwrap_or(image.usage);
+        plan.storage &= usable.contains(vk::ImageUsageFlags::STORAGE);
+        if !usable.contains(vk::ImageUsageFlags::SAMPLED) {
+            plan.sampled = None;
+        }
         let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
         if reached != index.is_some() {
             return Err(Error::Refused(Refusal::TextureIndex { index }));
@@ -2470,9 +2647,10 @@ impl Texture {
             layer_count: shape.layers,
         };
         let image = inner.image.image;
-        let make = |(components, aspect)| {
+        let make = |(components, aspect, role): (_, _, vk::ImageUsageFlags)| {
             let (view_type, format) = (shape.view_type, plan.format);
-            // SAFETY: the image is bound, of the view's format, has the view's usage, and holds
+            let usage = views_usage.map(|usage| usage & role);
+            // SAFETY: the image is bound, lists the view's format, has the view's usage, and holds
             // the range: the texture's levels and layers hold the view's.
             unsafe {
                 image_view(
@@ -2482,18 +2660,25 @@ impl Texture {
                     format,
                     components,
                     range(aspect),
+                    usage,
                 )
             }
         };
-        let storage = (plan.storage)
-            .then_some((vk::ComponentMapping::default(), vk::ImageAspectFlags::COLOR));
+        let sampled_role =
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        let sampled = (plan.sampled).map(|(components, aspect)| (components, aspect, sampled_role));
+        let storage = (plan.storage).then_some((
+            vk::ComponentMapping::default(),
+            vk::ImageAspectFlags::COLOR,
+            vk::ImageUsageFlags::STORAGE,
+        ));
         let mut views = Views {
             core: Arc::clone(core),
             sampled: None,
             storage: None,
         };
         let mut made = || {
-            views.sampled = plan.sampled.map(make).transpose()?;
+            views.sampled = sampled.map(make).transpose()?;
             views.storage = storage.map(make).transpose()?;
             Ok::<_, Error>(())
         };
@@ -2544,6 +2729,7 @@ impl Texture {
             descriptor: d,
             image: Arc::clone(&inner.image),
             format: plan.format,
+            views_usage,
             unit: plan.unit,
             index,
             word: plan.word,
@@ -2629,6 +2815,7 @@ impl Texture {
                     self.inner.format,
                     at.components,
                     at.range,
+                    (self.inner.views_usage).map(|_| vk::ImageUsageFlags::SAMPLED),
                 )
             }?;
             *view = Some(made);
@@ -2733,6 +2920,20 @@ impl Texture {
         let [first_level, first_layer] = self.inner.base();
         let (level_in_image, layer) = (first_level + level, first_layer + slice);
         let image = &self.inner.image;
+        // A view of another format than the image's renders where the format's features hold an
+        // attachment.
+        let renders =
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+        let looped = vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        let usage = match self.inner.views_usage {
+            None => None,
+            Some(usage) if usage.intersects(renders) => Some(usage & (renders | looped)),
+            Some(_) => {
+                return Err(Error::Unsupported(Gap::TextureFormat {
+                    pixel_format: d.pixel_format,
+                }))
+            }
+        };
         let mut views = lock(&self.inner.attachments);
         let kept = (views.iter())
             .find(|a| a.level == level_in_image && a.layer == layer)
@@ -2759,6 +2960,7 @@ impl Texture {
                         self.inner.format,
                         vk::ComponentMapping::default(),
                         range,
+                        usage,
                     )
                 }?;
                 core.counters.rise(Gauge::AttachmentViews);

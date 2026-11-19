@@ -499,13 +499,18 @@ pub enum Refusal {
         /// Its slices.
         slice_count: u32,
     },
-    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of another pixel format
-    /// over a texture made without `PixelFormatView` usage.
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a pixel format Metal does
+    /// not view the texture as: without `PixelFormatView` usage, any but its own, its sRGB sibling
+    /// and a combined depth and stencil format's stencil
+    /// (`metal2vulkan::metal::format::views_without_usage`); with it, any but those and the
+    /// uncompressed colour formats of the same bytes a texel
+    /// (`metal2vulkan::metal::format::views_with_usage`).
     ///
     /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the
     /// conformance crate, job m3-max-43677: Metal's validation layer stops an `R32Uint` view of an
     /// `RGBA8Unorm` texture of `ShaderRead` usage, `Texture View Validation`, and makes it where
-    /// the usage adds `PixelFormatView`).
+    /// the usage adds `PixelFormatView`; Apple's `makeTextureView` and
+    /// `MTLTextureUsage.pixelFormatView` pages state the rest).
     TextureViewFormat {
         /// The texture's pixel format.
         texture: PixelFormat,
@@ -1065,7 +1070,8 @@ pub enum RenderPassKind {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureViewKind {
-    /// Another pixel format, over a texture of `PixelFormatView` usage.
+    /// Another pixel format Metal takes that the texture's image does not list: the device holds
+    /// it in no viewed form of the image format's compatibility class.
     PixelFormat,
     /// Another texture type, but a 2D view of one slice of a 2D array.
     TextureType,

@@ -413,6 +413,13 @@ made, with no lock, and never rewritten for layouts.
   the upload of the next submission, ahead of every command buffer committed after the call, or
   ahead of its first copy; until then nothing holds it, so a texture released first is freed at
   once, with nothing submitted.
+- A texture's image lists the formats Metal views the texture as that the device holds in a
+  viewed form of the image format's compatibility class, and is then mutable
+  (`VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT` with a `VkImageFormatListCreateInfo`, its own format
+  first): its sRGB sibling whatever its usage, as Metal views a texture as its sibling without
+  `PixelFormatView` usage, and with that usage every uncompressed colour format of the same bytes
+  a texel. A texture of no such format is not mutable. A view of another format takes the image's
+  usage that its format's features hold (`VkImageViewUsageCreateInfo`).
 - The sampled element's view is the format's, through its component mapping with the
   descriptor's swizzle composed over it; a depth or stencil format's view takes its depth, else
   its stencil. The storage element is written where the usage has shader write and the device
@@ -620,8 +627,10 @@ made, with no lock, and never rewritten for layouts.
   command buffer's upload is seen by it; Metal on a two-copy GPU sees it only until the command
   buffer is scheduled.
 - Texture views that change what the replay streams' views keep are not built
-  (`Gap::TextureView`, naming the kind): another pixel format, another texture type (but a 2D
-  view of one slice of a 2D array), and some of a cube's faces or a cube array's cubes.
+  (`Gap::TextureView`, naming the kind): another pixel format the texture's image does not list,
+  another texture type (but a 2D view of one slice of a 2D array), and some of a cube's faces or a
+  cube array's cubes. A view of a pixel format Metal does not view the texture as is
+  `Refusal::TextureViewFormat`.
 - A swizzle reaches a texture's sampled element alone, as Apple defines it for reads and
   samples. A swizzled texture, or a view made with a swizzle or of a swizzled texture, has a
   storage element and attachment views that map each channel to itself, as Vulkan requires of

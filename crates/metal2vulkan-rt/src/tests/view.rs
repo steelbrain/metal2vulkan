@@ -7,11 +7,13 @@
 //! stops is `Refusal::TextureViewRange` or `Refusal::TextureViewFormat`, and each kind of view
 //! the runtime does not build `Gap::TextureView` naming it. A view with a swizzle holds Metal's
 //! combination of it over its parent's, in its descriptor and its resource ID's word, over a
-//! texture of any usage. Every gauge comes back to zero with the device, the views' image views
-//! among them. A view of a Managed texture writes the texture's own named bytes. A command buffer
-//! keeps a view it uses after its parent, as Metal's retains every object its encoders use:
-//! released while the command buffer is pending, the view keeps its image views and its element
-//! of set 1 until it retires.
+//! texture of any usage. A view of another pixel format Metal views the texture as (its sRGB
+//! sibling, or with `PixelFormatView` usage a same-size colour format) reads its parent's bytes,
+//! and one of a format Metal does not view it as is `Refusal::TextureViewFormat`. Every gauge
+//! comes back to zero with the device, the views' image views among them. A view of a Managed
+//! texture writes the texture's own named bytes. A command buffer keeps a view it uses after its
+//! parent, as Metal's retains every object its encoders use: released while the command buffer
+//! is pending, the view keeps its image views and its element of set 1 until it retires.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -241,18 +243,42 @@ mod on_device {
                 ),
                 "{name}: another format without PixelFormatView usage"
             );
+            // Pixel-format views, each of its parent's bytes: the sRGB sibling of a texture made
+            // without `PixelFormatView` usage, and an `R32Uint` view of one made with it; a format
+            // of another size, or a compressed one, Metal refuses even so.
             let mut d = TextureDescriptor::new(Type2D, rgba, 8, 8);
             d.usage = TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW;
+            d.storage_mode = StorageMode::Shared;
             let formats = device.new_texture(&d, Some(4112)).expect("a texture");
+            let whole = Region {
+                origin: [0; 3],
+                size: [8, 8, 1],
+            };
+            let texels: Vec<u8> = (0..256).map(|i| (i * 7 + 3) as u8).collect();
+            (formats.replace_region(whole, 0, 0, &texels, 32, 256)).expect("the bytes");
+            for (case, parent, format) in [
+                ("an sRGB sibling", &flat, PixelFormat::RGBA8UnormSRGB),
+                ("a same-size format", &formats, PixelFormat::R32Uint),
+            ] {
+                let levels = 0..parent.descriptor().mipmap_level_count;
+                let made = (view(parent, format, Type2D, levels, 0..1))
+                    .unwrap_or_else(|error| panic!("{name}: {case}: {error}"));
+                assert_eq!(made.descriptor().pixel_format, format, "{name}: {case}");
+                assert_eq!(read(&made), read(parent), "{name}: {case}: the bytes");
+            }
+            for format in [PixelFormat::R16Float, PixelFormat::BC1RGBA] {
+                assert!(
+                    matches!(
+                        view(&formats, format, Type2D, 0..1, 0..1),
+                        Err(Error::Refused(Refusal::TextureViewFormat { .. }))
+                    ),
+                    "{name}: {format:?} of an RGBA8Unorm texture"
+                );
+            }
             let mut d = TextureDescriptor::new(TextureType::Cube, rgba, 4, 4);
             d.usage = TextureUsage::SHADER_READ;
             let cube = device.new_texture(&d, Some(4114)).expect("a texture");
             for (case, result, kind) in [
-                (
-                    "another format",
-                    view(&formats, PixelFormat::R32Uint, Type2D, 0..1, 0..1),
-                    TextureViewKind::PixelFormat,
-                ),
                 (
                     "a 2D array of a 2D texture",
                     view(&flat, rgba, Type2DArray, 0..3, 0..1),

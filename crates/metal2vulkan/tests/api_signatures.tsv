@@ -6169,11 +6169,14 @@ fn	metal2vulkan::metal::format::padded_words	pub fn padded_words(pf: PixelFormat
 fn	metal2vulkan::metal::format::rotated_channels	pub fn rotated_channels(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::sampled_type	pub fn sampled_type(pf: PixelFormat) -> Option<SampledType>
 fn	metal2vulkan::metal::format::srgb_raw_twin	pub fn srgb_raw_twin(pf: PixelFormat) -> Option<PixelFormat>
+fn	metal2vulkan::metal::format::srgb_sibling	pub fn srgb_sibling(pf: PixelFormat) -> Option<PixelFormat>
 fn	metal2vulkan::metal::format::storage_image_choice	pub fn storage_image_choice(pf: PixelFormat, profile: &DeviceProfile) -> Result<StorageImageChoice, Error>
 fn	metal2vulkan::metal::format::storage_view_formats	pub fn storage_view_formats(pf: PixelFormat, profile: &DeviceProfile) -> Vec<vk::Format>
 fn	metal2vulkan::metal::format::swizzle_over	pub fn swizzle_over(pf: PixelFormat, swizzle: TextureSwizzleChannels, own: PixelFormat, profile: &DeviceProfile) -> Option<TextureSwizzleChannels>
 fn	metal2vulkan::metal::format::texture_usages	pub fn texture_usages(pf: PixelFormat, usage: TextureUsage) -> BTreeSet<FormatUsage>
 fn	metal2vulkan::metal::format::to_rotated_image	pub fn to_rotated_image<T: Copy>(metal: [T; 4]) -> [T; 4]
+fn	metal2vulkan::metal::format::views_with_usage	pub fn views_with_usage(pf: PixelFormat, view: PixelFormat) -> bool
+fn	metal2vulkan::metal::format::views_without_usage	pub fn views_without_usage(pf: PixelFormat, view: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::vk_format	pub fn vk_format(pf: PixelFormat, usages: &BTreeSet<FormatUsage>, profile: &DeviceProfile) -> Result<FormatMapping, Error>
 fn	metal2vulkan::metal::format::writes_dropped	pub fn writes_dropped(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::x_channel	pub fn x_channel(pf: PixelFormat) -> bool

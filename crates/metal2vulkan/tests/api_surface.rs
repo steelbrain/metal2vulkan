@@ -982,6 +982,9 @@ surface! {
         fn direct_format;
         fn byte_format;
         fn srgb_raw_twin;
+        fn srgb_sibling;
+        fn views_without_usage;
+        fn views_with_usage;
         fn block_extent;
         enum Footprint N;
         fn footprint;
