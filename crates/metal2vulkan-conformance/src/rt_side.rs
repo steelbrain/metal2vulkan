@@ -1416,6 +1416,14 @@ impl Side for RtSide<'_> {
         self.compute_state_for_commands(library, entry, stage_input)
     }
 
+    fn compute_pipeline_with_descriptor(
+        &mut self,
+        library: Handle,
+        spec: &crate::pipeline_facts::ComputeStateSpec<'_>,
+    ) -> Answer<Handle> {
+        self.described_compute(library, spec)
+    }
+
     fn queue_slots(
         &mut self,
         max: Option<u32>,
@@ -1562,7 +1570,7 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 15] = [
+    const CALLS: [(&str, &str); 16] = [
         (
             "heap_buffer_size_and_align",
             crate::cases::device_queries::HEAP_BUFFERS,
@@ -1602,6 +1610,10 @@ mod answered {
         ("visible_function_table", "visible-tables-stage-vertex"),
         ("argument_buffer", "half-storage-writes-r16f-held"),
         ("argument_buffer", "read-write-tier-held"),
+        (
+            "compute_pipeline_with_descriptor",
+            "pipeline-facts-compute-plain",
+        ),
     ];
 
     /// The calls `value` records as unavailable, wherever in it they sit.

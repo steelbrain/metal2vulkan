@@ -1,10 +1,11 @@
 //! The rt side's state and target calls that the old runtime's side answers and the runtime has
 //! the counterpart of: a compute state's limit under its descriptor, a compute state for indirect
-//! commands (the runtime's typed refusal), a command queue's slots, a fragment fill and a render
-//! target of the mesh family's format.
+//! commands (the runtime's typed refusal), a compute state of a whole descriptor, a command
+//! queue's slots, a fragment fill and a render target of the mesh family's format.
 
 use super::{keep, waited_for, RtSide, QUEUE_COMMAND_BUFFERS, WAIT};
 use crate::case::{Answer, FragmentFill, FragmentFilled, Handle, Side, StageInput};
+use crate::pipeline_facts::ComputeStateSpec;
 use crate::pipeline_limits::{floored, ComputeLimitsSpec, ComputeStateLimits, Creation};
 use crate::transcript::{Negative, Value};
 use metal2vulkan_rt as rt;
@@ -26,7 +27,7 @@ fn refuses_as_metal(error: &rt::Error) -> bool {
 
 impl RtSide<'_> {
     /// The library's `entry` as a stage of a descriptor.
-    fn kernel(&self, library: Handle, entry: &str) -> Answer<rt::StageSource> {
+    pub(super) fn kernel(&self, library: Handle, entry: &str) -> Answer<rt::StageSource> {
         let function = (self.held_library(library)?.function(entry))
             .map_err(|error| self.on.translation_failure(&error))?;
         Ok(rt::StageSource::Function(rt::FunctionDescriptor::new(
@@ -69,6 +70,24 @@ impl RtSide<'_> {
         let mut descriptor = rt::ComputePipelineDescriptor::new(self.kernel(library, entry)?);
         descriptor.support_indirect_command_buffers = true;
         descriptor.stage_input = stage_input.map(crate::runtime_side::stage_input_descriptor);
+        let on = self.on;
+        let state = (on.device)
+            .new_compute_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
+            .map_err(|error| on.failure(&error))?;
+        Ok(keep(&mut self.pipelines, state))
+    }
+
+    /// [`crate::case::Side::compute_pipeline_with_descriptor`]: the runtime's state of the
+    /// descriptor's kernel, `supportIndirectCommandBuffers` and `requiredThreadsPerThreadgroup`.
+    /// The runtime takes no label: a state's label is its consumer's.
+    pub(super) fn described_compute(
+        &mut self,
+        library: Handle,
+        spec: &ComputeStateSpec<'_>,
+    ) -> Answer<Handle> {
+        let mut descriptor = rt::ComputePipelineDescriptor::new(self.kernel(library, spec.entry)?);
+        descriptor.support_indirect_command_buffers = spec.support_indirect_command_buffers;
+        descriptor.required_threads_per_threadgroup = spec.required_threads_per_threadgroup;
         let on = self.on;
         let state = (on.device)
             .new_compute_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
