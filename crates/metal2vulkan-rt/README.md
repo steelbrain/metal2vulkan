@@ -445,7 +445,12 @@ between, `external_writes_done` comes first, as above.
   offset read as signed in one 32-bit add. In a probe of one particle kernel that form was within
   0.7% of a zero-extended offset (inexact below the bind address) on the RX 7900 XTX and two
   Radeon 780Ms, at the kernel's grid and at four times it, where the sign-extended offset it
-  replaced was 6.8 to 9.5% slower. In an earlier probe of constant reads,
+  replaced was 6.8 to 9.5% slower. On the Intel UHD 630's Windows driver the compute harness
+  measured three of its 38 workloads slower in this form than in the sign-extended one:
+  image_filter by 3.4%, dispatch_chain by 2.6% and burst_160 by 2.2%, the median moving 0.05%.
+  Each reaches a buffer through a computed index; the cause is inferred, not measured: one more
+  32-bit add per access, which that device does not fold into the index's shift. In an earlier
+  probe of constant reads,
   32-bit offsets bought 4.3 to 6.6% on AMD cards and more on the RTX 3090, where a 64-bit sum was
   8.9% slower on the RX 7900 XTX. A longer buffer is `Refusal::BufferTooLong`.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
