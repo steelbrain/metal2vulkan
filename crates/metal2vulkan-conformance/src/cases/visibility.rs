@@ -36,6 +36,9 @@
 //!   set with no draw kept, a sum past 32 and past 64 bits, a second pass in the next command
 //!   buffer and in the **same** one (`joined`, read once after both), and an offset taken again.
 //!   `Boolean`: words 0, 2 and 3 under a covering draw and under one covering nothing.
+//! - No mode: a pass whose encoder sets none, then one that sets `Disabled` at both words, each
+//!   drawing, under `Reset` and under `Accumulate`. Metal leaves every byte as it was, which is
+//!   what a pass of the replay streams' asks: a visibility result buffer and no mode.
 //!
 //! # How this family's inputs are keyed, and the one key the compiler cannot guard
 //!
@@ -469,6 +472,44 @@ const SHAPES: &[Shape] = &[
         samples: 1,
         kind: ACCUMULATE,
         start: Some(&[0, 2, 3, 0, 2, 3, 9]),
+        joined: false,
+    },
+    // No mode: a pass that sets none, then one that sets `Disabled` at both words, each drawing.
+    Shape {
+        name: "visibility-disabled-reset",
+        words: 2,
+        passes: &[
+            &[Act::draw(), Act::draw_nothing()],
+            &[
+                Act::Mode(OFF, 8),
+                Act::draw(),
+                Act::Mode(OFF, 0),
+                Act::draw(),
+            ],
+        ],
+        depth: None,
+        samples: 1,
+        kind: RESET,
+        start: None,
+        joined: false,
+    },
+    // The same under `Accumulate`, over words a mode would add to.
+    Shape {
+        name: "visibility-disabled-accumulate",
+        words: 2,
+        passes: &[
+            &[Act::draw(), Act::draw_nothing()],
+            &[
+                Act::Mode(OFF, 8),
+                Act::draw(),
+                Act::Mode(OFF, 0),
+                Act::draw(),
+            ],
+        ],
+        depth: None,
+        samples: 1,
+        kind: ACCUMULATE,
+        start: Some(&[100, 7]),
         joined: false,
     },
 ];
@@ -1156,6 +1197,9 @@ mod tests {
             "visibility-boolean-accumulate",
             &[&[1, 3, 3, 0, 2, 3, 9], &[1, 3, 3, 1, 2, 3, 9]],
         ),
+        // Not the lane's: no mode writes nothing, under either type (an M3 Max, macOS 27.0.1).
+        ("visibility-disabled-reset", &[&[U, U], &[U, U]]),
+        ("visibility-disabled-accumulate", &[&[100, 7], &[100, 7]]),
     ];
 
     /// The one outcome of `name`'s recorded Metal answer.

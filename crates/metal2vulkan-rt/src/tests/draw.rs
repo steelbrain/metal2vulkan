@@ -59,6 +59,10 @@
 //!     a pipeline state of other formats than the pass's, points, a depth test, a stencil test
 //!     without a stencil attachment, a misaligned index offset, a non-finite viewport and a
 //!     mirrored one.
+//!   - a pass with a visibility result buffer draws, its command buffer keeps the buffer until it
+//!     retires, and its bytes stay as they were; `Disabled` at any offset records nothing, the
+//!     pass takes the submission, barrier and pass one without the buffer takes, and `Boolean`
+//!     and `Counting` are `DrawKind::VisibilityResults`.
 //!
 //! `llvm-as` assembles the fixtures; without it a device test skips visibly.
 
@@ -109,14 +113,14 @@ fn a_viewport_is_vulkans_flipped_and_covers_its_own_pixels() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
     use crate::tests::blit::on_device::settled;
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device, finished, within};
     use crate::{
         Block, Buffer, ColorAttachmentDescriptor, CommandBuffer, CompareFunction, CullMode,
         DepthStencilDescriptor, Device, DrawKind, Error, FunctionDescriptor, Gap, IndexBuffer,
         IndexClass, IndexType, Library, MemoryClass, NumberedSampler, PixelFormat, PrimitiveType,
         Refusal, Region, RenderPassDescriptor, RenderPipelineDescriptor, RenderPipelineState,
         ScissorRect, StageSource, StencilOperation, StorageMode, Texture, TextureDescriptor,
-        TextureType, TextureUsage, Viewport,
+        TextureType, TextureUsage, Viewport, VisibilityResultMode,
     };
     use metal2vulkan::error::Feature;
     use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
@@ -2360,6 +2364,113 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             encoder.end_encoding();
             run(name, &command_buffer);
             println!("{name}: each draw refused by kind");
+        });
+    }
+
+    /// A pass with a visibility result buffer draws, keeps the buffer until its command buffer
+    /// retires, and leaves its bytes as they were, as Metal's pass does where its encoder enables
+    /// no mode: `Disabled` at any offset records nothing, and the pass takes the submission,
+    /// barrier and pass one without the buffer takes, as the buffer joins no hazard tracking.
+    /// `Boolean` and `Counting` are `DrawKind::VisibilityResults`.
+    #[test]
+    fn every_device_keeps_a_pass_s_visibility_buffer_and_leaves_its_bytes() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("visibility_buffer", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let visibility = buffers.of(&device, &[0xaa; 16]);
+            // Another buffer over the same bytes, read once the test's handle of the pass's is
+            // gone.
+            let bytes = (device.new_buffer(visibility.block(), visibility.offset(), 16, None))
+                .expect("a buffer");
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            // The upload that moves the new target to its home layout, in a submission apart.
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            run(name, &first);
+            let counters = device.counters();
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            // The whole target in blue, in a pass with the buffer given or none.
+            let encode = |buffer: Option<&Buffer>| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut d = pass(&color, None);
+                d.visibility_result_buffer = buffer.cloned();
+                let mut encoder = (command_buffer.render_command_encoder(&d))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                draw(encoder.set_visibility_result_mode(VisibilityResultMode::Disabled, 8));
+                draw(encoder.set_visibility_result_mode(VisibilityResultMode::Disabled, 1 << 40));
+                for mode in [
+                    VisibilityResultMode::Boolean,
+                    VisibilityResultMode::Counting,
+                ] {
+                    assert_eq!(
+                        format!("{:?}", encoder.set_visibility_result_mode(mode, 0)),
+                        format!(
+                            "{:?}",
+                            Err::<(), _>(Error::Unsupported(Gap::Draw {
+                                kind: DrawKind::VisibilityResults
+                            }))
+                        ),
+                        "{name}: {mode:?}"
+                    );
+                }
+                draw(encoder.set_render_pipeline_state(&state));
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                encoder.end_encoding();
+                command_buffer
+            };
+            settled(&device);
+            let before = counters.metrics();
+            run(name, &encode(None));
+            let without = (before, counters.metrics());
+            settled(&device);
+            let before = counters.metrics();
+            let command_buffer = encode(Some(&visibility));
+            let held = counters.gauges().buffers;
+            drop(visibility);
+            assert_eq!(
+                counters.gauges().buffers,
+                held,
+                "{name}: the command buffer keeps the visibility result buffer"
+            );
+            run(name, &command_buffer);
+            let with = (before, counters.metrics());
+            drop(command_buffer);
+            within("the visibility result buffer's release", || {
+                counters.gauges().buffers == held - 1
+            });
+            let [without, with] = [without, with].map(|(before, after)| {
+                (
+                    after.submissions - before.submissions,
+                    after.barriers - before.barriers,
+                    after.passes - before.passes,
+                    after.bytes_copied - before.bytes_copied,
+                )
+            });
+            assert_eq!(
+                with, without,
+                "{name}: submissions, barriers, passes and bytes copied, with the buffer and without"
+            );
+            let contents = bytes.contents().expect("a Shared buffer");
+            // SAFETY: the buffer is alive, 16 bytes long, and no GPU work uses it.
+            let kept = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 16) };
+            assert_eq!(
+                kept, [0xaa; 16],
+                "{name}: the visibility result buffer's bytes"
+            );
+            assert_eq!(read(&color, 4), texels(|_, _| BLUE), "{name}: the texels");
+            println!("{name}: the visibility result buffer kept and its bytes as they were");
         });
     }
     /// Four samples: a white triangle over the lower-left half of a `SIDE` square

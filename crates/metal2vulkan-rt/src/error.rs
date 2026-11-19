@@ -1222,6 +1222,9 @@ pub enum DrawKind {
     /// no replay stream's patch draws name: the control stage takes each patch's index from its
     /// position.
     PatchIndexBuffer,
+    /// A visibility result mode but `Disabled` (`setVisibilityResultMode:offset:`'s `Boolean` or
+    /// `Counting`), which no replay stream sets: the runtime records no occlusion query.
+    VisibilityResults,
 }
 
 /// What a render pass asks that the runtime does not build ([`Gap::RenderPass`]).

@@ -1445,6 +1445,7 @@ enum	metal2vulkan-rt::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enu
 enum	metal2vulkan-rt::StorageMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum StorageMode
 enum	metal2vulkan-rt::StoreAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StoreAction
 enum	metal2vulkan-rt::TextureViewKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureViewKind
+enum	metal2vulkan-rt::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
 enum	metal2vulkan-rt::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
 enum	metal2vulkan-runtime::AddressPlacement	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AddressPlacement
 enum	metal2vulkan-runtime::AppleOnly	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AppleOnly
@@ -2447,6 +2448,7 @@ field	metal2vulkan-rt::RenderPassDescriptor.depth_attachment	pub depth_attachmen
 field	metal2vulkan-rt::RenderPassDescriptor.render_target_height	pub render_target_height: u32
 field	metal2vulkan-rt::RenderPassDescriptor.render_target_width	pub render_target_width: u32
 field	metal2vulkan-rt::RenderPassDescriptor.stencil_attachment	pub stencil_attachment: RenderPassStencilAttachmentDescriptor
+field	metal2vulkan-rt::RenderPassDescriptor.visibility_result_buffer	pub visibility_result_buffer: Option<Buffer>
 field	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor.clear_stencil	pub clear_stencil: u32
 field	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor.level	pub level: u32
 field	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor.load_action	pub load_action: LoadAction
@@ -9715,6 +9717,7 @@ method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_sampler_state_with_lod_
 method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_texture	pub fn set_vertex_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_viewport	pub fn set_viewport(&mut self, viewport: Viewport) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::set_viewports	pub fn set_viewports(&mut self, viewports: &[Viewport]) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_visibility_result_mode	pub fn set_visibility_result_mode(&mut self, mode: VisibilityResultMode, offset: u64) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::wait_for_fence	pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-rt::RenderPipelineDescriptor::fragment_writes_depth_unattached	pub fn fragment_writes_depth_unattached(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
@@ -13743,6 +13746,7 @@ variant	metal2vulkan-rt::DrawKind::PatchIndexBuffer	PatchIndexBuffer
 variant	metal2vulkan-rt::DrawKind::Points	Points
 variant	metal2vulkan-rt::DrawKind::Viewport	Viewport
 variant	metal2vulkan-rt::DrawKind::Viewports	Viewports
+variant	metal2vulkan-rt::DrawKind::VisibilityResults	VisibilityResults
 variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)
 variant	metal2vulkan-rt::Error::Limit	Limit(Limit)
 variant	metal2vulkan-rt::Error::Loader	Loader(ash::LoadingError)
@@ -14010,6 +14014,9 @@ variant	metal2vulkan-rt::StoreAction::Unknown	Unknown
 variant	metal2vulkan-rt::TextureViewKind::PixelFormat	PixelFormat
 variant	metal2vulkan-rt::TextureViewKind::Slices	Slices
 variant	metal2vulkan-rt::TextureViewKind::TextureType	TextureType
+variant	metal2vulkan-rt::VisibilityResultMode::Boolean	Boolean
+variant	metal2vulkan-rt::VisibilityResultMode::Counting	Counting
+variant	metal2vulkan-rt::VisibilityResultMode::Disabled	Disabled
 variant	metal2vulkan-rt::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-rt::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-rt::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }

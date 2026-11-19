@@ -13,6 +13,7 @@
 //! smallest attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are
 //! set.
 
+use crate::buffer::Buffer;
 use crate::device::Core;
 use crate::error::{Error, Gap, Refusal, RenderPassKind};
 use crate::texture::{Attachment, Texture};
@@ -211,10 +212,12 @@ impl Default for RenderPassStencilAttachmentDescriptor {
 /// `MTLRenderPassDescriptor`: the attachments a render command encoder renders into
 /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)).
 ///
-/// Not built, and so not fields: a visibility result buffer, a rasterization rate map, tile
-/// sizes, imageblock and threadgroup memory lengths, sample buffer attachments, layered rendering
-/// (`renderTargetArrayLength`) and a pass with no attachment (`defaultRasterSampleCount`); a pass
-/// with no attachment is refused, [`Gap::RenderPass`] of [`RenderPassKind::NoAttachment`].
+/// Not built, and so not fields: a rasterization rate map, tile sizes, imageblock and threadgroup
+/// memory lengths, sample buffer attachments, layered rendering (`renderTargetArrayLength`) and a
+/// pass with no attachment (`defaultRasterSampleCount`); a pass with no attachment is refused,
+/// [`Gap::RenderPass`] of [`RenderPassKind::NoAttachment`]. `visibilityResultType` is not a field:
+/// it decides only what an enabled visibility result mode writes, and no mode but `Disabled` is
+/// built.
 #[derive(Clone, Default)]
 pub struct RenderPassDescriptor {
     /// `colorAttachments`.
@@ -227,6 +230,13 @@ pub struct RenderPassDescriptor {
     pub render_target_width: u32,
     /// `renderTargetHeight`: where nonzero, the render area's height, cut to the attachments'.
     pub render_target_height: u32,
+    /// `visibilityResultBuffer`: `None` by default. The command buffer keeps it until it retires,
+    /// and the pass leaves its bytes as they were: Metal's pass does so under either
+    /// `visibilityResultType` where its encoder enables no mode (an Apple M3 Max, macOS 27.0.1),
+    /// and `Disabled` is the only mode
+    /// [`RenderCommandEncoder::set_visibility_result_mode`](crate::RenderCommandEncoder::set_visibility_result_mode)
+    /// builds. It joins no hazard tracking: no command of the pass reaches it.
+    pub visibility_result_buffer: Option<Buffer>,
 }
 
 /// One attachment of a checked pass.
@@ -385,15 +395,20 @@ impl Pass {
 
     /// Checks `d` on the device of `core`.
     ///
-    /// Err: [`Refusal::OtherDevice`] for another device's texture; [`Refusal::AttachmentUsage`];
-    /// [`Refusal::AttachmentPlace`]; [`Refusal::AttachmentFormat`]; [`Gap::RenderPass`];
-    /// [`Error::Vulkan`] where an attachment's view cannot be made.
+    /// Err: [`Refusal::OtherDevice`] for another device's texture or visibility result buffer;
+    /// [`Refusal::AttachmentUsage`]; [`Refusal::AttachmentPlace`]; [`Refusal::AttachmentFormat`];
+    /// [`Gap::RenderPass`]; [`Error::Vulkan`] where an attachment's view cannot be made.
     pub(crate) fn check(core: &Arc<Core>, d: &RenderPassDescriptor) -> Result<Pass, Error> {
         let gap = |kind| Error::Unsupported(Gap::RenderPass { kind });
         let mine = |texture: &Texture| match texture.is_of(core) {
             true => Ok(()),
             false => Err(Error::Refused(Refusal::OtherDevice)),
         };
+        if let Some(buffer) = &d.visibility_result_buffer {
+            if !buffer.is_of(core) {
+                return Err(Error::Refused(Refusal::OtherDevice));
+            }
+        }
         let mut colors = Vec::new();
         for (index, c) in d.color_attachments.iter().enumerate() {
             let Some(texture) = &c.texture else {

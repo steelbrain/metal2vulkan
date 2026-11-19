@@ -15,7 +15,7 @@ use crate::render::{
 use crate::transcript::{Negative, Value};
 use crate::work::Plane;
 use metal2vulkan_rt as rt;
-use metal2vulkan_runtime::{LoadAction, StoreAction, StoreActionOptions};
+use metal2vulkan_runtime::{LoadAction, StoreAction, StoreActionOptions, VisibilityResultMode};
 
 /// A typed error of the runtime as the failure it records.
 fn of_rt(error: rt::Error) -> Failure {
@@ -381,8 +381,10 @@ impl RtSide<'_> {
             attachment.store_action = store(stencil.store)?;
             attachment.clear_stencil = stencil.clear;
         }
-        if pass.visibility.is_some() {
-            return Err(Failure::unavailable("visibilityResultBuffer"));
+        // `visibilityResultType` is not the runtime's field: it decides only what an enabled mode
+        // writes, and the runtime builds `Disabled` alone.
+        if let Some(visibility) = pass.visibility {
+            descriptor.visibility_result_buffer = Some(self.held(visibility)?.clone());
         }
         if pass.array_length != 0 {
             return Err(Failure::unavailable("renderTargetArrayLength"));
@@ -429,6 +431,15 @@ impl RtSide<'_> {
                 (encoder.set_depth_bias(v.bias, v.slope_scale, v.clamp)).map_err(of_rt)
             }
             RenderStep::FillMode(mode) => encoder.set_triangle_fill_mode(*mode).map_err(of_rt),
+            RenderStep::VisibilityResultMode { mode, offset } => {
+                let mode = match mode {
+                    VisibilityResultMode::Disabled => rt::VisibilityResultMode::Disabled,
+                    VisibilityResultMode::Boolean => rt::VisibilityResultMode::Boolean,
+                    VisibilityResultMode::Counting => rt::VisibilityResultMode::Counting,
+                    _ => return Err(Failure::unavailable("setVisibilityResultMode:offset:")),
+                };
+                (encoder.set_visibility_result_mode(mode, *offset)).map_err(of_rt)
+            }
             RenderStep::DepthClip(mode) => encoder.set_depth_clip_mode(*mode).map_err(of_rt),
             RenderStep::StencilReferences { front, back } => {
                 encoder.set_stencil_front_back_reference_value(*front, *back);

@@ -123,7 +123,9 @@ pub use pipeline::ComputePipelineState;
 pub use pixel_format_info::{PixelFormatInfo, TextureLevelInfo, TextureLevelQuery};
 pub use queue::CommandQueue;
 pub use render::RenderPipelineState;
-pub use render_encoder::{IndexBuffer, RenderCommandEncoder, ScissorRect, Viewport};
+pub use render_encoder::{
+    IndexBuffer, RenderCommandEncoder, ScissorRect, Viewport, VisibilityResultMode,
+};
 pub use sampler::SamplerState;
 pub use texture::{
     BytesPlace, HeapRange, Region, SizeAndAlign, StorageMode, Texture, TextureDescriptor,

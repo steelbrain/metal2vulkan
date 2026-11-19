@@ -2078,8 +2078,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   than 0 (`DepthBiasClamp`, set by `set_depth_bias`), a triangle fill mode but `Fill`
   (`FillMode`, `set_triangle_fill_mode`), the depth clip mode `Clamp` (`DepthClamp`,
   `set_depth_clip_mode`), a count of viewports or scissor rectangles other than 1 (`Viewports`,
-  `set_viewports`, `set_scissor_rects`), each refused where it is set, the encoder's state
-  unchanged; the replay streams set Metal's defaults alone, which those setters take as nothing; a
+  `set_viewports`, `set_scissor_rects`), a visibility result mode but `Disabled`
+  (`VisibilityResults`, `set_visibility_result_mode`), each refused where it is set, the
+  encoder's state unchanged; the replay streams set Metal's defaults alone, which those setters
+  take as nothing; a
   viewport Vulkan's is not (a
   negative width, a depth range past `[0, 1]`, bounds past the device's viewport limits), a
   pipeline state whose formats are not the pass's attachments', a draw that binds a texture
@@ -2103,8 +2105,16 @@ or does not check is rebuilt from the generations' names, with young counted ful
   the level and layer it reads.
 - A vertex fetch outside its buffer returns what the device gives: the floor enables no buffer
   robustness, so there is no bounds guarantee beyond the device's.
-- Not built, and so not methods: indirect draws (of patches too), visibility results,
-  `useResource:`, `useHeap:stages:`, the store action options setters, tile functions,
+- A pass's visibility result buffer (`visibility_result_buffer`, Metal's
+  `visibilityResultBuffer`) is kept by the command buffer until it retires, and its bytes stay as
+  they were: no command of the pass reaches it, and it joins no hazard tracking.
+  `set_visibility_result_mode` (`setVisibilityResultMode:offset:`) takes `Disabled` at any offset
+  and records nothing. Metal's pass leaves the buffer's bytes as they were under either
+  `visibilityResultType` where its encoder enables no mode (an Apple M3 Max, macOS 27.0.1; the
+  conformance cases `visibility-disabled-reset` and `visibility-disabled-accumulate`), so the
+  result type is not a field. The replay streams that set a visibility result buffer enable no
+  mode.
+- Not built, and so not methods: indirect draws (of patches too), `useResource:`, `useHeap:stages:`, the store action options setters, tile functions,
   `setVertexBuffer:offset:attributeStride:atIndex:`, `setTessellationFactorScale:` (read only by a
   state that enables the scale, which is refused) and `drawIndexedPatches:` (whose control-point
   index buffer only a state of a control-point index type reads, which is refused). Where a replay stream calls
@@ -2121,8 +2131,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   resolve texture, or a store action that resolves), a 1D or 3D texture's attachment, the
   `CustomSampleDepthStore` store action, a clear of a format only a shader clears (extended
   range, bfloat, YCbCr), and a pass with no attachment. The descriptor has no field for a
-  visibility result buffer, a rasterization rate map, tile sizes, imageblock and threadgroup
-  memory, sample buffer attachments, layered rendering or store action options. The replay
+  rasterization rate map, tile sizes, imageblock and threadgroup memory, sample buffer
+  attachments, layered rendering or store action options. The replay
   streams' passes render into one or two color attachments and a stencil attachment or a
   `Depth32Float` depth attachment, each a level of a 2D texture of one sample, with `Load`,
   `Clear` and `DontCare` loads and `Store`, `DontCare` and `Unknown` stores.

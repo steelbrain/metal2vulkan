@@ -129,6 +129,20 @@ pub struct ScissorRect {
     pub height: u64,
 }
 
+/// `MTLVisibilityResultMode`, which
+/// [`RenderCommandEncoder::set_visibility_result_mode`] takes: `Disabled` alone is built.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum VisibilityResultMode {
+    /// `MTLVisibilityResultModeDisabled`, Metal's default: the draws write no result.
+    #[default]
+    Disabled,
+    /// `MTLVisibilityResultModeBoolean`: not built, [`DrawKind::VisibilityResults`].
+    Boolean,
+    /// `MTLVisibilityResultModeCounting`: not built, [`DrawKind::VisibilityResults`].
+    Counting,
+}
+
 /// The index buffer of an indexed draw
 /// ([`RenderCommandEncoder::draw_indexed_primitives`]): `indexBuffer`, `indexBufferOffset` and
 /// `indexType`.
@@ -402,9 +416,10 @@ enum Call<'a> {
 /// winding, a depth-stencil state's depth and stencil tests, the depth bias without a clamp, the
 /// stencil references, the blend color, the store actions an encoder sets for an attachment whose
 /// pass left them unknown, memory barriers, fences, direct draws of lines and triangles,
-/// indexed or not, and direct draws of patches with a tessellation factor buffer. Not built, and
-/// so not methods: indirect draws, several viewports or scissor rectangles, the triangle fill
-/// mode, the depth clip mode, visibility results, `useResource:`, the store action options
+/// indexed or not, direct draws of patches with a tessellation factor buffer, and the `Disabled`
+/// visibility result mode (`Boolean` and `Counting` are [`DrawKind::VisibilityResults`]). Not
+/// built, and so not methods: indirect draws, several viewports or scissor rectangles, the
+/// triangle fill mode, the depth clip mode, `useResource:`, the store action options
 /// setters, tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
 /// `setTessellationFactorScale:` (read by a pipeline that enables the scale, which is refused),
 /// and indexed patch draws (`drawIndexedPatches:`, read by a pipeline of a control-point index
@@ -481,12 +496,13 @@ pub struct RenderCommandEncoder {
 impl CommandBuffer {
     /// `renderCommandEncoderWithDescriptor:`: begins `descriptor`'s pass, one
     /// `vkCmdBeginRendering` between the pass's first barrier and its commands. The command
-    /// buffer keeps each attachment's texture until it retires.
+    /// buffer keeps each attachment's texture, and the visibility result buffer, until it
+    /// retires.
     ///
     /// Err: [`Refusal::Committed`];
     /// [`Refusal::EncoderOpen`] while another encoder of the command
     /// buffer is open; [`Refusal::OtherDevice`] for another device's
-    /// texture; [`Refusal::AttachmentUsage`];
+    /// texture or visibility result buffer; [`Refusal::AttachmentUsage`];
     /// [`Refusal::AttachmentPlace`];
     /// [`Refusal::AttachmentFormat`];
     /// [`Gap::RenderPass`]; [`Error::Vulkan`] where an
@@ -567,6 +583,11 @@ fn begin(
     for t in pass.targets() {
         building.keep_texture(&t.texture);
         building.wrote_texture_managed(&t.texture);
+    }
+    // Kept as Metal's pass holds it, and no access declared: no draw writes it while `Disabled`
+    // is the only mode built.
+    if let Some(buffer) = &descriptor.visibility_result_buffer {
+        building.keep(buffer);
     }
     building.overs_before(&overs, false)?;
     let opens = building.opens_command_buffer();
@@ -1073,6 +1094,27 @@ impl RenderCommandEncoder {
             _ => Err(Error::Unsupported(Gap::Draw {
                 kind: DrawKind::FillMode,
             })),
+        }
+    }
+
+    /// `setVisibilityResultMode:offset:`: `Disabled`, Metal's default, is every draw's, at any
+    /// offset, and records nothing; `Boolean` and `Counting` are not built. A program may set
+    /// `Disabled` with no visibility result buffer and at an offset it never enables.
+    ///
+    /// Err: [`Gap::Draw`] of [`DrawKind::VisibilityResults`] for `Boolean` and `Counting`.
+    pub fn set_visibility_result_mode(
+        &mut self,
+        mode: VisibilityResultMode,
+        offset: u64,
+    ) -> Result<(), Error> {
+        // Metal reads the offset only for an enabled mode: `Disabled` takes any.
+        match (mode, offset) {
+            (VisibilityResultMode::Disabled, _) => Ok(()),
+            (VisibilityResultMode::Boolean | VisibilityResultMode::Counting, _) => {
+                Err(Error::Unsupported(Gap::Draw {
+                    kind: DrawKind::VisibilityResults,
+                }))
+            }
         }
     }
 

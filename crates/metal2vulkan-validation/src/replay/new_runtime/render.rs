@@ -291,7 +291,14 @@ impl NewRuntime {
                     return Err(refuse(call, "a rasterization rate map"));
                 }
                 f.only("visibilityResultType", Fields::uint, 0)?;
-                let visibility = f.set_object("visibilityResultBuffer")?;
+                // A skipped buffer is held as none, and the pass marked as one the runtime does
+                // not build while the descriptor names it.
+                let (visibility, skipped) = match f.set_object("visibilityResultBuffer")? {
+                    Some(Some(id)) if self.skipped(id) => (Some(None), true),
+                    Some(Some(id)) => (Some(Some(self.buffer_of(call, id)?)), false),
+                    Some(None) => (Some(None), false),
+                    None => (None, false),
+                };
                 let layers = f.uint("renderTargetArrayLength")?;
                 let tile = [
                     "imageblockSampleLength",
@@ -304,7 +311,8 @@ impl NewRuntime {
                 let height = f.count("renderTargetHeight")?;
                 let pass = self.pass(call.receiver);
                 if let Some(visibility) = visibility {
-                    pass.hold(OWN, "visibilityResultBuffer", visibility.is_none());
+                    pass.hold(OWN, "visibilityResultBuffer", !skipped);
+                    pass.descriptor.visibility_result_buffer = visibility;
                 }
                 if let Some(layers) = layers {
                     pass.hold(OWN, "renderTargetArrayLength", layers <= 1);
