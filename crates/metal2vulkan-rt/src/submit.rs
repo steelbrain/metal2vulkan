@@ -1704,7 +1704,8 @@ impl WorkState {
         if own < IN_FLIGHT && across >= IN_FLIGHT {
             self.counters.count(Metric::LoneSubmissionsAcrossQueues);
         }
-        // Each reason `step` and `unheld` send a group for, all of its own queue's.
+        // The reasons `step` and `unheld` send a group for, but for a command buffer that cannot
+        // join it and a segment that leans on a copy (`Metrics::forced_flushes_across_queues`).
         let leads = (fifo.entries.front())
             .and_then(|entry| entry.pending.as_ref())
             .and_then(|pending| pending.gpu.segments.get(pending.next))
