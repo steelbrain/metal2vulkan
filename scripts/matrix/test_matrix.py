@@ -183,7 +183,7 @@ class TimedAgainTests(unittest.TestCase):
             return 0, "\n".join(lines + [f"M2V-SUITE {leg_id} harness exit 0"]) + "\n", {"id": name}
 
         with mock.patch.object(run, "job", job, create=True), mock.patch.object(matrix, "log"):
-            run.gpu_node("n", legs, lambda: ("carry", "mirror", "rev"))
+            run.gpu_node("n", legs, lambda: (("carry", "mirror", "rev"), None))
         # The XTX's old runtime spread 15% in its first timing: it is timed once more, after the
         # 2080's, and that last job is the node's last, which tidies; once more only.
         self.assertEqual(asked, [("rt-n", False), ("harness-1002:744c", False), ("harness-10de:1e87", False),
