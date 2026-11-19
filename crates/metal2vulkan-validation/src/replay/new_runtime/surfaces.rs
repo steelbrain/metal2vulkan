@@ -630,7 +630,8 @@ impl NewRuntime {
                         (bytes.end - bytes.start) as usize,
                     )
                 };
-                let uploaded = entry.replace_region(region, 0, 0, bytes, span.bytes_per_row, 0);
+                let uploaded =
+                    entry.replace_region(region, 0, 0, bytes.into(), span.bytes_per_row, 0);
                 uploaded.map_err(failed)?;
                 let [width, height, _] = region.size;
                 self.surfaces.counts.bytes += u64::from(width) * u64::from(height) * shape.texel;
