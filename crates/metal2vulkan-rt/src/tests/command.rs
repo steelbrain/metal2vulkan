@@ -2738,7 +2738,10 @@ pub(crate) mod on_device {
     /// once.
     #[test]
     fn every_device_counts_nothing_a_command_buffer_keeps_as_a_handle() {
-        use crate::{PixelFormat, SamplerDescriptor, TextureDescriptor, TextureType};
+        use crate::{
+            IndexClass, PixelFormat, SamplerDescriptor, TextureDescriptor, TextureType,
+            TextureUsage,
+        };
         let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
@@ -2748,10 +2751,12 @@ pub(crate) mod on_device {
             let event = shared_event(&device);
             let mut arena = Arena::new(&device);
             let a = arena.buffer();
-            let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+            let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+            d.usage = TextureUsage::RENDER_TARGET;
             let texture = device.new_texture(&d, None).expect("a texture");
+            let _grant = (device.grant_indices(IndexClass::Sampler, 1, 1)).expect("an index");
             let state =
-                (device.new_sampler_state(&SamplerDescriptor::new(), 0)).expect("a sampler state");
+                (device.new_sampler_state(&SamplerDescriptor::new(), 1)).expect("a sampler state");
             let queue = queue(&device);
             let command_buffer = queue.command_buffer().expect("a command buffer");
             (command_buffer.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
