@@ -64,6 +64,34 @@ fn load_action(call: &Call, raw: u64) -> Result<rt::LoadAction, PlayError> {
     })
 }
 
+/// The viewport of `value`, an `MTLViewport`'s fields.
+fn viewport(call: &Call, value: &Value) -> Result<rt::Viewport, PlayError> {
+    let known = ["originX", "originY", "width", "height", "znear", "zfar"];
+    let f = Fields::of(call, value, &known)?;
+    let [x, y, width, height, znear, zfar] = known.map(|key| f.required(key, Fields::float));
+    Ok(rt::Viewport {
+        origin_x: x?,
+        origin_y: y?,
+        width: width?,
+        height: height?,
+        znear: znear?,
+        zfar: zfar?,
+    })
+}
+
+/// The scissor rectangle of `value`, an `MTLScissorRect`'s fields.
+fn scissor(call: &Call, value: &Value) -> Result<rt::ScissorRect, PlayError> {
+    let known = ["x", "y", "width", "height"];
+    let f = Fields::of(call, value, &known)?;
+    let [x, y, width, height] = known.map(|key| f.required(key, Fields::uint));
+    Ok(rt::ScissorRect {
+        x: x?,
+        y: y?,
+        width: width?,
+        height: height?,
+    })
+}
+
 /// `MTLStoreAction`.
 fn store_action(call: &Call, raw: u64) -> Result<rt::StoreAction, PlayError> {
     Ok(match raw {
@@ -459,32 +487,25 @@ impl NewRuntime {
                 result
             }
             "setViewport:" => {
-                let known = ["originX", "originY", "width", "height", "znear", "zfar"];
-                let f = Fields::arg(call, 0, &known)?;
-                let [x, y, width, height, znear, zfar] =
-                    known.map(|key| f.required(key, Fields::float));
-                let viewport = rt::Viewport {
-                    origin_x: x?,
-                    origin_y: y?,
-                    width: width?,
-                    height: height?,
-                    znear: znear?,
-                    zfar: zfar?,
-                };
+                let viewport = viewport(call, arg(call, 0)?)?;
                 self.render(id).encoder.set_viewport(viewport)
             }
+            "setViewports:count:" => {
+                let viewports = (list(call, 0)?.iter())
+                    .map(|value| viewport(call, value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.render(id).encoder.set_viewports(&viewports)
+            }
             "setScissorRect:" => {
-                let known = ["x", "y", "width", "height"];
-                let f = Fields::arg(call, 0, &known)?;
-                let [x, y, width, height] = known.map(|key| f.required(key, Fields::uint));
-                let rect = rt::ScissorRect {
-                    x: x?,
-                    y: y?,
-                    width: width?,
-                    height: height?,
-                };
+                let rect = scissor(call, arg(call, 0)?)?;
                 self.render(id).encoder.set_scissor_rect(rect);
                 Ok(())
+            }
+            "setScissorRects:count:" => {
+                let rects = (list(call, 0)?.iter())
+                    .map(|value| scissor(call, value))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.render(id).encoder.set_scissor_rects(&rects)
             }
             "setCullMode:" => {
                 let mode = metal(call, uint(call, 0)?)?;
@@ -628,7 +649,7 @@ impl NewRuntime {
                 let mode = metal(call, uint(call, 0)?)?;
                 self.render(id).encoder.set_triangle_fill_mode(mode)
             }
-            "setDepthClipMode:" => {
+            "setDepthClipMode:" | "setDepthClipModeSPI:" => {
                 let mode = metal(call, uint(call, 0)?)?;
                 self.render(id).encoder.set_depth_clip_mode(mode)
             }
