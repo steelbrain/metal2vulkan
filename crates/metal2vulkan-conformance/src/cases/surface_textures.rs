@@ -209,7 +209,21 @@ impl Case for SurfaceTextures {
     fn allowances(&self) -> Vec<Allowance> {
         // The GPU read lands in a `Shared` buffer, which is what
         // [`crate::replay::shared_memory_notice`] is for; it loosens the notices site alone.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // The old runtime lays the plane's texture over a buffer, and where the device's own
+        // linear image does not lie at the plane's pitch it reads and writes the texels through
+        // a copy, which it announces once per device (`shadowed-texture`). Metal announces
+        // nothing, so the notices site differs wherever the copy is taken, and the notice is
+        // what justifies it; it too loosens the notices site alone. Measured on the Radeon 780M
+        // (RADV PHOENIX, 53559): the four plane cases, whose rows are 64 and 128 bytes, take the
+        // copy and the two with 256- and 512-byte rows do not; lavapipe takes it for none.
+        // metal2vulkan-rt announces neither: it counts its surface forms instead.
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::notice_allowance(
+                metal2vulkan_runtime::Degradation::ShadowedTexture.code(),
+            ),
+        ]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
