@@ -200,9 +200,12 @@ in its memory.
   device: the block-maker thread frees each allocation idle that long, one at a time, after
   `BlockMappings::unmap` of each block kept in it, whatever the device's queues are doing, so a
   program that keeps committing gives back what it stopped using within 250 ms plus the frees
-  ahead of it. It frees between the allocations it makes, never beside one. Each class keeps one
-  reserve made ahead of need and not freed: the idle allocations its free bytes need to stay at
-  8 MiB or more, one 16 MiB allocation of each class at most. `Metrics::allocations_freed`
+  ahead of it. It frees between the allocations it makes, never beside one. Each class keeps a
+  reserve that the idle rule does not free: the newest idle 16 MiB allocations with free bytes,
+  taken until the class's free bytes reach 8 MiB. An allocation that holds kept blocks counts
+  only its bytes outside them, so the reserve may hold several 16 MiB allocations. A long
+  allocation, which a take longer than 16 MiB made for itself, is never the reserve.
+  `Metrics::allocations_freed`
   counts the frees and `Metrics::idle_frees_by_age` their idle times; `Metrics::idle_reuses_by_age`
   counts idle allocations taken again, by how long they were idle. `Gauges::shared_idle_bytes` and
   `Gauges::private_idle_bytes` count the idle bytes, the reserve's included, and
