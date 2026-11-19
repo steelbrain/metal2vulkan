@@ -882,6 +882,9 @@ fn a_placement_a_held_commit_owes_takes_the_index_without_waiting_and_is_counted
     );
 }
 
+/// A play that ends with a command buffer held on an event no record signals still ends its
+/// device: once it dropped, every gauge reads zero, and each goes out as the matrix's line,
+/// `M2V-MATRIX gauge KEY@drop 0`.
 #[test]
 fn a_play_that_ends_with_a_command_buffer_held_ends_its_device() {
     let dir = ScratchDir::new("rt-replay-end-held").unwrap();
@@ -918,7 +921,15 @@ fn a_play_that_ends_with_a_command_buffer_held_ends_its_device() {
         ended.contains("still wait on events at the stream's end"),
         "{ended}"
     );
-    backend.end().unwrap();
+    let ended = backend.end();
+    ended.result().unwrap();
+    for line in ended.lines() {
+        let fields: Vec<&str> = line.split(' ').collect();
+        assert!(
+            matches!(fields[..], ["M2V-MATRIX", "gauge", key, "0"] if key.ends_with("@drop")),
+            "{line}"
+        );
+    }
 }
 
 #[test]

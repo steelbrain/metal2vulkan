@@ -7,6 +7,7 @@ use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
 use super::new_runtime::second::merge;
 use super::new_runtime::unwritten::Unwritten;
+use super::new_runtime::Ended;
 use super::player::{
     Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
     TextureWrites, WAIT_COMPLETED,
@@ -899,6 +900,32 @@ fn a_heap_splits_by_what_the_stream_places_whatever_its_type() {
     assert_eq!(kept.splits, splits);
     assert_eq!((report.pinned, report.textures_outside), (Some(2), 2));
     assert_eq!(report.relaid, Relaid::default());
+}
+
+/// The gauges the new runtime's backend reads once its device dropped go out as the matrix's
+/// lines, `M2V-MATRIX gauge replay-rt/device/GAUGE@drop N`: three fields after the marker, the
+/// key ending in `@drop`, as `scripts/matrix/results.py` reads a record, whose rule fails a gauge
+/// not at zero there. The end's error names such a gauge.
+#[test]
+fn the_gauges_at_device_drop_go_out_as_the_matrix_lines() {
+    let ended = Ended {
+        gauges: vec![("buffers", 0), ("blocks", 2)],
+        zero: false,
+        idle: true,
+    };
+    let lines = [
+        "M2V-MATRIX gauge replay-rt/device/buffers@drop 0",
+        "M2V-MATRIX gauge replay-rt/device/blocks@drop 2",
+    ];
+    assert_eq!(ended.lines(), lines);
+    let error = ended.result().unwrap_err();
+    assert!(error.contains("[blocks=2]"), "{error}");
+    let zero = Ended {
+        gauges: vec![("buffers", 0)],
+        zero: true,
+        idle: true,
+    };
+    assert_eq!(zero.result(), Ok(()));
 }
 
 /// A buffer whose recorded range meets a live buffer's in part, as a guest's allocator reuses

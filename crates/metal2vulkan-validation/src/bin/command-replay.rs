@@ -397,8 +397,13 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             };
             let code = run(&mut backend, &mut reader, &mut report, snapshots, until);
             // The device ends here, not in `exit()`, where the driver's own exit teardown would
-            // run beside the runtime's threads.
-            match backend.end() {
+            // run beside the runtime's threads. Its gauges read after it dropped go out as the
+            // matrix's lines, which the matrix's zero-at-drop rule reads.
+            let ended = backend.end();
+            for line in ended.lines() {
+                report.line(&line);
+            }
+            match ended.result() {
                 Ok(()) => code,
                 Err(error) => {
                     report.line(&format!("error teardown: {error}"));

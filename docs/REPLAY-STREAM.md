@@ -820,5 +820,11 @@ the play ended but objects whose ID the program saw have other IDs in the runtim
 one end `; not a verdict past frame F, call C`: `F` and `C` the frame and stream position of the
 call at which it first skipped, past which nothing the play shows is a verdict. A dispatch is
 skipped only where it names a skipped object. `COUNTS` is `stream KEY=VALUE ... executed
-KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped, 2 for a harness
-failure (a bad command line or an unreadable stream) and 3 for `ids`, a run that played to the end.
+KEY=VALUE ...`. On the new runtime the player then ends its device and prints, for each of the
+runtime's gauges read once the device dropped, `M2V-MATRIX gauge replay-rt/device/GAUGE@drop N`:
+the matrix's own record, so the matrix's rule (`scripts/matrix/results.py`) fails a play whose
+gauge is not 0 at device drop. Such a gauge, or a device that did not quiesce within 30 seconds,
+also writes `error teardown: WHAT`. The old runtime's counts end with its device, so its plays
+print no such line. The exit status is 0 for `ok`, 1 for a run that stopped or an `ok` followed
+by `error teardown`, 2 for a harness failure (a bad command line or an unreadable stream) and 3
+for `ids`, a run that played to the end.

@@ -564,6 +564,95 @@ fn texture_class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
 /// threads.
 const QUIESCE: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// What the play's device left once [`NewRuntime::end`] tore it down: the runtime's gauges, read
+/// after the device dropped, and whether it quiesced in time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ended {
+    /// Each of the runtime's gauges by name (`rt::Gauges`; `threads` the slots a thread still
+    /// holds). Every one is zero once the device is torn down.
+    pub gauges: Vec<(&'static str, u64)>,
+    /// Whether every gauge read zero, whole (`rt::Gauges::default()`).
+    pub zero: bool,
+    /// Whether the device quiesced within 30 seconds.
+    pub idle: bool,
+}
+
+impl Ended {
+    /// The matrix's line of each gauge, `M2V-MATRIX gauge replay-rt/device/GAUGE@drop N`, in the
+    /// form `scripts/matrix/results.py` reads: its rule fails a gauge not at zero at device drop.
+    pub fn lines(&self) -> Vec<String> {
+        let lines = self.gauges.iter().map(|(gauge, value)| {
+            format!("M2V-MATRIX gauge replay-rt/device/{gauge}@drop {value}")
+        });
+        lines.collect()
+    }
+
+    /// Err names the gauges not at zero, a handle or a resource that outlived the play, or a
+    /// quiesce past those 30 seconds whose threads run on into `exit()`.
+    pub fn result(&self) -> Result<(), String> {
+        if self.idle && self.zero {
+            return Ok(());
+        }
+        let live = self.gauges.iter().filter(|(_, value)| *value != 0);
+        let live: Vec<String> = live
+            .map(|(gauge, value)| format!("{gauge}={value}"))
+            .collect();
+        let idle = match self.idle {
+            true => "quiesced",
+            false => "did not quiesce in time",
+        };
+        Err(format!(
+            "the device {idle} and its gauges read [{}] after the backend dropped",
+            live.join(" ")
+        ))
+    }
+}
+
+/// Every gauge of `gauges` by its name in `rt::Gauges`, `threads` counting the slots a thread
+/// holds.
+fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
+    let threads = gauges.threads.iter().filter(|&&id| id != 0).count() as u64;
+    vec![
+        ("threads", threads),
+        ("buffers", gauges.buffers),
+        ("textures", gauges.textures),
+        ("samplers", gauges.samplers),
+        ("pipelines", gauges.pipelines),
+        ("kernels", gauges.kernels),
+        ("kernel_entries", gauges.kernel_entries),
+        ("render_contents", gauges.render_contents),
+        ("attachment_views", gauges.attachment_views),
+        ("command_buffers", gauges.command_buffers),
+        ("descriptor_slots", gauges.descriptor_slots),
+        ("blocks", gauges.blocks),
+        ("events", gauges.events),
+        ("device_samplers", gauges.device_samplers),
+        ("spilled_bytes", gauges.spilled_bytes),
+        ("managed_spilled_bytes", gauges.managed_spilled_bytes),
+        ("shared_allocation_bytes", gauges.shared_allocation_bytes),
+        ("private_allocation_bytes", gauges.private_allocation_bytes),
+        ("shared_idle_bytes", gauges.shared_idle_bytes),
+        ("private_idle_bytes", gauges.private_idle_bytes),
+        ("shared_idle_age_nanos", gauges.shared_idle_age_nanos),
+        ("private_idle_age_nanos", gauges.private_idle_age_nanos),
+        ("shared_reserve_bytes", gauges.shared_reserve_bytes),
+        ("private_reserve_bytes", gauges.private_reserve_bytes),
+        ("shared_long_reused_bytes", gauges.shared_long_reused_bytes),
+        (
+            "private_long_reused_bytes",
+            gauges.private_long_reused_bytes,
+        ),
+        ("capture_bytes", gauges.capture_bytes),
+        ("staging_bytes", gauges.staging_bytes),
+        ("stage_entries", gauges.stage_entries),
+        ("stage_entry_bytes", gauges.stage_entry_bytes),
+        ("pipeline_cache_bytes", gauges.pipeline_cache_bytes),
+        ("shadows", gauges.shadows),
+        ("shadow_bytes", gauges.shadow_bytes),
+        ("timestamp_pools", gauges.timestamp_pools),
+    ]
+}
+
 impl Drop for NewRuntime {
     /// The device's quiesce on every way out of a play, an error's and a panic's included: no
     /// runtime thread runs on into the process's `exit()`, where the driver tears itself down
@@ -641,23 +730,16 @@ impl NewRuntime {
     /// Ends the play's device before the process exits, as the runtime's contract asks of a
     /// consumer (`rt::Device`): quiesces it within 30 seconds (a committed command buffer waiting
     /// on an event no played record signals ends unrun), drops every handle the backend holds, the
-    /// device's last among them, and reads the gauges once it is torn down. Err names the gauges
-    /// not at zero: a handle or a resource that outlived the play, or a quiesce past those 30
-    /// seconds whose threads run on into `exit()`.
-    pub fn end(self) -> Result<(), String> {
+    /// device's last among them, and reads the gauges once it is torn down ([`Ended`]).
+    pub fn end(self) -> Ended {
         let counters = self.device.counters();
         let idle = self.device.quiesce(QUIESCE);
         drop(self);
         let gauges = counters.gauges();
-        match (idle, gauges == rt::Gauges::default()) {
-            (true, true) => Ok(()),
-            (idle, _) => Err(format!(
-                "the device {} and its gauges read {gauges:?} after the backend dropped",
-                match idle {
-                    true => "quiesced",
-                    false => "did not quiesce in time",
-                },
-            )),
+        Ended {
+            zero: gauges == rt::Gauges::default(),
+            gauges: named(gauges),
+            idle,
         }
     }
 
