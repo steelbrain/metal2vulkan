@@ -67,11 +67,15 @@ order, and a lower one never overrides a higher one.
    attachment feedback loop (a device without it reads a render target through a counted copy of
    that target, recorded as a known gap). A second form chosen by anything else is not allowed.
 3. **Native-like speed.** Structure decides speed: driver-owned memory, optimal images in real
-   layouts, direct addresses, nothing copied that Metal would not copy. The one exception to
-   optimal images is a texture over a Shared buffer: a linear image on that buffer's memory, in
-   the device's own layout, created so its first use keeps the bytes, with the alignment the guest
+   layouts, direct addresses, nothing copied that Metal would not copy. Optimal images have two
+   exceptions. A texture over a Shared buffer: a linear image on that buffer's memory, in the
+   device's own layout, created so its first use keeps the bytes, with the alignment the guest
    reads from Metal's minimum linear texture alignment, and where a format query offers no linear
-   image for the format and usage, a counted copy at commit. The exception does not grow.
+   image for the format and usage, a counted copy at commit. A plane texture of an exported
+   surface: a linear image on the surface's own exported memory, at the pitch and plane starts the
+   surface's export states, and where the device offers no such image or cannot meet the layout
+   the consumer asked for, the copy form of the same call, counted and recorded as a known gap.
+   The exceptions do not grow.
 4. **Small.** Every cache is bounded, every feature has one form, and anything unused is deleted.
 
 **An accuracy note is logged, never fatal.** A precision note is recorded and announced, and the
