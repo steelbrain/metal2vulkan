@@ -834,8 +834,11 @@ counted from 0), completes the work committed so far, reports as at the stream's
   buffers, offsets, bytes, textures and sampler states, the viewport, scissor, cull mode, winding,
   blend color and stencil references, the draws (indexed or not, with instance counts, base
   vertex and base instance), fences and memory barriers (their stages are the runtime's to
-  order). Compute encoders on the new runtime play `setStageInRegion:` (the runtime takes it and
-  it changes nothing a dispatch of a kernel without a stage-in argument does, the only kernel it
+  order). On the new runtime a bind of a range (`withRange:`) of buffers, textures or sampler
+  states plays as the single-slot bind of each, from the range's location, on render and compute
+  encoders alike.
+  Compute encoders on the new runtime play `setStageInRegion:` (the runtime takes it and it
+  changes nothing a dispatch of a kernel without a stage-in argument does, the only kernel it
   builds); the old runtime refuses it.
 
 `report.txt` holds one line per item: the line `recorded before the recorder's completion fix: the
