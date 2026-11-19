@@ -21,6 +21,8 @@
 //                        commit.
 //   enqueue              on queue A, `x` is enqueued and not committed, then `u`; `x` (no work) is
 //                        committed 2 s after `w`'s commit.
+//   empty-waiter         as control, but `w`'s encoder only waits on F: no dispatch, nothing for
+//                        the GPU. Whether its completion waits for `u`.
 //
 // A second argument, `untracked`, makes X and Y with MTLResourceHazardTrackingModeUntracked, so
 // only the fence orders `w` after `u` (Metal tracks a tracked buffer's writes across command
@@ -28,8 +30,8 @@
 //
 // Each run reports whether `w` completed within the 2 s before the release, after how long, the
 // statuses of `u` and `w` then, and how many words of Y held 0x5a5a5a5a when `w` completed; then,
-// after the release, both statuses and errors and whether `w`'s GPU start came before `u`'s GPU
-// end.
+// after the release, both statuses and errors, whether `w`'s GPU start came before `u`'s GPU
+// end, and when `w`'s completed handler ran against `u`'s GPU end.
 //
 // Build and run (no cargo target needed):
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation \
@@ -86,9 +88,9 @@ int main(int argc, char **argv) {
         }
         const char *kase = argv[1];
         const char *cases[] = {"control", "control-nofence", "shared-event", "event",
-                               "behind-shared-event", "enqueue"};
+                               "behind-shared-event", "enqueue", "empty-waiter"};
         int which = -1;
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 7; i++) {
             if (strcmp(kase, cases[i]) == 0) {
                 which = i;
             }
@@ -131,7 +133,7 @@ int main(int argc, char **argv) {
                argc == 3 ? "untracked" : "tracked",
                getenv("MTL_DEBUG_LAYER") ? getenv("MTL_DEBUG_LAYER") : "unset");
         BOOL fenced = which != 1;
-        BOOL held = which >= 2;
+        BOOL held = which >= 2 && which <= 5;
         for (int run = 0; run < 3; run++) {
             id<MTLCommandQueue> qa = [device newCommandQueue];
             id<MTLCommandQueue> qb = [device newCommandQueue];
@@ -173,7 +175,9 @@ int main(int argc, char **argv) {
             if (fenced) {
                 [e waitForFence:fence];
             }
-            dispatch(e, consume, x, y);
+            if (which != 6) {
+                dispatch(e, consume, x, y);
+            }
             [e endEncoding];
             __block double w_done = 0;
             __block int w_read = -1;
@@ -225,11 +229,13 @@ int main(int argc, char **argv) {
             [u waitUntilCompleted];
             [w waitUntilCompleted];
             printf("RUN %d: final status u %ld (error %s) w %ld (error %s); u gpu %.3f..%.3f ms, "
-                   "w gpu %.3f..%.3f ms (from w's commit); w started before u ended: %s\n",
+                   "w gpu %.3f..%.3f ms (from w's commit); w started before u ended: %s; "
+                   "w's handler %.3f ms after u's GPU end\n",
                    run, (long)u.status, u.error ? u.error.localizedDescription.UTF8String : "nil",
                    (long)w.status, w.error ? w.error.localizedDescription.UTF8String : "nil",
                    u.GPUStartTime * 1e3 - t0, u.GPUEndTime * 1e3 - t0, w.GPUStartTime * 1e3 - t0,
-                   w.GPUEndTime * 1e3 - t0, w.GPUStartTime < u.GPUEndTime ? "yes" : "no");
+                   w.GPUEndTime * 1e3 - t0, w.GPUStartTime < u.GPUEndTime ? "yes" : "no",
+                   w_done - u.GPUEndTime * 1e3);
         }
         return 0;
     }
