@@ -314,6 +314,10 @@ impl OldRuntime {
                     origin(call, arg(call, 8)?)?,
                 )
             }
+            "generateMipmapsForTexture:" => {
+                let texture = self.texture(call, 0)?;
+                self.blit(id).generate_mipmaps(&texture)
+            }
             "fillBuffer:range:value:" => {
                 let buffer = self.buffer(call, 0)?;
                 let range = range(call, arg(call, 1)?)?;

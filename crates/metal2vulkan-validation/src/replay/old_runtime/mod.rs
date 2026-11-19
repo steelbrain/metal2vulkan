@@ -497,6 +497,8 @@ impl OldRuntime {
     ) -> Result<Option<(Object, Made)>, PlayError> {
         let format = |at: usize| metal::<PixelFormat>(call, uint(call, at)?);
         let kind = |at: usize| metal::<TextureType>(call, uint(call, at)?);
+        // A view's swizzle, argument 4 of the calls that take one.
+        let swizzle = || descriptors::swizzle(&Fields::arg(call, 4, &descriptors::SWIZZLE_KEYS)?);
         let at = |at: usize| -> Result<IdPlacement, PlayError> {
             Ok(IdPlacement::At(ResourceId(uint(call, at)?)))
         };
@@ -545,6 +547,24 @@ impl OldRuntime {
                     None,
                     at(4)?,
                 ),
+            "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:" => texture
+                .new_texture_view_with_swizzle(
+                    format(0)?,
+                    kind(1)?,
+                    range(call, arg(call, 2)?)?,
+                    range(call, arg(call, 3)?)?,
+                    swizzle()?,
+                ),
+            "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:resourceIndex:" => {
+                texture.new_texture_subview_with_placement(
+                    format(0)?,
+                    kind(1)?,
+                    range(call, arg(call, 2)?)?,
+                    range(call, arg(call, 3)?)?,
+                    Some(swizzle()?),
+                    at(5)?,
+                )
+            }
             _ => return Err(refuse(call, "not played on a texture")),
         };
         let view = view.map_err(failed(call))?;

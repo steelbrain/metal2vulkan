@@ -15,6 +15,9 @@
 //! - A texture its descriptor marks `outside` takes none of the program's IDs.
 //! - A Private buffer's bytes a stream holds around a dispatch go in before the dispatch, and the
 //!   bytes it leaves are compared with the stream's after.
+//! - A view made through a swizzle, by the public call and by Apple's private one at a resource
+//!   index, is sampled through it.
+//! - A blit's generated mipmaps fill a texture's levels below its first.
 //!
 //! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
 //! their own beside the stream's.
@@ -808,4 +811,181 @@ fn a_private_buffer_takes_its_bytes_before_a_dispatch_and_is_compared_after() {
         let (split, alone) = (report.split_executed[key], plain.total.executed[key]);
         assert_eq!(split, alone, "{key}");
     }
+}
+
+/// Each view through a swizzle of a 4 by 4 red `RGBA8Unorm` texture, the public call's
+/// (blue, red, one, zero) and Apple's private call's at resource index 50 (alpha, green, red,
+/// red), sampled at every pixel by `a4_pixel_fetch` (the owned fixture
+/// `engine/a4_pixel_fetch.ll`): (0, 1, 1, 0) and (1, 0, 1, 1), where the texture itself samples
+/// as (1, 0, 0, 1).
+#[test]
+fn a_view_s_swizzle_is_what_a_kernel_samples() {
+    let ll = metal2vulkan_devtools::engine_dir().join("a4_pixel_fetch.ll");
+    let library = metallib(&[MtlbFunction {
+        name: "a4_pixel_fetch",
+        type_code: 2,
+        bitcode: wrap(&metal2vulkan_devtools::llvm_assemble(&ll).unwrap()),
+        constants: Vec::new(),
+        public: Vec::new(),
+        tags: Vec::new(),
+    }]);
+    // MTLTextureSwizzle: zero 0, one 1, red 2, green 3, blue 4, alpha 5.
+    let views = [
+        (
+            "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:",
+            [4, 2, 1, 0],
+            None,
+            [0.0f32, 1.0, 1.0, 0.0],
+        ),
+        (
+            "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:resourceIndex:",
+            [5, 3, 2, 2],
+            Some(50),
+            [1.0, 0.0, 1.0, 1.0],
+        ),
+    ];
+    let sampled = |color: [f32; 4]| -> Vec<u8> {
+        let texel: Vec<u8> = color.iter().flat_map(|c| c.to_le_bytes()).collect();
+        texel.repeat(16)
+    };
+    let dir = ScratchDir::new("replay-swizzled-views").unwrap();
+    let path = written(&dir, |w| {
+        let library = w.blob(&library)?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let data = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &data, &[])?;
+        let entry = [Value::Str("a4_pixel_fetch".into())];
+        w.call("newFunctionWithName:", 3, 4, &entry, &[])?;
+        let function = [Value::Object(4)];
+        let selector = "newComputePipelineStateWithFunction:error:";
+        w.call(selector, 1, 5, &function, &[])?;
+        w.call("m2v.textureDescriptor", 0, 6, &[render_target(vec![])], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 7, &[Value::Object(6)], &[])?;
+        let args = [
+            whole(),
+            Value::Uint(0),
+            Value::Bytes([255, 0, 0, 255].repeat(16)),
+            Value::Uint(16),
+        ];
+        w.call(
+            "replaceRegion:mipmapLevel:withBytes:bytesPerRow:",
+            7,
+            0,
+            &args,
+            &[],
+        )?;
+        let one = uints(&[("location", 0), ("length", 1)]);
+        for (view, &(selector, [red, green, blue, alpha], index, _)) in (8..).zip(&views) {
+            let swizzle = uints(&[
+                ("red", red),
+                ("green", green),
+                ("blue", blue),
+                ("alpha", alpha),
+            ]);
+            let mut args = vec![
+                Value::Uint(70),
+                Value::Uint(2),
+                one.clone(),
+                one.clone(),
+                swizzle,
+            ];
+            args.extend(index.map(Value::Uint));
+            w.call(selector, 7, view, &args, &[])?;
+        }
+        for (buffer, at) in [(10, OUTPUT), (11, OUTPUT + 0x1000)] {
+            let length = [Value::Uint(256), Value::Uint(0)];
+            let at = addressed(at, 256);
+            w.call("newBufferWithLength:options:", 1, buffer, &length, &at)?;
+        }
+        w.call("commandBuffer", 2, 12, &[], &[])?;
+        w.call("computeCommandEncoder", 12, 13, &[], &[])?;
+        w.call("setComputePipelineState:", 13, 0, &[Value::Object(5)], &[])?;
+        for (view, buffer) in [(8, 10), (9, 11)] {
+            let texture = [Value::Object(view), Value::Uint(0)];
+            w.call("setTexture:atIndex:", 13, 0, &texture, &[])?;
+            let output = [Value::Object(buffer), Value::Uint(0), Value::Uint(0)];
+            w.call("setBuffer:offset:atIndex:", 13, 0, &output, &[])?;
+            let grid = uints(&[("width", 4), ("height", 4), ("depth", 1)]);
+            let args = [grid.clone(), grid];
+            w.call("dispatchThreads:threadsPerThreadgroup:", 13, 0, &args, &[])?;
+        }
+        w.call("endEncoding", 13, 0, &[], &[])?;
+        w.call("commit", 12, 0, &[], &[])?;
+        let sums = views.map(|(.., color)| Value::Bytes(Sha256::digest(sampled(color)).to_vec()));
+        let buffers = [Value::Object(10), Value::Object(11)];
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &buffers,
+            &[("sha256", Value::List(sums.to_vec()))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("swizzled-views", device, &path);
+        assert_eq!(report.checks.len(), 2);
+        for check in &report.checks {
+            assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
+        }
+    });
+}
+
+/// A blit's `generateMipmapsForTexture:` of a 4 by 4 `RGBA8Unorm` texture of three levels whose
+/// first holds one colour: a view of each level below reads back that colour in every pixel.
+#[test]
+fn a_blit_s_generated_mipmaps_fill_the_levels_below_the_first() {
+    let texel = [0x40u8, 0x80, 0xc0, 0xff];
+    let dir = ScratchDir::new("replay-mipmaps").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let levels = render_target(vec![("mipmapLevelCount", Value::Uint(3))]);
+        w.call("m2v.textureDescriptor", 0, 3, &[levels], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 4, &[Value::Object(3)], &[])?;
+        let args = [
+            whole(),
+            Value::Uint(0),
+            Value::Bytes(texel.repeat(16)),
+            Value::Uint(16),
+        ];
+        w.call(
+            "replaceRegion:mipmapLevel:withBytes:bytesPerRow:",
+            4,
+            0,
+            &args,
+            &[],
+        )?;
+        w.call("commandBuffer", 2, 5, &[], &[])?;
+        w.call("blitCommandEncoder", 5, 6, &[], &[])?;
+        w.call("generateMipmapsForTexture:", 6, 0, &[Value::Object(4)], &[])?;
+        w.call("endEncoding", 6, 0, &[], &[])?;
+        w.call("commit", 5, 0, &[], &[])?;
+        for (view, level) in [(7, 1), (8, 2)] {
+            let args = [
+                Value::Uint(70),
+                Value::Uint(2),
+                uints(&[("location", level), ("length", 1)]),
+                uints(&[("location", 0), ("length", 1)]),
+            ];
+            let selector = "newTextureViewWithPixelFormat:textureType:levels:slices:";
+            w.call(selector, 4, view, &args, &[])?;
+        }
+        let sums = [4, 1].map(|pixels| Value::Bytes(Sha256::digest(texel.repeat(pixels)).to_vec()));
+        let views = [Value::Object(7), Value::Object(8)];
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &views,
+            &[("sha256", Value::List(sums.to_vec()))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("mipmaps", device, &path);
+        assert_eq!(report.checks.len(), 2);
+        for check in &report.checks {
+            assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
+        }
+    });
 }

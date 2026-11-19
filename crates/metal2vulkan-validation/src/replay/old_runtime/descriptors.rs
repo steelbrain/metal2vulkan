@@ -45,6 +45,19 @@ pub(super) const TEXTURE_KEYS: [&str; 20] = [
     "outside",
 ];
 
+/// The keys of an `MTLTextureSwizzleChannels`.
+pub(super) const SWIZZLE_KEYS: [&str; 4] = ["red", "green", "blue", "alpha"];
+
+/// The `MTLTextureSwizzleChannels` `s` holds, each channel set.
+pub(super) fn swizzle(s: &Fields) -> Result<TextureSwizzleChannels, PlayError> {
+    Ok(TextureSwizzleChannels {
+        red: s.required("red", Fields::metal)?,
+        green: s.required("green", Fields::metal)?,
+        blue: s.required("blue", Fields::metal)?,
+        alpha: s.required("alpha", Fields::metal)?,
+    })
+}
+
 /// `f`'s properties set on `d`, in the map's order.
 pub(super) fn texture(call: &Call, f: &Fields, d: &mut TextureDescriptor) -> Result<(), PlayError> {
     if let Some(kind) = f.metal("textureType")? {
@@ -76,13 +89,8 @@ pub(super) fn texture(call: &Call, f: &Fields, d: &mut TextureDescriptor) -> Res
         let raw = (d.resource_options.raw() & !0xf0) | ((mode & 0xf) << 4);
         d.resource_options = options(call, raw)?;
     }
-    if let Some(s) = f.fields("swizzle", &["red", "green", "blue", "alpha"])? {
-        d.swizzle = TextureSwizzleChannels {
-            red: s.required("red", Fields::metal)?,
-            green: s.required("green", Fields::metal)?,
-            blue: s.required("blue", Fields::metal)?,
-            alpha: s.required("alpha", Fields::metal)?,
-        };
+    if let Some(s) = f.fields("swizzle", &SWIZZLE_KEYS)? {
+        d.swizzle = swizzle(&s)?;
     }
     if let Some(index) = f.list("resourceIndex")? {
         d.placement = placement(call, index)?;
