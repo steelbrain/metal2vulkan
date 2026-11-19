@@ -323,6 +323,14 @@ impl Retiree {
     }
 }
 
+/// What a round of the completion thread saw of the progress semaphore.
+enum Seen {
+    /// A host wait reported this value reached (0: nothing new).
+    Reached(u64),
+    /// The counter read this value, which a host wait then reported not reached.
+    Behind(u64),
+}
+
 /// Whether a host wait on `semaphore` for `value`, with a timeout of 0, reports it reached.
 pub(crate) fn reached_by_wait(
     device: &ash::Device,
@@ -372,23 +380,34 @@ pub(crate) fn run(core: Arc<Core>) {
                 retire.extend(state.flight.drain(..).map(Retiree::lost));
             }
         } else {
-            if !state.flight.is_empty() {
-                // SAFETY: the progress semaphore is the device's.
-                let read = unsafe { device.get_semaphore_counter_value(done.progress) };
+            if let (Some(front), Some(back)) = (state.flight.front(), state.flight.back()) {
                 // A retirement tells the guest its command buffer completed and lets it read
                 // what the GPU wrote, which Vulkan orders after the signal only through a host
                 // wait on it ("signal operations happening before host operations that wait on
-                // them"); the counter read states no such order. So nothing at or below the value
-                // read retires until a wait on that value, with a timeout of 0, says it is
-                // reached.
-                let due = |reached: u64| {
-                    (state.flight.front()).is_some_and(|retiree| retiree.value <= reached)
+                // them"); the counter read states no such order. So nothing retires until a wait
+                // on its value, with a timeout of 0, says it is reached. With one value pending,
+                // that wait is the one call; with more, the counter read finds the highest value
+                // reached and the wait confirms it.
+                let (front, back) = (front.value, back.value);
+                let seen = match front == back {
+                    true => reached_by_wait(device, done.progress, front)
+                        .map(|by| Seen::Reached(if by { front } else { 0 })),
+                    // SAFETY: the progress semaphore is the device's.
+                    false => unsafe { device.get_semaphore_counter_value(done.progress) }.and_then(
+                        |read| match read >= front {
+                            true => reached_by_wait(device, done.progress, read).map(|by| {
+                                if by {
+                                    Seen::Reached(read)
+                                } else {
+                                    Seen::Behind(read)
+                                }
+                            }),
+                            false => Ok(Seen::Reached(read)),
+                        },
+                    ),
                 };
-                match read.and_then(|reached| match due(reached) {
-                    true => reached_by_wait(device, done.progress, reached).map(|by| (reached, by)),
-                    false => Ok((reached, true)),
-                }) {
-                    Ok((reached, true)) => {
+                match seen {
+                    Ok(Seen::Reached(reached)) => {
                         behind = None;
                         // Before the submit thread's mark is read (`Work::completed`).
                         done.completed.fetch_max(reached, Ordering::SeqCst);
@@ -400,9 +419,9 @@ pub(crate) fn run(core: Arc<Core>) {
                             retire.extend(state.flight.pop_front());
                         }
                     }
-                    Ok((reached, false)) => {
+                    Ok(Seen::Behind(read)) => {
                         // Nothing retires this round: the thread waits for the value again.
-                        behind = Some(reached);
+                        behind = Some(read);
                         core.counters.count(Metric::WaitsBehindCounter);
                     }
                     Err(_) => {
