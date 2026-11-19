@@ -5,6 +5,7 @@
 //! M4).
 
 use super::*;
+use crate::device::requirements::VkFeature;
 use crate::float16::{f16_bits_to_f32, f32_to_f16_bits};
 use crate::pipeline::sym::ResourceKind;
 use crate::spirv::interp::{run, Buffer, Config, Resources};
@@ -206,8 +207,13 @@ fn control(domain: PatchDomain, partition: Partition, max_factor: u32) -> Contro
         push_offset: 0,
         control_points: 0,
         index_type: IndexType::None,
+        addressed: false,
     }
 }
+
+/// The device address of the factors in the address form's runs: past 2^32, so a read that
+/// dropped the high word would miss them.
+const FACTORS: u64 = 0x0000_0012_3450_0000;
 
 /// The factor buffer's words for `patches` patches of `halves` each, packed from `offset`
 /// bytes, each patch `Control::factor_bytes` apart.
@@ -226,7 +232,8 @@ fn pack(domain: PatchDomain, offset: u32, patches: &[Vec<u16>]) -> Vec<u32> {
 
 /// The levels [`levels`] computes for patches `0..patches` of instances `0..instances` with
 /// `factors` bound and `push` (residual offset, instance stride, scale) pushed: per invocation,
-/// the outer levels then the inner ones, as `float`s.
+/// the outer levels then the inner ones, as `float`s. In the address form the factors are at
+/// [`FACTORS`], and the pushed address is it plus the offset.
 fn run_levels(
     c: &Control,
     factors: &[u32],
@@ -258,15 +265,26 @@ fn run_levels(
         }))
     });
     let mut push_bytes = vec![0u8; c.push_offset as usize];
-    push_bytes.extend(push.0.to_le_bytes());
-    push_bytes.extend(push.1.to_le_bytes());
-    push_bytes.extend(push.2.to_bits().to_le_bytes());
-    push_bytes.extend([0; 12]);
+    let (slot, address) = match c.addressed {
+        false => {
+            push_bytes.extend(push.0.to_le_bytes());
+            push_bytes.extend(push.1.to_le_bytes());
+            push_bytes.extend(push.2.to_bits().to_le_bytes());
+            push_bytes.extend([0; 12]);
+            (Some(FACTOR_SLOT), None)
+        }
+        true => {
+            push_bytes.extend((FACTORS + u64::from(push.0)).to_le_bytes());
+            push_bytes.extend(push.1.to_le_bytes());
+            push_bytes.extend(push.2.to_bits().to_le_bytes());
+            (None, Some(FACTORS))
+        }
+    };
     let res = Resources {
         buffers: vec![
             Buffer {
-                slot: Some(FACTOR_SLOT),
-                address: None,
+                slot,
+                address,
                 bytes: le_words(factors),
             },
             Buffer {
@@ -602,6 +620,149 @@ fn factors_at_an_even_byte_are_read_from_it() {
             }
         }
     }
+}
+
+/// The levels of `c`'s address form (its push offset rounded up to 8, the address's alignment)
+/// for the same factors and push as [`run_levels`] gives its bound form, which they must equal.
+fn run_both(
+    c: &Control,
+    factors: &[u32],
+    push: (u32, u32, f32),
+    patches: u32,
+    instances: u32,
+) -> Vec<Vec<f32>> {
+    let bound = run_levels(c, factors, push, patches, instances);
+    let mut a = *c;
+    a.addressed = true;
+    a.push_offset = c.push_offset.next_multiple_of(8);
+    let addressed = run_levels(&a, factors, push, patches, instances);
+    assert_eq!(addressed, bound, "{c:?}");
+    addressed
+}
+
+/// The address form reads the factors the bound form reads, at the same bytes, under the same
+/// rules: every factor class under each partition and a scale, each step function at offsets and
+/// instance strides at a multiple of 4 and 2 past one, both domains, from an address past 2^32.
+#[test]
+fn the_address_form_reads_what_the_bound_form_reads() {
+    let mut values: Vec<u16> = (0..32u16)
+        .flat_map(|e| [0, 1, 0x200, 0x3ff].map(move |m| (e << 10) | m))
+        .chain((0..0x8000).step_by(97))
+        .collect();
+    values.sort_unstable();
+    values.dedup();
+    let patches: Vec<Vec<u16>> = values
+        .iter()
+        .map(|&x| vec![x, h(4.0), h(4.0), h(4.0), x, x | 0x8000])
+        .collect();
+    let factors = pack(PatchDomain::Quad, 0, &patches);
+    for (partition, max, scale) in [
+        (Partition::Pow2, 16, Some(0.5)),
+        (Partition::Integer, 64, None),
+        (Partition::FractionalOdd, 64, None),
+        (Partition::FractionalOdd, 64, Some(3.0)),
+        (Partition::FractionalEven, 8, Some(1024.0)),
+    ] {
+        let mut c = control(PatchDomain::Quad, partition, max);
+        c.scale_enabled = scale.is_some();
+        let scale = scale.unwrap_or(1.0);
+        let got = run_both(&c, &factors, (0, 0, scale), patches.len() as u32, 1);
+        for (p, row) in patches.iter().zip(&got) {
+            assert_eq!(row, &expect(&c, p, scale), "{partition:?}: {:#06x}", p[0]);
+        }
+    }
+    let bytes: Vec<u8> = (0..48u16)
+        .flat_map(|j| h(1.0 + f32::from(j)).to_le_bytes())
+        .collect();
+    let factors = words_of(&bytes);
+    for domain in [PatchDomain::Triangle, PatchDomain::Quad] {
+        for (offset, stride) in [(2u32, 2u32), (6, 30), (0, 26), (4, 2), (10, 0)] {
+            for step in [
+                Step::Constant,
+                Step::PerPatch,
+                Step::PerInstance,
+                Step::PerPatchAndPerInstance,
+            ] {
+                let mut c = control(domain, Partition::FractionalOdd, 64);
+                c.step = step;
+                c.push_offset = 20;
+                run_both(&c, &factors, (offset, stride, 1.0), 2, 2);
+            }
+        }
+    }
+}
+
+/// The address form's push fields: the address at the stage's offset, a `u64`, and the stride and
+/// the scale where the stage reads them; its push range ends at the last.
+#[test]
+fn the_address_form_pushes_the_address_and_what_it_reads() {
+    use crate::pipeline::sym::PushField as F;
+    for (step, scale, fields, bytes) in [
+        (
+            Step::PerPatch,
+            false,
+            vec![(F::TessellationFactorAddress, 0)],
+            8,
+        ),
+        (
+            Step::Constant,
+            true,
+            vec![
+                (F::TessellationFactorAddress, 0),
+                (F::TessellationFactorScale, 12),
+            ],
+            16,
+        ),
+        (
+            Step::PerInstance,
+            false,
+            vec![
+                (F::TessellationFactorAddress, 0),
+                (F::TessellationFactorInstanceStride, 8),
+            ],
+            12,
+        ),
+    ] {
+        assert_eq!(address_fields(step, scale), fields, "{step:?} {scale}");
+        assert_eq!(Control::push_bytes(true, step, scale), (bytes, 8));
+        assert_eq!(Control::push_bytes(false, step, scale), (PUSH_BYTES, 4));
+    }
+}
+
+/// In the address form the patch index is the patch's position: the form binds no patch index
+/// buffer.
+#[test]
+fn the_address_form_s_patch_index_is_the_position() {
+    let mut c = control(PatchDomain::Triangle, Partition::Integer, 64);
+    c.addressed = true;
+    let m = kernel(move |mb| {
+        let src = declare_sources(mb, &c)?;
+        assert!(src.factors.is_none() && src.patch_indices.is_none());
+        let out = out_buffer(mb)?;
+        Ok(Box::new(move |fb: &mut FunctionBuilder<'_>| {
+            let position = global_id(fb, 0)?;
+            let patch = patch_index(fb, &src, position)?;
+            let f32_ = float(fb)?;
+            let as_float = fb.convert(ConvOp::Bitcast, patch, f32_)?;
+            store(fb, out, position, as_float)
+        }))
+    });
+    let res = Resources {
+        buffers: vec![Buffer {
+            slot: Some(out_slot()),
+            address: None,
+            bytes: vec![0; 16],
+        }],
+        push: vec![0; 8],
+        ..Resources::default()
+    };
+    let cfg = Config {
+        workgroups: [4, 1, 1],
+        step_limit: u64::MAX,
+        ..Config::default()
+    };
+    let o = run(&m, &cfg, res).expect("run");
+    assert_eq!(words_of(&o.buffers[0]), [0, 1, 2, 3]);
 }
 
 /// The patch index of each position `0..positions` with `indices` bound as the patch index
@@ -969,9 +1130,24 @@ fn the_synthesized_stages_pass_l3() {
                         push_offset: 64,
                         control_points,
                         index_type,
+                        addressed: false,
                     };
                     crate::spirv::testing::check_valid(control_module(&c).expect("control"), p)
                         .unwrap_or_else(|e| panic!("{stem} {c:?}: {e}"));
+                    // The address form, on a profile with device addresses and 64-bit integers,
+                    // without a control-point index type, which it does not implement.
+                    let enabled = &p.fields().enabled.features;
+                    if index_type == IndexType::None
+                        && enabled.contains(&VkFeature::BufferDeviceAddress)
+                        && enabled.contains(&VkFeature::ShaderInt64)
+                    {
+                        let c = Control {
+                            addressed: true,
+                            ..c
+                        };
+                        crate::spirv::testing::check_valid(control_module(&c).expect("control"), p)
+                            .unwrap_or_else(|e| panic!("{stem} {c:?}: {e}"));
+                    }
                 }
             }
         }

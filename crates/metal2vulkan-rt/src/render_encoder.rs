@@ -369,6 +369,8 @@ enum Call<'a> {
         indices: IndexBuffer<'a>,
         base_vertex: i32,
     },
+    /// A draw of patches: each patch one vertex of a patch list, at its position.
+    Patches { patch_start: u32, patch_count: u32 },
 }
 
 /// `MTLRenderCommandEncoder`: one dynamic rendering into its pass's attachments, begun as the
@@ -385,11 +387,14 @@ enum Call<'a> {
 /// and sampler states, one viewport and scissor rectangle, the cull mode, the front-facing
 /// winding, a depth-stencil state's depth and stencil tests, the depth bias without a clamp, the
 /// stencil references, the blend color, the store actions an encoder sets for an attachment whose
-/// pass left them unknown, memory barriers, fences, and direct draws of lines and triangles,
-/// indexed or not. Not built, and so not methods: indirect draws, several viewports or scissor
-/// rectangles, the triangle fill mode, the depth clip mode, visibility results, `useResource:`,
-/// the store action options setters, tile functions and the
-/// `setVertexBuffer:offset:attributeStride:atIndex:` family. A draw of what the runtime does not
+/// pass left them unknown, memory barriers, fences, direct draws of lines and triangles,
+/// indexed or not, and direct draws of patches with a tessellation factor buffer. Not built, and
+/// so not methods: indirect draws, several viewports or scissor rectangles, the triangle fill
+/// mode, the depth clip mode, visibility results, `useResource:`, the store action options
+/// setters, tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
+/// `setTessellationFactorScale:` (read by a pipeline that enables the scale, which is refused),
+/// and indexed patch draws (`drawIndexedPatches:`, read by a pipeline of a control-point index
+/// type, which is refused). A draw of what the runtime does not
 /// build is [`Gap::Draw`], naming its [`DrawKind`].
 ///
 /// Owned: one thread encodes at a time. Dropping it ends it, as
@@ -409,6 +414,8 @@ pub struct RenderCommandEncoder {
     tables: [Tables; 2],
     /// The state set, borrowed from what the command buffer keeps (`crate::kept`).
     pipeline: Option<Lent<RenderPipelineState>>,
+    /// The tessellation factor buffer and its offset, borrowed likewise.
+    factors: Option<(Lent<Buffer>, u64)>,
     /// Whether the pipeline state renders into the pass's attachments' formats.
     renders_into: bool,
     /// The depth-stencil state's tests, Metal's default state's where none is set.
@@ -489,6 +496,7 @@ impl CommandBuffer {
                     command,
                     tables: [Tables::new(), Tables::new()],
                     pipeline: None,
+                    factors: None,
                     renders_into: false,
                     tests: Tests::of(&DepthStencilDescriptor::default()),
                     viewport: Viewport {
@@ -1409,7 +1417,12 @@ impl RenderCommandEncoder {
             vertex_start,
             vertex_count,
         };
-        self.draw(primitive_type, call, instance_count, base_instance)
+        self.draw(
+            primitives(primitive_type)?,
+            call,
+            instance_count,
+            base_instance,
+        )
     }
 
     /// `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:`
@@ -1436,12 +1449,95 @@ impl RenderCommandEncoder {
             indices,
             base_vertex,
         };
-        self.draw(primitive_type, call, instance_count, base_instance)
+        self.draw(
+            primitives(primitive_type)?,
+            call,
+            instance_count,
+            base_instance,
+        )
     }
 
+    /// `setTessellationFactorBuffer:offset:instanceStride:`. `None` unbinds it. A draw of
+    /// patches pushes the buffer's address plus `offset`, from which the pipeline state's control
+    /// stage reads each patch's factors; `instance_stride` is read only under a per-instance
+    /// factor step function, which the runtime refuses
+    /// ([`RenderPipelineKind::Tessellation`](crate::RenderPipelineKind::Tessellation)). The
+    /// command buffer keeps the buffer until it retires. An offset 2 past a multiple of 4, which
+    /// Metal's validation refuses, is read at that byte, as plain Metal reads it.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's buffer;
+    /// [`Refusal::TessellationFactorOffset`] for factors at an odd byte.
+    pub fn set_tessellation_factor_buffer(
+        &mut self,
+        buffer: Option<&Buffer>,
+        offset: u64,
+        instance_stride: u64,
+    ) -> Result<(), Error> {
+        let _ = instance_stride;
+        let factors = match buffer {
+            Some(buffer) => {
+                if let Some((held, at)) = &self.factors {
+                    if held.address() == buffer.address() && *at == offset {
+                        return Ok(());
+                    }
+                }
+                let building = self.building();
+                if !buffer.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                if buffer.gpu_address().wrapping_add(offset) % 2 != 0 {
+                    return Err(Error::Refused(Refusal::TessellationFactorOffset { offset }));
+                }
+                // SAFETY: the encoder holds the borrow, and it ends before its command buffer
+                // commits.
+                Some((unsafe { building.lend_buffer(buffer) }, offset))
+            }
+            None => None,
+        };
+        self.factors = factors;
+        self.changed();
+        Ok(())
+    }
+
+    /// `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:`
+    /// (the shorter form is this call with one instance and base instance 0), with a pipeline
+    /// state whose vertex function is post-tessellation: one `vkCmdDraw` of `patch_count` patches
+    /// from `patch_start`, each one vertex of the state's patch list. The pipeline's control stage
+    /// reads each patch's factors from the tessellation factor buffer, which counts as a read.
+    /// `number_of_patch_control_points` does not change the draw: the function's own
+    /// `[[patch(_, N)]]` count is what Metal draws, whatever the draw names. A draw of no patches
+    /// or no instances records nothing.
+    ///
+    /// Err: as [`draw_primitives`](Self::draw_primitives); [`Refusal::PatchDraw`] for a state
+    /// whose vertex function is not post-tessellation; [`Refusal::NoTessellationFactorBuffer`];
+    /// [`Gap::Draw`] of [`DrawKind::PatchIndexBuffer`] for a patch index buffer.
+    pub fn draw_patches(
+        &mut self,
+        number_of_patch_control_points: u32,
+        patch_start: u32,
+        patch_count: u32,
+        patch_index_buffer: Option<(&Buffer, u64)>,
+        instance_count: u32,
+        base_instance: u32,
+    ) -> Result<(), Error> {
+        let _ = number_of_patch_control_points;
+        if patch_index_buffer.is_some() {
+            return Err(Error::Unsupported(Gap::Draw {
+                kind: DrawKind::PatchIndexBuffer,
+            }));
+        }
+        let call = Call::Patches {
+            patch_start,
+            patch_count,
+        };
+        let patches = (vk::PrimitiveTopology::PATCH_LIST, false);
+        self.draw(patches, call, instance_count, base_instance)
+    }
+
+    /// A draw of `call` at `topology`, with primitive restart or not.
     fn draw(
         &mut self,
-        primitive_type: PrimitiveType,
+        (topology, restart): (vk::PrimitiveTopology, bool),
         call: Call<'_>,
         instance_count: u32,
         base_instance: u32,
@@ -1452,20 +1548,22 @@ impl RenderCommandEncoder {
         let compiled = &state.inner.compiled;
         let draws = &compiled.draws;
         let gap = |kind| Err(Error::Unsupported(Gap::Draw { kind }));
+        let patches = draws.patches;
+        if patches != matches!(call, Call::Patches { .. }) {
+            return Err(Error::Refused(Refusal::PatchDraw));
+        }
+        if patches && self.factors.is_none() {
+            return Err(Error::Refused(Refusal::NoTessellationFactorBuffer));
+        }
         if !self.renders_into {
             return gap(DrawKind::AttachmentFormats);
-        }
-        let (topology, restart) = input_assembly(primitive_type);
-        let topology = vk::PrimitiveTopology::from_raw(topology.as_raw());
-        if topology == vk::PrimitiveTopology::POINT_LIST {
-            return gap(DrawKind::Points);
         }
         if self.tests.stencil && self.pass.stencil.is_none() {
             return Err(Error::Refused(Refusal::StencilAttachment));
         }
         // The index buffer: its `VkBuffer`, the offset there, and the index type.
         let index = match call {
-            Call::Direct { .. } => None,
+            Call::Direct { .. } | Call::Patches { .. } => None,
             Call::Indexed {
                 index_count,
                 indices:
@@ -1531,6 +1629,7 @@ impl RenderCommandEncoder {
         let count = match call {
             Call::Direct { vertex_count, .. } => vertex_count,
             Call::Indexed { index_count, .. } => index_count,
+            Call::Patches { patch_count, .. } => patch_count,
         };
         if count == 0 || instance_count == 0 {
             return Ok(());
@@ -1546,9 +1645,12 @@ impl RenderCommandEncoder {
         // texture, a Managed buffer's device copy or a texture over one, or textures over a buffer
         // in an image of their own while any lives (`crate::over`).
         let index_buffer = index.map(|(buffer, ..)| buffer);
+        // A patch draw's factor buffer is its read as an index buffer is an indexed draw's.
+        let factors = (self.factors.as_ref()).filter(|_| patches);
         let each = reads.is_some()
             || self.facts.managed
             || index_buffer.is_some_and(|buffer| buffer.managed_overs().is_some())
+            || factors.is_some_and(|(buffer, _)| buffer.managed_overs().is_some())
             || building.copies_over();
         match each {
             true => self.draw_reaches(reads, index_buffer)?,
@@ -1573,9 +1675,12 @@ impl RenderCommandEncoder {
         let (bind, first) = building.bind_graphics(pipeline);
         if !self.push_filled {
             if let Some(state) = &self.pipeline {
+                let factors = (self.factors.as_ref()).map_or(0, |(buffer, offset)| {
+                    buffer.gpu_address().wrapping_add(*offset)
+                });
                 fill_push(
                     &mut self.push,
-                    (&self.tables, self.facts.nil),
+                    (&self.tables, self.facts.nil, factors),
                     &self.moved,
                     &self.shadow_slots,
                     state,
@@ -1653,6 +1758,19 @@ impl RenderCommandEncoder {
                     vertex_count,
                     instance_count,
                     vertex_start,
+                    base_instance,
+                ),
+                (
+                    Call::Patches {
+                        patch_start,
+                        patch_count,
+                    },
+                    _,
+                ) => device.cmd_draw(
+                    command,
+                    patch_count,
+                    instance_count,
+                    patch_start,
                     base_instance,
                 ),
                 (Call::Indexed { .. }, None) => {}
@@ -1742,7 +1860,8 @@ impl RenderCommandEncoder {
     /// hold copied; then the copies it needs first, its textures over a buffer in an image of
     /// their own (`crate::over`) and the textures over a Managed buffer's device copy it reaches
     /// (`crate::over::ManagedOvers`), each recorded between the rendering's end and its new
-    /// beginning. `index` is its index buffer.
+    /// beginning. `index` is its index buffer; a patch draw reads the tessellation factor buffer
+    /// as such.
     fn draw_reaches(
         &mut self,
         reads: Option<AttachmentReads>,
@@ -1776,11 +1895,15 @@ impl RenderCommandEncoder {
         };
         let draws = &state.inner.compiled.draws;
         let tables = &self.tables;
+        let factors = (self.factors.as_ref())
+            .filter(|_| draws.patches)
+            .map(|(buffer, _)| &**buffer);
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
         let vertex_reads = (draws.bindings.iter())
             .filter_map(|&(_, index)| tables[VERTEX].buffer(index))
-            .chain(index);
+            .chain(index)
+            .chain(factors);
         let accesses: Vec<(u32, Access)> = match building.copies_over() {
             false => Vec::new(),
             true => (draws.buffers.iter())
@@ -2072,9 +2195,23 @@ impl Drop for RenderCommandEncoder {
 /// nothing taking `nil`, the nil buffer's address: a texture whose image the pass `moved` to the
 /// feedback layout reads through its second element in that layout, and one in `shadow_slots`,
 /// which reads a shadow, through its second element, the shadow's.
+/// The topology of a draw of `primitive_type`, and whether it restarts strips.
+///
+/// Err: [`Gap::Draw`] of [`DrawKind::Points`].
+fn primitives(primitive_type: PrimitiveType) -> Result<(vk::PrimitiveTopology, bool), Error> {
+    let (topology, restart) = input_assembly(primitive_type);
+    let topology = vk::PrimitiveTopology::from_raw(topology.as_raw());
+    if topology == vk::PrimitiveTopology::POINT_LIST {
+        return Err(Error::Unsupported(Gap::Draw {
+            kind: DrawKind::Points,
+        }));
+    }
+    Ok((topology, restart))
+}
+
 fn fill_push(
     push: &mut Vec<u8>,
-    (tables, nil): (&[Tables; 2], u64),
+    (tables, nil, factors): (&[Tables; 2], u64, u64),
     moved: &[Moved],
     shadow_slots: &[(usize, u32)],
     state: &RenderPipelineState,
@@ -2118,6 +2255,10 @@ fn fill_push(
             FieldValue::ConstexprSampler(place) => {
                 let index = ids.get(place).copied().unwrap_or(0);
                 push[at..at + 4].copy_from_slice(&index.to_le_bytes());
+            }
+            FieldValue::Word(word) => push[at..at + 4].copy_from_slice(&word.to_le_bytes()),
+            FieldValue::TessellationFactors => {
+                push[at..at + 8].copy_from_slice(&factors.to_le_bytes());
             }
             // A render content has no dispatch or stage-in region (`render::draws`).
             FieldValue::DispatchRegion | FieldValue::StageInRegion => {}

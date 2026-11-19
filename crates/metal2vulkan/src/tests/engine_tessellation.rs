@@ -1832,3 +1832,132 @@ fn an_emulated_pipeline_reads_the_primitive_id_from_the_patch_position() {
         }
     }
 }
+
+/// Under the identity domains (`Device::from_queries`' profile), a tessellation pipeline's control
+/// stage reads the factors through their address: the layout binds nothing, the interface states
+/// `PushField::TessellationFactorAddress` as a vertex-stage placement at the tessellation state's
+/// push offset (a multiple of 8, past the functions' fields), the evaluation stage reaches its
+/// pulled buffers through their pushed addresses with their strides, and every module passes L3,
+/// on each committed profile with `tessellationShader`, `bufferDeviceAddress` and `shaderInt64`.
+/// The stream's state (`fractionalOdd`, maximum 64, per patch, counter-clockwise) and Metal's
+/// defaults compile; a control-point index type is not implemented in this form.
+#[test]
+fn under_the_identity_domains_the_control_stage_reads_the_factors_by_address() {
+    use crate::device::{HandleDomain, PointerDomain};
+    use crate::pipeline::interface::PushLoc;
+    use crate::pipeline::sym::{SlotClass, SlotRef};
+    let Some(bc) = fixture() else { return };
+    let Some(fragments) = assemble_text("fragments", FRAGMENTS) else {
+        return;
+    };
+    let policy = DevicePolicy {
+        pointer_domain: PointerDomain::Identity,
+        handle_domain: HandleDomain::Identity,
+        ..DevicePolicy::default()
+    };
+    let streamed = TessellationDescriptor {
+        partition_mode: TessellationPartitionMode::FractionalOdd,
+        max_tessellation_factor: 64,
+        factor_step_function: TessellationFactorStepFunction::PerPatch,
+        output_winding_order: Winding::CounterClockwise,
+        ..Default::default()
+    };
+    let mut tried = 0;
+    for (stem, p) in committed_profiles().expect("committed profiles") {
+        let enabled = &p.fields().enabled.features;
+        if !p.fields().fragment.tessellation_shader
+            || !enabled.contains(&VkFeature::BufferDeviceAddress)
+            || !enabled.contains(&VkFeature::ShaderInt64)
+        {
+            continue;
+        }
+        let desc = crate::pipeline::testing::description(&stem).unwrap_or_else(|e| panic!("{e}"));
+        let dev = Device::from_queries(desc, policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        tried += 1;
+        for t in [streamed, TessellationDescriptor::default()] {
+            let d = tessellation_pipeline(
+                &bc,
+                &fragments,
+                "tess_triangle_points",
+                Some("tess_fragment"),
+                Some(t),
+            );
+            let p = (dev.compile_render_pipeline(&d, &Budget::standard()))
+                .unwrap_or_else(|e| panic!("{stem} {t:?}: {e}"));
+            assert!(
+                p.layout.sets.iter().all(|s| s.bindings.is_empty()),
+                "{stem}: no descriptor"
+            );
+            let ts = p.graphics.tessellation.expect("tessellation state");
+            assert_eq!(ts.push_offset % 8, 0, "{stem}");
+            let control: Vec<_> = (p.interface.push.iter())
+                .filter(|pl| {
+                    (pl.fields.iter()).any(|f| f.field == PushField::TessellationFactorAddress)
+                })
+                .collect();
+            let [control] = control.as_slice() else {
+                panic!("{stem}: one placement of the factors' address: {control:?}");
+            };
+            assert_eq!(control.stage, Stage::Vertex, "{stem}");
+            assert_eq!(control.push_range, Some((ts.push_offset, 8)), "{stem}");
+            let fields: Vec<_> = control.fields.iter().map(|f| (f.field, f.loc)).collect();
+            assert_eq!(
+                fields,
+                [(
+                    PushField::TessellationFactorAddress,
+                    PushLoc::Push {
+                        offset: ts.push_offset
+                    }
+                )],
+                "{stem}"
+            );
+            let vertex = &p.interface.push[0];
+            let end = vertex.push_range.map_or(0, |(o, s)| o + s);
+            assert!(ts.push_offset >= end, "{stem}: past the functions' fields");
+            let slot = |index| SlotRef {
+                stage: Stage::Vertex,
+                class: SlotClass::Buffer,
+                index,
+            };
+            let pushed: Vec<PushField> = vertex.fields.iter().map(|f| f.field).collect();
+            for field in [
+                PushField::SlotGuestBase(slot(0)),
+                PushField::SlotGuestBase(slot(1)),
+                PushField::VertexBufferStride(0),
+                PushField::VertexBufferStride(1),
+            ] {
+                assert!(pushed.contains(&field), "{stem}: {field:?} in {pushed:?}");
+            }
+            assert!(
+                !(pushed.iter()).any(|f| matches!(f, PushField::SlotBindOffset(_))),
+                "{stem}: {pushed:?}"
+            );
+            for m in &p.stages {
+                check_words_valid(&m.spirv, &p.requirements, dev.profile())
+                    .unwrap_or_else(|e| panic!("{stem} {:?}: L3: {e}", m.stage));
+            }
+        }
+        let indexed = TessellationDescriptor {
+            control_point_index_type: TessellationControlPointIndexType::UInt32,
+            ..streamed
+        };
+        let d = tessellation_pipeline(
+            &bc,
+            &fragments,
+            "tess_triangle_points",
+            Some("tess_fragment"),
+            Some(indexed),
+        );
+        match dev.compile_render_pipeline(&d, &Budget::standard()) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(u.feature, Feature::Tessellation, "{stem}");
+                assert_eq!(u.needs, Needs::NotImplemented, "{stem}");
+            }
+            other => panic!("{stem}: {:?}", other.map(|_| ())),
+        }
+    }
+    assert!(
+        tried > 0,
+        "a committed profile has the identity domains' features"
+    );
+}

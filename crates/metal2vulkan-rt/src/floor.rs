@@ -316,6 +316,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // requires both of every graphics device.
     feature!(core.independent_blend => IndependentBlend),
     feature!(core.fragment_stores_and_atomics => FragmentStoresAndAtomics),
+    // A render pipeline of a post-tessellation vertex function draws its patches through the
+    // device's tessellator: a synthesized control stage reads each patch's factors through their
+    // address, and the function is the evaluation stage. A device without it is below the floor.
+    feature!(core.tessellation_shader => TessellationShader),
     // What Vulkan 1.1 to 1.3 require of every device and the translator's shaders use where they
     // are enabled: multiview, subgroup operations on 8-, 16- and 64-bit values, a fragment's
     // demotion to a helper and its termination, and workgroup memory zeroed at its declaration.

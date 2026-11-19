@@ -228,6 +228,20 @@ pub enum Refusal {
     /// Basis: metal-documented (a compute dispatch needs a compute pipeline state set first, and a
     /// draw a render pipeline state).
     NoPipeline,
+    /// A draw of patches with a render pipeline state whose vertex function is not a
+    /// post-tessellation one, or a draw of primitives with one whose vertex function is.
+    ///
+    /// Basis: metal-measured (an M4: plain Metal stops its process over a patch draw with a
+    /// pipeline that is not a tessellation one, its validation off; Metal's validation stops a
+    /// draw of primitives with a tessellation pipeline).
+    PatchDraw,
+    /// A draw of patches while the encoder has no tessellation factor buffer
+    /// (`setTessellationFactorBuffer:offset:instanceStride:`).
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal ends the process, SIGSEGV,
+    /// at a quad patch draw with no tessellation factor buffer, where the same draw with one set
+    /// runs and paints the target, the API validation layer off).
+    NoTessellationFactorBuffer,
     /// A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`,
     /// `setBufferOffset`, `setThreadgroupMemoryLength`).
     ///
@@ -1013,8 +1027,12 @@ pub enum RenderPipelineKind {
     SampleCount,
     /// Vertex amplification (`maxVertexAmplificationCount` above 1).
     VertexAmplification,
-    /// A post-tessellation vertex function. A descriptor's tessellation state with any other
-    /// vertex function is ignored, as Metal ignores it.
+    /// A post-tessellation vertex function's tessellation state that the runtime does not build:
+    /// a per-instance factor step function (`MTLTessellationFactorStepFunctionPerInstance` or
+    /// `PerPatchAndPerInstance`) or an enabled factor scale (`tessellationFactorScaleEnabled`),
+    /// which no replay stream's states use. The translator refuses a control-point index type
+    /// (`tessellationControlPointIndexType`) itself. A descriptor's tessellation state with a vertex
+    /// function that is not post-tessellation is ignored, as Metal ignores it.
     Tessellation,
     /// Stages the translator synthesizes beside the functions' but a tessellation's: geometry
     /// stages, lines drawn as bands of triangles, a rate map's fan-out, or mesh records.
@@ -1079,6 +1097,10 @@ pub enum DrawKind {
     /// (VUID-vkCmdDraw-pNext-09461). Metal counts the step from any base instance. The same
     /// draw from base instance 0 runs.
     DividedBaseInstance,
+    /// A draw of patches through a patch index buffer (`drawPatches:`'s `patchIndexBuffer`), which
+    /// no replay stream's patch draws name: the control stage takes each patch's index from its
+    /// position.
+    PatchIndexBuffer,
 }
 
 /// What a render pass asks that the runtime does not build ([`Gap::RenderPass`]).
@@ -1357,6 +1379,13 @@ impl fmt::Display for Refusal {
             }
             Refusal::EncoderOpen => f.write_str("an encoder of the command buffer is open"),
             Refusal::NoPipeline => f.write_str("no pipeline state is set"),
+            Refusal::PatchDraw => f.write_str(
+                "patches are drawn with a post-tessellation vertex function's pipeline state, and \
+                 only with one",
+            ),
+            Refusal::NoTessellationFactorBuffer => {
+                f.write_str("a draw of patches needs a tessellation factor buffer")
+            }
             Refusal::BufferIndex { index } => {
                 write!(f, "buffer index {index} is past the 31 entries")
             }

@@ -522,6 +522,13 @@ pub(crate) enum FieldValue {
     /// The compute encoder's stage-in region (`setStageInRegion:`), 32 bytes read as two
     /// `uvec4`: its origin and its size, each with a zero `w`.
     StageInRegion,
+    /// A `u32` the content fixes: a post-tessellation vertex function's pulled layout's stride,
+    /// the descriptor's.
+    Word(u32),
+    /// A `u64`: the address of the render encoder's tessellation factor buffer plus its offset
+    /// (`setTessellationFactorBuffer:offset:instanceStride:`), which a post-tessellation vertex
+    /// function's control stage reads each patch's factors from.
+    TessellationFactors,
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the

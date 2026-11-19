@@ -35,6 +35,15 @@
 //! compiles; a point or line class's comes with the draws, made by the first draw of that class.
 //! The cost: a content drawn only as lines or points makes a triangle `VkPipeline` it never uses
 //! (8 contents of the 537). The replay streams draw no points: a draw of points is refused.
+//!
+//! A content whose vertex function is post-tessellation draws patches alone, so its one
+//! `VkPipeline` is the patch class's, made with the state: the translator's synthesized vertex and
+//! control stages, the function as the evaluation stage, and a `PATCH_LIST` of one control point
+//! per patch. Its control stage reads each patch's factors through their address, which a draw
+//! pushes ([`FieldValue::TessellationFactors`]); the evaluation stage reaches its control points'
+//! and patches' buffers through their pushed addresses, at the strides of the descriptor's layouts
+//! ([`FieldValue::Word`]). A per-instance factor step function and an enabled factor scale, which
+//! the replay streams' states never use, are refused ([`RenderPipelineKind::Tessellation`]).
 
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
@@ -112,6 +121,9 @@ pub(crate) struct Draws {
     /// Whether a draw must be at base instance 0: a binding has a divisor other than 1 and the
     /// device does not report `supportsNonZeroFirstInstance` (VUID-vkCmdDraw-pNext-09461).
     pub(crate) first_instance_zero: bool,
+    /// Whether the vertex function is post-tessellation: the content draws patches alone, through
+    /// its patch-class `VkPipeline`, and reads the encoder's tessellation factor buffer.
+    pub(crate) patches: bool,
 }
 
 /// The state Vulkan 1.3 lets a draw set, which every render `VkPipeline` takes as dynamic.
@@ -143,8 +155,9 @@ pub(crate) struct RenderCompiled {
     stages: Vec<Module>,
     /// The fixed-function state every `VkPipeline` of the content takes.
     fixed: Fixed,
-    /// The triangle class's `VkPipeline`, made with the content.
-    triangles: vk::Pipeline,
+    /// The `VkPipeline` made with the content: the triangle class's, or a post-tessellation vertex
+    /// function's patch class's, its only one.
+    primary: vk::Pipeline,
     /// The line class's, made by the first draw of lines; null until then.
     lines: Mutex<vk::Pipeline>,
     /// The translator's notes of where the pipeline's answers may differ from Metal's.
@@ -183,6 +196,9 @@ struct Fixed {
     blends: Vec<vk::PipelineColorBlendAttachmentState>,
     /// Each colour attachment's format by Metal index, `UNDEFINED` for an absent one.
     colors: Vec<vk::Format>,
+    /// A patch list's control points per patch (`patchControlPoints`), 0 but for a
+    /// post-tessellation vertex function's content.
+    patch_control_points: u32,
     /// The depth and the stencil attachment's formats, `UNDEFINED` for none.
     depth: vk::Format,
     stencil: vk::Format,
@@ -324,6 +340,10 @@ fn draws(
             RuntimeFact::BaseVertexInstance => {}
             // A colour moved into a storage form, which the runtime never moves.
             RuntimeFact::MovableStorageWrites { .. } => {}
+            // A post-tessellation function's pulled attributes and their layouts' strides: the
+            // content's own descriptor, whose projection link checked. A stride set per bind is
+            // refused at its push field below.
+            RuntimeFact::VertexFetch { .. } | RuntimeFact::VertexBufferStride { .. } => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one a draw does
             // not supply.
             _ => return Err(draw_input()),
@@ -415,6 +435,17 @@ fn draws(
                     constexprs.push((place, sampler));
                     FieldValue::ConstexprSampler(place)
                 }
+                // A pulled layout's stride, the descriptor's: one the content fixes.
+                PushField::VertexBufferStride(layout) => {
+                    let stride = (pipeline.vertex_input.pulled.iter())
+                        .find(|pulled| pulled.buffer_index == layout)
+                        .map(|pulled| pulled.stride);
+                    match stride {
+                        Some(VertexStride::Static(stride)) => FieldValue::Word(stride),
+                        _ => return Err(draw_input()),
+                    }
+                }
+                PushField::TessellationFactorAddress => FieldValue::TessellationFactors,
                 _ => return Err(draw_input()),
             };
             fields.push((offset, at, value));
@@ -445,6 +476,7 @@ fn draws(
         push_len,
         fields,
         first_instance_zero: divided && !nonzero_first_instance,
+        patches: pipeline.graphics.tessellation.is_some(),
     };
     Ok((draws, (numbered, constexprs)))
 }
@@ -468,19 +500,30 @@ fn refuse(d: &RenderPipelineDescriptor) -> Result<(), Error> {
 /// What the translator's pipeline states that the runtime does not build, where it states one;
 /// `enabled` is what device creation enabled.
 fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPipelineKind> {
+    use metal2vulkan::vk::ShaderStage;
     let g = &pipeline.graphics;
     let requirements = &pipeline.requirements;
-    let tessellated = g.tessellation.is_some() || g.emulated_tessellation.is_some();
+    // A tessellation state the control stage reads beside the factors' address: the instance
+    // stride of a per-instance step function, or the scale.
+    let pushes =
+        |field| (pipeline.interface.push.iter()).any(|p| p.fields.iter().any(|f| f.field == field));
+    let tessellated = pushes(PushField::TessellationFactorInstanceStride)
+        || pushes(PushField::TessellationFactorScale);
+    // A post-tessellation function's pipeline: its synthesized vertex and control stages, and the
+    // function's evaluation stage.
+    let stages: &[ShaderStage] = match g.tessellation {
+        Some(_) => &[
+            ShaderStage::VERTEX,
+            ShaderStage::TESSELLATION_CONTROL,
+            ShaderStage::TESSELLATION_EVALUATION,
+            ShaderStage::FRAGMENT,
+        ],
+        None => &[ShaderStage::VERTEX, ShaderStage::FRAGMENT],
+    };
     let synthesized = g.line_band.is_some()
         || g.region_fan_out.is_some()
         || g.mesh_records.is_some()
-        || pipeline.stages.iter().any(|stage| {
-            ![
-                metal2vulkan::vk::ShaderStage::VERTEX,
-                metal2vulkan::vk::ShaderStage::FRAGMENT,
-            ]
-            .contains(&stage.stage)
-        });
+        || (pipeline.stages.iter()).any(|stage| !stages.contains(&stage.stage));
     let unenabled = !(requirements.features).is_subset(&enabled.features)
         || !(requirements.extensions).is_subset(&enabled.extensions);
     let separate = matches!(
@@ -588,6 +631,7 @@ impl Fixed {
             bindings,
             divisors,
             attributes,
+            patch_control_points: g.tessellation.map_or(0, |t| t.patch_control_points),
             discard: g.rasterizer_discard,
             samples: vk::SampleCountFlags::from_raw(g.rasterization_samples.as_raw()),
             alpha_to_coverage: g.alpha_to_coverage,
@@ -705,7 +749,7 @@ impl RenderCompiled {
             core: Arc::clone(core),
             stages,
             fixed,
-            triangles: vk::Pipeline::null(),
+            primary: vk::Pipeline::null(),
             lines: Mutex::new(vk::Pipeline::null()),
             notes,
             draws,
@@ -713,20 +757,26 @@ impl RenderCompiled {
             constexprs,
         };
         // Made whole before the `VkPipeline`, so dropping it releases what was made.
-        compiled.triangles = compiled.make(vk::PrimitiveTopology::TRIANGLE_LIST)?;
+        let class = match compiled.draws.patches {
+            true => vk::PrimitiveTopology::PATCH_LIST,
+            false => vk::PrimitiveTopology::TRIANGLE_LIST,
+        };
+        compiled.primary = compiled.make(class)?;
         Ok(compiled)
     }
 
-    /// The `VkPipeline` of the content for draws of `topology`'s class, a line or triangle one:
-    /// the line class's made by its first draw, which waits for it, a first-use wait
-    /// ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)).
+    /// The `VkPipeline` of the content for draws of `topology`'s class, a line or triangle one, or
+    /// for a post-tessellation vertex function's content the patch one, which the encoder draws
+    /// alone with it: the line class's made by its first draw, which waits for it, a first-use
+    /// wait ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)).
     ///
     /// Err: [`Error::Vulkan`] where the pipeline cannot be made.
     pub(crate) fn pipeline(&self, topology: vk::PrimitiveTopology) -> Result<vk::Pipeline, Error> {
-        if topology != vk::PrimitiveTopology::LINE_LIST
-            && topology != vk::PrimitiveTopology::LINE_STRIP
+        if self.draws.patches
+            || (topology != vk::PrimitiveTopology::LINE_LIST
+                && topology != vk::PrimitiveTopology::LINE_STRIP)
         {
-            return Ok(self.triangles);
+            return Ok(self.primary);
         }
         let mut lines = lock(&self.lines);
         if *lines == vk::Pipeline::null() {
@@ -755,7 +805,8 @@ impl RenderCompiled {
 
     /// A `VkPipeline` of the content for draws of the class of `topology`, a list topology, made
     /// through the device's pipeline data, rendering dynamically into the descriptor's attachment
-    /// formats. A draw sets its own topology within the class as dynamic state.
+    /// formats. A draw sets its own topology within the class as dynamic state. A patch list takes
+    /// the translator's control points per patch.
     fn make(&self, topology: vk::PrimitiveTopology) -> Result<vk::Pipeline, Error> {
         let core = &self.core;
         let fixed = &self.fixed;
@@ -787,6 +838,8 @@ impl RenderCompiled {
             vertex_input = vertex_input.push_next(&mut divided);
         }
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default().topology(topology);
+        let tessellation = vk::PipelineTessellationStateCreateInfo::default()
+            .patch_control_points(fixed.patch_control_points);
         let viewport = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
@@ -823,6 +876,9 @@ impl RenderCompiled {
             .layout(core.layout);
         if !fixed.discard {
             info = info.color_blend_state(&blend);
+        }
+        if topology == vk::PrimitiveTopology::PATCH_LIST {
+            info = info.tessellation_state(&tessellation);
         }
         made_through_cache(core, "vkCreateGraphicsPipelines", |cache| {
             // SAFETY: the modules, the layout and the cache are the device's; each specialization
@@ -872,7 +928,7 @@ impl Drop for RenderCompiled {
         // it retired.
         self.core.counters.fall(Gauge::RenderContents);
         let lines = *self.lines.get_mut().unwrap_or_else(|e| e.into_inner());
-        for pipeline in [self.triangles, lines] {
+        for pipeline in [self.primary, lines] {
             if pipeline != vk::Pipeline::null() {
                 (self.core.reaper).give(Job::Free(Free::Pipeline(pipeline)));
             }
