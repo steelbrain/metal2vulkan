@@ -83,7 +83,7 @@ use crate::hazard::Access;
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::over;
 use crate::pass::{layout_barrier, ops, LoadAction, Pass, RenderPassDescriptor, StoreAction};
-use crate::pipeline::{FieldValue, PUSH_STAGES};
+use crate::pipeline::{address_word, FieldValue, PUSH_STAGES};
 use crate::record::{memory_barrier, Reach};
 use crate::render::{Draws, RenderPipelineState, FRAGMENT, VERTEX};
 use crate::ring::{Placed, CHUNK};
@@ -2246,8 +2246,8 @@ fn fill_push(
         match value {
             // At a multiple of the argument's alignment, which the draw checked first.
             FieldValue::BufferAddress { slot, .. } => {
-                let address = tables.address(slot, nil);
-                push[at..at + 8].copy_from_slice(&address.to_le_bytes());
+                let word = address_word(tables.address(slot, nil));
+                push[at..at + 8].copy_from_slice(&word.to_le_bytes());
             }
             FieldValue::TextureId(slot) => {
                 let id = (tables.texture(slot)).map_or(0, |t| {

@@ -1097,8 +1097,9 @@ pub enum PushField {
     /// modulo 2^32.
     SlotBindOffset(SlotRef),
     /// Guest base address of a static-root slot. Under the identity domains, a `u64`: a buffer
-    /// slot's device address (its `gpuAddress` plus the bind offset), and a texture or sampler
-    /// slot's `gpuResourceID` (`docs/RESOURCE-ID.md`), 0 for nil.
+    /// slot's device address (its `gpuAddress` plus the bind offset) less 2^31, modulo 2^64
+    /// (`docs/API.md`, section 5), and a texture or sampler slot's `gpuResourceID`
+    /// (`docs/RESOURCE-ID.md`), 0 for nil.
     SlotGuestBase(SlotRef),
     /// Stride of a pulled vertex buffer layout.
     VertexBufferStride(u32),

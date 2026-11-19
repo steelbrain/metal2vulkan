@@ -636,6 +636,14 @@ pub fn u32_op(fb: &mut FunctionBuilder<'_>, op: BinOp, a: Value, b: Value) -> BR
         (BinOp::IMul, Some(1), _) | (BinOp::BitwiseAnd, Some(u32::MAX), _) => Ok(b),
         (BinOp::IMul | BinOp::BitwiseAnd, Some(0), _)
         | (BinOp::IMul | BinOp::BitwiseAnd, _, Some(0)) => k32(fb, 0),
+        // A sum of a value and a constant is noted, for a consumer that folds the constant
+        // (`psb`'s biased offsets).
+        (BinOp::IAdd, None, Some(c)) | (BinOp::IAdd, Some(c), None) => {
+            let x = if y.is_some() { a } else { b };
+            let r = fb.binary(op, a, b)?;
+            fb.note_sum(r, x, c);
+            Ok(r)
+        }
         _ => fb.binary(op, a, b),
     }
 }

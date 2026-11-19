@@ -134,6 +134,16 @@ impl<'m> FunctionBuilder<'m> {
         self.m.lanes.get(&y).copied()
     }
 
+    /// Note that `y`, a 32-bit unsigned integer, is `x + c` modulo 2^32: `x` dominates `y`.
+    pub fn note_sum(&mut self, y: Value, x: Value, c: u32) {
+        self.m.sums.insert(y, (x, c));
+    }
+
+    /// The value and constant `y` was noted to add.
+    pub fn sum_of(&self, y: Value) -> Option<(Value, u32)> {
+        self.m.sums.get(&y).copied()
+    }
+
     /// Note that `y`, a 32-bit unsigned integer, is the zero extension of 16-bit integer `of`:
     /// `of` dominates `y`.
     pub fn note_widened16(&mut self, y: Value, of: Value) {

@@ -144,7 +144,11 @@ fn run_all(
             // Zero residuals: each buffer is bound at its start.
             PushField::SlotBindOffset(_) => {}
             PushField::SlotGuestBase(s) => {
-                push[o..o + 8].copy_from_slice(&guest_base(s.index).to_le_bytes());
+                let word = match plan.families.access.identity {
+                    true => super::engine_word_phases::slot_word(guest_base(s.index)),
+                    false => guest_base(s.index),
+                };
+                push[o..o + 8].copy_from_slice(&word.to_le_bytes());
                 addressed = true;
             }
             PushField::DispatchRegion => {

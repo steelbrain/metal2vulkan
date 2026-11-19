@@ -57,6 +57,12 @@ fn bitcode() -> Option<Vec<u8>> {
     }
 }
 
+/// The word the runtime pushes for a buffer slot's `SlotGuestBase` at `address` under the identity
+/// domains: the address less 2^31 (`lower::access::SLOT_ADDRESS_BIAS`).
+pub(super) fn slot_word(address: u64) -> u64 {
+    address.wrapping_sub(crate::lower::access::SLOT_ADDRESS_BIAS)
+}
+
 /// Every committed profile `Device::from_queries` derives under the identity domains (those with
 /// `bufferDeviceAddress` and `shaderInt64`), by stem.
 pub(super) fn identity_profiles() -> Vec<(String, DeviceProfile)> {
@@ -266,7 +272,7 @@ fn dispatch(
         match f.field {
             PushField::SlotGuestBase(s) => {
                 let (address, bind, _) = &buffers[s.index as usize];
-                push[o..o + 8].copy_from_slice(&(address + bind).to_le_bytes());
+                push[o..o + 8].copy_from_slice(&slot_word(address + bind).to_le_bytes());
             }
             PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
             _ => return Err(format!("unexpected push field {f:?}")),

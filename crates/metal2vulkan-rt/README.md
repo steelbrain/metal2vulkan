@@ -439,10 +439,15 @@ between, `external_writes_done` comes first, as above.
   offers a non-host-visible type first.
 - rt caps a buffer at 2 GiB (`MAX_BUFFER_LENGTH`), where the M3's Metal allows 38.88 GiB
   (`maxBufferLength`, 41,747,087,360 bytes), about twenty times as much: shaders reach a buffer's
-  bytes by 32-bit offsets from its bind address, which bought 4.3 to 6.6% on AMD cards and more on
-  the RTX 3090 in a probe of constant reads, where a 64-bit sum without them was 8.9% slower on the
-  RX 7900 XTX, and lifting the cap would put 64-bit offset arithmetic on every buffer access. A
-  longer buffer is `Refusal::BufferTooLong`.
+  bytes by 32-bit offsets from its bind address, and lifting the cap would put 64-bit offset
+  arithmetic on every buffer access. The word rt pushes for a buffer slot is the slot's address
+  less 2^31; an access adds its 32-bit offset plus 2^31 to that word, zero-extended, which is the
+  offset read as signed in one 32-bit add. In a probe of one particle kernel that form was within
+  0.7% of a zero-extended offset (inexact below the bind address) on the RX 7900 XTX and two
+  Radeon 780Ms at the kernel's grid, and on the XTX and one 780M at four times it, where the
+  sign-extended offset it replaced was 6.8 to 9.5% slower. In an earlier probe of constant reads,
+  32-bit offsets bought 4.3 to 6.6% on AMD cards and more on the RTX 3090, where a 64-bit sum was
+  8.9% slower on the RX 7900 XTX. A longer buffer is `Refusal::BufferTooLong`.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
   block that is not a multiple of 4, or of the index size, is refused (`Refusal::ArgumentPlace`).
   Metal's offset rules keep both at that multiple of the buffer's start, so only a buffer that

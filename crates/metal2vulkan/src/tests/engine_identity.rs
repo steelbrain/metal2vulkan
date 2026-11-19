@@ -79,6 +79,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use super::engine_word_phases::slot_word;
 use crate::bind::{BindState, BoundBuffer, Dispatch, StageTable};
 use crate::budget::Budget;
 use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
@@ -252,7 +253,7 @@ fn a_buffer_kernel_reads_each_slot_at_its_pushed_device_address() {
             match f.field {
                 PushField::SlotGuestBase(s) => {
                     let (base, bind) = at[s.index as usize];
-                    push[o..o + 8].copy_from_slice(&(base + bind).to_le_bytes());
+                    push[o..o + 8].copy_from_slice(&slot_word(base + bind).to_le_bytes());
                     read.push(s);
                 }
                 PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
@@ -288,6 +289,90 @@ fn a_buffer_kernel_reads_each_slot_at_its_pushed_device_address() {
         assert_eq!(got.buffers[2], expected, "{stem}: out");
         assert_eq!(got.buffers[0], bits, "{stem}: bits");
         assert_eq!(got.buffers[1], halves, "{stem}: halves");
+    }
+}
+
+/// A slot pointer used as a value under the identity domains is its Metal address, though the
+/// runtime pushes each buffer slot's address less 2^31 (`lower::access::SLOT_ADDRESS_BIAS`): a
+/// `ptrtoint` to `i64` and to `i32` and an address compare add the bias back, and the loads beside
+/// them, one 4 bytes below its slot's bind address, add their offsets plus the bias to the word.
+#[test]
+fn a_slot_pointer_used_as_a_value_is_its_metal_address() {
+    use super::engine_pointer_memory::{assemble, kernel};
+    let body = "  %p = getelementptr inbounds i8, ptr addrspace(1) %b0, i64 20
+  %a = ptrtoint ptr addrspace(1) %p to i64
+  store i64 %a, ptr addrspace(1) %b2, align 8
+  %a32 = ptrtoint ptr addrspace(1) %b1 to i32
+  %o2 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 2
+  store i32 %a32, ptr addrspace(1) %o2, align 4
+  %lt = icmp ult ptr addrspace(1) %b0, %b1
+  %z = zext i1 %lt to i32
+  %o3 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 3
+  store i32 %z, ptr addrspace(1) %o3, align 4
+  %q = getelementptr inbounds i8, ptr addrspace(1) %b1, i64 -4
+  %w = load i32, ptr addrspace(1) %q, align 4
+  %o4 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 4
+  store i32 %w, ptr addrspace(1) %o4, align 4
+  %v = load i32, ptr addrspace(1) %p, align 4
+  %o5 = getelementptr inbounds i32, ptr addrspace(1) %b2, i64 5
+  store i32 %v, ptr addrspace(1) %o5, align 4
+";
+    let name = "slot_values";
+    let Some(bc) = assemble(name, &kernel(name, 3, body, "")) else {
+        return;
+    };
+    // (the buffer's device address, the bind offset): above 4 GiB, so a dropped high word shows.
+    let at = [
+        (0x1_0000_0000u64, 0u64),
+        (0x2_0000_1000, 16),
+        (0x3_0000_2000, 0),
+    ];
+    let words =
+        |base: u32| -> Vec<u8> { (0..16u32).flat_map(|i| (base + i).to_le_bytes()).collect() };
+    let bytes = [words(0x100), words(0x200), vec![0xEE; 28]];
+    let slot_address = |i: usize| at[i].0 + at[i].1;
+    let mut want = slot_address(0).wrapping_add(20).to_le_bytes().to_vec();
+    want.extend_from_slice(&(slot_address(1) as u32).to_le_bytes());
+    want.extend_from_slice(&1u32.to_le_bytes());
+    want.extend_from_slice(&bytes[1][12..16]);
+    want.extend_from_slice(&bytes[0][20..24]);
+    want.extend_from_slice(&[0xEE; 4]);
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, plan, module) =
+            compile_kept(&bc, name, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(a.interface.descriptors.is_empty(), "{stem}");
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+        let region = region_bytes([0; 3], [1, 1, 1], [1, 1, 1]).expect("packs");
+        for f in &plan.push.fields {
+            let PushLoc::Push { offset } = f.loc else {
+                panic!("{stem}: {f:?} spilled");
+            };
+            let o = offset as usize;
+            match f.field {
+                PushField::SlotGuestBase(s) => {
+                    let word = slot_word(slot_address(s.index as usize));
+                    push[o..o + 8].copy_from_slice(&word.to_le_bytes());
+                }
+                PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
+                _ => panic!("{stem}: unexpected push field {f:?}"),
+            }
+        }
+        let buffers = (0..3)
+            .map(|i| Buffer {
+                slot: None,
+                address: Some(at[i].0),
+                bytes: bytes[i].clone(),
+            })
+            .collect();
+        let res = Resources {
+            buffers,
+            push,
+            spec: local_size(1),
+        };
+        let got = run(&module, &Config::default(), res).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(got.buffers[2], want, "{stem}: out");
     }
 }
 
@@ -693,7 +778,7 @@ fn the_stage_in_region_is_read_from_its_pushed_field() {
             let o = offset as usize;
             match f.field {
                 PushField::SlotGuestBase(s) if s == slot(0) => {
-                    push[o..o + 8].copy_from_slice(&OUT.to_le_bytes())
+                    push[o..o + 8].copy_from_slice(&slot_word(OUT).to_le_bytes())
                 }
                 PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
                 PushField::StageInRegion => push[o..o + 32].copy_from_slice(&region_in),
@@ -1035,9 +1120,11 @@ fn textures_at_their_resource_ids(ab: bool) {
                 let o = offset as usize;
                 let bytes = match field.field {
                     PushField::SlotGuestBase(s) => match (ab, s.class, s.index) {
-                        (false, SlotClass::Buffer, 0) | (true, SlotClass::Buffer, 1) => OUT,
+                        (false, SlotClass::Buffer, 0) | (true, SlotClass::Buffer, 1) => {
+                            slot_word(OUT)
+                        }
                         (false, SlotClass::Texture, i @ 0..=2) => ids[i as usize],
-                        (true, SlotClass::Buffer, 0) => AB,
+                        (true, SlotClass::Buffer, 0) => slot_word(AB),
                         _ => panic!("{stem}: unexpected slot {s:?}"),
                     },
                     PushField::DispatchRegion => {
@@ -1192,11 +1279,19 @@ fn many_placed(
             }
             (PushField::SlotGuestBase(s), PushLoc::Push { offset }) => {
                 pushed.push(s);
-                (BASE + u64::from(s.index) * STRIDE, &mut push, offset)
+                (
+                    slot_word(BASE + u64::from(s.index) * STRIDE),
+                    &mut push,
+                    offset,
+                )
             }
             (PushField::SlotGuestBase(s), PushLoc::ArgumentTable { offset }) => {
                 spilled.push(s);
-                (BASE + u64::from(s.index) * STRIDE, &mut block, offset)
+                (
+                    slot_word(BASE + u64::from(s.index) * STRIDE),
+                    &mut block,
+                    offset,
+                )
             }
             other => panic!("{stem}: unexpected push field {other:?}"),
         };
@@ -1328,7 +1423,7 @@ fn grid_push(plan: &Plan, out: u64, region: [u8; 32]) -> Vec<u8> {
         let o = offset as usize;
         match f.field {
             PushField::SlotGuestBase(s) if s == slot(0) => {
-                push[o..o + 8].copy_from_slice(&out.to_le_bytes())
+                push[o..o + 8].copy_from_slice(&slot_word(out).to_le_bytes())
             }
             PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
             _ => panic!("unexpected push field {f:?}"),
@@ -2289,10 +2384,10 @@ fn the_emulated_tiers_barriers_run_only_in_a_threadgroup_of_several_threads() {
                 let o = offset as usize;
                 match f.field {
                     PushField::SlotGuestBase(s) if s == slot(0) => {
-                        push[o..o + 8].copy_from_slice(&INPUT.to_le_bytes())
+                        push[o..o + 8].copy_from_slice(&slot_word(INPUT).to_le_bytes())
                     }
                     PushField::SlotGuestBase(s) if s == slot(1) => {
-                        push[o..o + 8].copy_from_slice(&OUT.to_le_bytes())
+                        push[o..o + 8].copy_from_slice(&slot_word(OUT).to_le_bytes())
                     }
                     PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
                     _ => panic!("unexpected push field {f:?}"),
@@ -2479,7 +2574,8 @@ fn unwritten_slots_are_loaded_through_non_writable_places() {
                 let o = offset as usize;
                 match f.field {
                     PushField::SlotGuestBase(s) => {
-                        push[o..o + 8].copy_from_slice(&AT[s.index as usize].to_le_bytes());
+                        push[o..o + 8]
+                            .copy_from_slice(&slot_word(AT[s.index as usize]).to_le_bytes());
                     }
                     PushField::DispatchRegion => {
                         let region = region_bytes([0; 3], [1, 1, 1], [1, 1, 1]).expect("packs");

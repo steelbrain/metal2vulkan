@@ -136,6 +136,9 @@ pub struct ModuleBuilder {
     /// The vector, lane value, and lane index of each narrow lane insert the lowering noted
     /// (`FunctionBuilder::note_insert`).
     pub(super) inserts: HashMap<Value, (Value, Value, u32)>,
+    /// The value and constant each 32-bit unsigned sum of a value and a constant the lowering
+    /// noted adds (`FunctionBuilder::note_sum`). Nothing here changes the IR.
+    pub(super) sums: HashMap<Value, (Value, u32)>,
     /// How each struct the builder made holds its members, and what each extract from a struct
     /// reads (`FunctionBuilder::member_source`): every `OpCompositeConstruct` and
     /// `OpCompositeInsert` of a struct type and every `OpCompositeExtract` from one, by result.
@@ -432,6 +435,7 @@ impl ModuleBuilder {
             + map_bytes(&self.bits)
             + map_bytes(&self.lanes)
             + map_bytes(&self.inserts)
+            + map_bytes(&self.sums)
             + map_bytes(&self.structs)
             + self.struct_bytes
             + map_bytes(&self.widened16)

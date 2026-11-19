@@ -538,14 +538,23 @@ pub(crate) enum Place {
     Block(u32),
 }
 
+/// The word a buffer slot's [`FieldValue::BufferAddress`] parameter holds for `address`: the
+/// address less 2^31, as the translator's identity domains read a buffer slot's `SlotGuestBase`
+/// (`docs/API.md`, section 5). A module adds an access's 32-bit byte offset plus 2^31 to the word,
+/// zero-extended, which is the address plus the offset read as signed, and adds 2^31 back where it
+/// reads the address itself.
+pub(crate) fn address_word(address: u64) -> u64 {
+    address.wrapping_sub(1 << 31)
+}
+
 /// What a parameter holds.
 #[derive(Clone, Copy)]
 pub(crate) enum FieldValue {
-    /// A `u64`: the address of the buffer bound at the slot plus its offset, the address of the
-    /// slot's `set_bytes` copy, or 0 where nothing is bound. `mask` is the alignment the module
-    /// takes that address to have, less 1 (`RuntimeFact::AddressAlignment`), 0 where it takes
-    /// none: a dispatch whose bound buffer's address it does not divide is refused
-    /// (`Refusal::BufferOffsetAlignment`).
+    /// A `u64`: the [`address_word`] of the address of the buffer bound at the slot plus its
+    /// offset, of the address of the slot's `set_bytes` copy, or of the nil buffer's address where
+    /// nothing is bound. `mask` is the alignment the module takes that address to have, less 1
+    /// (`RuntimeFact::AddressAlignment`), 0 where it takes none: a dispatch whose bound buffer's
+    /// address it does not divide is refused (`Refusal::BufferOffsetAlignment`).
     BufferAddress { slot: u32, mask: u64 },
     /// A `u64`: the `gpuResourceID` of the texture bound at the slot, 0 where none is.
     TextureId(u32),

@@ -409,8 +409,7 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
             Ok(Source::View { view, residual })
         }
         (Some(SlotLowering::Psb { start }), _) if identity => {
-            let v = cx.push_field(fb, PushField::SlotGuestBase(slot))?;
-            let address = super::pointer::slot_guest_base_u64(fb, v)?;
+            let address = super::pointer::slot_address(cx, fb, slot)?;
             Ok(Source::Address { address, start })
         }
         (Some(SlotLowering::Psb { start }), _) => {

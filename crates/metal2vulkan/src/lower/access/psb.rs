@@ -31,8 +31,9 @@
 //! storage class as they cover `StorageBuffer`. A sub-word store there is one narrow store; without
 //! the access it stays the two word atomics ([`PsbMem`]'s `write_bits`).
 
+use super::SLOT_ADDRESS_BIAS;
 use crate::device::DeviceProfile;
-use crate::memory::leaf::{Units, WordMem, WordOps};
+use crate::memory::leaf::{k32, u32_op, Units, WordMem, WordOps};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{TypeId, Value};
@@ -176,14 +177,18 @@ enum Reach {
     /// making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the product is
     /// exact, and no 64-bit shift or multiply scales an index.
     Below,
-    /// From a slot's own device address under the identity domains ([`prepare_direct`]): each
-    /// unit at that address plus its 32-bit byte offset sign-extended, in 64-bit integers, then
-    /// one `OpConvertUToPtr` to the unit's block (`NonWritable` for a load of an unwritten slot).
+    /// From a slot's own device address under the identity domains ([`prepare_direct`]), held
+    /// as that address less [`SLOT_ADDRESS_BIAS`] (2^31): each unit at that base plus its 32-bit
+    /// byte offset plus 2^31, modulo 2^32, zero-extended, in 64-bit integers, then one
+    /// `OpConvertUToPtr` to the unit's block (`NonWritable` for a load of an unwritten slot).
     /// Every byte of a buffer lies within 2^31 bytes of each bind address in it, the runtime
-    /// making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the sign
-    /// extension is exact. It is the integer form of an access chain's signed index, which a device adds as
-    /// it would that index: no shift of the offset in 64 bits, no zero-extended offset to split
-    /// into a scalar base and a vector one, and no pointer bitcast.
+    /// making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the offset
+    /// read as signed is in `[-2^31, 2^31)`, the biased one is that offset plus 2^31 exactly, and
+    /// the sum is the address plus the offset. A unit index `x + c` with a constant `c` folds
+    /// `c`'s bytes into the bias: `(x + c) * s + 2^31` is `x * s + (c * s + 2^31)` modulo 2^32.
+    /// The bias is one 32-bit add, which a device fuses with the index's shift; the offset is
+    /// zero-extended, which a device splits into a scalar base and a vector offset; no shift of
+    /// the offset in 64 bits and no pointer bitcast.
     Direct,
 }
 
@@ -219,18 +224,18 @@ pub fn prepare_at(
 }
 
 /// Prepare an access of a static slot at the `u32` displacement `m` from its bind offset, under
-/// the identity domains, from `address` (a `u64`), the slot's own device address, which the
-/// binder holds to a multiple of the argument's alignment (`RuntimeFact::AddressAlignment`): the
-/// access is the byte offset `m`, read as signed, from `address`, as a descriptor view's is `m`
-/// from its base. Every byte of a buffer lies within 2^31 bytes of each bind address in it, the
-/// runtime making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the
-/// offset is exact whatever the slot's window. Nothing is rounded, so a constant offset is one
-/// immediate. Uncontained, as Metal contains no device-address access.
-pub fn prepare_direct(address: Value, m: Value) -> PsbAccess {
+/// the identity domains, from `base` (a `u64`), the slot's own device address less
+/// [`SLOT_ADDRESS_BIAS`], an address the binder holds to a multiple of the argument's alignment
+/// (`RuntimeFact::AddressAlignment`): the access is the byte offset `m`, read as signed, from that
+/// address, as a descriptor view's is `m` from its base ([`Reach::Direct`]). Every byte of a
+/// buffer lies within 2^31 bytes of each bind address in it, the runtime making no buffer longer
+/// than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the offset is exact whatever the slot's
+/// window. Nothing is rounded. Uncontained, as Metal contains no device-address access.
+pub fn prepare_direct(base: Value, m: Value) -> PsbAccess {
     PsbAccess {
         mem: PsbMem {
             reach: Reach::Direct,
-            ..PsbMem::at(address)
+            ..PsbMem::at(base)
         },
         off: m,
         inb: None,
@@ -338,15 +343,24 @@ impl PsbMem {
                 let addr = fb.binary(BinOp::IAdd, self.base, d)?;
                 self.place(fb, addr, ty, load)
             }
-            Reach::Below | Reach::Direct => {
-                let shift = crate::memory::leaf::k32(fb, bytes.trailing_zeros())?;
-                let at = crate::memory::leaf::u32_op(fb, BinOp::ShiftLeftLogical, index, shift)?;
+            Reach::Below => {
+                let shift = k32(fb, bytes.trailing_zeros())?;
+                let at = u32_op(fb, BinOp::ShiftLeftLogical, index, shift)?;
                 let u64_ = u64_ty(fb)?;
-                let widen = match self.reach {
-                    Reach::Direct => ConvOp::SConvert,
-                    _ => ConvOp::UConvert,
-                };
-                let d = fb.convert(widen, at, u64_)?;
+                let d = fb.convert(ConvOp::UConvert, at, u64_)?;
+                let addr = fb.binary(BinOp::IAdd, self.base, d)?;
+                self.place(fb, addr, ty, load)
+            }
+            Reach::Direct => {
+                let shift = bytes.trailing_zeros();
+                let (x, c) = fb.sum_of(index).unwrap_or((index, 0));
+                let s = k32(fb, shift)?;
+                let at = u32_op(fb, BinOp::ShiftLeftLogical, x, s)?;
+                let bias = (c << shift).wrapping_add(SLOT_ADDRESS_BIAS as u32);
+                let bias = k32(fb, bias)?;
+                let at = u32_op(fb, BinOp::IAdd, at, bias)?;
+                let u64_ = u64_ty(fb)?;
+                let d = fb.convert(ConvOp::UConvert, at, u64_)?;
                 let addr = fb.binary(BinOp::IAdd, self.base, d)?;
                 self.place(fb, addr, ty, load)
             }

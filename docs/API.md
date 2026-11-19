@@ -111,12 +111,14 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   addresses used directly and a texture's or sampler's handle is its `gpuResourceID`
   ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
   them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
-  pushed as `PushField::SlotGuestBase`, with no root table, no descriptor and no containment, as
-  Metal contains no device-address access. A slot whose argument states an alignment of at least
-  4 (`air.arg_type_align_size`) is reached from that address as it is: each access is at the
-  address plus its 32-bit byte offset, sign-extended, which is exact as the new runtime makes no
-  buffer longer than 2 GiB (`MAX_BUFFER_LENGTH`), and an access of 8 or 16 bytes at an offset
-  proven a multiple of its size is one `uvec2` or `uvec4`. The function states
+  pushed less 2^31 as `PushField::SlotGuestBase` (section 5), with no root table, no descriptor
+  and no containment, as Metal contains no device-address access. A slot whose argument states an
+  alignment of at least 4 (`air.arg_type_align_size`) is reached from that address as it is: each
+  access is at the pushed word plus its 32-bit byte offset plus 2^31, modulo 2^32, zero-extended,
+  which is the address plus the offset read as signed, exact as the new runtime makes no buffer
+  longer than 2 GiB (`MAX_BUFFER_LENGTH`); a constant part of the offset joins the 2^31 in one
+  constant. An access of 8 or 16 bytes at an offset proven a multiple of its size is one `uvec2`
+  or `uvec4`. The function states
   `RuntimeFact::AddressAlignment` with that alignment (at most 16), and the new runtime refuses
   a dispatch whose bound address is not a multiple of it, as Metal's API validation refuses the
   bind offset (an accepted difference, section 10). A
@@ -1518,6 +1520,14 @@ for dependency in &pipeline.dependencies {
   the shader accesses it, and for a buffer the byte window it can touch. A buffer slot's `kind`
   says whether Metal binds a buffer, a visible-function table or an intersection function table
   there.
+- Under the identity domains (section 1) a buffer slot's `PushField::SlotGuestBase` is its
+  address, the bound buffer's `gpuAddress` plus the bind offset (or the address of its
+  `setBytes` copy, or of the consumer's nil buffer where nothing is bound), less 2^31, modulo
+  2^64. An access through the slot adds its 32-bit byte offset plus 2^31, modulo 2^32,
+  zero-extended, to that word; a pointer compare, a pointer converted to an integer or stored, a
+  pulled vertex fetch and an access from the word below it add the 2^31 back to read the address
+  itself. A pointer loaded from an argument buffer is the address the buffer holds, unbiased. A
+  texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased.
 - The layout numbers set 0 densely, in `ResourceSlot` order. Set 1 holds the heap arrays (the
   resources reached through argument buffers and resource IDs); `pipeline::heap_sampler_capacity`
   is the most elements a set-1 sampler array has on a profile. A texture buffer reached so is an

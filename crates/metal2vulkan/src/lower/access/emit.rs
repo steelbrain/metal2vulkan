@@ -275,15 +275,20 @@ pub(super) fn prepare(
     let ops = WordOps::of(crate::lower::sync::memory_model::coherence(cx.plan));
     if let Some(SlotLowering::Psb { start }) = lowering {
         // Under the identity domains a slot whose address the binder holds to its argument's
-        // alignment is reached from that address as it is, with `uvec2` and `uvec4` units at
-        // offsets proven multiples of their size; any other from the word below each access.
+        // alignment is reached from that address as it is (its biased word), with `uvec2` and
+        // `uvec4` units at offsets proven multiples of their size; any other from the word below
+        // each access.
         let aligned = cx.plan.families.access.aligned.contains(&t.slot);
         let a = if cx.plan.families.access.identity {
-            let address = cx.push_field(fb, PushField::SlotGuestBase(choice.slot))?;
-            let address = super::pointer::slot_guest_base_u64(fb, address)?;
             match aligned {
-                true => psb::prepare_direct(address, m),
-                false => psb::prepare_at(fb, address, m, start)?,
+                true => {
+                    let base = super::pointer::biased_slot_address(cx, fb, choice.slot)?;
+                    psb::prepare_direct(base, m)
+                }
+                false => {
+                    let address = super::pointer::slot_address(cx, fb, choice.slot)?;
+                    psb::prepare_at(fb, address, m, start)?
+                }
             }
         } else {
             let table = cx.push_field(fb, PushField::RootTableAddress)?;

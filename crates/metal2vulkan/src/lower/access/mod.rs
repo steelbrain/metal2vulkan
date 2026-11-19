@@ -1306,11 +1306,18 @@ impl Census {
 }
 
 /// The field a slot's device address is read from under the identity domains: its Metal address,
-/// the bound buffer's `gpuAddress` plus the bind offset, which is its Vulkan device address there
-/// (`SlotGuestBase`'s value, a `uvec2`, low word first).
+/// the bound buffer's `gpuAddress` plus the bind offset, which is its Vulkan device address there,
+/// less [`SLOT_ADDRESS_BIAS`] (`SlotGuestBase`'s value, a `uvec2`, low word first).
 fn address_field(slot: SlotRef) -> PushField {
     PushField::SlotGuestBase(slot)
 }
+
+/// The bias of a buffer slot's `SlotGuestBase` word under the identity domains, 2^31: the runtime
+/// pushes the slot's address less it. An access adds its 32-bit byte offset plus the bias to the
+/// word, zero-extended ([`psb::prepare_direct`]), which is the address plus the offset read as
+/// signed in one 32-bit add, and every other read of the word adds the bias back
+/// ([`pointer::slot_address`]).
+pub(crate) const SLOT_ADDRESS_BIAS: u64 = 1 << 31;
 
 /// Whether profile `p` takes the identity domains, where a pointer is a device address used
 /// directly.

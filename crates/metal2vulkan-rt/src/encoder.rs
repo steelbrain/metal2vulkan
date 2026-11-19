@@ -12,8 +12,8 @@ use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
 use crate::over;
 use crate::pipeline::{
-    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Which, PUSH_BYTES,
-    PUSH_STAGES, SQUARE,
+    address_word, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Which,
+    PUSH_BYTES, PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
 use crate::ring::CHUNK;
@@ -1292,7 +1292,8 @@ impl Parameters {
                         Some(Slot::Bytes(address)) => *address,
                         Some(Slot::Empty) | None => nil,
                     };
-                    bytes[at..at + 8].copy_from_slice(&address.to_le_bytes());
+                    let word = address_word(address);
+                    bytes[at..at + 8].copy_from_slice(&word.to_le_bytes());
                 }
                 FieldValue::TextureId(slot) => {
                     let id = match textures.get(slot as usize) {

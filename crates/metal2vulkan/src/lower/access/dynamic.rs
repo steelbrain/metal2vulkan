@@ -1329,8 +1329,7 @@ pub(super) fn static_guest_address(
             crate::pipeline::interface::Window::Bounded { start, .. } => start,
             crate::pipeline::interface::Window::Whole => 0,
         };
-        let base = cx.push_field(fb, PushField::SlotGuestBase(choice.slot))?;
-        let base = super::pointer::slot_guest_base_u64(fb, base)?;
+        let base = super::pointer::slot_address(cx, fb, choice.slot)?;
         let disp = super::psb::displacement(fb, m, start)?;
         let guest = fb.binary(BinOp::IAdd, base, disp)?;
         let r = k32(fb, t.root)?;

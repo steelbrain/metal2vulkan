@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use super::engine_word_phases::identity_profiles;
+use super::engine_word_phases::{identity_profiles, slot_word};
 use crate::lower::dispatch::region_bytes;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, SpecKey};
@@ -86,7 +86,7 @@ fn accesses_up_to_2_gib_land_at_their_own_words() {
             match f.field {
                 PushField::SlotGuestBase(s) => {
                     let address = if s.index == 0 { IDX } else { SLOT };
-                    push[o..o + 8].copy_from_slice(&address.to_le_bytes());
+                    push[o..o + 8].copy_from_slice(&slot_word(address).to_le_bytes());
                 }
                 PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
                 _ => panic!("{stem}: unexpected push field {f:?}"),

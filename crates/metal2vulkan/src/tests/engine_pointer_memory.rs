@@ -93,7 +93,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
     out
 }
 
-fn assemble(name: &str, text: &str) -> Option<Vec<u8>> {
+pub(super) fn assemble(name: &str, text: &str) -> Option<Vec<u8>> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
         "m2v-pointer-memory-{}-{}-{name}",
@@ -140,7 +140,7 @@ fn meta(name: &str, buffers: u32) -> String {
 }
 
 /// A kernel `name(b0, .., b{buffers-1}, t)` with `body` and the declarations `decls`.
-fn kernel(name: &str, buffers: u32, body: &str, decls: &str) -> String {
+pub(super) fn kernel(name: &str, buffers: u32, body: &str, decls: &str) -> String {
     let params: Vec<String> = (0..buffers)
         .map(|i| format!("ptr addrspace(1) noundef \"air-buffer-no-alias\" %b{i}"))
         .collect();

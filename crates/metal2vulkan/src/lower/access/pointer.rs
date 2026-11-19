@@ -750,27 +750,77 @@ fn displacement(
     )?))
 }
 
-/// `SlotGuestBase(slot)` (a `uvec2` push field) in the address form.
+/// Buffer slot `slot`'s Metal address ([`slot_address`]) in the address form.
 fn guest_base(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     slot: SlotRef,
     words: bool,
 ) -> BResult<Address> {
-    let v = cx.push_field(fb, PushField::SlotGuestBase(slot))?;
-    if words {
-        return Ok(Address::Words(wide::split(fb, v)?));
+    if !words {
+        return Ok(Address::U64(slot_address(cx, fb, slot)?));
     }
-    Ok(Address::U64(slot_guest_base_u64(fb, v)?))
+    let v = cx.push_field(fb, PushField::SlotGuestBase(slot))?;
+    let word = wide::split(fb, v)?;
+    if !biased(cx) {
+        return Ok(Address::Words(word));
+    }
+    let bias = Pair {
+        lo: k32(fb, super::SLOT_ADDRESS_BIAS as u32)?,
+        hi: k32(fb, 0)?,
+    };
+    Ok(Address::Words(wide::add(fb, word, bias)?))
 }
 
-/// A `SlotGuestBase` field's value (a `uvec2`, low word first) as a `u64` (needs `shaderInt64`).
-pub(super) fn slot_guest_base_u64(fb: &mut FunctionBuilder<'_>, v: SValue) -> BResult<SValue> {
+/// Whether buffer slots' `SlotGuestBase` words are their Metal addresses less
+/// [`SLOT_ADDRESS_BIAS`](super::SLOT_ADDRESS_BIAS): under the identity domains, where the runtime
+/// pushes them. A replay variant reads each slot's address itself from its root entry.
+fn biased(cx: &EmitCx<'_>) -> bool {
+    cx.plan.families.access.identity && !cx.plan.families.access.replay
+}
+
+/// Buffer slot `slot`'s `SlotGuestBase` word (a `uvec2`, low word first) as a `u64` (needs
+/// `shaderInt64`).
+fn slot_word(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, slot: SlotRef) -> BResult<SValue> {
+    let v = cx.push_field(fb, PushField::SlotGuestBase(slot))?;
     let u64_ = fb.module().ty(SType::Int {
         width: 64,
         signed: false,
     })?;
     fb.convert(ConvOp::Bitcast, v, u64_)
+}
+
+/// Buffer slot `slot`'s Metal address, the bound buffer's `gpuAddress` plus the bind offset, as a
+/// `u64` (needs `shaderInt64`): its `SlotGuestBase` word, plus
+/// [`SLOT_ADDRESS_BIAS`](super::SLOT_ADDRESS_BIAS) where the word is biased ([`biased`]). What a
+/// pointer compare, a converted or stored pointer, and an access from the word below it read.
+pub(super) fn slot_address(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    slot: SlotRef,
+) -> BResult<SValue> {
+    let word = slot_word(cx, fb, slot)?;
+    if !biased(cx) {
+        return Ok(word);
+    }
+    let bias = k64(fb, super::SLOT_ADDRESS_BIAS)?;
+    fb.binary(BinOp::IAdd, word, bias)
+}
+
+/// Buffer slot `slot`'s Metal address less [`SLOT_ADDRESS_BIAS`](super::SLOT_ADDRESS_BIAS), a
+/// `u64`: its `SlotGuestBase` word where the word is biased ([`biased`]), the base an access
+/// reached from the slot's own address adds its biased offset to (`psb::prepare_direct`).
+pub(super) fn biased_slot_address(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    slot: SlotRef,
+) -> BResult<SValue> {
+    let word = slot_word(cx, fb, slot)?;
+    if biased(cx) {
+        return Ok(word);
+    }
+    let bias = k64(fb, super::SLOT_ADDRESS_BIAS)?;
+    fb.binary(BinOp::ISub, word, bias)
 }
 
 /// The start of the 2³² bytes a pointer into plan slot `slot` whose offset range the analysis
