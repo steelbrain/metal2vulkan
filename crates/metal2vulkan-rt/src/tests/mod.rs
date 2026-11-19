@@ -35,6 +35,7 @@ mod managed;
 mod memory;
 mod mipmaps;
 mod narrow;
+mod nil_slots;
 mod null_descriptor;
 mod one_path;
 mod over;
