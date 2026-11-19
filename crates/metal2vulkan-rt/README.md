@@ -384,9 +384,14 @@ The block is one form on every device: an allocation of its own in the device's 
 type, dedicated to the one buffer that spans it (`VkMemoryDedicatedAllocateInfo`), never a range
 of a pooled allocation. Vulkan lets a driver require a dedicated allocation for an export
 (`VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT`), so this is the form every driver takes, and
-what exportable memory costs each submission falls on these allocations alone. A handle is
-offered where the device lists its extensions, which device creation enables where listed, and its
-buffers export it (`vkGetPhysicalDeviceExternalBufferProperties`); elsewhere the call refuses with
+what exportable memory costs each submission falls on these allocations alone. That cost grows
+with the exports live, and the consumer's picture set bounds it: the consumer keeps at most 64 of
+its device caches exported at once, a few decoders' output pools. On RADV each live export adds
+about 0.37 µs to every submission's host time (the Radeon RX 7900 XTX, without the validation
+layer: 6.7 µs with none, 30.1 µs with 64); under the validation layer the RTX 2080, the RTX 3090
+and the Iris Xe added at most 1.6 µs with 64. A handle is offered where the device lists its
+extensions, which device creation enables where listed, and its buffers export it
+(`vkGetPhysicalDeviceExternalBufferProperties`); elsewhere the call refuses with
 `Limit::NoExport`, before anything is allocated.
 
 Each export is one `VkDeviceMemory` allocation and counts against the device's allocations;
