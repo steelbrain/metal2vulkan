@@ -11,12 +11,9 @@ use std::ptr::NonNull;
 /// The device's `minImportedHostPointerAlignment`, where it imports host memory
 /// (`VK_EXT_external_memory_host` enabled): an import's address and length are multiples of it.
 pub(super) fn host_alignment(device: &rt::Device) -> Option<u64> {
-    let enabled = device.extensions().iter();
     let name = ash::ext::external_memory_host::NAME;
-    if !enabled
-        .into_iter()
-        .any(|extension| extension.as_c_str() == name)
-    {
+    let mut enabled = device.extensions().iter();
+    if !enabled.any(|extension| extension.as_c_str() == name) {
         return None;
     }
     let raw = device.raw();
