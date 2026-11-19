@@ -209,6 +209,16 @@ fn two_processes(case: &str) {
         c.hits == 0 && c.misses == compiled && compiled >= 1,
         "the first process: {c:?}"
     );
+    // The second process starts with every entry the first wrote on disk: a run that returned
+    // before its device's cache thread wrote them (the device's last handle another thread's)
+    // left one out under load.
+    let on_disk = files_beginning(cache.path(), b"M2VARTF\0") as u64;
+    let records = first_records.len() as u64;
+    assert!(
+        on_disk >= c.writes && (c.driver_data_truncated > 0 || records >= c.driver_saves),
+        "the first process's entries on disk as the second starts: {on_disk} functions, \
+         {records} records; {c:?}"
+    );
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
