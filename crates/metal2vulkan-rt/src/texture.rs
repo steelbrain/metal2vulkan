@@ -1177,16 +1177,16 @@ fn check_over(
         return Err(gap());
     }
     let (block, copy) = buffer.held();
-    // An imported block's memory takes no image made without its handle.
-    if copy.is_none() && block.memory.imported {
-        return Err(gap());
-    }
+    // Over an imported block, the copy: an image bound there would be made for the import's
+    // handle, so in the undefined layout (VUID-VkImageCreateInfo-pNext-01443), and the runtime
+    // makes no image in imported memory.
+    let imported = copy.is_none() && block.memory.imported;
     let spilled = copy.is_none() && block.memory.spilled();
     let extent = linear_extent(core, shape, plan)
         .is_some_and(|max| d.width <= max.width && d.height <= max.height);
     let (linear, optimal) = core.format_features(plan.format);
     let features = linear.contains(optimal & kept_features(plan.usage));
-    Ok(!spilled && extent && features)
+    Ok(!imported && !spilled && extent && features)
 }
 
 /// The format features an image of `usage` is used by, which a linear image is to keep where the
@@ -3479,7 +3479,9 @@ impl Buffer {
     ///
     /// Where the device's linear image does not take the texture (another pitch, an offset off
     /// its memory alignment, a format or usage its linear tiling lacks, memory that spilled, a
-    /// render target whose advertised subresource passes its rows or the buffer), the
+    /// render target whose advertised subresource passes its rows or the buffer), and over a
+    /// buffer in an imported block (a no-copy buffer's, [`Device::import_host_memory`],
+    /// [`Device::import_dma_buf`]), the
     /// texture is an optimal image of its own, which the device copies the bytes shaders reach
     /// into and back (`crate::over`): over a Shared buffer once a submission, over a Managed
     /// buffer's device copy only at Metal's Managed events. Each copy counts in

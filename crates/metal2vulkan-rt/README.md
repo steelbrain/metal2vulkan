@@ -358,8 +358,10 @@ counts against the device's allocations; `Gauges::imports` counts those live. Th
 until its last handle and its last buffer, command buffer or upload are gone; then the block-maker
 thread frees its memory, which ends the import, and runs `release`, Metal's deallocator, after it
 (at teardown, on the thread that tears down). Neither `BlockMappings` hook runs for an imported
-block. A texture over a buffer in an imported block is `Gap::TextureOverBuffer`: an image bound to
-imported memory must be made for its handle, which the runtime does not do.
+block. A texture over a buffer in an imported block is the counted copy of a texture over a
+buffer: an image of its own, which the device copies the buffer's bytes into before the
+submissions that use it and back after a command writes it (`Metrics::over_copies`); the buffer
+stays the import itself.
 
 ### Known gaps of memory blocks
 
@@ -380,6 +382,10 @@ imported memory must be made for its handle, which the runtime does not do.
   arguments) or of the index size (indexed draws), which documented Metal does not allow, its
   pointer being page-aligned. The consumer places every other buffer at an aligned byte. Such a
   buffer is still made and its other uses run; only the dispatch or draw is refused.
+- A texture over a buffer in an imported block is the counted copy of a texture over a buffer on
+  every device (`Metrics::over_copies`): its bytes are copied into an image of its own before the
+  submissions that use it, and back after a command writes it. The runtime makes no image in
+  imported memory.
 - On the NVIDIA cards we measured in Thunderbolt enclosures, freeing host-visible memory takes
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one idle allocation at a time,

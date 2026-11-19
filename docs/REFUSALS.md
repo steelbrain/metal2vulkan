@@ -38,7 +38,7 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 62 | 62 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 25 | 25 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -56,7 +56,7 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 19 | 16 | 0 | 0 | 27 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 6 | 4 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 9 | 4 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 25 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -683,8 +683,8 @@ Columns:
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
-| `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 1: `crates/metal2vulkan-rt/src/memory.rs (round)` | `-` |
-| `BlockIds` | A block after every block number has been used (`Device::take_block`) | every device (a public call's own check of its arguments) | `ours`: block numbers are 32 bits | 2: `crates/metal2vulkan-rt/src/memory.rs (make_allocation)`, `crates/metal2vulkan-rt/src/memory.rs (number)` | `-` |
+| `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 2: `crates/metal2vulkan-rt/src/import.rs (check_len)`, `crates/metal2vulkan-rt/src/memory.rs (round)` | `-` |
+| `BlockIds` | A block after every block number has been used (`Device::take_block`) | every device (a public call's own check of its arguments) | `ours`: block numbers are 32 bits | 2: `crates/metal2vulkan-rt/src/memory.rs (allocation_number)`, `crates/metal2vulkan-rt/src/memory.rs (number)` | `-` |
 | `ThreadgroupMemory` | A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up to 16 bytes), is past the device's... | at the device's limit | `device`: the device's `maxComputeSharedMemorySize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 2: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`, `crates/metal2vulkan-rt/src/render_encoder.rs (set_bytes)` | `-` |
 | `IndexRange` | A grant of no indices, or one past its class's range (`Device::grant_indices`, [`IndexClass::range`]) | every device (a public call's own check of its arguments) | `ours`: the descriptor arrays are 65,536 sampled and 65,536 storage textures, one index of both a texture's, and 4,000 samplers of each use, and index 0 is nil | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
@@ -692,6 +692,9 @@ Columns:
 | `DeviceSamplers` | A sampler state whose device samplers would take the device past its `maxSamplerAllocationCount`, less the sampler arrays' two defaults... | at the device's limit | `device`: the device's `maxSamplerAllocationCount` | 1: `crates/metal2vulkan-rt/src/sampler.rs (take)` | `-` |
 | `MemoryAllocations` | A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones, refused before the driver is called | at the device's limit | `device`: the device's `maxMemoryAllocationCount` | 1: `crates/metal2vulkan-rt/src/memory.rs (allocate)` | `-` |
 | `AllocationNotMapped` | A take that no free range fits made an allocation that the consumer's `BlockMappings::map` did not map | every device (a public call's own check of its arguments) | `ours`: the consumer's hook gave the allocation no place in its own address range | 1: `crates/metal2vulkan-rt/src/memory.rs (own)` | `-` |
+| `NoImport` | An import of a handle the device does not take (`Device::import_dma_buf`, `Device::import_host_memory`) | at the device's limit | `device`: the device's extensions and its external buffer properties | 2: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`, `crates/metal2vulkan-rt/src/import.rs (import_host_memory)` | `-` |
+| `ImportType` | An import whose handle's memory type query offers no type the import takes, so nothing is imported | at the device's limit | `device`: the handle's memory type query and the buffer's memory requirements | 2: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`, `crates/metal2vulkan-rt/src/import.rs (import_host_memory)` | `-` |
+| `ImportAlignment` | An import of no bytes, or one whose address or length is not a multiple of `alignment` | at the device's limit | `device`: `minImportedHostPointerAlignment` and the buffer's memory requirements | 3: `crates/metal2vulkan-rt/src/import.rs (check_len)`, `crates/metal2vulkan-rt/src/import.rs (check_size)` (+1) | `-` |
 | `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
@@ -1276,8 +1279,8 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::ArgumentPlace`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`
 - `rt:Refusal::ViewportNotFinite`: `crates/metal2vulkan-rt/src/render_encoder.rs (set_viewport)`
 - `rt:Refusal::StencilAttachment`: `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`
-- `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (round)`
-- `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (make_allocation)`; `crates/metal2vulkan-rt/src/memory.rs (number)`
+- `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/import.rs (check_len)`; `crates/metal2vulkan-rt/src/memory.rs (round)`
+- `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (allocation_number)`; `crates/metal2vulkan-rt/src/memory.rs (number)`
 - `rt:Limit::ThreadgroupMemory`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_bytes)`
 - `rt:Limit::IndexRange`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
@@ -1285,6 +1288,9 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-rt/src/sampler.rs (take)`
 - `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-rt/src/memory.rs (allocate)`
 - `rt:Limit::AllocationNotMapped`: `crates/metal2vulkan-rt/src/memory.rs (own)`
+- `rt:Limit::NoImport`: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
+- `rt:Limit::ImportType`: `crates/metal2vulkan-rt/src/import.rs (import_dma_buf)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
+- `rt:Limit::ImportAlignment`: `crates/metal2vulkan-rt/src/import.rs (check_len)`; `crates/metal2vulkan-rt/src/import.rs (check_size)`; `crates/metal2vulkan-rt/src/import.rs (import_host_memory)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`; `crates/metal2vulkan-rt/src/pipeline.rs (of)`

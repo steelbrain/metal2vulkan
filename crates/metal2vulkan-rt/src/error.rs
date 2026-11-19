@@ -903,12 +903,10 @@ pub enum Gap {
     },
     /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) the runtime
     /// does not make: other than 2D of one level, sample and slice; of a format of other than
-    /// one color texel an element; whose first texel in the bytes shaders reach is not a whole
-    /// number of texels in, which no copy addresses; or over a buffer in an imported block, whose
-    /// memory no image made without its handle may be bound to.
+    /// one color texel an element; or whose first texel in the bytes shaders reach is not a whole
+    /// number of texels in, which no copy addresses.
     ///
-    /// Basis: ours (the in-place linear image and the copy form take one 2D color image, and
-    /// neither an image of an imported handle).
+    /// Basis: ours (the in-place linear image and the copy form take one 2D color image).
     TextureOverBuffer {
         /// The texture's pixel format.
         pixel_format: PixelFormat,

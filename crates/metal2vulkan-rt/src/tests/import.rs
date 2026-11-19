@@ -1,10 +1,11 @@
 //! Imports: the two type rules, and under a device cfg, on every device of the cfg's kind, that
 //! host memory is imported into the first host-visible, host-coherent type its query offers, that
-//! a GPU write reaches it and its release runs only once its memory is freed, that an ordinary
-//! Shared allocation succeeds after an import of a shared mapping of a file (which RADV refuses
-//! at the import), that an import counts against the device's allocations, and that a dma-buf is
-//! imported where its first offered type is host-visible and host-coherent and refused at the
-//! query, with nothing imported, everywhere else.
+//! a GPU write reaches it and its release runs only once its memory is freed, that a texture over
+//! a buffer in an imported block is read and written by blits through the counted copy, that an
+//! ordinary Shared allocation succeeds after an import of a shared mapping of a file (which RADV
+//! refuses at the import), that an import counts against the device's allocations, and that a
+//! dma-buf is imported where its first offered type is host-visible and host-coherent and refused
+//! at the query, with nothing imported, everywhere else.
 
 use crate::import::host_type;
 
@@ -54,13 +55,17 @@ fn host_memory_takes_the_first_coherent_listed_type_offered() {
     assert_eq!(host_type(0, 0xff, 0xff), None);
 }
 
-/// On unix, where the tests map host memory themselves.
-#[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::memory::Release;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::devices_of_the_cfgs_kind;
-    use crate::{Device, DeviceOptions, Error, ImportHandle, Limit, MemoryClass};
+    use crate::{
+        BufferLayout, Device, DeviceOptions, Error, ImportHandle, IndexClass, Limit, MemoryClass,
+        PixelFormat, Region, StorageMode, TextureDescriptor, TexturePlace, TextureType,
+        TextureUsage,
+    };
+    use std::alloc::Layout;
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -78,37 +83,22 @@ mod on_device {
         }
     }
 
-    /// `len` bytes of fresh anonymous memory at a multiple of `alignment`, each byte its offset
-    /// times 7; and the mapping to unmap, its address and length.
-    fn anonymous(len: u64, alignment: u64) -> (NonNull<u8>, (usize, usize)) {
-        let whole = (len + alignment) as usize;
-        // SAFETY: a new private mapping, which nothing else uses.
-        let base = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                whole,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        assert_ne!(base, libc::MAP_FAILED, "an anonymous mapping");
-        let start = (base as u64).next_multiple_of(alignment) as usize;
-        let pointer = NonNull::new(start as *mut u8).expect("a mapping's address");
+    /// `len` bytes of host memory of the test's own at a multiple of `alignment`, each byte its
+    /// offset times 7, and the allocation to free.
+    fn host_memory(len: u64, alignment: u64) -> (NonNull<u8>, (NonNull<u8>, Layout)) {
+        let layout = Layout::from_size_align(len as usize, alignment as usize).expect("a layout");
+        // SAFETY: the layout's size is not zero.
+        let pointer = NonNull::new(unsafe { std::alloc::alloc(layout) }).expect("an allocation");
         for at in 0..len as usize {
-            // SAFETY: `at` is inside the mapping.
+            // SAFETY: `at` is inside the allocation.
             unsafe { pointer.add(at).write((at * 7) as u8) };
         }
-        (pointer, (base as usize, whole))
+        (pointer, (pointer, layout))
     }
 
-    fn unmap((address, len): (usize, usize)) {
-        // SAFETY: a mapping the test made, which nothing uses any more.
-        assert_eq!(
-            unsafe { libc::munmap(address as *mut libc::c_void, len) },
-            0
-        );
+    fn free((pointer, layout): (NonNull<u8>, Layout)) {
+        // SAFETY: an allocation of `layout` the test made, which nothing uses any more.
+        unsafe { std::alloc::dealloc(pointer.as_ptr(), layout) };
     }
 
     /// A release that sets a flag, and the flag.
@@ -128,7 +118,7 @@ mod on_device {
         each_device("import_host_memory", |name, _, device| {
             let counters = device.counters();
             let Some((_, alignment)) = device.core().imports.host.as_ref() else {
-                let (pointer, mapping) = anonymous(64 << 10, 4096);
+                let (pointer, mapping) = host_memory(64 << 10, 4096);
                 let (release, _) = releasing();
                 // SAFETY: the memory is the test's, mapped until it unmaps it below.
                 match unsafe { device.import_host_memory(pointer, 64 << 10, release) } {
@@ -137,13 +127,13 @@ mod on_device {
                     })) => {}
                     other => panic!("{name}: {other:?}"),
                 }
-                unmap(mapping);
+                free(mapping);
                 println!("import: {name}: imports no host memory, refused typed");
                 return;
             };
             let alignment = *alignment;
             let len = (64u64 << 10).next_multiple_of(alignment);
-            let (pointer, mapping) = anonymous(len, alignment);
+            let (pointer, mapping) = host_memory(len, alignment);
             let before = counters.gauges();
             let (release, released) = releasing();
             // SAFETY: the memory is the test's, mapped until it unmaps it after the release.
@@ -193,10 +183,158 @@ mod on_device {
             wait_until("the release", || released.load(Ordering::SeqCst));
             let after = counters.gauges();
             assert_eq!((after.imports, after.blocks), (0, held - 1), "{name}");
-            unmap(mapping);
+            free(mapping);
             println!(
                 "import: {name}: host memory imported into type {memory_type} (device-local \
                  {device_local}), written by the GPU, released after its free"
+            );
+        });
+    }
+
+    /// A texture over a buffer in an imported block of host memory, read and written by shaders,
+    /// is the counted copy on every device: a blit's read of it into a Shared buffer finds the
+    /// host's rows, a blit's write to it reaches the host's memory, and the copies between the
+    /// buffer and its image count in `Metrics::over_copies`.
+    #[test]
+    fn every_device_makes_a_texture_over_an_imported_buffer() {
+        each_device("import_texture", |name, _, device| {
+            const WIDTH: u32 = 64;
+            const HEIGHT: u32 = 8;
+            let Some((_, alignment)) = device.core().imports.host.as_ref() else {
+                println!("import: {name}: imports no host memory");
+                return;
+            };
+            let alignment = *alignment;
+            let row = u64::from(WIDTH) * 4;
+            let rows = u64::from(HEIGHT);
+            let answer = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let pitch = row.next_multiple_of(answer);
+            let len = (pitch * rows).next_multiple_of(alignment);
+            let (pointer, mapping) = host_memory(len, alignment);
+            let (release, released) = releasing();
+            // SAFETY: the memory is the test's, mapped until it unmaps it after the release.
+            let (block, memory_type) = unsafe { device.import_host_memory(pointer, len, release) }
+                .unwrap_or_else(|error| panic!("{name}: an import: {error}"));
+            let buffer = (device.new_buffer(block.id, 0, len, None)).expect("a buffer");
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
+            d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+            let texture = (buffer.new_texture(&d, Some(first), 0, pitch))
+                .unwrap_or_else(|error| panic!("{name}: a texture over the import: {error}"));
+            assert_eq!(
+                texture.descriptor().storage_mode,
+                StorageMode::Shared,
+                "{name}"
+            );
+            assert!(texture.copied_over().is_some(), "{name}: copied");
+            let copies = || device.counters().metrics().over_copies;
+            let before = copies();
+            // The host's rows, as the image's texels.
+            let host = |at: u64| {
+                // SAFETY: `at` is inside the imported memory, which the test still maps.
+                unsafe { pointer.add(at as usize).read_volatile() }
+            };
+            let packed = |byte: &dyn Fn(u64) -> u8| -> Vec<u8> {
+                (0..rows)
+                    .flat_map(|y| (0..row).map(move |x| (y, x)))
+                    .map(|(y, x)| byte(y * pitch + x))
+                    .collect()
+            };
+            let queue = device.new_command_queue(4).expect("a queue");
+
+            // Read: a blit of the image into a Shared buffer finds the host's rows.
+            let out_block = (device.take_block(MemoryClass::Shared, row * rows))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let out = (device.new_buffer(out_block.id, 0, row * rows, Some(0))).expect("a buffer");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            let layout = BufferLayout {
+                offset: 0,
+                bytes_per_row: row,
+                bytes_per_image: 0,
+            };
+            encoder
+                .copy_from_texture_to_buffer(
+                    &texture,
+                    TexturePlace::default(),
+                    [WIDTH, HEIGHT, 1],
+                    &out,
+                    layout,
+                )
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let contents = out.contents().expect("Shared");
+            // SAFETY: the buffer's bytes, which no command writes any more.
+            let read =
+                unsafe { std::slice::from_raw_parts(contents.as_ptr(), (row * rows) as usize) };
+            let written: Vec<u8> = (0..rows)
+                .flat_map(|y| (0..row).map(move |x| ((y * pitch + x) * 7) as u8))
+                .collect();
+            assert!(
+                read == written.as_slice() && packed(&host) == written,
+                "{name}: the image read the host's bytes"
+            );
+            let copied_in = copies();
+            assert!(copied_in > before, "{name}: the bytes copied in, counted");
+
+            // Write: a blit from a plain texture reaches the host's memory.
+            let mut plain_d = d;
+            plain_d.usage = TextureUsage::RENDER_TARGET;
+            plain_d.storage_mode = StorageMode::Shared;
+            let plain = (device.new_texture(&plain_d, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let source: Vec<u8> = (0..row * rows).map(|i| (i % 241) as u8 ^ 0x3c).collect();
+            let whole = Region {
+                origin: [0; 3],
+                size: [WIDTH, HEIGHT, 1],
+            };
+            (plain.replace_region(whole, 0, 0, &source, row, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .copy_from_texture(
+                    &plain,
+                    TexturePlace::default(),
+                    [WIDTH, HEIGHT, 1],
+                    &texture,
+                    TexturePlace::default(),
+                )
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert!(
+                packed(&host) == source,
+                "{name}: the write reached the host"
+            );
+            assert!(
+                copies() > copied_in,
+                "{name}: the image copied back, counted"
+            );
+            let counted = copies() - before;
+            drop((
+                command_buffer,
+                queue,
+                texture,
+                plain,
+                out,
+                out_block,
+                buffer,
+                block,
+            ));
+            wait_until("the release", || released.load(Ordering::SeqCst));
+            free(mapping);
+            println!(
+                "import: {name}: a texture over imported host memory (type {memory_type}), \
+                 copied ({counted} copies counted), read and written"
             );
         });
     }
@@ -205,6 +343,7 @@ mod on_device {
     /// RADV refuses at the import), whatever its answer, an ordinary Shared allocation succeeds:
     /// a take of 32 MiB, past the pool's 16 MiB allocations, which makes its own. A refused
     /// import leaves the gauges as they were.
+    #[cfg(unix)]
     #[test]
     fn every_device_allocates_shared_memory_after_an_import_of_a_shared_file_mapping() {
         each_device("import_shared_file", |name, _, device| {
@@ -272,6 +411,7 @@ mod on_device {
     }
 
     /// A file of `len` bytes in the OS temp dir, removed from the directory at once.
+    #[cfg(unix)]
     fn tempfile(len: u64) -> std::fs::File {
         let path = std::env::temp_dir().join(format!("m2v-import-{}", std::process::id()));
         let file = std::fs::OpenOptions::new()
@@ -309,8 +449,8 @@ mod on_device {
                 counters.gauges().blocks == u64::from(MAX - 1)
             });
             let len = (64u64 << 10).next_multiple_of(alignment);
-            let (first, first_mapping) = anonymous(len, alignment);
-            let (second, second_mapping) = anonymous(len, alignment);
+            let (first, first_mapping) = host_memory(len, alignment);
+            let (second, second_mapping) = host_memory(len, alignment);
             let (release, first_released) = releasing();
             // SAFETY: the memory is the test's, mapped until it unmaps it after the release.
             let (block, _) = unsafe { device.import_host_memory(first, len, release) }
@@ -327,8 +467,8 @@ mod on_device {
             wait_until("the release", || first_released.load(Ordering::SeqCst));
             assert!(!second_released.load(Ordering::SeqCst), "{name}");
             drop(device);
-            unmap(first_mapping);
-            unmap(second_mapping);
+            free(first_mapping);
+            free(second_mapping);
             println!("import: {name}: an import past the count refused");
         }
     }
@@ -464,7 +604,7 @@ mod on_device {
                     drop(shared);
                     if let Some((_, alignment)) = device.core().imports.host.as_ref() {
                         let len = LEN.next_multiple_of(*alignment);
-                        let (pointer, mapping) = anonymous(len, *alignment);
+                        let (pointer, mapping) = host_memory(len, *alignment);
                         let (release, host_released) = releasing();
                         // SAFETY: the memory is the test's, mapped until it unmaps it below.
                         let (block, _) =
@@ -472,7 +612,7 @@ mod on_device {
                                 .unwrap_or_else(|error| panic!("{name}: host memory: {error}"));
                         drop(block);
                         wait_until("the release", || host_released.load(Ordering::SeqCst));
-                        unmap(mapping);
+                        free(mapping);
                     }
                     println!(
                         "import: {name}: a dma-buf refused at the query (offered {offered:#x}, \
