@@ -3267,7 +3267,9 @@ pub(crate) mod on_device {
             let queue = queue(&device);
             let mut arena = Arena::new(&device);
             let (a, b) = (arena.buffer(), arena.buffer());
-            let event = shared_event(&device);
+            // An `MTLEvent`: its waiter is scheduled once staged, where a shared event's stays
+            // `Committed` until the value is reached, which the busy work holds back here.
+            let event = device.new_event().expect("an event");
             let counters = device.counters();
             // The mix, each command buffer handed to `commit` as it is made: the fills write
             // `base + 1..=3` into `a` and `value` into every byte of `b`.
@@ -3283,7 +3285,7 @@ pub(crate) mod on_device {
                 let signals = queue.command_buffer().expect("a command buffer");
                 fill(&signals, &a, base + 2);
                 signals
-                    .encode_signal_event(event.as_event(), signal)
+                    .encode_signal_event(&event, signal)
                     .expect("a signal");
                 commit(&signals);
                 // After the signal, which sent the group: one committed while a group is held
@@ -3291,9 +3293,7 @@ pub(crate) mod on_device {
                 let empty = queue.command_buffer().expect("a command buffer");
                 commit(&empty);
                 let waits = queue.command_buffer().expect("a command buffer");
-                waits
-                    .encode_wait_for_event(event.as_event(), signal)
-                    .expect("a wait");
+                waits.encode_wait_for_event(&event, signal).expect("a wait");
                 fill(&waits, &a, base + 3);
                 commit(&waits);
                 vec![first, shared, signals, empty, waits]
