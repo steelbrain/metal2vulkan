@@ -719,31 +719,38 @@ made, with no lock, and never rewritten for layouts.
   thread and returns. A committed command buffer holds no device handle.
 - The submit thread passes what is ready to `vkQueueSubmit2` in the device's commit order, each
   queue's command buffers in groups: a submission holds at most sixteen command buffers of one
-  queue, ahead of them the upload (zero fills, texture copies and new textures' moves to their
-  home layouts), and only its last submit info signals the progress semaphore. Consecutive
-  command buffers that no event wait or signal separates share one submit info, the upload with
-  the first: the GPU runs them in order either way, and a driver may pay for each info (the UHD
-  630's paid about 160 us apiece). `Metrics::submit_infos` counts them. The upload records
-  at most 4,096 calls and keeps at most 64 MiB on its own account: the staging buffers of copies
-  larger than the staging region, and the textures and blocks released while it held them. A call
-  that finds it past either submits it and waits for it to complete before recording, so nothing
-  grows without a commit. While fewer than three of a queue's submissions are not yet seen complete,
-  each of its command buffers goes at once, alone. While three are, the ones committed meanwhile
-  are held in one group, each scheduled as it joins, and the group goes when it holds sixteen, when
-  a completion leaves fewer than three in flight (the completion thread wakes the submit thread as
-  it retires; no commit or wait is needed), when the host is to wait for one of them
-  (`wait_until_completed`, or `CommandQueue::send_now`, the hint for a wait the runtime does not
-  see), or at teardown. Waiting for a place in the queue sends nothing. A segment that signals an
-  event ends its group, which goes at once; one that waits on an event's semaphore leads a new
-  group, the one held going first. The thread holds a segment whose event waits are not met, and
-  its queue's later command buffers behind it, while the segments before it run, so the host can
-  see a signal the command buffer makes before its wait. Other queues go on. `Scheduled` means
-  the last segment is in a submission: passed to `vkQueueSubmit2`, or in a group held. A command
-  buffer whose segments hold no commands, no event wait and no event signal takes no submission:
-  the submit thread schedules it as it reaches it, and it completes with its queue's command
-  buffer before it, in flight, or at once where that one has completed. Where that one is in a
-  group held, it joins the group, which goes at once, so its completion waits only on submitted
-  work.
+  queue, ahead of them the upload (zero fills, texture copies and new textures' moves to their home
+  layouts), and only its last submit info signals the progress semaphore. Consecutive command
+  buffers that no event wait or signal separates share one submit info, the upload with the first:
+  the GPU runs them in order either way, and a driver may pay for each info (the UHD 630's paid
+  about 160 us apiece). `Metrics::submit_infos` counts them. The upload records at most 4,096 calls
+  and keeps at most 64 MiB on its own account: the staging buffers of copies larger than the staging
+  region, and the textures and blocks released while it held them. A call that finds it past either
+  submits it and waits for it to complete before recording, so nothing grows without a commit. While
+  fewer than three of a queue's submissions are not yet seen complete, each of its command buffers
+  goes at once, alone. While three are, the ones committed meanwhile are held in one group, each
+  scheduled as it joins, and the group goes when it holds sixteen, when a completion leaves fewer
+  than three in flight (the completion thread wakes the submit thread as it retires; no commit or
+  wait is needed), when the host is to wait for one of them (`wait_until_completed`, or
+  `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. Waiting
+  for a place in the queue sends nothing. A segment that signals an event ends its group, which goes
+  at once; one that waits on an event's semaphore leads a new group, the one held going first. The
+  driver runs a submission's command buffers as one kernel job, which a job timeout ends as a whole
+  (Linux's amdgpu ends a job past its timeout and resets the ring), so a group is bounded by its
+  expected GPU run, as the old runtime's are: a queue's expected run follows its command buffers'
+  own GPU times as each retires (a longer one raises it at once, a shorter one halves the way toward
+  it), and a command buffer joins a group only while the group's expected runs, summed, stay within
+  16 ms. One whose queue has no run yet, or that would take the sum past the bound, goes alone, the
+  group held going first. The bound is tested again as the group goes, with the expected run as it
+  then stands: a group past it goes member by member, one `vkQueueSubmit2` each, only the last
+  signalling. The thread holds a segment whose event waits are not met, and its queue's later
+  command buffers behind it, while the segments before it run, so the host can see a signal the
+  command buffer makes before its wait. Other queues go on. `Scheduled` means the last segment is in
+  a submission: passed to `vkQueueSubmit2`, or in a group held. A command buffer whose segments hold
+  no commands, no event wait and no event signal takes no submission: the submit thread schedules it
+  as it reaches it, and it completes with its queue's command buffer before it, in flight, or at
+  once where that one has completed. Where that one is in a group held, it joins the group, which
+  goes at once, so its completion waits only on submitted work.
 - A command buffer's scheduled handlers run on the submit thread, once it is scheduled and before
   its submission goes to the driver (one that ends without a submission: once it ends, before it
   retires), with no lock of the runtime's held. In the handler its status is `Scheduled` and its
@@ -866,6 +873,11 @@ that touch blocks first.
   run in flight) is equal. A recorded replay stream on the same card plays 1.5 times as fast as on
   the old runtime; it was recorded before the recorder's completion fix, so that figure compares
   the two runtimes on the same stream and no more.
+- One command buffer whose own GPU run passes the driver's job timeout still ends there: the
+  runtime does not cut a command buffer's work into shorter jobs, and joins none to it (the
+  grouping bound above). Linux's amdgpu ends a job past its timeout, 2 s by default (Linux 7.3.3),
+  and resets the ring, where Metal runs the command buffer within its own watchdog's longer bound
+  (the old runtime's known gap in `docs/FAST-PATHS.md` names the same limit).
 - A command buffer whose timestamps are not available when its submission signals reports no GPU
   times: its `gpu_start_time` and `gpu_end_time` are 0, and `Metrics::stamps_not_available`
   counts it, where Metal reports the times of every command buffer that completes. A signal says

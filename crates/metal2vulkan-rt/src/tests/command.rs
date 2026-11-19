@@ -1138,7 +1138,10 @@ pub(crate) mod on_device {
             let before = device.counters().metrics().submissions;
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let (target, offset) = self.work.device_range();
-            let size = self.work.length();
+            // A page: the batch ahead of it holds it in flight, whatever it does, and its own GPU
+            // run stays short on every device, as the queue's expected run reads it
+            // (`QueueInner::ran`).
+            let size = self.work.length().min(4096);
             command_buffer
                 .record_for_test(&[&self.work], |device, command| {
                     // SAFETY: the command buffer is recording outside any render pass; the range
@@ -1203,13 +1206,19 @@ pub(crate) mod on_device {
     /// (`Done::completed`): every earlier command buffer's, so the progress stays there until the
     /// body opens the busy work ([`Busy::open`]) and the completion thread sees a busy one
     /// complete, and a held group goes no earlier than that. The busy work is opened after `body`
-    /// where it did not, and waited for.
+    /// where it did not, and waited for. First a command buffer of the queue with no commands of
+    /// its own runs and retires, so the queue's expected GPU run is known and the command buffers
+    /// held behind the busy work may join one group (`submit::GROUP_RUN`).
     fn behind_busy(
         name: &str,
         device: &Device,
         queue: &CommandQueue,
         body: impl FnOnce(&Busy, u64, u64),
     ) {
+        let first = queue.command_buffer().expect("a command buffer");
+        (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+        first.commit().expect("a commit");
+        finished(name, &first);
         let before = device.counters().metrics().submissions;
         let seen = device.core().done.completed();
         let mut busy = Busy::new(device);
@@ -1352,9 +1361,9 @@ pub(crate) mod on_device {
     /// within `GROUP_RUN`, each its queue's expected run: behind three running submissions, three
     /// fills on a queue whose command buffers ran 1 ms go as one group, and on a queue whose
     /// command buffers ran past the bound as three submissions, the first two before the busy
-    /// work ends. The expected run is set as a retiring command buffer's GPU times set it
-    /// (`QueueInner::ran`); the busy work retires only after the fills were staged, and the
-    /// retirements move it.
+    /// work ends. The expected run is set behind the busy work as a retiring command buffer's GPU
+    /// times set it (`QueueInner::ran`); the busy work retires only after the fills were staged,
+    /// and the retirements move it.
     #[test]
     fn every_device_joins_a_held_group_only_within_its_expected_run() {
         each_device("command_group_run", |name, _, device| {
@@ -1362,10 +1371,10 @@ pub(crate) mod on_device {
             let buffer = arena.buffer();
             for (run, alone) in [(1_000_000, false), (GROUP_RUN + 1, true)] {
                 let queue = queue(&device);
-                let first = queue.command_buffer().expect("a command buffer");
-                first.queue().ran(run);
-                drop(first);
                 behind_busy(name, &device, &queue, |busy, before, _| {
+                    let probe = queue.command_buffer().expect("a command buffer");
+                    probe.queue().ran(run);
+                    drop(probe);
                     let held: Vec<CommandBuffer> = (1..=3)
                         .map(|word| queue_fill(&queue, &buffer, word))
                         .collect();
@@ -1401,6 +1410,42 @@ pub(crate) mod on_device {
                 );
             }
             drop((buffer, arena, device));
+        });
+    }
+
+    /// The bound is tested again as a held group goes, with the expected run as it then stands:
+    /// three fills that joined one group behind three running submissions on a queue whose command
+    /// buffers ran 1 ms go member by member, three submissions, once a run of 1 s raised the
+    /// expected run before the busy work ended.
+    #[test]
+    fn every_device_sends_a_group_past_its_expected_run_member_by_member() {
+        each_device("command_group_apart", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let probe = queue.command_buffer().expect("a command buffer");
+            behind_busy(name, &device, &queue, |busy, before, _| {
+                probe.queue().ran(1_000_000);
+                let held: Vec<CommandBuffer> = (1..=3)
+                    .map(|word| queue_fill(&queue, &buffer, word))
+                    .collect();
+                for command_buffer in &held {
+                    within(name, || {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    });
+                }
+                let sent = device.counters().metrics().submissions - before;
+                assert_eq!(sent, AHEAD, "{name}: the three joined one group");
+                probe.queue().ran(1_000_000_000);
+                busy.open();
+                for command_buffer in &held {
+                    finished(name, command_buffer);
+                }
+                assert_eq!(word(&buffer), 3, "{name}");
+                let all = device.counters().metrics().submissions - before;
+                assert_eq!(all, AHEAD + 3, "{name}: member by member");
+            });
+            drop((probe, buffer, arena, queue, device));
         });
     }
 

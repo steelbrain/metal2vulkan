@@ -36,6 +36,8 @@ pub(crate) struct QueueInner {
     /// ([`expected_run`](Self::expected_run)); `u64::MAX` before one of its command buffers
     /// retired with its GPU times.
     run: AtomicU64,
+    /// Its command buffers retired with their GPU times ([`retired`](Self::retired)).
+    retired: AtomicU64,
     counters: Counters,
     /// The device, without keeping it: a command buffer handle that outlives the device's
     /// handles holds its queue, and neither keeps the device from its teardown.
@@ -75,6 +77,7 @@ impl Device {
                 last_end: AtomicU64::new(0),
                 last_scheduled: AtomicU64::new(0),
                 run: AtomicU64::new(u64::MAX),
+                retired: AtomicU64::new(0),
                 counters: core.counters.clone(),
                 core: Arc::downgrade(core),
             }),
@@ -168,6 +171,13 @@ impl QueueInner {
         let _ = (self.run).fetch_update(Ordering::Relaxed, Ordering::Relaxed, |run| {
             Some(next_run((run != u64::MAX).then_some(run), nanos))
         });
+        self.retired.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// How many of its command buffers retired with their GPU times: a group counts its joins
+    /// since the last ([`UNSEEN_JOINS`](crate::submit::UNSEEN_JOINS)).
+    pub(crate) fn retired(&self) -> u64 {
+        self.retired.load(Ordering::Relaxed)
     }
 
     /// Whether `queue` is this queue.

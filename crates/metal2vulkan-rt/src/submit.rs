@@ -10,8 +10,12 @@
 //! submission's command buffers as one kernel job, which a job timeout ends as a whole (Linux's
 //! amdgpu ends a job past its timeout and resets the ring), so a command buffer joins the group
 //! only while the group's expected GPU runs, summed, stay within [`GROUP_RUN`]; one whose queue
-//! has no run yet, or whose run is past the bound, goes alone, the group held going first. A
-//! segment that
+//! has no run yet, or whose run is past the bound, goes alone, the group held going first. The
+//! bound is tested again as the group goes, with the expected run as it then stands (a completion
+//! between a join and the send may have raised it): a group past it goes member by member, one
+//! `vkQueueSubmit2` each, only the last signalling. At most [`UNSEEN_JOINS`] command buffers join
+//! a group while none of the queue's completes, so command buffers that turn long all at once join
+//! no more than that many on the estimate of the short ones before them. A segment that
 //! signals an event ends its group, which goes at once; one that waits on a semaphore leads a new
 //! group, the one held going first. A group is one submission with one signal of the progress
 //! semaphore, which the completion thread follows in commit order. A command buffer that takes no
@@ -63,6 +67,12 @@ pub(crate) const GROUP: usize = 16;
 /// pass it summed: on a Radeon 780M a replay's frame of 5,114 dispatches, 29 GB written in 35 s,
 /// lost the device to a ring timeout of one submission.
 pub(crate) const GROUP_RUN: u64 = 16_000_000;
+
+/// The most command buffers that join one group while none of their queue's completes: they join
+/// on an expected run no completion has updated, so a program whose command buffers turn long all
+/// at once puts at most this many of them in one job before the estimate rises. The planner rules
+/// it from the replay streams' largest GPU time over this many consecutive command buffers.
+pub(crate) const UNSEEN_JOINS: usize = GROUP;
 
 /// The submissions of a queue not yet seen complete at which its command buffers are held in a
 /// group. Three, not two: with two, the GPU idles between a group's end and the next
@@ -290,6 +300,14 @@ struct Batch {
     /// The expected GPU runs of its command buffers, summed, in nanoseconds ([`GROUP_RUN`]);
     /// `u64::MAX` where one's was not known.
     run: u64,
+    /// Where each command buffer that leads in it begins among `segments`, its copy-ins first.
+    starts: Vec<usize>,
+    /// Its queue's completed command buffers when the last of its joins was counted, and the
+    /// command buffers that joined since one of them completed ([`UNSEEN_JOINS`]).
+    seen: u64,
+    unseen: usize,
+    /// It goes member by member ([`GROUP_RUN`], tested again as it goes).
+    apart: bool,
     /// Events it signals that the completion thread is not yet watching.
     watch: Vec<Arc<EventInner>>,
     /// What its segments wrote of buffers under textures over a buffer in an image of their own
@@ -1453,9 +1471,17 @@ impl WorkState {
         // stay within the bound: the group goes first where its own run is not known or would take
         // the sum past it.
         let run = fifo.queue.expected_run();
+        let retired = fifo.queue.retired();
         let leads = pending.next == 0;
         if let (true, Some(group)) = (leads, &fifo.group) {
-            if run.is_none_or(|run| group.run.saturating_add(run) > GROUP_RUN) {
+            let unseen = if group.seen == retired {
+                group.unseen
+            } else {
+                0
+            };
+            if run.is_none_or(|run| group.run.saturating_add(run) > GROUP_RUN)
+                || unseen >= UNSEEN_JOINS
+            {
                 return Step::Goes(index);
             }
         }
@@ -1470,6 +1496,10 @@ impl WorkState {
             count: 0,
             partial: false,
             run: 0,
+            starts: Vec::new(),
+            seen: 0,
+            unseen: 0,
+            apart: false,
             watch: Vec::new(),
             leans: Leans::default(),
             overs: Vec::new(),
@@ -1480,6 +1510,12 @@ impl WorkState {
         });
         if leads {
             group.run = group.run.saturating_add(run.unwrap_or(u64::MAX));
+            group.starts.push(group.segments.len());
+            if group.seen != retired {
+                group.seen = retired;
+                group.unseen = 0;
+            }
+            group.unseen += 1;
         }
         group.leans.join(&segment.overs);
         for buffer in &segment.managed_written {
@@ -1580,6 +1616,12 @@ impl WorkState {
         let across: usize = (self.fifos.iter()).map(|fifo| fifo.in_flight.len()).sum();
         let fifo = &mut self.fifos[index];
         let mut batch = fifo.group.take()?;
+        // The bound again, with the expected run as it now stands: a completion since a join may
+        // have raised it.
+        let members = batch.starts.len() as u64;
+        batch.apart = members > 1
+            && (fifo.queue.expected_run())
+                .is_none_or(|run| run.saturating_mul(members) > GROUP_RUN);
         let own = fifo.in_flight.len();
         if own < IN_FLIGHT && across >= IN_FLIGHT {
             self.counters.count(Metric::LoneSubmissionsAcrossQueues);
@@ -1883,6 +1925,10 @@ impl Batch {
             count: 0,
             partial: false,
             run: 0,
+            starts: Vec::new(),
+            seen: 0,
+            unseen: 0,
+            apart: false,
             watch: Vec::new(),
             leans: Leans::default(),
             overs: Vec::new(),
@@ -1914,6 +1960,8 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         backs,
         written,
         wrote,
+        starts,
+        apart,
         ..
     } = batch;
     let device = &core.device;
@@ -1952,6 +2000,7 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         // took it out under.
         unsafe { device.end_command_buffer(upload.command) }.is_ok()
     });
+    let mut ahead = 0;
     if let Some(upload) = &upload {
         let commands = std::iter::once(upload.command)
             .chain(upload.copy_ins.iter().map(|copy_in| copy_in.command));
@@ -1963,45 +2012,69 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
                     ..Staged::default()
                 },
             );
+            ahead += 1;
         }
     }
-    segments.retain(|staged| {
-        staged.command.is_some() || !staged.waits.is_empty() || !staged.signals.is_empty()
-    });
+    // One part, or, where the group goes member by member, one for each command buffer that leads
+    // in it, the upload with the first.
+    let mut parts: Vec<Vec<Staged>> = Vec::with_capacity(1);
+    let bounds: Vec<usize> = match apart {
+        true => (starts.iter())
+            .map(|start| start + ahead)
+            .filter(|&at| at > 0)
+            .collect(),
+        false => Vec::new(),
+    };
+    for &at in bounds.iter().rev() {
+        parts.push(segments.split_off(at));
+    }
+    parts.push(segments);
+    parts.reverse();
+    for part in &mut parts {
+        part.retain(|staged| {
+            staged.command.is_some() || !staged.waits.is_empty() || !staged.signals.is_empty()
+        });
+    }
+    parts.retain(|part| !part.is_empty());
     let progress = vk::SemaphoreSubmitInfo::default()
         .semaphore(core.done.progress)
         .value(value)
         .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS);
-    match segments.last_mut() {
+    match parts.last_mut().and_then(|part| part.last_mut()) {
         Some(last) => last.signals.push(progress),
-        None => segments.push(Staged {
+        None => parts.push(vec![Staged {
             signals: vec![progress],
             ..Staged::default()
-        }),
+        }]),
     }
-    let merged = infos(&segments);
-    let infos: Vec<vk::SubmitInfo2<'_>> = merged
-        .iter()
-        .map(|info| {
-            vk::SubmitInfo2::default()
-                .wait_semaphore_infos(info.waits)
-                .command_buffer_infos(&info.commands)
-                .signal_semaphore_infos(info.signals)
-        })
-        .collect();
     if ok {
         let queue = lock(&core.queues.runtime);
         if core.pool.freeing() {
             core.counters.count(Metric::SubmissionsDuringFrees);
         }
-        // Counted before the call: the work can complete, and a thread waiting on it go on to
-        // read the metrics, before the call returns here.
-        core.counters.count(Metric::Submissions);
-        core.counters.submitted_infos(infos.len() as u64);
-        // SAFETY: every command buffer is executable and in no other pending submission; every
-        // wait is on a signal submitted earlier, and every signal raises its semaphore; the queue
-        // is held.
-        ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
+        for part in &parts {
+            let merged = infos(part);
+            let infos: Vec<vk::SubmitInfo2<'_>> = merged
+                .iter()
+                .map(|info| {
+                    vk::SubmitInfo2::default()
+                        .wait_semaphore_infos(info.waits)
+                        .command_buffer_infos(&info.commands)
+                        .signal_semaphore_infos(info.signals)
+                })
+                .collect();
+            // Counted before the call: the work can complete, and a thread waiting on it go on to
+            // read the metrics, before the call returns here.
+            core.counters.count(Metric::Submissions);
+            core.counters.submitted_infos(infos.len() as u64);
+            // SAFETY: every command buffer is executable and in no other pending submission;
+            // every wait is on a signal submitted earlier, and every signal raises its semaphore;
+            // the queue is held.
+            ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
+            if !ok {
+                break;
+            }
+        }
         drop(queue);
     }
     if !ok {
