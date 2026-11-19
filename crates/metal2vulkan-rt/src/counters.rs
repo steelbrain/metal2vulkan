@@ -85,10 +85,12 @@ pub(crate) enum Metric {
     SurfacesCopied,
     /// [`Metrics::texture_clear_barriers`].
     TextureClearBarriers,
+    /// [`Metrics::sparse_binds`].
+    SparseBinds,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::TextureClearBarriers as usize + 1;
+const METRICS: usize = Metric::SparseBinds as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -122,6 +124,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::SurfacesInPlace,
     Metric::SurfacesCopied,
     Metric::TextureClearBarriers,
+    Metric::SparseBinds,
 ];
 
 // Each metric of the order is at its own index.
@@ -337,6 +340,7 @@ struct Atomics {
     external_releases: AtomicU64,
     surfaces_in_place: AtomicU64,
     surfaces_copied: AtomicU64,
+    sparse_binds: AtomicU64,
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
     capture_wait_nanos: AtomicU64,
@@ -458,6 +462,7 @@ impl Counters {
             Metric::SurfacesInPlace => &a.surfaces_in_place,
             Metric::SurfacesCopied => &a.surfaces_copied,
             Metric::TextureClearBarriers => &a.texture_clear_barriers,
+            Metric::SparseBinds => &a.sparse_binds,
         }
     }
 
@@ -889,6 +894,7 @@ impl Counters {
             external_releases: a.external_releases.load(Relaxed),
             surfaces_in_place: a.surfaces_in_place.load(Relaxed),
             surfaces_copied: a.surfaces_copied.load(Relaxed),
+            sparse_binds: a.sparse_binds.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
             capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
             capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
@@ -1284,6 +1290,10 @@ pub struct Metrics {
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),
     /// [`SurfaceForm::Copy`](crate::SurfaceForm::Copy)).
     pub surfaces_copied: u64,
+    /// `vkQueueBindSparse` calls: one for each import over several dma-bufs
+    /// ([`Device::import_dma_bufs`](crate::Device::import_dma_bufs)), binding its imports into its
+    /// buffer. Each signals a value the next `vkQueueSubmit2` waits for.
+    pub sparse_binds: u64,
 }
 
 /// No Metal counterpart: the `vkAllocateMemory` calls one site of the runtime made on the
@@ -1388,7 +1398,7 @@ pub struct Gauges {
     /// constexpr sampler owns. A placement that takes an index from another object adds none.
     pub descriptor_slots: u64,
     /// Live `VkDeviceMemory` allocations: those blocks are ranges of, the idle ones among them,
-    /// each imported block's, and the runtime's own. Each counts against the device's
+    /// each import's (one for each dma-buf of a block over several), and the runtime's own. Each counts against the device's
     /// `maxMemoryAllocationCount` ([`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations)).
     pub blocks: u64,
     /// Events and shared events (timeline semaphores).
@@ -1471,9 +1481,11 @@ pub struct Gauges {
     /// from its first record until its times are read at its completion: made as command buffers
     /// need them, and kept until the device drops.
     pub timestamp_pools: u64,
-    /// Imported blocks (`Device::import_dma_buf` on Unix,
-    /// [`Device::import_host_memory`](crate::Device::import_host_memory)) whose memory is not yet
-    /// freed: each is also one of [`blocks`](Self::blocks).
+    /// Imports whose memory is not yet freed: one for each imported block
+    /// (`Device::import_dma_buf` on Unix,
+    /// [`Device::import_host_memory`](crate::Device::import_host_memory)), and one for each
+    /// dma-buf of a block over several (`Device::import_dma_bufs` on Unix). Each is also one
+    /// of [`blocks`](Self::blocks).
     pub imports: u64,
     /// Exported blocks ([`Device::new_exported_block`](crate::Device::new_exported_block)) whose
     /// memory is not yet freed, an opaque handle's surface in place among them

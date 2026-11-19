@@ -311,6 +311,21 @@ pub(crate) enum Own {
         /// Its memory is an import of its own, freed with it.
         import: bool,
     },
+    /// An import over several dma-bufs ([`crate::Device::import_dma_bufs`]): its sparse buffer,
+    /// bound to its chunks' imports by the bind that signals `bind` on the binds' timeline
+    /// ([`crate::import::Sparse`]), whose memory requirements name `space` bytes of the sparse
+    /// address space. Its memory is its chunks', each a block of its own given back after it
+    /// ([`sparse_block`]).
+    #[cfg(unix)]
+    Sparse {
+        /// The bind's value.
+        bind: u64,
+        /// The bytes of the sparse address space it takes.
+        space: u64,
+    },
+    /// One dma-buf's import under such a buffer: memory and no buffer.
+    #[cfg(unix)]
+    Chunk,
 }
 
 impl Memory {
@@ -335,6 +350,16 @@ impl Memory {
     /// Whether it is a Private block in another memory type than the Private one.
     pub(crate) fn spilled(&self) -> bool {
         self.spilled
+    }
+
+    /// Whether it is memory the consumer brought: one import, or several behind one buffer.
+    pub(crate) fn imported(&self) -> bool {
+        match self.own {
+            Some(Own::Import) => true,
+            #[cfg(unix)]
+            Some(Own::Sparse { .. }) => true,
+            _ => false,
+        }
     }
 
     pub(crate) fn info(&self) -> BlockInfo {
@@ -400,6 +425,10 @@ pub(crate) struct Block {
     /// The block whose allocation this block's buffer is bound in ([`surface_view`]): given back
     /// after this one, so the block-maker thread destroys the buffer before it frees the memory.
     _under: Option<Arc<Block>>,
+    /// An import over several dma-bufs' chunks, in order ([`sparse_block`]): given back after
+    /// this one, so the block-maker thread destroys the sparse buffer before it frees any of
+    /// their memory, the last of them holding the release.
+    _chunks: Vec<Block>,
 }
 
 impl Block {
@@ -409,6 +438,7 @@ impl Block {
             core,
             release: Mutex::new(None),
             _under: None,
+            _chunks: Vec::new(),
         }
     }
 
@@ -419,6 +449,7 @@ impl Block {
             core,
             release: Mutex::new(release),
             _under: None,
+            _chunks: Vec::new(),
         }
     }
 
@@ -429,6 +460,7 @@ impl Block {
             core,
             release: Mutex::new(None),
             _under: Some(under),
+            _chunks: Vec::new(),
         }
     }
 }
@@ -1563,6 +1595,153 @@ pub(crate) unsafe fn import(
     })
 }
 
+/// Makes the sparse buffer of an import over several dma-bufs ([`crate::Device::import_dma_bufs`]):
+/// `len` bytes of the floor's usage, for dma-bufs, made with `VK_BUFFER_CREATE_SPARSE_BINDING_BIT`,
+/// bound to nothing yet; with its memory requirements.
+///
+/// Err: [`Error::Vulkan`] where the buffer cannot be made.
+///
+/// # Safety
+///
+/// The device was made with `sparseBinding` for such buffers ([`crate::import::binds_dma_bufs`]),
+/// and `len` is at most its `maxBufferSize`.
+#[cfg(unix)]
+pub(crate) unsafe fn sparse_buffer(
+    core: &Core,
+    len: u64,
+) -> Result<(vk::Buffer, vk::MemoryRequirements), Error> {
+    let device = &core.device;
+    let mut external = vk::ExternalMemoryBufferCreateInfo::default()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let info = vk::BufferCreateInfo::default()
+        .flags(vk::BufferCreateFlags::SPARSE_BINDING)
+        .size(len)
+        .usage(floor::BUFFER_USAGE)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .push_next(&mut external);
+    // SAFETY: the caller's.
+    let buffer =
+        unsafe { device.create_buffer(&info, None) }.map_err(Error::vulkan("vkCreateBuffer"))?;
+    // SAFETY: the buffer is live.
+    let needs = unsafe { device.get_buffer_memory_requirements(buffer) };
+    Ok((buffer, needs))
+}
+
+/// Imports one dma-buf of an import over several, `info`'s, with no buffer: counted against the
+/// device's allocations ([`allocate`]) and in the imports gauge. Never zeroed.
+///
+/// # Safety
+///
+/// `info` is a valid import of a dma-buf.
+#[cfg(unix)]
+pub(crate) unsafe fn import_chunk(
+    core: &Core,
+    info: &vk::MemoryAllocateInfo<'_>,
+) -> Result<vk::DeviceMemory, Error> {
+    // SAFETY: the caller's.
+    let memory = unsafe {
+        allocate(
+            &core.device,
+            &core.counters,
+            core.max_allocations,
+            info,
+            None,
+        )
+    }?;
+    core.counters.rise(Gauge::Imports);
+    Ok(memory)
+}
+
+/// Frees a chunk's import that no block holds: an import over several dma-bufs that failed past
+/// it, before its bind.
+///
+/// # Safety
+///
+/// Nothing is bound to `memory`, and nothing uses it.
+#[cfg(unix)]
+pub(crate) unsafe fn free_chunk(core: &Core, memory: vk::DeviceMemory) {
+    // SAFETY: the caller's.
+    unsafe { core.device.free_memory(memory, None) };
+    core.counters.fall(Gauge::Blocks);
+    core.counters.fall(Gauge::Imports);
+}
+
+/// What [`sparse_block`] makes a block of: the sparse buffer of `len` bytes, its chunks' imports
+/// in order with their lengths, the memory type they are of, the bind's value, the sparse address
+/// space its memory requirements name, and its numbers.
+#[cfg(unix)]
+pub(crate) struct SparseParts {
+    pub(crate) buffer: vk::Buffer,
+    pub(crate) len: u64,
+    pub(crate) chunks: Vec<(vk::DeviceMemory, u64)>,
+    pub(crate) index: u32,
+    pub(crate) bind: u64,
+    pub(crate) space: u64,
+    pub(crate) numbers: (BlockId, AllocationId),
+}
+
+/// The block of an import over several dma-bufs: Shared, as an import is, over the sparse buffer
+/// from its first byte, at the buffer's device address, never mapped. Each chunk is a block of its
+/// own under it ([`Block::_chunks`]), of the same numbers, its memory and no buffer, the last one
+/// holding `release`. Never zeroed.
+#[cfg(unix)]
+pub(crate) fn sparse_block(
+    core: &Arc<Core>,
+    parts: SparseParts,
+    release: Option<Release>,
+) -> Block {
+    let SparseParts {
+        buffer,
+        len,
+        chunks,
+        index,
+        bind,
+        space,
+        numbers: (id, allocation),
+    } = parts;
+    let address = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+    // SAFETY: the buffer has device-address usage, and it is sparse
+    // (`VUID-vkGetBufferDeviceAddress-bufferDeviceAddress-03324`). Its addresses run over its
+    // whole size (`VUID-VkDeviceAddress-size-11364`), across its chunks.
+    let address = unsafe { core.device.get_buffer_device_address(&address) };
+    let device_local = core.device_local & (1 << index) != 0;
+    let memory =
+        |memory: vk::DeviceMemory, len: u64, buffer: vk::Buffer, address: u64, own: Own| Memory {
+            id,
+            class: MemoryClass::Shared,
+            len,
+            allocation,
+            memory,
+            base: 0,
+            buffer,
+            address,
+            mapping: None,
+            device_local,
+            spilled: false,
+            own: Some(own),
+            zeroed: false,
+        };
+    let chunk = |(memory_of, chunk_len): (vk::DeviceMemory, u64), release: Option<Release>| {
+        let held = memory(memory_of, chunk_len, vk::Buffer::null(), 0, Own::Chunk);
+        Block::imported(held, Arc::clone(core), release)
+    };
+    let chunks = match chunks.split_last() {
+        Some((&last, before)) => (before.iter())
+            .map(|&before| chunk(before, None))
+            .chain(std::iter::once(chunk(last, release)))
+            .collect(),
+        None => Vec::new(),
+    };
+    let own = Own::Sparse { bind, space };
+    Block {
+        memory: memory(vk::DeviceMemory::null(), len, buffer, address, own),
+        core: Arc::clone(core),
+        release: Mutex::new(None),
+        _under: None,
+        _chunks: chunks,
+    }
+}
+
 /// Makes an export's block: a buffer of `len` bytes rounded up to 64 KiB, as a take's are, that
 /// exports `handle`, its dedicated allocation in the Private memory type, exportable as `handle`
 /// (counted against the device's allocations, [`allocate`]), bound at its first byte, the
@@ -1825,12 +2004,34 @@ pub(crate) unsafe fn surface_view(
 
 /// Frees an imported or exported block given back: its buffer, then its memory, then runs an
 /// import's release, as the bytes are the consumer's alone again; of a surface's buffer on the
-/// opaque handle's allocation, the buffer alone. The submissions made during the `vkFreeMemory`
-/// are counted.
+/// opaque handle's allocation, the buffer alone; of an import over several dma-bufs, the sparse
+/// buffer alone, once its bind completed, and of each of its chunks, the memory alone, the last
+/// one's release after it. The submissions made during the `vkFreeMemory` are counted.
 fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
-    // SAFETY: no GPU work that uses the block is pending (a command buffer or upload that uses it
-    // holds it until it retires), and no buffer of it is left.
-    unsafe { core.device.destroy_buffer(memory.buffer, None) };
+    match memory.own {
+        // An import over several dma-bufs' buffer: its bind, the one use of it no command buffer
+        // held, completes before it goes (`VUID-vkDestroyBuffer-buffer-00922`), and its chunks,
+        // given back after it, free the memory.
+        #[cfg(unix)]
+        Some(Own::Sparse { bind, space }) => {
+            let sparse = core.imports.sparse.as_ref();
+            if let Some(sparse) = sparse {
+                sparse.wait(&core.device, bind);
+            }
+            // SAFETY: as below, and the bind completed.
+            unsafe { core.device.destroy_buffer(memory.buffer, None) };
+            if let Some(sparse) = sparse {
+                sparse.unreserve(space);
+            }
+            return;
+        }
+        // A chunk has no buffer.
+        #[cfg(unix)]
+        Some(Own::Chunk) => {}
+        // SAFETY: no GPU work that uses the block is pending (a command buffer or upload that
+        // uses it holds it until it retires), and no buffer of it is left.
+        _ => unsafe { core.device.destroy_buffer(memory.buffer, None) },
+    }
     // A surface's buffer on the opaque handle's allocation frees no memory: the block under it,
     // given back after it, does.
     if memory.own == Some(Own::Surface { import: false }) {

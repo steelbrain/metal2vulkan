@@ -489,6 +489,22 @@ impl Device {
             mut divisor,
             mut zero_initialize,
         } = enabled_features;
+        // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
+        // the device's queries offer that import: it changes no other path, as only that import
+        // makes a sparse buffer.
+        // SAFETY: as for the floor check.
+        let sparse = unsafe {
+            crate::import::binds_dma_bufs(
+                vk_instance,
+                raw,
+                &families[family as usize],
+                &capabilities.extensions,
+            )
+        };
+        let core = vk::PhysicalDeviceFeatures {
+            sparse_binding: core.sparse_binding | vk::Bool32::from(sparse),
+            ..core
+        };
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
             .push_next(&mut vulkan11)
@@ -604,6 +620,11 @@ impl Device {
                 &capabilities.memory,
             )
         };
+        #[cfg(unix)]
+        let imports = imports.with_sparse(
+            &device,
+            sparse.then_some(properties.properties.limits.sparse_address_space_size),
+        );
         // SAFETY: as above.
         let exports = unsafe { Exports::new(vk_instance, raw, &device, &capabilities.extensions) };
         let feedback = (capabilities.feedback_loop).then(|| {
@@ -1512,6 +1533,8 @@ impl Drop for Core {
             unsafe { region.free(self) };
         }
         memory::free_all(self);
+        #[cfg(unix)]
+        self.imports.destroy(&self.device);
         self.stamps.destroy(&self.device, &self.counters);
         // SAFETY: the device is idle; nothing reads the ring.
         let ring_blocks = unsafe { self.ring.destroy(&self.device) };

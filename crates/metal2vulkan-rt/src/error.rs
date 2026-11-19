@@ -1439,25 +1439,32 @@ pub enum Limit {
         len: u64,
     },
     /// An import of a handle the device does not take
-    /// (`Device::import_dma_buf` on Unix,
+    /// (`Device::import_dma_buf` and `Device::import_dma_bufs` on Unix,
     /// [`Device::import_host_memory`](crate::Device::import_host_memory), and a dma-buf surface's
     /// buffer, [`Surface::buffer`](crate::Surface::buffer)): it does not list the
     /// handle's extensions (`VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` for a
     /// dma-buf, `VK_EXT_external_memory_host` for host memory), or its buffers do not import the
-    /// handle (`vkGetPhysicalDeviceExternalBufferProperties`). Metal's counterpart,
-    /// `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned memory.
+    /// handle (`vkGetPhysicalDeviceExternalBufferProperties`). For several dma-bufs, also where
+    /// the device does not bind them into one sparse buffer: it lacks `sparseBinding`, its queue
+    /// family binds no sparse memory, its sparse buffers import no dma-buf or only dedicated, or
+    /// such a buffer does not take every host-visible, host-coherent type a plain one takes
+    /// ([`Device::dma_buf_granule`](crate::Device::dma_buf_granule) is `None`). Metal's
+    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned
+    /// memory.
     ///
-    /// Basis: device (the device's extensions and its external buffer properties).
+    /// Basis: device (the device's extensions, features, queue family and external buffer
+    /// properties).
     NoImport {
         /// The handle asked for.
         handle: ImportHandle,
     },
     /// An import whose handle's memory type query offers no type the import takes, so nothing is
     /// imported: for a dma-buf, the first type the fd's query offers is not host-visible and
-    /// host-coherent, or the buffer's memory requirements do not list it; for host memory, the
-    /// pointer's query offers no type that is both and that the requirements list. Metal's
-    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any page-aligned
-    /// memory.
+    /// host-coherent, or the buffer's memory requirements do not list it; for several, that holds
+    /// of one fd, or one fd's type is not the first fd's, which `listed` then names alone; for
+    /// host memory, the pointer's query offers no type that is both and that the requirements
+    /// list. Metal's counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes
+    /// any page-aligned memory.
     ///
     /// Basis: device (the handle's memory type query and the buffer's memory requirements).
     ImportType {
@@ -1469,7 +1476,9 @@ pub enum Limit {
         listed: u32,
     },
     /// An import of no bytes, or one whose address or length is not a multiple of `alignment`:
-    /// for host memory the device's `minImportedHostPointerAlignment`, and for either handle the
+    /// for host memory the device's `minImportedHostPointerAlignment`, for several dma-bufs each
+    /// one's length against [`Device::dma_buf_granule`](crate::Device::dma_buf_granule) (or the
+    /// sparse buffer's alignment where the granule is no multiple of it), and for one handle the
     /// alignment of the buffer's memory requirements where their size is past the length. Metal's
     /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes memory of a
     /// whole number of pages at a page's first byte.
@@ -1482,6 +1491,22 @@ pub enum Limit {
         len: u64,
         /// The multiple the device takes.
         alignment: u64,
+    },
+    /// An import over several dma-bufs
+    /// ([`Device::import_dma_bufs`](crate::Device::import_dma_bufs)) whose sparse buffer would
+    /// take the device's sparse address space past its `sparseAddressSpaceSize`, with the sparse
+    /// buffers still live (`VUID-vkCreateBuffer-flags-00911`): nothing is imported. Metal's
+    /// counterpart, `newBufferWithBytesNoCopy:length:options:deallocator:`, takes any
+    /// page-aligned memory.
+    ///
+    /// Basis: device (`sparseAddressSpaceSize`).
+    SparseAddressSpace {
+        /// The bytes the import's buffer takes.
+        len: u64,
+        /// The bytes the live sparse buffers take.
+        live: u64,
+        /// The device's `sparseAddressSpaceSize`.
+        max: u64,
     },
     /// An export of a handle the device does not give
     /// ([`Device::new_exported_block`](crate::Device::new_exported_block)): it does not list the
@@ -2084,6 +2109,11 @@ impl fmt::Display for Limit {
             } => write!(
                 f,
                 "an import of {len} bytes of {handle:?} at no multiple of {alignment} bytes"
+            ),
+            Limit::SparseAddressSpace { len, live, max } => write!(
+                f,
+                "a sparse buffer of {len} bytes beside {live} bytes of live ones, past the \
+                 device's sparse address space of {max}"
             ),
             Limit::NoExport { handle } => write!(f, "the device exports no {handle:?}"),
             Limit::ExportType {

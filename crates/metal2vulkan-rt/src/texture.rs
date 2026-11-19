@@ -4177,7 +4177,7 @@ pub(crate) trait TextureObject {
             unit,
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
-            imported: device_copy.is_none() && block.memory.own == Some(memory::Own::Import),
+            imported: device_copy.is_none() && block.memory.imported(),
         };
         Some((&named.buffer, copy))
     }

@@ -1,6 +1,7 @@
 //! Imports: blocks over memory the consumer brings, the memory of Metal's no-copy buffers
 //! (`newBufferWithBytesNoCopy:length:options:deallocator:`). A dma-buf by its fd
-//! (`Device::import_dma_buf`, on Unix) or host memory by its address
+//! (`Device::import_dma_buf`, on Unix), several dma-bufs behind one buffer
+//! (`Device::import_dma_bufs`, on Unix) or host memory by its address
 //! ([`Device::import_host_memory`]), each into the memory type its own rule takes from the
 //! handle's query, and each a block the consumer places buffers in as it places them in a block
 //! it took.
@@ -13,19 +14,29 @@
 //! host-coherent.
 
 use crate::block::Block;
+#[cfg(unix)]
+use crate::counters::Metric;
+#[cfg(unix)]
+use crate::device::lock;
 use crate::device::{Core, Device};
 use crate::error::{Error, Limit};
 use crate::floor;
 use crate::memory::{self, ImportFailed, Mapping, Own, Release};
 use ash::vk;
 use std::ptr::NonNull;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::OnceLock;
 
 /// No Metal counterpart: the handle an import takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ImportHandle {
     /// A Linux dma-buf by its fd (`Device::import_dma_buf`, on Unix).
     DmaBuf,
+    /// Several Linux dma-bufs by their fds, behind one buffer ([`Device::import_dma_bufs`]).
+    DmaBufs,
     /// Host memory by its address ([`Device::import_host_memory`]).
     HostMemory,
 }
@@ -33,7 +44,9 @@ pub enum ImportHandle {
 impl ImportHandle {
     fn vk(self) -> vk::ExternalMemoryHandleTypeFlags {
         match self {
-            ImportHandle::DmaBuf => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+            ImportHandle::DmaBuf | ImportHandle::DmaBufs => {
+                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT
+            }
             ImportHandle::HostMemory => vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT,
         }
     }
@@ -48,6 +61,10 @@ pub(crate) struct Imports {
     /// the device's buffers import a dma-buf.
     #[cfg(unix)]
     pub(crate) dma_buf: Option<ash::khr::external_memory_fd::Device>,
+    /// The import over several dma-bufs' sparse binding, where the device was made with it
+    /// ([`binds_dma_bufs`]) and its granule holds ([`Sparse::new`]).
+    #[cfg(unix)]
+    pub(crate) sparse: Option<Sparse>,
     /// The host-visible and host-coherent memory types, one bit each.
     pub(crate) coherent: u32,
 }
@@ -109,9 +126,264 @@ impl Imports {
             host,
             #[cfg(unix)]
             dma_buf,
+            #[cfg(unix)]
+            sparse: None,
             coherent,
         }
     }
+
+    /// The imports with the sparse binding of an import over several dma-bufs, where the device
+    /// was made with it (`space`, its `sparseAddressSpaceSize`, is `Some` where
+    /// [`binds_dma_bufs`] held) and its granule holds ([`Sparse::new`]).
+    #[cfg(unix)]
+    pub(crate) fn with_sparse(self, device: &ash::Device, space: Option<u64>) -> Imports {
+        let sparse = (space.filter(|_| self.dma_buf.is_some()))
+            .and_then(|space| Sparse::new(device, self.coherent, space));
+        Imports { sparse, ..self }
+    }
+
+    /// At the device's teardown, once it is idle and every import is freed: the binds' timeline.
+    #[cfg(unix)]
+    pub(crate) fn destroy(&self, device: &ash::Device) {
+        if let Some(&timeline) = self
+            .sparse
+            .as_ref()
+            .and_then(|sparse| sparse.timeline.get())
+        {
+            // SAFETY: the device is idle, and no wait or signal names the timeline.
+            unsafe { device.destroy_semaphore(timeline, None) };
+        }
+    }
+}
+
+/// Whether device creation enables `sparseBinding` for imports over several dma-bufs
+/// ([`Device::import_dma_bufs`]): the device reports the feature, the runtime's queue `family`
+/// binds sparse memory, `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` are in
+/// `extensions`, and a sparse buffer of the floor's usage imports a dma-buf with no dedicated
+/// allocation (`vkGetPhysicalDeviceExternalBufferProperties`, as the Vulkan rules for a sparse
+/// bind of imported memory name the handle in the buffer, `VUID-VkSparseMemoryBind-memory-02731`).
+/// Elsewhere the feature stays as the floor and the consumer leave it, and the import refuses.
+/// The feature changes nothing else: only a buffer made with `VK_BUFFER_CREATE_SPARSE_BINDING_BIT`
+/// binds sparse, and only this import makes one.
+///
+/// # Safety
+///
+/// `physical` is `instance`'s, of Vulkan 1.3.
+pub(crate) unsafe fn binds_dma_bufs(
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+    family: &vk::QueueFamilyProperties,
+    extensions: &[&std::ffi::CStr],
+) -> bool {
+    let enabled = |name: &std::ffi::CStr| extensions.contains(&name);
+    if !enabled(ash::khr::external_memory_fd::NAME)
+        || !enabled(ash::ext::external_memory_dma_buf::NAME)
+        || !family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING)
+    {
+        return false;
+    }
+    // SAFETY: the caller's.
+    let features = unsafe { instance.get_physical_device_features(physical) };
+    let info = vk::PhysicalDeviceExternalBufferInfo::default()
+        .flags(vk::BufferCreateFlags::SPARSE_BINDING)
+        .usage(floor::BUFFER_USAGE)
+        .handle_type(ImportHandle::DmaBufs.vk());
+    let mut properties = vk::ExternalBufferProperties::default();
+    // SAFETY: the caller's.
+    unsafe {
+        instance.get_physical_device_external_buffer_properties(physical, &info, &mut properties)
+    };
+    let offered = properties
+        .external_memory_properties
+        .external_memory_features;
+    features.sparse_binding == vk::TRUE
+        && offered.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+        && !offered.contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY)
+}
+
+/// The sparse binding of imports over several dma-bufs ([`Device::import_dma_bufs`]).
+///
+/// One `vkQueueBindSparse` on the runtime's queue binds each such buffer to its imports, under
+/// the queue's lock, and signals the next value of the binds' timeline; nothing waits for it
+/// there. Vulkan orders no sparse bind against command buffers, "even within a single queue",
+/// and a semaphore wait's second scope is every command of its batch "and all commands that occur
+/// later in submission order", so the next submission waits for that value once ([`Sparse::owed`]),
+/// and every later one is ordered after it. The block's free waits for the value on the
+/// block-maker thread before the buffer goes, for a block no command buffer used.
+#[cfg(unix)]
+pub(crate) struct Sparse {
+    /// What a chunk's length is a multiple of ([`Device::dma_buf_granule`]).
+    pub(crate) granule: u64,
+    /// The device's `sparseAddressSpaceSize`.
+    space: u64,
+    /// The bytes the live sparse buffers' memory requirements name, against `space`
+    /// (`VUID-vkCreateBuffer-flags-00911`).
+    live: AtomicU64,
+    /// The binds' timeline, made at the first bind.
+    timeline: OnceLock<vk::Semaphore>,
+    /// The value the last bind signalled. Read and written under the runtime queue's lock.
+    last: AtomicU64,
+    /// The value of a bind no submission has waited for yet, 0 where none. Written under the
+    /// runtime queue's lock, by a bind, and taken under it by the next submission.
+    owed: AtomicU64,
+}
+
+#[cfg(unix)]
+impl Sparse {
+    /// The sparse binding on a device made with it, where its granule holds: a sparse buffer of
+    /// the floor's usage for dma-bufs takes every host-visible and host-coherent type a plain one
+    /// takes, so wherever the dma-buf rule takes a type for one import of an fd it takes the same
+    /// type for a chunk of this one. Its granule is that buffer's alignment, in which Vulkan binds
+    /// a sparse buffer's memory (`VUID-VkSparseMemoryBind-resourceOffset-09491`), rounded up to
+    /// the host's page. `None` elsewhere.
+    fn new(device: &ash::Device, coherent: u32, space: u64) -> Option<Sparse> {
+        // SAFETY: `sysconf` reads a constant of the host.
+        let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
+        let handle = ImportHandle::DmaBufs.vk();
+        let plain = requirements(device, crate::memory::GRANULE, handle, false);
+        let sparse = requirements(device, crate::memory::GRANULE, handle, true);
+        let granule = (sparse.alignment.max(1).checked_next_multiple_of(page))
+            .filter(|granule| granule.is_multiple_of(sparse.alignment.max(1)))?;
+        (plain.memory_type_bits & coherent & !sparse.memory_type_bits == 0).then(|| Sparse {
+            granule,
+            space,
+            live: AtomicU64::new(0),
+            timeline: OnceLock::new(),
+            last: AtomicU64::new(0),
+            owed: AtomicU64::new(0),
+        })
+    }
+
+    /// Takes `len` bytes of the sparse address space for a buffer whose memory requirements
+    /// name them. Err: [`Limit::SparseAddressSpace`].
+    fn reserve(&self, len: u64) -> Result<(), Error> {
+        (self.live)
+            .fetch_update(Relaxed, Relaxed, |live| {
+                live.checked_add(len).filter(|&total| total <= self.space)
+            })
+            .map(drop)
+            .map_err(|live| {
+                Error::Limit(Limit::SparseAddressSpace {
+                    len,
+                    live,
+                    max: self.space,
+                })
+            })
+    }
+
+    /// Gives back `len` bytes of the sparse address space, once their buffer is destroyed.
+    pub(crate) fn unreserve(&self, len: u64) {
+        self.live.fetch_sub(len, Relaxed);
+    }
+
+    /// Binds `binds` into `buffer` by one `vkQueueBindSparse` on the runtime's queue, under its
+    /// lock, signalling the timeline's next value, which it returns and which the next submission
+    /// waits for. Counted in [`Metrics::sparse_binds`](crate::Metrics::sparse_binds).
+    ///
+    /// Err: [`Error::Vulkan`] where the timeline cannot be made or the bind fails.
+    ///
+    /// # Safety
+    ///
+    /// `buffer` is a sparse buffer of `core`'s device that nothing uses, and each bind lies in it
+    /// and in its memory, at its alignment, in a type it takes.
+    unsafe fn bind(
+        &self,
+        core: &Core,
+        buffer: vk::Buffer,
+        binds: &[vk::SparseMemoryBind],
+    ) -> Result<u64, Error> {
+        let queue = lock(&core.queues.runtime);
+        let timeline = match self.timeline.get() {
+            Some(&timeline) => timeline,
+            None => {
+                let made = crate::event::timeline(&core.device)?;
+                // Under the queue's lock, so no other bind set it first.
+                *self.timeline.get_or_init(|| made)
+            }
+        };
+        let value = self.last.load(Relaxed) + 1;
+        let buffer_binds = [vk::SparseBufferMemoryBindInfo::default()
+            .buffer(buffer)
+            .binds(binds)];
+        let signals = [timeline];
+        let values = [value];
+        let mut timeline_info =
+            vk::TimelineSemaphoreSubmitInfo::default().signal_semaphore_values(&values);
+        let info = vk::BindSparseInfo::default()
+            .buffer_binds(&buffer_binds)
+            .signal_semaphores(&signals)
+            .push_next(&mut timeline_info);
+        core.counters.count(Metric::SparseBinds);
+        // SAFETY: the caller's for the buffer and the binds; the queue's family binds sparse
+        // memory ([`binds_dma_bufs`]) and the queue is held; the value is above every value the
+        // timeline was given, all of them signalled under this lock.
+        unsafe {
+            core.device
+                .queue_bind_sparse(*queue, &[info], vk::Fence::null())
+        }
+        .map_err(Error::vulkan("vkQueueBindSparse"))?;
+        self.last.store(value, Relaxed);
+        self.owed.store(value, Relaxed);
+        drop(queue);
+        Ok(value)
+    }
+
+    /// The timeline and the value of a bind no submission has waited for yet, which the calling
+    /// submission now waits for: taken, so only the next one waits. Called under the runtime
+    /// queue's lock by the submission that is about to be made.
+    pub(crate) fn owed(&self) -> Option<(vk::Semaphore, u64)> {
+        let value = self.owed.load(Relaxed);
+        if value == 0 {
+            return None;
+        }
+        self.owed.store(0, Relaxed);
+        self.timeline.get().map(|&timeline| (timeline, value))
+    }
+
+    /// Waits on the host until the bind that signals `value` completed: before its buffer is
+    /// destroyed (`VUID-vkDestroyBuffer-buffer-00922`). At once where a submission waited for it
+    /// and retired, as each that used the buffer did; a lost device ends the wait.
+    pub(crate) fn wait(&self, device: &ash::Device, value: u64) {
+        let Some(&timeline) = self.timeline.get() else {
+            return;
+        };
+        let semaphores = [timeline];
+        let values = [value];
+        let info = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        // SAFETY: the timeline is live, and the bind that signals `value` was submitted. A lost
+        // device fails the wait, and then nothing is pending.
+        let _ = unsafe { device.wait_semaphores(&info, u64::MAX) };
+    }
+}
+
+/// The memory requirements of a buffer of `len` bytes and the floor's usage for `handle`, made
+/// with `VK_BUFFER_CREATE_SPARSE_BINDING_BIT` where `sparse` holds.
+#[cfg(unix)]
+fn requirements(
+    device: &ash::Device,
+    len: u64,
+    handle: vk::ExternalMemoryHandleTypeFlags,
+    sparse: bool,
+) -> vk::MemoryRequirements {
+    let flags = match sparse {
+        true => vk::BufferCreateFlags::SPARSE_BINDING,
+        false => vk::BufferCreateFlags::empty(),
+    };
+    let mut external = vk::ExternalMemoryBufferCreateInfo::default().handle_types(handle);
+    let buffer = vk::BufferCreateInfo::default()
+        .flags(flags)
+        .size(len)
+        .usage(floor::BUFFER_USAGE)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .push_next(&mut external);
+    let of = vk::DeviceBufferMemoryRequirements::default().create_info(&buffer);
+    let mut needs = vk::MemoryRequirements2::default();
+    // SAFETY: the device is live and the create info valid: its buffers import `handle`, and a
+    // sparse one is asked only of a device made with `sparseBinding` ([`binds_dma_bufs`]).
+    unsafe { device.get_device_buffer_memory_requirements(&of, &mut needs) };
+    needs.memory_requirements
 }
 
 /// The flags both rules ask of an import's memory type.
@@ -234,6 +506,230 @@ impl Device {
             }
             Err(ImportFailed::After(error)) => Err(error),
         }
+    }
+
+    /// No Metal counterpart: what [`Device::import_dma_bufs`] cuts at. Each dma-buf's length,
+    /// and so its offset in the block, is a multiple of it: the alignment in which the device binds
+    /// a sparse buffer's memory, rounded up to the host's page (64 KiB on RADV of Mesa 26.2.6, 4
+    /// KiB on lavapipe). `None` where the call refuses every import
+    /// ([`Limit::NoImport`](crate::Limit::NoImport)): the device does not bind dma-bufs into a
+    /// sparse buffer (Mesa's Intel driver, 26.2.6, imports no dma-buf for one), or its sparse
+    /// buffer does not take every type a plain one takes.
+    #[cfg(unix)]
+    pub fn dma_buf_granule(&self) -> Option<u64> {
+        (self.core().imports.sparse.as_ref()).map(|sparse| sparse.granule)
+    }
+
+    /// `newBufferWithBytesNoCopy:length:options:deallocator:`'s memory, from several Linux
+    /// dma-bufs: one block over the dma-bufs of `chunks`, each fd with its length, in order, each
+    /// starting where the one before ends, for the consumer to place buffers in
+    /// ([`Device::new_buffer`]) as in a block it took. Metal's memory is one range; a consumer
+    /// whose pages take more than one dma-buf (a udmabuf holds a bounded number of a memfd's
+    /// ranges) cuts them at [`Device::dma_buf_granule`], the last padded, and imports them here.
+    /// As for [`Device::import_dma_buf`], the block is Shared, its `contents` is `None` and its
+    /// zero mark is 0; its `gpu_address`, and every buffer of it, run across the dma-bufs as over
+    /// one range: the block's `VkBuffer` is one sparse buffer
+    /// (`VK_BUFFER_CREATE_SPARSE_BINDING_BIT`) that each dma-buf's import is bound into at its
+    /// offset.
+    ///
+    /// Each fd's import takes the dma-buf rule's type ([`Device::import_dma_buf`]) of the types the
+    /// sparse buffer's memory requirements list, and every fd the same one, which the call returns
+    /// with the block. Every refusal comes before any allocation is attempted, with nothing
+    /// imported. The call takes owned fds, as [`Device::import_dma_buf`] does, and returns a block,
+    /// so a consumer that imports one dma-buf or several places its buffers the same way.
+    ///
+    /// One `vkQueueBindSparse` on the runtime's queue binds the imports, and the call does not
+    /// wait for it: the runtime's next `vkQueueSubmit2` waits for it, once, and so does the block's
+    /// free (on the block-maker thread) where nothing used the block. So the caller waits as long as
+    /// one import's `vkAllocateMemory` takes for each dma-buf, and one queue call. Counted in
+    /// [`Metrics::sparse_binds`](crate::Metrics::sparse_binds).
+    ///
+    /// The fds: after `Ok` the driver owns each. After a refusal or a failed query the runtime
+    /// closes them all: no driver was given any. After a failed import the imports made are freed,
+    /// and their fds with them; the failing fd is closed only where it still names the same file
+    /// (as for [`Device::import_dma_buf`]), and the rest are closed.
+    ///
+    /// The block lives until its last handle and its last buffer, command buffer or upload are
+    /// gone. The block-maker thread then destroys its buffer, frees each import, which ends it, and
+    /// runs `release`, Metal's deallocator, after the last: as for [`Device::import_dma_buf`].
+    /// Each dma-buf's import is one `VkDeviceMemory` allocation: it counts against the device's
+    /// `maxMemoryAllocationCount`, and in [`Gauges::imports`](crate::Gauges::imports) and
+    /// [`Gauges::blocks`](crate::Gauges::blocks) while it lives.
+    ///
+    /// Err: [`Limit::NoImport`](crate::Limit::NoImport) where [`Device::dma_buf_granule`] is
+    /// `None`; [`Limit::ImportAlignment`](crate::Limit::ImportAlignment) for no fds, a length of
+    /// 0 or one that is no multiple of the granule (or of the sparse buffer's alignment);
+    /// [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's longest allocation or buffer;
+    /// [`Limit::SparseAddressSpace`](crate::Limit::SparseAddressSpace);
+    /// [`Limit::ImportType`](crate::Limit::ImportType) where the rule takes no type for an fd, or
+    /// another type than the first fd's (then `listed` names that type alone);
+    /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations);
+    /// [`Limit::BlockIds`](crate::Limit::BlockIds); [`Error::Vulkan`] where a query, the buffer,
+    /// an import or the bind fails (an fd is no dma-buf of its length or more, or the device is out
+    /// of memory or lost); [`Error::Quiesced`].
+    #[cfg(unix)]
+    pub fn import_dma_bufs(
+        &self,
+        chunks: Vec<(std::os::fd::OwnedFd, u64)>,
+        release: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(Block, u32), Error> {
+        use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+        let core = self.core();
+        let handle = ImportHandle::DmaBufs;
+        if core.closed() {
+            return Err(Error::Quiesced);
+        }
+        let (Some(fds), Some(sparse)) = (&core.imports.dma_buf, &core.imports.sparse) else {
+            return Err(Error::Limit(Limit::NoImport { handle }));
+        };
+        let granule = sparse.granule;
+        let misaligned = |len: u64, alignment: u64| {
+            Error::Limit(Limit::ImportAlignment {
+                handle,
+                len,
+                alignment,
+            })
+        };
+        if chunks.is_empty() {
+            return Err(misaligned(0, granule));
+        }
+        let mut len = 0u64;
+        for &(_, chunk) in &chunks {
+            if chunk == 0 || !chunk.is_multiple_of(granule) {
+                return Err(misaligned(chunk, granule));
+            }
+            len = len.saturating_add(chunk);
+        }
+        check_len(core, handle, len)?;
+        // SAFETY: the device was made with `sparseBinding` for such buffers (`sparse` is `Some`),
+        // and `len` is at most its `maxBufferSize` (`check_len`).
+        let (buffer, needs) = unsafe { memory::sparse_buffer(core, len) }?;
+        let destroy = || {
+            // SAFETY: nothing uses or binds the buffer.
+            unsafe { core.device.destroy_buffer(buffer, None) }
+        };
+        if !granule.is_multiple_of(needs.alignment.max(1)) {
+            destroy();
+            return Err(misaligned(len, needs.alignment));
+        }
+        let mut index = None;
+        for (fd, _) in &chunks {
+            let mut properties = vk::MemoryFdPropertiesKHR::default();
+            // SAFETY: the extensions are enabled; `fd` is open, and the query takes no ownership.
+            let queried = unsafe {
+                fds.get_memory_fd_properties(handle.vk(), fd.as_raw_fd(), &mut properties)
+            };
+            if let Err(result) = queried {
+                destroy();
+                return Err(Error::Vulkan {
+                    call: "vkGetMemoryFdPropertiesKHR",
+                    result,
+                });
+            }
+            let offered = properties.memory_type_bits;
+            let listed = index.map_or(needs.memory_type_bits, |first: u32| {
+                needs.memory_type_bits & (1 << first)
+            });
+            match dma_buf_type(offered, listed, core.imports.coherent) {
+                Some(taken) => index = Some(taken),
+                None => {
+                    destroy();
+                    return Err(Error::Limit(Limit::ImportType {
+                        handle,
+                        offered,
+                        listed,
+                    }));
+                }
+            }
+        }
+        let Some(index) = index else {
+            destroy();
+            return Err(misaligned(0, granule));
+        };
+        if let Err(error) = sparse.reserve(needs.size) {
+            destroy();
+            return Err(error);
+        }
+        let undo = |made: &[(vk::DeviceMemory, u64)]| {
+            for &(memory, _) in made {
+                // SAFETY: nothing is bound to the import yet, and nothing uses it.
+                unsafe { memory::free_chunk(core, memory) };
+            }
+            sparse.unreserve(needs.size);
+            destroy();
+        };
+        let numbers = match core.pool.own_numbers() {
+            Ok(numbers) => numbers,
+            Err(error) => {
+                undo(&[]);
+                return Err(error);
+            }
+        };
+        let mut made = Vec::with_capacity(chunks.len());
+        let mut rest = chunks.into_iter();
+        for (fd, chunk) in rest.by_ref() {
+            let identity = identity(fd.as_raw_fd());
+            let raw = fd.into_raw_fd();
+            let mut import = vk::ImportMemoryFdInfoKHR::default()
+                .handle_type(handle.vk())
+                .fd(raw);
+            let mut flags = vk::MemoryAllocateFlagsInfo::default()
+                .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+            let info = vk::MemoryAllocateInfo::default()
+                .allocation_size(chunk)
+                .memory_type_index(index)
+                .push_next(&mut import)
+                .push_next(&mut flags);
+            // SAFETY: an import of the dma-buf into a type its query offered and the sparse
+            // buffer takes.
+            match unsafe { memory::import_chunk(core, &info) } {
+                Ok(memory) => made.push((memory, chunk)),
+                Err(error) => {
+                    // Nothing was imported of this fd, so it is still ours: closed, where it is
+                    // still the dma-buf; the fds after it close as `rest` drops.
+                    if identity.is_some() && identity == self::identity(raw) {
+                        // SAFETY: `raw` is open and names the dma-buf the call was given, which
+                        // no one else owns.
+                        drop(unsafe { OwnedFd::from_raw_fd(raw) });
+                    }
+                    undo(&made);
+                    return Err(error);
+                }
+            }
+        }
+        let mut offset = 0;
+        let binds: Vec<vk::SparseMemoryBind> = (made.iter())
+            .map(|&(memory, size)| {
+                let bind = vk::SparseMemoryBind::default()
+                    .resource_offset(offset)
+                    .size(size)
+                    .memory(memory);
+                offset += size;
+                bind
+            })
+            .collect();
+        // SAFETY: the buffer is new and unused; each bind lies in it at a multiple of its
+        // alignment, from the first byte of an import of at least its size, of a type the buffer
+        // takes, imported for the handle the buffer names (`VUID-VkSparseMemoryBind-memory-02731`).
+        let bind = match unsafe { sparse.bind(core, buffer, &binds) } {
+            Ok(bind) => bind,
+            Err(error) => {
+                undo(&made);
+                return Err(error);
+            }
+        };
+        let parts = memory::SparseParts {
+            buffer,
+            len,
+            chunks: made,
+            index,
+            bind,
+            space: needs.size,
+            numbers,
+        };
+        let block = memory::sparse_block(core, parts, release);
+        let info = block.memory.info();
+        Ok((Block::claim(core, info, block), index))
     }
 
     /// `newBufferWithBytesNoCopy:length:options:deallocator:`'s memory, from host memory: a block

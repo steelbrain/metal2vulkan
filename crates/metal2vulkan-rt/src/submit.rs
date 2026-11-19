@@ -2161,6 +2161,20 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         if core.pool.freeing() {
             core.counters.count(Metric::SubmissionsDuringFrees);
         }
+        // A bind of an import over several dma-bufs since the last submission: this one waits for
+        // it, and every later command, in this submission and after it, is ordered after that
+        // wait (`crate::import::Sparse`).
+        #[cfg(unix)]
+        if let Some((timeline, value)) = (core.imports.sparse.as_ref()).and_then(|s| s.owed()) {
+            if let Some(first) = parts.first_mut().and_then(|part| part.first_mut()) {
+                first.waits.push(
+                    vk::SemaphoreSubmitInfo::default()
+                        .semaphore(timeline)
+                        .value(value)
+                        .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
+                );
+            }
+        }
         for part in &parts {
             let merged = infos(part);
             let infos: Vec<vk::SubmitInfo2<'_>> = merged
