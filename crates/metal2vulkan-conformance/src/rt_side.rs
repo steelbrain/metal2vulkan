@@ -24,8 +24,8 @@
 //! the suite's allowances name (`metal2vulkan-degrade-<kind>`).
 
 use crate::case::{
-    Answer, Bindings, Failure, Handle, SamplerSpec, ShaderSource, Side, StageInRegion, StageInput,
-    TextureSpec, Venue,
+    Answer, ArgumentSlot, Bindings, Failure, Handle, SamplerSpec, ShaderSource, Side,
+    StageInRegion, StageInput, TextureSpec, Venue,
 };
 use crate::command_buffer_facts::CommandBufferFacts;
 use crate::device::Venues;
@@ -370,6 +370,9 @@ pub struct RtSide<'a> {
     /// (`DepthStencilState::precision_note`); and of each texture the case made
     /// (`Texture::precision_note`), which [`Side::announced`] answers too.
     encoder_notes: BTreeSet<rt::PrecisionNote>,
+    /// Each argument buffer the case made ([`Side::argument_buffer`]), with the textures its
+    /// resource IDs name, which a dispatch that binds it makes resident.
+    argument_residents: Vec<(Handle, Vec<Handle>)>,
 }
 
 impl<'a> RtSide<'a> {
@@ -390,6 +393,7 @@ impl<'a> RtSide<'a> {
             dispatched: BTreeSet::new(),
             drawn: BTreeSet::new(),
             encoder_notes: BTreeSet::new(),
+            argument_residents: Vec::new(),
         }
     }
 
@@ -455,6 +459,13 @@ impl<'a> RtSide<'a> {
                     .ok_or_else(|| Failure::named("NoSuchHandle", format!("sampler {}", handle.0)))
             })
             .collect::<Answer<Vec<rt::SamplerState>>>()?;
+        // The textures the bound argument buffers name: Metal keeps a resource a kernel reaches
+        // through an argument buffer resident only where the encoder was told so.
+        let resident = (self.argument_residents.iter())
+            .filter(|(buffer, _)| bindings.buffers.contains(buffer))
+            .flat_map(|(_, textures)| textures.iter())
+            .map(|&handle| self.held_texture(handle).cloned())
+            .collect::<Answer<Vec<rt::Texture>>>()?;
         let of_rt = |error: rt::Error| Failure::of_rt(&error);
         let command_buffer = self.queue()?.command_buffer().map_err(of_rt)?;
         let mut encoder =
@@ -468,6 +479,10 @@ impl<'a> RtSide<'a> {
         }
         for (index, sampler) in samplers.iter().enumerate() {
             (encoder.set_sampler_state(Some(sampler), index as u32)).map_err(of_rt)?;
+        }
+        for texture in &resident {
+            (encoder.use_resource(rt::Resource::Texture(texture), rt::ResourceUsage::READ))
+                .map_err(of_rt)?;
         }
         dispatch(&mut encoder).map_err(of_rt)?;
         encoder.end_encoding();
@@ -1429,6 +1444,26 @@ impl Side for RtSide<'_> {
         self.table(caller, functions, spec)
     }
 
+    fn argument_buffer(&mut self, slots: &[ArgumentSlot]) -> Answer<Handle> {
+        let mut words = Vec::with_capacity(slots.len() * 8);
+        let mut named = Vec::new();
+        for slot in slots {
+            let id = match *slot {
+                ArgumentSlot::Texture(handle) => {
+                    named.push(handle);
+                    self.held_texture(handle)?.gpu_resource_id()
+                }
+                ArgumentSlot::Sampler(handle) => (self.samplers.get(handle.0 as usize))
+                    .ok_or_else(|| Failure::named("NoSuchHandle", format!("sampler {}", handle.0)))?
+                    .gpu_resource_id(),
+            };
+            words.extend(id.to_bits().to_le_bytes());
+        }
+        let buffer = self.buffer(&words)?;
+        self.argument_residents.push((buffer, named));
+        Ok(buffer)
+    }
+
     fn empty_command_buffers(&mut self) -> Answer<EmptyCommandBuffers> {
         let of_rt = |error: rt::Error| Failure::of_rt(&error);
         let order: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -1527,7 +1562,7 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 13] = [
+    const CALLS: [(&str, &str); 15] = [
         (
             "heap_buffer_size_and_align",
             crate::cases::device_queries::HEAP_BUFFERS,
@@ -1565,6 +1600,8 @@ mod answered {
         ("fragment_fill", "rgb10a2-srgb-stores-f"),
         ("visible_function_table", "visible-tables-compute-size-0"),
         ("visible_function_table", "visible-tables-stage-vertex"),
+        ("argument_buffer", "half-storage-writes-r16f-held"),
+        ("argument_buffer", "read-write-tier-held"),
     ];
 
     /// The calls `value` records as unavailable, wherever in it they sit.
