@@ -85,7 +85,7 @@
 //! finite numbers whose products the same ceiling bounds.
 
 use crate::allowance::Allowance;
-use crate::case::{call, made, probe, Abort, Case, Handle, Input, MetalSource, Side};
+use crate::case::{call, made, Abort, Case, Handle, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{RenderPass, RenderStep, RenderWork, TessellationState};
 use crate::transcript::{Node, Observed, Sites, Value};
@@ -95,9 +95,10 @@ use metal2vulkan::metal::{
 use metal2vulkan_runtime::Degradation;
 
 use super::tessellation_sweeps::{
-    air_inputs, domain_pipeline, drawn_or_refused, grid_record, load, medium_layout, quad_factors,
-    raw_quad_factors, read_medium_marks, refused_pass, shaders_of, tessellation_notices, Domain,
-    FINITE, MEDIUM_GRID, MEDIUM_MAX, QUAD_FACTOR_BYTES, REGION_BYTES,
+    air_inputs, domain_pipeline, drawn_or_refused, grid_record, load, medium_layout,
+    pipeline_or_refused, quad_factors, raw_quad_factors, read_medium_marks, refused_leg,
+    shaders_of, tessellation_notices, Domain, FINITE, MEDIUM_GRID, MEDIUM_MAX, QUAD_FACTOR_BYTES,
+    REGION_BYTES,
 };
 
 // ---- The vocabulary every case of the family states its cells in ------------------------------
@@ -298,18 +299,17 @@ impl Cross {
         };
         let mut pipelines = Vec::with_capacity(self.pipelines.len());
         for (site, state) in &self.pipelines {
-            pipelines.push(probe(
+            pipelines.push(pipeline_or_refused(
                 sites,
                 &format!("{site}/pipeline"),
                 side.render_pipeline(library, &domain_pipeline(fixture.entry, *state)),
-                |_| Value::Absent,
             ));
         }
 
         let mut work = Vec::new();
         let mut encoded = Vec::new();
         for (at, leg) in self.legs.iter().enumerate() {
-            let Some(pipeline) = pipelines[leg.pipeline] else {
+            let Ok(&pipeline) = pipelines[leg.pipeline].as_ref() else {
                 continue;
             };
             encoded.push(at);
@@ -333,7 +333,7 @@ impl Cross {
             let pass = encoded.iter().position(|held| *held == at);
             let node = drawn_or_refused(
                 Node::branch(name, vec![marks]),
-                refused_pass(&outcome, pass),
+                refused_leg(&pipelines[leg.pipeline], &outcome, pass),
             );
             answered.push((leg.path.clone(), node));
         }

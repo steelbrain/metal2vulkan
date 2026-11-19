@@ -143,7 +143,7 @@
 
 use crate::allowance::Allowance;
 use crate::case::{
-    call, made, probe, Abort, Case, Failure, Handle, Input, MetalSource, PassOutcome, Side,
+    call, made, probe, Abort, Answer, Case, Failure, Handle, Input, MetalSource, PassOutcome, Side,
 };
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -518,18 +518,17 @@ impl Case for PartitionModes {
 
         let mut pipelines = Vec::with_capacity(modes.len());
         for &mode in &modes {
-            pipelines.push(probe(
+            pipelines.push(pipeline_or_refused(
                 sites,
                 &format!("{}/pipeline", partition_site(mode)),
                 side.render_pipeline(library, &domain_pipeline(fixture.entry, self.state(mode))),
-                |_| Value::Absent,
             ));
         }
 
         let mut work = Vec::new();
         let mut drawn = Vec::new();
         for (at, pipeline) in pipelines.iter().enumerate() {
-            let Some(pipeline) = pipeline else { continue };
+            let Ok(pipeline) = pipeline else { continue };
             drawn.push(at);
             work.push(RenderWork::Pass(RenderPass::sized([1, 1]).drawing(
                 one_patch_steps(*pipeline, grid, factors, marks, at as u32 * REGION_BYTES, 1),
@@ -551,7 +550,10 @@ impl Case for PartitionModes {
                 Observed::bytes(region, marks_layout(base)),
             ));
             let pass = drawn.iter().position(|held| *held == at);
-            nodes.push(drawn_or_refused(node, refused_pass(&outcome, pass)));
+            nodes.push(drawn_or_refused(
+                node,
+                refused_leg(&pipelines[at], &outcome, pass),
+            ));
         }
         sites.push(Node::branch(self.domain.patch_type(), nodes));
         Ok(())
@@ -663,15 +665,14 @@ impl Case for EdgeFactors {
             "buffer/marks",
             side.buffer(&vec![0u8; FACTOR_SITES.len() * REGION_BYTES as usize]),
         )?;
-        let pipeline = probe(
+        let pipeline = pipeline_or_refused(
             sites,
             "pipeline",
             side.render_pipeline(library, &domain_pipeline(fixture.entry, self.state())),
-            |_| Value::Absent,
         );
 
         let mut work = Vec::new();
-        if let Some(pipeline) = pipeline {
+        if let Ok(&pipeline) = pipeline.as_ref() {
             for (at, _) in FACTOR_SITES.iter().enumerate() {
                 let mut steps =
                     one_patch_steps(pipeline, grid, factors, marks, at as u32 * REGION_BYTES, 1);
@@ -695,7 +696,10 @@ impl Case for EdgeFactors {
                 "marks",
                 Observed::bytes(region, marks_layout(base)),
             ));
-            sites.push(drawn_or_refused(node, refused_pass(&outcome, Some(at))));
+            sites.push(drawn_or_refused(
+                node,
+                refused_leg(&pipeline, &outcome, Some(at)),
+            ));
         }
         Ok(())
     }
@@ -899,15 +903,14 @@ impl Case for NonFiniteFactors {
             "buffer/marks",
             side.buffer(&vec![0u8; cells.len() * REGION_BYTES as usize]),
         )?;
-        let pipeline = probe(
+        let pipeline = pipeline_or_refused(
             sites,
             "pipeline",
             side.render_pipeline(library, &domain_pipeline(QUAD.entry, self.state())),
-            |_| Value::Absent,
         );
 
         let mut work = Vec::new();
-        if let Some(pipeline) = pipeline {
+        if let Ok(&pipeline) = pipeline.as_ref() {
             for at in 0..cells.len() {
                 let mut steps =
                     one_patch_steps(pipeline, grid, factors, marks, at as u32 * REGION_BYTES, 1);
@@ -939,7 +942,7 @@ impl Case for NonFiniteFactors {
                 "marks",
                 Observed::bytes(region, medium_layout(base)),
             )];
-            let refused = refused_pass(&outcome, Some(at));
+            let refused = refused_leg(&pipeline, &outcome, Some(at));
             match cell.placement {
                 None => groups.push(drawn_or_refused(Node::branch(cell.value, leaves), refused)),
                 Some(placement) => {
@@ -1156,17 +1159,16 @@ impl Case for FactorSteps {
         let all = steps();
         let mut pipelines = Vec::with_capacity(all.len());
         for &step in &all {
-            pipelines.push(probe(
+            pipelines.push(pipeline_or_refused(
                 sites,
                 &format!("{}/pipeline", step.name()),
                 side.render_pipeline(library, &domain_pipeline(QUAD.entry, self.state(step))),
-                |_| Value::Absent,
             ));
         }
 
         let mut work = Vec::new();
         for (at, pipeline) in pipelines.iter().enumerate() {
-            let Some(pipeline) = pipeline else { continue };
+            let Ok(pipeline) = pipeline else { continue };
             for (leg, held) in STEP_LEGS.iter().enumerate() {
                 let region = Self::region(at, leg) * REGION_BYTES;
                 work.push(RenderWork::Pass(RenderPass::sized([1, 1]).drawing(vec![
@@ -1213,9 +1215,12 @@ impl Case for FactorSteps {
                     "marks",
                     Observed::bytes(region, coarse_layout(base)),
                 ));
-                let drawn = pipelines[at].is_some().then_some(pass);
+                let drawn = pipelines[at].is_ok().then_some(pass);
                 pass += usize::from(drawn.is_some());
-                node = node.with(drawn_or_refused(held, refused_pass(&outcome, drawn)));
+                node = node.with(drawn_or_refused(
+                    held,
+                    refused_leg(&pipelines[at], &outcome, drawn),
+                ));
             }
             sites.push(node);
         }
@@ -1549,18 +1554,17 @@ impl Case for FactorScales {
         )?;
         let mut pipelines = Vec::with_capacity(2);
         for enabled in [true, false] {
-            pipelines.push(probe(
+            pipelines.push(pipeline_or_refused(
                 sites,
                 &format!("{}/pipeline", Self::pipeline_site(enabled)),
                 side.render_pipeline(library, &domain_pipeline(QUAD.entry, Self::state(enabled))),
-                |_| Value::Absent,
             ));
         }
 
         let mut work = Vec::new();
         let mut drawn = Vec::new();
         for (at, cell) in SCALE_CELLS.iter().enumerate() {
-            let Some(pipeline) = pipelines[usize::from(!cell.enabled)] else {
+            let Ok(&pipeline) = pipelines[usize::from(!cell.enabled)].as_ref() else {
                 continue;
             };
             drawn.push(at);
@@ -1593,7 +1597,11 @@ impl Case for FactorScales {
                     Observed::bytes(region, medium_layout(base)),
                 ));
                 let pass = drawn.iter().position(|held| *held == at);
-                nodes.push(drawn_or_refused(node, refused_pass(&outcome, pass)));
+                let pipeline = &pipelines[usize::from(!cell.enabled)];
+                nodes.push(drawn_or_refused(
+                    node,
+                    refused_leg(pipeline, &outcome, pass),
+                ));
             }
             sites.push(Node::branch(Self::pipeline_site(enabled), nodes));
         }
@@ -1620,17 +1628,50 @@ pub(super) fn medium_layout(offset: u64) -> ByteLayout {
     }
 }
 
+/// [`probe`] of a render pipeline that keeps our refusal: the state, or the failure its site
+/// recorded, which each leg that needed the state answers with (`refused_leg`).
+pub(super) fn pipeline_or_refused(
+    sites: &mut Sites,
+    at: &str,
+    answer: Answer<Handle>,
+) -> Result<Handle, Failure> {
+    match answer {
+        Ok(state) => {
+            sites.value(at, Value::ok(Value::Absent));
+            Ok(state)
+        }
+        Err(failure) => {
+            probe::<Handle>(sites, at, Err(failure.clone()), |_| Value::Absent);
+            Err(failure)
+        }
+    }
+}
+
+/// Our refusal of a leg: of the pipeline it needed, where our side refused that and so never drew
+/// the leg, else of the pass that drew it ([`refused_pass`]).
+pub(super) fn refused_leg<'a>(
+    pipeline: &'a Result<Handle, Failure>,
+    outcome: &'a PassOutcome,
+    pass: Option<usize>,
+) -> Option<&'a Failure> {
+    match pipeline {
+        Err(failure) => Some(failure),
+        Ok(_) => refused_pass(outcome, pass),
+    }
+}
+
 /// Our refusal of the pass a leg was drawn by, `pass` being its place among the passes the run
 /// encoded where it was encoded at all.
-pub(super) fn refused_pass(outcome: &PassOutcome, pass: Option<usize>) -> Option<&Failure> {
+fn refused_pass(outcome: &PassOutcome, pass: Option<usize>) -> Option<&Failure> {
     outcome.refused.get(pass?)?.as_ref()
 }
 
-/// A leg's site as our side answers it: `node`, the leg's answer, or where our side refused the
-/// pass that drew it, that refusal as the site's own value with nothing under it. A refused pass
-/// has no answer: what a read-back holds after it is the buffer's starting bytes, which no site
-/// records. The comparison reads our refusal at a site whose Metal answer is a tree as that
-/// refusal alone and does not descend under it, so the leg's one row is the refusal's.
+/// A leg's site as our side answers it: `node`, the leg's answer, or where our side did not draw
+/// the leg, the refusal that stopped it (its pipeline's or its pass's) as the site's own value
+/// with nothing under it. An undrawn leg has no answer: what a read-back holds is the buffer's
+/// starting bytes, which no site records. The comparison reads our refusal at a site whose Metal
+/// answer is a tree as that refusal alone and does not descend under it, so the leg's one row is
+/// the refusal's.
 pub(super) fn drawn_or_refused(node: Node, refused: Option<&Failure>) -> Node {
     match refused {
         Some(failure) => Node::leaf(node.name, Observed::value(failure.recorded())),
@@ -1851,18 +1892,17 @@ impl Case for PatchIndices {
         }
         let mut pipelines = Vec::with_capacity(types.len());
         for &index_type in &types {
-            pipelines.push(probe(
+            pipelines.push(pipeline_or_refused(
                 sites,
                 &format!("{}/pipeline", index_type.name()),
                 side.render_pipeline(library, &self.pipeline(index_type)),
-                |_| Value::Absent,
             ));
         }
 
         let mut work = Vec::new();
         let mut drawn = Vec::new();
         for (at, pipeline) in pipelines.iter().enumerate() {
-            let Some(pipeline) = pipeline else { continue };
+            let Ok(pipeline) = pipeline else { continue };
             drawn.push(at);
             let region = at as u32 * PATCH_REGION_BYTES;
             let mut steps = vec![
@@ -1972,7 +2012,10 @@ impl Case for PatchIndices {
                 )),
             };
             let pass = drawn.iter().position(|held| *held == at);
-            sites.push(drawn_or_refused(node, refused_pass(&outcome, pass)));
+            sites.push(drawn_or_refused(
+                node,
+                refused_leg(&pipelines[at], &outcome, pass),
+            ));
         }
         Ok(())
     }
@@ -2140,10 +2183,10 @@ mod tests {
         assert_eq!(STEP_FUNCTIONS.to_vec(), Step::ALL.to_vec());
     }
 
-    /// A leg whose pass our side refused answers with the refusal at the leg's own site and no
-    /// marks: the comparison holds that one refusal and nothing under it. The marks read back after
-    /// a refused pass are the buffer's starting bytes, and recorded they made a row for every cell
-    /// Metal marked. A leg whose pass ran keeps its marks.
+    /// A leg our side did not draw answers with the refusal at the leg's own site and no marks:
+    /// the comparison holds that one refusal and nothing under it. The marks read back after a
+    /// refused pass are the buffer's starting bytes, and recorded they made a row for every cell
+    /// Metal marked. A leg drawn keeps its marks.
     #[test]
     fn a_refused_pass_is_the_legs_answer_and_no_marks() {
         use crate::allowance::Offered;
@@ -2176,6 +2219,30 @@ mod tests {
             Offered::notices(&[]),
         );
         assert!(found.is_exact(), "{found:?}");
+    }
+
+    /// A leg's refusal is its pipeline's where our side refused that, whatever the passes
+    /// answered, else its own pass's, and none for a leg drawn and answered.
+    #[test]
+    fn a_legs_refusal_is_its_pipelines_else_its_passs() {
+        let failure = |detail: &str| Failure::named("Error::Unsupported", detail);
+        let outcome = PassOutcome {
+            refused: vec![None, Some(failure("the pass"))],
+            status: Value::Absent,
+            error: None,
+        };
+        let refused = Err(failure("the pipeline"));
+        assert_eq!(
+            refused_leg(&refused, &outcome, None),
+            Some(&failure("the pipeline"))
+        );
+        let made = Ok(Handle(1));
+        assert_eq!(
+            refused_leg(&made, &outcome, Some(1)),
+            Some(&failure("the pass"))
+        );
+        assert_eq!(refused_leg(&made, &outcome, Some(0)), None);
+        assert_eq!(refused_leg(&made, &outcome, None), None);
     }
 
     /// The bytes the recording of `case` holds at the leaf `path` (node names from the root,
