@@ -1408,9 +1408,8 @@ impl Surface {
     /// once that submission has completed, and has it go at once where it is not yet made. The
     /// runtime's own commands need no such wait: the move goes ahead of every command buffer
     /// committed after the make. In the copy form, whose planes' images the other API never
-    /// reaches, and for a Direct3D 11 import
-    /// ([`Device::import_d3d11_surface`](crate::Device::import_d3d11_surface)), whose images are
-    /// general as imported, the call returns at once. Each call in place counts in
+    /// reaches, and for a Direct3D 11 import (`Device::import_d3d11_surface`, on Windows), whose
+    /// images are general as imported, the call returns at once. Each call in place counts in
     /// [`Metrics::surface_waits`](crate::Metrics::surface_waits), with its time and the
     /// submissions it waited for.
     ///
