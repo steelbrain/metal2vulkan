@@ -9,12 +9,11 @@ use super::value::Value;
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
-use metal2vulkan::metal::{PatchType, PixelFormat};
+use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource, TessellationDescriptor,
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
-use metal2vulkan::Budget;
 
 /// `newSamplerStateWithDescriptor:`'s descriptor, `[map]`, as the translator's: every key but
 /// `borderColor`, `supportArgumentBuffers` and `resourceIndex`, which the backend reads from the
@@ -296,8 +295,9 @@ const TESSELLATION_KEYS: [&str; 7] = [
 /// or the short one of a vertex and fragment function and color 0's format), as the translator's:
 /// each stage of `stage`, which makes the stage of a function key and its linked functions' key.
 /// `label` and `resourceIndex` are the backend's to read from the fields it returns. The
-/// tessellation state ([`stages_state`]) is the descriptor's only where the vertex function is a
-/// post-tessellation one, whose patch Metal draws with it; any other ignores it, as Metal does.
+/// tessellation state ([`stages_state`]) is the descriptor's where it differs from Metal's
+/// defaults: the translator draws a post-tessellation vertex function's patch with it, which it
+/// knows from the function's AIR, and ignores it for any other, as Metal does.
 pub(super) fn render_pipeline<'c>(
     call: &'c Call,
     stage: impl Fn(&Fields, &str, &str) -> Result<Option<StageSource>, PlayError>,
@@ -371,9 +371,7 @@ pub(super) fn render_pipeline<'c>(
     }
     let state = stages_state(&f)?;
     // Metal's defaults are the descriptor's `None`, which asks nothing of the vertex function.
-    if state.tessellation != TessellationDescriptor::default()
-        && post_tessellation(call, &d.vertex)?
-    {
+    if state.tessellation != TessellationDescriptor::default() {
         d.tessellation = Some(state.tessellation);
     }
     d.max_vertex_call_stack_depth = state.vertex_call_stack_depth;
@@ -410,19 +408,6 @@ pub(super) fn stages_state(f: &Fields) -> Result<StagesState, PlayError> {
         vertex_call_stack_depth: f.count("maxVertexCallStackDepth")?.unwrap_or(1),
         fragment_call_stack_depth: f.count("maxFragmentCallStackDepth")?.unwrap_or(1),
     })
-}
-
-/// Whether `vertex` is a post-tessellation vertex function: one whose `patchType` is not `None`.
-fn post_tessellation(call: &Call, vertex: &StageSource) -> Result<bool, PlayError> {
-    let StageSource::Function(vertex) = vertex else {
-        return Err(refuse(
-            call,
-            "a compiled vertex stage, which no player makes",
-        ));
-    };
-    let properties = vertex.function.properties(&Budget::default());
-    let properties = properties.map_err(|error| refuse(call, error.to_string()))?;
-    Ok(properties.patch_type() != PatchType::None)
 }
 
 /// The keys of `m2v.setPass`'s map, a render pass descriptor's own properties.

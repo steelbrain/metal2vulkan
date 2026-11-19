@@ -110,8 +110,8 @@
 //! stage binds nothing: it reads the factors through their device address, the pushed
 //! `PushField::TessellationFactorAddress` (the factor buffer's address plus the encoder's offset, a
 //! `u64`), at the same bytes and with the same rules as above, from the word that holds the even
-//! byte the address names. Nothing contains the read: as Metal's own, a read past the buffer reads
-//! whatever memory is there. The patch index is the patch's position: the form reads no patch
+//! byte the address names, and no word past the one that holds the last factor's byte. Nothing
+//! contains the read: as Metal's own, a read past the buffer reads whatever memory is there. The patch index is the patch's position: the form reads no patch
 //! index buffer, and its consumer refuses a draw that names one. A control-point index type is not
 //! implemented in it ([`super::control_plan`]). Its push fields ([`address_fields`]) are the
 //! address and, where read, the instance stride and the scale, which the pipeline's interface
@@ -675,8 +675,9 @@ fn factor_address(
 
 /// The `count` factors' `half` bits (each a `uint`) at the even device address `address` (a
 /// `u64`), as [`factor_halves`] reads them from a bound buffer: the words from the one that holds
-/// the address, each loaded through a read-only `PhysicalStorageBuffer` pointer, unpacked low half
-/// first, from that word's high half where the address is 2 past a multiple of 4.
+/// the address to the one that holds the last factor's byte, each loaded through a read-only
+/// `PhysicalStorageBuffer` pointer, unpacked low half first, from that word's high half where the
+/// address is 2 past a multiple of 4.
 fn address_halves(
     fb: &mut FunctionBuilder<'_>,
     address: Value,
@@ -696,15 +697,28 @@ fn address_halves(
     };
     let aligned = k64(fb, !3)?;
     let first = fb.binary(BinOp::BitwiseAnd, address, aligned)?;
+    let low = fb.convert(ConvOp::UConvert, address, u32_)?;
+    let two = ku(fb, 2)?;
+    let high = fb.binary(BinOp::BitwiseAnd, low, two)?;
+    let zero = ku(fb, 0)?;
+    let shifted = fb.binary(BinOp::INotEqual, high, zero)?;
     let mask = ku(fb, 0xffff)?;
     let sixteen = ku(fb, 16)?;
+    let words = (count + 1).div_ceil(2);
     let mut unpacked = Vec::with_capacity(count + 2);
-    for k in 0..(count + 1).div_ceil(2) {
+    for k in 0..words {
         let at = match k {
             0 => first,
             _ => {
                 let offset = k64(fb, 4 * k as u64)?;
-                fb.binary(BinOp::IAdd, first, offset)?
+                let at = fb.binary(BinOp::IAdd, first, offset)?;
+                // The word past the factors' last is read only where they start 2 past a
+                // multiple of 4; elsewhere the first word is read again, so every word read
+                // holds a factor's byte.
+                match count % 2 == 0 && k == words - 1 {
+                    true => fb.select(shifted, at, first)?,
+                    false => at,
+                }
             }
         };
         let ptr = fb.device_place_read_only(at, u32_)?;
@@ -718,11 +732,6 @@ fn address_halves(
         unpacked.push(fb.binary(BinOp::BitwiseAnd, w, mask)?);
         unpacked.push(fb.binary(BinOp::ShiftRightLogical, w, sixteen)?);
     }
-    let low = fb.convert(ConvOp::UConvert, address, u32_)?;
-    let two = ku(fb, 2)?;
-    let high = fb.binary(BinOp::BitwiseAnd, low, two)?;
-    let zero = ku(fb, 0)?;
-    let shifted = fb.binary(BinOp::INotEqual, high, zero)?;
     let mut halves = Vec::with_capacity(count);
     for (&low, &high) in unpacked.iter().zip(unpacked.iter().skip(1)).take(count) {
         halves.push(fb.select(shifted, high, low)?);

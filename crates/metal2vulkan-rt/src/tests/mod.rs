@@ -30,6 +30,7 @@ mod one_path;
 mod over;
 mod over_aliases;
 mod pass;
+mod patch;
 mod places;
 mod push_window;
 mod readback;

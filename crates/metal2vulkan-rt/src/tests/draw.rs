@@ -98,7 +98,7 @@ fn a_viewport_is_vulkans_flipped_and_covers_its_own_pixels() {
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
@@ -121,12 +121,12 @@ mod on_device {
     use std::path::Path;
 
     /// The side of the targets.
-    const SIDE: u32 = 8;
+    pub(crate) const SIDE: u32 = 8;
     /// The constexpr sampler's index the test gives `sampled_fragment`.
     const CONSTEXPR: u32 = 3;
 
     /// The library of `ll`, or None where `llvm-as` is missing.
-    fn library(ll: &Path) -> Option<Library> {
+    pub(crate) fn library(ll: &Path) -> Option<Library> {
         match llvm_assemble(ll) {
             Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
             Err(AssembleError::Missing(why)) => {
@@ -137,12 +137,12 @@ mod on_device {
         }
     }
 
-    fn examples() -> Option<Library> {
+    pub(crate) fn examples() -> Option<Library> {
         library(&fixtures_dir().join("examples/runtime_examples.ll"))
     }
 
     /// `colored_vertex` with `fragment`, drawing into one colour attachment of `color`.
-    fn descriptor(
+    pub(crate) fn descriptor(
         library: &Library,
         fragment: &str,
         color: PixelFormat,
@@ -158,19 +158,23 @@ mod on_device {
         d
     }
 
-    fn state(name: &str, device: &Device, d: &RenderPipelineDescriptor) -> RenderPipelineState {
+    pub(crate) fn state(
+        name: &str,
+        device: &Device,
+        d: &RenderPipelineDescriptor,
+    ) -> RenderPipelineState {
         (device.new_render_pipeline_state(d, crate::tests::no_constexpr_samplers))
             .unwrap_or_else(|error| panic!("{name}: {error}"))
     }
 
     /// Shared buffers in one block, 256 bytes apart.
-    struct Buffers {
+    pub(crate) struct Buffers {
         block: Block,
         next: u64,
     }
 
     impl Buffers {
-        fn new(device: &Device) -> Buffers {
+        pub(crate) fn new(device: &Device) -> Buffers {
             Buffers {
                 block: (device.take_block(MemoryClass::Shared, 65536)).expect("a block"),
                 next: 0,
@@ -178,12 +182,12 @@ mod on_device {
         }
 
         /// A buffer of `bytes`.
-        fn of(&mut self, device: &Device, bytes: &[u8]) -> Buffer {
+        pub(crate) fn of(&mut self, device: &Device, bytes: &[u8]) -> Buffer {
             self.at(device, bytes, 0)
         }
 
         /// A buffer of `bytes`, `skew` bytes past the place [`of`](Self::of) would take.
-        fn at(&mut self, device: &Device, bytes: &[u8], skew: u64) -> Buffer {
+        pub(crate) fn at(&mut self, device: &Device, bytes: &[u8], skew: u64) -> Buffer {
             let len = bytes.len() as u64;
             let at = self.next + skew;
             let buffer = (device.new_buffer(self.block.id, at, len, Some(0))).expect("a buffer");
@@ -197,12 +201,12 @@ mod on_device {
         }
     }
 
-    fn floats(values: &[f32]) -> Vec<u8> {
+    pub(crate) fn floats(values: &[f32]) -> Vec<u8> {
         values.iter().flat_map(|v| v.to_le_bytes()).collect()
     }
 
     /// A 2D render target of `format`, `SIDE` a side.
-    fn target(device: &Device, format: PixelFormat, usage: TextureUsage) -> Texture {
+    pub(crate) fn target(device: &Device, format: PixelFormat, usage: TextureUsage) -> Texture {
         let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
         d.usage = usage;
         d.storage_mode = StorageMode::Shared;
@@ -210,7 +214,7 @@ mod on_device {
     }
 
     /// The texels of `texture`, `unit` bytes each.
-    fn read(texture: &Texture, unit: usize) -> Vec<u8> {
+    pub(crate) fn read(texture: &Texture, unit: usize) -> Vec<u8> {
         let row = SIDE as usize * unit;
         let mut bytes = vec![0; row * SIDE as usize];
         let region = Region {
@@ -230,7 +234,7 @@ mod on_device {
     }
 
     /// A pass that clears `color` to opaque black, with `stencil` cleared to 0 where given.
-    fn pass(color: &Texture, stencil: Option<&Texture>) -> RenderPassDescriptor {
+    pub(crate) fn pass(color: &Texture, stencil: Option<&Texture>) -> RenderPassDescriptor {
         let mut d = RenderPassDescriptor::default();
         let c = &mut d.color_attachments[0];
         c.texture = Some(color.clone());
@@ -242,7 +246,7 @@ mod on_device {
     }
 
     /// `command_buffer` committed and complete with no error.
-    fn run(name: &str, command_buffer: &CommandBuffer) {
+    pub(crate) fn run(name: &str, command_buffer: &CommandBuffer) {
         command_buffer.commit().expect("a commit");
         finished(name, command_buffer);
         assert_eq!(command_buffer.error(), None, "{name}");
@@ -253,14 +257,14 @@ mod on_device {
         color.map(|c| (c * 255.0) as u8)
     }
 
-    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
-    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    pub(crate) const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    pub(crate) const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    pub(crate) const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
     const WHITE: [f32; 4] = [1.0; 4];
 
     /// The fixture's vertices, positions and colors: the top half of clip space (y up) in green,
     /// then the whole of it in blue and in white, three each.
-    fn vertices(device: &Device, buffers: &mut Buffers) -> (Buffer, Buffer) {
+    pub(crate) fn vertices(device: &Device, buffers: &mut Buffers) -> (Buffer, Buffer) {
         let top = [-1.0, 0.0, 3.0, 0.0, -1.0, 4.0];
         let whole = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
         let positions: Vec<f32> = [top, whole, whole].concat();
@@ -275,7 +279,7 @@ mod on_device {
     }
 
     /// The texels of `SIDE` rows of `SIDE` texels, `texel(x, y)` each.
-    fn texels(texel: impl Fn(u32, u32) -> [f32; 4]) -> Vec<u8> {
+    pub(crate) fn texels(texel: impl Fn(u32, u32) -> [f32; 4]) -> Vec<u8> {
         (0..SIDE)
             .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
             .flat_map(|(x, y)| rgba8(texel(x, y)))
