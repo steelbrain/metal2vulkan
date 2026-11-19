@@ -43,6 +43,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 mod compute;
+mod events;
 mod render;
 mod work;
 
@@ -1333,6 +1334,35 @@ impl Side for RtSide<'_> {
         }
     }
 
+    fn event_cross_queue_wait(&mut self) -> Answer<crate::event_orders::CrossQueueWait> {
+        self.cross_queue_wait()
+    }
+
+    fn event_highest_signal(&mut self, values: [u64; 2]) -> Answer<u64> {
+        self.highest_signal(values)
+    }
+
+    fn held_command_buffer(&mut self) -> Answer<crate::event_orders::HeldCommandBuffer> {
+        self.held_command_buffer_probe()
+    }
+
+    fn signal_before_a_wait(&mut self) -> Answer<crate::event_orders::SignalBeforeWait> {
+        self.signal_before_wait()
+    }
+
+    fn event_wait_behind_a_running_signal(
+        &mut self,
+        shared: bool,
+    ) -> Answer<crate::event_orders::WaitBehindRunningSignal> {
+        self.wait_behind_a_running_signal(shared)
+    }
+
+    fn scheduled_handler_order(
+        &mut self,
+    ) -> Answer<crate::scheduled_handlers::ScheduledHandlerOrder> {
+        self.scheduled_handler_order_probe()
+    }
+
     fn empty_command_buffers(&mut self) -> Answer<EmptyCommandBuffers> {
         let of_rt = |error: rt::Error| Failure::of_rt(&error);
         let order: Arc<Mutex<Vec<String>>> = Arc::default();
@@ -1431,10 +1461,36 @@ mod answered {
     };
 
     /// Each call the side answers, with a case that reaches it.
-    const CALLS: [(&str, &str); 1] = [(
-        "heap_buffer_size_and_align",
-        crate::cases::device_queries::HEAP_BUFFERS,
-    )];
+    const CALLS: [(&str, &str); 7] = [
+        (
+            "heap_buffer_size_and_align",
+            crate::cases::device_queries::HEAP_BUFFERS,
+        ),
+        (
+            "event_cross_queue_wait",
+            crate::cases::event_orders::CROSS_QUEUE_WAIT,
+        ),
+        (
+            "event_highest_signal",
+            crate::cases::event_orders::HIGHEST_SIGNAL,
+        ),
+        (
+            "held_command_buffer",
+            crate::cases::event_orders::HELD_COMMAND_BUFFER,
+        ),
+        (
+            "signal_before_a_wait",
+            crate::cases::event_orders::SIGNAL_BEFORE_WAIT,
+        ),
+        (
+            "event_wait_behind_a_running_signal",
+            crate::cases::event_orders::WAIT_BEHIND_A_RUNNING_SIGNAL,
+        ),
+        (
+            "scheduled_handler_order",
+            crate::cases::scheduled_handlers::SCHEDULED_HANDLER_ORDER,
+        ),
+    ];
 
     /// The calls `value` records as unavailable, wherever in it they sit.
     fn unavailable(value: &Value, calls: &mut Vec<String>) {
