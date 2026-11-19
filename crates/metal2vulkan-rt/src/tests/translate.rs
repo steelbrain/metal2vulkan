@@ -1769,6 +1769,10 @@ mod on_device {
                 metrics.pipeline_cache_lock_wait_nanos
                     >= metrics.pipeline_cache_lock_wait_max_nanos
             );
+            assert!(
+                metrics.pipeline_cache_lock_waits >= 1,
+                "{name}: the creation's wait counted"
+            );
             let overlaps = caches.overlaps();
             assert_eq!(overlaps, 0, "{name}: a creation during a look");
             drop((a, b, c));
@@ -1776,8 +1780,10 @@ mod on_device {
             within("the teardown", || counters.gauges() == Gauges::default());
             let _ = std::fs::remove_dir_all(&dir);
             println!(
-                "{name}: {} look skipped, a creation waited {} ns for a look, {overlaps} overlaps",
+                "{name}: {} look skipped, {} creations waited for a look, the longest {} ns, \
+                 {overlaps} overlaps",
                 metrics.pipeline_cache_looks_skipped - skipped,
+                metrics.pipeline_cache_lock_waits,
                 metrics.pipeline_cache_lock_wait_max_nanos,
             );
         }

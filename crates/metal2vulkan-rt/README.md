@@ -2000,9 +2000,10 @@ takes exclusive by a try, so none of them runs during a creation (which Vulkan a
 which Intel's Windows driver 101.2145 for the UHD 630 has faulted reading the data): a look that
 finds a creation begun since creation was quiet is skipped until creation is quiet again
 (`Metrics::pipeline_cache_looks_skipped`), and a creation that begins during a look waits for that
-look alone (`Metrics::pipeline_cache_lock_wait_nanos` and `pipeline_cache_lock_wait_max_nanos`). The
-device's drop writes the blob once more where the size changed at all. A crash between writes loses
-only the pipelines made since the last; no creation waits for a write.
+look alone (`Metrics::pipeline_cache_lock_waits` counts those waits,
+`pipeline_cache_lock_wait_nanos` their time and `pipeline_cache_lock_wait_max_nanos` the longest).
+The device's drop writes the blob once more where the size changed at all. A crash between writes
+loses only the pipelines made since the last; no creation waits for a write.
 
 The cache holds at most 32 MiB when the reaper looks (about five times the 6.25 MB of pipeline data
 a long recorded session made): one past it is replaced by a fresh, empty cache that creations take

@@ -2406,6 +2406,7 @@ field	metal2vulkan-rt::Metrics.over_copy_bytes_imported	pub over_copy_bytes_impo
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipeline_cache_lock_wait_max_nanos	pub pipeline_cache_lock_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.pipeline_cache_lock_wait_nanos	pub pipeline_cache_lock_wait_nanos: u64
+field	metal2vulkan-rt::Metrics.pipeline_cache_lock_waits	pub pipeline_cache_lock_waits: u64
 field	metal2vulkan-rt::Metrics.pipeline_cache_looks_skipped	pub pipeline_cache_looks_skipped: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.private_long_reuses	pub private_long_reuses: u64

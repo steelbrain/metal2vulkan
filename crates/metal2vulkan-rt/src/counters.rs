@@ -298,6 +298,7 @@ struct Atomics {
     translations_loaded: AtomicU64,
     creations_before_seed: AtomicU64,
     pipeline_cache_looks_skipped: AtomicU64,
+    pipeline_cache_lock_waits: AtomicU64,
     pipeline_cache_lock_wait_nanos: AtomicU64,
     pipeline_cache_lock_wait_max_nanos: AtomicU64,
     cache_writes_dropped: AtomicU64,
@@ -485,9 +486,10 @@ impl Counters {
     }
 
     /// A creation through the pipeline cache that waited `nanos` nanoseconds for the reaper's look
-    /// at it ([`Metrics::pipeline_cache_lock_wait_nanos`]).
+    /// at it ([`Metrics::pipeline_cache_lock_waits`]).
     pub(crate) fn pipeline_cache_lock_wait(&self, nanos: u64) {
         let a = &self.atomics;
+        a.pipeline_cache_lock_waits.fetch_add(1, Relaxed);
         a.pipeline_cache_lock_wait_nanos.fetch_add(nanos, Relaxed);
         a.pipeline_cache_lock_wait_max_nanos
             .fetch_max(nanos, Relaxed);
@@ -863,6 +865,7 @@ impl Counters {
             translations_loaded: a.translations_loaded.load(Relaxed),
             creations_before_seed: a.creations_before_seed.load(Relaxed),
             pipeline_cache_looks_skipped: a.pipeline_cache_looks_skipped.load(Relaxed),
+            pipeline_cache_lock_waits: a.pipeline_cache_lock_waits.load(Relaxed),
             pipeline_cache_lock_wait_nanos: a.pipeline_cache_lock_wait_nanos.load(Relaxed),
             pipeline_cache_lock_wait_max_nanos: a.pipeline_cache_lock_wait_max_nanos.load(Relaxed),
             cache_writes_dropped: a.cache_writes_dropped.load(Relaxed),
@@ -1159,9 +1162,14 @@ pub struct Metrics {
     /// was quiet: a look reads the cache's size and data only while no creation runs, and never
     /// waits for one, so it looks again once creation is quiet again.
     pub pipeline_cache_looks_skipped: u64,
+    /// Creations through the pipeline cache that waited for a look of the reaper's at it: a
+    /// creation that begins during a look waits for that look's reads alone. Their time is in
+    /// [`pipeline_cache_lock_wait_nanos`](Self::pipeline_cache_lock_wait_nanos), the longest in
+    /// [`pipeline_cache_lock_wait_max_nanos`](Self::pipeline_cache_lock_wait_max_nanos).
+    pub pipeline_cache_lock_waits: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) creations through the pipeline cache
-    /// waited for the reaper's looks at it, in total: a creation that begins during a look waits
-    /// for that look's reads alone.
+    /// waited for the reaper's looks at it, in total
+    /// ([`pipeline_cache_lock_waits`](Self::pipeline_cache_lock_waits) counts the waits).
     pub pipeline_cache_lock_wait_nanos: u64,
     /// The longest such wait, in nanoseconds; a maximum since the device was made, so the
     /// difference of two reads does not apply to it.
