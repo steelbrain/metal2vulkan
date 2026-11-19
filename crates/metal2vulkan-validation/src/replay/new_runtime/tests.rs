@@ -21,18 +21,17 @@ fn made(result: u64) -> Call {
 /// under one `Translation` key; a runtime gap by the gap.
 #[test]
 fn translator_refusals_are_counted_by_kind() {
-    let refused = |error: Error| rt::Error::Translation(error);
-    let tessellation = Feature::Lowering(LowerFamily::Tessellation);
+    let tessellation = || {
+        let feature = Feature::Lowering(LowerFamily::Tessellation);
+        rt::Error::Translation(Unsupported::not_implemented(feature).into())
+    };
     let answers = [
+        (7, tessellation()),
+        (8, tessellation()),
         (
-            7,
-            refused(Unsupported::not_implemented(tessellation).into()),
+            9,
+            rt::Error::Translation(Error::LimitExceeded(Limit::SpirvWords)),
         ),
-        (
-            8,
-            refused(Unsupported::not_implemented(tessellation).into()),
-        ),
-        (9, refused(Error::LimitExceeded(Limit::SpirvWords))),
         (
             10,
             rt::Error::Unsupported(rt::Gap::TextureView {
