@@ -424,8 +424,8 @@ fn a_fragment_reads_the_slice_index_its_vertex_function_wrote() {
     // A fragment that does not read the slice keeps its key: its only output is the color 0 it
     // writes, which the pipeline has no attachment for. Its stage input `color` (`user(locn0)`),
     // which the vertex function does not write, reaches only that color, so the linking drops it
-    // and the fragment compiles with it absent: its key is the one with exactly that absent input,
-    // and not the one without.
+    // and the fragment compiles with it absent: its key is the one with exactly that absent input
+    // and its push fields from the vertex function's push end, and not the one without the input.
     let plain = function("amp_fragment");
     let keys = dev
         .render_pipeline_key(
@@ -439,6 +439,9 @@ fn a_fragment_reads_the_slice_index_its_vertex_function_wrote() {
     let fragment_inputs = keys.fragment_inputs.clone().expect("fragment inputs");
     eprintln!("absent varyings: {:?}", fragment_inputs.absent_varyings);
     assert_eq!(fragment_inputs.absent_varyings, absent);
+    // Its push fields start at the vertex function's push end.
+    assert_ne!(fragment_inputs.push_base, 0);
+    unattached.push_base = fragment_inputs.push_base;
     let mut dropped = unattached.clone();
     dropped.absent_varyings = absent;
     assert_eq!(fragment_inputs, dropped);
