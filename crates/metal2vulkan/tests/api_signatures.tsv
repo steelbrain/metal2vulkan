@@ -1122,7 +1122,6 @@ const	metal2vulkan::cache::ARTIFACT_FORMAT_VERSION	pub const ARTIFACT_FORMAT_VER
 const	metal2vulkan::cache::RUNTIME_VERSION	pub const RUNTIME_VERSION: u32
 const	metal2vulkan::cache::SEMANTICS_VERSION	pub const SEMANTICS_VERSION: u32
 const	metal2vulkan::cache::SOURCE_DIGEST	pub const SOURCE_DIGEST: &str
-const	metal2vulkan::device::NVIDIA_AMPERE_GA10X	pub const NVIDIA_AMPERE_GA10X: &[u32]
 const	metal2vulkan::metal::format::BICUBIC_TEXELS_UNBOUND	pub const BICUBIC_TEXELS_UNBOUND: u32
 const	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	pub const NOT_MIPMAPPED_MAX_LOD: f32
 const	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	pub const MAX_VERTEX_ALIGNMENT: u32
@@ -1222,7 +1221,6 @@ const-value	metal2vulkan::bind::indirect_commands::RECORDS_ID_LIMIT	1 <<31
 const-value	metal2vulkan::bind::indirect_commands::THREADGROUP_BUFFER_ARGUMENT_COUNT	31
 const-value	metal2vulkan::bind::indirect_commands::WRITTEN_FLAG_BYTES	4
 const-value	metal2vulkan::cache::SOURCE_DIGEST	env!("M2V_SOURCE_DIGEST")
-const-value	metal2vulkan::device::NVIDIA_AMPERE_GA10X	&[0x2200, 0x2203, 0x2204, 0x2205, 0x2206, 0x2207, 0x2208, 0x220a, 0x220d, 0x2216, 0x222b, 0x222f, 0x2230, 0x2231, 0x2232, 0x2233, 0x2235, 0x2236, 0x2237, 0x2238, 0x223f, 0x2414, 0x2420, 0x2438, 0x2460, 0x2480, 0x2482, 0x2483, 0x2484, 0x2486, 0x2487, 0x2488, 0x2489, 0x248a, 0x248c, 0x248d, 0x248e, 0x249c, 0x249d, 0x249f, 0x24a0, 0x24a4, 0x24ac, 0x24ad, 0x24af, 0x24b0, 0x24b1, 0x24b6, 0x24b7, 0x24b8, 0x24b9, 0x24ba, 0x24bb, 0x24bf, 0x24c0, 0x24c7, 0x24c8, 0x24c9, 0x24dc, 0x24dd, 0x24df, 0x24e0, 0x24fa, 0x2501, 0x2503, 0x2504, 0x2505, 0x2507, 0x2508, 0x2509, 0x2520, 0x2521, 0x2523, 0x252f, 0x2531, 0x2544, 0x2560, 0x2561, 0x2563, 0x2571, 0x2582, 0x2583, 0x2584, 0x25a0, 0x25a2, 0x25a3, 0x25a4, 0x25a5, 0x25a6, 0x25a7, 0x25a9, 0x25aa, 0x25ab, 0x25ac, 0x25ad, 0x25af, 0x25b0, 0x25b2, 0x25b5, 0x25b6, 0x25b8, 0x25b9, 0x25ba, 0x25bb, 0x25bc, 0x25bd, 0x25e0, 0x25e2, 0x25e5, 0x25ec, 0x25ed, 0x25f9, 0x25fa, 0x25fb]
 const-value	metal2vulkan::metal::format::BICUBIC_TEXELS_UNBOUND	crate::metal::bicubic::BicubicTexels::NEUTRAL.0
 const-value	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	0.25
 const-value	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	4
@@ -1485,34 +1483,18 @@ enum	metal2vulkan::bind::indirect_commands::RecordError	#[derive(Clone, Copy, De
 enum	metal2vulkan::bind::indirect_commands::RecordField	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum RecordField
 enum	metal2vulkan::bind::indirect_commands::StateSource	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum StateSource
 enum	metal2vulkan::cache::ArtifactError	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ArtifactError
-enum	metal2vulkan::device::BatchOrderPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BatchOrderPolicy
-enum	metal2vulkan::device::CompletionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CompletionPolicy
 enum	metal2vulkan::device::Containment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Containment
 enum	metal2vulkan::device::ContainmentPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ContainmentPolicy
-enum	metal2vulkan::device::DontCareColorPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DontCareColorPolicy
-enum	metal2vulkan::device::DriverFact	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverFact
 enum	metal2vulkan::device::DriverWorkaround	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverWorkaround
 enum	metal2vulkan::device::Exposure	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Exposure
-enum	metal2vulkan::device::ExtendedRangeBlitPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ExtendedRangeBlitPolicy
 enum	metal2vulkan::device::FloatControl	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FloatControl
 enum	metal2vulkan::device::FloatWidth	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FloatWidth
 enum	metal2vulkan::device::FormatUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FormatUsage
 enum	metal2vulkan::device::FunctionStorage	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum FunctionStorage
 enum	metal2vulkan::device::GuestIsolation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum GuestIsolation
-enum	metal2vulkan::device::HalfChainPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HalfChainPolicy
 enum	metal2vulkan::device::HandleDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HandleDomain
-enum	metal2vulkan::device::HeapAnswerPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapAnswerPolicy
-enum	metal2vulkan::device::HeapCompressionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapCompressionPolicy
-enum	metal2vulkan::device::HostPageTexturePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HostPageTexturePolicy
 enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Independence
-enum	metal2vulkan::device::IndirectRecordsPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndirectRecordsPolicy
-enum	metal2vulkan::device::ManagedCopyInPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ManagedCopyInPolicy
-enum	metal2vulkan::device::PipelineWaitPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PipelineWaitPolicy
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
-enum	metal2vulkan::device::QueueSharingPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum QueueSharingPolicy
-enum	metal2vulkan::device::QueueTurnPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum QueueTurnPolicy
-enum	metal2vulkan::device::RateMapRegionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RateMapRegionPolicy
-enum	metal2vulkan::device::RenderLoweringPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderLoweringPolicy
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
 enum	metal2vulkan::device::Robustness	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Robustness
 enum	metal2vulkan::device::SimdClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum SimdClass
@@ -1520,15 +1502,10 @@ enum	metal2vulkan::device::SpirvExtension	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan::device::StageCreateFlag	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StageCreateFlag
 enum	metal2vulkan::device::SubgroupOp	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SubgroupOp
 enum	metal2vulkan::device::Tier	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Tier
-enum	metal2vulkan::device::UnsharedIsolationPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum UnsharedIsolationPolicy
-enum	metal2vulkan::device::UnstoredDontCarePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum UnstoredDontCarePolicy
-enum	metal2vulkan::device::VertexReachPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VertexReachPolicy
 enum	metal2vulkan::device::VkExtension	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkExtension
 enum	metal2vulkan::device::VkFeature	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkFeature
 enum	metal2vulkan::device::VkLimit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkLimit
 enum	metal2vulkan::device::VkProperty	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkProperty
-enum	metal2vulkan::device::WideLinePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum WideLinePolicy
-enum	metal2vulkan::device::YCbCrInPlacePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum YCbCrInPlacePolicy
 enum	metal2vulkan::error::AbiError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum AbiError
 enum	metal2vulkan::error::Attachment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Attachment
 enum	metal2vulkan::error::BindError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum BindError
@@ -3346,40 +3323,14 @@ field	metal2vulkan::device::DeviceDescription.formats	pub formats: FormatSupport
 field	metal2vulkan::device::DeviceDescription.generated_commands	pub generated_commands: Option<GeneratedCommandsProperties>
 field	metal2vulkan::device::DeviceDescription.khr_format_feature_flags2	pub khr_format_feature_flags2: bool
 field	metal2vulkan::device::DeviceDescription.limits	pub limits: Limits
-field	metal2vulkan::device::DeviceDescription.measured	pub measured: BTreeSet<DriverWorkaround>
 field	metal2vulkan::device::DeviceDescription.rgba4_opaque_black_swizzled	pub rgba4_opaque_black_swizzled: bool
 field	metal2vulkan::device::DeviceDescription.robust_buffer_access_update_after_bind	pub robust_buffer_access_update_after_bind: bool
 field	metal2vulkan::device::DeviceDescription.subgroup	pub subgroup: SubgroupProperties
 field	metal2vulkan::device::DeviceDescription.vendor_id	pub vendor_id: u32
-field	metal2vulkan::device::DevicePolicy.batch_order	pub batch_order: BatchOrderPolicy
-field	metal2vulkan::device::DevicePolicy.completion	pub completion: CompletionPolicy
 field	metal2vulkan::device::DevicePolicy.containment	pub containment: ContainmentPolicy
-field	metal2vulkan::device::DevicePolicy.dont_care_colors	pub dont_care_colors: DontCareColorPolicy
-field	metal2vulkan::device::DevicePolicy.extended_range_blits	pub extended_range_blits: ExtendedRangeBlitPolicy
-field	metal2vulkan::device::DevicePolicy.half_chains	pub half_chains: HalfChainPolicy
 field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: HandleDomain
-field	metal2vulkan::device::DevicePolicy.heap_answers	pub heap_answers: HeapAnswerPolicy
-field	metal2vulkan::device::DevicePolicy.heap_compression	pub heap_compression: HeapCompressionPolicy
-field	metal2vulkan::device::DevicePolicy.host_page_textures	pub host_page_textures: HostPageTexturePolicy
-field	metal2vulkan::device::DevicePolicy.indirect_records	pub indirect_records: IndirectRecordsPolicy
 field	metal2vulkan::device::DevicePolicy.isolation	pub isolation: GuestIsolation
-field	metal2vulkan::device::DevicePolicy.managed_copy_in	pub managed_copy_in: ManagedCopyInPolicy
-field	metal2vulkan::device::DevicePolicy.pipeline_commit_wait	pub pipeline_commit_wait: Duration
-field	metal2vulkan::device::DevicePolicy.pipeline_creation_wait	pub pipeline_creation_wait: Duration
-field	metal2vulkan::device::DevicePolicy.pipeline_waits	pub pipeline_waits: PipelineWaitPolicy
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
-field	metal2vulkan::device::DevicePolicy.queue_sharing	pub queue_sharing: QueueSharingPolicy
-field	metal2vulkan::device::DevicePolicy.queue_turns	pub queue_turns: QueueTurnPolicy
-field	metal2vulkan::device::DevicePolicy.rate_map_regions	pub rate_map_regions: RateMapRegionPolicy
-field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
-field	metal2vulkan::device::DevicePolicy.unshared_isolation	pub unshared_isolation: UnsharedIsolationPolicy
-field	metal2vulkan::device::DevicePolicy.unstored_dont_care_loads	pub unstored_dont_care_loads: UnstoredDontCarePolicy
-field	metal2vulkan::device::DevicePolicy.vertex_reach	pub vertex_reach: VertexReachPolicy
-field	metal2vulkan::device::DevicePolicy.wide_lines	pub wide_lines: WideLinePolicy
-field	metal2vulkan::device::DevicePolicy.ycbcr_in_place_reads	pub ycbcr_in_place_reads: YCbCrInPlacePolicy
-field	metal2vulkan::device::DriverDiagnostic.id	pub id: i32
-field	metal2vulkan::device::DriverDiagnostic.id_name	pub id_name: &'static str
-field	metal2vulkan::device::DriverDiagnostic.text	pub text: Cow<'static, str>
 field	metal2vulkan::device::EnableSet.extensions	pub extensions: BTreeSet<VkExtension>
 field	metal2vulkan::device::EnableSet.features	pub features: BTreeSet<VkFeature>
 field	metal2vulkan::device::EnabledCaps.extensions	pub extensions: BTreeSet<VkExtension>
@@ -8202,7 +8153,6 @@ method	metal2vulkan::device::Device::kernel_observes_partition	pub fn kernel_obs
 method	metal2vulkan::device::Device::mesh_descriptor_key	pub fn mesh_descriptor_key(&self, d: &MeshPipelineDescriptor) -> crate::cache::PipelineKey
 method	metal2vulkan::device::Device::metal_properties	pub fn metal_properties(&self) -> &MetalDeviceProperties
 method	metal2vulkan::device::Device::neutral_kinds	pub fn neutral_kinds(&self) -> Vec<NeutralResource>
-method	metal2vulkan::device::Device::new	pub fn new(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error>
 method	metal2vulkan::device::Device::policy	pub fn policy(&self) -> &DevicePolicy
 method	metal2vulkan::device::Device::profile	pub fn profile(&self) -> &DeviceProfile
 method	metal2vulkan::device::Device::profile_fingerprint	pub fn profile_fingerprint(&self) -> crate::cache::Hash256
@@ -8212,9 +8162,6 @@ method	metal2vulkan::device::Device::render_pipeline_key	pub fn render_pipeline_
 method	metal2vulkan::device::Device::render_variant_key	pub fn render_variant_key(&self, d: &RenderPipelineDescriptor, v: &VariantKey, b: &Budget, entries: &StageEntries) -> Result<RenderPipelineKeys, Error>
 method	metal2vulkan::device::Device::required_enables	pub fn required_enables(&self) -> EnableSet
 method	metal2vulkan::device::Device::tile_pipeline_key	pub fn tile_pipeline_key(&self, d: &TileRenderPipelineDescriptor) -> crate::cache::PipelineKey
-method	metal2vulkan::device::DeviceDescription::blendless_color_formats	pub fn blendless_color_formats(&self) -> Vec<Format>
-method	metal2vulkan::device::DeviceDescription::canonical_device_id	pub fn canonical_device_id(&self) -> u32
-method	metal2vulkan::device::DeviceDescription::driver_facts	pub fn driver_facts(&self) -> BTreeSet<DriverFact>
 method	metal2vulkan::device::DeviceDescription::from_khronos_json	pub fn from_khronos_json(json: &str, profile: Option<&str>) -> Result<DeviceDescription, Error>
 method	metal2vulkan::device::DeviceDescription::has	pub fn has(&self, feature: VkFeature) -> bool
 method	metal2vulkan::device::DeviceDescription::has_format_feature_flags2	pub fn has_format_feature_flags2(&self) -> bool
@@ -8223,7 +8170,6 @@ method	metal2vulkan::device::DeviceDescription::query	pub unsafe fn query(instan
 method	metal2vulkan::device::DeviceDescription::recommended_enables	pub fn recommended_enables(&self, policy: &DevicePolicy) -> EnableSet
 method	metal2vulkan::device::DeviceDescription::required_enables	pub fn required_enables(&self, requirements: &Requirements) -> Result<EnableSet, Capability>
 method	metal2vulkan::device::DeviceDescription::with_enabled	pub fn with_enabled(mut self, enabled: &EnableSet) -> Result<DeviceDescription, Error>
-method	metal2vulkan::device::DevicePolicy::exact_answers	pub const fn exact_answers(self) -> DevicePolicy
 method	metal2vulkan::device::DeviceProfile::addressed_needs	pub fn addressed_needs(&self) -> Vec<Capability>
 method	metal2vulkan::device::DeviceProfile::check	pub fn check(&self, req: &Requirements) -> Result<(), Capability>
 method	metal2vulkan::device::DeviceProfile::checks_atomics_in_shader	pub fn checks_atomics_in_shader(&self) -> bool
@@ -8254,7 +8200,6 @@ method	metal2vulkan::device::DeviceProfile::ulong_atomic_gaps	pub fn ulong_atomi
 method	metal2vulkan::device::DeviceProfile::union_requirements	pub fn union_requirements(&self, a: &Requirements, b: &Requirements) -> Requirements
 method	metal2vulkan::device::DeviceProfile::vertex_entry_inputs	pub fn vertex_entry_inputs(&self, d: &EntryDescriptor<'_>, vertex: Option<&VertexDescriptor>, budget: &Budget) -> Result<LoweringInputs, Error>
 method	metal2vulkan::device::DeviceProfile::workarounds	pub fn workarounds(&self) -> &[DriverWorkaround]
-method	metal2vulkan::device::DriverFact::pipeline_creation_diagnostics	pub fn pipeline_creation_diagnostics(self, dynamic_states: &[DynamicState], topology: PrimitiveTopology, blendless_colors: &[Format]) -> Vec<DriverDiagnostic>
 method	metal2vulkan::device::EnableSet::new	pub fn new() -> EnableSet
 method	metal2vulkan::device::EnabledCaps::portability_withholds	pub fn portability_withholds(&self, feature: VkFeature) -> bool
 method	metal2vulkan::device::Exposure::exposed	pub fn exposed(self, api: ApiVersion, extensions: &BTreeSet<VkExtension>) -> bool
@@ -9073,7 +9018,6 @@ struct	metal2vulkan::device::Device	#[derive(Clone, Debug)] pub struct Device(Ar
 struct	metal2vulkan::device::DeviceDescription	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DeviceDescription
 struct	metal2vulkan::device::DevicePolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DevicePolicy
 struct	metal2vulkan::device::DeviceProfile	#[derive(Clone, Debug, PartialEq, Eq)] pub struct DeviceProfile
-struct	metal2vulkan::device::DriverDiagnostic	#[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DriverDiagnostic
 struct	metal2vulkan::device::EnableSet	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct EnableSet
 struct	metal2vulkan::device::EnabledCaps	#[derive(Clone, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct EnabledCaps
 struct	metal2vulkan::device::FloatControls	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct FloatControls
@@ -11229,62 +11173,10 @@ variant	metal2vulkan::bind::indirect_commands::StateSource::Parent	Parent
 variant	metal2vulkan::cache::ArtifactError::Corrupt	Corrupt
 variant	metal2vulkan::cache::ArtifactError::Stale	Stale
 variant	metal2vulkan::cache::ArtifactError::WrongDevice	WrongDevice
-variant	metal2vulkan::device::BatchOrderPolicy::Ends	Ends
-variant	metal2vulkan::device::BatchOrderPolicy::Exact	Exact
-variant	metal2vulkan::device::CompletionPolicy::Exact	Exact
-variant	metal2vulkan::device::CompletionPolicy::Grouped	Grouped
 variant	metal2vulkan::device::Containment::On	On { robust: Robustness }
 variant	metal2vulkan::device::Containment::UnsafeOff	UnsafeOff
 variant	metal2vulkan::device::ContainmentPolicy::Contained	Contained
 variant	metal2vulkan::device::ContainmentPolicy::UnsafeOff	UnsafeOff
-variant	metal2vulkan::device::DontCareColorPolicy::Driver	Driver
-variant	metal2vulkan::device::DontCareColorPolicy::Kept	Kept
-variant	metal2vulkan::device::DriverFact::Bc6hBlockDecodeIsMetals	Bc6hBlockDecodeIsMetals
-variant	metal2vulkan::device::DriverFact::Bc7BlockDecodeIsMetals	Bc7BlockDecodeIsMetals
-variant	metal2vulkan::device::DriverFact::BlendlessColorAttachmentsWarn	BlendlessColorAttachmentsWarn
-variant	metal2vulkan::device::DriverFact::ChannelBlockDecodeIsMetals	ChannelBlockDecodeIsMetals
-variant	metal2vulkan::device::DriverFact::ClearedDepthAtStandardPositions	ClearedDepthAtStandardPositions
-variant	metal2vulkan::device::DriverFact::ColorBlockDecodeIsMetals	ColorBlockDecodeIsMetals
-variant	metal2vulkan::device::DriverFact::ColorClearIsMetals	ColorClearIsMetals
-variant	metal2vulkan::device::DriverFact::ColorImagesLieAsMetalHeapTextures	ColorImagesLieAsMetalHeapTextures
-variant	metal2vulkan::device::DriverFact::ColorResolveAverageIsMetals	ColorResolveAverageIsMetals
-variant	metal2vulkan::device::DriverFact::CompressedImagesHideAliasedWrites	CompressedImagesHideAliasedWrites
-variant	metal2vulkan::device::DriverFact::ConstantOffsetUniformReadsPreloaded	ConstantOffsetUniformReadsPreloaded
-variant	metal2vulkan::device::DriverFact::DepthImageKeepsDenormals	DepthImageKeepsDenormals
-variant	metal2vulkan::device::DriverFact::DepthStencilImagesLieApart	DepthStencilImagesLieApart
-variant	metal2vulkan::device::DriverFact::DepthStencilImagesStayGpuOptimized	DepthStencilImagesStayGpuOptimized
-variant	metal2vulkan::device::DriverFact::DepthTestComparesMagnitudes	DepthTestComparesMagnitudes
-variant	metal2vulkan::device::DriverFact::DepthTestKeepsDenormals	DepthTestKeepsDenormals
-variant	metal2vulkan::device::DriverFact::DontCareStoreIsMetals	DontCareStoreIsMetals
-variant	metal2vulkan::device::DriverFact::DontCareStoreIsOneOfMetals	DontCareStoreIsOneOfMetals
-variant	metal2vulkan::device::DriverFact::DynamicRestartWarns	DynamicRestartWarns
-variant	metal2vulkan::device::DriverFact::FirstSparseResourceWaitsForQueues	FirstSparseResourceWaitsForQueues
-variant	metal2vulkan::device::DriverFact::FragmentDepthKeepsDepth16Codes	FragmentDepthKeepsDepth16Codes
-variant	metal2vulkan::device::DriverFact::FragmentDepthStoresUnchanged	FragmentDepthStoresUnchanged
-variant	metal2vulkan::device::DriverFact::HostTransferImagesKeepTheirBytes	HostTransferImagesKeepTheirBytes
-variant	metal2vulkan::device::DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer	ImageUsesMissBufferWritesInOneCommandBuffer
-variant	metal2vulkan::device::DriverFact::InterlockOrdersDraws	InterlockOrdersDraws
-variant	metal2vulkan::device::DriverFact::InterlockedDrawsRaceUnderLoad	InterlockedDrawsRaceUnderLoad
-variant	metal2vulkan::device::DriverFact::InterlockedPassSplitNoSlower	InterlockedPassSplitNoSlower
-variant	metal2vulkan::device::DriverFact::LineTiesAreMetals	LineTiesAreMetals
-variant	metal2vulkan::device::DriverFact::MultisampleColorImagesLieAsMetalHeapTextures	MultisampleColorImagesLieAsMetalHeapTextures
-variant	metal2vulkan::device::DriverFact::MultisampledDepthFasterOutOfGeneral	MultisampledDepthFasterOutOfGeneral
-variant	metal2vulkan::device::DriverFact::PlainAllocationsHoldSubmissions	PlainAllocationsHoldSubmissions
-variant	metal2vulkan::device::DriverFact::PositionedDepthReadAtStandardPositions	PositionedDepthReadAtStandardPositions
-variant	metal2vulkan::device::DriverFact::QueueFailuresReportedByMessenger	QueueFailuresReportedByMessenger
-variant	metal2vulkan::device::DriverFact::RobustIndexFetchReadsZero	RobustIndexFetchReadsZero
-variant	metal2vulkan::device::DriverFact::RowCopiesDispatchFaster	RowCopiesDispatchFaster
-variant	metal2vulkan::device::DriverFact::SampledDepthKeepsHiZ	SampledDepthKeepsHiZ
-variant	metal2vulkan::device::DriverFact::SampledFetchRecoversCodes	SampledFetchRecoversCodes
-variant	metal2vulkan::device::DriverFact::SemaphoreOperationsStallSubmits	SemaphoreOperationsStallSubmits
-variant	metal2vulkan::device::DriverFact::ShadowCopyBackDispatchFaster	ShadowCopyBackDispatchFaster
-variant	metal2vulkan::device::DriverFact::ShadowCopyInDispatchFaster	ShadowCopyInDispatchFaster
-variant	metal2vulkan::device::DriverFact::SignallingSubmitsStallEvery1024	SignallingSubmitsStallEvery1024
-variant	metal2vulkan::device::DriverFact::SubpixelSnapIsMetals	SubpixelSnapIsMetals
-variant	metal2vulkan::device::DriverFact::TileStoreIsMetals	TileStoreIsMetals
-variant	metal2vulkan::device::DriverFact::TimestampPoolsAreCounterSampleBuffers	TimestampPoolsAreCounterSampleBuffers
-variant	metal2vulkan::device::DriverFact::TimestampsWaitForEveryQueue	TimestampsWaitForEveryQueue
-variant	metal2vulkan::device::DriverFact::UnstoredClearNoSlower	UnstoredClearNoSlower
 variant	metal2vulkan::device::DriverWorkaround::BothBarycentricFormsRejected	BothBarycentricFormsRejected
 variant	metal2vulkan::device::DriverWorkaround::BufferAtomicsUncontained	BufferAtomicsUncontained
 variant	metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals	ClippedCoverageNotMetals
@@ -11317,8 +11209,6 @@ variant	metal2vulkan::device::Exposure::Core	Core(ApiVersion)
 variant	metal2vulkan::device::Exposure::Extension	Extension(&'static [VkExtension])
 variant	metal2vulkan::device::Exposure::Implied	Implied { version: ApiVersion, extensions: &'static [VkExtension] }
 variant	metal2vulkan::device::Exposure::Promoted	Promoted { version: ApiVersion, extensions: &'static [VkExtension] }
-variant	metal2vulkan::device::ExtendedRangeBlitPolicy::Canonical	Canonical
-variant	metal2vulkan::device::ExtendedRangeBlitPolicy::Kept	Kept
 variant	metal2vulkan::device::FloatControl::DenormFlushToZero	DenormFlushToZero
 variant	metal2vulkan::device::FloatControl::DenormPreserve	DenormPreserve
 variant	metal2vulkan::device::FloatControl::RoundingModeRte	RoundingModeRte
@@ -11347,35 +11237,13 @@ variant	metal2vulkan::device::FunctionStorage::Assumed	Assumed(u64)
 variant	metal2vulkan::device::FunctionStorage::Measured	Measured(u64)
 variant	metal2vulkan::device::GuestIsolation::Off	Off
 variant	metal2vulkan::device::GuestIsolation::On	On
-variant	metal2vulkan::device::HalfChainPolicy::AtExits	AtExits
-variant	metal2vulkan::device::HalfChainPolicy::EachOperation	EachOperation
 variant	metal2vulkan::device::HandleDomain::Identity	Identity
 variant	metal2vulkan::device::HandleDomain::Table	Table
-variant	metal2vulkan::device::HeapAnswerPolicy::Device	Device
-variant	metal2vulkan::device::HeapAnswerPolicy::Metal	Metal
-variant	metal2vulkan::device::HeapCompressionPolicy::Compressed	Compressed
-variant	metal2vulkan::device::HeapCompressionPolicy::Uncompressed	Uncompressed
-variant	metal2vulkan::device::HostPageTexturePolicy::InPlace	InPlace
-variant	metal2vulkan::device::HostPageTexturePolicy::Shadow	Shadow
 variant	metal2vulkan::device::Independence::All	All
 variant	metal2vulkan::device::Independence::None	None
 variant	metal2vulkan::device::Independence::Only32Bit	Only32Bit
-variant	metal2vulkan::device::IndirectRecordsPolicy::Carried	Carried
-variant	metal2vulkan::device::IndirectRecordsPolicy::Untaxed	Untaxed
-variant	metal2vulkan::device::ManagedCopyInPolicy::AtCommit	AtCommit
-variant	metal2vulkan::device::ManagedCopyInPolicy::AtSubmission	AtSubmission
-variant	metal2vulkan::device::PipelineWaitPolicy::Bounded	Bounded
-variant	metal2vulkan::device::PipelineWaitPolicy::Exact	Exact
 variant	metal2vulkan::device::PointerDomain::Identity	Identity
 variant	metal2vulkan::device::PointerDomain::ResidentTable	ResidentTable
-variant	metal2vulkan::device::QueueSharingPolicy::Adaptive	Adaptive
-variant	metal2vulkan::device::QueueSharingPolicy::PerQueue	PerQueue
-variant	metal2vulkan::device::QueueTurnPolicy::CommitOrder	CommitOrder
-variant	metal2vulkan::device::QueueTurnPolicy::Fair	Fair
-variant	metal2vulkan::device::RateMapRegionPolicy::Exact	Exact
-variant	metal2vulkan::device::RateMapRegionPolicy::FanOut	FanOut
-variant	metal2vulkan::device::RenderLoweringPolicy::AtCall	AtCall
-variant	metal2vulkan::device::RenderLoweringPolicy::Worker	Worker
 variant	metal2vulkan::device::ResolveMode::Average	Average
 variant	metal2vulkan::device::ResolveMode::Max	Max
 variant	metal2vulkan::device::ResolveMode::Min	Min
@@ -11430,12 +11298,6 @@ variant	metal2vulkan::device::Tier::Emulated	Emulated
 variant	metal2vulkan::device::Tier::Linear	Linear
 variant	metal2vulkan::device::Tier::NoSubgroup	NoSubgroup
 variant	metal2vulkan::device::Tier::PartialFragment	PartialFragment
-variant	metal2vulkan::device::UnsharedIsolationPolicy::Bounded	Bounded
-variant	metal2vulkan::device::UnsharedIsolationPolicy::Off	Off
-variant	metal2vulkan::device::UnstoredDontCarePolicy::Cleared	Cleared
-variant	metal2vulkan::device::UnstoredDontCarePolicy::Driver	Driver
-variant	metal2vulkan::device::VertexReachPolicy::Bounded	Bounded
-variant	metal2vulkan::device::VertexReachPolicy::Exact	Exact
 variant	metal2vulkan::device::VkExtension::Ext4444Formats	Ext4444Formats
 variant	metal2vulkan::device::VkExtension::ExtAttachmentFeedbackLoopLayout	ExtAttachmentFeedbackLoopLayout
 variant	metal2vulkan::device::VkExtension::ExtBorderColorSwizzle	ExtBorderColorSwizzle
@@ -11825,10 +11687,6 @@ variant	metal2vulkan::device::VkProperty::SubgroupOperation	SubgroupOperation(Su
 variant	metal2vulkan::device::VkProperty::SubgroupQuadOperationsInAllStages	SubgroupQuadOperationsInAllStages
 variant	metal2vulkan::device::VkProperty::SubgroupStage	SubgroupStage(Stage)
 variant	metal2vulkan::device::VkProperty::VariableSampleLocations	VariableSampleLocations
-variant	metal2vulkan::device::WideLinePolicy::Device	Device
-variant	metal2vulkan::device::WideLinePolicy::Exact	Exact
-variant	metal2vulkan::device::YCbCrInPlacePolicy::Exact	Exact
-variant	metal2vulkan::device::YCbCrInPlacePolicy::Model	Model
 variant	metal2vulkan::error::AbiError::BadSamplerState	BadSamplerState
 variant	metal2vulkan::error::AbiError::BadValue	BadValue
 variant	metal2vulkan::error::AbiError::ContainerMismatch	ContainerMismatch
