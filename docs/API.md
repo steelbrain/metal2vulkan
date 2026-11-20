@@ -1638,6 +1638,17 @@ for dependency in &pipeline.dependencies {
   a constant offset, and an access through a pointer loaded from memory or made from an integer,
   is not checked. The binder writes `SlotBounds` from the bound buffer and refuses
   `ZeroAddress` (`Unsupported{IdentityDomains}`): the zero range is the new runtime's own memory.
+  What the check costs, measured on the new runtime against the same build with the check
+  removed (release, no validation layer): in the compute harness's GPU time, `wide_bindings`
+  34.7% slower on a Radeon 780M (job m3-max-56485), 38.5% on an RTX 3090 (m3-max-56486) and 68%
+  on an Iris Xe (m3-max-56546); `bind_2000` 17.9%, 32.1% and 11.3%; `constant_managed` and
+  `constant_private` 8.0% and 8.3% on the 780M, 22.2% and 25.8% on the 3090, level on the Iris
+  Xe; `row_cells` level on the 780M and the 3090, 9.5% on the Iris Xe. A recorded replay
+  stream's GPU time a frame, its players built from 653014c278 (the same jobs): 3.3% more on the
+  780M over 438 frames (one round), level on the 3090 over 464 frames, and 5.5% more on the Iris
+  Xe over 200 frames (m3-max-56641). Making two recorded sessions' render pipelines cold takes
+  3.5% and 3.8% more driver time on two RTX 3090s with the check than without it (players built
+  from 84b4f52e4b, jobs m3-max-58076 and m3-max-58098).
 - The layout numbers set 0 densely, in `ResourceSlot` order. Set 1 holds the heap arrays (the
   resources reached through argument buffers and resource IDs); `pipeline::heap_sampler_capacity`
   is the most elements a set-1 sampler array has on a profile. A texture buffer reached so is an

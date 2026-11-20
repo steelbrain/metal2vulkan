@@ -1660,6 +1660,15 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   The call's time grows with the new block it is the first to use: 2.1 and 2.5 ms with a 1 MiB
   block, 9.1 ms with 64 MiB and 28.4 ms with 256 MiB (job m3-max-52745); the probe's later
   submissions spent at most 0.18 ms each.
+- A texture or a block not shared outside rt, released while an upload not yet submitted holds it
+  (a new texture's move home, a copy into or out of it, a block's zero fill), keeps its memory
+  until that upload is submitted: with the next submission, which a commit of a command buffer
+  with work for the GPU makes (one with nothing for the GPU makes none), at a call that sends the
+  uploads at once (`Texture::get_bytes` of a texture without named bytes), or when an upload call
+  finds them past their bound of 4,096 calls or 64 MiB (above). The released bytes count against
+  that bound, which only the next upload call tests; with no later call they stay until the
+  device drops, where Metal frees a released resource once no work uses it.
+  `Metrics::held_releases` and `held_release_bytes` count such releases.
 - On NVIDIA, short command buffers committed back to back reach the GPU in more submissions than
   the old runtime made of them, and such a burst runs behind it. The cost is NVIDIA's latency per
   submission: the runtime submits sooner, each command buffer as soon as it can. On an RTX 2080
@@ -1801,7 +1810,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   function's constant-offset accesses to it meets the device's own out-of-bounds behaviour, and
   where nothing maps there that is a fault, which loses the device on NVIDIA's driver and on RADV
   (above). An access through a pointer loaded from memory or made from an integer is not checked
-  either: no binding bounds it.
+  either: no binding bounds it. The check's measured cost, in GPU time and in cold pipeline
+  makes, is in docs/API.md, section 5 (`PushField::SlotBounds`).
 - A dispatch's threadgroup memory, the kernel's own and the lengths set, each rounded up to 16
   bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
   Metal's is its `maxThreadgroupMemoryLength`. A kernel's access past its threadgroup memory is
@@ -2286,15 +2296,18 @@ or does not check is rebuilt from the generations' names, with young counted ful
   domains, which every state is translated under: a state over a function that holds one is
   `Error::Translation` of `Unsupported{IdentityDomains}`, not implemented, whose symbol names the
   first form it holds. By form:
-  - tier 2's pointer indexing to a texture: reading the texture of an argument buffer that a
-    pointer another argument buffer holds reaches, whose plan reads the root table ("an encoder
-    value the function reads as RootTableAddress"). The translator test
+  - tier 2's pointer indexing to a texture: a texture behind a pointer member of an argument
+    buffer, read in the argument buffer that pointer reaches, whose plan reads the root table
+    ("an encoder value the function reads as RootTableAddress"). The translator test
     `a_texture_of_an_argument_buffer_a_pointer_member_reaches_is_refused_under_the_identity_domains`
     and the device test `argument_tier` assert it;
-  - a pointer the function loads from memory or makes from an integer, whose plan reads the root
-    table as the pointer indexing above does ("an encoder value the function reads as
-    RootTableAddress"): no test yet, and refused until a recorded stream or a guest's boot meets
-    it;
+  - a buffer reached through a pointer member of an argument buffer, or through a `gpuAddress`
+    the program stored in a buffer, and a pointer the function makes from an integer, whose
+    plan reads the root table as the pointer indexing above does (the same symbol): a plain
+    kernel that reads a buffer through an argument buffer's pointer member is refused so. No
+    test yet;
+  - a kernel that turns a buffer argument's pointer into an integer, which the translator takes
+    as a wide pointer read through the root table (the same symbol): no test yet;
   - a sample, gather or comparison of an argument buffer's texture, and a depth texture of one
     both compared and sampled without comparison: no test yet;
   - an argument buffer's sampler, and an array of samplers: no test yet;
@@ -2314,6 +2327,26 @@ or does not check is rebuilt from the generations' names, with young counted ful
   -51726, -51757, -51772, -51839 and -51840. No tool translates every pipeline state of the
   recorded streams under the identity domains without a GPU, so the count is of these streams
   to these frames.
+- On RADV (Mesa 26.2.6) a stage reads the pushed values it does not keep in registers from the
+  driver's own upload of them, and the driver may widen such a read to a power of two of words,
+  past the upload's end: 12 words read as 16, 16 bytes past it. Where the upload ends the
+  driver's upload buffer, the read faults. A Radeon 780M and an RX 7900 XTX then lose the device,
+  and every guest's later work ends `DeviceLost`; an RX 550 logs the fault and goes on, and what
+  the read answers there is not known. rt places each stage's pushed values with no regard to that
+  widening. Met on the 780M by a compute kernel of a recorded session, whose fault lies at the end
+  of the driver's upload buffer (job m3-max-57449), and in guest sessions on the 780M and the
+  RX 7900 XTX.
+- Every `VkPipeline` is made through the device's `VkPipelineCache` (The cache directory, above),
+  which is empty on a host's first run. Cold, the driver's time for a recorded session's render
+  pipelines made through it, against the same pipelines made past any cache (states-only plays):
+  5.8% slower on an RTX 3090 (NVIDIA 620.70.06, job m3-max-58076) and 6.8% slower on a second RTX
+  3090 with a second session (m3-max-58098); 9.8% faster on an Iris Xe (ANV, m3-max-58178), whose
+  driver shares compiled stages between the pipelines made through one cache; level on a Radeon
+  780M (RADV, m3-max-58159), 0.4% slower, within the plays' spread. Warm, in a second process on
+  the directory a first one filled, with the driver's own disk cache on: 21.4 against 21.0 ms
+  through the cache against past it on the second RTX 3090 (m3-max-58285), 5.5 against 21.5 ms on
+  the Iris Xe and 3.6 against 8.1 ms on the Radeon 780M; with the driver's disk cache off, 5.6
+  against 4,280.6 ms on the Iris Xe and 3.7 against 845.8 ms on the Radeon 780M.
 - No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it
   unless the consumer calls `prepare_dispatch` for that dispatch: a state reads only its
   lowerings from the cache directory, each variant is lowered at the first dispatch that needs it
@@ -2599,6 +2632,23 @@ or does not check is rebuilt from the generations' names, with young counted ful
   780M, 0.9 to 1.5 ms for the others, nothing once the driver's cache holds it. A driver without
   the restriction serves it from its cache (0.1 ms on ANV). Linking from pipeline libraries would
   avoid it; the floor does not have them.
+- Each render content is one whole `VkPipeline`, compiled with no shared library parts, so a cold
+  make pays the content's whole compile. A recorded session's heaviest content, a fragment
+  function of about 30,800 SPIR-V instructions, takes 1,408 ms of driver time cold on an RTX 3090
+  (NVIDIA 620.70.06, job m3-max-58251), and 1,335 ms on a second RTX 3090 (m3-max-58134). Made
+  without either dynamic state rt adds (the feedback loop's enable, depth bias's enable), its time
+  changes by under 1% (m3-max-58251). It is paid once per cold cache: warm, with the driver's disk
+  cache on, the whole session's render pipelines take 34.5 ms of driver time on the second RTX
+  3090 (m3-max-58285). A warm make in a new process reads each render content's record (The cache
+  directory), so it decodes and specializes no function: on lavapipe, a recorded session's warm
+  render state creation is 31 to 44% faster with the records than without them (m3-max-58317).
+- Mesh render pipelines are not built. No call makes a state of a `MTLMeshRenderPipelineDescriptor`
+  (`newRenderPipelineStateWithMeshDescriptor:`), and the render encoder has no object or mesh
+  binding and no mesh draw (`drawMeshThreadgroups:`, `drawMeshThreads:` and the indirect form), so
+  no type here names them and the consumer refuses them itself. `new_render_pipeline_state` takes
+  a vertex function: an object or mesh function in its place is the translator's refusal
+  (`Error::Translation`). The translator compiles mesh pipelines (docs/API.md, "Mesh pipelines");
+  rt makes no `VkPipeline` of one.
 
 ## Render encoders
 
@@ -3108,6 +3158,14 @@ runtime's descriptor set layouts, the empty set 0 and set 1 of the arrays
 (`vkGetDescriptorSetLayoutSupport`, which Vulkan answers only for a created device; the limits
 alone do not promise it). A device that does not is refused with `Error::BelowFloor`,
 `Missing::SetLayout`.
+
+On macOS the driver that meets the floor is Mesa's Vulkan driver for Apple GPUs (KosmicKrisp):
+Mesa 26.3.1 on an Apple M3 Max offers every item, `nullDescriptor` and both set layouts among them
+(job m3-max-47313), and the conformance suite's rt side runs on it (m3-max-57732). A consumer
+ships it and loads it through `Instance::with_drivers`. MoltenVK is
+below the floor: it reports no `nullDescriptor`, and its `vkGetDescriptorSetLayoutSupport`, which
+answers by a count of descriptors alone, refuses set 1 (`Missing::SetLayout`; MoltenVK 1.4.2, job
+m3-max-43653).
 
 ### Extensions
 
