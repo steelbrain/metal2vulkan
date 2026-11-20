@@ -399,10 +399,8 @@ impl ColorCell {
         }
         let reach = self.b_reach();
         let drawn = |x: u64, y: u64| {
-            x >= B_RECT.x
-                && x < B_RECT.x + B_RECT.width
-                && y >= B_RECT.y
-                && y < B_RECT.y + B_RECT.height
+            (B_RECT.x..B_RECT.x + B_RECT.width).contains(&x)
+                && (B_RECT.y..B_RECT.y + B_RECT.height).contains(&y)
         };
         (0..SIDE)
             .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
