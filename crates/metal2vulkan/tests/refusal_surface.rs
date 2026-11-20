@@ -1,14 +1,14 @@
 //! The refusal surface, and the basis of every refusal that claims Metal stops an input.
 //!
 //! `scripts/refusal-surface/refusal_surface.py` reads every typed refusal of the two published
-//! crates and of the new runtime from the sources and writes `docs/REFUSALS.md`. Its **Basis**
+//! crates and of the runtime from the sources and writes `docs/REFUSALS.md`. Its **Basis**
 //! column says where the belief that an input must be refused comes from: derived from the
 //! construction site wherever the site states it (a capability a device lacks, a piece not built, a
 //! cap of this crate's), and declared in the refusal's own doc comment, as a last line
 //! `Basis: <value> (the evidence)`, wherever the claim is about Metal itself, which no construction
 //! site can state.
 //!
-//! The new runtime's refusal enums (each variant of its `Error` whose whole payload is one enum it
+//! The runtime's refusal enums (each variant of its `Error` whose whole payload is one enum it
 //! declares) are such claims, so every variant of them carries a declared basis, and this test is
 //! what makes an absent or malformed one fail. A refusal whose basis is not settled says
 //! `Basis: unknown (why)`: the project's rule is that unknown stays visible, not that every row gets
@@ -71,7 +71,7 @@ fn every_metal_refusal_states_its_basis() {
     assert!(
         out.trim().is_empty(),
         "refusals whose basis is absent or malformed:\n{out}\n\
-         Each variant of the new runtime's refusal enums ends its doc comment with \
+         Each variant of the runtime's refusal enums ends its doc comment with \
          `Basis: <value> (the evidence)`; a basis that is not settled is `Basis: unknown (why)`, \
          never nothing. The values are in scripts/refusal-surface/refusal_surface.py."
     );

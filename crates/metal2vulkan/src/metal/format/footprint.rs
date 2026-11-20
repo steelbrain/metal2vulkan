@@ -10,8 +10,8 @@
 //!
 //! [`footprint`] is the first question for the formats whose answer the format's own structure
 //! decides — its block's bytes and texel extent, and how many planes Metal lays its bytes in —
-//! and `None` for every format whose footprint the image this crate maps it to decides, which
-//! `metal2vulkan-runtime`'s `texture/heap_tiled.rs` reads from that image instead. The two never
+//! and `None` for every format whose footprint the image this crate maps it to decides, which the
+//! runtime reads from that image instead. The two never
 //! answer for one format (`tests::footprint_answers_where_no_image_does`), and every byte count
 //! here is held to the bytes of a format the crate **does** hold whose element is the same size
 //! (`tests::footprint_bytes_match_a_held_twin`), so no number here is one nobody checked.

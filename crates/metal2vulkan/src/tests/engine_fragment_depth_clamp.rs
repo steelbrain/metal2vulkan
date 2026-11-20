@@ -17,8 +17,8 @@
 //!   ordered greater-than more than without the input, and its kill. The functions that write no
 //!   depth are the same module under it.
 //!
-//! What the depth stores is the runtime lane's (`runtime_lane::viewport_ranges`, Metal probes 3
-//! and 3b). `llvm-as` assembles the fixture; a missing tool skips visibly. No GPU is used.
+//! What the depth stores is Metal probes 3 and 3b's. `llvm-as` assembles the fixture; a missing
+//! tool skips visibly. No GPU is used.
 
 use std::collections::BTreeMap;
 use std::path::Path;

@@ -1,6 +1,5 @@
 //! A float rounded to the code Metal stores in a color channel (`color_write::round`), on the
-//! interpreter, against the rules probes measured on an Apple M3 Max and an M4
-//! (`runtime_lane::color_writes` holds the same rules).
+//! interpreter, against the rules probes measured on an Apple M3 Max and an M4.
 //!
 //! Each case writes one value to every lane of a four-lane output whose lanes take different
 //! rules, so every rule runs beside the others. The reference is the value each rule writes: the

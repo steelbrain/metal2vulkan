@@ -19,8 +19,8 @@
 //! it too, measured the same way on the same device, its red at bit 8, green 4, blue 0 and alpha
 //! 12, read back off Metal's own words.
 //!
-//! Metal's store into an 8-bit sRGB format (`R8Unorm_sRGB`, `RG8Unorm_sRGB`; the lane's rule,
-//! `runtime_lane::color_writes`, and its in-guest probe's clears and draws on the M3 Max): each
+//! Metal's store into an 8-bit sRGB format (`R8Unorm_sRGB`, `RG8Unorm_sRGB`; an in-guest probe's
+//! clears and draws on the M3 Max): each
 //! channel's value clamped to `[0, 1]` (a NaN 0), times 4095 exactly, rounded to nearest, encoded
 //! by Metal's twelve-bit table, as `pack_float_to_srgb_unorm4x8` encodes a color channel. The
 //! fragment function encodes the channel by the MSL transfer through the device's `Pow`, as its

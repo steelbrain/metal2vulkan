@@ -101,8 +101,7 @@ pub const RUNTIME_VERSION: u32 = 2540;
 /// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
 /// or reads. A cache of translations across builds keys on it beside [`SEMANTICS_VERSION`] and
 /// [`ARTIFACT_FORMAT_VERSION`], so a build of other sources never reads another build's output,
-/// even when no version moved; `metal2vulkan-runtime`'s shader cache does. An edit to a test-only
-/// module leaves it unchanged.
+/// even when no version moved. An edit to a test-only module leaves it unchanged.
 pub const SOURCE_DIGEST: &str = env!("M2V_SOURCE_DIGEST");
 
 /// Writes a digest as lowercase hex.

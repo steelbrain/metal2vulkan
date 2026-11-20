@@ -26,8 +26,7 @@
 //!   (`arith::pack`, `PrecisionNote::DevicePackConversion`): every format's reads, stores and a
 //!   read after the function's own write, within the note's bound of the probes's model; and
 //!   through `half` members, of probe 12's. The interpreter models no `Pow` and leaves a pack of a
-//!   NaN undefined, so the sRGB formats and NaN stores are the device lane's
-//!   (`runtime_lane::tile_normalized`).
+//!   NaN undefined, so the sRGB formats and NaN stores are a device's to check.
 //! - The refusals are typed: no tile inputs, a converting format, an attachment without a format,
 //!   a multisampled pass, a threadgroup variable in a tile function; the binder specializes the
 //!   render area, refuses an empty one, and binds the attachments in their staging formats, and

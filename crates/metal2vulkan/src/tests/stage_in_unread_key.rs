@@ -558,7 +558,7 @@ fn an_unread_attribute_changes_no_word_of_the_module() {
 ///
 /// This is the measurement of the fix. `Device::kernel_inputs_read` narrows a creation's lowering
 /// inputs to the attributes the kernel's entry reads, and a creation keys its kernel and compiles
-/// it under those (`metal2vulkan-runtime`'s `Variant::compiled`), so the 36 rows ask for one
+/// it under those, so the 36 rows ask for one
 /// compiled function and the memo of compiled functions answers 35 of them. Before the narrowing
 /// each row was a key of its own and each bought a translation of bytes the first already
 /// produced; [`an_unread_attribute_changes_no_word_of_the_module`] is what says those were the

@@ -140,7 +140,7 @@ fn stems() -> Vec<String> {
 }
 
 /// The pipeline of `rt6_cover` and `fragment` from `fragments` at `samples`, with no attachment
-/// (as `runtime_lane::attachmentless` draws it) unless `color`.
+/// unless `color`.
 fn render(
     cover: &Library,
     fragment: StageSource,

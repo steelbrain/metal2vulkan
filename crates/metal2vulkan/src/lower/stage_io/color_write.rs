@@ -28,7 +28,7 @@
 //!   Metal's where the profile takes `DriverDeviation::MetalColorWrites`, and a lane's the function
 //!   rounds to nearest even (its NaN `0x7fc00000`) where it takes `MetalFloatColorNans`; a `half`
 //!   output's on no device: it reaches the attachment held widened by the device's conversion,
-//!   whose NaN is the device's (`runtime_lane::color_writes`: NVIDIA's stores `0x7fff`, ANV and
+//!   whose NaN is the device's (measured: NVIDIA's stores `0x7fff`, ANV and
 //!   RADV store `0xfe00`, lavapipe quiets or canonicalizes a `half` NaN, MoltenVK canonicalizes
 //!   it); elsewhere the module records the note. An output every return of which holds a constant
 //!   none of whose lanes is a NaN (`stage_io::returns_no_nan`) stores none, and records no note for

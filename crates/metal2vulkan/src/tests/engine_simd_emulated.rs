@@ -3010,7 +3010,7 @@ define void @{name}(ptr addrspace(1) %src, ptr addrspace(1) %dst, ptr addrspace(
 
 /// On lavapipe's `Device::from_queries` profile the lockstep order gives the stores of every
 /// [`row_store_kernel`] barriers under the default domains, and none under the identity domains
-/// (the new runtime's), whose kernels take no order: there each kernel's module has no lockstep
+/// (the runtime's), whose kernels take no order: there each kernel's module has no lockstep
 /// barrier, states no `RowLockstep` and takes no simd class, it does not observe its threadgroup
 /// partition with partial threadgroups, and that variant's pipeline runs its grid in tiles
 /// (`GridTiles`).

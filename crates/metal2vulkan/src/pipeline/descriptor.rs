@@ -543,8 +543,8 @@ pub struct PrivateRenderState {
     /// `openGLModeEnabled` (default off): changes nothing Metal draws or reflects, and makes two
     /// states Metal otherwise refuses (`pipeline::private_state`'s docs): a fragment function
     /// writing depth without a depth attachment, its depth going nowhere, and a rasterizing state
-    /// whose vertex function returns `void`, which rasterizes nothing. The runtime answers both
-    /// (`metal2vulkan-runtime`'s `new_render_pipeline_state`), the second as the state of the
+    /// whose vertex function returns `void`, which rasterizes nothing. The runtime answers both,
+    /// the second as the state of the
     /// descriptor with rasterization disabled; the compile reads it not, and its link refuses a
     /// rasterizing `void` vertex function whatever the mode
     /// ([`DescriptorError::RasterizedVoidVertex`](crate::error::DescriptorError::RasterizedVoidVertex)).

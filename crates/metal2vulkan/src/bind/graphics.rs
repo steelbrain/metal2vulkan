@@ -1785,8 +1785,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 // The bound buffer's bytes before its bind offset and its length, which
                 // instantiation reads from the state.
                 PushField::SlotBounds(slot) if planned(slot).is_some() => {}
-                // The identity domains' zero range is the new runtime's own memory, and their
-                // bicubic slot's format treatment the new runtime's own field.
+                // The identity domains' zero range is the runtime's own memory, and their
+                // bicubic slot's format treatment the runtime's own field.
                 PushField::ZeroAddress | PushField::BicubicTexels(_) => {
                     return Err(not_implemented(Feature::IdentityDomains))
                 }

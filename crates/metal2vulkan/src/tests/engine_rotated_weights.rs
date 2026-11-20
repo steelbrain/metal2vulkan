@@ -13,10 +13,9 @@
 //!   variant where its pipeline reads the weights (`BindError::NeedsVariant` from the base),
 //!   whose plan states it; a pipeline that reads none draws as it is.
 //!
-//! What the weights hold is the runtime lane's (`runtime_lane::provoking`) and a Metal probe's
-//! (the M3 Max, macOS 27.0.1: the first weight bit for bit, the others within `2^-15`). Every
-//! module passes L3. `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is
-//! used.
+//! What the weights hold is a Metal probe's (the M3 Max, macOS 27.0.1: the first weight bit for
+//! bit, the others within `2^-15`). Every module passes L3. `llvm-as` assembles the fixtures; a
+//! missing tool skips visibly. No GPU is used.
 
 use std::path::Path;
 

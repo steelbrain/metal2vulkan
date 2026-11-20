@@ -2,7 +2,7 @@
 //!
 //! Each stage has a push window: vertex `[0, 64)`, fragment `[64, 128)`, compute `[0, 128)`.
 //! Vulkan guarantees `maxPushConstantsSize ≥ 128`, so those windows depend neither on the other
-//! stage nor on the device. On a profile whose push window is the new runtime's floor
+//! stage nor on the device. On a profile whose push window is the runtime's floor
 //! (`PushWindow::Floor`, `Device::from_queries`'), which requires `maxPushConstantsSize ≥ 256`, a
 //! compute window is `[0, 256)` (a dispatch region and 24 buffer addresses below its tail), and a render
 //! pipeline's two stages share one range `[0, 256)`, dense by link: the vertex function's fields
@@ -70,7 +70,7 @@ pub const fn window(stage: Stage, w: PushWindow, base: u32) -> (u32, u32) {
     }
 }
 
-/// The push bytes of the new runtime's floor (`PushWindow::Floor`): its `maxPushConstantsSize`.
+/// The push bytes of the runtime's floor (`PushWindow::Floor`): its `maxPushConstantsSize`.
 pub const FLOOR_BYTES: u32 = 256;
 
 /// The end of a vertex function's window on the floor: the floor's end less one address, so the

@@ -3,11 +3,9 @@
 //!
 //! - On the CPU interpreter, 192 linear 2D samples Metal took, 16 per format and result type, are
 //!   Metal's bytes, through a constexpr sampler and through a runtime one: 128 of the one-plane
-//!   formats (an Apple M3 Max on macOS 26.7, byte-identical to the Apple M4's probe),
-//!   whose device lane `runtime_lane::extended_range_samples` compares the same samples on each
-//!   venue, and 64 of the two-plane formats (an Apple M4 on macOS 27.0.1: footprints inside the
-//!   texture of its linear clamp-to-edge samples), whose device lane
-//!   `runtime_lane::two_plane_samples` replays every sample of that probe.
+//!   formats (an Apple M3 Max on macOS 26.7, byte-identical to the Apple M4's probe), and 64 of
+//!   the two-plane formats (an Apple M4 on macOS 27.0.1: footprints inside the
+//!   texture of its linear clamp-to-edge samples).
 //! - Under every address mode, each border color, a constant offset, and pixel coordinates,
 //!   through constexpr and runtime samplers (a runtime sampler's `MirrorClampToEdge` too, each
 //!   tap mirrored once and clamped), nearest samples are the decoded texel at Metal's position and
@@ -1167,8 +1165,7 @@ fn swizzled_samples_and_gathers_are_the_unswizzled_swizzled() {
             width: N as u32,
             codes: &codes,
         };
-        // The lowering takes no profile's choice here: one profile serves (the device lane
-        // `runtime_lane::extended_swizzles` runs each venue).
+        // The lowering takes no profile's choice here: one profile serves.
         for (stem, p) in profiles().into_iter().take(1) {
             // Each kernel's unswizzled results.
             let mut base = BTreeMap::new();

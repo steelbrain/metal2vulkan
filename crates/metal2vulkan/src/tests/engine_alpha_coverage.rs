@@ -3,8 +3,8 @@
 //! four samples, alpha to coverage off and on, on committed profiles.
 //!
 //! Vulkan specifies no algorithm for converting the alpha to a coverage mask, where Metal's
-//! coverage is its own (a 2x2 ordered dither at two and four samples, measured on an Apple M3 Max
-//! by `runtime_lane::alpha_coverage`), so a pipeline that covers by alpha
+//! coverage is its own (a 2x2 ordered dither at two and four samples, measured on an Apple M3
+//! Max), so a pipeline that covers by alpha
 //! (`GraphicsState::alpha_to_coverage`) records `PrecisionNote::DeviceAlphaCoverage` on its
 //! fragment stage, and the vertex stage records none; on a profile measured to cover as Metal
 //! does (`DriverDeviation::MetalAlphaCoverage`: `moltenvk-m3`, MoltenVK on the M3 Max's macOS 27

@@ -9,7 +9,7 @@
 //! threadgroup memory, a SIMD-group or quad function, or a mesh or object stage (`addrspace(3)`,
 //! `@air.simd_`, `@air.quad_`, `air.mesh`, `air.object`) is compiled, every entry its ABI declares,
 //! on every committed profile under `Device::new`'s default policy and under
-//! `Device::from_queries` with the identity domains (the new runtime's), and each module compiled
+//! `Device::from_queries` with the identity domains (the runtime's), and each module compiled
 //! is read: it declares none of the three capabilities, its requirements name neither the
 //! extension (Vulkan's or SPIR-V's) nor its features, and each part compiles modules that
 //! declare `Workgroup` variables. Each part counts the modules whose threadgroup arena is sized at

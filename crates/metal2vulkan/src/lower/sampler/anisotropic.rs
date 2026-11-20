@@ -33,8 +33,8 @@
 //! fraction and the levels' blend are the device's (`PrecisionNote::AnisotropicFilter`), so the
 //! level, a tap count at a threshold and the spacing may differ from Metal's by their rounding.
 //! The spacing past two taps below the cap is an approximation (`κ_n`). Each tap is the device's
-//! own filter at the level handed to it, so its footprint and sum are the device's. The lane
-//! `runtime_lane::anisotropic_filter` measures it on `rgba8Unorm` at `maxAnisotropy` 2 to 16.
+//! own filter at the level handed to it, so its footprint and sum are the device's, measured on
+//! `rgba8Unorm` at `maxAnisotropy` 2 to 16.
 //!
 //! **The form.** Each tap is one device sample at an explicit level: under a linear mip filter the
 //! fractional level, which the device's linear mip filter blends: the device's blend, which need
@@ -228,9 +228,9 @@ const KAPPA: [(i32, f32); 8] = [
 /// there, and blends nothing of level 1 at any mip precision up to 11 bits. Vulkan leaves an
 /// anisotropic sampler's level and taps to the implementation ("Texel Anisotropic Filtering": "The
 /// particular scheme for anisotropic texture filtering is implementation-dependent"), and an RTX
-/// 5080's reads past level 0 at a fractional level whatever its mipmap mode (the lane
-/// `runtime_lane::anisotropic_filter` at `MINIFIED_NEAREST`: a linear filter under a nearest mip
-/// filter at `maxAnisotropy` 8 off by up to 147 codes).
+/// 5080's reads past level 0 at a fractional level whatever its mipmap mode (measured at
+/// `MINIFIED_NEAREST`: a linear filter under a nearest mip filter at `maxAnisotropy` 8 off by up to
+/// 147 codes).
 const MINIFIED_ZERO: f32 = 1.0 / 4096.0;
 
 /// The level handed for level 0 where Metal's level is above 0 under a nearest mip filter or

@@ -262,7 +262,7 @@ pub fn limit(fb: &mut FunctionBuilder<'_>, length: Value, n: u32) -> BResult<Val
 /// in the slot's buffer: `m` plus `before`, the buffer's bytes before the bind offset (from the
 /// slot's pushed bounds, `PushField::SlotBounds`), under the slot's [`limit`] for the access's
 /// size, both made once per function by `EmitCx::slot_limit`. One add and one compare per access,
-/// in `u32`. Exact as the new runtime makes no buffer longer than 2 GiB: an offset that reaches
+/// in `u32`. Exact as the runtime makes no buffer longer than 2 GiB: an offset that reaches
 /// before the buffer's start wraps to at least 2^31, past every limit.
 pub fn in_buffer(
     fb: &mut FunctionBuilder<'_>,

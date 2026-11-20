@@ -1226,8 +1226,8 @@ macro_rules! formats_held_for_copies {
 ///
 /// Measured on an Apple M3 Max under macOS 27.0.1, plain Metal (the `format-footprints-*`
 /// conformance recordings): `newTextureWithDescriptor:` makes a texture of each in every texture
-/// type its type rules take (`metal2vulkan-runtime`'s `texture_descriptor.rs`: no cube of a
-/// one-plane YCbCr format), in `Shared` and `Private` storage, and `replaceRegion:` and
+/// type its type rules take (no cube of a one-plane YCbCr format), in `Shared` and `Private`
+/// storage, and `replaceRegion:` and
 /// `getBytes:` move each texel's bytes unchanged, 2 or 4 a texel ([`footprint()`]'s element), a
 /// fresh texture's reading zero; where Metal keeps the texture compressed (seven of the padded
 /// formats, 16 by 16 under `ShaderRead`) both host copies leave their destinations as they were,

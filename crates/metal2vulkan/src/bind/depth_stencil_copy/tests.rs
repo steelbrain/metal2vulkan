@@ -216,8 +216,7 @@ fn the_depth_split_is_valid_where_the_device_has_what_it_needs() {
 ///
 /// 65536 inputs is a small enough space to check whole, so it is checked whole rather than
 /// sampled. This is the arithmetic the two shaders perform, in the same order and the same
-/// precision; that a real device performs it so is the device test's half of the claim
-/// (`metal2vulkan_runtime`'s multisampled depth round trip).
+/// precision; that a real device performs it so is a device test's half of the claim.
 ///
 /// Its failure mode was exercised while writing it: dropping the `+ 0.5`, so the conversion to
 /// unsigned truncates `d * 65535` instead of rounding it, misses 36442 of the 65536 codes.

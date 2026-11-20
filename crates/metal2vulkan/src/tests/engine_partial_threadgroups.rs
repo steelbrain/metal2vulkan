@@ -485,8 +485,7 @@ fn a_barrier_and_a_simdgroup_sum_run_partial_threadgroups_as_metal() {
 /// A grid of whole threadgroups, of a `dispatchThreads` or a `dispatchThreadgroups`, runs on the
 /// partial-threadgroups variant's plan as its ragged grids do, every thread live: as the same
 /// regions unflagged, on the one specialization a ragged grid of its threadgroup size takes, with
-/// the plain pipeline's words and Metal's. `metal2vulkan-runtime` runs a large kernel's whole
-/// grids so.
+/// the plain pipeline's words and Metal's.
 #[test]
 fn whole_grids_run_on_the_partial_plan_with_every_thread_live() {
     let (Some(shape_bc), Some(neighbour_bc)) = (

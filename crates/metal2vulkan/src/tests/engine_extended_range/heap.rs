@@ -9,8 +9,8 @@
 //! - A read of an unsigned integer heap group declares no twin and no routine, its query its own
 //!   class's; it declares the float class, which holds a member of a float format that it reads in
 //!   that member's own class.
-//! - The device lane `runtime_lane::heap_extended_reads` compares such reads and queries through
-//!   an argument buffer with the same texture's through a slot, bit for bit, on each venue.
+//! - A device's reads and queries through an argument buffer are the same texture's through a
+//!   slot, bit for bit, where measured.
 //! - A sample or gather through a constexpr sampler without a mip filter or anisotropy declares the
 //!   twin and the routine and states no `RuntimeFact::HeapRawSamples`; a `half` gather and a
 //!   runtime sampler's sample declare them and state the fact; a mip-filtered sampler's sample

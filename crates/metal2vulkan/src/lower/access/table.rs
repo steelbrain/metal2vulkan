@@ -121,7 +121,7 @@ pub fn declare(mb: &mut ModuleBuilder, placement: &PushPlacement) -> BResult<Opt
 }
 
 /// The bytes of the parameter block one load reads: a line of 16 bytes at a multiple of 16. The
-/// block's address is a multiple of 16 (the new runtime's ring places every block so) and its size
+/// block's address is a multiple of 16 (the runtime's ring places every block so) and its size
 /// is one (`PushPlacement::argument_table_size`), so every line a field touches lies in the block.
 pub const LINE: u32 = 16;
 

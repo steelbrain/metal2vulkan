@@ -1,8 +1,7 @@
 //! Metal's anisotropic filter emulated: where a sample takes it, the module's shape, the notes it
 //! records and the specialization a runtime sampler slot reads; every module validated by
 //! `spirv-val` under its profile. The interpreter leaves `Exp2` unmodelled (the spacing's 6-bit
-//! power reads it), so the footprint's values are the GPU lanes' to check (`validation`'s
-//! `runtime_lane::anisotropic_filter`); these are shape tests.
+//! power reads it), so the footprint's values are a device's to check; these are shape tests.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 

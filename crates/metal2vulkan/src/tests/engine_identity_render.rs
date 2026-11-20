@@ -272,7 +272,7 @@ fn ima_descriptor(library: &Library) -> RenderPipelineDescriptor {
 }
 
 /// `stem`'s profile under the identity domains with no buffer robustness and without
-/// `vertexAttributeInstanceRateDivisor`, as the new runtime enables neither where a device does
+/// `vertexAttributeInstanceRateDivisor`, as the runtime enables neither where a device does
 /// not offer them.
 fn fixed_function_device(stem: &str) -> Device {
     let mut desc = description(stem).unwrap_or_else(|e| panic!("{e}"));

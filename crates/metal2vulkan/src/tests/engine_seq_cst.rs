@@ -7,8 +7,7 @@
 //! addresses buffers, and through the stage's binding of the status buffer elsewhere.
 //!
 //! The kernel is the store-buffering litmus of our probe
-//! (`metal2vulkan_devtools::litmus::store_buffering`; `runtime_lane::seq_cst_fences` runs it on
-//! devices).
+//! (`metal2vulkan_devtools::litmus::store_buffering`).
 
 use crate::device::profile::BufferAccess;
 use crate::error::{Error, Feature};

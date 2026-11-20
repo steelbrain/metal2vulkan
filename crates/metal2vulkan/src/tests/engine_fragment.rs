@@ -4499,8 +4499,7 @@ fn a_later_simdgroup_operation_predicates_with_a_whole_quad_exit() {
 /// operations a quad whose four invocations are helpers exits before the simdgroup operations after
 /// it (one `OpIsHelperInvocationEXT` and a kill per exit), as Metal drops a quad whose every thread
 /// is discarded: Vulkan leaves such a quad to the implementation, and lavapipe under
-/// `RequireFullQuadsKHR` kept it a lane of a later `simd_sum` (the lane
-/// `runtime_lane::discard_hoist`, master's gate at 5991e117).
+/// `RequireFullQuadsKHR` kept it a lane of a later `simd_sum` (master's gate at 5991e117).
 #[test]
 fn a_demoting_site_exits_a_quad_of_helpers_before_a_later_simdgroup_operation() {
     let Some(bc) = fixture("fragment_discard_hoist") else {

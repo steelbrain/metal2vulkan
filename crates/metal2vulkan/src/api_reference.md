@@ -78,4 +78,4 @@ The library needs none of them.
   compiles one pipeline with this API and writes its SPIR-V. It enables `serde` and adds nothing
   else to the library.
 
-The Metal-like runtime is its own crate, `metal2vulkan-runtime`, built on this API alone.
+The Metal-like runtime is its own crate, `metal2vulkan-rt`, built on this API alone.
