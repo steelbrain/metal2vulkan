@@ -29,8 +29,8 @@ use std::path::Path;
 use crate::bind::{
     sampler_desc, AccessClass, BindState, BindingPlan, BoundBuffer, BoundSampler, BoundTexture,
     Dispatch, DrawCall, DrawCommands, FieldLocation, ImageSource, IndexBufferRef, IndexOverrun,
-    IndirectRef, NeutralResource, PlanDiagnostic, SamplerDescriptor, SamplerSource,
-    StageTable, TextureFacts, UseTarget, WriteSource,
+    IndirectRef, NeutralResource, PlanDiagnostic, SamplerDescriptor, SamplerSource, StageTable,
+    TextureFacts, UseTarget, WriteSource,
 };
 use crate::budget::Budget;
 use crate::device::profile::{Containment, Robustness};

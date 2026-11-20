@@ -100,7 +100,6 @@ impl LastRelocation {
             words: Arc::clone(words),
         });
     }
-
 }
 
 /// A clone of a compiled function shares its slot, so the `Debug`, equality and hashing of a

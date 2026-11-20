@@ -25,9 +25,7 @@ use crate::device::enables::format_exposure_gap;
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
 use crate::error::{Capability, DescriptorError, Error, Feature, Unsupported};
-use crate::metal::{
-    PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage,
-};
+use crate::metal::{PixelFormat, TextureSwizzleChannels, TextureType, TextureUsage};
 use crate::pipeline::lower_inputs::{
     AliasView, ChannelWrite, StorageImageChoice, StorageImageClass,
 };
@@ -645,7 +643,6 @@ impl ExtendedRange {
         let code = if neg { 384 - k } else { 384 + k };
         code.clamp(0, 1023) as u32
     }
-
 }
 
 /// The layout of a two-plane YCbCr format ([`ycbcr_format`]): Metal's texture over an IOSurface's

@@ -23,8 +23,7 @@ fn instantiate(
     let made = super::instantiate(t, state, draw, &mut fresh).map(|()| fresh);
     KEPT.with(|kept| {
         let mut kept = kept.borrow_mut();
-        let over =
-            super::instantiate(t, state, draw, &mut kept).map(|()| kept.clone());
+        let over = super::instantiate(t, state, draw, &mut kept).map(|()| kept.clone());
         assert_eq!(over, made, "the commands written over those before");
     });
     made

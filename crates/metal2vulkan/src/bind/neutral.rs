@@ -11,7 +11,6 @@
 //! texel buffers), except typed storage images, which must use exactly their declared format and
 //! are listed only where the profile's format table supports it.
 
-
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::FormatUsage;
 use crate::device::Device;

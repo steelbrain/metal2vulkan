@@ -2901,7 +2901,6 @@ impl BindingPlan {
         }
         Ok(t)
     }
-
 }
 
 /// The Vulkan draw of a Metal draw, and the base vertex and first instance the
