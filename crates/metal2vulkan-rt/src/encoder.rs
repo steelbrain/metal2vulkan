@@ -192,9 +192,8 @@ pub struct ComputeCommandEncoder {
     threadgroup_lengths: Vec<(u32, u32)>,
     /// The lengths of the last variant looked up, in its kernel's order, kept to reuse.
     lengths: Vec<u32>,
-    /// `use_resource` declarations, by resource id: its own and its id in the hazard sets; with
-    /// the texture, where the resource is one.
-    declared: Vec<([u32; 2], Access, Option<Lent<Texture>>)>,
+    /// `use_resource` declarations.
+    declared: Vec<Declared>,
     /// A `use_resource` declaration writes a Shared buffer.
     declared_shared_write: bool,
     /// The pixel format of the first texture a `use_resource` declaration writes that has no
@@ -1691,11 +1690,15 @@ fn merge(a: Access, b: Access) -> Access {
     }
 }
 
+/// A `use_resource` declaration, by resource id: its own and its id in the hazard sets; its
+/// access; the texture, where the resource is one.
+type Declared = ([u32; 2], Access, Option<Lent<Texture>>);
+
 /// What a dispatch touches besides its pipeline's own facts.
 pub(crate) struct Accesses<'a> {
     slots: &'a [Slot],
     textures: &'a [Option<Lent<Texture>>],
-    declared: &'a [([u32; 2], Access, Option<Lent<Texture>>)],
+    declared: &'a [Declared],
     indirect: Option<[u32; 2]>,
 }
 
