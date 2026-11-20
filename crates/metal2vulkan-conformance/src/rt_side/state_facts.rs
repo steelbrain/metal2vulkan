@@ -10,7 +10,7 @@
 use super::RtSide;
 use crate::case::{Answer, Failure, Field, Handle};
 use crate::pipeline_facts::{ComputeStateFacts, RenderStateFacts};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 
 /// `label`: the runtime keeps none on a state.
 fn label() -> Field<Option<String>> {

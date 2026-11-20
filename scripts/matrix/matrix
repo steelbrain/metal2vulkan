@@ -82,12 +82,12 @@ KEEP = r"""f == 0 { print; if ($0 ~ /^ *Summary \[/) f = 1; next }
 k || /M2V-MATRIX / { print }"""
 NEXTEST_OUT = "--no-fail-fast --success-output final --failure-output final"
 #: The packages of the GPU legs' device-test archive, and the tests of it a leg runs:
-#: `metal2vulkan-rt`'s, and the replay player's stream device tests (`metal2vulkan-validation`'s
+#: `metal2vulkan-runtime`'s, and the replay player's stream device tests (`metal2vulkan-validation`'s
 #: `replay::rt_replay`), each of which writes and plays its own small stream. A break in the player
 #: or in the runtime's stream path that only a GPU shows would otherwise wait for a lane's play of a
 #: recorded stream to find it.
-DEVICE_TEST_PACKAGES = ("metal2vulkan-rt", "metal2vulkan-validation")
-DEVICE_TEST_FILTER = ("package(metal2vulkan-rt) | (package(metal2vulkan-validation)"
+DEVICE_TEST_PACKAGES = ("metal2vulkan-runtime", "metal2vulkan-validation")
+DEVICE_TEST_FILTER = ("package(metal2vulkan-runtime) | (package(metal2vulkan-validation)"
                       " & test(/^replay::rt_replay::/))")
 #: The observations a Linux job's tree carries: Metal's alone (37 MiB of the 1.5 GiB), from which
 #: the stream device tests take their public cases' Metal outputs.
@@ -454,7 +454,7 @@ export RUSTFLAGS='--cfg m2v_gpu' CARGO_TARGET_DIR=target/gpucfg
 
 def winbuild_script(harness):
     timed = "\ncargo build --release -p metal2vulkan-harness --bin harness\nh=$?" if harness else "\nh=0"
-    return windows_head() + f"""cargo nextest run -p metal2vulkan-rt --all-features --no-run
+    return windows_head() + f"""cargo nextest run -p metal2vulkan-runtime --all-features --no-run
 a=$?{timed}
 echo "M2V-BUILD exit $a $h"
 [ $a -eq 0 ] && [ $h -eq 0 ]
@@ -464,7 +464,7 @@ echo "M2V-BUILD exit $a $h"
 def winrun_script(leg, suite, layer=None):
     if suite == "rt":
         body = f"""{layer_lines(layer, 'windows', leg.id)}
-cargo nextest run -p metal2vulkan-rt --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+cargo nextest run -p metal2vulkan-runtime --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
 rc=${{PIPESTATUS[0]}}"""
     else:
         body = f"""(
@@ -506,7 +506,7 @@ class Run:
         self.build_info = None
         #: Whether the commit has the harness, whose timed workloads each GPU leg runs.
         #: Whether the commit has the lock budget, which a node naming its event must measure.
-        self.lock_budget = subprocess.run(["git", "cat-file", "-e", f"{sha}:crates/metal2vulkan-rt/src/tests/locks.rs"],
+        self.lock_budget = subprocess.run(["git", "cat-file", "-e", f"{sha}:crates/metal2vulkan-runtime/src/tests/locks.rs"],
                                           cwd=REPO, capture_output=True).returncode == 0
         self.harness = subprocess.run(["git", "cat-file", "-e", f"{sha}:crates/metal2vulkan-harness/Cargo.toml"],
                                       cwd=REPO, capture_output=True).returncode == 0

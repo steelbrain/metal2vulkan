@@ -23,7 +23,7 @@ use crate::authored::OwnRow;
 use crate::run::OwnReport;
 use crate::Result;
 use ash::vk;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::thread;
 use std::time::{Duration, Instant};
 

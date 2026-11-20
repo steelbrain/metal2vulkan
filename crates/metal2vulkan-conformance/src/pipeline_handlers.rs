@@ -42,7 +42,7 @@
 //! # Why the error's text is not compared
 //!
 //! Metal's refusal is an `NSError` whose domain, code and localized description are Apple's; ours
-//! is a typed `metal2vulkan_rt::Error`. Neither is a translation of the other and no
+//! is a typed `metal2vulkan_runtime::Error`. Neither is a translation of the other and no
 //! implementation could match the words, so what the case compares is **that the creation was
 //! refused and how the refusal arrived**, not what it said. That is the same choice
 //! [`crate::library_facts`] makes for a device object's identity: the portable question, stated
@@ -54,7 +54,7 @@
 //!
 //! # Why our leg takes the synchronous call for both paths
 //!
-//! `metal2vulkan-rt` has no asynchronous creation form: the coverage map names the
+//! `metal2vulkan-runtime` has no asynchronous creation form: the coverage map names the
 //! synchronous call as each handler form's counterpart, and that is the whole of what we
 //! implement. So our side takes that call twice, and the arrival site reads `Answered` on our leg
 //! because a call that returned *is* a delivery. This is stated rather than hidden: what the case

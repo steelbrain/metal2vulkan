@@ -237,7 +237,7 @@ impl Case for SurfaceTextures {
         // what justifies it; it too loosens the notices site alone. Measured on the Radeon 780M
         // (RADV PHOENIX, 53559): the four plane cases, whose rows are 64 and 128 bytes, take the
         // copy and the two with 256- and 512-byte rows do not; lavapipe takes it for none.
-        // metal2vulkan-rt announces neither: it counts its surface forms instead.
+        // metal2vulkan-runtime announces neither: it counts its surface forms instead.
         vec![
             crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(

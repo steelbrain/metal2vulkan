@@ -368,7 +368,7 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 /// `pixel-sampler-scaling` ([`crate::degradation::Degradation::PixelSamplerScaling`]), the
 /// static note of a sample whose sampler may state pixel coordinates, which the translator then
 /// divides by the texture's size for the device's normalized sampler. The function does not know
-/// the bound state, and under the identity domains of `metal2vulkan-rt` no binder specializes the
+/// the bound state, and under the identity domains of `metal2vulkan-runtime` no binder specializes the
 /// slot by it, so the note is recorded for every such sample, nearest ones included; the old
 /// runtime specializes a slot bound with a nearest pixel sampler and records it for none of
 /// them.

@@ -36,7 +36,7 @@
 //! alone ([`LONG_FILLS`] of [`LONG_FILL_BYTES`] into a private buffer): no loop runs on the GPU,
 //! so nothing can hang.
 //!
-//! On `metal2vulkan-rt` the `MTLEvent` row's waiting command buffer may still read `Committed`,
+//! On `metal2vulkan-runtime` the `MTLEvent` row's waiting command buffer may still read `Committed`,
 //! with no handler run, though its wait is met: the runtime schedules a command buffer once
 //! its device's one submit thread is free, and Metal promises no time between a command buffer's
 //! dependencies resolving and its scheduling. The case declares that in its allowances.
@@ -93,14 +93,14 @@ use crate::transcript::{Negative, Node, Observed, Sites, Value};
 /// A wait committed before the signal that meets it.
 pub const CROSS_QUEUE_WAIT: &str = "event-cross-queue-wait";
 
-/// The slug of `docs/API.md`'s accepted difference that says `metal2vulkan-rt` schedules a
+/// The slug of `docs/API.md`'s accepted difference that says `metal2vulkan-runtime` schedules a
 /// command buffer waiting for a shared event's value as it is submitted
 /// ([`shared_wait_scheduled_as_submitted`]).
 const SHARED_WAIT_SCHEDULED_AS_SUBMITTED: &str =
     "a-command-buffer-that-waits-for-a-shared-event-s-value-is-scheduled-as-it-is-submitted";
 
 /// The declaration [`WAIT_BEHIND_A_RUNNING_SIGNAL`]'s `MTLSharedEvent` row needs on
-/// `metal2vulkan-rt`: the waiting command buffer's status while the signaller runs may be
+/// `metal2vulkan-runtime`: the waiting command buffer's status while the signaller runs may be
 /// `Committed` or `Scheduled`, and its handlers then none or the scheduled one.
 ///
 /// **What it rests on**, the accepted difference [`SHARED_WAIT_SCHEDULED_AS_SUBMITTED`] names:
@@ -344,12 +344,12 @@ impl Case for EventOrder {
     }
 }
 
-/// The slug of `docs/API.md`'s accepted difference that says when `metal2vulkan-rt` schedules a
+/// The slug of `docs/API.md`'s accepted difference that says when `metal2vulkan-runtime` schedules a
 /// command buffer ([`scheduled_once_the_submit_thread_is_free`]).
 const SCHEDULED_ONCE_THE_SUBMIT_THREAD_IS_FREE: &str =
     "the-runtime-schedules-a-command-buffer-once-its-submit-thread-is-free";
 
-/// The declaration [`WAIT_BEHIND_A_RUNNING_SIGNAL`]'s `MTLEvent` row needs on `metal2vulkan-rt`:
+/// The declaration [`WAIT_BEHIND_A_RUNNING_SIGNAL`]'s `MTLEvent` row needs on `metal2vulkan-runtime`:
 /// the waiting command buffer's status while the signaller runs may be `Committed` or
 /// `Scheduled`, and its handlers then none or the scheduled one.
 ///

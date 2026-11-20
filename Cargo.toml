@@ -5,7 +5,7 @@ members = [
     "crates/metal2vulkan-conformance",
     "crates/metal2vulkan-devtools",
     "crates/metal2vulkan-harness",
-    "crates/metal2vulkan-rt",
+    "crates/metal2vulkan-runtime",
     "crates/metal2vulkan-validation",
 ]
 # A bare `cargo build`, `cargo test` or `cargo run` at the root acts on the translator alone, as it

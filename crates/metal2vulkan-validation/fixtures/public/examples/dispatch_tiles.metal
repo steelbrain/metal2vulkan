@@ -1,4 +1,4 @@
-// Owned fixture: the kernels the metal2vulkan-rt crate's dispatch tiles device tests run
+// Owned fixture: the kernels the metal2vulkan-runtime crate's dispatch tiles device tests run
 // (src/tests/dispatch_tiles.rs). Written from scratch for them; `scripts/regen-air-fixtures/
 // regen-air-fixtures.sh --dir examples dispatch_tiles` compiles it. No translator sweep reads this
 // directory. None of them observes its threadgroup partition: each reads only the grid's builtins.

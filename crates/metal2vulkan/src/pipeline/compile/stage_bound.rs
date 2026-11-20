@@ -19,7 +19,7 @@
 //! - every other module past it, a kernel planned again that still is among them, is refused
 //!   (`Unsupported`, `Feature::StageSize`, `Needs::StageBound`, naming as its symbol the module's
 //!   entry weight and the bound it passed): a device whose compiler would take a heavier stage is
-//!   refused it all the same, a known gap of `metal2vulkan-rt`.
+//!   refused it all the same, a known gap of `metal2vulkan-runtime`.
 //!
 //! **The compiled bound.** [`COMPILED_STAGE_WEIGHT`] is the heaviest entry measured to compile
 //! within host-sized memory: on ANV, Mesa 26.2.6, on the Iris Xe of RPL-P, compute modules created

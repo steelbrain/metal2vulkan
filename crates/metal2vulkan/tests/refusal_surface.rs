@@ -1,7 +1,7 @@
 //! The refusal surface, and the basis of every refusal that claims Metal stops an input.
 //!
-//! `scripts/refusal-surface/refusal_surface.py` reads every typed refusal of the two published
-//! crates and of the runtime from the sources and writes `docs/REFUSALS.md`. Its **Basis**
+//! `scripts/refusal-surface/refusal_surface.py` reads every typed refusal of the three published
+//! crates from the sources and writes `docs/REFUSALS.md`. Its **Basis**
 //! column says where the belief that an input must be refused comes from: derived from the
 //! construction site wherever the site states it (a capability a device lacks, a piece not built, a
 //! cap of this crate's), and declared in the refusal's own doc comment, as a last line

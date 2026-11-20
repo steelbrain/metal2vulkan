@@ -177,7 +177,7 @@ enum Reach {
     /// From the 4-aligned device address below one access of a slot under the identity domains
     /// ([`prepare_at`]): each unit at that address plus its index times its size, the product in
     /// 32 bits and zero-extended. A unit lies within 2^31 bytes of that address, the runtime
-    /// making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the product is
+    /// making no buffer longer than 2 GiB (`metal2vulkan_runtime::MAX_BUFFER_LENGTH`), so the product is
     /// exact, and no 64-bit shift or multiply scales an index.
     Below,
     /// From a slot's own device address under the identity domains ([`prepare_direct`]), held
@@ -185,7 +185,7 @@ enum Reach {
     /// byte offset plus 2^31, modulo 2^32, zero-extended, in 64-bit integers, then one
     /// `OpConvertUToPtr` to the unit's block (`NonWritable` for a load of an unwritten slot).
     /// Every byte of a buffer lies within 2^31 bytes of each bind address in it, the runtime
-    /// making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the offset
+    /// making no buffer longer than 2 GiB (`metal2vulkan_runtime::MAX_BUFFER_LENGTH`), so the offset
     /// read as signed is in `[-2^31, 2^31)`, the biased one is that offset plus 2^31 exactly, and
     /// the sum is the address plus the offset. A unit index `x + c` with a constant `c` folds
     /// `c`'s bytes into the bias: `(x + c) * s + 2^31` is `x * s + (c * s + 2^31)` modulo 2^32.
@@ -231,7 +231,7 @@ pub fn prepare_at(fb: &mut FunctionBuilder<'_>, address: Value, m: Value) -> BRe
 /// (`RuntimeFact::AddressAlignment`): the access is the byte offset `m`, read as signed, from that
 /// address, as a descriptor view's is `m` from its base ([`Reach::Direct`]). Every byte of a
 /// buffer lies within 2^31 bytes of each bind address in it, the runtime making no buffer longer
-/// than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the offset is exact whatever the slot's
+/// than 2 GiB (`metal2vulkan_runtime::MAX_BUFFER_LENGTH`), so the offset is exact whatever the slot's
 /// window. Nothing is rounded. The check, where the access takes one, is `emit::prepare`'s.
 pub fn prepare_direct(base: Value, m: Value) -> PsbAccess {
     PsbAccess {

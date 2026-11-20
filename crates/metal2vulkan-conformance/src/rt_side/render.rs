@@ -18,7 +18,7 @@ use crate::values::{
     StoreActionOptions, VisibilityResultMode,
 };
 use crate::work::Plane;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 
 /// A typed error of the runtime as the failure it records.
 fn of_rt(error: rt::Error) -> Failure {

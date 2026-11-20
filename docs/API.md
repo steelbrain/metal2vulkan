@@ -10,8 +10,8 @@ numbers from Metal indices, and never classify errors by message text.
 This guide walks the flow on the repository's own fixtures. Every `rust` block is quoted from
 [`examples/api_preview.rs`](../crates/metal2vulkan/examples/api_preview.rs), which the test suite
 runs (`tests/api_preview_example.rs` fails when a block here stops matching it). Sections 9 and 10
-also cover the runtime crate (`metal2vulkan-rt`): the precision notes it carries and its deliberate
-differences from Metal. The runtime's own guide is [its README](../crates/metal2vulkan-rt/README.md).
+also cover the runtime crate (`metal2vulkan-runtime`): the precision notes it carries and its deliberate
+differences from Metal. The runtime's own guide is [its README](../crates/metal2vulkan-runtime/README.md).
 
 ## Stability
 
@@ -2358,16 +2358,16 @@ that holds only under some bound values is in `specialized_notes`;
 `stage.precision_notes_bound(&plan.specialization, &|key| plan.specialized_value(key))` gives the
 notes a plan reaches. Section 9 lists every note.
 
-**The runtime's errors** are its own type, `metal2vulkan_rt::Error`;
+**The runtime's errors** are its own type, `metal2vulkan_runtime::Error`;
 [REFUSALS.md](REFUSALS.md) lists its refusals with their basis, and its
-[README](../crates/metal2vulkan-rt/README.md) states each known gap.
+[README](../crates/metal2vulkan-runtime/README.md) states each known gap.
 
 ## 9. Degrade notices
 
 Where an answer may differ from Metal's, the operation carries a precision note
 (`metal2vulkan::pipeline::PrecisionNote`), fixed per operation and never decided at run time: by
 the translated module, the pixel format, the descriptor or the state, on every device.
-`metal2vulkan-rt` gives them through these items:
+`metal2vulkan-runtime` gives them through these items:
 
 - `ComputePipelineState::precision_notes` and `RenderPipelineState::precision_notes`: the
   translator's notes of the state's modules, with `SwizzledOpaqueBlackBorder` where a function
@@ -2419,7 +2419,7 @@ bound.
   NaN or an infinity: Metal's resolve counts a half or small-float NaN as 0 and a half infinity as
   65536 of its sign, and makes any 32-bit float NaN 0x7fc00000, where the device's average may
   keep them.
-  On `metal2vulkan-rt` it is the static note `PrecisionNote::DeviceRoundedResolve` of a render
+  On `metal2vulkan-runtime` it is the static note `PrecisionNote::DeviceRoundedResolve` of a render
   pass that resolves a color attachment (`RenderPassDescriptor::precision_note`), by Vulkan's
   `AVERAGE` in the pass's own rendering, on every device: an extended-range, bfloat or YCbCr
   attachment's resolve is `Gap::RenderPass` of `RenderPassKind::Resolve`, and an integer one is
@@ -2455,7 +2455,7 @@ bound.
   reaches: a texel whose bytes no Metal write left (uploaded or copied bytes) keeps a code Metal's
   pass would change. Not on a driver whose pass stores the codes as Metal's
   (`DriverFact::TileStoreIsMetals`: MoltenVK on Apple's GPUs, whose pass is a Metal pass). On a
-  device `Device::from_queries` made (`metal2vulkan-rt`'s) it is the static note
+  device `Device::from_queries` made (`metal2vulkan-runtime`'s) it is the static note
   `PrecisionNote::SnormMinimumKept` of every render pipeline that draws into such an attachment,
   whatever its passes load, on its fragment stage (its vertex stage where it has none).
 - `metal2vulkan-degrade-shared-exponent-kept` (precision). `SharedExponentKept`: A draw in a render
@@ -2465,7 +2465,7 @@ bound.
   texel whose bytes no Metal write left (uploaded or copied words) keeps a word Metal would change,
   of the same value. Not on a driver whose pass stores the words as Metal's
   (`DriverFact::TileStoreIsMetals`). On a device `Device::from_queries` made
-  (`metal2vulkan-rt`'s) it is the static note `PrecisionNote::SharedExponentKept` of
+  (`metal2vulkan-runtime`'s) it is the static note `PrecisionNote::SharedExponentKept` of
   every render pipeline that draws into such an attachment, whatever its passes load, on its
   fragment stage (its vertex stage where it has none).
 - `metal2vulkan-degrade-compressed-texel-decode` (precision). `CompressedTexelDecode`: The static
@@ -2502,7 +2502,7 @@ bound.
   measured but MoltenVK on an Apple M4). Cost: a denormal depth may read, sample and copy out as a
   zero, or the depth test may compare it as zero (a positive one) or below zero (a negative one),
   where Metal keeps it and compares a positive one above zero and a negative one not below it.
-  On `metal2vulkan-rt` it is the static note `PrecisionNote::DepthDenormals` of every
+  On `metal2vulkan-runtime` it is the static note `PrecisionNote::DepthDenormals` of every
   depth-stencil state that tests or writes depth (`DepthStencilState::precision_note`), on every
   device, with no driver fact.
 - `metal2vulkan-degrade-f16-fma-double-rounding` (precision). `PrecisionNote::F16FmaDoubleRounding`:
@@ -3344,7 +3344,7 @@ bound.
   formats are OCP's own, and Metal on Apple M3 does not compile them.
 - `metal2vulkan-degrade-device-depth-bias` (precision). `PrecisionNote::DeviceDepthBias`: A draw
   of triangles under a depth bias (`setDepthBias:slopeScale:clamp:` with a bias or a slope scale
-  other than 0) on `metal2vulkan-rt`, whose render encoder carries it as a static note
+  other than 0) on `metal2vulkan-runtime`, whose render encoder carries it as a static note
   (`RenderCommandEncoder::DEPTH_BIAS_NOTE`): the biased depth is the device's. Vulkan biases by
   `m × slopeScale + r × depthBias`, where the maximum depth slope `m` is the device's (exact, or
   the larger of the two derivatives' magnitudes) and the unit `r` is `2^(e - n)` of the primitive's
@@ -3776,7 +3776,7 @@ each item named states the rule in full.
   own `DontCare` (MoltenVK), which decides it. A pass that renders such a texture in place, as
   the default policy renders a texture's own image, otherwise announces `dont-care-store`.
 
-- **The runtime's `DontCare` store writes what the pass rendered** (`metal2vulkan-rt`'s
+- **The runtime's `DontCare` store writes what the pass rendered** (`metal2vulkan-runtime`'s
   render encoder stores a `DontCare` attachment as it stores a `Store` one, its README's render
   passes). Apple's page for
   `MTLStoreAction.dontCare`: "The GPU has permission to discard the rendered contents of the
@@ -4034,7 +4034,7 @@ each item named states the rule in full.
   `allocatedSize`): the size query's answer for its descriptor, a view's its texture's, as Metal
   answers; `None` for a texture outside a heap, whose Metal answer the runtime does not model.
 - **The runtime's heap texture size and alignment are the device's own**
-  (`metal2vulkan-rt`'s `Device::heap_texture_size_and_align`, its README's heaps): the device's
+  (`metal2vulkan-runtime`'s `Device::heap_texture_size_and_align`, its README's heaps): the device's
   own image requirements, not Metal's, the size rounded up to and the alignment raised to the
   device's `bufferImageGranularity`, so a buffer placed by the same answers never shares a
   granularity page with the texture. The answers differ by device, so the consumer places by this
@@ -4216,7 +4216,7 @@ each item named states the rule in full.
   when made, announced (`metal2vulkan-degrade-surface-texels-tail`). One of another format, off
   16 or of several levels stays `NotImplemented(SurfacePlaneShape)`.
 - **The runtime's Managed copies read the consumer's bytes when the GPU reaches them**
-  (`metal2vulkan-rt`'s `Buffer::did_modify_range` and `Texture::upload_region`). On a device whose
+  (`metal2vulkan-runtime`'s `Buffer::did_modify_range` and `Texture::upload_region`). On a device whose
   Shared memory is not device-local, a Managed buffer's changed range is one device copy from the
   consumer's bytes into the buffer's device copy, and on every device a Managed texture's uploaded
   region is one device copy from its named bytes into its image, at the head of the next
@@ -4476,7 +4476,7 @@ each item named states the rule in full.
 **Queues and command buffers**
 
 - **The runtime schedules a command buffer once its submit thread is free**
-  (`metal2vulkan-rt`'s `CommandBuffer::status`, `add_scheduled_handler` and
+  (`metal2vulkan-runtime`'s `CommandBuffer::status`, `add_scheduled_handler` and
   `wait_until_scheduled`). Apple defines `MTLCommandBufferStatusScheduled` as "All dependencies
   have been resolved and the command buffer has been scheduled for execution", and promises no
   time between the two. Every queue's command buffers go to the device's one `VkQueue`, which
@@ -4487,7 +4487,7 @@ each item named states the rule in full.
   handlers not run, for as long as that submission's driver call lasts, where an Apple M3 Max had
   scheduled it while the signalling command buffer still ran.
 - **A command buffer that waits for a shared event's value is `Scheduled` as it is submitted**
-  (`metal2vulkan-rt`'s `CommandBufferStatus::Scheduled`, `Device::new_shared_event`), its
+  (`metal2vulkan-runtime`'s `CommandBufferStatus::Scheduled`, `Device::new_shared_event`), its
   scheduled handlers run, while the GPU still waits for the value, as for an `MTLEvent`'s value.
   Apple's MTLCommandBuffer.h describes `MTLCommandBufferStatusScheduled` as "All dependencies
   have been resolved and the command buffer has been scheduled for execution" (lines 47-48), and
@@ -4664,7 +4664,7 @@ each item named states the rule in full.
 **Command queues**
 
 - **A write whose queue holds nothing back is seen by another queue's command buffer committed
-  after it** (`metal2vulkan-rt`). A writer whose queue has fewer than three submissions in flight
+  after it** (`metal2vulkan-runtime`). A writer whose queue has fewer than three submissions in flight
   is submitted at once, ahead of every command buffer committed after it on any queue, so a later
   reader on another queue reads the write, on every device and every run: all 1024 words in the
   conformance case `fence-none-tracked-behind-one`, whose writer's queue has one busy command
@@ -4674,4 +4674,4 @@ each item named states the rule in full.
   before the fill and read none of it in 5 runs of 5 (job m3-max-52432), and behind three busy
   command buffers likewise (job m3-max-52415); Metal's tracking ordered the copy only against work
   it had already submitted. The runtime's README states what was measured
-  (`crates/metal2vulkan-rt/README.md`, "Queues, command buffers and events").
+  (`crates/metal2vulkan-runtime/README.md`, "Queues, command buffers and events").

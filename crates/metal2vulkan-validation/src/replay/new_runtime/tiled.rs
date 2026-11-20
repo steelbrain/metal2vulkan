@@ -22,7 +22,7 @@ use super::{failed, objects_named, unaddressed, NewRuntime, Object};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::{HashMap, VecDeque};
 
 /// A tiled texture's take: its texture, and its buffer, offset and row pitch.

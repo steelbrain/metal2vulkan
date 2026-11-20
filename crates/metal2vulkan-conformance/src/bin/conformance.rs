@@ -14,7 +14,7 @@
 //! With no case named, the whole case set is selected. `--cpu` replays on a CPU Vulkan
 //! implementation (lavapipe), which is how the no-Metal leg is proven.
 //!
-//! `replay` replays through the runtime (`metal2vulkan-rt`), on its public API
+//! `replay` replays through the runtime (`metal2vulkan-runtime`), on its public API
 //! ([`metal2vulkan_conformance::rt_side`]), held to the ledger, `known-gaps-rt.tsv`.
 //!
 //! The command's exit status is 0 only where the selection holds no surprise: no unrecorded case,

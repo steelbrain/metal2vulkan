@@ -614,7 +614,7 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
     if device_type == DeviceType::Gpu {
         metal2vulkan_validation::gpu::tripwire::refuse_if_tripped()?;
     }
-    let instance = metal2vulkan_rt::Instance::new(&[]).map_err(|error| error.to_string())?;
+    let instance = metal2vulkan_runtime::Instance::new(&[]).map_err(|error| error.to_string())?;
     let (_, vk_instance) = instance.raw();
     let ranks: &[Kind] = match device_type {
         DeviceType::Cpu => &[Kind::CPU],
@@ -641,9 +641,9 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
     candidates.sort_by_key(|(rank, ..)| *rank);
     let mut refused = Vec::new();
     for (_, name, physical) in candidates {
-        let mut options = metal2vulkan_rt::DeviceOptions::default();
+        let mut options = metal2vulkan_runtime::DeviceOptions::default();
         options.pipeline_cache_dir = Some(cache.clone());
-        let opened = metal2vulkan_rt::Device::new(&physical, options)
+        let opened = metal2vulkan_runtime::Device::new(&physical, options)
             .and_then(|device| NewRuntime::new(device, device_type));
         match opened {
             Ok(backend) => return Ok((backend, name)),

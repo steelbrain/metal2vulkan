@@ -321,7 +321,7 @@ pub(crate) mod vulkan {
     }
 }
 
-/// Bounded waits on the new runtime's command buffers (`metal2vulkan_rt`): the replay player's
+/// Bounded waits on the new runtime's command buffers (`metal2vulkan_runtime`): the replay player's
 /// backend over it. The runtime's own wait has no bound, so the wait is on the command buffer's
 /// completed handler, after the queue's wait hint has sent it. How the command buffer ended is the
 /// caller's to read (the player reads its error into the play's verdict): a wait here says only
@@ -329,7 +329,7 @@ pub(crate) mod vulkan {
 pub(crate) mod new_runtime {
     use super::WaitOutcome;
     use super::{hang, judge, wait_timeout, CompletionSource, SubmissionBackend, Verdict};
-    use metal2vulkan_rt::{CommandBuffer, CommandQueue, Error};
+    use metal2vulkan_runtime::{CommandBuffer, CommandQueue, Error};
     use std::sync::{Arc, Condvar, Mutex, PoisonError};
     use std::time::Duration;
 

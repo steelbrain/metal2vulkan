@@ -19,7 +19,7 @@ use super::player::{
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
 use crate::ScratchDir;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::File;

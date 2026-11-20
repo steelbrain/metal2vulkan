@@ -6,7 +6,7 @@ use super::RtSide;
 use crate::case::{Answer, Failure, Handle};
 use crate::visible_tables::{LinkedList, Maker, TableOutcome, TableSpec};
 use metal2vulkan::pipeline::LinkedFunctions;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 
 impl RtSide<'_> {
     /// [`crate::case::Side::visible_function_table`]: the runtime's state of `spec.entry` of

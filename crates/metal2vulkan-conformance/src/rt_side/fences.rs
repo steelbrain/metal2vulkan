@@ -13,7 +13,7 @@ use crate::event_orders::{Status, COMPLETION};
 use crate::fence_orders::{
     written_words, FenceOrder, FenceShape, BYTES, HELD_BOUND, LONG_FILLS, LONG_FILL_BYTES, WRITTEN,
 };
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::sync::mpsc;
 
 /// The long job on `encoder`: [`LONG_FILLS`] fills of `long`, no loop on the GPU.

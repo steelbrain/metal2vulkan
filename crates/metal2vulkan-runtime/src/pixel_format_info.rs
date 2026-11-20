@@ -98,7 +98,7 @@ impl Device {
     /// [`PixelFormatInfo::INVALID`] (the README's known gaps of textures). No Vulkan call is made.
     ///
     /// ```
-    /// use metal2vulkan_rt::{Device, PixelFormatInfo};
+    /// use metal2vulkan_runtime::{Device, PixelFormatInfo};
     ///
     /// // Every field a consumer reads; 80 is `MTLPixelFormatBGRA8Unorm`.
     /// fn describe(device: &Device) -> (&'static str, u64, u64, [u64; 4]) {
@@ -146,7 +146,7 @@ impl Device {
     /// texture's rows is its own answer. No Vulkan call is made.
     ///
     /// ```
-    /// use metal2vulkan_rt::{Device, TextureLevelInfo, TextureLevelQuery};
+    /// use metal2vulkan_runtime::{Device, TextureLevelInfo, TextureLevelQuery};
     ///
     /// // A query a consumer builds field by field, and every field of the answer.
     /// fn level(device: &Device) -> [u64; 13] {

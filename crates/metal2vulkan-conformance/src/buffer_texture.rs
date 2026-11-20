@@ -194,7 +194,7 @@ pub fn ends_metals_process(request: &BufferTextureRequest) -> Option<String> {
 /// What a texture made over a buffer answers of itself: every `MTLTexture` getter both sides have,
 /// so a difference names the field rather than the object.
 ///
-/// The three getters metal2vulkan-rt keeps no counterpart of (`cpuCacheMode`,
+/// The three getters metal2vulkan-runtime keeps no counterpart of (`cpuCacheMode`,
 /// `hazardTrackingMode`, `allowGPUOptimizedContents`, which its consumer implements) are each the
 /// value a side recorded, so the runtime's side records its refusal at those three sites alone.
 #[derive(Clone, Debug, PartialEq, Eq)]

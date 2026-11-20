@@ -12,7 +12,7 @@ use crate::case::{Answer, Failure, Field, Handle};
 use crate::compute_descriptors::{ComputeDescriptorFacts, DescriptorSpec as ComputeDescriptorSpec};
 use crate::descriptor_reads;
 use crate::render_descriptors::{DescriptorSpec, RenderDescriptorFacts};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 
 /// `label`: the runtime keeps none, on a descriptor or on what it makes of one.
 fn label() -> Field<Option<String>> {

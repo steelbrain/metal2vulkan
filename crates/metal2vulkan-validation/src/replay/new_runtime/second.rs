@@ -14,7 +14,7 @@
 //! before it.
 
 use super::places::Place;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::HashMap;
 
 /// One buffer's CPU copy, its place, its GPU copy, and the ranges of it named since the last

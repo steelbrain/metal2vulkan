@@ -192,7 +192,7 @@ def base_records(records, same_harness):
             for kind, values in records.items()}
 
 
-#: The lock budget's records (`crates/metal2vulkan-rt/src/tests/locks.rs`): the locked
+#: The lock budget's records (`crates/metal2vulkan-runtime/src/tests/locks.rs`): the locked
 #: instructions per million added commands of each kind, measured on a node whose matrix setup
 #: names its CPU's locked-instruction event (`M2V_LOCK_EVENT`). The test holds the bound; the
 #: matrix holds that the measurement ran where the node names the event, and carries the values.

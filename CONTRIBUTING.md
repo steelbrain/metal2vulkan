@@ -32,7 +32,7 @@ they bind people too.
 │   │   ├── tests/                #   integration tests through the public API, golden tables
 │   │   └── examples/             #   api_preview.rs, which docs/API.md quotes
 │   ├── metal2vulkan-air/         # the AIR front end
-│   ├── metal2vulkan-rt/          # unpublished: the runtime, the Metal API on Vulkan (README)
+│   ├── metal2vulkan-runtime/     # the runtime, the Metal API on Vulkan (README)
 │   ├── metal2vulkan-validation/  # unpublished: cases, executors, corpus tools
 │   │   ├── fixtures/public/      #   our own synthetic fixtures (.ll, .air.ll, .metal, .spvasm)
 │   │   ├── profiles/             #   committed Khronos device profiles
@@ -54,7 +54,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
 scripts/api-docs   # the translator's API reference; fails on a link to a hidden item
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
 cargo nextest run -p metal2vulkan-conformance --all-features
 cargo test --workspace --all-features --doc
@@ -63,9 +63,9 @@ cargo test --workspace --all-features --doc
 None of these opens a device. Device tests compile only under `--cfg m2v_gpu` or
 `--cfg m2v_cpu_icd`, and on a GPU the tests that fault it, hold it for long or allocate toward its
 limits only with `--cfg m2v_gpu_hazards` too ([docs/VALIDATION.md](docs/VALIDATION.md)).
-`metal2vulkan-rt`'s device tests run under the Khronos validation layer and fail without it: point
+`metal2vulkan-runtime`'s device tests run under the Khronos validation layer and fail without it: point
 `VK_LAYER_PATH` at the layer's directory (`scripts/validation-layer`; docs/VALIDATION.md, "The
-validation layer under `metal2vulkan-rt`'s device tests").
+validation layer under `metal2vulkan-runtime`'s device tests").
 
 To build the command:
 
@@ -172,12 +172,11 @@ Edit the source, then regenerate:
 | `crates/metal2vulkan-validation/profiles/*.json` | `scripts/regen-device-profiles/` | gpuinfo reports and local captures |
 
 `crates/metal2vulkan/tests/api_signatures.tsv` is written the same way: the signature-level public
-surface of the two published crates and of `metal2vulkan-rt`, by
+surface of the three published crates, by
 `python3 scripts/api-signatures/signatures.py --bless` (`--check` to verify, `--selftest` for the
 derivation's own tests), from those crates' sources alone.
 `crates/metal2vulkan/tests/api_signatures.rs` says what it pins, what it cannot see, and what
-blessing it asserts; a removed or changed line is a breaking change of a published crate, or of the
-API `metal2vulkan-rt` is published with at the cutover.
+blessing it asserts; a removed or changed line is a breaking change of a published crate.
 
 Three docs are checked by tests. `docs/REFUSALS.md` must be the surface the sources state, and
 every variant of the runtime's refusal enums must end its doc comment with a `Basis:` line that says

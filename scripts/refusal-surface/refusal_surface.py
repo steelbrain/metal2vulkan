@@ -8,12 +8,12 @@ The refusal surface is read from the construction sites of the typed refusals, o
   `driver_defect`, `runtime_driver_defect`, `metal_gpu_family`, `device_capability`, and
   `Unsupported { .. }`
   literals, in the `src` of crates/metal2vulkan-air, crates/metal2vulkan and
-  crates/metal2vulkan-rt;
+  crates/metal2vulkan-runtime;
 - the binder's refusals of valid bind states at a device limit (`BindError`);
 - the translation caps (`Limit`, `Error::LimitExceeded`);
 - the rasterization-rate maps the compile layer does not compile (`UnpinnedCompile`);
 - the translation deadline (`BudgetExceeded`, `Error::Budget`);
-- the new runtime's floor (`floor::BelowFloor`, in crates/metal2vulkan-rt): each `floor::Missing`
+- the new runtime's floor (`floor::BelowFloor`, in crates/metal2vulkan-runtime): each `floor::Missing`
   item a device below the floor lacks;
 - the new runtime's own refusal enums: each variant of its `Error` whose payload is one enum it
   declares (`Refused(Refusal)`, `Limit(Limit)`, and any added later), found from that payload, one
@@ -57,15 +57,15 @@ CRATES = ROOT / "crates"
 TREES = [
     ("air", CRATES / "metal2vulkan-air" / "src"),
     ("translator", CRATES / "metal2vulkan" / "src"),
-    ("rt", CRATES / "metal2vulkan-rt" / "src"),
+    ("rt", CRATES / "metal2vulkan-runtime" / "src"),
 ]
 
 # The new runtime's floor: the file that declares `Missing`, the items of `BelowFloor`.
-FLOOR_RS = CRATES / "metal2vulkan-rt" / "src" / "floor.rs"
+FLOOR_RS = CRATES / "metal2vulkan-runtime" / "src" / "floor.rs"
 
 # The new runtime's error: each variant whose payload is one enum the runtime declares is a family
 # of typed refusals (`Refused(Refusal)`, `Limit(Limit)`, `Unsupported(Gap)`, and any added later).
-RT_ERROR_RS = CRATES / "metal2vulkan-rt" / "src" / "error.rs"
+RT_ERROR_RS = CRATES / "metal2vulkan-runtime" / "src" / "error.rs"
 
 CONSTRUCTORS = {
     "not_implemented": "NotImplemented",

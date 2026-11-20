@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "The Metal conformance suite: one case run on Metal and on metal2vulkan-rt, recorded and compared"
+description = "The Metal conformance suite: one case run on Metal and on metal2vulkan-runtime, recorded and compared"
 # Never publish this workspace member to crates.io.
 publish = false
 readme = "README.md"
@@ -16,7 +16,7 @@ readme = "README.md"
 # rather than once per feature set.
 metal2vulkan = { path = "../metal2vulkan", features = ["serde", "ash", "cli"] }
 # The runtime, which the suite replays through its public API alone (`src/rt_side.rs`).
-metal2vulkan-rt = { path = "../metal2vulkan-rt" }
+metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
 # Fixture paths, `llvm_assemble` and the scratch root: the suite's shaders are the owned public
 # fixtures.
 metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }

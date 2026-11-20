@@ -503,7 +503,7 @@ impl Case for AstcTextures {
         // 14 HDR rows, which that card makes through the same carrier and twin since the HDR
         // decode, have not run there since: their declaration counts as unchecked until a run on
         // a device without unified memory announces it.
-        // Where the device holds the format's block itself, `metal2vulkan-rt` keeps the blocks in
+        // Where the device holds the format's block itself, `metal2vulkan-runtime` keeps the blocks in
         // an image of it and reads the device's decode of them, the static note it announces as
         // `compressed-texel-decode` for every block-compressed texture it makes. Here it is a
         // declaration; a linear form's texels also take the entry's bound (below), and an sRGB or
@@ -531,7 +531,7 @@ impl Case for AstcTextures {
                     Justification::notice(Degradation::DecodedTexelPrecision),
                 ));
             }
-            // `metal2vulkan-rt` keeps no twin: where the device holds the format's block, a
+            // `metal2vulkan-runtime` keeps no twin: where the device holds the format's block, a
             // linear channel is the device's decode of it, the static note
             // `compressed-texel-decode`, whose catalogue entry bounds an ASTC LDR channel at
             // 1/2048.

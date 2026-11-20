@@ -2106,7 +2106,7 @@ mod tests {
     /// notice. The two `Depth32Float` rows apart: each also leaves its `fresh` site unchecked under
     /// `fresh-pattern-zeroed` and declares that notice ([`zeroed_depth_pattern`]), and the texture
     /// row declares `restricted-depth-upload` too, the notices MoltenVK announced; and a
-    /// block-compressed texture row declares `compressed-texel-decode`, which `metal2vulkan-rt`
+    /// block-compressed texture row declares `compressed-texel-decode`, which `metal2vulkan-runtime`
     /// announces for every such texture. A row whose notices were a guess would show here as a
     /// row loosening a site nothing needed.
     #[test]

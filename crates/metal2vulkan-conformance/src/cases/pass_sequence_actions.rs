@@ -414,7 +414,7 @@ impl ColorCell {
 }
 
 /// The slug of `docs/API.md`'s accepted difference that says what a `DontCare` store leaves on
-/// `metal2vulkan-rt`: what the pass rendered, where Apple's page lets the GPU replace the
+/// `metal2vulkan-runtime`: what the pass rendered, where Apple's page lets the GPU replace the
 /// attachment's contents with arbitrary data.
 const DONT_CARE_TEXELS: &str = "the-runtime-s-dontcare-store-writes-what-the-pass-rendered";
 

@@ -17,7 +17,7 @@
 //! does: the player takes the index without waiting, as the recording did, and counts it on a line
 //! of its own. The index stays owed to the held commit.
 
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// The slot of `class`: textures, samplers (and any class the runtime adds, which the backend

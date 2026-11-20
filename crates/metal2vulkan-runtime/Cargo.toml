@@ -1,6 +1,6 @@
 [package]
-name = "metal2vulkan-rt"
-version = "0.0.0"
+name = "metal2vulkan-runtime"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,20 +8,21 @@ authors.workspace = true
 description = "The Metal API on Vulkan, with one path for every device"
 readme = "README.md"
 repository.workspace = true
-# Published as metal2vulkan-runtime once it takes that name.
-publish = false
+documentation = "https://docs.rs/metal2vulkan-runtime"
+keywords = ["metal", "vulkan", "gpu", "graphics"]
+categories = ["graphics", "api-bindings"]
 autobins = false
 autoexamples = false
 
 [lib]
-name = "metal2vulkan_rt"
+name = "metal2vulkan_runtime"
 path = "src/lib.rs"
 
 [dependencies]
 # The Vulkan API. Nothing is linked at build time: the instance opens the loader with `dlopen`.
 ash = { workspace = true, features = ["std", "loaded"] }
 # The translator: Metal AIR to SPIR-V, through its public API only.
-metal2vulkan = { version = "0.2.0", path = "../metal2vulkan", features = ["ash"] }
+metal2vulkan = { version = "=0.2.0", path = "../metal2vulkan", features = ["ash"] }
 
 # The host clock of command buffer times, and the ids of the runtime's threads, on unix.
 [target.'cfg(unix)'.dependencies]

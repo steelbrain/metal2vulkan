@@ -5724,13 +5724,13 @@ fn a_refusal_of_what_the_device_offers_is_the_runtime_s() {
 }
 
 /// Every object of the consumer's own ([`crate::known_gaps::ConsumerObject`]) is named in
-/// metal2vulkan-rt's README, in its section of what the consumer implements: a row may say the
+/// metal2vulkan-runtime's README, in its section of what the consumer implements: a row may say the
 /// consumer implements an object only where the runtime's contract says so.
 #[test]
 fn every_object_of_the_consumer_s_own_is_named_in_rt_s_readme() {
     use crate::known_gaps::ConsumerObject;
     let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-rt/README.md");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-runtime/README.md");
     let readme = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
     let section: String = (readme.lines())

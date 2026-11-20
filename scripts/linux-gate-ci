@@ -45,7 +45,7 @@ cpu_icd_tests() {
     # otherwise rebuild the whole tree in place on every run.
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR}-cpu-icd" \
         RUSTFLAGS='-Dwarnings --cfg m2v_cpu_icd' LP_NUM_THREADS=1 \
-        cargo nextest run -p metal2vulkan-validation -p metal2vulkan-rt --all-features \
+        cargo nextest run -p metal2vulkan-validation -p metal2vulkan-runtime --all-features \
         --build-jobs "$jobs"
 }
 
@@ -89,7 +89,7 @@ step "Package the published crates" \
     cargo package --workspace --exclude metal2vulkan-validation --exclude metal2vulkan-devtools \
     -j "$jobs"
 step "Test metal2vulkan" \
-    cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt \
+    cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime \
     -p metal2vulkan-devtools --all-features --build-jobs "$jobs"
 step "Test validation suite" \
     cargo nextest run -p metal2vulkan-validation --all-features --build-jobs "$jobs"

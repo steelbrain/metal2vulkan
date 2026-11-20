@@ -297,7 +297,7 @@ impl Case for CompressedDecode {
         // The device's decode of the texture's own blocks, announced `compressed-texel-decode`
         // where the runtime makes it, declared at the notices site, moves a texel by up to the
         // largest difference its catalogue entry states for the format's family: on
-        // `metal2vulkan-rt`'s run each round's texels are loosened by that number and no further,
+        // `metal2vulkan-runtime`'s run each round's texels are loosened by that number and no further,
         // justified by the notice, so a run past it is the note's claim failing. The old
         // runtime's run is not loosened: there the notice holds nowhere and faults nothing, and a
         // texel the device moves is the venue's ledger row. A texel's `float` value is also the

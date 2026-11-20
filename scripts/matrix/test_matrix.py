@@ -300,7 +300,7 @@ class DeviceTestTests(unittest.TestCase):
 
     def test_the_archive_holds_the_validation_crate_beside_the_runtime(self):
         script = matrix.build_script("abc", "", False)
-        self.assertIn("cargo nextest archive -p metal2vulkan-rt -p metal2vulkan-validation --all-features", script)
+        self.assertIn("cargo nextest archive -p metal2vulkan-runtime -p metal2vulkan-validation --all-features", script)
 
     def test_a_leg_runs_the_runtime_s_tests_and_the_stream_module(self):
         leg = matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")
@@ -327,11 +327,11 @@ class UncountedTests(unittest.TestCase):
         # budget test's captured lines come after the summary.
         out = "\n".join([
             "    Starting 2 tests across 1 binary",
-            "        PASS [   0.027s] (1/2) metal2vulkan-rt tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind",
-            "        PASS [   0.010s] (2/2) metal2vulkan-rt tests::pass::on_device::every_device_clears",
+            "        PASS [   0.027s] (1/2) metal2vulkan-runtime tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind",
+            "        PASS [   0.010s] (2/2) metal2vulkan-runtime tests::pass::on_device::every_device_clears",
             "     Summary [   0.030s] 2 tests run: 2 passed, 0 skipped",
-            "        PASS [   0.027s] (1/2) metal2vulkan-rt tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind",
-            "--- STDOUT:              metal2vulkan-rt tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind ---",
+            "        PASS [   0.027s] (1/2) metal2vulkan-runtime tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind",
+            "--- STDOUT:              metal2vulkan-runtime tests::draw::on_device::every_gpu_adds_no_locked_instruction_per_bind ---",
             "LOCKS bind_locks: not counted, the node names no M2V_LOCK_EVENT",
             "M2V-MATRIX uncounted lock_budget/bound_draw",
             "",

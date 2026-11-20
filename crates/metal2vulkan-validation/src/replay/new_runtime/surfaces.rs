@@ -68,7 +68,7 @@ use crate::replay::args::{refuse, Fields, SURFACE_FACT_KEYS, SURFACE_PLANE_KEYS}
 use crate::replay::player::{Backend, Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 

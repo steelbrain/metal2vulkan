@@ -17,7 +17,7 @@ use crate::event_orders::{
 };
 use crate::scheduled_handlers::{Returned, ScheduledHandlerOrder, ARRIVAL, HOLD_LIMIT, WINDOW};
 use crate::shared_events::{EventRise, WAIT_MS};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};

@@ -21,7 +21,7 @@
 use super::{waited_for, work, RtDevice, WAIT};
 use crate::case::{Answer, Failure};
 use crate::texture_query::{HeapTextureQuery, Storage};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 
 /// Hold `sized`, the runtime's answer for `descriptor` (the descriptor of `query`), to the
 /// module's property, on `queue`.

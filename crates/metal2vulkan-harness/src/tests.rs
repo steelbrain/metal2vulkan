@@ -13,7 +13,7 @@ use crate::run::{
 };
 use crate::{Buffer, Device, Failed, GaugeReader, Refused, Result, Storage, Waits};
 use metal2vulkan::metal::TextureUsage;
-use metal2vulkan_rt::{Error as RtError, Gap, KernelInputKind, Limit};
+use metal2vulkan_runtime::{Error as RtError, Gap, KernelInputKind, Limit};
 use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::ptr::NonNull;

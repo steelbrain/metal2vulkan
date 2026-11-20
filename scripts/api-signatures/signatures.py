@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""The signature-level public surface of the two published crates and of `metal2vulkan-rt`,
-which is published under the runtime's name at the cutover, against its committed table.
+"""The signature-level public surface of the three published crates, against its committed table.
 
     signatures.py --check     # derive it and compare with the table; the diff, and a bad status
     signatures.py --bless     # write the table, printing what moved
@@ -788,23 +787,22 @@ def collect(crate, names, real, home, extra=()):
 
 # ---------------------------------------------------------------- driver
 
-CRATES = ["metal2vulkan", "metal2vulkan-air", "metal2vulkan-rt"]
+CRATES = ["metal2vulkan", "metal2vulkan-air", "metal2vulkan-runtime"]
 
 # A floor on each crate's record count. The table is the pin, so a parse that went blind shows as
 # thousands of removals and fails on its own; the floor is what makes a *blessed* collapse loud as
 # well, so a table of four items cannot pass quietly. It is a long way under the real counts and
 # is raised only when a crate's surface grows past it.
-FLOORS = {"metal2vulkan": 6000, "metal2vulkan-air": 1800, "metal2vulkan-rt": 25}
+FLOORS = {"metal2vulkan": 6000, "metal2vulkan-air": 1800, "metal2vulkan-runtime": 25}
 
 HEADER = """\
-# The signature-level public surface of metal2vulkan, metal2vulkan-air and metal2vulkan-rt: one
+# The signature-level public surface of metal2vulkan, metal2vulkan-air and metal2vulkan-runtime: one
 # record a line, "kind<TAB>key<TAB>signature", derived from the sources by
 # scripts/api-signatures/signatures.py and pinned by crates/metal2vulkan/tests/api_signatures.rs,
 # which says what it covers, what it cannot see, and what blessing a change here asserts.
 #
 # Write it with `python3 scripts/api-signatures/signatures.py --bless`, which prints what moved.
-# A removed or changed line is a breaking change of a published crate, or, for metal2vulkan-rt,
-# of the API it is published with at the cutover.
+# A removed or changed line is a breaking change of a published crate.
 """
 
 
@@ -1007,10 +1005,10 @@ def bless(root, table_path):
 CASES = [
     (
         "a method's signature, its return type and its loss of `pub`",
-        {"crates/metal2vulkan-rt/src/lib.rs": """\
+        {"crates/metal2vulkan-runtime/src/lib.rs": """\
 pub mod event;
 """,
-         "crates/metal2vulkan-rt/src/event.rs": """\
+         "crates/metal2vulkan-runtime/src/event.rs": """\
 /// An event.
 pub struct SharedEvent(u32);
 
@@ -1029,15 +1027,15 @@ impl SharedEvent {
     }
 }
 """},
-        ["method\tmetal2vulkan-rt::event::SharedEvent::device\t"
+        ["method\tmetal2vulkan-runtime::event::SharedEvent::device\t"
          "pub fn device(&self) -> Option<&Device>",
-         "struct\tmetal2vulkan-rt::event::SharedEvent\tpub struct SharedEvent(u32)"],
-        ["method\tmetal2vulkan-rt::event::SharedEvent::device\tpub fn device(&self) -> &Device",
-         "method\tmetal2vulkan-rt::event::SharedEvent::signalled\tpub fn signalled(&self) -> bool"],
+         "struct\tmetal2vulkan-runtime::event::SharedEvent\tpub struct SharedEvent(u32)"],
+        ["method\tmetal2vulkan-runtime::event::SharedEvent::device\tpub fn device(&self) -> &Device",
+         "method\tmetal2vulkan-runtime::event::SharedEvent::signalled\tpub fn signalled(&self) -> bool"],
     ),
     (
         "a unit variant that became a struct variant, and a field",
-        {"crates/metal2vulkan-rt/src/lib.rs": """\
+        {"crates/metal2vulkan-runtime/src/lib.rs": """\
 /// How a vertex is fetched.
 pub enum VertexFetch {
     /// Fixed function.
@@ -1053,17 +1051,17 @@ pub struct DeviceProperties {
     seen: bool,
 }
 """},
-        ["variant\tmetal2vulkan-rt::VertexFetch::FixedFunction\t"
+        ["variant\tmetal2vulkan-runtime::VertexFetch::FixedFunction\t"
          "FixedFunction { narrow_float: bool }",
-         "variant\tmetal2vulkan-rt::VertexFetch::Shader\tShader",
-         "field\tmetal2vulkan-rt::DeviceProperties.drm_render\t"
+         "variant\tmetal2vulkan-runtime::VertexFetch::Shader\tShader",
+         "field\tmetal2vulkan-runtime::DeviceProperties.drm_render\t"
          "pub drm_render: Option<(i64, i64)>"],
-        ["variant\tmetal2vulkan-rt::VertexFetch::FixedFunction\tFixedFunction",
-         "field\tmetal2vulkan-rt::DeviceProperties.seen\tseen: bool"],
+        ["variant\tmetal2vulkan-runtime::VertexFetch::FixedFunction\tFixedFunction",
+         "field\tmetal2vulkan-runtime::DeviceProperties.seen\tseen: bool"],
     ),
     (
         "a wrapped signature reads as the one the formatter left on a line",
-        {"crates/metal2vulkan-rt/src/lib.rs": """\
+        {"crates/metal2vulkan-runtime/src/lib.rs": """\
 /// A plan.
 pub struct Plan(u32);
 
@@ -1084,16 +1082,16 @@ impl Plan {
     }
 }
 """},
-        ["method\tmetal2vulkan-rt::Plan::vertex_returns_value\t"
+        ["method\tmetal2vulkan-runtime::Plan::vertex_returns_value\t"
          "pub fn vertex_returns_value(&self, budget: &Budget, entries: &StageEntries) "
          "-> Result<bool, ()>"],
-        ["method\tmetal2vulkan-rt::Plan::vertex_returns_value\t"
+        ["method\tmetal2vulkan-runtime::Plan::vertex_returns_value\t"
          "pub fn vertex_returns_value( &self, budget: &Budget, entries: &StageEntries, ) "
          "-> Result<bool, ()>"],
     ),
     (
         "a constant's declaration and its value are two records",
-        {"crates/metal2vulkan-rt/src/lib.rs": """\
+        {"crates/metal2vulkan-runtime/src/lib.rs": """\
 /// How many bytes an argument handle takes.
 pub const ARGUMENT_HANDLE_BYTES: u64 = 8;
 
@@ -1105,21 +1103,21 @@ impl Table {
     pub const MIN_ENTRIES: u64 = 16;
 }
 """},
-        ["const\tmetal2vulkan-rt::ARGUMENT_HANDLE_BYTES\tpub const ARGUMENT_HANDLE_BYTES: u64",
-         "const-value\tmetal2vulkan-rt::ARGUMENT_HANDLE_BYTES\t8",
-         "assoc-const\tmetal2vulkan-rt::Table::MIN_ENTRIES\tpub const MIN_ENTRIES: u64",
-         "assoc-const-value\tmetal2vulkan-rt::Table::MIN_ENTRIES\t16"],
-        ["const\tmetal2vulkan-rt::ARGUMENT_HANDLE_BYTES\t"
+        ["const\tmetal2vulkan-runtime::ARGUMENT_HANDLE_BYTES\tpub const ARGUMENT_HANDLE_BYTES: u64",
+         "const-value\tmetal2vulkan-runtime::ARGUMENT_HANDLE_BYTES\t8",
+         "assoc-const\tmetal2vulkan-runtime::Table::MIN_ENTRIES\tpub const MIN_ENTRIES: u64",
+         "assoc-const-value\tmetal2vulkan-runtime::Table::MIN_ENTRIES\t16"],
+        ["const\tmetal2vulkan-runtime::ARGUMENT_HANDLE_BYTES\t"
          "pub const ARGUMENT_HANDLE_BYTES: u64 = 8",
-         "const-value\tmetal2vulkan-rt::ARGUMENT_HANDLE_BYTES\t16"],
+         "const-value\tmetal2vulkan-runtime::ARGUMENT_HANDLE_BYTES\t16"],
     ),
     (
         "what is not surface: crate-private, hidden, and test-only",
-        {"crates/metal2vulkan-rt/src/lib.rs": """\
+        {"crates/metal2vulkan-runtime/src/lib.rs": """\
 pub mod gap;
 mod inner;
 """,
-         "crates/metal2vulkan-rt/src/gap.rs": """\
+         "crates/metal2vulkan-runtime/src/gap.rs": """\
 /// A gap.
 pub enum RuntimeGap {
     /// Options.
@@ -1139,19 +1137,19 @@ mod tests {
     pub struct Probe(u32);
 }
 """,
-         "crates/metal2vulkan-rt/src/inner.rs": """\
+         "crates/metal2vulkan-runtime/src/inner.rs": """\
 /// Reachable from nowhere a consumer may write.
 pub struct Hidden(u32);
 """},
-        ["variant\tmetal2vulkan-rt::gap::RuntimeGap::FunctionOptions\tFunctionOptions(u32)"],
-        ["struct\tmetal2vulkan-rt::gap::Inside\tpub(crate) struct Inside(u32)",
-         "struct\tmetal2vulkan-rt::gap::Plumbing\tpub struct Plumbing(u32)",
-         "struct\tmetal2vulkan-rt::gap::Probe\tpub struct Probe(u32)",
-         "struct\tmetal2vulkan-rt::inner::Hidden\tpub struct Hidden(u32)"],
+        ["variant\tmetal2vulkan-runtime::gap::RuntimeGap::FunctionOptions\tFunctionOptions(u32)"],
+        ["struct\tmetal2vulkan-runtime::gap::Inside\tpub(crate) struct Inside(u32)",
+         "struct\tmetal2vulkan-runtime::gap::Plumbing\tpub struct Plumbing(u32)",
+         "struct\tmetal2vulkan-runtime::gap::Probe\tpub struct Probe(u32)",
+         "struct\tmetal2vulkan-runtime::inner::Hidden\tpub struct Hidden(u32)"],
     ),
     (
         "a trait's own items, and a trait impl's header",
-        {"crates/metal2vulkan-rt/src/lib.rs": """\
+        {"crates/metal2vulkan-runtime/src/lib.rs": """\
 use std::fmt;
 
 /// A thing with a length.
@@ -1172,15 +1170,15 @@ impl fmt::Debug for Buffer {
     }
 }
 """},
-        ["trait-item\tmetal2vulkan-rt::Measured::length\tfn length(&self) -> u64",
-         "trait-item\tmetal2vulkan-rt::Measured::Unit\ttype Unit",
-         "trait-impl\tmetal2vulkan-rt::Buffer impl fmt::Debug\timpl fmt::Debug for Buffer"],
-        ["method\tmetal2vulkan-rt::Buffer::fmt\t"
+        ["trait-item\tmetal2vulkan-runtime::Measured::length\tfn length(&self) -> u64",
+         "trait-item\tmetal2vulkan-runtime::Measured::Unit\ttype Unit",
+         "trait-impl\tmetal2vulkan-runtime::Buffer impl fmt::Debug\timpl fmt::Debug for Buffer"],
+        ["method\tmetal2vulkan-runtime::Buffer::fmt\t"
          "fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result"],
     ),
     (
         "the attributes that are the contract reach the signature",
-        {"crates/metal2vulkan-rt/src/lib.rs": """\
+        {"crates/metal2vulkan-runtime/src/lib.rs": """\
 /// A gap a consumer must read completely.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -1201,13 +1199,13 @@ pub struct Awkward {
     pub one: u32,
 }
 """},
-        ["enum\tmetal2vulkan-rt::RuntimeGap\t"
+        ["enum\tmetal2vulkan-runtime::RuntimeGap\t"
          "#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub enum RuntimeGap",
-         "struct\tmetal2vulkan-rt::Interop\t#[cfg(feature = \"ash\")] pub struct Interop(u32)",
-         "struct\tmetal2vulkan-rt::Awkward\t#[non_exhaustive] pub struct Awkward"],
-        ["enum\tmetal2vulkan-rt::RuntimeGap\tpub enum RuntimeGap",
-         "struct\tmetal2vulkan-rt::Interop\tpub struct Interop(u32)",
-         "struct\tmetal2vulkan-rt::Awkward\tpub struct Awkward"],
+         "struct\tmetal2vulkan-runtime::Interop\t#[cfg(feature = \"ash\")] pub struct Interop(u32)",
+         "struct\tmetal2vulkan-runtime::Awkward\t#[non_exhaustive] pub struct Awkward"],
+        ["enum\tmetal2vulkan-runtime::RuntimeGap\tpub enum RuntimeGap",
+         "struct\tmetal2vulkan-runtime::Interop\tpub struct Interop(u32)",
+         "struct\tmetal2vulkan-runtime::Awkward\tpub struct Awkward"],
     ),
 ]
 
@@ -1223,7 +1221,7 @@ def selftest():
                 path = tree / rel
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text, encoding="utf-8")
-            recs, _counts, _surface = records(tree, ["metal2vulkan-rt"])
+            recs, _counts, _surface = records(tree, ["metal2vulkan-runtime"])
             got = set(lines_of(recs))
             missing = [r for r in want if r not in got]
             present = [r for r in unwanted if r in got]

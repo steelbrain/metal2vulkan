@@ -17,7 +17,7 @@ use super::{failed, unaddressed, NewRuntime, Object, Skips};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::{HashMap, HashSet};
 
 /// Where a binding is: the stage (fragment or not) and whether it is a texture.

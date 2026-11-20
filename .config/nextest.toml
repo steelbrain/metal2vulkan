@@ -20,5 +20,5 @@ slow-timeout = { period = "300s", terminate-after = 24 }
 # and another test's Shared block failed with `ERROR_OUT_OF_DEVICE_MEMORY` (one run of two). The
 # same tests without it peaked at 2.4 GiB, and it beside one other test at 2.8 GiB.
 [[profile.default.overrides]]
-filter = 'package(metal2vulkan-rt) & test(/::an_access_up_to_2_gib_lands_at_its_own_word$/)'
+filter = 'package(metal2vulkan-runtime) & test(/::an_access_up_to_2_gib_lands_at_its_own_word$/)'
 threads-required = 'num-test-threads'

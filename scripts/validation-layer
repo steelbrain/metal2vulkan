@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Khronos validation layer that `metal2vulkan-rt`'s device tests run under, one version on
+"""The Khronos validation layer that `metal2vulkan-runtime`'s device tests run under, one version on
 every leg, as a directory a job unpacks in its own workspace.
 
     scripts/validation-layer make OUT [--linux-from HOST] [--macos-from PREFIX] [--no-windows]
@@ -24,7 +24,7 @@ layer"):
     Windows  VK_LAYER_PATH=<DIR\\windows, as a Windows path>  PATH=DIR/windows:$PATH
     macOS    VK_LAYER_PATH=DIR/macos  DYLD_LIBRARY_PATH=DIR/macos
 
-and the device tests enable the layer for their own process (`crates/metal2vulkan-rt/src/tests/
+and the device tests enable the layer for their own process (`crates/metal2vulkan-runtime/src/tests/
 validation.rs`).
 """
 

@@ -1,4 +1,4 @@
-//! The player's backend over the new runtime (`metal2vulkan-rt`), through its public API on one
+//! The player's backend over the new runtime (`metal2vulkan-runtime`), through its public API on one
 //! device. The backend is the runtime's consumer: it takes the blocks the stream's own buffers lie
 //! in (`places`) and every texture and sampler index, granted at the start. A block of the stream
 //! is a block of the runtime, and a heap is a block of its own. What the runtime does not build
@@ -42,7 +42,7 @@ use crate::gpu::DeviceType;
 use metal2vulkan::metal::resource_word::TextureWord;
 use metal2vulkan::metal::sampler::SamplerWord;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use places::{class_index, granule, Place, Places};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Range;

@@ -249,7 +249,7 @@ pub enum OwnRow {
     /// for another, each freed within 25 ms of its idle age (10% of it), as the runtime counts
     /// each free's idle time at its start. A free that began later fails the row.
     ///
-    /// [`MemoryClass::block_len`]: metal2vulkan_rt::MemoryClass::block_len
+    /// [`MemoryClass::block_len`]: metal2vulkan_runtime::MemoryClass::block_len
     IdleFrees,
     /// [`IdleFrees`](Self::IdleFrees) while command buffers are committed every 2 ms, the
     /// second block given back once the first's free ended.

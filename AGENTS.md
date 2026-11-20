@@ -11,18 +11,19 @@ manifest at the root) of seven crates under `crates/`:
 | Crate | Published | What it is |
 |---|---|---|
 | `crates/metal2vulkan` | yes | The translator: Metal AIR to SPIR-V through a Metal-shaped API (device, library, pipelines, binding plans), and the `metal2vulkan` command (feature `cli`) |
-| `crates/metal2vulkan-rt` | no | The runtime: the Metal API on Vulkan with one path for every device, built only on the translator's public API. Unpublished until it takes the name `metal2vulkan-runtime` |
+| `crates/metal2vulkan-runtime` | yes | The runtime: the Metal API on Vulkan with one path for every device, built only on the translator's public API |
 | `crates/metal2vulkan-air` | yes | The AIR front end: container, bitstream, bitcode, typed IR, metadata ABI, intrinsics, canonicalization, `graph`, `budget` |
 | `crates/metal2vulkan-validation` | no | Authored semantic cases, Metal and Vulkan execution, harvest, the corpus index and audits |
 | `crates/metal2vulkan-conformance` | no | The Metal conformance suite: one case run on Metal and on the runtime, recorded and compared field by field. Independent of the harvested corpus |
 | `crates/metal2vulkan-devtools` | no | The external-tool runner, fixture assemblers and fixture paths the tests share |
 | `crates/metal2vulkan-harness` | no | The runtime's compute harness: one set of compute workloads through the runtime's Metal-shaped API on one GPU, checked against CPU references, then timed |
 
-The two published crates share one version; `metal2vulkan` pins `metal2vulkan-air` exactly
-(`=0.x.y`). License: dual, `GPL-2.0-or-later OR LGPL-3.0-or-later`, at the recipient's choice. The
-root `LICENSE` is the notice; `LICENSE-GPL-2.0`, `LICENSE-LGPL-3.0` and `LICENSE-GPL-3.0` (which the
-LGPL v3 incorporates) are the texts. Each published crate carries copies of all four, held equal to
-the root's by a test (`published_crates`).
+The three published crates share one version; `metal2vulkan` pins `metal2vulkan-air` exactly
+(`=0.x.y`), and `metal2vulkan-runtime` pins `metal2vulkan` the same way. License: dual,
+`GPL-2.0-or-later OR LGPL-3.0-or-later`, at the recipient's choice. The root `LICENSE` is the
+notice; `LICENSE-GPL-2.0`, `LICENSE-LGPL-3.0` and `LICENSE-GPL-3.0` (which the LGPL v3
+incorporates) are the texts. Each published crate carries copies of all four, held equal to the
+root's by a test (`published_crates`).
 
 The translator's core lives in `crates/metal2vulkan-air/src/` and, in
 `crates/metal2vulkan/src/`, `memory/`, `lower/`, `structurize/`, `spirv/`, `pipeline/` and
@@ -32,7 +33,7 @@ The translator's core lives in `crates/metal2vulkan-air/src/` and, in
 |---|---|
 | `README.md` | What it is, install, command line, quick library use |
 | `docs/API.md` | The translator's API guide; the precision-note catalogue; accepted differences |
-| `crates/metal2vulkan-rt/README.md` | The runtime's guide: its floor, its contract with the consumer (memory, events, addresses, surfaces) and its known gaps |
+| `crates/metal2vulkan-runtime/README.md` | The runtime's guide: its floor, its contract with the consumer (memory, events, addresses, surfaces) and its known gaps |
 | `docs/HOWTO.md` | Integration: tools, caching, failures, isolation |
 | `docs/ARCHITECTURE.md` | The translator's stages and module map |
 | `docs/FAST-PATHS.md` | The translator's speed-for-accuracy switches, until the cutover deletes them |
@@ -56,7 +57,7 @@ order, and a lower one never overrides a higher one.
    decided at run time.
 2. **One path for every device.** Differences come only from Vulkan feature, property, format,
    limit and memory-type queries. Product code holds no vendor, device or driver ID, and no
-   runtime policy switch. A test enforces this for `metal2vulkan-rt`. One form means one form per
+   runtime policy switch. A test enforces this for `metal2vulkan-runtime`. One form means one form per
    Vulkan capability: where the floor cannot require a feature, that feature's query may choose a
    second form, for eight only: 16-bit floats, storage-image reads without a format, 64-bit
    atomics, 64-bit floats, SIMD groups (the subgroup size range with its stages and operations,
@@ -109,11 +110,10 @@ investigation gets a time box, then rung 4.
 question: it is allowed only as the last form on a device that has no other, and it is reported
 as a known gap.
 
-**The old runtime and old switches.** `metal2vulkan-runtime` takes regression fixes only, from at
-most one lane, until the cutover deletes it. The same goes for the translator's `DevicePolicy`
-switches, the driver-fact tables, the device checks and `docs/FAST-PATHS.md` with
-`tests::fast_paths`: they stay correct until the cutover deletes them. Never add a switch, a
-fact-table row, a device check or a ledger row.
+**The old runtime and old switches.** The old runtime is deleted, and its crate name is now the
+runtime's. The translator's `DevicePolicy` switches, the driver-fact tables, the device checks and
+`docs/FAST-PATHS.md` with `tests::fast_paths` stay correct until the cutover deletes them. Never
+add a switch, a fact-table row, a device check or a ledger row.
 
 ## Translation honesty
 
@@ -125,7 +125,7 @@ fact-table row, a device check or a ledger row.
 - **Honest FALLBACK.** Unsupported input returns a typed `Err` (the command line prints
   `FALLBACK`). Never emit wrong-but-valid SPIR-V to silence a gate.
 - **Scope.** The runtime has a floor: one Vulkan version plus a fixed extension list
-  (`crates/metal2vulkan-rt/README.md`); a device below it gets a typed refusal. Above the floor,
+  (`crates/metal2vulkan-runtime/README.md`); a device below it gets a typed refusal. Above the floor,
   refuse only what the device truly lacks, and implement the rest. A Metal feature that no guest
   has used, in a replay stream or a live session, is a typed refusal until one does; a refusal a
   guest meets is a bug, ranked by how often guests meet it. A near-equivalent, the device's native
@@ -248,8 +248,7 @@ in either).
   `crates/metal2vulkan/src/spirv_binary/table.rs` (the test parser's table, test-only) come from
   `scripts/regen-spirv-grammar/`, from Khronos's grammar JSON alone; never hand-edit them. A
   newly named opcode or enumerant goes in that script's `items.txt`, then regenerate.
-- The published crates (`metal2vulkan`, `metal2vulkan-air`, and `metal2vulkan-rt`, which is
-  published as `metal2vulkan-runtime` once it takes that name) take only
+- The published crates (`metal2vulkan`, `metal2vulkan-air` and `metal2vulkan-runtime`) take only
   dependencies that offer a GPL-2.0-compatible license (MIT, BSD, ISC, Unlicense or a similar
   option); never one that is Apache-2.0-only, GPL-3.0-only or LGPL-3.0-only. The dual license's
   GPL-2.0 option must hold for consumers that link the crates into GPL-2.0 programs. Code in
@@ -271,7 +270,7 @@ doctests, so they have their own line. The gate:
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
 cargo nextest run -p metal2vulkan-conformance --all-features
 cargo test --workspace --all-features --doc

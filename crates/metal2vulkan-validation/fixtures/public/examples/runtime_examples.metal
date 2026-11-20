@@ -1,4 +1,4 @@
-// Owned fixture: the functions the harness's authored render workloads and metal2vulkan-rt's draw
+// Owned fixture: the functions the harness's authored render workloads and metal2vulkan-runtime's draw
 // tests run. Written from scratch for them; `scripts/regen-air-fixtures/
 // regen-air-fixtures.sh --dir examples` compiles it. No translator sweep reads this directory.
 #include <metal_stdlib>

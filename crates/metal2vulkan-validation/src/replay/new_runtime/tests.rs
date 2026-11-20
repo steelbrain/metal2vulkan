@@ -4,7 +4,7 @@ use super::{Skips, Substitutes};
 use crate::replay::stream::Call;
 use crate::replay::value::{Name, Value};
 use metal2vulkan::error::{Error, Feature, Limit, LowerFamily, Unsupported};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::BTreeMap;
 
 /// A pipeline state's making, object `result`.

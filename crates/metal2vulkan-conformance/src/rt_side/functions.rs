@@ -18,7 +18,7 @@ use crate::library_facts::{FunctionDescriptorSpec, LibraryFacts};
 use metal2vulkan::library::FunctionStage;
 use metal2vulkan::metal::FunctionOptions;
 use metal2vulkan::Budget;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::BTreeMap;
 
 /// `device`: neither the runtime's library nor a function of it keeps a device.

@@ -126,7 +126,7 @@ jobs:
           rustup target add x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc
           for target in x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc; do
             echo "::group::$target"
-            cargo clippy --target "$target" -p metal2vulkan-air -p metal2vulkan -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-conformance --all-targets --all-features -- -D warnings
+            cargo clippy --target "$target" -p metal2vulkan-air -p metal2vulkan -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-conformance --all-targets --all-features -- -D warnings
             echo "::endgroup::"
           done
 
@@ -141,7 +141,7 @@ jobs:
           set -euo pipefail
           for target in x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc; do
             echo "::group::$target"
-            cargo doc --target "$target" -p metal2vulkan-rt --all-features --no-deps
+            cargo doc --target "$target" -p metal2vulkan-runtime --all-features --no-deps
             echo "::endgroup::"
           done
 
@@ -174,7 +174,7 @@ jobs:
           for row in \
             metal2vulkan=0 \
             metal2vulkan-air=0 \
-            metal2vulkan-rt=0 \
+            metal2vulkan-runtime=0 \
             metal2vulkan-validation=0 \
             metal2vulkan-conformance=0 \
             metal2vulkan-devtools=0 \
@@ -205,12 +205,12 @@ jobs:
       # builds alone against the others' packages, so none reads a file outside its own directory.
       # Validation and the dev-tools crate are not published.
       - name: Package the published crates
-        run: cargo package --workspace --exclude metal2vulkan-validation --exclude metal2vulkan-conformance --exclude metal2vulkan-devtools --exclude metal2vulkan-rt --exclude metal2vulkan-harness
+        run: cargo package --workspace --exclude metal2vulkan-validation --exclude metal2vulkan-conformance --exclude metal2vulkan-devtools --exclude metal2vulkan-harness
 
       # With the AIR front end's crate's own tests, and the dev-tools crate's:
       # its tool runner and L3 checks.
       - name: Test metal2vulkan
-        run: cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
+        run: cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 
       # GPU-free on every host: tests that open a device compile only under `--cfg m2v_gpu` or
       # `--cfg m2v_cpu_icd`, and no device-opening code runs without one of them.
@@ -236,7 +236,7 @@ jobs:
         env:
           RUSTFLAGS: -Dwarnings --cfg m2v_cpu_icd
           LP_NUM_THREADS: "1"
-        run: cargo nextest run -p metal2vulkan-validation -p metal2vulkan-rt --all-features
+        run: cargo nextest run -p metal2vulkan-validation -p metal2vulkan-runtime --all-features
 
       # The conformance suite's replay leg on lavapipe: it reads the committed recordings, runs the
       # runtime side and compares, with no Metal present. Its exit status is 0 only where the run

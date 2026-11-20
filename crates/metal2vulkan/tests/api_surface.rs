@@ -24,9 +24,9 @@
 //! a new variant is a compile error there.
 //!
 //! Method signatures are not pinned here, and neither are fields, variants, `metal2vulkan-air` or
-//! `metal2vulkan-rt`: `api_signatures` pins all of those, record by record, against
+//! `metal2vulkan-runtime`: `api_signatures` pins all of those, record by record, against
 //! `tests/api_signatures.tsv`. A change this table cannot see — a method's parameters or return
-//! type, a method or a variant removed, anything in `metal2vulkan-air` or `metal2vulkan-rt` —
+//! type, a method or a variant removed, anything in `metal2vulkan-air` or `metal2vulkan-runtime` —
 //! fails there.
 //! `compiled_functions_round_trip_through_the_public_api` and
 //! `compiled_render_stages_round_trip_through_the_public_api` drive the main consumer flow

@@ -2457,7 +2457,7 @@ pub enum PrecisionNote {
     /// exponent for a float depth attachment and the device's for a fixed-point one (at most
     /// `2 × 2^-n`); a biased depth past the viewport's depth range is undefined there ("Depth
     /// Clamping and Range Adjustment"). Static per operation: no pipeline stage records it;
-    /// `metal2vulkan-rt`'s render encoder carries it (`RenderCommandEncoder::DEPTH_BIAS_NOTE`).
+    /// `metal2vulkan-runtime`'s render encoder carries it (`RenderCommandEncoder::DEPTH_BIAS_NOTE`).
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
@@ -2468,7 +2468,7 @@ pub enum PrecisionNote {
     /// one) or below zero (a negative one), where Metal compares a positive one above zero and a
     /// negative one not below it; and RADV and ANV store a denormal a GPU write gives a depth image
     /// as a zero, where Metal keeps it. Static per operation: no pipeline stage records it;
-    /// `metal2vulkan-rt`'s depth-stencil state carries it
+    /// `metal2vulkan-runtime`'s depth-stencil state carries it
     /// (`DepthStencilState::precision_note`). `metal2vulkan-runtime` announces the same
     /// difference as its `depth-denormals` kind, which this note announces too.
     ///
@@ -2484,7 +2484,7 @@ pub enum PrecisionNote {
     /// `device-filtered-mipmaps`). Where a level halves an even size, each sample falls between
     /// two texels on the axis, so the filter is a box of them at the device's filter precision; an
     /// sRGB format is filtered in linear space. Static per operation: no
-    /// pipeline stage records it; `metal2vulkan-rt`'s blit encoder carries it
+    /// pipeline stage records it; `metal2vulkan-runtime`'s blit encoder carries it
     /// (`BlitCommandEncoder::GENERATE_MIPMAPS_NOTE`). `metal2vulkan-runtime` announces the same
     /// difference as its `device-filtered-mipmaps` kind, which this note announces too.
     ///
@@ -2500,7 +2500,7 @@ pub enum PrecisionNote {
     /// samples (`metal2vulkan-runtime`'s `device-rounded-resolve`, which this note announces too):
     /// on RADV, ANV, NVIDIA and lavapipe every unorm, snorm and packed 16-bit unorm channel within
     /// one code of Metal's, an sRGB channel within two. Static per operation: no pipeline stage
-    /// records it; `metal2vulkan-rt`'s render pass carries it for every color attachment it
+    /// records it; `metal2vulkan-runtime`'s render pass carries it for every color attachment it
     /// resolves (`RenderPassDescriptor::precision_note`), on every device.
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
@@ -2511,7 +2511,7 @@ pub enum PrecisionNote {
     /// answers the device's decode of its blocks (an sRGB form's code through the device's sRGB
     /// decode), where Metal interpolates a block's endpoints with 6-bit weights. Its blocks'
     /// bytes, copies and sizes are Metal's. Static per texture, decided by its pixel format alone
-    /// on every device: no pipeline stage records it; `metal2vulkan-rt`'s texture carries it
+    /// on every device: no pipeline stage records it; `metal2vulkan-runtime`'s texture carries it
     /// (`Texture::precision_note`). `metal2vulkan-runtime` announces the same difference as its
     /// `compressed-texel-decode` kind, for a BC texture on a driver not measured to decode its
     /// format as Metal does, which this note announces too.
@@ -2543,7 +2543,7 @@ pub enum PrecisionNote {
     /// (`VkSamplerBorderColorComponentMappingCreateInfoEXT`), which a sampler that meets every view
     /// cannot; the NVIDIA driver reads `(0, 0, 0, 1)`. Where the device has the feature, the texel
     /// is read through the view's mapping, as Metal's is. Static, decided on every device by the
-    /// sampler alone: no translated stage records it; on `metal2vulkan-rt` a sampler state carries
+    /// sampler alone: no translated stage records it; on `metal2vulkan-runtime` a sampler state carries
     /// it by its descriptor (`SamplerState::precision_note`), and a pipeline whose function samples
     /// through such a constexpr sampler carries it among its notes by the sampler's constants
     /// (`precision_notes`).

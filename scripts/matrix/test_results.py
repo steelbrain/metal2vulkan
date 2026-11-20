@@ -15,21 +15,21 @@ import results
 
 NEXTEST = """\
     Starting 3 tests across 1 binary
-        FAIL [   0.002s] (1/3) metal2vulkan-rt tests::breaks
-        PASS [   0.003s] (2/3) metal2vulkan-rt tests::counts
-        PASS [   0.003s] (3/3) metal2vulkan-rt tests::loops
+        FAIL [   0.002s] (1/3) metal2vulkan-runtime tests::breaks
+        PASS [   0.003s] (2/3) metal2vulkan-runtime tests::counts
+        PASS [   0.003s] (3/3) metal2vulkan-runtime tests::loops
      Summary [   0.003s] 3 tests run: 2 passed, 1 failed, 0 skipped
-        PASS [   0.003s] (2/3) metal2vulkan-rt tests::counts
+        PASS [   0.003s] (2/3) metal2vulkan-runtime tests::counts
   stdout ───
     M2V-MATRIX metric compute/submissions 3
     M2V-MATRIX instructions compute/per_dispatch 2000
-        PASS [   0.003s] (3/3) metal2vulkan-rt tests::loops
+        PASS [   0.003s] (3/3) metal2vulkan-runtime tests::loops
   stdout ───
     M2V-MATRIX gauge loop/buffers@100 12
     M2V-MATRIX gauge loop/buffers@200 12
     M2V-MATRIX gauge loop/buffers@drop 0
     M2V-MATRIX time loop/gpu 1000.250
-        FAIL [   0.002s] (1/3) metal2vulkan-rt tests::breaks
+        FAIL [   0.002s] (1/3) metal2vulkan-runtime tests::breaks
   stdout ───
     test tests::breaks ... FAILED
     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out
@@ -50,7 +50,7 @@ class ParseTests(unittest.TestCase):
         legs = results.parse_job(job(("1002:744c", "rt", 100, NEXTEST)))
         suite = legs["1002:744c"]["suites"]["rt"]
         self.assertEqual((suite["run"], suite["passed"], suite["exit"]), (3, 2, 100))
-        self.assertEqual(suite["failed"], ["metal2vulkan-rt tests::breaks"])
+        self.assertEqual(suite["failed"], ["metal2vulkan-runtime tests::breaks"])
         self.assertEqual(suite["records"]["metric"], {"compute/submissions": 3})
         self.assertEqual(suite["records"]["instructions"], {"compute/per_dispatch": 2000})
         self.assertEqual(suite["records"]["gauge"], {"loop/buffers@100": 12, "loop/buffers@200": 12,

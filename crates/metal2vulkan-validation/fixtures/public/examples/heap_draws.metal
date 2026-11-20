@@ -1,4 +1,4 @@
-// Owned fixture: the functions metal2vulkan-rt's copy-over tests draw with
+// Owned fixture: the functions metal2vulkan-runtime's copy-over tests draw with
 // (src/tests/copy_over.rs): one triangle over the whole target, and fragments that read a texture
 // under them, directly or through an argument buffer, or write two colors, and a kernel that reads
 // a texture through an argument buffer. Written from scratch for it;

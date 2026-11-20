@@ -14,13 +14,13 @@ of a Vulkan device.
 | Crate | Directory | What it is |
 |---|---|---|
 | `metal2vulkan` | [`crates/metal2vulkan`](crates/metal2vulkan) | The translator. A Metal-shaped API (device, library, pipeline descriptors, binding plans) that compiles compute, render, tessellation, tile and mesh pipelines for a described Vulkan device: SPIR-V per stage, one pipeline layout, fixed-function state, and per-draw descriptor writes and push constants. The `cli` feature builds the `metal2vulkan` command. |
-| `metal2vulkan-rt` | [`crates/metal2vulkan-rt`](crates/metal2vulkan-rt) | Not published yet. The Metal API on Vulkan, with one path for every device: devices, memory blocks and buffers, textures, sampler states, command queues, command buffers and events, encoders and pipeline states, run on a Vulkan device through `ash`. It uses only the translator's public API. |
+| `metal2vulkan-runtime` | [`crates/metal2vulkan-runtime`](crates/metal2vulkan-runtime) | The Metal API on Vulkan, with one path for every device: devices, memory blocks and buffers, textures, sampler states, command queues, command buffers and events, encoders and pipeline states, run on a Vulkan device through `ash`. It uses only the translator's public API. |
 | `metal2vulkan-air` | [`crates/metal2vulkan-air`](crates/metal2vulkan-air) | The AIR front end: the metallib container, the bitcode reader, a typed IR, AIR's metadata ABI, intrinsics and canonicalization. For tools that read AIR without translating it. |
 | `metal2vulkan-validation` | [`crates/metal2vulkan-validation`](crates/metal2vulkan-validation) | Not published. Authored cases run on Metal and on Vulkan and compared, and bounded audits over a private corpus. |
 | `metal2vulkan-devtools` | [`crates/metal2vulkan-devtools`](crates/metal2vulkan-devtools) | Not published. The external-tool runner and fixture assemblers the tests share. |
 
-The two published crates share one version and are released together; `metal2vulkan` pins
-`metal2vulkan-air` exactly.
+The three published crates share one version and are released together; `metal2vulkan` pins
+`metal2vulkan-air` exactly, and `metal2vulkan-runtime` pins `metal2vulkan` exactly.
 
 What the translator promises:
 
@@ -42,7 +42,7 @@ revision:
 [dependencies]
 metal2vulkan = { git = "https://github.com/steelbrain/metal2vulkan", rev = "<sha>" }
 # For the Metal API on Vulkan:
-metal2vulkan-rt = { git = "https://github.com/steelbrain/metal2vulkan", rev = "<sha>" }
+metal2vulkan-runtime = { git = "https://github.com/steelbrain/metal2vulkan", rev = "<sha>" }
 ```
 
 Features of `metal2vulkan`, none needed by the library:
@@ -127,14 +127,14 @@ let pipeline = device.compile_compute_pipeline(&descriptor, &Budget::standard())
 cargo run -p metal2vulkan --example api_preview   # needs llvm-as on PATH
 ```
 
-For the runtime, start at [its README](crates/metal2vulkan-rt/README.md).
+For the runtime, start at [its README](crates/metal2vulkan-runtime/README.md).
 
 ## Documentation
 
 | Document | Read it when |
 |---|---|
 | [docs/API.md](docs/API.md) | You use the translator's API: devices, libraries, pipelines, binding, caching, errors; and the runtime's precision notes |
-| [Runtime README](crates/metal2vulkan-rt/README.md) | You use the Metal API on Vulkan |
+| [Runtime README](crates/metal2vulkan-runtime/README.md) | You use the Metal API on Vulkan |
 | [docs/HOWTO.md](docs/HOWTO.md) | You integrate: tools, caching, failures, isolation, the runtime's shader cache |
 | [docs/RUNTIME-PORTING.md](docs/RUNTIME-PORTING.md) | You port Metal calls (Objective-C or metal-rs) to the runtime |
 | [docs/RESOURCE-ID.md](docs/RESOURCE-ID.md) | You compute a texture's or sampler's `gpuResourceID` on the guest's side |

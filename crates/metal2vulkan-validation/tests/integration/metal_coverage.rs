@@ -2,7 +2,7 @@
 //! docs/METAL-COVERAGE.md) names only counterparts that exist.
 //!
 //! Each row is a public item of the macOS SDK's Metal headers, by name. An implemented row names
-//! its counterpart in the runtime (`metal2vulkan-rt/src`) or the translator (`src`, `air/src`):
+//! its counterpart in the runtime (`metal2vulkan-runtime/src`) or the translator (`src`, `air/src`):
 //! a type (`Type`), a method or associated item (`Type::name`), or a field (`Type.name`), or
 //! several of these, comma-separated. This test reads those sources and holds every counterpart
 //! to a public item of that name: the type declared `pub`, a method `pub fn` inside an `impl` of
@@ -178,7 +178,7 @@ fn has_field(files: &[String], ty: &str, name: &str) -> bool {
 fn every_counterpart_the_coverage_map_names_exists() {
     let root = root();
     let mut runtime = Vec::new();
-    sources(&root.join("crates/metal2vulkan-rt/src"), &mut runtime);
+    sources(&root.join("crates/metal2vulkan-runtime/src"), &mut runtime);
     let mut translator = Vec::new();
     sources(&root.join("crates/metal2vulkan/src"), &mut translator);
     sources(&root.join("crates/metal2vulkan-air/src"), &mut translator);

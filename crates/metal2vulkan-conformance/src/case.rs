@@ -488,17 +488,17 @@ pub struct Failure {
 }
 
 impl Failure {
-    /// The failure a typed error of the runtime (`metal2vulkan-rt`) is. A translator refusal
+    /// The failure a typed error of the runtime (`metal2vulkan-runtime`) is. A translator refusal
     /// that names a capability the device could enable is the venue's gap ([`device_gap_of`]).
-    pub fn of_rt(error: &metal2vulkan_rt::Error) -> Self {
+    pub fn of_rt(error: &metal2vulkan_runtime::Error) -> Self {
         let lacks = match error {
-            metal2vulkan_rt::Error::Translation(metal2vulkan::error::Error::Unsupported(
+            metal2vulkan_runtime::Error::Translation(metal2vulkan::error::Error::Unsupported(
                 unsupported,
             )) => device_gap_of(unsupported),
             // A threadgroup Metal runs and this device's limits for the kernel do not.
-            metal2vulkan_rt::Error::Limit(metal2vulkan_rt::Limit::ThreadgroupThreads {
-                ..
-            }) => Some(error.to_string()),
+            metal2vulkan_runtime::Error::Limit(
+                metal2vulkan_runtime::Limit::ThreadgroupThreads { .. },
+            ) => Some(error.to_string()),
             _ => None,
         };
         Self {

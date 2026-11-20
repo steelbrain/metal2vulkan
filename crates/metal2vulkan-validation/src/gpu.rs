@@ -63,8 +63,8 @@ mod tests {
             concat!(".create_", "instance("),
             concat!(".enumerate_", "physical_devices("),
             concat!(".create_", "device("),
-            // The new runtime's device creation (`metal2vulkan_rt`).
-            concat!("metal2vulkan_rt::Device", "::new("),
+            // The new runtime's device creation (`metal2vulkan_runtime`).
+            concat!("metal2vulkan_runtime::Device", "::new("),
         ];
         let allowed: &[(&str, &str, usize)] = &[
             ("src/candidate/platform/device.rs", opens[2], 1),

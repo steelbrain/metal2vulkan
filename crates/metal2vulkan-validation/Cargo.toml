@@ -30,7 +30,7 @@ metal2vulkan = { path = "../metal2vulkan", features = ["serde", "ash", "cli"] }
 # The AIR front end the product pins exactly: the same crate the product
 # builds, which validation decodes, canonicalizes, and audits AIR through.
 metal2vulkan-air = { path = "../metal2vulkan-air" }
-metal2vulkan-rt = { path = "../metal2vulkan-rt" }
+metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
 metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
 base64 = "0.22"
 libc.workspace = true

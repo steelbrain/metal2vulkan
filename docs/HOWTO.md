@@ -2,7 +2,7 @@
 
 The checklist around the library: the tools each piece needs, caching, failures, isolating a
 compile, host memory a driver refuses, and checking an integration. The API itself is
-[API.md](API.md); the runtime's is [its README](../crates/metal2vulkan-rt/README.md).
+[API.md](API.md); the runtime's is [its README](../crates/metal2vulkan-runtime/README.md).
 
 ## 1. Tools
 
@@ -55,7 +55,7 @@ and `sqrt` with the device's 16-bit instructions, as ANV's and RADV's do. RADV's
 fuses a `float` addition, subtraction, multiply or fused multiply-add into the conversion of its
 result and rounds the exact result once (`DriverWorkaround::HalfConversionFusedWithArithmetic`), so
 a pipeline that rounds such a result to `half` there records `NativeHalfConversion`. On a device
-`Device::from_queries` made (`metal2vulkan-rt`), which reads no driver identity, every device with
+`Device::from_queries` made (`metal2vulkan-runtime`), which reads no driver identity, every device with
 the float controls takes the pair, NVIDIA's included, and every pipeline that rounds through it
 records `NativeHalfConversion`, as a driver's compiler may fold the pair or fuse the operation so.
 A `half` read from memory or from its bits is the device's widening on every device (an
@@ -90,7 +90,7 @@ The translator keeps no cache; it gives you keys and encodings to keep one
 
 The runtime keeps its lowered functions and its pipeline cache in the directory
 `DeviceOptions::pipeline_cache_dir` names, from one device to the next; with none, every boot
-lowers every function and compiles every pipeline cold ([its README](../crates/metal2vulkan-rt/README.md), "The cache
+lowers every function and compiles every pipeline cold ([its README](../crates/metal2vulkan-runtime/README.md), "The cache
 directory").
 
 ## 4. Handle failures
@@ -144,14 +144,14 @@ The runtime imports a no-copy buffer's memory as a block, and the consumer place
 it: host memory by its address (`Device::import_host_memory`) or, on Linux, a dma-buf
 (`Device::import_dma_buf`) or several (`Device::import_dma_bufs`). Which to try first, and what to
 do where they refuse, is the consumer's; every refusal comes before any allocation is attempted,
-with nothing imported ([its README](../crates/metal2vulkan-rt/README.md), "Imported blocks").
+with nothing imported ([its README](../crates/metal2vulkan-runtime/README.md), "Imported blocks").
 
 ## 7. Memory another API writes
 
 A block the consumer exports (an opaque fd or a dma-buf on a Unix host, an NT handle on Windows)
 is the memory another API writes in place, and an exported surface's planes are textures over its
 own exported memory; the contract for each is in
-[the runtime's README](../crates/metal2vulkan-rt/README.md), "Exported blocks" and "Exported
+[the runtime's README](../crates/metal2vulkan-runtime/README.md), "Exported blocks" and "Exported
 surfaces".
 
 ## 8. Check the integration
@@ -191,4 +191,4 @@ suspending with GPU work of its own, at its own power cost, or make such calls f
 afford to block.
 
 A host note: drop the runtime's devices before the process exits; what a device kept to the exit
-meets on NVIDIA's driver is in [the runtime's README](../crates/metal2vulkan-rt/README.md).
+meets on NVIDIA's driver is in [the runtime's README](../crates/metal2vulkan-runtime/README.md).

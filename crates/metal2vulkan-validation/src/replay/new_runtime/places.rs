@@ -8,7 +8,7 @@
 //! before its release and are committed after it (a command buffer released uncommitted runs
 //! nothing, and holds nothing from then).
 
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::BTreeMap;
 use std::ops::Range;
 

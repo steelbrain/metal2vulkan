@@ -1,4 +1,4 @@
-//! The runtime's side: the case vocabulary on `metal2vulkan-rt`'s public API.
+//! The runtime's side: the case vocabulary on `metal2vulkan-runtime`'s public API.
 //!
 //! The vocabulary is ported one family at a time. A call this side does not answer yet answers
 //! [`Failure::unavailable`] with its name, so a case that needs it ends refused, its row naming
@@ -16,10 +16,10 @@
 //! numbered its state words took, as Metal gives an equal one the same ID.
 //!
 //! The runtime announces no degrade notice: where a kernel's answers may differ from Metal's, its
-//! state carries static precision notes ([`metal2vulkan_rt::ComputePipelineState::precision_notes`],
-//! [`metal2vulkan_rt::RenderPipelineState::precision_notes`]), and so do a texture of a
-//! block-compressed format ([`metal2vulkan_rt::Texture::precision_note`]) and a sampler state that
-//! reads an opaque-black border ([`metal2vulkan_rt::SamplerState::precision_note`]). This side
+//! state carries static precision notes ([`metal2vulkan_runtime::ComputePipelineState::precision_notes`],
+//! [`metal2vulkan_runtime::RenderPipelineState::precision_notes`]), and so do a texture of a
+//! block-compressed format ([`metal2vulkan_runtime::Texture::precision_note`]) and a sampler state that
+//! reads an opaque-black border ([`metal2vulkan_runtime::SamplerState::precision_note`]). This side
 //! announces the notes of each state its case dispatched or drew with, and of each texture and
 //! sampler state it made, by the codes the suite's allowances name (`metal2vulkan-degrade-<kind>`).
 
@@ -37,7 +37,7 @@ use crate::transcript::{Negative, Value};
 use ash::vk;
 use metal2vulkan::device::{ApiVersion, DeviceDescription};
 use metal2vulkan::metal::PixelFormat;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{mpsc, Arc, Mutex};
@@ -67,7 +67,7 @@ const HANDLER_FILL: usize = 64;
 
 /// Why the command-buffer facts' queue label and getters are not this side's to answer.
 const THE_CONSUMERS: &str = "a queue's label and a command buffer's device and commandQueue \
-                             never reach the GPU: metal2vulkan-rt leaves them to its consumer";
+                             never reach the GPU: metal2vulkan-runtime leaves them to its consumer";
 
 /// The command buffers a queue of this side's holds at once: `newCommandQueue`'s.
 const QUEUE_COMMAND_BUFFERS: u32 = 64;
@@ -140,7 +140,7 @@ impl RtDevice {
             }
         }
         Err(format!(
-            "no {venues:?} device opens for metal2vulkan-rt: {}",
+            "no {venues:?} device opens for metal2vulkan-runtime: {}",
             refused.join("; ")
         ))
     }
@@ -157,7 +157,7 @@ impl RtDevice {
 
     /// The failure a typed error of the runtime is on this device. A translator refusal that names
     /// capabilities is the venue's lack only where the device offers none of its alternatives;
-    /// where it offers one, the capability is one `metal2vulkan-rt`'s floor leaves off, a typed
+    /// where it offers one, the capability is one `metal2vulkan-runtime`'s floor leaves off, a typed
     /// refusal of the runtime's until a stream uses it, and the failure is the runtime's refusal.
     pub(crate) fn failure(&self, error: &rt::Error) -> Failure {
         let mut failure = Failure::of_rt(error);
@@ -294,7 +294,7 @@ fn venue(instance: &rt::Instance, physical: &rt::PhysicalDevice) -> Venue {
     Venue {
         device: text(&properties.device_name),
         driver: format!(
-            "metal2vulkan-rt on {} {}",
+            "metal2vulkan-runtime on {} {}",
             text(&driver.driver_name),
             text(&driver.driver_info)
         ),
@@ -324,7 +324,7 @@ struct RtHeap {
 fn heap_is_the_consumers() -> Failure {
     Failure::named(
         "TheConsumers",
-        "metal2vulkan-rt keeps no heap object: its consumer places resources in the blocks it takes \
+        "metal2vulkan-runtime keeps no heap object: its consumer places resources in the blocks it takes \
          and implements MTLHeap's calls and getters",
     )
 }
@@ -339,7 +339,7 @@ fn heap_is_the_consumers() -> Failure {
 pub(crate) fn reflection_is_the_consumers() -> Failure {
     Failure::named(
         "TheConsumers",
-        "metal2vulkan-rt builds no pipeline reflection and acts on no MTLPipelineOption \
+        "metal2vulkan-runtime builds no pipeline reflection and acts on no MTLPipelineOption \
          (FailOnBinaryArchiveMiss, ArgumentInfo, BufferTypeInfo, BindingInfo): its consumer builds \
          reflection from the library's AIR",
     )
@@ -561,7 +561,7 @@ fn texture_facts(texture: &rt::Texture) -> crate::buffer_texture::BufferTextureF
     let consumers = || {
         Failure::named(
             "TheConsumers",
-            "metal2vulkan-rt's TextureDescriptor states no cpuCacheMode, hazardTrackingMode or \
+            "metal2vulkan-runtime's TextureDescriptor states no cpuCacheMode, hazardTrackingMode or \
              allowGPUOptimizedContents: its consumer implements them",
         )
         .recorded()
@@ -599,7 +599,7 @@ fn storage_mode(mode: rt::StorageMode) -> u64 {
 fn resource_is_the_consumers() -> Failure {
     Failure::named(
         "TheConsumers",
-        "metal2vulkan-rt keeps no label, device, cpuCacheMode, hazardTrackingMode, resourceOptions, \
+        "metal2vulkan-runtime keeps no label, device, cpuCacheMode, hazardTrackingMode, resourceOptions, \
          heap, heapOffset or isAliasable of a resource: its consumer keeps what it made each with \
          and where it placed it",
     )
@@ -971,7 +971,7 @@ impl Side for RtSide<'_> {
     ) -> Answer<crate::pass_descriptors::PassDescriptorFacts> {
         Err(Failure::named(
             "TheConsumers",
-            "metal2vulkan-rt's RenderPassDescriptor is a value its consumer fills: what Metal's \
+            "metal2vulkan-runtime's RenderPassDescriptor is a value its consumer fills: what Metal's \
              MTLRenderPassDescriptor answers of its fields is the consumer's",
         ))
     }
@@ -1101,7 +1101,7 @@ impl Side for RtSide<'_> {
         Ok(crate::texture_views::ViewFacts {
             parent: Err(Failure::named(
                 "TheConsumers",
-                "metal2vulkan-rt keeps no parentTexture, parentRelativeLevel, \
+                "metal2vulkan-runtime keeps no parentTexture, parentRelativeLevel, \
                  parentRelativeSlice or shareable: its consumer keeps the texture it made a view \
                  of and what it shared",
             )),

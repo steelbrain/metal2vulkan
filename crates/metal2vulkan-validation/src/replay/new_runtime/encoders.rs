@@ -8,7 +8,7 @@ use super::{failed, granule, Held, NewRuntime, Object};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::HashSet;
 
 /// A compute encoder, its buffer and texture slots that hold a skipped object, and whether its

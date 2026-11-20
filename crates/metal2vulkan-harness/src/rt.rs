@@ -1,4 +1,4 @@
-//! The new runtime (`metal2vulkan-rt`) behind the harness's traits.
+//! The new runtime (`metal2vulkan-runtime`) behind the harness's traits.
 //!
 //! The new runtime places a buffer where its consumer says, in a block the consumer took
 //! (`Device::take_block`, `Device::new_buffer`); the harness is that consumer here. It places each
@@ -37,7 +37,7 @@ use crate::plan::{self, Constant, TextureSource};
 use crate::run::OwnReport;
 use crate::{Code, Refused, Result, Size, Storage, Waits};
 use ash::vk;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;

@@ -1,4 +1,4 @@
-//! Running a [`Work`] program on `metal2vulkan-rt`: its resources made in order, its steps encoded
+//! Running a [`Work`] program on `metal2vulkan-runtime`: its resources made in order, its steps encoded
 //! into one blit encoder at a time, its reads answered, each wait bounded.
 //!
 //! The runtime places memory where its consumer says, and this side is the consumer: a buffer
@@ -19,7 +19,7 @@ use crate::texture_query::Storage;
 use crate::work::{Clear, Done, Plane, Rect, Resource, Step, TextureKind, TextureSpec, Work};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::BTreeSet;
 
 /// A typed error of the runtime as the failure it records.

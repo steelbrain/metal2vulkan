@@ -14,7 +14,7 @@ use crate::compute_pass::{
     ComputePass, ComputePassOutcome, ComputeStep, Dispatching, PassResource,
 };
 use crate::transcript::{Negative, Value};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 
 /// A typed error of the runtime as the failure it records.
 fn of_rt(error: rt::Error) -> Failure {
@@ -186,7 +186,7 @@ impl RtSide<'_> {
         self.dispatched.extend(set);
         let dispatch_type = Failure::named(
             "TheConsumers",
-            "an encoder's dispatchType is the argument it was made with: metal2vulkan-rt keeps no \
+            "an encoder's dispatchType is the argument it was made with: metal2vulkan-runtime keeps no \
              getter and leaves it to its consumer",
         )
         .recorded();

@@ -15,7 +15,7 @@ use super::places::Place;
 use super::{failed, granule, NewRuntime};
 use crate::replay::player::PlayError;
 use crate::replay::stream::Call;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 

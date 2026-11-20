@@ -25,7 +25,7 @@ every option.
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
 cargo nextest run -p metal2vulkan-conformance --all-features
 cargo test --workspace --all-features --doc
@@ -62,9 +62,9 @@ CARGO_TARGET_DIR=target/gpuhazards RUSTFLAGS='-Dwarnings --cfg m2v_gpu --cfg m2v
 A site that stops announcing, or any other failing assertion, still compiles: the lint sees none of
 it, and only a run does.
 
-### The validation layer under `metal2vulkan-rt`'s device tests
+### The validation layer under `metal2vulkan-runtime`'s device tests
 
-Every instance `metal2vulkan-rt`'s device tests open runs under `VK_LAYER_KHRONOS_validation`, at
+Every instance `metal2vulkan-runtime`'s device tests open runs under `VK_LAYER_KHRONOS_validation`, at
 one version on every device (1.4.363.0), through one test helper (`src/tests/validation.rs`). The
 product holds none of it: the helper enables the layer for its own test process with the loader's
 and the layer's own variables (`VK_INSTANCE_LAYERS`, and `VK_KHRONOS_VALIDATION_REPORT_FLAGS`
@@ -204,23 +204,23 @@ holds them, then times each GPU in a job of its own.
 
 | Leg | Runs | Built |
 |---|---|---|
-| Each GPU of a Linux node | `metal2vulkan-rt`'s tests and the replay player's stream device tests (`metal2vulkan-validation`'s `replay::rt_replay`) under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`crates/metal2vulkan-harness`) on the runtime (`harness --runtime new`), the leg's suite `harness` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
+| Each GPU of a Linux node | `metal2vulkan-runtime`'s tests and the replay player's stream device tests (`metal2vulkan-validation`'s `replay::rt_replay`) under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`crates/metal2vulkan-harness`) on the runtime (`harness --runtime new`), the leg's suite `harness` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
 | The Windows host's GPU | The same tests (under the validation layer) and harness, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
-| `lavapipe` | The gate's suites and the device tests (`metal2vulkan-rt`'s under the validation layer) in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
+| `lavapipe` | The gate's suites and the device tests (`metal2vulkan-runtime`'s under the validation layer) in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
 | `lint` | The gate's `cargo fmt --all --check`, clippy with `-D warnings` plain, under `--cfg m2v_gpu` and under `--cfg m2v_cpu_icd`, and Rustdoc with `-D warnings`, each its own suite | In place, on the builder, beside its other jobs |
 
 A leg passes when every suite passed and no rule below fails. Its line names the device and
 driver as `vulkaninfo` reported them, the node, the tests passed of those run, the records, the
 base it was compared with and the job.
 
-Every job that runs `metal2vulkan-rt`'s device tests unpacks the validation layer's carry (the
+Every job that runs `metal2vulkan-runtime`'s device tests unpacks the validation layer's carry (the
 config's `validation_layer`, made by `scripts/validation-layer`) in its workspace and points the
 loader at its OS's directory; the leg's note gives the layer's version (`layer`). A job without
 the layer says so there, which is a problem of the leg, and points the loader at no layer, so its
 device tests fail. The harness's timing jobs run without the layer.
 
 Where a job names a Vulkan driver's library in `M2V_DIRECT_DRIVER` (on macOS, Mesa's Mac driver,
-`libvulkan_kosmickrisp.dylib`), `metal2vulkan-rt`'s device tests load it themselves and give it
+`libvulkan_kosmickrisp.dylib`), `metal2vulkan-runtime`'s device tests load it themselves and give it
 to the loader alone through `Instance::with_drivers`, as a consumer that ships its driver does;
 the loader's `VK_DRIVER_FILES` and its own search then go unused, and each test's output says
 `direct driver PATH`. Elsewhere the job's `VK_DRIVER_FILES` chooses the driver.

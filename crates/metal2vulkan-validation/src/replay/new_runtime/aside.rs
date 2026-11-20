@@ -11,7 +11,7 @@
 //! flag plays its read-backs into the CPU's copy, as Metal does.
 
 use super::places::Place;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 

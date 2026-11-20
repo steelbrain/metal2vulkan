@@ -30,7 +30,7 @@ use super::{failed, whole_slices, NewRuntime, Object};
 use crate::replay::args::{refuse, Fields, SURFACE_FACT_KEYS};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::collections::{HashMap, HashSet};
 
 /// The four characters of a pixel format of a surface, big-endian.

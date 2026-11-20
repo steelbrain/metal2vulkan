@@ -1,7 +1,6 @@
-# metal2vulkan-rt
+# metal2vulkan-runtime
 
-The Metal API on Vulkan, with one path for every device. It is unpublished until it takes the
-name `metal2vulkan-runtime`.
+The Metal API on Vulkan, with one path for every device.
 
 Its public API so far: the instance and the device, memory blocks (taken, or imported from the
 consumer's memory) and the buffers in them, the grants of texture and sampler indices, textures,

@@ -8,7 +8,7 @@ use crate::case::{Answer, FragmentFill, FragmentFilled, Handle, Side, StageInput
 use crate::pipeline_facts::ComputeStateSpec;
 use crate::pipeline_limits::{floored, ComputeLimitsSpec, ComputeStateLimits, Creation};
 use crate::transcript::{Negative, Value};
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 
 /// A typed error of the runtime as the failure it records.
 fn of_rt(error: rt::Error) -> crate::case::Failure {

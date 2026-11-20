@@ -325,7 +325,7 @@ impl Case for EtcTextures {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        // Where the device holds the format's block itself, `metal2vulkan-rt` keeps the blocks in
+        // Where the device holds the format's block itself, `metal2vulkan-runtime` keeps the blocks in
         // an image of it and reads the device's decode of them, the static note it announces as
         // `compressed-texel-decode` for every block-compressed texture it makes. A declaration
         // and not a tolerance: no ETC2 or EAC bound is stated, so every texel still compares exactly.

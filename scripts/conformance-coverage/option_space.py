@@ -156,7 +156,7 @@ GENERATED = (
 
 #: The published crates' sources, where a Metal type the tree models by hand is declared.
 BY_HAND = (
-    "crates/metal2vulkan-rt/src",
+    "crates/metal2vulkan-runtime/src",
     "crates/metal2vulkan/src",
     "crates/metal2vulkan-air/src",
 )

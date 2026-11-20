@@ -1,5 +1,5 @@
 //! A buffer argument's offsets are 32-bit under the identity domains, and the runtime makes no
-//! buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so every byte of a bound buffer
+//! buffer longer than 2 GiB (`metal2vulkan_runtime::MAX_BUFFER_LENGTH`), so every byte of a bound buffer
 //! lies within 2^31 bytes of the bind address. On the CPU interpreter, which traps on an address
 //! that lies in no buffer, `ob1_storage_buffer` loads and stores at word indices up to the last
 //! word below 2 GiB through slots whose bytes are two buffers: one at the bind address and one

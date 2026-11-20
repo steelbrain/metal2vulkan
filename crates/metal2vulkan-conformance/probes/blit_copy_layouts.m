@@ -1,4 +1,4 @@
-// Plain Metal's bytes for the runtime's blit copy tests (metal2vulkan-rt, tests::blit): the
+// Plain Metal's bytes for the runtime's blit copy tests (metal2vulkan-runtime, tests::blit): the
 // same textures, buffers, byte patterns and copies, each destination read back whole and printed
 // as its length and FNV-1a 64 hash, which the tests hold their own results to.
 //

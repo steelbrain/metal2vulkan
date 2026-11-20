@@ -727,7 +727,7 @@ MTLArgument.h	MTLTensorBinding	property	dimensions		M			tensors (`MTLTensor`)	L	
 MTLArgument.h	MTLTensorBinding	property	auxiliaryPlanes		M			tensors (`MTLTensor`)	L	tensor
 MTLArgumentEncoder.h	MTLArgumentEncoder	protocol	MTLArgumentEncoder		M			argument encoders	M	argument-encoders
 MTLArgumentEncoder.h	MTLArgumentEncoder	property	device		M			argument encoders	M	argument-encoders
-MTLArgumentEncoder.h	MTLArgumentEncoder	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLArgumentEncoder.h	MTLArgumentEncoder	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLArgumentEncoder.h	MTLArgumentEncoder	property	encodedLength		M			argument encoders	M	argument-encoders
 MTLArgumentEncoder.h	MTLArgumentEncoder	property	alignment		M			argument encoders	M	argument-encoders
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setArgumentBuffer:offset:		M			argument encoders	M	argument-encoders
@@ -753,17 +753,17 @@ MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIntersectionFunctionTable:atIn
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIntersectionFunctionTables:withRange:		O			ray tracing		
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setDepthStencilState:atIndex:		M			a depth/stencil state in an argument buffer, which indirect render commands read	M	icb-depth-stencil
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setDepthStencilStates:withRange:		M			a depth/stencil state in an argument buffer, which indirect render commands read	M	icb-depth-stencil
-MTLBinaryArchive.h	MTLBinaryArchiveDescriptor	class	MTLBinaryArchiveDescriptor		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLBinaryArchive.h	MTLBinaryArchiveDescriptor	property	url		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLBinaryArchive.h	MTLBinaryArchive	protocol	MTLBinaryArchive		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLBinaryArchive.h	MTLBinaryArchive	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLBinaryArchive.h	MTLBinaryArchive	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLBinaryArchive.h	MTLBinaryArchive	method	addComputePipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLBinaryArchive.h	MTLBinaryArchive	method	addRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLBinaryArchive.h	MTLBinaryArchive	method	addTileRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLBinaryArchive.h	MTLBinaryArchive	method	addMeshRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchiveDescriptor	class	MTLBinaryArchiveDescriptor		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchiveDescriptor	property	url		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	protocol	MTLBinaryArchive		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	property	device		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	addComputePipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	addRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	addTileRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	addMeshRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLBinaryArchive.h	MTLBinaryArchive	method	addLibraryWithDescriptor:error:		M			a library's functions in a binary archive (macOS 15)	S	archive
-MTLBinaryArchive.h	MTLBinaryArchive	method	serializeToURL:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	serializeToURL:error:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLBinaryArchive.h	MTLBinaryArchive	method	addFunctionWithDescriptor:library:error:		M			one function in a binary archive	S	archive
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	protocol	MTLBlitCommandEncoder		I	runtime	BlitCommandEncoder			
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	synchronizeResource:	yes	I	runtime	BlitCommandEncoder::synchronize_resource			
@@ -782,10 +782,10 @@ MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	updateFence:		I	runtime	Bli
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	waitForFence:		I	runtime	BlitCommandEncoder::wait_for_fence			
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	getTextureAccessCounters:region:mipLevel:slice:resetCounters:countersBuffer:countersBufferOffset:	yes	M			not scheduled: Metal's counts are its texture hardware's units, nondeterministic, and differ between an M3 Max and an M4, so no exact answer exists	L	access-counters
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resetTextureAccessCounters:region:mipLevel:slice:	yes	M			as `getTextureAccessCounters:...`	L	access-counters
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:		M			an encoder call metal2vulkan-rt does not build	S	encoder-calls
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:slice:level:		M			an encoder call metal2vulkan-rt does not build	S	encoder-calls
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:		M			an encoder call metal2vulkan-rt does not build	S	encoder-calls
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:slice:level:		M			an encoder call metal2vulkan-rt does not build	S	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:		M			an encoder call metal2vulkan-runtime does not build	S	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:slice:level:		M			an encoder call metal2vulkan-runtime does not build	S	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:		M			an encoder call metal2vulkan-runtime does not build	S	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:slice:level:		M			an encoder call metal2vulkan-runtime does not build	S	encoder-calls
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resetCommandsInBuffer:withRange:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeIndirectCommandBuffer:withRange:		M			indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`)	L	icb
@@ -849,11 +849,11 @@ MTLCommandBuffer.h	MTLCommandBufferEncoderInfo	property	label		M			encoder execu
 MTLCommandBuffer.h	MTLCommandBufferEncoderInfo	property	debugSignposts		M			encoder execution status	M	cmdbuf
 MTLCommandBuffer.h	MTLCommandBufferEncoderInfo	property	errorState		M			encoder execution status	M	cmdbuf
 MTLCommandBuffer.h	MTLCommandBuffer	protocol	MTLCommandBuffer		I	runtime	CommandBuffer			
-MTLCommandBuffer.h	MTLCommandBuffer	property	device		M			a query metal2vulkan-rt does not answer	S	queries
-MTLCommandBuffer.h	MTLCommandBuffer	property	commandQueue		M			a query metal2vulkan-rt does not answer	S	queries
+MTLCommandBuffer.h	MTLCommandBuffer	property	device		M			a query metal2vulkan-runtime does not answer	S	queries
+MTLCommandBuffer.h	MTLCommandBuffer	property	commandQueue		M			a query metal2vulkan-runtime does not answer	S	queries
 MTLCommandBuffer.h	MTLCommandBuffer	property	retainedReferences		M			YES for every runtime command buffer (it retains what it uses)	S	cmdbuf
 MTLCommandBuffer.h	MTLCommandBuffer	property	errorOptions		M			encoder execution status (`MTLCommandBufferErrorOptionEncoderExecutionStatus`): which encoder faulted, in the error's `encoderInfos`	M	cmdbuf
-MTLCommandBuffer.h	MTLCommandBuffer	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLCommandBuffer.h	MTLCommandBuffer	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLCommandBuffer.h	MTLCommandBuffer	property	kernelStartTime		I	runtime	CommandBuffer::kernel_start_time			
 MTLCommandBuffer.h	MTLCommandBuffer	property	kernelEndTime		I	runtime	CommandBuffer::kernel_end_time			
 MTLCommandBuffer.h	MTLCommandBuffer	property	logs		M			shader logging	M	logging
@@ -889,14 +889,14 @@ MTLCommandBuffer.h	MTLCommandBuffer	method	useResidencySet:		M			residency sets	
 MTLCommandBuffer.h	MTLCommandBuffer	method	useResidencySets:count:		M			residency sets	M	residency
 MTLCommandEncoder.h	MTLCommandEncoder	protocol	MTLCommandEncoder		I	runtime	ComputeCommandEncoder			
 MTLCommandEncoder.h	MTLCommandEncoder	property	device		M			every encoder's device	S	labels
-MTLCommandEncoder.h	MTLCommandEncoder	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLCommandEncoder.h	MTLCommandEncoder	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLCommandEncoder.h	MTLCommandEncoder	method	endEncoding		I	runtime	ComputeCommandEncoder::end_encoding	each encoder's `end_encoding(self)`		
 MTLCommandEncoder.h	MTLCommandEncoder	method	barrierAfterQueueStages:beforeStages:		M			a barrier between this encoder's stages and earlier work of the queue (macOS 26)	M	barriers
 MTLCommandEncoder.h	MTLCommandEncoder	method	insertDebugSignpost:		M			debug signposts: no effect on results	S	labels
 MTLCommandEncoder.h	MTLCommandEncoder	method	pushDebugGroup:		M			debug groups: no effect on results	S	labels
 MTLCommandEncoder.h	MTLCommandEncoder	method	popDebugGroup		M			debug groups	S	labels
 MTLCommandQueue.h	MTLCommandQueue	protocol	MTLCommandQueue		I	runtime	CommandQueue			
-MTLCommandQueue.h	MTLCommandQueue	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLCommandQueue.h	MTLCommandQueue	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLCommandQueue.h	MTLCommandQueue	property	device		I	runtime	CommandQueue::device			
 MTLCommandQueue.h	MTLCommandQueue	method	commandBuffer		I	runtime	CommandQueue::command_buffer			
 MTLCommandQueue.h	MTLCommandQueue	method	commandBufferWithDescriptor:		M			the descriptor's retained references and error options (log state is shader logging's)	S	cmdbuf
@@ -910,7 +910,7 @@ MTLCommandQueue.h	MTLCommandQueueDescriptor	class	MTLCommandQueueDescriptor		M		
 MTLCommandQueue.h	MTLCommandQueueDescriptor	property	maxCommandBufferCount		M			as `new_command_queue_with_max_command_buffer_count` takes it	S	queue
 MTLCommandQueue.h	MTLCommandQueueDescriptor	property	logState		M			shader logging	M	logging
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	protocol	MTLComputeCommandEncoder		I	runtime	ComputeCommandEncoder			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	property	dispatchType		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	property	dispatchType		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setComputePipelineState:		I	runtime	ComputeCommandEncoder::set_compute_pipeline_state			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBytes:length:atIndex:		I	runtime	ComputeCommandEncoder::set_bytes	copied at the call; more than 4096 bytes refused		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffer:offset:atIndex:		I	runtime	ComputeCommandEncoder::set_buffer			
@@ -964,7 +964,7 @@ MTLComputePipeline.h	MTLComputePipelineReflection	class	MTLComputePipelineReflec
 MTLComputePipeline.h	MTLComputePipelineReflection	property	bindings		I	translator	ComputePipelineReflection::bindings			
 MTLComputePipeline.h	MTLComputePipelineReflection	property	arguments	yes	I	translator	ComputePipelineReflection::bindings	deprecated for `bindings`		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	class	MTLComputePipelineDescriptor		I	translator	ComputePipelineDescriptor			
-MTLComputePipeline.h	MTLComputePipelineDescriptor	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLComputePipeline.h	MTLComputePipelineDescriptor	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	computeFunction		I	translator	ComputePipelineDescriptor.kernel			
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	threadGroupSizeIsMultipleOfThreadExecutionWidth		I	translator	ComputePipelineDescriptor.threadgroup_size_is_multiple_of_execution_width			
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	maxTotalThreadsPerThreadgroup		I	translator	ComputePipelineDescriptor.max_total_threads_per_threadgroup			
@@ -973,7 +973,7 @@ MTLComputePipeline.h	MTLComputePipelineDescriptor	property	buffers		I	translator
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	supportIndirectCommandBuffers		I	translator	ComputePipelineDescriptor.support_indirect_command_buffers			
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	insertLibraries	yes	I	translator	FunctionDescriptor.libraries	the deprecated name of `preloadedLibraries`		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	preloadedLibraries		I	translator	FunctionDescriptor.libraries			
-MTLComputePipeline.h	MTLComputePipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLComputePipeline.h	MTLComputePipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	method	reset		I	translator	ComputePipelineDescriptor::new	a plain value: assign a new one		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	linkedFunctions		I	translator	FunctionDescriptor.linked			
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	supportAddingBinaryFunctions		I	translator	ComputePipelineDescriptor.support_adding_binary_functions			
@@ -984,18 +984,18 @@ MTLComputePipeline.h	MTLComputePipelineDescriptor	property	forwardProgressUsage	
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	contentionRelief		M			persistent kernels (macOS 27): forward progress and contention hints, unmeasured	L	persistent
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	optimizeForPersistentKernel		M			persistent kernels (macOS 27): forward progress and contention hints, unmeasured	L	persistent
 MTLComputePipeline.h	MTLComputePipelineState	protocol	MTLComputePipelineState		I	runtime	ComputePipelineState			
-MTLComputePipeline.h	MTLComputePipelineState	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLComputePipeline.h	MTLComputePipelineState	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLComputePipeline.h	MTLComputePipelineState	property	reflection		M			the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler	S	reflection
 MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithName:		M			a handle by function name	S	function-handles
 MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithBinaryFunction:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLComputePipeline.h	MTLComputePipelineState	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLComputePipeline.h	MTLComputePipelineState	property	device		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLComputePipeline.h	MTLComputePipelineState	property	maxTotalThreadsPerThreadgroup		I	runtime	ComputePipelineState::max_total_threads_per_threadgroup			
 MTLComputePipeline.h	MTLComputePipelineState	property	threadExecutionWidth		I	runtime	ComputePipelineState::thread_execution_width			
 MTLComputePipeline.h	MTLComputePipelineState	property	staticThreadgroupMemoryLength		I	runtime	ComputePipelineState::static_threadgroup_memory_length			
 MTLComputePipeline.h	MTLComputePipelineState	method	imageblockMemoryLengthForDimensions:		I	runtime	ComputePipelineState::imageblock_memory_length_for_dimensions			
 MTLComputePipeline.h	MTLComputePipelineState	property	supportIndirectCommandBuffers		I	runtime	ComputePipelineState::support_indirect_command_buffers			
-MTLComputePipeline.h	MTLComputePipelineState	property	gpuResourceID		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLComputePipeline.h	MTLComputePipelineState	property	gpuResourceID		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithFunction:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithAdditionalBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLComputePipeline.h	MTLComputePipelineState	method	newVisibleFunctionTableWithDescriptor:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
@@ -1034,8 +1034,8 @@ MTLDepthStencil.h	MTLDepthStencilDescriptor	property	backFaceStencil		I	translat
 MTLDepthStencil.h	MTLDepthStencilDescriptor	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
 MTLDepthStencil.h	MTLDepthStencilState	protocol	MTLDepthStencilState		I	runtime	DepthStencilState			
 MTLDepthStencil.h	MTLDepthStencilState	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
-MTLDepthStencil.h	MTLDepthStencilState	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLDepthStencil.h	MTLDepthStencilState	property	gpuResourceID		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDepthStencil.h	MTLDepthStencilState	property	device		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLDepthStencil.h	MTLDepthStencilState	property	gpuResourceID		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLArgumentDescriptor	class	MTLArgumentDescriptor		I	translator	ArgumentDescriptor			
 MTLDevice.h	MTLArgumentDescriptor	class method	argumentDescriptor		I	translator	ArgumentDescriptor::new	a plain value		
 MTLDevice.h	MTLArgumentDescriptor	property	dataType		I	translator	ArgumentDescriptor.data_type			
@@ -1047,10 +1047,10 @@ MTLDevice.h	MTLArgumentDescriptor	property	constantBlockAlignment		I	translator	
 MTLDevice.h	MTLArchitecture	class	MTLArchitecture		M			Apple's GPU architecture name; a Vulkan device has none	S	queries
 MTLDevice.h	MTLArchitecture	property	name		M			Apple's GPU architecture name; a Vulkan device has none	S	queries
 MTLDevice.h	MTLDevice	protocol	MTLDevice		I	runtime	Device			
-MTLDevice.h	MTLDevice	property	name		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLDevice.h	MTLDevice	property	registryID		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	name		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLDevice.h	MTLDevice	property	registryID		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	property	architecture		M			Apple's GPU architecture name (`MTLArchitecture`); a Vulkan device has no Apple architecture, so only its driver's name could answer	S	queries
-MTLDevice.h	MTLDevice	property	maxThreadsPerThreadgroup		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	maxThreadsPerThreadgroup		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	property	lowPower	yes	M			deprecated multi-GPU query; Apple silicon answers NO	S	queries
 MTLDevice.h	MTLDevice	property	headless	yes	M			deprecated multi-GPU query; Apple silicon answers NO	S	queries
 MTLDevice.h	MTLDevice	property	removable	yes	M			deprecated multi-GPU query; Apple silicon answers NO	S	queries
@@ -1059,15 +1059,15 @@ MTLDevice.h	MTLDevice	property	recommendedMaxWorkingSetSize		M			the device-loca
 MTLDevice.h	MTLDevice	property	location	yes	M			deprecated multi-GPU query; Apple silicon answers built-in	S	queries
 MTLDevice.h	MTLDevice	property	locationNumber	yes	M			deprecated multi-GPU query; Apple silicon answers 0	S	queries
 MTLDevice.h	MTLDevice	property	maxTransferRate	yes	M			deprecated multi-GPU query; Apple silicon answers 0	S	queries
-MTLDevice.h	MTLDevice	property	depth24Stencil8PixelFormatSupported	yes	M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	depth24Stencil8PixelFormatSupported	yes	M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	property	readWriteTextureSupport		I	runtime	Device::read_write_texture_support			
 MTLDevice.h	MTLDevice	property	argumentBuffersSupport		I	runtime	Device::argument_buffers_support			
-MTLDevice.h	MTLDevice	property	rasterOrderGroupsSupported		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLDevice.h	MTLDevice	property	supports32BitFloatFiltering		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLDevice.h	MTLDevice	property	supports32BitMSAA		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	rasterOrderGroupsSupported		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLDevice.h	MTLDevice	property	supports32BitFloatFiltering		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLDevice.h	MTLDevice	property	supports32BitMSAA		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	property	supportsQueryTextureLOD		M			capability query	S	queries
 MTLDevice.h	MTLDevice	property	supportsBCTextureCompression		M			capability query	S	queries
-MTLDevice.h	MTLDevice	property	supportsPullModelInterpolation		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	supportsPullModelInterpolation		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	property	barycentricCoordsSupported	yes	M			capability query (deprecated name of the next)	S	queries
 MTLDevice.h	MTLDevice	property	supportsShaderBarycentricCoordinates		M			capability query	S	queries
 MTLDevice.h	MTLDevice	property	currentAllocatedSize		M			the runtime's sub-allocator knows the total	S	queries
@@ -1077,7 +1077,7 @@ MTLDevice.h	MTLDevice	method	newCommandQueueWithMaxCommandBufferCount:		I	runtim
 MTLDevice.h	MTLDevice	method	newCommandQueueWithDescriptor:		M			the descriptor form of `new_command_queue_with_max_command_buffer_count`	S	queue
 MTLDevice.h	MTLDevice	method	heapTextureSizeAndAlignWithDescriptor:		I	runtime	Device::heap_texture_size_and_align			
 MTLDevice.h	MTLDevice	method	heapBufferSizeAndAlignWithLength:options:		I	runtime	Device::heap_buffer_size_and_align			
-MTLDevice.h	MTLDevice	method	newHeapWithDescriptor:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLDevice.h	MTLDevice	method	newHeapWithDescriptor:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLDevice.h	MTLDevice	method	newBufferWithLength:options:		I	runtime	Device::new_buffer			
 MTLDevice.h	MTLDevice	method	newBufferWithBytes:length:options:		M			a buffer made with bytes; Managed: `Device::new_managed_buffer`	S	buffers
 MTLDevice.h	MTLDevice	method	newBufferWithBytesNoCopy:length:options:deallocator:		I	runtime	Device::import_host_memory, Device::new_buffer	a block over the bytes, and a buffer in it; Managed: Device::new_managed_buffer		
@@ -1099,26 +1099,26 @@ MTLDevice.h	MTLDevice	method	newLibraryWithStitchedDescriptor:completionHandler:
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:error:		I	runtime	Device::new_render_pipeline_state			
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:options:reflection:error:		I	runtime	Device::new_render_pipeline_state	without reflection, which the consumer builds		
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:completionHandler:		I	runtime	Device::new_render_pipeline_state	handler form: the call returns what the handler receives		
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:options:completionHandler:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:error:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:options:reflection:error:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:completionHandler:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:options:completionHandler:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:options:completionHandler:		M			a pipeline creation form metal2vulkan-runtime does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:error:		M			a pipeline creation form metal2vulkan-runtime does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:options:reflection:error:		M			a pipeline creation form metal2vulkan-runtime does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:completionHandler:		M			a pipeline creation form metal2vulkan-runtime does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:options:completionHandler:		M			a pipeline creation form metal2vulkan-runtime does not take	S	pipelines
 MTLDevice.h	MTLDevice	method	newComputePipelineStateWithDescriptor:options:reflection:error:		I	runtime	Device::new_compute_pipeline_state	without reflection, which the consumer builds		
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithDescriptor:options:completionHandler:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithDescriptor:options:completionHandler:		M			a pipeline creation form metal2vulkan-runtime does not take	S	pipelines
 MTLDevice.h	MTLDevice	method	newFence		I	runtime	Device::new_fence			
 MTLDevice.h	MTLDevice	method	supportsFeatureSet:	yes	M			deprecated feature sets; would answer from the family rows	S	queries
-MTLDevice.h	MTLDevice	method	supportsFamily:		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	method	supportsFamily:		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	method	supportsTextureSampleCount:		I	runtime	Device::supports_texture_sample_count			
 MTLDevice.h	MTLDevice	method	minimumLinearTextureAlignmentForPixelFormat:		I	runtime	Device::minimum_linear_texture_alignment			
 MTLDevice.h	MTLDevice	method	minimumTextureBufferAlignmentForPixelFormat:		M			a texture buffer's offset alignment; a texture buffer is refused (`Gap::TextureBuffer`)	S	queries
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:reflection:error:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:completionHandler:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:reflection:error:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:completionHandler:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLDevice.h	MTLDevice	property	maxThreadgroupMemoryLength		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLDevice.h	MTLDevice	property	maxArgumentBufferSamplerCount		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLDevice.h	MTLDevice	property	programmableSamplePositionsSupported		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:reflection:error:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:completionHandler:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:reflection:error:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:completionHandler:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLDevice.h	MTLDevice	property	maxThreadgroupMemoryLength		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLDevice.h	MTLDevice	property	maxArgumentBufferSamplerCount		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLDevice.h	MTLDevice	property	programmableSamplePositionsSupported		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	method	getDefaultSamplePositions:count:		M			the standard positions a pass without `sample_positions` rasterizes at	S	queries
 MTLDevice.h	MTLDevice	method	newArgumentEncoderWithArguments:		M			argument encoders	M	argument-encoders
 MTLDevice.h	MTLDevice	method	supportsRasterizationRateMapWithLayerCount:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
@@ -1135,24 +1135,24 @@ MTLDevice.h	MTLDevice	method	newIOCommandQueueWithDescriptor:error:		M			fast re
 MTLDevice.h	MTLDevice	method	newIOHandleWithURL:compressionMethod:error:	yes	M			fast resource loading	L	io
 MTLDevice.h	MTLDevice	method	newIOFileHandleWithURL:error:		M			fast resource loading	L	io
 MTLDevice.h	MTLDevice	method	newIOFileHandleWithURL:compressionMethod:error:		M			fast resource loading	L	io
-MTLDevice.h	MTLDevice	method	sparseTileSizeWithTextureType:pixelFormat:sampleCount:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLDevice.h	MTLDevice	property	sparseTileSizeInBytes		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLDevice.h	MTLDevice	method	convertSparsePixelRegions:toTileRegions:withTileSize:alignmentMode:numRegions:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLDevice.h	MTLDevice	method	convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLDevice.h	MTLDevice	method	sparseTileSizeInBytesForSparsePageSize:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLDevice.h	MTLDevice	method	sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLDevice.h	MTLDevice	property	maxBufferLength		O			the consumer's: it states one no larger than `MAX_BUFFER_LENGTH` (metal2vulkan-rt's README, Memory blocks and buffers)		
+MTLDevice.h	MTLDevice	method	sparseTileSizeWithTextureType:pixelFormat:sampleCount:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLDevice.h	MTLDevice	property	sparseTileSizeInBytes		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLDevice.h	MTLDevice	method	convertSparsePixelRegions:toTileRegions:withTileSize:alignmentMode:numRegions:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLDevice.h	MTLDevice	method	convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLDevice.h	MTLDevice	method	sparseTileSizeInBytesForSparsePageSize:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLDevice.h	MTLDevice	method	sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLDevice.h	MTLDevice	property	maxBufferLength		O			the consumer's: it states one no larger than `MAX_BUFFER_LENGTH` (metal2vulkan-runtime's README, Memory blocks and buffers)		
 MTLDevice.h	MTLDevice	property	counterSets		M			counter sets; the runtime samples none, so an empty list would be its answer	S	queries
 MTLDevice.h	MTLDevice	method	newCounterSampleBufferWithDescriptor:error:		M			counter sample buffers	M	counters
 MTLDevice.h	MTLDevice	method	sampleTimestamps:gpuTimestamp:		M			a CPU and GPU timestamp pair in the time base of `CommandBuffer::gpu_start_time`	S	queries
 MTLDevice.h	MTLDevice	method	newArgumentEncoderWithBufferBinding:		M			argument encoders	M	argument-encoders
 MTLDevice.h	MTLDevice	method	supportsCounterSampling:		M			the runtime samples no counters, so NO would be its answer	S	queries
-MTLDevice.h	MTLDevice	method	supportsVertexAmplificationCount:		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	method	supportsVertexAmplificationCount:		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLDevice.h	MTLDevice	property	supportsDynamicLibraries		M			capability query	S	queries
 MTLDevice.h	MTLDevice	property	supportsRenderDynamicLibraries		M			capability query	S	queries
 MTLDevice.h	MTLDevice	method	newDynamicLibrary:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLDevice.h	MTLDevice	method	newDynamicLibraryWithURL:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLDevice.h	MTLDevice	method	newBinaryArchiveWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLDevice.h	MTLDevice	method	newBinaryArchiveWithDescriptor:error:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLDevice.h	MTLDevice	property	supportsPlacementSparse		M			capability query; the runtime makes no placement-sparse buffers, so NO	S	queries
 MTLDevice.h	MTLDevice	property	supportsRaytracing		M			capability query: the runtime builds no ray tracing, so NO is its answer (the query, not ray tracing)	S	queries
 MTLDevice.h	MTLDevice	method	accelerationStructureSizesWithDescriptor:		O			ray tracing		
@@ -1201,13 +1201,13 @@ MTLDrawable.h	MTLDrawable	method	addPresentedHandler:		O			presentation: no `CAM
 MTLDrawable.h	MTLDrawable	property	presentedTime		O			presentation: no `CAMetalLayer` or drawables; the consumer presents the Vulkan image		
 MTLDrawable.h	MTLDrawable	property	drawableID		O			presentation: no `CAMetalLayer` or drawables; the consumer presents the Vulkan image		
 MTLDynamicLibrary.h	MTLDynamicLibrary	protocol	MTLDynamicLibrary		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
-MTLDynamicLibrary.h	MTLDynamicLibrary	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLDynamicLibrary.h	MTLDynamicLibrary	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLDynamicLibrary.h	MTLDynamicLibrary	property	device		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLDynamicLibrary.h	MTLDynamicLibrary	property	installName		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLDynamicLibrary.h	MTLDynamicLibrary	method	serializeToURL:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLEvent.h	MTLEvent	protocol	MTLEvent		I	runtime	Event			
 MTLEvent.h	MTLEvent	property	device		I	runtime	Event::device			
-MTLEvent.h	MTLEvent	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLEvent.h	MTLEvent	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLEvent.h	MTLSharedEventListener	class	MTLSharedEventListener		M			the shared event listener	S	events
 MTLEvent.h	MTLSharedEventListener	method	init		M			the shared event listener	S	events
 MTLEvent.h	MTLSharedEventListener	method	initWithDispatchQueue:		O			a GCD dispatch queue is macOS's: the listener runs its own thread		
@@ -1219,10 +1219,10 @@ MTLEvent.h	MTLSharedEvent	method	newSharedEventHandle		M			texture and event han
 MTLEvent.h	MTLSharedEvent	method	waitUntilSignaledValue:timeoutMS:		I	runtime	SharedEvent::wait_until_signaled_value			
 MTLEvent.h	MTLSharedEvent	property	signaledValue		I	runtime	SharedEvent::signaled_value			
 MTLEvent.h	MTLSharedEventHandle	class	MTLSharedEventHandle		M			texture and event handles shared across processes	M	sharing
-MTLEvent.h	MTLSharedEventHandle	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLEvent.h	MTLSharedEventHandle	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLFence.h	MTLFence	protocol	MTLFence		I	runtime	Fence			
-MTLFence.h	MTLFence	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLFence.h	MTLFence	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLFence.h	MTLFence	property	device		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLFence.h	MTLFence	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLFunctionConstantValues.h	MTLFunctionConstantValues	class	MTLFunctionConstantValues		I	translator	FunctionConstantValues			
 MTLFunctionConstantValues.h	MTLFunctionConstantValues	method	setConstantValue:type:atIndex:		I	translator	FunctionConstantValues::with_index			
 MTLFunctionConstantValues.h	MTLFunctionConstantValues	method	setConstantValues:type:withRange:		I	translator	FunctionConstantValues::with_index	one call an index of the range		
@@ -1274,30 +1274,30 @@ MTLFunctionStitching.h	MTLStitchedLibraryDescriptor	property	functionGraphs		M		
 MTLFunctionStitching.h	MTLStitchedLibraryDescriptor	property	functions		M			function stitching	L	stitching
 MTLFunctionStitching.h	MTLStitchedLibraryDescriptor	property	binaryArchives		M			function stitching	L	stitching
 MTLFunctionStitching.h	MTLStitchedLibraryDescriptor	property	options		M			function stitching	L	stitching
-MTLHeap.h	MTLHeapDescriptor	class	MTLHeapDescriptor		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeapDescriptor	property	size		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeapDescriptor	property	storageMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeapDescriptor	property	cpuCacheMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeapDescriptor	property	sparsePageSize		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeapDescriptor	property	hazardTrackingMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeapDescriptor	property	resourceOptions		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeapDescriptor	property	type		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	class	MTLHeapDescriptor		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	size		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	storageMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	cpuCacheMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	sparsePageSize		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	hazardTrackingMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	resourceOptions		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	type		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLHeap.h	MTLHeapDescriptor	property	maxCompatiblePlacementSparsePageSize		M			placement sparse heaps' largest page size	S	sparse
-MTLHeap.h	MTLHeap	protocol	MTLHeap		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	storageMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	cpuCacheMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	hazardTrackingMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	resourceOptions		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	size		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	usedSize		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	currentAllocatedSize		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	method	maxAvailableSizeWithAlignment:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	method	newBufferWithLength:options:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	method	newTextureWithDescriptor:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	method	setPurgeableState:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLHeap.h	MTLHeap	property	type		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	protocol	MTLHeap		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	device		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	storageMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	cpuCacheMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	hazardTrackingMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	resourceOptions		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	size		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	usedSize		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	currentAllocatedSize		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	maxAvailableSizeWithAlignment:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	newBufferWithLength:options:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	newTextureWithDescriptor:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	setPurgeableState:		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	type		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLHeap.h	MTLHeap	method	newBufferWithLength:options:offset:		I	runtime	Device::new_heap_buffer	a heap is a range of a block the consumer took (HeapRange)		
 MTLHeap.h	MTLHeap	method	newTextureWithDescriptor:offset:		I	runtime	Device::new_heap_texture	a heap is a range of a block the consumer took (HeapRange)		
 MTLHeap.h	MTLHeap	method	newAccelerationStructureWithSize:		O			ray tracing		
@@ -1441,7 +1441,7 @@ MTLLibrary.h	MTLFunctionConstant	property	index		I	translator	FunctionConstant::
 MTLLibrary.h	MTLFunctionConstant	property	required		I	translator	FunctionConstant::is_required			
 MTLLibrary.h	MTLFunction	protocol	MTLFunction		I	translator	Function			
 MTLLibrary.h	MTLFunction	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
-MTLLibrary.h	MTLFunction	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLLibrary.h	MTLFunction	property	device		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLLibrary.h	MTLFunction	property	functionType		I	translator	Function::properties, FunctionProperties::function_type			
 MTLLibrary.h	MTLFunction	property	patchType		I	translator	Function::properties, FunctionProperties::patch_type			
 MTLLibrary.h	MTLFunction	property	patchControlPointCount		I	translator	Function::properties, FunctionProperties::patch_control_point_count			
@@ -1474,7 +1474,7 @@ MTLLibrary.h	MTLFunctionReflection	property	bindings		I	translator	FunctionRefle
 MTLLibrary.h	MTLFunctionReflection	property	userAnnotation		I	translator	FunctionReflection::user_annotation			
 MTLLibrary.h	MTLLibrary	protocol	MTLLibrary		I	translator	Library			
 MTLLibrary.h	MTLLibrary	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
-MTLLibrary.h	MTLLibrary	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLLibrary.h	MTLLibrary	property	device		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLLibrary.h	MTLLibrary	method	newFunctionWithName:		I	translator	Library::function			
 MTLLibrary.h	MTLLibrary	method	newFunctionWithName:constantValues:error:		I	translator	Library::function, FunctionDescriptor.constants	the function with its constant values, in its stage's descriptor		
 MTLLibrary.h	MTLLibrary	method	newFunctionWithName:constantValues:completionHandler:		I	translator	Library::function, FunctionDescriptor.constants	the function with its constant values, in its stage's descriptor		
@@ -1539,7 +1539,7 @@ MTLRasterizationRate.h	MTLRasterizationRateMapDescriptor	property	label		I	trans
 MTLRasterizationRate.h	MTLRasterizationRateMapDescriptor	property	layerCount		I	translator	RateMapDescriptor.layers			
 MTLRasterizationRate.h	MTLRasterizationRateMap	protocol	MTLRasterizationRateMap		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
 MTLRasterizationRate.h	MTLRasterizationRateMap	property	device		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
-MTLRasterizationRate.h	MTLRasterizationRateMap	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRasterizationRate.h	MTLRasterizationRateMap	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLRasterizationRate.h	MTLRasterizationRateMap	property	screenSize		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
 MTLRasterizationRate.h	MTLRasterizationRateMap	property	physicalGranularity		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
 MTLRasterizationRate.h	MTLRasterizationRateMap	property	layerCount		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
@@ -1606,30 +1606,30 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setStencilStoreAction:	
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setColorStoreActionOptions:atIndex:	yes	M			store action options, whose one option needs more than one sample	S	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setDepthStoreActionOptions:	yes	M			store action options, whose one option needs more than one sample	S	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setStencilStoreActionOptions:	yes	M			store action options, whose one option needs more than one sample	S	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBytes:length:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBuffer:offset:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBufferOffset:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBuffers:offsets:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectTexture:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectTextures:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerState:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerStates:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectThreadgroupMemoryLength:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBytes:length:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBuffer:offset:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBufferOffset:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBuffers:offsets:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshTexture:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshTextures:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerState:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerStates:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBytes:length:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBuffer:offset:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBufferOffset:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBuffers:offsets:withRange:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectTexture:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectTextures:withRange:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerState:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerStates:withRange:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectThreadgroupMemoryLength:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBytes:length:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBuffer:offset:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBufferOffset:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBuffers:offsets:withRange:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshTexture:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshTextures:withRange:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerState:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerStates:withRange:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:vertexStart:vertexCount:instanceCount:		I	runtime	RenderCommandEncoder::draw_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:vertexStart:vertexCount:		I	runtime	RenderCommandEncoder::draw_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:		I	runtime	RenderCommandEncoder::draw_indexed_primitives			
@@ -1647,24 +1647,24 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPatches:patchStart:
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:		M			indirect draws	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:		M			patches through a control-point index buffer	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:		M			patches through a control-point index buffer, drawn indirectly	M	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileWidth		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileHeight		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBytes:length:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBuffer:offset:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBufferOffset:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBuffers:offsets:withRange:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileTexture:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileTextures:withRange:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:withRange:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileWidth		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileHeight		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBytes:length:atIndex:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBuffer:offset:atIndex:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBufferOffset:atIndex:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBuffers:offsets:withRange:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileTexture:atIndex:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileTextures:withRange:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:atIndex:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:withRange:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileAccelerationStructure:atBufferIndex:		O			ray tracing		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	dispatchThreadsPerTile:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	dispatchThreadsPerTile:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setThreadgroupMemoryLength:offset:atIndex:		M			a render pass's threadgroup memory, which tile functions use	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:	yes	M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:	yes	M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
@@ -1721,8 +1721,8 @@ MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultBuffer		I	runti
 MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetArrayLength		M			layered rendering	M	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	imageblockSampleLength		M			a pass's imageblock memory, which tile functions use	M	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	threadgroupMemoryLength		M			a pass's threadgroup memory, which tile functions use	M	render-pass
-MTLRenderPass.h	MTLRenderPassDescriptor	property	tileWidth		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderPass.h	MTLRenderPassDescriptor	property	tileHeight		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderPass.h	MTLRenderPassDescriptor	property	tileWidth		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderPass.h	MTLRenderPassDescriptor	property	tileHeight		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderPass.h	MTLRenderPassDescriptor	property	defaultRasterSampleCount		M			a pass with no attachment, which is refused (`RenderPassKind::NoAttachment`)	M	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetWidth		I	runtime	RenderPassDescriptor.render_target_width			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetHeight		I	runtime	RenderPassDescriptor.render_target_height			
@@ -1757,7 +1757,7 @@ MTLRenderPipeline.h	MTLRenderPipelineReflection	property	vertexArguments	yes	I	t
 MTLRenderPipeline.h	MTLRenderPipelineReflection	property	fragmentArguments	yes	I	translator	RenderPipelineReflection::fragment_bindings	deprecated for `fragmentBindings`		
 MTLRenderPipeline.h	MTLRenderPipelineReflection	property	tileArguments	yes	I	translator	RenderPipelineReflection::tile_bindings	deprecated for `tileBindings`		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	class	MTLRenderPipelineDescriptor		I	translator	RenderPipelineDescriptor			
-MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexFunction		I	translator	RenderPipelineDescriptor.vertex			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	fragmentFunction		I	translator	RenderPipelineDescriptor.fragment			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexDescriptor		I	translator	RenderPipelineDescriptor.vertex_descriptor			
@@ -1781,7 +1781,7 @@ MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	tessellationOutputWindi
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexBuffers		I	translator	RenderPipelineDescriptor.vertex_buffers			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	fragmentBuffers		I	translator	RenderPipelineDescriptor.fragment_buffers			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	supportIndirectCommandBuffers		I	translator	RenderPipelineDescriptor.support_indirect_command_buffers			
-MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexPreloadedLibraries		I	translator	FunctionDescriptor.libraries	the vertex stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	fragmentPreloadedLibraries		I	translator	FunctionDescriptor.libraries	the fragment stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexLinkedFunctions		I	translator	FunctionDescriptor.linked	the vertex stage's `StageSource::Function`		
@@ -1797,32 +1797,32 @@ MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	vertexAddition
 MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	fragmentAdditionalBinaryFunctions		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	tileAdditionalBinaryFunctions		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	protocol	MTLRenderPipelineState		I	runtime	RenderPipelineState			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLRenderPipeline.h	MTLRenderPipelineState	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLRenderPipeline.h	MTLRenderPipelineState	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLRenderPipeline.h	MTLRenderPipelineState	property	device		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLRenderPipeline.h	MTLRenderPipelineState	property	reflection		M			the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler	S	reflection
 MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithName:stage:		M			a handle by function name	S	function-handles
 MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithBinaryFunction:stage:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineDescriptorForSpecialization		M			pipeline specialization (macOS 26): a descriptor to finish an unspecialized state	M	specialization
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerThreadgroup		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderPipeline.h	MTLRenderPipelineState	property	threadgroupSizeMatchesTileSize		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerThreadgroup		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderPipeline.h	MTLRenderPipelineState	property	threadgroupSizeMatchesTileSize		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderPipeline.h	MTLRenderPipelineState	property	imageblockSampleLength		I	runtime	RenderPipelineState::imageblock_sample_length			
 MTLRenderPipeline.h	MTLRenderPipelineState	method	imageblockMemoryLengthForDimensions:		I	runtime	RenderPipelineState::imageblock_memory_length_for_dimensions			
 MTLRenderPipeline.h	MTLRenderPipelineState	property	supportIndirectCommandBuffers		I	runtime	RenderPipelineState::support_indirect_command_buffers			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerObjectThreadgroup		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerMeshThreadgroup		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderPipeline.h	MTLRenderPipelineState	property	objectThreadExecutionWidth		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderPipeline.h	MTLRenderPipelineState	property	meshThreadExecutionWidth		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadgroupsPerMeshGrid		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderPipeline.h	MTLRenderPipelineState	property	gpuResourceID		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerObjectThreadgroup		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerMeshThreadgroup		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	objectThreadExecutionWidth		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	meshThreadExecutionWidth		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadgroupsPerMeshGrid		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	gpuResourceID		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithFunction:stage:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newVisibleFunctionTableWithDescriptor:stage:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newIntersectionFunctionTableWithDescriptor:stage:		O			ray tracing		
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithAdditionalBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`)	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	property	shaderValidation		M			shader validation (not scheduled)	L	shadervalidation
-MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerTileThreadgroup		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
-MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerObjectThreadgroup		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
-MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerMeshThreadgroup		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerTileThreadgroup		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
+MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerObjectThreadgroup		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerMeshThreadgroup		M			mesh render pipelines; metal2vulkan-runtime makes none	L	mesh
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	class	MTLRenderPipelineColorAttachmentDescriptorArray		I	translator	RenderPipelineDescriptor.color_attachments	an array		
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	method	objectAtIndexedSubscript:		I	translator	RenderPipelineDescriptor.color_attachments			
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	method	setObject:atIndexedSubscript:		I	translator	RenderPipelineDescriptor.color_attachments			
@@ -1832,14 +1832,14 @@ MTLRenderPipeline.h	MTLTileRenderPipelineColorAttachmentDescriptorArray	class	MT
 MTLRenderPipeline.h	MTLTileRenderPipelineColorAttachmentDescriptorArray	method	objectAtIndexedSubscript:		I	translator	TileRenderPipelineDescriptor.color_attachment_formats			
 MTLRenderPipeline.h	MTLTileRenderPipelineColorAttachmentDescriptorArray	method	setObject:atIndexedSubscript:		I	translator	TileRenderPipelineDescriptor.color_attachment_formats			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	class	MTLTileRenderPipelineDescriptor		I	translator	TileRenderPipelineDescriptor			
-MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	tileFunction		I	translator	TileRenderPipelineDescriptor.tile			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	rasterSampleCount		I	translator	TileRenderPipelineDescriptor.raster_sample_count			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	colorAttachments		I	translator	TileRenderPipelineDescriptor.color_attachment_formats			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	threadgroupSizeMatchesTileSize		I	translator	TileRenderPipelineDescriptor.threadgroup_size_matches_tile_size			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	tileBuffers		I	translator	TileRenderPipelineDescriptor.buffers			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	maxTotalThreadsPerThreadgroup		I	translator	TileRenderPipelineDescriptor.max_total_threads_per_threadgroup			
-MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	preloadedLibraries		I	translator	FunctionDescriptor.libraries			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	linkedFunctions		I	translator	FunctionDescriptor.linked			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	supportAddingBinaryFunctions		I	translator	TileRenderPipelineDescriptor.support_adding_binary_functions			
@@ -1848,7 +1848,7 @@ MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	method	reset		I	translator	T
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	shaderValidation		M			shader validation (not scheduled)	L	shadervalidation
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	requiredThreadsPerThreadgroup		I	translator	TileRenderPipelineDescriptor.required_threads_per_threadgroup			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	class	MTLMeshRenderPipelineDescriptor		I	translator	MeshPipelineDescriptor			
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	objectFunction		I	translator	MeshPipelineDescriptor.object			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshFunction		I	translator	MeshPipelineDescriptor.mesh			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	fragmentFunction		I	translator	MeshPipelineDescriptor.fragment			
@@ -1870,7 +1870,7 @@ MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	colorAttachments		I
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	depthAttachmentPixelFormat		I	translator	MeshPipelineDescriptor.depth_format			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	stencilAttachmentPixelFormat		I	translator	MeshPipelineDescriptor.stencil_format			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	supportIndirectCommandBuffers		I	translator	MeshPipelineDescriptor.support_indirect_command_buffers			
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	objectLinkedFunctions		I	translator	FunctionDescriptor.linked	the object stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshLinkedFunctions		I	translator	FunctionDescriptor.linked	the mesh stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	fragmentLinkedFunctions		I	translator	FunctionDescriptor.linked	the fragment stage's `StageSource::Function`		
@@ -1897,18 +1897,18 @@ MTLResidencySet.h	MTLResidencySet	property	allAllocations		M			residency sets	M	
 MTLResidencySet.h	MTLResidencySet	property	allocationCount		M			residency sets	M	residency
 MTLResidencySet.h	MTLResidencySet	method	commit		M			residency sets	M	residency
 MTLResource.h	MTLResource	protocol	MTLResource		I	runtime	Buffer			
-MTLResource.h	MTLResource	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLResource.h	MTLResource	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLResource.h	MTLResource	property	cpuCacheMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	label		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	device		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	cpuCacheMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLResource.h	MTLResource	property	storageMode		I	runtime	Texture::descriptor, TextureDescriptor.storage_mode	a texture's, through its descriptor; a buffer's is its block's class, which the consumer chose		
-MTLResource.h	MTLResource	property	hazardTrackingMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLResource.h	MTLResource	property	resourceOptions		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLResource.h	MTLResource	method	setPurgeableState:		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLResource.h	MTLResource	property	heap		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLResource.h	MTLResource	property	heapOffset		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	hazardTrackingMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	resourceOptions		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLResource.h	MTLResource	method	setPurgeableState:		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLResource.h	MTLResource	property	heap		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	heapOffset		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLResource.h	MTLResource	property	allocatedSize		M			as `MTLAllocation`'s	S	queries
-MTLResource.h	MTLResource	method	makeAliasable		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLResource.h	MTLResource	method	isAliasable		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	method	makeAliasable		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLResource.h	MTLResource	method	isAliasable		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLResource.h	MTLResource	method	setOwnerWithIdentity:		O			memory accounting to another task: an OS service		
 MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	protocol	MTLResourceStateCommandEncoder		M			the resource state encoder (sparse textures' mappings)	M	resource-state
 MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateTextureMappings:mode:regions:mipLevels:slices:numRegions:		M			the resource state encoder (sparse textures' mappings)	M	resource-state
@@ -1952,11 +1952,11 @@ MTLSampler.h	MTLSamplerDescriptor	property	lodMaxClamp		I	translator	SamplerDesc
 MTLSampler.h	MTLSamplerDescriptor	property	lodAverage		I	translator	SamplerDescriptor.lod_average			
 MTLSampler.h	MTLSamplerDescriptor	property	lodBias		I	translator	SamplerDescriptor.lod_bias			
 MTLSampler.h	MTLSamplerDescriptor	property	compareFunction		I	translator	SamplerDescriptor.compare_function			
-MTLSampler.h	MTLSamplerDescriptor	property	supportArgumentBuffers		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLSampler.h	MTLSamplerDescriptor	property	supportArgumentBuffers		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLSampler.h	MTLSamplerDescriptor	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
 MTLSampler.h	MTLSamplerState	protocol	MTLSamplerState		I	runtime	SamplerState			
 MTLSampler.h	MTLSamplerState	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
-MTLSampler.h	MTLSamplerState	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLSampler.h	MTLSamplerState	property	device		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLSampler.h	MTLSamplerState	property	gpuResourceID		I	runtime	SamplerState::gpu_resource_id			
 MTLStageInputOutputDescriptor.h	MTLBufferLayoutDescriptor	class	MTLBufferLayoutDescriptor		I	translator	StageInputLayoutDescriptor			
 MTLStageInputOutputDescriptor.h	MTLBufferLayoutDescriptor	property	stride		I	translator	StageInputLayoutDescriptor.stride			
@@ -2028,8 +2028,8 @@ MTLTexture.h	MTLSharedTextureHandle	class	MTLSharedTextureHandle		M			texture an
 MTLTexture.h	MTLSharedTextureHandle	property	device		M			texture and event handles shared across processes	M	sharing
 MTLTexture.h	MTLSharedTextureHandle	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
 MTLTexture.h	MTLTextureDescriptor	class	MTLTextureDescriptor		I	runtime	TextureDescriptor			
-MTLTexture.h	MTLTextureDescriptor	class method	texture2DDescriptorWithPixelFormat:width:height:mipmapped:		M			a query or call metal2vulkan-rt does not answer	S	queries
-MTLTexture.h	MTLTextureDescriptor	class method	textureCubeDescriptorWithPixelFormat:size:mipmapped:		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLTexture.h	MTLTextureDescriptor	class method	texture2DDescriptorWithPixelFormat:width:height:mipmapped:		M			a query or call metal2vulkan-runtime does not answer	S	queries
+MTLTexture.h	MTLTextureDescriptor	class method	textureCubeDescriptorWithPixelFormat:size:mipmapped:		M			a query or call metal2vulkan-runtime does not answer	S	queries
 MTLTexture.h	MTLTextureDescriptor	class method	textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:		M			a texture buffer's descriptor; a texture buffer is refused (`Gap::TextureBuffer`)	S	queries
 MTLTexture.h	MTLTextureDescriptor	property	textureType		I	runtime	TextureDescriptor.texture_type			
 MTLTexture.h	MTLTextureDescriptor	property	pixelFormat		I	runtime	TextureDescriptor.pixel_format			
@@ -2039,12 +2039,12 @@ MTLTexture.h	MTLTextureDescriptor	property	depth		I	runtime	TextureDescriptor.de
 MTLTexture.h	MTLTextureDescriptor	property	mipmapLevelCount		I	runtime	TextureDescriptor.mipmap_level_count			
 MTLTexture.h	MTLTextureDescriptor	property	sampleCount		I	runtime	TextureDescriptor.sample_count			
 MTLTexture.h	MTLTextureDescriptor	property	arrayLength		I	runtime	TextureDescriptor.array_length			
-MTLTexture.h	MTLTextureDescriptor	property	resourceOptions		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLTexture.h	MTLTextureDescriptor	property	cpuCacheMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTextureDescriptor	property	resourceOptions		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLTexture.h	MTLTextureDescriptor	property	cpuCacheMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLTexture.h	MTLTextureDescriptor	property	storageMode		I	runtime	TextureDescriptor.storage_mode			
-MTLTexture.h	MTLTextureDescriptor	property	hazardTrackingMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTextureDescriptor	property	hazardTrackingMode		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLTexture.h	MTLTextureDescriptor	property	usage		I	runtime	TextureDescriptor.usage			
-MTLTexture.h	MTLTextureDescriptor	property	allowGPUOptimizedContents		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTextureDescriptor	property	allowGPUOptimizedContents		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLTexture.h	MTLTextureDescriptor	property	compressionType		M			lossy compression (not scheduled)	M	compression
 MTLTexture.h	MTLTextureDescriptor	property	swizzle		I	runtime	TextureDescriptor.swizzle			
 MTLTexture.h	MTLTextureDescriptor	property	placementSparsePageSize		M			placement sparse textures' page size	S	sparse
@@ -2057,9 +2057,9 @@ MTLTexture.h	MTLTextureViewDescriptor	property	swizzle		I	runtime	Texture::new_t
 MTLTexture.h	MTLTextureViewDescriptor	property	minLOD		M			a view's minimum LOD (macOS 27), unmeasured	M	min-lod
 MTLTexture.h	MTLTexture	protocol	MTLTexture		I	runtime	Texture			
 MTLTexture.h	MTLTexture	property	rootResource	yes	M			a view's root resource (deprecated: `parentTexture` and `buffer` answer it)	S	queries
-MTLTexture.h	MTLTexture	property	parentTexture		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLTexture.h	MTLTexture	property	parentRelativeLevel		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
-MTLTexture.h	MTLTexture	property	parentRelativeSlice		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTexture	property	parentTexture		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLTexture.h	MTLTexture	property	parentRelativeLevel		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
+MTLTexture.h	MTLTexture	property	parentRelativeSlice		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLTexture.h	MTLTexture	property	buffer		M			the buffer a texture over a buffer was made from	S	queries
 MTLTexture.h	MTLTexture	property	bufferOffset		M			the offset of a texture over a buffer in its buffer	S	queries
 MTLTexture.h	MTLTexture	property	bufferBytesPerRow		M			the row pitch of a texture over a buffer	S	queries
@@ -2074,12 +2074,12 @@ MTLTexture.h	MTLTexture	property	mipmapLevelCount		I	runtime	Texture::descriptor
 MTLTexture.h	MTLTexture	property	sampleCount		I	runtime	Texture::descriptor, TextureDescriptor.sample_count	through the texture's descriptor		
 MTLTexture.h	MTLTexture	property	arrayLength		I	runtime	Texture::descriptor, TextureDescriptor.array_length	through the texture's descriptor		
 MTLTexture.h	MTLTexture	property	usage		I	runtime	Texture::descriptor, TextureDescriptor.usage	through the texture's descriptor		
-MTLTexture.h	MTLTexture	property	shareable		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTexture	property	shareable		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLTexture.h	MTLTexture	property	framebufferOnly		M			NO for every texture but a drawable's, which the runtime has none of	S	queries
 MTLTexture.h	MTLTexture	property	firstMipmapInTail		M			sparse tiles	S	sparse
 MTLTexture.h	MTLTexture	property	tailSizeInBytes		M			sparse tiles	S	sparse
 MTLTexture.h	MTLTexture	property	isSparse		M			sparse tiles	S	sparse
-MTLTexture.h	MTLTexture	property	allowGPUOptimizedContents		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTexture	property	allowGPUOptimizedContents		O			the consumer's (metal2vulkan-runtime's README, What the consumer implements)		
 MTLTexture.h	MTLTexture	property	compressionType		M			lossy compression (not scheduled)	M	compression
 MTLTexture.h	MTLTexture	property	gpuResourceID		I	runtime	Texture::gpu_resource_id			
 MTLTexture.h	MTLTexture	method	getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:		I	runtime	Texture::get_bytes			

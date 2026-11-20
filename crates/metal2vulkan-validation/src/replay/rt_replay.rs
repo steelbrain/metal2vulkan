@@ -118,7 +118,7 @@ impl ScratchCache {
 
 /// The new runtime's first device of the cfg's kind (a GPU: discrete, then integrated, then
 /// virtual; else the CPU), its kernels kept in `cache`.
-fn rt_device(cache: &Path) -> metal2vulkan_rt::Device {
+fn rt_device(cache: &Path) -> metal2vulkan_runtime::Device {
     use ash::vk::PhysicalDeviceType as Kind;
     let kinds: &[Kind] = match gpu::TEST_DEVICE {
         DeviceType::Gpu => {
@@ -127,11 +127,11 @@ fn rt_device(cache: &Path) -> metal2vulkan_rt::Device {
         }
         DeviceType::Cpu => &[Kind::CPU],
     };
-    let instance = metal2vulkan_rt::Instance::new(&[]).unwrap();
+    let instance = metal2vulkan_runtime::Instance::new(&[]).unwrap();
     let (_, vk_instance) = instance.raw();
     let mut physical = instance.physical_devices().unwrap();
     // SAFETY: each is one of the instance's physical devices, and the instance is live.
-    let kind_of = |p: &metal2vulkan_rt::PhysicalDevice| unsafe {
+    let kind_of = |p: &metal2vulkan_runtime::PhysicalDevice| unsafe {
         vk_instance
             .get_physical_device_properties(p.raw())
             .device_type
@@ -139,9 +139,9 @@ fn rt_device(cache: &Path) -> metal2vulkan_rt::Device {
     physical.retain(|p| kinds.contains(&kind_of(p)));
     physical.sort_by_key(|p| kinds.iter().position(|&kind| kind == kind_of(p)));
     let physical = physical.first().expect("a device of the cfg's kind");
-    let mut options = metal2vulkan_rt::DeviceOptions::default();
+    let mut options = metal2vulkan_runtime::DeviceOptions::default();
     options.pipeline_cache_dir = Some(cache.to_path_buf());
-    metal2vulkan_rt::Device::new(physical, options).unwrap()
+    metal2vulkan_runtime::Device::new(physical, options).unwrap()
 }
 
 fn written(

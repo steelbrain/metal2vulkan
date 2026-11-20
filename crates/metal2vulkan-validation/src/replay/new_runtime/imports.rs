@@ -5,7 +5,7 @@
 //! (`Metrics::over_copies_imported`). A descriptor-form one (`newBufferWithDescriptor:` with
 //! `noCopy`) is a pool buffer, with no import ([`NoCopies`]).
 
-use metal2vulkan_rt as rt;
+use metal2vulkan_runtime as rt;
 use std::alloc::Layout;
 use std::collections::{BTreeMap, HashMap};
 use std::ptr::NonNull;

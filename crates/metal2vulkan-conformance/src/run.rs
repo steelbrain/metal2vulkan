@@ -30,7 +30,7 @@ pub fn selected(names: &[String]) -> Result<Vec<Box<dyn Case>>, String> {
         .collect()
 }
 
-/// Replay `cases` on the runtime (`metal2vulkan-rt`), on the device `venues` names, as a report,
+/// Replay `cases` on the runtime (`metal2vulkan-runtime`), on the device `venues` names, as a report,
 /// and say whether the same selection read the same thing in each of `runs` passes
 /// ([`crate::stability`]). The runtime has no policy and counts no work for the cost half, so the
 /// report holds no cost rows.

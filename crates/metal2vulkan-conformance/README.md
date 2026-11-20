@@ -5,7 +5,7 @@ The Metal conformance suite. It makes one sentence executable:
 > We are a Metal implementation. Any difference from Metal is a bug, unless we announced it.
 
 A case is written once, against one vocabulary, and run by either side: native Metal on macOS, and
-`metal2vulkan-rt` on whatever Vulkan device the host has. Each run emits a **transcript**: a
+`metal2vulkan-runtime` on whatever Vulkan device the host has. Each run emits a **transcript**: a
 tree of named sites holding what a Metal program can observe. Metal's answer is **recorded** on a
 Mac, once per case, and **replayed** anywhere — the replay leg needs no Metal at all.
 
@@ -266,7 +266,7 @@ cannot be re-taken once the machine updates. `--show` adds every case's own figu
 
 The harvested corpus, the stored observations, the corpus index, the censuses and audits and the
 executors all belong to `metal2vulkan-validation`. None of it is this crate's business, and this
-crate depends on none of it. What it uses from outside is `metal2vulkan-rt`, the translator's
+crate depends on none of it. What it uses from outside is `metal2vulkan-runtime`, the translator's
 public API, `metal2vulkan-devtools` for fixture paths and `llvm_assemble`, and, on macOS,
 `objc2-metal`.
 
@@ -288,7 +288,7 @@ edits one.
 | `verdict` | Exact, announced, divergent, refused, unrecorded, and per venue "lacks the device feature" |
 | `recording` | A case's Metal answer, keyed by chip, macOS build and the release whose Metal it is, with its runs and its outcome set |
 | `case` | The case API and the vocabulary both sides answer in |
-| `rt_side` | `metal2vulkan-rt` as a side |
+| `rt_side` | `metal2vulkan-runtime` as a side |
 | `metal_side` | Native Metal as a side (macOS only), which record mode runs |
 | `validated` | The second oracle: the same case under Metal's API validation layer, in a child process |
 | `record`, `replay` | Taking Metal's answer, and comparing a run against it |
