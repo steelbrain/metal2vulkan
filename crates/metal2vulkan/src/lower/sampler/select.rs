@@ -712,6 +712,11 @@ fn select_heap_raw(
     sampler: SamplerArg,
     m: &mut Meter,
 ) -> Result<Option<super::heap_raw::HeapRaw>, Error> {
+    // Under the identity domains the element holds no raw texels to decode: it is read in the
+    // class the shader declares, as a read of it is (`texture::tabled`).
+    if !crate::lower::texture::tabled(cx, ImageRef::Heap { group, handle }) {
+        return Ok(None);
+    }
     let shape = call.t.image;
     let float = match call.t.texel {
         Some(_) => texel(call.t, 4)?.1 == TexelClass::Float,

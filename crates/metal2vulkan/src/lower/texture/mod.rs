@@ -2624,7 +2624,7 @@ pub(super) fn heap_alpha_in_red(
 /// (their classes, raw texels and conversions): any heap image but under the identity domains,
 /// where an argument buffer's texture is the element its resource ID names, read in the class the
 /// shader declares through the plain form (`access::handle::emit_identity_handle`).
-fn tabled(cx: &SelectCx<'_>, image: ImageRef) -> bool {
+pub(crate) fn tabled(cx: &SelectCx<'_>, image: ImageRef) -> bool {
     image.heap() && !crate::lower::access::identity(cx.profile)
 }
 
