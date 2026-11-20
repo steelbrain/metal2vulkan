@@ -52,7 +52,8 @@ mod on_device {
         ClearColor::new(r, g, b, a)
     }
 
-    /// A Private render target of `format`, `SIDE` a side, of `samples`.
+    /// A Private render target of `format`, `SIDE` a side, of `samples`, with no index of its
+    /// own: the test renders into it and reads it through a blit, and no shader reaches it.
     fn texture(device: &Device, format: PixelFormat, samples: u32) -> Texture {
         let kind = match samples {
             1 => TextureType::Type2D,
@@ -62,7 +63,7 @@ mod on_device {
         d.sample_count = samples;
         d.usage = TextureUsage::RENDER_TARGET;
         d.storage_mode = StorageMode::Private;
-        (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{format:?}: {error}"))
+        (device.new_texture_for_views(&d)).unwrap_or_else(|error| panic!("{format:?}: {error}"))
     }
 
     /// `texture`'s texels, read through a blit into a Shared buffer.
