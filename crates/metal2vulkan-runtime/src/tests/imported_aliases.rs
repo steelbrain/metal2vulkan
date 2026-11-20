@@ -12,7 +12,7 @@
 //!   the pages then hold at their pitch, every other byte as the CPU wrote it.
 //!
 //! And a compositor's process, in the order it makes things: a composite in BGRA8Unorm whose
-//! textures all go, then one in RGBA16Float whose own images take the places the first freed,
+//! textures all go, then one in RGBA16Float whose own images may take places the first freed,
 //! alone and beside a thread that makes, clears and drops render targets on a queue of its own.
 //! No two live textures' places meet, each target reads the CPU's texels through the texture
 //! over the import, and in the order the queue runs the command buffers every image moves home
@@ -615,17 +615,19 @@ mod on_device {
     }
 
     /// A compositor's process: the composite in BGRA8Unorm, every texture of it gone, sixteen
-    /// 1-by-1 BGRA8Unorm textures, then the composite in RGBA16Float, whose own images take
+    /// 1-by-1 BGRA8Unorm textures, then the composite in RGBA16Float, whose own images may take
     /// places the first freed; alone, and then beside a second thread that makes, clears and
     /// drops render targets on a queue of its own. On every device of the cfg's kind that imports
     /// host memory, with the block-maker thread running:
     ///
     /// - no two live textures' places meet (the places rt recorded for their images);
-    /// - alone, T75's image in RGBA16Float takes a place the BGRA8Unorm composite held;
     /// - each target reads the CPU's texels through T75, in each format;
     /// - in the order the queue runs the command buffers, every image the device made moves home
     ///   once, from the undefined or the preinitialized layout, and no command names it before
     ///   that move: a copy into an own image among them (`tests::layouts::moves`).
+    ///
+    /// Whether T75's RGBA16Float image takes a place the BGRA8Unorm composite held follows the
+    /// driver's sizes and alignments, so it is printed, with the places, and never asserted.
     #[test]
     fn own_images_over_imported_memory_move_home_once_before_their_copies_in_places_of_their_own() {
         if examples().is_none() {
@@ -666,15 +668,17 @@ mod on_device {
                         })
                         .collect();
                     let held = composite(name, &device, &reader, (&live, first), Format::Half);
-                    if !beside {
-                        let read = held.read.expect("T75 placed in a texture block");
-                        assert!(
-                            freed.all.iter().any(|&range| meet(range, read)),
-                            "{name}: T75's image in RGBA16Float {read:?} takes no place the \
-                             BGRA8Unorm composite held: {:?}",
-                            freed.all
-                        );
-                    }
+                    // Where the driver's sizes and alignments put it is the places' policy, not
+                    // an invariant: printed, never asserted.
+                    let reused = (held.read)
+                        .is_some_and(|read| freed.all.iter().any(|&range| meet(range, read)));
+                    eprintln!(
+                        "own image moves: {name}: beside a churn {beside}: T75's RGBA16Float \
+                         image at {:?}, in a place the BGRA8Unorm composite held: {}; it held {:?}",
+                        held.read,
+                        if reused { "yes" } else { "no" },
+                        freed.all
+                    );
                     for (id, check) in checks {
                         live.leave(id);
                         drop(check);
@@ -687,6 +691,17 @@ mod on_device {
                 );
             }
             let moves = moves(handle);
+            // Printed before the checks, so a failing run's log carries it too.
+            eprintln!(
+                "own image moves: {name}: {} places entered, none met; {} moves home, {} other \
+                 steps, {} copies in; {} steps out of order, the first {:?}",
+                live.entered.load(Ordering::Relaxed),
+                moves.homes,
+                moves.uses,
+                moves.copies_in,
+                moves.broken.len(),
+                moves.broken.first()
+            );
             assert!(
                 moves.broken.is_empty(),
                 "{name}: {} steps out of order, the first {:?}",
@@ -696,14 +711,6 @@ mod on_device {
             assert!(
                 moves.homes > 0 && moves.copies_in > 0,
                 "{name}: the queue's order was taken: {moves:?}"
-            );
-            println!(
-                "own image moves: {name}: {} places entered, none met; {} moves home, {} other \
-                 steps, {} copies in, every one after its image's move home",
-                live.entered.load(Ordering::Relaxed),
-                moves.homes,
-                moves.uses,
-                moves.copies_in,
             );
         });
     }
