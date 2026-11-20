@@ -1725,13 +1725,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   without a fault. A bad address that the old runtime survived ends the
   GPU's work for every guest process under the new runtime on NVIDIA and RADV: the consequence of
   one device and direct addresses, which the owner accepted.
-- An index past a set 1 array's length is a fault of the same kind. A kernel indexes the arrays
-  with a resource ID's index as the guest gave it, with no clamp: an index of 65,536 or more used
-  through a texture array, or 4,000 or more through a sampler array, reads a descriptor from past
-  the array. Vulkan leaves that undefined,
-  and Metal leaves a resource ID that names no live resource of the access undefined; here it can
-  fault as a bad address does, with the same consequences. An index within an array that no live
-  object owns reads its null descriptor or default sampler, with no fault.
+- No guest word indexes a set 1 array past its length. A slot's texture or sampler, and a
+  constexpr sampler, are read at the runtime's own placement (texture indices 1 to 65,535, sampler
+  indices 1 to 3,999; a placement outside them is refused). An argument buffer's texture is read at
+  its resource ID's index masked to its low 16 bits, so a bad ID reads an element of the arrays,
+  never one past them; a sample, gather or comparison of an argument buffer's texture, and an
+  argument buffer's sampler, are refused at the pipeline's make. Metal leaves a resource ID that
+  names no live resource of the access undefined: an index within an array that no live object
+  owns reads its null descriptor or default sampler, with no fault.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
   dispatch past it is split into dispatches of at most that many, each told its first
