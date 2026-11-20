@@ -452,7 +452,7 @@ pub(crate) fn vk_filtering(
 /// Without a mip filter it reads the base level, and its clamp keeps Metal's choice between the
 /// two filters (`not_mipmapped_lods`); through Metal's own sampler with anisotropy and equal
 /// filters its clamp is `[0, 0]`, where that sampler reads Metal's `NotMipmapped`. With filters
-/// that differ there, no clamp reads Metal's answer (`docs/FAST-PATHS.md`, known gaps).
+/// that differ there, no clamp reads Metal's answer.
 ///
 /// Its level clamp is the descriptor's, its lower bound at least 0: the device clamps its own level
 /// into it and selects and blends levels at its own precision (`PrecisionNote::DeviceSampling` off

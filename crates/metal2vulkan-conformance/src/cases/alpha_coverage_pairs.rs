@@ -108,7 +108,7 @@
 //!   validation layer ends the process** at `setRenderPipelineState:`
 //!   (`the texture sample count (4) does not match the renderPipelineState colorSampleCount (1)`).
 //!   A case of it would end a recording run, and a plain-Metal answer that looks undefined is not
-//!   one to pin as a conformance expectation. It is in `docs/FAST-PATHS.md`'s known gaps instead.
+//!   one to pin as a conformance expectation.
 //!
 //! # Nothing here can fault a GPU
 //!

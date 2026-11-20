@@ -547,8 +547,8 @@ impl OffsetArms {
 pub const OFFSET_ARM_VALUES: u32 = 1 << METAL_TEXEL_OFFSET_BITS;
 
 /// The most arms of armed offsets ([`OffsetArms`]) one function's accesses take together: two
-/// accesses of two dynamic lanes, or 32 of one; past it the access is refused as without the arms
-/// (`docs/FAST-PATHS.md`, known gaps). A driver's pipeline making grows faster than the arms: ANV
+/// accesses of two dynamic lanes, or 32 of one; past it the access is refused as without the arms.
+/// A driver's pipeline making grows faster than the arms: ANV
 /// (Mesa 26.2.4, Iris Xe) made a kernel of 512 arms in 0.63 s (0.02 s with the `Offset` operand),
 /// of 1056 in 3.2 s and of 1536 in 5.9 s, past the 5-s making ceiling.
 pub const OFFSET_ARMS_PER_FUNCTION: u32 = 512;

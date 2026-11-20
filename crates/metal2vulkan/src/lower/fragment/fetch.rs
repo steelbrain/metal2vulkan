@@ -222,7 +222,7 @@
 //! `R16Float` and `RG16Float` (each width the format takes), the 677 and 1,350 states of our probe
 //! below, and the 677 under `RG16Float`'s partial write masks, fast and safe math: every
 //! channel the model's rounded, fitted or constant forms name holds Metal's value (some zero signs
-//! differ, a known gap of `docs/FAST-PATHS.md`). Without fast math every product and sum rounds on
+//! differ). Without fast math every product and sum rounds on
 //! its own (the rounded forms); under fast math Metal's passes fuse and regroup it (the fast
 //! forms). Measured on plain Metal on the M3 Max under macOS 27.0.1, our own MSL, a function
 //! reading `[[color(0)]]` beside an unwritten second attachment, 16,384 random pixels a draw

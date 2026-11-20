@@ -2311,8 +2311,7 @@ pub fn unorm8_tile_value(
 /// and its widening ([`narrow::round`]): two instructions, Metal's `half(float)` by the Vulkan spec
 /// (conversions are correctly rounded, to nearest even under `RoundingModeRTE`, denormals kept
 /// under `DenormPreserve`, zero signs and infinities under `SignedZeroInfNanPreserve`), as the
-/// module's own `half` results round on such a profile (docs/FAST-PATHS.md's `half` rounding row:
-/// exact under either policy, no note). Elsewhere the integer sequence ([`f32_to_half`]), about
+/// module's own `half` results round on such a profile (exact, no note). Elsewhere the integer sequence ([`f32_to_half`]), about
 /// fifty instructions, the same on every device. The two agree on every `x` but a NaN's bits,
 /// which the conversion leaves to the device: the blends clamp a NaN source to zero, and a 16-bit
 /// float blend stores every NaN as Metal's own.

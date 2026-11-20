@@ -301,8 +301,7 @@ pub(crate) fn payload_barrier() -> MeshFixtureCase {
 /// through its primitive data field `id`: `16 * 2 + 4 * 0 + 0 + 1`, 33, over every pixel of a 2x2
 /// target, as `(33, 0, 0, 1)`.
 ///
-/// Drawn on a GPU only: its mesh function aborts the CPU ICD's compiler (docs/FAST-PATHS.md's
-/// known gaps).
+/// Drawn on a GPU only: its mesh function aborts the CPU ICD's compiler.
 #[cfg(m2v_gpu)]
 pub(crate) fn payload_order() -> MeshFixtureCase {
     let row = row("mesh_order", Stage::Mesh, "mesh_order_mesh");

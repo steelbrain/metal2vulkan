@@ -98,7 +98,7 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   no switch either: each records its note.
 - **The resident-table and handle-table domains** (`PointerDomain::ResidentTable`,
   `HandleDomain::Table`, the default). The identity domains (`PointerDomain::Identity` with
-  `HandleDomain::Identity`, taken together) are the new runtime's form: pointers are device
+  `HandleDomain::Identity`, taken together) are the runtime's form: pointers are device
   addresses used directly and a texture's or sampler's handle is its `gpuResourceID`
   ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
   them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
@@ -115,10 +115,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   whose argument states an alignment of at least 4 (`air.arg_type_align_size`) is reached from
   that address as it is: each access is at the pushed word plus its 32-bit byte offset plus 2^31,
   modulo 2^32, zero-extended, which is the address plus the offset read as signed, exact as the
-  new runtime makes no buffer longer than 2 GiB (`MAX_BUFFER_LENGTH`); a constant part of the
+  runtime makes no buffer longer than 2 GiB (`MAX_BUFFER_LENGTH`); a constant part of the
   offset joins the 2^31 in one constant. An access of 8 or 16 bytes at an offset proven a multiple
   of its size is one `uvec2` or `uvec4`. The function states `RuntimeFact::AddressAlignment` with
-  that alignment (at most 16), and the new runtime refuses a dispatch whose bound address is not a
+  that alignment (at most 16), and the runtime refuses a dispatch whose bound address is not a
   multiple of it, as Metal's API validation refuses the bind offset (an accepted difference,
   section 10). A slot whose argument states an alignment below 4, or none, is reached the same way where each of
   its accesses is one 1- or 2-byte unit no wider than that alignment (an `i8` access of a `uchar`
@@ -186,7 +186,7 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `metal::format::BICUBIC_TEXELS_UNBOUND` for a slot bound to nothing), the bits the default
   domains specialize `SpecKey::BicubicTexels` to. `bicubic_texels_word` has no word for a
   compressed, YUV, stencil, integer, extended-range or 8-bit sRGB format, so such a texture has
-  no bicubic sample there (the new runtime refuses the dispatch, `Gap::BicubicTexels`). Its
+  no bicubic sample there (the runtime refuses the dispatch, `Gap::BicubicTexels`). Its
   arithmetic is noted `PrecisionNote::BicubicFilterArithmetic`, as on the default domains. A
   fragment function under the pipeline's private alpha test
   (`PrivateRenderState::alpha_test_enabled`, a compare function other
@@ -217,233 +217,6 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   An argument buffer's texture reads the element at its ID's index masked to its low 16 bits,
   so a bad ID reads an element of the arrays ([RESOURCE-ID.md](RESOURCE-ID.md)); the change that
   first lowers an argument buffer's sampler masks its index the same way.
-- **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
-  default; changes emitted code). On an integrated GPU or a CPU device a function that only
-  samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes
-  in place through a uniform texel buffer, which no sampler of the device reads, so the shader
-  filters and converts them. A linear sample that addresses no border is Vulkan's Y′CbCr model
-  of the codes, as the device's own conversion with a linear chroma filter computes it: four
-  luma codes and four chroma pairs blended bilinearly, then the range and matrix in `float`,
-  clamped into `[0, 1]` (eight fetches), recorded `HalfSampleFilter` or `FloatSampleFilter` and
-  announced `ycbcr-filter-not-exact`. `ycbcr_in_place_reads = YCbCrInPlacePolicy::Exact`, which
-  `exact_answers()` selects, converts each of Metal's four taps and sums them on the grid
-  `2048`, exactly (twenty fetches). A nearest sample, a border mode and a gather are Metal's
-  under either value.
-- **`half` chains held at `float` precision without `shaderFloat16`** (`HalfChainPolicy::AtExits`,
-  the default; changes emitted code). A device without 16-bit floats has no `half` arithmetic, so
-  a module computes each `half` `+ - *` in `float` and rounds it by the device's quantize. An
-  operation whose flags hold `contract` and `reassoc` and whose result only such operations read
-  is left unrounded: the chain rounds where a value leaves it, one quantize per exit instead of
-  one per operation, recorded `FastMathRewrites`. `half_chains = HalfChainPolicy::EachOperation`,
-  which `exact_answers()` selects, rounds every operation. A device with `shaderFloat16` computes
-  `half` alike under either value.
-- **Batches of a queue ordered by their ends** (`BatchOrderPolicy::Ends`, the runtime's choice; no
-  pipeline differs). On ANV, RADV and NVIDIA's driver, each measured to start no kernel submission
-  of a `VkQueue` before the one before it completed, each batch of command buffers ends with a
-  barrier ordering its work before every later command of its `VkQueue`: a batch that depends on
-  an earlier one there begins with no barrier of its own, and a command buffer's GPU start is
-  taken once the work before it completed, which is when such a driver starts it. Nothing is
-  announced: on those drivers the work's order, its results and its GPU times are the same under
-  either value. `batch_order = BatchOrderPolicy::Exact`, which `exact_answers()` selects, orders
-  each batch after the earlier ones of its queue only by its work's dependencies on theirs, as
-  Metal does (an M3 Max starts an independent command buffer committed behind running work while
-  that work runs), and takes a command buffer's GPU start as its work begins. Every other driver
-  takes that form under either value.
-- **A render encoder's calls lowered inside each call** (`RenderLoweringPolicy::AtCall`, the
-  default, which `exact_answers()` selects too; the runtime's choice, no pipeline differs): each
-  call works out and records its commands before it returns, and returns every refusal.
-  `render_lowering = RenderLoweringPolicy::Worker` logs each call and lowers it later, in order,
-  before the command buffer's submission: in batches of 32 calls on the device's lowering thread
-  while the program goes on. A program that runs 16 batches ahead of that thread waits for it in
-  its next call, and one 4 encoders' ends ahead in its next `end_encoding`. `end_encoding` hands the encoder's end to that thread too and returns; the next
-  call that follows the end in its command buffer (another encoder, an event or semaphore
-  command, `commit_failed`, `refusal`, `used_resources`, `ended_encoders`, `failed_pipeline`,
-  `dropped_draw`)
-  lowers on the program's thread what the thread has not, and a rebind or detach of host pages
-  and `Device::work_counts` lower every encoder's first. `commit` makes its checks at the call
-  (committed already, an encoder open, one abandoned) and returns, its status `Committed`, its own work left to run once the end is lowered, on the
-  thread that lowers it; while such a commit waits, every later commit of the device waits
-  behind it, so the device's scheduler still takes commits in their order across its queues. A
-  wait for the command buffer lowers on the waiting thread what that thread has not. A refusal
-  only the commit's own work finds (an executed indirect command's recording, the commit's
-  uploads) fails the command buffer, nothing of it run, with `CallRefused` of `commit` at index
-  0 where no call of it was refused before: it commits again with nothing made for its commands,
-  so it completes, in its queue's order, its completed handlers run and its waits return, as
-  every committed command buffer of Metal's does. An end that checks the depth/stencil
-  attachment's store actions or store action options (one `Unknown`, options set, or any store
-  action or resolve target set by a call) is lowered inside `end_encoding`, which returns its
-  refusal. The call still makes Metal's checks of its arguments and of the encoder's state, and returns
-  their refusals: the argument tables' and state setters', the objects' devices, the pipeline
-  state's against the pass, and a draw's kind, arguments and settings. It copies the bytes it
-  was lent and holds the objects it names. A call those checks do not cover is lowered inside
-  the call, as under `AtCall`: store actions, resolve targets, visibility result modes,
-  threadgroup memory lengths, fences, patch and mesh draws, a draw while a visible-function
-  table or a vertex buffer of more than 4 GiB past its offset is bound, and any call while a
-  buffer of the device is detached. From a pipeline state that fetches the pass's colors, reads
-  its tile memory, uses an imageblock, draws patches or meshes, or renders a color in another
-  format than its attachment's; a tile dispatch; an execution of indirect render commands; a
-  memory barrier; and a draw that gives the pass its hidden depth and stencil, every later call
-  of the encoder is lowered inside the call, and so is every call of a pass the device draws in
-  color groups. A refusal only the lowering finds (a runtime gap of the draw's variant or
-  instance, out of memory, a Vulkan error) fails the command buffer instead:
-  `CommandBufferError::CallRefused` names the call (`EncoderCall`: its Metal selector and its
-  index among the encoder's calls; the end is `endEncoding`, the index after the encoder's last
-  call), `CommandBuffer::refusal` returns the error the call would
-  have returned, and that encoder and every one after it in the command buffer run nothing.
-  Notices a logged call's lowering announces name the call (`DegradeNotice::call`) and may reach
-  the message sink on the lowering thread, and `DeviceOptions::lowering_refuses` turns the kinds
-  it lists into such refusals (section 9).
-- **A pipeline still being made: a creation waits a bound, a command buffer until made**
-  (`PipelineWaitPolicy::Bounded`, the default; the runtime's choice, no pipeline differs). A render or compute state's creation
-  hands the driver's making of its predicted pipeline to the runtime's pool and waits for it
-  `DevicePolicy::pipeline_creation_wait` at most. A committed command buffer waits for its draws'
-  and dispatches' (a compute encoder's, a render pass's tile dispatches, an execution's replayed
-  draws, whose pipelines the commit hands to the pool) pipelines still being made until they are
-  made, however long that takes, and records them then: each renders and writes what Metal's
-  does, its command buffer completing later, as on a slower GPU. `commit` waits for none of them
-  but a pass that executes render commands the CPU writes, until its commit plus
-  `DevicePolicy::pipeline_commit_wait` at most, for its pipelines and for those its executions'
-  replay begins itself, which it leaves to the command buffer's host step past that; the step
-  records the pass once they are made. No other program call blocks for a making but those that
-  wait for the GPU (a wait for the command buffer's completion or scheduling, an event it
-  signals, a new command buffer of a queue whose most are all uncompleted); a host step that
-  meets a making of its own waits for it on its step's thread. No draw or dispatch is dropped
-  for its making's time. Meanwhile it holds back only its own queue's later command buffers: one of
-  another queue committed after it goes first, even where the two touch one tracked resource
-  that one of them writes, and the waiting one runs after it, as an x86 Mac's GPU may take a
-  later commit of another queue first (`metal2vulkan-conformance`'s
-  `probes/cross_queue_surface_order.m`: a Radeon Pro 5300M and a UHD 630 under macOS 26.7.1;
-  an M3 Max kept commit order); a fence the two share keeps commit order, and so does a command
-  buffer of a queue made for copies (`Device::new_command_queue_for_copies`, a runtime extension
-  that promises it), which waits behind the waiting one where the two conflict. Both bounds are 4.5 s
-  by default. What one call waits for the driver's
-  makings: a state's creation, its creation wait at most; a `commit`, until its own deadline at
-  most (it records there what it can, an execution of render commands the CPU writes among
-  them; every other recording runs on the runtime's scheduler thread, which no call waits for). A
-  creation waits on no command buffer's deadline and a commit on no creation's, so a host step
-  that creates a state and commits a command buffer waits their sum at most, 9 s by default,
-  under a guest's 10 s FIFO check, where a driver's cold compile took 11.6 s (MoltenVK with a cold
-  Metal compiler service). Made until made under this value too, in the call that makes them: a
-  draw that records nothing, a draw in a pass of custom sample positions, and one recorded again
-  into another instance of its pass (each in the draw's call or an execution's replay), a device
-  replay's draws (in its `commit`), and a making that failed, made again by its command's
-  recording. `pipeline_waits = PipelineWaitPolicy::Exact`, which `exact_answers()` selects, makes
-  the predicted pipeline before the creation returns, as Metal compiles there, and waits for
-  every draw's and dispatch's until made.
-- **A wide line the device's own** (`WideLinePolicy::Device`, the default; the runtime's choice, no
-  pipeline's code differs). A line Apple's `setLineWidth:` widens, and a triangle's edge in fill
-  mode `Lines`, is drawn by the device's own lines wherever it draws the width (`wideLines`, inside
-  `lineWidthRange`), announced `device-wide-lines`: no device's lines are taken as Metal's
-  parallelogram, a driver's parallelograms included (their ends are the driver's). `wide_lines =
-  WideLinePolicy::Exact`, which `exact_answers()` selects, draws those as the pipeline's band
-  variant instead (section 4), on a device with `tessellationShader`. Every other width other than 1
-  is the band under either value, and what neither draws the device's lines at the nearest width
-  they draw, announced `lines-at-nearest-width` (the runtime's README, line widths).
-- **A compressed extended-range texture's blits keep the bytes** (`ExtendedRangeBlitPolicy::Kept`,
-  the default; the runtime's choice, no pipeline differs). Metal's GPU blit into, out of or between
-  `BGRA10_XR` or `BGRA10_XR_sRGB` textures it keeps losslessly compressed
-  (`allowGPUOptimizedContents`, 16 texels or more a side, neither `ShaderWrite` nor
-  `PixelFormatView` usage) writes each texel's canonical encoding, each 16-bit field's low six bits
-  cleared and the alpha code clamped to `[384, 894]`, and its fill clears the low six bits alone;
-  the device's copy keeps the bytes, the same value, announced `extended-range-bits-kept`.
-  `extended_range_blits = ExtendedRangeBlitPolicy::Canonical`, which `exact_answers()` selects,
-  writes Metal's encoding: a compute dispatch after each such blit rewrites the texels it wrote (an
-  image's through a scratch copy, a buffer's or a texture over a buffer's in place), and a fill's
-  texel is encoded before it is written. A blit out of one into a buffer whose words the device
-  cannot bind (an offset or pitch off 4 bytes, past `maxStorageBufferRange`), or into a texture over
-  a buffer whose rows share bytes, keeps the bytes under either value, announced.
-- **Command queues share `VkQueue`s where the GPU idles between them**
-  (`QueueSharingPolicy::Adaptive`, the default; the runtime's choice, no pipeline differs). On a
-  device whose own self-check finds its GPU idle when consecutive work comes from another
-  `VkQueue` (the runtime's check, run once per driver, release and runtime on a thread of its own
-  and its verdict kept in the shader cache's directory as the in-place check's is; NVIDIA's driver
-  on the RTX 5080 Laptop GPU idles about 50 us at each such switch), a command queue that makes a
-  command buffer while it holds no other uncompleted one moves onto the busy `VkQueue` of its
-  family whose oldest batch has run under 0.5 ms, so short command buffers of several queues run
-  with no switch between them. A queue one of whose command buffers ran on the GPU for over 2 ms,
-  by its own timestamps, is long: no queue joins its `VkQueue`, and it moves once more, at its next
-  such make, to an idle `VkQueue` of its own. So a queue waits behind another's long command buffer once per queue
-  that goes long, about that command buffer's length: the first long command buffer of a queue
-  that shared holds the command buffers committed behind it there for its whole length,
-  announced `queue-sharing` at the device's first join (section 9). A queue made with
-  `Device::new_command_queue_unshared` never moves, and no queue joins its `VkQueue`: the form
-  for a queue whose command buffers must never wait behind another's (a compositor's beside an
-  application's; on the RTX 5080 Laptop GPU none of its completions took over 10 ms in any run,
-  where a shared one's had one stall of 30 ms beside 30 ms command buffers). Presenting queues, and a queue that lent its `VkQueue`
-  (`CommandQueue::with_vk_queue`), never move. Before the check answers, and on a device whose
-  check finds no idling or that has no two `VkQueue`s of one family (MoltenVK, RADV, lavapipe),
-  each queue keeps the `VkQueue` it took at its creation. So does a device whose
-  command buffers write no GPU timestamps it reads (`DeviceOptions::gpu_times_from_host`, or a
-  driver whose timestamps wait for every queue's), counted `WorkCounts::queue_sharing_untimed`: a
-  queue is known long only by its command buffers' timestamps.
-  `queue_sharing = QueueSharingPolicy::PerQueue`, which `exact_answers()` selects, keeps each
-  command queue on that `VkQueue` everywhere and runs no check. Under either value a queue takes,
-  as it is made, the `VkQueue` the fewest live command queues hold, of those no unshared queue
-  holds, in turn among equals, so queues share one only while more are live than `VkQueue`s,
-  however many came and went before (`WorkCounts::command_queues_live_most`); an unshared queue
-  takes one no command queue holds where one is free
-  (`WorkCounts::unshared_queues_sharing_a_vk_queue` counts one that found none).
-- **Other queues' work is held back from an unshared queue's `VkQueue`**
-  (`UnsharedIsolationPolicy::Bounded`, the default; the runtime's choice, no pipeline differs).
-  Where a queue made with `Device::new_command_queue_unshared` shares its `VkQueue` with other
-  command queues (a device with one graphics queue: RADV, ANV, lavapipe), another queue's batch is
-  submitted there only while less than 2 ms of the other queues' expected GPU work is in flight on
-  it; else the scheduler holds it, in its place in the order, until enough completes. A batch's
-  expected work is its command queue's: the host's view of how long its recent batches ran, raised
-  at once by a longer one and halved toward a shorter one; while a batch of a command queue with
-  no run seen yet is in flight, no other goes until it completes. The next batch goes in before
-  the one ahead ends, so the GPU is not left idle between them where the scheduler's thread runs
-  in time, and the unshared queue's command buffer waits behind about one batch of theirs: the
-  whole of one, however long, as a submission runs to its end. A scheduler pass that finds a held
-  batch let go and the unshared queue's command buffer ready together (a pass the host ran late)
-  sends the unshared one first, and a batch whose room comes during a pass waits while the
-  unshared queue's commit, posted before that, is not yet taken in by a pass, or is taken in and
-  waits only for its host step, its submission checks or a signal already submitted to land
-  (`WorkCounts::heads_held_for_unshared_commits`); commits posted after its room came never hold
-  it, nor one that waits for anything else. The 2 ms holds while an unshared queue there committed a command
-  buffer within the last 50 ms, so a compositor drawing 20 frames a second or more (a 24-frame
-  video's, a 30-frame game's) keeps it; while none has, the budget is 16 ms: an application
-  keeping less queued beside a quiet compositor is not held, and the compositor's first command
-  buffer after its quiet stretch waits behind at most about 16 ms of the other queues' expected
-  work and one batch, the 2 ms applying from that commit on
-  (`WorkCounts::heads_let_go_unshared_idle` counts the heads the 16 ms let go where 2 ms would
-  hold them). Beside an application keeping three
-  30 ms command buffers in flight, a compositor's median wait fell from 75 to 17.5 ms on the Iris
-  Xe and from 71-84 to 18 ms on the Radeon 780M, with no throughput lost on a quiet host; under
-  the host's CPU load the GPU idles more (docs/FAST-PATHS.md has the numbers). Counted:
-  `WorkCounts::heads_held_for_unshared_isolation`. `unshared_isolation =
-  UnsharedIsolationPolicy::Off` submits every ready batch at once, so the unshared queue's command
-  buffers wait behind every batch submitted before them there.
-- **Command queues take turns on a `VkQueue` they share** (`QueueTurnPolicy::Fair`, the default;
-  the runtime's choice, no pipeline differs). On a `VkQueue` two or more command queues hold (a
-  device with one graphics queue: RADV, ANV, lavapipe), a batch of a queue not made unshared is
-  submitted there only while less than 2 ms of its own queue's expected GPU work is in flight on
-  it, or 16 ms while no other command queue submitted there within the last 50 ms; else the
-  scheduler holds it, in its place in the order, and a later commit of another queue that shares
-  nothing with it goes first. Each batch of a queue in flight counts the queue's expected run now
-  (as above), so a run longer than its recent ones prices the rest of a burst at once; a queue
-  with no run seen yet keeps one batch in flight until it completes. So a command buffer another
-  queue commits after one queue's burst of command buffers waits behind about 16 ms of it and one
-  batch, then about 2 ms and one batch while it keeps submitting, not the whole burst; a batch
-  already submitted still runs to its end. An unshared queue's batches are never held for their
-  turn. Counted: `WorkCounts::heads_held_for_queue_turns`, `heads_let_go_turn_idle`,
-  `scheduler_at_commit_left_turns`. `queue_turns = QueueTurnPolicy::CommitOrder` submits every
-  ready batch at once, in commit order, so a later commit of another queue waits behind every
-  batch submitted before it there (docs/FAST-PATHS.md has the trade).
-- **An attachment loaded `DontCare` and not stored, cleared where its driver clears it no slower**
-  (`UnstoredDontCarePolicy::Driver`, the default; the runtime's choice, no pipeline differs). Metal's
-  draws read zero (a colour) or the pass's clear value (depth, stencil) of such an attachment
-  wherever they read it (an M3 Max, macOS 27.0.1: a framebuffer fetch and a stencil test, in passes
-  split and whole). In a pass whose draws reach a tile the runtime clears it over the render area
-  on a driver measured to run that clear no slower than its `DONT_CARE` load
-  (`DriverFact::UnstoredClearNoSlower`: MoltenVK on the M3 Max, RADV on the Radeon 780M), and
-  leaves it to the driver's `DONT_CARE` elsewhere, announced `dont-care-unstored-load`: lavapipe's
-  draws then read its earlier texels. `unstored_dont_care_loads = UnstoredDontCarePolicy::Cleared`,
-  which `exact_answers()` selects, clears it on every device. Separate depth and stencil textures
-  take the same answer, each aspect apart, in the scratch image the pass renders them through. An
-  image the runtime makes to stand for an attachment there (that scratch image, a stand-in, a
-  backing) starts at zero on such a driver, never as its memory lies. A
-  memoryless one is not covered.
 
 Loops run as written: no execution bound is translated in.
 
@@ -477,20 +250,12 @@ println!("  Metal properties: {:?}", device.metal_properties());
 - `neutral_kinds()`: the neutral resources plans bind where nothing compatible is bound. Create
   each once, up front.
 
-### Measured driver behavior
+### Driver behavior
 
-Where Vulkan leaves an answer to the driver and a driver's answer is Metal's, the profile relies on
-it only where that driver was measured to give it, keyed on the description's driver identity
-(`driver_id`, `vendor_id`, and `device_id` where one GPU differs from another; MoltenVK's
-`device_id` is the macOS release and the Apple GPU family, so the M3 Max and the M4 share one under
-macOS 27), never on its `driver_version` and never on a claim of the description itself. A row holds
-at every release of its driver. A GPU that reports more than one `device_id` is read by the one it
-was measured under (`DeviceDescription::canonical_device_id`): the Radeon 780M of Hawk Point
-(`0x1900`) as Phoenix's (`0x15bf`). These are `DriverDeviation`s (simdgroups that run in lockstep,
-Metal's own `float` functions, sampler and canonical NaNs, color writes, ...), measured on MoltenVK
-on Apple's M3 Max and M4, with a few per-GPU facts measured elsewhere. A driver or GPU that was not
-measured takes the route each deviation's docs name for it: the device's own answer, recorded as a
-precision note, or, where the answer decides a capability, its emulation or a refusal.
+Where Vulkan leaves an answer to the driver, the profile takes the device's own answer, recorded
+as a precision note, or, where the answer decides a capability, its emulation or a refusal.
+`Device::from_queries` reads no driver identity, so no answer is taken as Metal's because a driver
+was measured to give it.
 
 Metal semantics the translation keeps on every device, beyond Vulkan's: Metal's 32-lane
 simdgroups (and, under the resident-table domains alone, the order Apple's lockstep gives a
@@ -502,286 +267,6 @@ zeros, a `half` read from its bits, which is the device's widening on every devi
 bits, and a denormal on a device that may flush 16-bit ones), and a `half` rounded from a value
 below the smallest normal `half` on a device without `shaderFloat16` (its `OpQuantizeToF16`'s
 zero) are the device's, each recorded as a precision note.
-
-What the runtime enables for itself outside the vocabulary enters no enable set, compile profile
-or fingerprint: among it the extensions of its dma-buf fallback for no-copy memory whose pointer
-the device refuses (`HostMemory::with_dma_buf`), `VK_EXT_external_memory_dma_buf` with
-`VK_KHR_external_memory_fd`, and `VK_EXT_image_drm_format_modifier` with
-`VK_EXT_queue_family_foreign` beside them, wherever a device lists them, and
-`VK_EXT_pageable_device_local_memory` with `VK_EXT_memory_priority`, where a device lists both and
-has `pageableDeviceLocalMemory`: its driver may then move device-local memory to host-local memory
-to make room rather than fail an allocation, every allocation at the default priority; and
-`VK_EXT_zero_initialize_device_memory`, where a device the runtime made lists it, has
-`zeroInitializeDeviceMemory` and copies textures on the host: its blocks of images are then
-allocated zero-initialized, as many as without it, and a `Shared` or `Managed` texture's image that
-copies on the host and lies in bytes no resource used starts in the driver's zeros, with no write
-of the host's (`WorkCounts::images_started_zeroed`).
-
-A texture over host pages is one over a no-copy buffer's (imported by their pointer or as
-dma-bufs), or over a host-visible buffer of the runtime's own longer than 32 MiB where the device
-imports host pointers and the memory class's best type for the buffer takes such an import: that
-buffer lies in fresh anonymous pages imported by their pointer, zero as mapped, so that nothing
-writes its zeros (`WorkCounts::fresh_page_buffers_made`). A class whose best memory type takes no
-such import -- a discrete card's write-combined class, whose best type for the buffer is a
-device-local host-visible one -- is placed as ever and its bytes set to zero on the host; the
-buffer reads zero either way, which is all a program sees.
-
-An image bound to imported memory starts in `VK_IMAGE_LAYOUT_UNDEFINED`
-(`VUID-VkImageCreateInfo-pNext-01443`), and its first move, like any layout transition, may read
-and write every byte bound to it, where Metal keeps every CPU write to bytes a command buffer does
-not write; a render pass's load and store operations may too, for an image it renders. Under the
-default `HostPageTexturePolicy::InPlace` the runtime relies on the driver there, checked: a texture
-over host pages whose declared usage samples, reads, renders into it or writes it through a shader
-(`ShaderWrite` or `ShaderAtomic`, of texels of 1, 2, 4, 8 or 16 bytes) is a linear image aliasing
-the pages (one over dma-buf pages a `DRM_FORMAT_MOD_LINEAR` image acquired from
-`VK_QUEUE_FAMILY_FOREIGN_EXT`: where the buffer lies in one import dedicated to nothing and the
-driver takes such an image there, its plane at offset 0, bound at the texels' offset in that import
-and asking the buffer's source nothing, `WorkCounts::dma_buf_images_in_import`; else over a dma-buf
-of its own pages, its plane at the texels' offset in their first page, or, where the driver lays
-such a plane out at another offset, at offset 0 of an image bound at the texels' offset,
-`WorkCounts::dma_buf_images_at_offset`) wherever the device makes such an image and its own check
-passed for that kind of pages and each of its accesses (`WorkCounts::host_textures_in_place`,
-`dma_buf_textures_in_place`, `fresh_page_textures_in_place`, and `host_textures_in_place_written`
-for one a shader writes), on a discrete GPU as on any other. An image over a dma-buf of its own
-pages is kept with its import as its texture goes, for the next texture over the same pages of the same plan,
-offset and pitches, which takes it asking the source nothing (`WorkCounts::dma_buf_images_taken`,
-docs/HOWTO.md). A texture that renders takes the
-feedback loop usage where the device makes the image with it, and the storage usage too where the
-check passed for a shader's writes of texels of its width over that kind of pages (with it a shader
-writes the texels in place, as one declared to), so a draw that reads it after
-a render-target barrier reads it through a snapshot (`WorkCounts::feedback_loop_alias_images`);
-without the storage usage such a draw splits its pass. The
-check makes such images of every texel size, small and 3840x2160, over each kind of pages while a
-CPU thread writes beside their texels, and passes a kind only where every first move kept every
-byte; for a texture that renders it checks images made with `RenderTarget` usage apart, through
-their first move, their moves into the feedback loop layout and back, and a render pass that
-clears and stores them, while the CPU writes the bytes between their rows and after them; and for
-one a shader writes, images made with `ShaderWrite` usage, whose every texel a kernel stores
-through an unsigned-integer view of 4, 8 or 16-byte texels while the CPU writes the bytes beside
-them (a program's atomics are among no round), and apart from those, images of 1- and 2-byte
-texels stored through `R8_UINT` and `R16_UINT` views, rows of which end inside a 4-byte word: a
-driver may store a narrow texel through a wider access, so 1- and 2-byte texels take verdicts of
-their own, and a byte their rounds changed keeps no wider texel's texture a shadow (a device
-without `shaderStorageImageExtendedFormats` leaves them unchecked). Each verdict is given apart for texels that share
-a line of the device's memory (`nonCoherentAtomSize` bytes) with bytes beside them and for texels
-that share none (their first byte, their end and, with bytes between rows, each row's start and
-end on a line): a device that writes back a texel's line whole puts an older value back over a
-CPU write in the first alone, as the Iris Xe's clear and store and draws do, so its render targets
-and written textures whose rows end on a line, a 3840x2160 `BGRA8Unorm` surface's among them,
-take the image in place where the others keep the shadow. A kernel's writes of a texture over a
-buffer's rows (no IOSurface plane's) whose rows, each to its pitch, start and end on a line, its
-buffer holding the last row to its pitch, may change the rows' padding (section 10, **Kernels**):
-the same rounds give a second verdict for such textures, which a round that changed only bytes of
-its rows' padding passes, so the Iris Xe's written textures over a buffer take the image in place
-whatever their rows' ends. A texture that renders over host pages whose renders failed for its row
-ends is a shadow, whatever its rows' padding. The check's copies of a texture's texels into a
-buffer's rows over each kind of host pages (a blit, as a shadow's copy back writes them, while the
-CPU writes the bytes between the rows and after them) decide no texture's placement: where they, or
-a kernel's writes of such texels, changed a byte for rows that end inside a line, or have not
-answered, a shadow's copy back into that kind of pages is spliced and its merge goes on the host,
-so the CPU's writes beside its texels stay (section 9, `shadowed-texture`). Where that kind's
-copies kept every byte or were not checked, a kind of host pages whose copies changed a byte for
-those row ends, its reads of them passing, decides it, but only where the check's pages of both lay
-in memory of a type of the same property flags (`VkMemoryPropertyFlags`, as the driver reports
-them: host-cached or not, coherent or not): a copy's line write-back belongs to the GPU's store
-path into memory of that type, which a kind's rounds see only as often as the CPU's writes race
-it, and one measured through memory of other flags says nothing of this memory. On the Iris Xe, a
-buffer copy, a copy of texels into a buffer's rows, a kernel's stores and a pass's clear, store and
-draws into host memory each write back the whole 64-byte line that holds a row's last bytes (its
-`nonCoherentAtomSize`; docs/FAST-PATHS.md, **Known gaps**), so its render targets over rows that
-end inside a line are shadows whose copies back are spliced. A byte beside the texels changed under
-the GPU's stores (a render round's clear, store or draw, or a kernel's stores) in one kind of pages,
-whose reads of those row ends passed, fails that access and row ends for every kind: the line
-written back belongs to the GPU's store path, which every kind's images share, while a kind whose
-pages the CPU maps uncached (ANV maps the dma-buf kind's so) sees it in fewer rounds. Reads, and
-verdicts a kind could not check, carry to no other kind. So the verdicts are given together once
-every kind is checked. It runs on a thread of its own, which the first such texture starts; a
-texture made before its kind of pages and access has its verdict is a shadow, made without waiting
-for the check (`WorkCounts::host_texture_shadows_check_pending`), and moves in place, with no copy,
-at a quiet commit once its kind's verdicts pass (`WorkCounts::host_textures_moved_in_place`;
-docs/HOWTO.md says which commits). It runs once per driver and driver version: its verdicts are kept
-in the shader cache's directory, named by the driver and the check's own version, not the runtime's
-(a device without one checks once per process), and recalled as the next device is made
-(`WorkCounts::in_place_checks_run`, `_passed`, `_failed`, `_unchecked`, `_recalled`): those it
-measured, passed or failed, and those it could not check for a cause that lasts for the driver (the
-device lacks an extension, a feature, an import, a format or an image of the shape). A class it
-could not check for a cause that may pass (pages or memory not made, an import refused, its writer
-thread not started, a move or the stores that failed; its reason noted) is checked again by the next
-device. Such a texture's commands read and write the texels in the memory the buffer's commands
-read, so a CPU write reaches them as it reaches the buffer's.
-
-Every other texture over host pages is a shadow (`shadowed-texture`, the notice naming why): under
-`HostPageTexturePolicy::Shadow` (`DevicePolicy::exact_answers`); one a shader writes of texels of
-a width the check's kernel stores none of (none of 1, 2, 4, 8 and 16 bytes); one made before the
-check for an access of its answered, or where it failed or made no image; and one no image in
-place serves (its format or
-usage the device makes no linear image of, the bytes' pitch, placement or memory, or over dma-buf
-pages no dma-buf of the texture's own pages, or, where the driver lays a plane at the texels'
-offset in their page out at another offset, no image of a plane at offset 0 that binds at that
-offset of an import of the pages: one that requires a dedicated allocation, as RADV's does, or
-whose memory's alignment does not divide the offset). `WorkCounts::host_texture_shadows_*` counts each
-reason apart (the texel width, `_store_width`), and of them all those whose usage renders into
-them (`_render_target`) and those a shader writes (`_shader_write`). A shadow
-is an optimal image of the runtime's own memory, whose texels the encoders copy in from the pages
-before a use and back (merged back: only the bytes the commands changed) after a write; no image
-is bound to the pages, and `Texture::vk_image` gives `None` for it. A shadow whose image the
-device refused for its format, features or limits, the bytes' pitch or placement, or the dma-buf
-import (not one the policy, a check or a write's width asks for) still has its bytes in place: a
-2D texture of one level, slice and sample, of an uncompressed format and no swizzle, whose rows
-start on a texel and lie a whole number of texels apart within a buffer that has no read twin,
-binds its rows as a texel buffer of the buffer's bytes (the pages, or the buffer's copy of them)
-at a slot whose function only reads, writes or asks its size (section 5,
-`TextureFacts::texel_rows`), and those commands copy nothing into or out of the shadow
-(`WorkCounts::texel_rows_textures`, `texel_rows_bound`); a slot that samples it reads the shadow.
-Such a texture's shadow (not one made before its pages' verdicts, nor one over a heap's buffer) is
-made at the first reach of its image, not with the texture: a slot that binds the image, a
-`use_resource` of it, a render pass's attachment, an execution of commands that inherits its
-binding, a view, its `VkImage` handed out (`WorkCounts::shadows_left_unmade`,
-`shadows_made_at_use`). One only ever bound through its rows, or read and written by the CPU and
-blits, which reach its bytes, makes none, and its resource ID reads the neutral texture until its
-shadow is made, as a texture that no command named holds nothing a read through its ID could see.
-Over a buffer with a read twin, a slot that only reads the texture binds the texture's read twin
-where it has one in place, and the shadow otherwise.
-A texture in place renders and
-is written beyond its declared usage, as plain Metal allows, through its usage shadow and an
-attachment stand-in, whose copies touch its texels alone.
-`Buffer::texture_placement` and `Buffer::texture_placement_with_iosurface_plane` answer, for the
-arguments of `new_texture` and `new_texture_with_iosurface_plane`, where the texture lies if made
-then (`TexturePlacement`): in place; `Pending`, a shadow made before its verdict that moves in place
-where the verdict passes; a shadow and why (`TextureShadowReason`: the policy, the texel width, the
-check's failed or unchecked verdict with its access and row ends, a refusal, a tiled texture's
-levels, texels past the buffer's length, a device copy, and over the device's own memory rows with
-bytes between them the buffer does not declare unobserved, of a texture that renders or of a
-buffer other writers than the device's ordered commands reach, `BytesBetweenRows`); no host pages (an
-image aliasing the buffer's memory: the device's linear image where it lays one out as Metal does,
-else a `DRM_FORMAT_MOD_LINEAR` image at Metal's pitch where the device's check passed for its pooled
-memory; a texture over that memory that takes neither answers its shadow's cause); or a shape no
-image in place takes; `Buffer::tiled_texture_placement` answers it for `new_tiled_texture`'s. The
-making's own route answers it (`texture/route.rs`), after every check the making runs before it
-makes anything, so the same arguments are refused with the same errors. Where the route is the image
-in place, the query asks first what the device answers without an image: rows that share bytes, and
-the format, feature and limit queries the image steps run before `vkCreateImage`, for every plan the
-making would try. Where those refuse every plan, that refusal is the answer and no image is
-made. Otherwise the query runs the image's making up to the bind
-(`texture/in_place_image.rs`): it makes the
-driver's linear image, and the `DRM_FORMAT_MOD_LINEAR` one where the driver lays the first out at
-another pitch, checks their requirements against the bytes' place and memory type, and releases
-them unbound, so a pitch, an image, a placement or rows the device refuses answer
-`Shadow(Refused(..))`, the shadow the texture then is. That is one or two `VkImage`s where the
-declared plan is made in place, and a pair more for each wider plan the making tries first where it
-is refused; nothing is bound or submitted. Only the bind shows the rest: over pages imported as
-dma-bufs, the caller's source's dma-buf and the driver's import of it; and memory or a lost device,
-which fail the making. A pending
-verdict starts the check, as a texture's making does. `Device::settle_in_place_checks` starts the
-check and says when the verdicts are known (a zero timeout waits for nothing). They become known
-once per `VkDevice`: a GPU recovery's new one reads them from the record as it is made, or checks
-again where the lost one's check left none.
-`Device::host_pages_texture_placement` answers the same question for a texture
-`new_texture_with_iosurface_plane` would make over a no-copy buffer of host pages not made yet
-(`start` and `length`, imported by pointer or as dma-bufs), by the same steps up to the import:
-where those decide (the shape and the call's refusals, the policy, the texel width, the verdicts
-for texels laid out from `start`, texels past `length`, rows that share bytes, and the device's
-format, feature and limit queries), its answer is the one `texture_placement_with_iosurface_plane`
-gives once the buffer is made; where only an image or the import decides, `InPlace`. It makes no
-buffer, import or image.
-`Buffer::new_tiled_texture` (Metal's private `newTiledTextureWithDescriptor:offset:bytesPerRow:`)
-makes what `new_texture` makes, and a 2D texture of more than one level, which is a copy of the
-buffer's rows at the offset and pitch, taken at its first use, as on an x86 Mac (an AMD Radeon Pro
-5300M and an Intel UHD Graphics 630 under macOS 26.7.1). Over any buffer such a texture is one
-image of its own holding every level (`shadowed-texture`, naming the levels;
-`TextureShadowReason::Mipmapped`). The first command of an encoder that uses any of its levels
-after its making, or after `Texture::did_modify_data` (Metal's private `didModifyData`) or a
-`replace_region` of its first level, takes the copy before that command: the bytes into its first
-level, then every later level made from the first as `generate_mipmaps` makes them for the format:
-the device's blit chain or the compute filter (`device-filtered-mipmaps`), or an integer format's
-texel picks. The copy is taken as that command is encoded and runs in its command buffer's order on
-the GPU, so it reads the bytes as they are when the command buffer runs. A rebind that encodes the
-encoder again before its command buffer's first submission (`Buffer::rebind_bytes_no_copy`) takes
-the copy in the encoding again where the first encoding took it, its work recorded on the GPU alone
-(a render pass that executes indirect commands the GPU writes) among it, and a `did_modify_data`
-made since is left to the next use encoded. A take whose encoder runs nothing, its command buffer
-having failed before it ran (committed as failed, a submission that fails, a host step that fails
-or a `vkQueueSubmit` the driver refuses) or dropped without a commit, is given back: the next use
-takes the copy. Work a host step records again after the commit (an execution of indirect commands
-the CPU wrote since) takes the copy where the commit's recording took it. Between takes no write of
-the bytes reaches a level, and nothing the GPU writes into a level reaches the bytes or the other
-levels. `get_bytes` and `replace_region` of the first level read and write the buffer's bytes, as
-the Macs' do, and of a later level the image (an accepted difference, section 10). While the
-buffer's bytes are detached (`detach_backing`) it keeps its own image, every level read and written
-by its commands as before and the later levels by its CPU calls; their calls on the first level are
-refused meanwhile (`NotImplemented(DetachedTexelAccess)`), as a one-level texture's are. A format
-`generate_mipmaps` leaves as it is or refuses has its first level copied and its later levels left
-as they are (docs/FAST-PATHS.md, known gaps).
-A texture of one level is `new_texture`'s, in place where that is.
-On a discrete GPU (no unified memory), a `Managed` no-copy buffer is two copies, as Metal keeps a
-`Managed` resource on a Mac with a discrete GPU (`HostBacking::DeviceCopy`): the GPU's own in
-device-local memory, which every command reads and writes, at the buffer's `gpu_address`, and the
-caller's pages, which `contents` answers. The pages reach the GPU's copy as the buffer is made
-and at a rebind (whole), each before any command of a command buffer committed after the call,
-and a `did_modify_range`'s range at the next commit of a command buffer that uses the buffer (its
-encoders' uses or `use_resource` name it, or a command reaches memory no use names), before any
-command of that command buffer, on its queue after the command buffers before it there: the copy
-in of a later range never lands under an earlier command buffer still to read the buffer. A
-commit of a command buffer that uses none of the buffer leaves the range for the next that does.
-By default (`DevicePolicy::managed_copy_in = ManagedCopyInPolicy::AtSubmission`) the GPU copies the
-range from the pages' import as that command buffer's submission runs, with no copy on the CPU:
-a CPU write of the range after the commit, before the GPU runs the command buffer, may be read,
-as on an Intel UHD Graphics 630 (one copy, macOS 26.7.1), where an AMD Radeon Pro 5300M (two
-copies) read the bytes at the commit. `ManagedCopyInPolicy::AtCommit`, which `exact_answers()`
-selects, takes the 5300M's answer: the commit copies each range on the CPU into staging buffers
-of host-cached system memory, a cost of the range's bytes, and a write after it reaches no
-command buffer committed before it, however late the GPU reaches it (docs/FAST-PATHS.md). Pages
-no import of their own maps are staged so at the commit under either, but where a guest RAM's
-chunk imports hold them all (`HostRam`): there the default copies them by the GPU from those
-imports, as from an import of their own (`WorkCounts::managed_bytes_copied_in_from_ram`). Under the default, a range of at most 16 KiB whose start and length are whole words is not copied: the submission reads it from the host copy as it is recorded and writes it in its command stream (`vkCmdUpdateBuffer`, `WorkCounts::managed_ranges_inlined`). On a device that orders its batches by their ends (RADV, NVIDIA's driver, ANV), a batch whose first work is such uploads alone records no barrier of its own before them: the end of the batch before it on its `VkQueue` already orders every earlier command ahead of them (`WorkCounts::managed_uploads_unbarriered`). The barrier after them makes them visible to the stages and access types the batch's own commands use those buffers in, not to every later command, where the batch's uses of each are known: the batch's end orders every later batch (`WorkCounts::managed_upload_barriers_narrowed`). A CPU write that no `did_modify_range` names is not seen by the GPU. A blit encoder's `synchronize_resource` copies the GPU's copy out to the pages in its
-command buffer's order, which the CPU sees once the command buffer completed: the bytes the GPU's
-tracked writes reached since the buffer's last copy out, in the GPU's order across command buffers
-and queues, the range whole where those are not known (an untracked buffer, an exported one or one
-whose `VkBuffer` was handed out, its first synchronize, a command buffer that may write memory no
-use names, `WorkCounts::managed_synchronizes_whole`). Every other byte of the pages already holds
-what the GPU's copy holds, so a byte the CPU wrote that the GPU did not keeps the CPU's value. The copies run
-from an import of the pages where the device makes one (never a copy of them), or from the
-chunk imports of a guest RAM that hold them, else through
-staging buffers the runtime frees once their work completed, at most 256 MiB staged ahead
-(`WorkCounts::managed_*`). A texture over the buffer's bytes is over the GPU's copy and follows
-it, its `replace_region` copying in and its `synchronize_resource` or `synchronize_texture`
-copying out. Over pages the
-process maps read-only, the GPU's writes are dropped: nothing is copied out, and the pages are
-copied in again at the completion of each command buffer that used the buffer. A detach keeps
-the GPU's copy. A detached no-copy buffer's `contents`, of either kind (and a detached no-copy
-heap's buffers'), answers the caller's pointer of the pages it lay in last, as Metal's does,
-until a rebind gives it new ones; the runtime reads and writes nothing through it meanwhile.
-Where device-local memory has no room for the GPU's copy, the buffer lies in its pages as a
-`Shared` one does (`device-memory-overflow`). A `Shared` no-copy buffer, and every
-no-copy buffer on a device with unified memory, lies in the caller's pages, which the GPU of a
-discrete device reads across the bus, as a discrete Mac's GPU reads them.
-A `Managed` texture over a no-copy buffer's bytes that lie in its pages there (not an IOSurface
-plane's) that only samples or reads, whose policy takes the image in place, over memory that
-carries a log of its writes (`HostMemory::with_dirty_pages`), tracked, one slice laid out as one
-copy, is instead a device copy (`WorkCounts::device_copy_textures`, whatever the check answered):
-the GPU's copy of the two a `Managed` resource is on a Mac with a discrete GPU, a shadow whose
-copies in take only the bands of rows the log reports changed (`dirty_copies_in_gated` and kin).
-Its notice is not announced: it holds the bytes wherever a command reads it. A `Shared` texture
-and an IOSurface's are the pages' alone there too, in place where the check passed, which the GPU
-reads across the bus as a discrete Mac's GPU reads them.
-A texture placed in a heap over dma-buf pages is an image over a dma-buf of its own pages, which its
-first submission acquires from `VK_QUEUE_FAMILY_FOREIGN_EXT`; a linear image over a buffer of the
-runtime's own memory starts `VK_IMAGE_LAYOUT_PREINITIALIZED`, and its move from there keeps its
-bytes. FAST-PATHS.md's costs and known gaps state what this costs and differs from Metal in.
-
-`MTLResourceOptions` bit 20 (0x100000, `ResourceOptions::BIT_20`) is an option no Metal header
-names, whose meaning Metal does not state; programs pass it with a buffer's options (0x100010 for
-a `Managed` no-copy buffer). `ResourceOptions::from_raw` takes it, and nothing in the runtime
-reads it. Measured on an M3 Max under macOS 27.0.1 and an AMD Radeon Pro 5300M under macOS 26.7.1,
-plain and under API validation (`crates/metal2vulkan-conformance/probes/resource_option_bit20.m`),
-the runtime following both halves:
-- a buffer of a length, of bytes or over the caller's pages (`newBufferWithBytesNoCopy:`), of
-  every storage mode, is made with it and reports its options without it; so are a heap and a
-  heap's buffer (the M3 Max; Metal's API validation stops the heap's buffer, "unknown bits
-  0x100000"). The runtime makes each as without it;
-- a texture descriptor with it ends Metal's process (its suballocator asserts, "Different
-  MTLResourceOptions used for the same heap index"): the runtime refuses it (`Invalid`,
-  `Problem::UndefinedValue`), as it refuses bit 24 there.
 
 ## 2. A library
 
@@ -1296,7 +781,7 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   a `half4` or `float4` output over the word it reads, within one code of Metal's
   (`PrecisionNote::DeviceColorConversion`: the attachment holds codes where Metal's tile holds a
   clear's or an earlier blend's result in the pass as a `half`, and under fast math Metal sums a
-  few states otherwise; `docs/FAST-PATHS.md`). A blend of the second source, and a blend or
+  few states otherwise). A blend of the second source, and a blend or
   partial mask on a device without the interlock, is refused as the device lacking the format; a
   blend of an output of fewer lanes is `NotImplemented`; a color input of
   one is read in the interlocked storage form, the word decoded to each channel's code over its
@@ -1324,11 +809,11 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   `R32_UINT`) wherever the device renders that format at the texture's count:
   its samples are the words Metal stores, read through the format's own view as Metal reads them,
   and copied bitwise. Its resolve is the crate-owned one, a pass after the pass that reads the
-  stored words (`shader-resolve`): Metal's for `RGB9E5Float` (each channel's mean of the samples'
+  stored words: Metal's for `RGB9E5Float` (each channel's mean of the samples'
   values, rounded to the nearest `half`, then encoded with its mantissas rounded half up) and an
   8-bit sRGB format, every pixel; for a packed 16-bit format each field's mean of the samples'
   codes, a tie rounded down (a one-bit field's up), within one code of Metal's, which averages its
-  tile's finer values (`word-resolve`). A device whose word's format renders one sample at that
+  tile's finer values. A device whose word's format renders one sample at that
   count refuses the texture (`TextureSampleCount`).
 - A fragment function that reads a color attachment (framebuffer fetch) reads it in an ordered
   form wherever the device has one. On a device with neither ordered form it reads the attachment
@@ -1614,8 +1099,8 @@ for dependency in &pipeline.dependencies {
   slot shorter than one access push a length that every such access past it fails. An access at
   a constant offset, and an access through a pointer loaded from memory or made from an integer,
   is not checked. The binder writes `SlotBounds` from the bound buffer and refuses
-  `ZeroAddress` (`Unsupported{IdentityDomains}`): the zero range is the new runtime's own memory.
-  What the check costs, measured on the new runtime against the same build with the check
+  `ZeroAddress` (`Unsupported{IdentityDomains}`): the zero range is the runtime's own memory.
+  What the check costs, measured on the runtime against the same build with the check
   removed (release, no validation layer): in the compute harness's GPU time, `wide_bindings`
   34.7% slower on a Radeon 780M (job m3-max-56485), 38.5% on an RTX 3090 (m3-max-56486) and 68%
   on an Iris Xe (m3-max-56546); `bind_2000` 17.9%, 32.1% and 11.3%; `constant_managed` and
@@ -1688,7 +1173,7 @@ for dependency in &pipeline.dependencies {
   memory (5.2 to 5.5 times where each invocation read its own word), its texel reads 0.98 to 1.04
   times. A window of up to 4 KiB read through a texel buffer was no slower than through a uniform
   buffer of device memory in any pattern measured; longer windows keep the uniform buffer, whose
-  reads over imported memory stay slower there (`docs/FAST-PATHS.md`, known gaps).
+  reads over imported memory stay slower there.
 - On MoltenVK, push set 0 (a push descriptor set layout) for a pipeline whose fragment stage writes
   a storage buffer of set 0 inside its interlock (an interlock execution mode, and a `StorageBuffer`
   variable of set 0 not decorated `NonWritable`): binding through Metal argument buffers, MoltenVK
@@ -1697,8 +1182,7 @@ for dependency in &pipeline.dependencies {
   fragments of a draw read it unordered (measured on an M3 Max with 1.4.2). A pushed set's buffers
   are discrete arguments, which Metal orders. MoltenVK's pushed sets do not hold their buffers'
   sizes, so bind set 0 there for a pipeline a stage of which reads a buffer's length
-  (`OpArrayLength`); the runtime does both, and announces such a bound set 0
-  (`metal2vulkan-degrade-interlocked-buffer-order`).
+  (`OpArrayLength`).
 - `dependencies` lists the bind-time state the pipeline depends on (`RuntimeFact`: threadgroup
   sizes, sampler coordinate modes, buffer ranges, ...) and how this profile honors each
   (`Mechanism`: a specialization constant, a push field, a plan-time check, a variant). The plan
@@ -1813,7 +1297,7 @@ for dependency in &pipeline.dependencies {
   `shaderStorageTexelBufferArrayNonUniformIndexing` for a slot that writes), and a format whose
   block holds several texels; parts past a stage's sampled or storage image descriptors are the
   link's descriptor-count refusal. A texture buffer past the limit in an argument buffer is the
-  heap class's neutral (`metal2vulkan-degrade-unnamed-texture-unviewable`).
+  heap class's neutral.
 - `interface.reaches_command_buffers` and `interface.texture_writing_stages` say, provably, which
   pipelines may touch an indirect command buffer and which stages may write a texture.
   `interface.command_writes` (`CommandWrites`) says what its functions may write into the
@@ -1891,7 +1375,7 @@ ask too (`plan.dispatch_variant(&dispatch)`, or `BindError::NeedsVariant` from i
 
 Textures follow Metal's texel rules: sparse textures report residency where the device can,
 `Depth32Float` texels are the device's depth image's (a value it clamps or a denormal it flushes is
-announced, `restricted-depth-upload`, `depth-denormals`), `ulong` textures and their atomics use
+the device's, `PrecisionNote::DepthDenormals`), `ulong` textures and their atomics use
 64-bit images where the device has them, and `half` and sRGB reads give Metal's values or record
 their bound (an sRGB texel is the device's own decode wherever the device samples its format,
 `srgb-texel-decode`). The
@@ -2516,7 +2000,7 @@ bound.
   the sampler's own may lie beyond the device's `maxSamplerLodBias`, which Vulkan clamps, or that an
   anisotropic sampler applies to its footprint's minor axis alone. On a device without
   `maintenance8`, a fragment's implicit-level sample with a dynamic texel offset samples with its
-  derivatives too, taken before the switch over the offset's values (`docs/FAST-PATHS.md`).
+  derivatives too, taken before the switch over the offset's values.
 - `metal2vulkan-degrade-device-transcendentals` (precision). `PrecisionNote::DeviceTranscendentals`:
   Transcendentals answer within Apple's stated bound, not Metal's bits: the device's own functions
   where they are Metal's (MoltenVK), and the device's precision for a call no other note bounds.
@@ -2703,7 +2187,7 @@ bound.
   that writes a color after an earlier one read them (`WorkCounts::fetch_draw_barriers`): a fetch reads what every earlier
   draw stored at its pixel, Metal's answer. Under the identity domains it reads the attachment's
   texture at its own pixel instead (`PushField::FetchedColor`), and the consumer orders each
-  fetching draw after the earlier draws of its pass by a barrier between them (the new runtime's
+  fetching draw after the earlier draws of its pass by a barrier between them (the runtime's
   `Metrics::attachment_loop_reads`, or its copies into the attachment's shadow on a device
   without the attachment feedback loop). Vulkan orders nothing between the overlapping
   fragments of one draw there, where Metal orders them in primitive order: a fragment that covers
@@ -2812,7 +2296,7 @@ bound.
   takes Vulkan's rule's form, the device's reading of it. Through MoltenVK's vertex and fragment stages
   under macOS 27, an isotropic sample is Metal's, but an anisotropic sample on a cube's `+Y` or
   `-Y` face loses the gradients' `z` component to SPIRV-Cross's `spvGradientCube`, so its ellipse
-  lies on the face's diagonal (docs/FAST-PATHS.md's known gaps). A kernel's samples through
+  lies on the face's diagonal. A kernel's samples through
   MoltenVK are Metal's own, with no note.
 - `metal2vulkan-degrade-half-texel-conversion` (precision). `PrecisionNote::HalfTexelConversion`:
   The module reads, gathers, or samples a texture with a `half` result, the device's `float` texel
@@ -3434,7 +2918,7 @@ each item named states the rule in full.
   draws as Metal does without validation: a partial last index reads up to the length rounded up
   to 4 bytes, and every later position draws index 0 plus the base vertex.
 - **An indexed draw from an index offset at or past the length draws index 0** plus the base vertex
-  at each position, where Metal reads whatever memory follows (`zeroed-index-fetch`).
+  at each position, where Metal reads whatever memory follows.
 - **An object grid of more than 2^29 threadgroups fails its command buffer by its count, at
   once** (`GpuRecoveryVictim`, Metal's code 1). Metal's GPU runs it for its watchdog's 5 seconds,
   then discards the command buffer from the draw's encoder on, and a command buffer of the queue
@@ -3538,7 +3022,6 @@ each item named states the rule in full.
   its read-write tier formats (`MTLReadWriteTextureTier`): a function that reads a storage class
   one of them is held in through a view the device cannot read so is refused
   (`Unsupported{ArgumentBufferTextures}` naming the view format's bit).
-  Which formats this reaches is in `docs/FAST-PATHS.md`'s device gaps.
 - **Two live textures with one ID: a function reads the holder**, the texture placed there last.
 - **An indirect command buffer's ID is Metal's small integer**, from 1, the lowest free, in the
   indirect command buffers' own space; it stays held while committed work that runs or makes the
@@ -3555,8 +3038,7 @@ each item named states the rule in full.
   array's elements (`pipeline::heap_sampler_capacity`: at most the handle table's 65536 entries
   and the update-after-bind sampler limits) and `maxSamplerAllocationCount`. Metal answers 500000
   on an M3 Max; MoltenVK there answers 65535. It counts every live sampler state, with or without
-  `supportArgumentBuffers`. A state past it reads the neutral sampler through an argument buffer
-  (`unlisted-argument-sampler`).
+  `supportArgumentBuffers`. A state past it reads the neutral sampler through an argument buffer.
 - **A texture can take no resource ID** (`IdPlacement::Outside`), for a consumer's helper textures
   and its textures over its own images (`Device::new_texture_with_vk_image`), such as swapchain
   images.
@@ -3566,13 +3048,10 @@ each item named states the rule in full.
   where Metal ended the process; an index of 16384 or more is refused.
 - **An indirect command names its pipeline state without holding it.** As in Metal, releasing a
   state gives its ID back while a command names it; a CPU-encoded command still runs what the state
-  ran, and a GPU-written record runs the ID's holder, or nothing (`released-command-state`).
+  ran, and a GPU-written record runs the ID's holder, or nothing.
 - **Unique identifiers** (`ComputePipelineState::unique_identifier`,
   `RenderPipelineState::unique_identifier`, `IndirectCommandBuffer::unique_identifier`) are
-  nonzero and unique among live objects, laid out by Metal's rule where it was measured
-  (`plain-state-unique-identifier`, `unmeasured-unique-identifier` where it differs).
-  `IndirectCommandBuffer::identifier_unmeasured` (no Metal counterpart) answers, without
-  announcing, whether a buffer's identifier is one that notice names.
+  nonzero and unique among live objects, laid out by Metal's rule where it was measured.
 
 **Indirect command buffers**
 
@@ -3683,14 +3162,14 @@ each item named states the rule in full.
   the device is lost. A loop running again stops, as Metal's does, at the GPU's recovery from a
   fault or a hang of another queue's command buffer (primitive type 9, or one a program commits
   as failed with Metal's code of either, 3 or 2; one behind the loop on its own queue waits for
-  it, a known gap in docs/FAST-PATHS.md): a fault's fails its command
+  it): a fault's fails its command
   buffer as a victim (`GpuRecoveryVictim`), a hang's ends it with no error, and nothing after the
   loop runs. Work inside a loop the runtime records apart (an indirect dispatch or
   an indirect command buffer's execution a host step records) is recorded again in each such
   run, after another round trip to the host where its first recording waited for the work
   before it. A condition word past its buffer reads
   as Metal reads it (the heap's bytes, or zero), and as zero where Metal reads memory unrelated to
-  the buffer (`predication-word-past-buffer`). An unbalanced record that is its unit's first
+  the buffer. An unbalanced record that is its unit's first
   drops the unit's dispatches before it as Metal's does: what the unit's encoders recorded before
   it is never submitted.
 - **A GPU-written indirect command naming a placed ID runs that ID's live holder**, the state made
@@ -3736,11 +3215,7 @@ each item named states the rule in full.
 
 - **Multisampled blit copies between depth or stencil and colour formats** copy each sample's
   bytes as plain Metal does (its validation stops them), through `VK_KHR_maintenance8` or
-  sample-rate draws. A 16-bit depth crosses as its codes, exact where the driver keeps every code
-  (`DriverFact::FragmentDepthKeepsDepth16Codes`: lavapipe's measured releases, and MoltenVK 1.4.2
-  on the Apple M3 Max) and refused where it is not measured to. A copy into a 32-bit float depth on
-  a driver not measured to store fragment depths unchanged is drawn and announced
-  (`drawn-depth-copy`).
+  sample-rate draws.
 - **A blit copy of 24-bit depth between textures of different formats is refused**: Apple's
   reference GPUs make no `Depth24Unorm_Stencil8` texture, so there is no Metal answer to match.
 - **A blit copy out of a texture whose rows overlap in the buffer writes them in turn, the later
@@ -3767,15 +3242,6 @@ each item named states the rule in full.
 
 **Render passes**
 
-- **A texture over a buffer that a pass stores `DontCare` keeps the buffer's bytes**, in every
-  texel, with or without memory barriers between the pass's draws, **and under
-  `DontCareColorPolicy::Kept` a texture's own image keeps its earlier texels**: Metal's answer,
-  but that the first pass in a process to overflow Apple's tiler (some 2 to 4 million
-  triangle-tile entries) leaves the rendered texels in every texel, which no call can predict or
-  detect. The runtime does not model the overflow, but where it hands the attachment to Metal's
-  own `DontCare` (MoltenVK), which decides it. A pass that renders such a texture in place, as
-  the default policy renders a texture's own image, otherwise announces `dont-care-store`.
-
 - **The runtime's `DontCare` store writes what the pass rendered** (`metal2vulkan-runtime`'s
   render encoder stores a `DontCare` attachment as it stores a `Store` one, its README's render
   passes). Apple's page for
@@ -3784,7 +3250,7 @@ each item named states the rule in full.
   may still store the contents back to the texture, but you can't rely on that behavior. You need
   to assume that GPU discarded the texture's contents." `MTLRenderPass.h` states only that it is
   the default store action. An Apple M3 Max on macOS 27.0.1 leaves the texels of a texture over a
-  buffer as they were before a clearing pass; the new runtime stores the clear there. The bytes
+  buffer as they were before a clearing pass; the runtime stores the clear there. The bytes
   of the buffer outside the texels keep what they held on both.
 
 - **Two mesh draws of one pass with no barrier between them run in order.** Where a later draw's
@@ -3858,16 +3324,7 @@ each item named states the rule in full.
   over host pages), its pass is of one color group, over no rasterization-rate map, with no depth
   attachment the device holds between passes, and records at the encoder's end (its draws in a
   secondary command buffer); one whose first instance records inline begins such a group but
-  joins none. On a device whose driver's image uses miss a write through a buffer over their
-  memory recorded before them in the same `VkCommandBuffer`
-  (`DriverFact::ImageUsesMissBufferWritesInOneCommandBuffer`: NVIDIA's 620.70.06 on the RTX
-  3090), a command that uses an image over bytes written before it in its `VkCommandBuffer` goes
-  on in a new one, a grouped encoder's in its own (`WorkCounts::command_buffers_split_at_aliases`);
-  a grouped render encoder's pass goes on in a new one before it where the pass or one of its
-  draws uses such an image, and a render encoder that could continue the render pass instance
-  the render encoder before it left open (`WorkCounts::render_passes_continued`) begins its own
-  in its own `VkCommandBuffer` instead where an image its pass uses lies over bytes the group's
-  encoders wrote. An encoder that updates a fence stays in its group: every command of
+  joins none. An encoder that updates a fence stays in its group: every command of
   a later member orders after the writes the update covers, whether or not its encoder waits for
   the fence, which orders more than Metal does, through the narrowest barrier that covers a
   fence: from those writes' stages to the command's own stages' storage, sampled and transfer
@@ -3950,8 +3407,7 @@ each item named states the rule in full.
     (`WorkCounts::private_textures_zero_filled` counts each; no fill where that use, a pass
     that loads it `Clear` and stores it or a blit into its whole extent, writes every texel before
     any command reads one, `WorkCounts::private_textures_overwritten_unfilled`), where an Apple
-    silicon Mac's reads zero or the compressed texture's fixed pattern, so `fresh-pattern-zeroed`
-    is never announced.
+    silicon Mac's reads zero or the compressed texture's fixed pattern.
     Such a Mac's holds what its memory held. Measured on Macs with an AMD Radeon Pro 5300M and an
     Intel UHD 630 (the consumer's probes): new `Private` textures read zero; a mipmapped
     `RGBA16Float` one made right after a cleared one of its descriptor was released read the
@@ -3960,9 +3416,8 @@ each item named states the rule in full.
     would show one process another's texels that way, which macOS never does, so the runtime
     gives the zeros those Macs read where their memory held nothing, which Metal's undefined
     contents allow.
-  - a GPU blit or fill through any texture keeps its bytes, with no `extended-range-bits-kept`,
-    `device-nan-encoding` or `shared-exponent-kept` note for it and no rewrite under
-    `ExtendedRangeBlitPolicy::Canonical`, and a clear of any texture takes the route of Metal's
+  - a GPU blit or fill through any texture keeps its bytes, with no `device-nan-encoding` or
+    `shared-exponent-kept` note for it, and a clear of any texture takes the route of Metal's
     uncompressed one, through `half`, so a `half` NaN clear keeps no sign and an extended-range
     or bfloat clear rounds as through `half`. Expected, not measured on such a Mac.
   - a `Clear` load in a pass of one layer without a draw call clears the attachment's whole level
@@ -3989,10 +3444,9 @@ each item named states the rule in full.
     whatever the class, so every length answered runs.
 
   Metal leaves a new texture's contents undefined, and zero and a released texture's texels are
-  both what such a Mac reads, so this trades no accuracy and no `DevicePolicy` switch fills the
-  texture. A device that presents an Apple silicon Mac (`lossless_compression` true) answers as
+  both what such a Mac reads, so this trades no accuracy. A device that presents an Apple silicon Mac (`lossless_compression` true) answers as
   one, on any GPU: the runtime writes the pattern and the zeros of a new `Private` texture, a
-  pattern no clear or copy writes exactly reading zero (`fresh-pattern-zeroed`), and a `Clear`
+  pattern no clear or copy writes exactly reading zero, and a `Clear`
   load in a pass of one layer without a draw call clears a texture Metal keeps compressed over its
   whole level and slice past the render area and any other texture over the render area rounded
   up to 32x32 tiles clipped to the level, as a pass with a draw call clears every texture, and no
@@ -4010,26 +3464,6 @@ each item named states the rule in full.
 
 **Heaps and memory**
 
-- **A heap texture answers Metal's size and alignment where the device's image fits them, else
-  the device's** (`Device::heap_texture_size_and_align`, `DevicePolicy::heap_answers`). Under the
-  default `HeapAnswerPolicy::Device`, a texture whose image binds into the heap's memory (a
-  multisample one too) and needs more than Metal's answer answers the larger of the two and lies
-  in that image: no image is put in its place and no shadow holds it. The alignment it takes is
-  the device's (on an RX 7900 XTX, 256 KiB for a 4-sample render target past 128 texels a side), at most a
-  heap's memory's own, 256 KiB, past which no image binds there, and at most 4 KiB or its own
-  size; where its image asks more, its image that a 4 KiB alignment holds (host-transfer usage, else linear) takes its
-  place. A `Shared` texture's answer also holds the linear image a heap over host pages binds.
-  Under `HeapAnswerPolicy::Metal` (in `exact_answers`), the answer is Metal's: an image that fits
-  it takes the place of one that does not, else a shadow of the heap's bytes holds the texture
-  there, and only a texture neither holds answers the device's (`heap-texture-larger-than-metal`).
-  Metal's measured answers (4:2:2, one-plane YCbCr, two-plane extended-range, `X32_Stencil8`,
-  `BlockWritesOnly`) hold under either value. A placement heap's `newTextureWithDescriptor:offset:` is held to Metal's own alignment, not that
-  answer, for a texture whose image lies in memory of its own (a shadow of the heap's bytes, a
-  multisample texture's samples in Metal's tiles): no image binds to the heap's memory there, so
-  every offset Metal makes the texture at makes it here, and such a texture is held to no
-  alignment bound of the heap's memory base either, whatever alignment it answers. A texture an
-  image of does bind into that memory is refused `NotImplemented(HeapTextureAlignment)` where its
-  answer passes the base (256 KiB, the largest image alignment measured).
 - **A heap's texture answers the size that placed it** (`Texture::allocated_size`, Metal's
   `allocatedSize`): the size query's answer for its descriptor, a view's its texture's, as Metal
   answers; `None` for a texture outside a heap, whose Metal answer the runtime does not model.
@@ -4042,8 +3476,8 @@ each item named states the rule in full.
   runtime; it holds each answer to three steps: (1) the alignment is a power of two; (2) a Private
   descriptor's texture is made at offset `align` in a heap of `align + size` bytes; (3) there,
   level 0's first slice written from a buffer reads back unchanged. A Shared, Managed or
-  Memoryless descriptor is held to step 1 alone, as the new runtime places heap textures in
-  Private blocks only. A descriptor whose bytes the new runtime does not move (depth and stencil
+  Memoryless descriptor is held to step 1 alone, as the runtime places heap textures in
+  Private blocks only. A descriptor whose bytes the runtime does not move (depth and stencil
   both, multisample, `Depth32Float`) is held to steps 1 and 2.
 - **A no-copy buffer's keep-alive waits for the buffers bound inside its import** (`KeepAlive`, a
   runtime extension with no Metal counterpart). A no-copy buffer made over part of a live one's
@@ -4053,8 +3487,7 @@ each item named states the rule in full.
   (issue 6 of the extension). It holds that import until it goes, so the first buffer's
   keep-alive, which keeps the pages that import maps, is dropped once the import is freed: after
   both buffers' releases, never before. Given with a keep-alive, the first buffer's deallocator
-  still runs at its release, as Metal's; given none, it waits for the free, announced as
-  `host-deallocator-delayed`. Counted: `WorkCounts::host_releases_held_inside`, each release
+  still runs at its release, as Metal's; given none, it waits for the free. Counted: `WorkCounts::host_releases_held_inside`, each release
   so held, beside `host_keep_alives_kept` (held now) and
   `ObjectChurn::buffers_bound_in_import`. A program that unmaps the first buffer's pages as its
   keep-alive drops unmaps them after the later buffer's release too, never before.
@@ -4135,8 +3568,8 @@ each item named states the rule in full.
   blit of its bytes past it is refused, as Metal's validation refuses it. Past a no-copy buffer's
   length (its pages past it are the caller's), past a wrapped `VkBuffer`'s or an exportable
   buffer's, past a buffer's under 16 KiB, and past a heap's end, the texture is a copy: a 2D texture or an array is a shadow image
-  whose copies in and back go through its tail (`shadowed-texture`), and a texture buffer's
-  functions view its tail, which copies in and back too (`staged-texture-buffer`); its texels the
+  whose copies in and back go through its tail, and a texture buffer's
+  functions view its tail, which copies in and back too; its texels the
   buffer's memory holds are the buffer's bytes on every path. Metal's texels past the length are
   the memory after the buffer's: on an Apple M3 Max under macOS 27.0.1
   (`probes/texels_past_buffer_length.m`, `probes/texture_buffer_past_length.m`) a kernel's
@@ -4148,7 +3581,7 @@ each item named states the rule in full.
   zero when made, read and written alike by its functions, blits and CPU calls, and no other
   allocation's bytes; two textures over one buffer past it keep a tail each. A colour texture
   over a plane of an IOSurface with planes keeps its texels past the surface in a tail of its own
-  too, announced (`metal2vulkan-degrade-surface-texels-tail`), where Metal lays them in no one
+  too, where Metal lays them in no one
   place; the plane shapes that keep no tail (a two-plane YCbCr, two-plane extended-range, 4:2:2,
   depth, stencil, BC or rotated texture) stay `NotImplemented(TexelsPastBufferLength)` there.
 - **A 2D array of several slices over an IOSurface plane keeps its slices past the first in a
@@ -4159,7 +3592,7 @@ each item named states the rule in full.
   and `replaceRegion`'s writes of it land at the plane's offset, over the first. The runtime's
   first slice is the plane's bytes, as Metal's is; its slices past the first lie in the
   texture's tail, zero when made, read and written alike by every path, and reach no byte of the
-  surface, announced (`metal2vulkan-degrade-surface-texels-tail`). A colour array over a plane
+  surface. A colour array over a plane
   whose offset and `bytesPerRow` are multiples of 16 is made so; one off 16, or of another
   format, stays `NotImplemented(SurfacePlaneShape)`.
 - **A mipmapped, 3D or multisample texture over an IOSurface plane lies in memory of its own.**
@@ -4169,8 +3602,7 @@ each item named states the rule in full.
   level and slice among them: its blits and kernels read other bytes than its blits,
   `replaceRegion` and `getBytes` write and read there. The runtime's such texture of a colour
   format lies in memory of its own, zero when made in every storage mode, read and written alike
-  by every path, and reaches no byte of the surface, announced
-  (`metal2vulkan-degrade-surface-texels-apart`): no level or slice of it is the plane's, as the
+  by every path, and reaches no byte of the surface: no level or slice of it is the plane's, as the
   M3 Max's are not. The x86 Macs under macOS 26.7.1 (an AMD Radeon Pro 5300M and an Intel UHD
   630) keep the first level and slice over the plane, and the runtime does not. Such a texture
   of another format stays `NotImplemented(SurfacePlaneShape)`, and a `Memoryless` one
@@ -4213,7 +3645,7 @@ each item named states the rule in full.
   are multiples of 16 lies so on every path, its CPU calls among them; a face past the plane's rows
   but inside the surface is the surface's bytes there, as every texture's rows past its plane are
   (the call gives no plane height), and a face past the surface lies in the texture's tail, zero
-  when made, announced (`metal2vulkan-degrade-surface-texels-tail`). One of another format, off
+  when made. One of another format, off
   16 or of several levels stays `NotImplemented(SurfacePlaneShape)`.
 - **The runtime's Managed copies read the consumer's bytes when the GPU reaches them**
   (`metal2vulkan-runtime`'s `Buffer::did_modify_range` and `Texture::upload_region`). On a device whose
@@ -4386,7 +3818,7 @@ each item named states the rule in full.
   declares the argument unaliased (the `air-buffer-no-alias` attribute, which the AIR of Metal's
   current compiler carries on every buffer argument) and no store, atomic, volatile or coherent
   access of the kernel reaches it, through the argument or through a pointer its address may come
-  back as: its views are decorated `NonWritable`, and under the identity domains (the new runtime)
+  back as: its views are decorated `NonWritable`, and under the identity domains (the runtime)
   its device-address loads go through `NonWritable` places. Under the identity domains a `constant`
   buffer argument is read-only memory too, whether or not the AIR declares it unaliased: Metal's
   `constant` address space is read-only. A dispatch that binds memory to such an argument and to
@@ -4395,7 +3827,7 @@ each item named states the rule in full.
   scalar load). The attribute states that no other argument reaches that memory.
 - **A dispatch that reaches a buffer bound off its argument's alignment is refused** (the
   alignment the kernel's AIR states for the argument, `air.arg_type_align_size`, at most 16;
-  `RuntimeFact::AddressAlignment`): the new runtime refuses the dispatch
+  `RuntimeFact::AddressAlignment`): the runtime refuses the dispatch
   (`Refusal::BufferOffsetAlignment`) where the bound address, the buffer's `gpuAddress` plus the
   offset, is not a multiple of it, before anything is recorded, as Metal's API validation refuses
   such a bind offset ("must be a multiple of 4 but was set to 2" for a `uint *` argument).
@@ -4409,7 +3841,7 @@ each item named states the rule in full.
   holds for the pipeline's `max_call_stack_depth`; a call that finds it full returns zero, where
   Metal's answer is corrupt.
 - **The threads of a SIMD-group run in no order between barriers** under the identity domains (the
-  new runtime), where an Apple GPU runs them in lockstep: the Metal Shading Language orders their
+  runtime), where an Apple GPU runs them in lockstep: the Metal Shading Language orders their
   memory accesses only through barriers and atomics, and calls two of them that conflict between
   barriers a data race.
 - **A simdgroup barrier in divergent code waits for its tangle**, as SPIR-V defines it. The Metal
@@ -4481,7 +3913,7 @@ each item named states the rule in full.
   have been resolved and the command buffer has been scheduled for execution", and promises no
   time between the two. Every queue's command buffers go to the device's one `VkQueue`, which
   takes one `vkQueueSubmit2` call at a time, all made by the device's one submit thread, and the
-  new runtime schedules each command buffer there once that thread's earlier calls have returned,
+  runtime schedules each command buffer there once that thread's earlier calls have returned,
   whichever queue they were for (the runtime's README, the known gaps of queues). So a command
   buffer whose wait an earlier submission's signal meets stays `Committed`, its scheduled
   handlers not run, for as long as that submission's driver call lasts, where an Apple M3 Max had
@@ -4548,7 +3980,7 @@ each item named states the rule in full.
   SPIR-V compiler down while a worker thread of the driver's still runs in it (a null dereference
   at `0x18` in `libnvidia-glvkspirv.so`, the fault above), on an RTX 3090 (620.70.06) in 6 of 80
   exits right after the device's check of textures over host pages ended, and none three seconds
-  after it. A device dropped before the exit leaves none ([FAST-PATHS](FAST-PATHS.md), known gaps).
+  after it. A device dropped before the exit leaves none.
 
 **Two-plane YCbCr textures**
 
@@ -4611,13 +4043,13 @@ each item named states the rule in full.
   one below its `maxMultiDrawCount` in one `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT`, its
   vertex function's variant storing `ViewportIndex` as `DrawIndex` (`BindState::region_viewports`,
   `VariantKey::region_viewports`): the same pixels in fewer commands. A region whose scissor, cut to
-  the guest's viewport and the render area, holds no pixel is not recorded. At a host step, under
-  `RateMapRegionPolicy::FanOut` (the default) on a device that enables `geometryShader`,
+  the guest's viewport and the render area, holds no pixel is not recorded. At a host step, on a
+  device that enables `geometryShader`,
   `shaderClipDistance` and `vertexPipelineStoresAndAtomics`, an executed command's draw of triangles
   is drawn once instead where a probe finds that none of its triangles crosses `w = 0` or touches
   more regions than the fan-out's copies: its variant's geometry stage emits a copy of each triangle
   for each region it touches (`VariantKey::region_fan_out`), a pixel centre within a rounding error
-  of an edge possibly covered otherwise (`docs/FAST-PATHS.md`). A draw the probe flags, a list of
+  of an edge possibly covered otherwise. A draw the probe flags, a list of
   triangles of one instance whose pipeline reads no `[[primitive_id]]` and writes no memory, is
   drawn in parts in its place: its runs of blocks of 64 triangles that hold a triangle the probe
   flagged region by region, cut to the first and the last flagged one, runs fewer than 170 triangles
@@ -4649,7 +4081,7 @@ each item named states the rule in full.
   pass whose sample positions put a sample on a pixel's edge records a box a column or a row at a
   time), so the pass's routes rasterize a vertex at one position and a depth `Equal` test across
   them holds where both pipelines compute the position alike; a draw the variant does not take is
-  drawn through each region's viewport (`docs/FAST-PATHS.md`, known gaps). The probe costs the host
+  drawn through each region's viewport. The probe costs the host
   step submissions it waits for before the pass, which run each probed draw's vertex function and
   geometry stage once and shade nothing: its parts, of at least 32 commands and at most 8 a probe,
   each submitted once the host recorded it, so the GPU runs one while the host records the next,

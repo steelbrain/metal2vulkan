@@ -109,7 +109,7 @@
 //     `ABGR4Unorm`'s 27.0.1 answer byte for byte.
 //   * `FETCH BGRA4Unorm TAKEN-BY-METAL`, rotating all 16 words exactly through the measured
 //     layout, and `BLEND BGRA4Unorm source-over TAKEN-BY-METAL`. So the word view's refusals
-//     would be our gap, and the fallback was NOT taken (docs/FAST-PATHS.md).
+//     would be our gap, and the fallback was NOT taken.
 //
 // One defect in that run, fixed here: the `RGBA8Unorm` fetch control read a 4-byte texel back with
 // `bytesPerRow` 8, which raised two AGX assertions and zeroed its texel lines. Its pipeline

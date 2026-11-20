@@ -54,7 +54,7 @@
 //! position its own vertex function computes: the identity rests on those correctly rounded
 //! operations and on the guest's position computation compiling alike in both pipelines, which
 //! Vulkan's invariance appendix does not promise across pipelines (its Rule 4), and which is
-//! checked by running it (`docs/FAST-PATHS.md`, known gaps).
+//! checked by running it.
 //!
 //! **Routes the GPU picks.** A consumer that records a draw's probe before the draw's pass
 //! instance and both its routes in its place, the fan-out variant's and the region-copy
