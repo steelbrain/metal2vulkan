@@ -793,10 +793,11 @@ fn required_features_are_cumulative() {
     assert!(v13.contains(&VkFeature::SubgroupSizeControl));
 }
 
-/// With feature `serde`, every committed description and a default and a non-default policy
-/// survive a JSON round trip unchanged, and the `Device` rebuilt from the decoded pair has the
-/// original's profile fingerprint: what an out-of-process compile worker needs to compile for the
-/// consumer's device (worker recipe step 1).
+/// With feature `serde`, every committed description and both policies survive a JSON round trip
+/// unchanged, and the `Device` rebuilt from the decoded pair has the original's profile
+/// fingerprint, or, where the description cannot take the policy (the identity domains without
+/// `bufferDeviceAddress` and `shaderInt64`), the same refusal: what an out-of-process compile
+/// worker needs to compile for the consumer's device (worker recipe step 1).
 #[cfg(feature = "serde")]
 #[test]
 fn descriptions_and_policies_round_trip_through_serde() {
@@ -814,13 +815,23 @@ fn descriptions_and_policies_round_trip_through_serde() {
             let policy_json = serde_json::to_string(&policy).unwrap();
             let decoded_policy: DevicePolicy = serde_json::from_str(&policy_json).unwrap();
             assert_eq!(decoded_policy, policy, "{stem}");
-            let original = Device::from_queries(description.clone(), policy).unwrap();
-            let rebuilt = Device::from_queries(decoded.clone(), decoded_policy).unwrap();
-            assert_eq!(
-                rebuilt.profile().fingerprint(),
-                original.profile().fingerprint(),
-                "{stem}"
-            );
+            let original = Device::from_queries(description.clone(), policy);
+            let rebuilt = Device::from_queries(decoded.clone(), decoded_policy);
+            match (original, rebuilt) {
+                (Ok(original), Ok(rebuilt)) => assert_eq!(
+                    rebuilt.profile().fingerprint(),
+                    original.profile().fingerprint(),
+                    "{stem}"
+                ),
+                (Err(original), Err(rebuilt)) => {
+                    assert_eq!(rebuilt.to_string(), original.to_string(), "{stem}")
+                }
+                (original, rebuilt) => panic!(
+                    "{stem}: the original derives {}, the decoded pair {}",
+                    original.is_ok(),
+                    rebuilt.is_ok()
+                ),
+            }
         }
     }
 }
