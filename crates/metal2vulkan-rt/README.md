@@ -514,9 +514,12 @@ is the acquire from the foreign queue family (`VK_QUEUE_FAMILY_FOREIGN_EXT`) of 
 preinitialized to general, and of the buffer's range under it, in one barrier. It is counted in
 `Metrics::external_acquires`. Vulkan's external resource sharing keeps the bytes through it: "To
 make the contents of the underlying memory accessible in the destination instance or API,
-applications must ... Acquire exclusive ownership in the destination instance or API", and the
-undefined layout an image is made in "is a placeholder", as "the layout specified as part of this
-transition will be the true initial layout of the image". The buffer's range is in the barrier
+applications must ... Acquire exclusive ownership in the destination instance or API". The
+acquire's old layout is preinitialized, Vulkan's layout of linear bytes the host wrote, because
+Vulkan's note on such an acquire says "the layout specified as part of this transition will be
+the true initial layout of the image. The undefined layout specified when creating it is a
+placeholder", and no layout is implied for a dma-buf (Table 17 lists Direct3D 11 handles
+alone). The buffer's range is in the barrier
 because an acquire of the image alone would leave undefined "the contents of any portion of
 another resource which aliases memory that is bound to" it. From then on, the image stays in the
 general layout, a host-accessible alias of the buffer, as in place over a Shared block. A second
