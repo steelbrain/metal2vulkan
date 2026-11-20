@@ -366,6 +366,58 @@ mod on_device {
         })
     }
 
+    /// Commits a fill of 256 MiB of device-local memory on a queue of its own, again and again
+    /// with up to 64 in flight, until `stop`: real GPU work backed up on the runtime's queue, so
+    /// that its submissions wait on the GPU. The commits made.
+    #[cfg(target_os = "linux")]
+    fn backlog(device: Device, stop: Arc<AtomicBool>) -> thread::JoinHandle<u64> {
+        thread::spawn(move || {
+            const LEN: u64 = 256 << 20;
+            let block = (device.take_block(MemoryClass::Private, LEN)).expect("a Private block");
+            let buffer = (device.new_buffer(block.id, 0, LEN, None)).expect("a buffer");
+            let queue = device.new_command_queue(128).expect("a queue");
+            let mut flight = VecDeque::new();
+            let mut commits = 0;
+            while !stop.load(Ordering::Relaxed) {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                encoder.fill_buffer(&buffer, 0..LEN, 7).expect("a fill");
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                commits += 1;
+                flight.push_back(command_buffer);
+                if flight.len() > 64 {
+                    let first = flight.pop_front().expect("one in flight");
+                    finished("the backlog thread", &first);
+                }
+            }
+            for command_buffer in &flight {
+                finished("the backlog thread", command_buffer);
+            }
+            commits
+        })
+    }
+
+    /// The process's threads' OS ids and names, for a trace's lines: `/proc/self/task`.
+    #[cfg(target_os = "linux")]
+    fn thread_names() -> String {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir("/proc/self/task")
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let comm = std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
+            names.push(format!(
+                "{}={}",
+                entry.file_name().to_string_lossy(),
+                comm.trim()
+            ));
+        }
+        names.sort();
+        names.join(" ")
+    }
+
     /// The median and the longest of `nanos`, in milliseconds.
     fn shown(nanos: &[u128]) -> String {
         let mut sorted = nanos.to_vec();
@@ -707,7 +759,8 @@ mod on_device {
     /// `Device::import_dma_bufs` of a guest RAM view's shape: 8 MiB in 2 dma-bufs, each made by
     /// one `UDMABUF_CREATE_LIST` of 1,013 scattered runs of a memfd with every page written first,
     /// against the same 8 MiB in 2 dma-bufs of one run each: whole and by step, `REPS` times with
-    /// the runtime's queue idle, and each create's time apart. On an instance without the
+    /// the runtime's queue idle and then backlogged with fills of 256 MiB ([`backlog`]), and each
+    /// create's time apart. On an instance without the
     /// validation layer, whose own cost would be the count.
     #[cfg(target_os = "linux")]
     #[test]
@@ -745,40 +798,62 @@ mod on_device {
             }
             // SAFETY: the mapping above, which nothing uses any more.
             assert_eq!(unsafe { libc::munmap(whole, file as usize) }, 0);
-            for runs in [1013u64, 1] {
-                let mut wholes = Vec::with_capacity(REPS);
-                let mut creates = Vec::with_capacity(4 * REPS);
-                let mut by_part = vec![Vec::with_capacity(REPS); DMA_PARTS.len()];
-                for _ in 0..REPS {
-                    let (chunks, made) = view_chunks(&memfd, 2, chunk, runs);
-                    creates.extend(made);
-                    wholes.push(dma_whole(&device, chunks));
-                    let (chunks, made) = view_chunks(&memfd, 2, chunk, runs);
-                    creates.extend(made);
-                    let steps = dma_parts(&device, chunks);
-                    for (times, took) in by_part.iter_mut().zip(steps) {
-                        times.push(took);
+            for queue in ["idle", "backlogged"] {
+                let stop = Arc::new(AtomicBool::new(false));
+                let worker =
+                    (queue == "backlogged").then(|| backlog(device.clone(), Arc::clone(&stop)));
+                if worker.is_some() {
+                    // The backlog builds before the first import.
+                    thread::sleep(std::time::Duration::from_millis(500));
+                    println!(
+                        "view dma-buf import time: {name}: threads {}",
+                        thread_names()
+                    );
+                }
+                for runs in [1013u64, 1] {
+                    let mut wholes = Vec::with_capacity(REPS);
+                    let mut creates = Vec::with_capacity(4 * REPS);
+                    let mut by_part = vec![Vec::with_capacity(REPS); DMA_PARTS.len()];
+                    for _ in 0..REPS {
+                        let (chunks, made) = view_chunks(&memfd, 2, chunk, runs);
+                        creates.extend(made);
+                        wholes.push(dma_whole(&device, chunks));
+                        let (chunks, made) = view_chunks(&memfd, 2, chunk, runs);
+                        creates.extend(made);
+                        let steps = dma_parts(&device, chunks);
+                        for (times, took) in by_part.iter_mut().zip(steps) {
+                            times.push(took);
+                        }
+                    }
+                    let sums: Vec<u128> = (0..REPS)
+                        .map(|rep| by_part.iter().map(|times| times[rep]).sum())
+                        .collect();
+                    let rest = median(&wholes).saturating_sub(median(&sums));
+                    let shape = format!("2 dma-bufs of {chunk} bytes, {runs} runs each, {queue}");
+                    println!(
+                        "view dma-buf import time: {name}: {shape}, granule {granule}: the whole \
+                     call {}; its steps by hand summed {}; the rest (the whole's median less the \
+                     steps') {:.3} ms; each UDMABUF_CREATE_LIST (outside the call) {}",
+                        shown(&wholes),
+                        shown(&sums),
+                        rest as f64 / 1e6,
+                        shown(&creates)
+                    );
+                    for (part, times) in DMA_PARTS.iter().zip(&by_part) {
+                        println!(
+                            "view dma-buf import time: {name}: {shape}: {part} {}",
+                            shown(times)
+                        );
                     }
                 }
-                let sums: Vec<u128> = (0..REPS)
-                    .map(|rep| by_part.iter().map(|times| times[rep]).sum())
-                    .collect();
-                let rest = median(&wholes).saturating_sub(median(&sums));
-                let shape = format!("2 dma-bufs of {chunk} bytes, {runs} runs each");
-                println!(
-                    "view dma-buf import time: {name}: {shape}, granule {granule}, idle: the \
-                     whole call {}; its steps by hand summed {}; the rest (the whole's median \
-                     less the steps') {:.3} ms; each UDMABUF_CREATE_LIST (outside the call) {}",
-                    shown(&wholes),
-                    shown(&sums),
-                    rest as f64 / 1e6,
-                    shown(&creates)
-                );
-                for (part, times) in DMA_PARTS.iter().zip(&by_part) {
+                stop.store(true, Ordering::Relaxed);
+                if let Some(worker) = worker {
+                    let commits = worker.join().expect("the backlog thread");
                     println!(
-                        "view dma-buf import time: {name}: {shape}: {part} {}",
-                        shown(times)
-                    );
+                    "view dma-buf import time: {name}: the backlog committed {commits} fills of \
+                     256 MiB; the device's submissions so far {}",
+                    device.counters().metrics().submissions
+                );
                 }
             }
         });
