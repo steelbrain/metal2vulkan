@@ -6,6 +6,8 @@
 //! not seen complete, each of its command buffers goes at once, alone. While that many run, the
 //! ones committed meanwhile are held in one group of at most [`GROUP`], which goes when it fills,
 //! when a completion leaves fewer running (the completion thread wakes the thread as it retires),
+//! while the completion thread runs a round of retirements, completed handlers and listeners (it
+//! sees no completion until the round ends, so a group is held only while it waits on the GPU),
 //! when the host is to wait for one of them ([`Work::send`]), when a command buffer of another
 //! queue that waits on a fence one of them updates is to go (`crate::fence`), or at teardown. The
 //! driver runs a submission's command buffers as one kernel job, which a job timeout ends as a
@@ -1427,8 +1429,16 @@ impl WorkState {
     /// group is scheduled at `now`, its scheduled handlers going to `joined`, but one that
     /// presents a drawable, which `submit` schedules once its submission has passed
     /// `vkQueueSubmit2`, and one held at `Committed`, which the completion thread schedules
-    /// ([`hold`]); one ended with nothing held goes to `ended`.
-    fn step(&mut self, now: u64, joined: &mut Vec<Joined>, ended: &mut Vec<Ended>) -> Step {
+    /// ([`hold`]); one ended with nothing held goes to `ended`. With `busy` (the completion
+    /// thread runs a round of retirements and handlers, `Done::busy`) a group goes as each
+    /// command buffer joins it, as no completion would send it until the round ends.
+    fn step(
+        &mut self,
+        now: u64,
+        busy: bool,
+        joined: &mut Vec<Joined>,
+        ended: &mut Vec<Ended>,
+    ) -> Step {
         let Some(index) = self.next_ready() else {
             return Step::Idle;
         };
@@ -1602,6 +1612,7 @@ impl WorkState {
         group.count += 1;
         let goes = signals
             || stop
+            || busy
             || group.count >= GROUP
             || fifo.in_flight.len() < IN_FLIGHT
             || fifo.send_through >= group.first;
@@ -1653,11 +1664,15 @@ impl WorkState {
     }
 
     /// The first FIFO whose group goes at the end of a pass: unless its queue has [`IN_FLIGHT`]
-    /// submissions not seen complete and no host wait is to come for it.
-    fn unheld(&self) -> Option<usize> {
+    /// submissions not seen complete, no host wait is to come for it, and the completion thread
+    /// waits for the GPU (not `busy` with a round of retirements and handlers).
+    fn unheld(&self, busy: bool) -> Option<usize> {
         self.fifos.iter().position(|fifo| {
             fifo.group.as_ref().is_some_and(|group| {
-                self.stop || fifo.in_flight.len() < IN_FLIGHT || fifo.send_through >= group.first
+                self.stop
+                    || busy
+                    || fifo.in_flight.len() < IN_FLIGHT
+                    || fifo.send_through >= group.first
             })
         })
     }
@@ -1890,16 +1905,18 @@ pub(crate) fn run(core: Arc<Core>) {
 /// goes as it closes, then each group its queue no longer holds, then an upload to flush alone.
 fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<'a, WorkState> {
     let work = &core.work;
-    // Marked before the completed value is read: a completion the read misses sees the mark and
-    // wakes the thread.
+    // Marked before the completed value and the completion thread's busy mark are read: a
+    // completion the read misses, or a round of the completion thread's begun after its read,
+    // sees the mark and wakes the thread.
     work.keeping.store(true, Ordering::SeqCst);
     state.settle(core.done.completed());
     let mut joined: Vec<Joined> = Vec::new();
     let mut ended: Vec<Ended> = Vec::new();
     let mut sent = false;
     loop {
-        let index = match state.step(times::host_time(), &mut joined, &mut ended) {
-            Step::Idle => match state.unheld() {
+        let busy = core.done.busy();
+        let index = match state.step(times::host_time(), busy, &mut joined, &mut ended) {
+            Step::Idle => match state.unheld(busy) {
                 Some(index) => index,
                 None => break,
             },

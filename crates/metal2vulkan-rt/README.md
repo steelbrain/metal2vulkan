@@ -1526,7 +1526,10 @@ made, with no lock, and never rewritten for layouts.
   goes at once, alone. While three are, the ones committed meanwhile are held in one group, each
   scheduled as it joins, and the group goes when it holds sixteen, when a completion leaves fewer
   than three in flight (the completion thread wakes the submit thread as it retires; no commit or
-  wait is needed), when the host is to wait for one of them (`wait_until_completed`, or
+  wait is needed), while the completion thread runs a round of retirements, completed handlers and
+  listeners (it sees no completion until the round ends: a group is held only while the completion
+  thread waits on the GPU, so a slow completed handler holds no later submission), when the host
+  is to wait for one of them (`wait_until_completed`, or
   `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. Waiting
   for a place in the queue sends nothing. A segment that signals an event ends its group, which goes
   at once, and so does a presenting command buffer's last (see "Presenting"); one that waits on an
@@ -1593,7 +1596,8 @@ made, with no lock, and never rewritten for layouts.
 - The completion thread retires command buffers as the progress semaphore reaches them, a
   submission's in commit order: the status, the blocks they kept, their recorders and their place
   in the queue, then the completed handlers. Completed handlers and listeners run on it, in
-  turn. A wait in one for what that thread has not yet done is `Refusal::WaitOnOwnThread`, and one
+  turn, so a slow completed handler delays the later command buffers' retirement, status and
+  handlers, in that order, though not their submission (above). A wait in one for what that thread has not yet done is `Refusal::WaitOnOwnThread`, and one
   already met answers at once: `wait_until_completed` for a command buffer not yet completed (its
   own handler's command buffer has), `wait_until_scheduled` for one not yet scheduled,
   `wait_until_signaled_value` for a value not yet reached (a timed wait too: it is refused, never

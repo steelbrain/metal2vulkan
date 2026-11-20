@@ -14,7 +14,7 @@ use crate::submit::{Ended, Finished, Upload};
 use crate::times::{self, Calibration};
 use ash::vk;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,10 @@ pub(crate) struct Done {
     wake: vk::Semaphore,
     /// The highest progress value the completion thread has seen reached.
     completed: AtomicU64,
+    /// The completion thread runs a round of retirements, completed handlers and listeners, from
+    /// the observation that began it: it sees no completion until the round ends, so the submit
+    /// thread holds no group meanwhile (`crate::submit`).
+    busy: AtomicBool,
 }
 
 struct DoneState {
@@ -210,6 +214,7 @@ impl Done {
             progress,
             wake,
             completed: AtomicU64::new(0),
+            busy: AtomicBool::new(false),
         })
     }
 
@@ -233,6 +238,11 @@ impl Done {
     /// The highest progress value the completion thread has seen reached.
     pub(crate) fn completed(&self) -> u64 {
         self.completed.load(Ordering::SeqCst)
+    }
+
+    /// Whether the completion thread runs a round of retirements, handlers and listeners.
+    pub(crate) fn busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
     }
 
     /// Wakes the completion thread where it waits. With `flight_only` (the change is only more
@@ -572,10 +582,11 @@ pub(crate) fn run(core: Arc<Core>) {
             if newly_lost {
                 core.work.lose();
             }
-            if !retire.is_empty() {
-                // A batch kept while submissions were in flight may go.
-                core.work.completed();
-            }
+            // Set before the submit thread's mark is read (`Work::completed`): a group it keeps
+            // while submissions were in flight goes, a completion having left fewer of them, or
+            // this round, which sees no completion, running while it is held.
+            done.busy.store(true, Ordering::SeqCst);
+            core.work.completed();
             // Each held command buffer whose waits are reached, or that retires now, is scheduled
             // before any retires, so before it completes. One that retires with an error is not:
             // its scheduled handlers run as it retires, as a failed submission's do. Its queue's
@@ -621,6 +632,7 @@ pub(crate) fn run(core: Arc<Core>) {
                 listener(value);
             }
             drop(fired);
+            done.busy.store(false, Ordering::SeqCst);
             state = done.lock();
             continue;
         }
