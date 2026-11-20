@@ -6,6 +6,15 @@
 //! driver's. Its barrier commands are counted too. The core commands that name a layout and that rt does not record get no entry, so
 //! that a call of one panics (ash's stub for a command it did not load) and the test learns of it.
 //!
+//! The same commands keep each image's moves in the order the queue runs them ([`moves`]): each
+//! command buffer's steps, as recorded, are taken in the order `vkQueueSubmit2` hands the command
+//! buffers to the queue. An image made while recording moves home once: a barrier of its first
+//! level from the undefined or the preinitialized layout, which keeps no bytes (the undefined
+//! one) or the host's (the preinitialized one). A second such move of an image that moved home
+//! is a step that drops its bytes, and any other command that names it before its move home (a
+//! copy into it among them) reads or writes it in a layout it is not in; either is noted
+//! against the device.
+//!
 //! Under a device cfg, on every device of the cfg's kind: one command buffer runs every blit
 //! entry that takes a texture over a texture over a Shared buffer in place (a copy from and to
 //! another texture, from and to a buffer, and a fill of its buffer), then a pass that clears it as
@@ -24,6 +33,23 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 /// Whether a device made now has its commands' layouts recorded.
 pub(crate) static RECORDING: AtomicBool = AtomicBool::new(false);
 
+/// Sets [`RECORDING`] while it lives, so that no device a later test makes in the same process
+/// (libtest runs every test in one) is recorded.
+pub(crate) struct Recording;
+
+impl Recording {
+    pub(crate) fn start() -> Recording {
+        RECORDING.store(true, Ordering::Relaxed);
+        Recording
+    }
+}
+
+impl Drop for Recording {
+    fn drop(&mut self) {
+        RECORDING.store(false, Ordering::Relaxed);
+    }
+}
+
 /// A layout a command of `device` named `image` in, `what` saying where.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Named {
@@ -40,9 +66,38 @@ impl Named {
     }
 }
 
+/// What a command does to an image, as the queue's order of commands takes it.
+#[derive(Clone, Copy)]
+enum Step {
+    /// A barrier's move of its first level from `layout`, undefined or preinitialized.
+    Home(vk::ImageLayout),
+    /// Any other command that names it, `what` saying which.
+    Use(&'static str),
+}
+
+/// A copy from a buffer: [`Moves::copies_in`] counts its steps.
+const COPY_IN: &str = "a copy from a buffer";
+
+/// One device's images' moves, in the order its queue ran its submitted command buffers.
+#[derive(Clone, Default, Debug)]
+pub(crate) struct Moves {
+    /// The moves home taken.
+    pub(crate) homes: u64,
+    /// Every other step taken.
+    pub(crate) uses: u64,
+    /// Of `uses`, the copies from a buffer into an image.
+    pub(crate) copies_in: u64,
+    /// The steps out of order: a second move home of an image, or a step before its move home.
+    pub(crate) broken: Vec<String>,
+}
+
 /// The driver's commands this module records, of one device.
 #[derive(Clone, Copy)]
 struct Driver {
+    begin_command_buffer: vk::PFN_vkBeginCommandBuffer,
+    create_image: vk::PFN_vkCreateImage,
+    get_device_queue: vk::PFN_vkGetDeviceQueue,
+    queue_submit2: vk::PFN_vkQueueSubmit2,
     allocate_command_buffers: vk::PFN_vkAllocateCommandBuffers,
     create_image_view: vk::PFN_vkCreateImageView,
     update_descriptor_sets: vk::PFN_vkUpdateDescriptorSets,
@@ -66,6 +121,15 @@ struct Record {
     devices: HashMap<vk::CommandBuffer, vk::Device>,
     /// Each image view's image.
     views: HashMap<(vk::Device, vk::ImageView), vk::Image>,
+    /// Each queue's device.
+    queues: HashMap<vk::Queue, vk::Device>,
+    /// Each command buffer's steps since its begin, in the order recorded.
+    steps: HashMap<vk::CommandBuffer, Vec<(vk::Image, Step)>>,
+    /// Each image made while recording, and whether it moved home: a handle made again starts
+    /// again.
+    homed: HashMap<(vk::Device, vk::Image), bool>,
+    /// Each device's moves.
+    moves: HashMap<vk::Device, Moves>,
 }
 
 static RECORD: LazyLock<Mutex<Record>> = LazyLock::new(Mutex::default);
@@ -90,6 +154,50 @@ pub(crate) fn barriers(device: vk::Device) -> u64 {
 
 pub(crate) fn forget() {
     record().named.clear();
+}
+
+/// `device`'s images' moves so far, in the order its queue ran its command buffers.
+pub(crate) fn moves(device: vk::Device) -> Moves {
+    record().moves.get(&device).cloned().unwrap_or_default()
+}
+
+/// Notes `steps` of `command_buffer`, in the order recorded.
+fn step(command_buffer: vk::CommandBuffer, steps: impl IntoIterator<Item = (vk::Image, Step)>) {
+    (record().steps.entry(command_buffer).or_default()).extend(steps);
+}
+
+/// Takes `command_buffer`'s steps, of `device`, as its queue runs it: after every command buffer
+/// submitted before it.
+fn take(record: &mut Record, device: vk::Device, command_buffer: vk::CommandBuffer) {
+    let steps = record.steps.remove(&command_buffer).unwrap_or_default();
+    let moves = record.moves.entry(device).or_default();
+    for (image, step) in steps {
+        // An image not made while recording (a swapchain's) has no record.
+        let Some(homed) = record.homed.get_mut(&(device, image)) else {
+            continue;
+        };
+        let shown = format!("image {:#x}", ash::vk::Handle::as_raw(image));
+        match step {
+            Step::Home(layout) => {
+                if *homed {
+                    let layout = layout.as_raw();
+                    let broken = format!("{shown}: a second move from layout {layout}");
+                    moves.broken.push(broken);
+                }
+                *homed = true;
+                moves.homes += 1;
+            }
+            Step::Use(what) => {
+                if !*homed {
+                    moves
+                        .broken
+                        .push(format!("{shown}: {what} before its move home"));
+                }
+                moves.uses += 1;
+                moves.copies_in += u64::from(what == COPY_IN);
+            }
+        }
+    }
 }
 
 /// The core commands that name an image layout and that rt does not record: none loaded.
@@ -128,6 +236,18 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
     // SAFETY: each pointer is the driver's command of its name, whose type its field names.
     let driver = unsafe {
         Driver {
+            begin_command_buffer: std::mem::transmute::<*const c_void, vk::PFN_vkBeginCommandBuffer>(
+                load(c"vkBeginCommandBuffer"),
+            ),
+            create_image: std::mem::transmute::<*const c_void, vk::PFN_vkCreateImage>(load(
+                c"vkCreateImage",
+            )),
+            get_device_queue: std::mem::transmute::<*const c_void, vk::PFN_vkGetDeviceQueue>(load(
+                c"vkGetDeviceQueue",
+            )),
+            queue_submit2: std::mem::transmute::<*const c_void, vk::PFN_vkQueueSubmit2>(load(
+                c"vkQueueSubmit2",
+            )),
             allocate_command_buffers: std::mem::transmute::<
                 *const c_void,
                 vk::PFN_vkAllocateCommandBuffers,
@@ -168,6 +288,10 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
     record().drivers.insert(handle, driver);
     let ours = |name: &CStr| -> Option<*const c_void> {
         let function: *const c_void = match name.to_bytes() {
+            b"vkBeginCommandBuffer" => begin_command_buffer as *const c_void,
+            b"vkCreateImage" => create_image as *const c_void,
+            b"vkGetDeviceQueue" => get_device_queue as *const c_void,
+            b"vkQueueSubmit2" => queue_submit2 as *const c_void,
             b"vkAllocateCommandBuffers" => allocate_command_buffers as *const c_void,
             b"vkCreateImageView" => create_image_view as *const c_void,
             b"vkUpdateDescriptorSets" => update_descriptor_sets as *const c_void,
@@ -256,6 +380,76 @@ unsafe extern "system" fn allocate_command_buffers(
     result
 }
 
+unsafe extern "system" fn begin_command_buffer(
+    command_buffer: vk::CommandBuffer,
+    info: *const vk::CommandBufferBeginInfo<'_>,
+) -> vk::Result {
+    let (_, driver) = driver_of(command_buffer);
+    // Steps of a recording never submitted are not the queue's.
+    record().steps.remove(&command_buffer);
+    // SAFETY: the caller's arguments, passed on.
+    unsafe { (driver.begin_command_buffer)(command_buffer, info) }
+}
+
+unsafe extern "system" fn create_image(
+    device: vk::Device,
+    info: *const vk::ImageCreateInfo<'_>,
+    allocator: *const vk::AllocationCallbacks<'_>,
+    image: *mut vk::Image,
+) -> vk::Result {
+    let driver = record().drivers[&device];
+    // SAFETY: the caller's arguments, passed on.
+    let result = unsafe { (driver.create_image)(device, info, allocator, image) };
+    if result == vk::Result::SUCCESS {
+        // SAFETY: the call wrote the image.
+        let image = unsafe { *image };
+        record().homed.insert((device, image), false);
+    }
+    result
+}
+
+unsafe extern "system" fn get_device_queue(
+    device: vk::Device,
+    family: u32,
+    index: u32,
+    queue: *mut vk::Queue,
+) {
+    let driver = record().drivers[&device];
+    // SAFETY: the caller's arguments, passed on.
+    unsafe { (driver.get_device_queue)(device, family, index, queue) };
+    // SAFETY: the call wrote the queue.
+    let queue = unsafe { *queue };
+    record().queues.insert(queue, device);
+}
+
+unsafe extern "system" fn queue_submit2(
+    queue: vk::Queue,
+    count: u32,
+    submits: *const vk::SubmitInfo2<'_>,
+    fence: vk::Fence,
+) -> vk::Result {
+    let driver = {
+        let mut record = record();
+        let device = record.queues[&queue];
+        // SAFETY: the caller's `count` submissions, each with its command buffer infos.
+        for submit in unsafe { slice(submits, count) } {
+            // SAFETY: as above.
+            let infos = unsafe {
+                slice(
+                    submit.p_command_buffer_infos,
+                    submit.command_buffer_info_count,
+                )
+            };
+            for info in infos {
+                take(&mut record, device, info.command_buffer);
+            }
+        }
+        record.drivers[&device]
+    };
+    // SAFETY: the caller's arguments, passed on.
+    unsafe { (driver.queue_submit2)(queue, count, submits, fence) }
+}
+
 unsafe extern "system" fn create_image_view(
     device: vk::Device,
     info: *const vk::ImageViewCreateInfo<'_>,
@@ -331,6 +525,18 @@ unsafe extern "system" fn cmd_pipeline_barrier2(
             ]
         }),
     );
+    let first = [vk::ImageLayout::UNDEFINED, vk::ImageLayout::PREINITIALIZED];
+    step(
+        command_buffer,
+        barriers.iter().map(|barrier| {
+            let home = first.contains(&barrier.old_layout)
+                && barrier.subresource_range.base_mip_level == 0;
+            match home {
+                true => (barrier.image, Step::Home(barrier.old_layout)),
+                false => (barrier.image, Step::Use("a barrier")),
+            }
+        }),
+    );
     // SAFETY: the caller's arguments, passed on.
     unsafe { (driver.cmd_pipeline_barrier2)(command_buffer, info) }
 }
@@ -356,6 +562,13 @@ unsafe extern "system" fn cmd_copy_image(
             ),
         ],
     );
+    step(
+        command_buffer,
+        [
+            (source, Step::Use("an image copy's source")),
+            (destination, Step::Use("an image copy's destination")),
+        ],
+    );
     // SAFETY: the caller's arguments, passed on.
     unsafe {
         (driver.cmd_copy_image)(
@@ -379,7 +592,8 @@ unsafe extern "system" fn cmd_copy_buffer_to_image(
     regions: *const vk::BufferImageCopy,
 ) {
     let (device, driver) = driver_of(command_buffer);
-    note(device, [("a copy from a buffer", image, layout)]);
+    note(device, [(COPY_IN, image, layout)]);
+    step(command_buffer, [(image, Step::Use(COPY_IN))]);
     // SAFETY: the caller's arguments, passed on.
     unsafe {
         (driver.cmd_copy_buffer_to_image)(command_buffer, buffer, image, layout, count, regions)
@@ -396,6 +610,7 @@ unsafe extern "system" fn cmd_copy_image_to_buffer(
 ) {
     let (device, driver) = driver_of(command_buffer);
     note(device, [("a copy to a buffer", image, layout)]);
+    step(command_buffer, [(image, Step::Use("a copy to a buffer"))]);
     // SAFETY: the caller's arguments, passed on.
     unsafe {
         (driver.cmd_copy_image_to_buffer)(command_buffer, image, layout, buffer, count, regions)
@@ -418,6 +633,13 @@ unsafe extern "system" fn cmd_blit_image(
         [
             ("a blit's source", source, source_layout),
             ("a blit's destination", destination, destination_layout),
+        ],
+    );
+    step(
+        command_buffer,
+        [
+            (source, Step::Use("a blit's source")),
+            (destination, Step::Use("a blit's destination")),
         ],
     );
     // SAFETY: the caller's arguments, passed on.
@@ -445,6 +667,7 @@ unsafe extern "system" fn cmd_clear_color_image(
 ) {
     let (device, driver) = driver_of(command_buffer);
     note(device, [("a colour clear", image, layout)]);
+    step(command_buffer, [(image, Step::Use("a colour clear"))]);
     // SAFETY: the caller's arguments, passed on.
     unsafe { (driver.cmd_clear_color_image)(command_buffer, image, layout, color, count, ranges) }
 }
@@ -476,13 +699,17 @@ unsafe extern "system" fn cmd_begin_rendering(
             ));
         }
     }
+    let used = named
+        .iter()
+        .map(|&(what, image, _)| (image, Step::Use(what)));
+    step(command_buffer, used.collect::<Vec<_>>());
     note(device, named);
     // SAFETY: the caller's arguments, passed on.
     unsafe { (driver.cmd_begin_rendering)(command_buffer, info) }
 }
 
 mod on_device {
-    use super::{barriers, forget, named, RECORDING};
+    use super::{barriers, forget, named, Recording};
     use crate::tests::command::on_device::{each_device, finished};
     use crate::texture::TextureObject;
     use crate::{
@@ -491,7 +718,6 @@ mod on_device {
         TextureType, TextureUsage,
     };
     use ash::vk;
-    use std::sync::atomic::Ordering;
 
     const WIDTH: u32 = 64;
     const HEIGHT: u32 = 8;
@@ -505,23 +731,6 @@ mod on_device {
     /// blit entry that takes a texture over it, and a pass that renders to it where the device
     /// takes it in place as a render target, and in its descriptor and a read of its image; the
     /// one other layout named is preinitialized, the old layout of its move home.
-    /// Sets [`RECORDING`] while it lives, so that no device a later test makes in the same
-    /// process (libtest runs every test in one) is recorded.
-    struct Recording;
-
-    impl Recording {
-        fn start() -> Recording {
-            RECORDING.store(true, Ordering::Relaxed);
-            Recording
-        }
-    }
-
-    impl Drop for Recording {
-        fn drop(&mut self) {
-            RECORDING.store(false, Ordering::Relaxed);
-        }
-    }
-
     #[test]
     fn a_texture_over_a_buffer_in_place_is_in_the_general_layout_in_every_command() {
         let _recording = Recording::start();
