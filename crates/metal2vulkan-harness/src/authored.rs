@@ -21,7 +21,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 39] = [
+pub const WORKLOADS: [Workload; 40] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -169,6 +169,10 @@ pub const WORKLOADS: [Workload; 39] = [
     Workload {
         name: "draw_full_4x",
         plan: draw_full_4x,
+    },
+    Workload {
+        name: "draw_full_rt",
+        plan: draw_full_rt,
     },
     Workload {
         name: "draw_2000",
@@ -372,6 +376,17 @@ fn draw_full_4x() -> Plan {
             vertex_count: 3,
         };
     }
+    plan
+}
+
+/// [`draw_full`]'s draws into a target of `RenderTarget` usage alone, which no shader reads or
+/// writes. Its texels are not checked: the harness's texel kernels read only a texture of
+/// `ShaderRead` and `ShaderWrite` usage, and [`draw_full_4x`] checks its own such target through
+/// the resolve.
+fn draw_full_rt() -> Plan {
+    let mut plan = draws("draw_full_rt", 512, 64);
+    plan.textures[0].usage = TextureUsage::RENDER_TARGET;
+    plan.expect_textures.clear();
     plan
 }
 

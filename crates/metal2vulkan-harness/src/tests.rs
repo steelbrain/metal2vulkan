@@ -357,6 +357,20 @@ fn a_draw_needs_a_render_target_and_binds_buffers_and_textures_alone() {
     assert!(bound.validate().is_err());
 }
 
+/// `draw_full_rt` draws into a target of `RenderTarget` usage alone and checks none of its texels,
+/// which the harness's texel kernels cannot read.
+#[test]
+fn the_render_only_row_draws_into_a_target_of_render_target_usage_alone() {
+    let plan = (WORKLOADS
+        .iter()
+        .find(|w| w.name == "draw_full_rt")
+        .unwrap()
+        .plan)();
+    assert!(plan.validate().is_ok());
+    assert_eq!(plan.textures[0].usage, TextureUsage::RENDER_TARGET);
+    assert!(plan.expect_textures.is_empty());
+}
+
 /// A draw that resolves draws into a multisample target and resolves it into a 1-sample render
 /// target of its format and size; a multisample texture takes no texels of a kernel or the CPU.
 #[test]

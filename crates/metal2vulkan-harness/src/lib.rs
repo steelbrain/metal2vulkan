@@ -19,9 +19,10 @@
 //! from a `Private` table, its reference. `draw_full` and `draw_2000` are draws of the render
 //! library's `colored_vertex` and `colored_fragment` (`plan::Grid::Draw`) in one pass: 64 that
 //! each cover a 512 by 512 target, and 2,000 that each cover a 16 by 16 one; `draw_full_4x` is
-//! `draw_full` into a target of 4 samples, which the pass resolves as it ends; `bind_2000` is
-//! `draw_2000` with a vertex buffer and a fragment texture set before each draw, each alternating
-//! between two objects.
+//! `draw_full` into a target of 4 samples, which the pass resolves as it ends; `draw_full_rt` is
+//! `draw_full` into a target of `RenderTarget` usage alone, whose texels nothing checks;
+//! `bind_2000` is `draw_2000` with a vertex buffer and a fragment texture set before each draw,
+//! each alternating between two objects.
 //! Every command buffer of a workload's runs carries a scheduled handler (on the old runtime, its
 //! submission handler) and a completed handler, as the consumer's command buffers do, so the times
 //! hold what the runtimes do to run them.
