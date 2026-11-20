@@ -57,7 +57,7 @@ mod on_device {
         d.usage = TextureUsage::RENDER_TARGET;
         d.storage_mode = StorageMode::Shared;
         let texture =
-            (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            (device.new_texture_for_views(&d)).unwrap_or_else(|error| panic!("{name}: {error}"));
         calls.push((
             "a copy of a texture's bytes",
             Box::new(move || {

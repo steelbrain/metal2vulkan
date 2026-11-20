@@ -28,8 +28,8 @@ mod on_device {
     use crate::texture::TextureObject;
     use crate::{
         Buffer, BufferLayout, CommandBuffer, CommandQueue, ComputePipelineDescriptor, Device,
-        DispatchType, FunctionDescriptor, Library, MemoryClass, PixelFormat, Region, Resource,
-        StageSource, StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType,
+        DispatchType, FunctionDescriptor, IndexClass, Library, MemoryClass, PixelFormat, Region,
+        Resource, StageSource, StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType,
         TextureUsage,
     };
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
@@ -112,7 +112,7 @@ mod on_device {
     fn plain(name: &str, device: &Device, texels: &[u8]) -> Texture {
         let mut d = descriptor();
         d.storage_mode = StorageMode::Shared;
-        let texture = (device.new_texture(&d, None)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let texture = (device.new_texture_for_views(&d)).unwrap_or_else(|e| panic!("{name}: {e}"));
         (texture.replace_region(whole(), 0, 0, texels.into(), ROW, 0))
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         texture
@@ -166,7 +166,9 @@ mod on_device {
             write(&buffer, &now);
             let copied_over = || device.counters().gauges().textures_copied_over;
             let before = copied_over();
-            let texture = (buffer.new_texture(&descriptor(), None, 0, pitch))
+            // A colour render target takes an index.
+            (device.grant_indices(IndexClass::Texture, 4096, 1)).expect("a grant");
+            let texture = (buffer.new_texture(&descriptor(), Some(4096), 0, pitch))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(
                 texture.copied_over().is_some(),
@@ -279,8 +281,12 @@ mod on_device {
                 (crate::tests::managed::on_device::new_managed(&device, cpu.id, offset, LEN, 0))
                     .unwrap_or_else(|e| panic!("{name}: {e}"))
             };
+            // A colour render target takes an index: each texture over a buffer its own.
+            (device.grant_indices(IndexClass::Texture, 4096, 4)).expect("a grant");
+            let next = std::cell::Cell::new(4096);
             let over = |buffer: &Buffer| {
-                let texture = (buffer.new_texture(&descriptor(), None, 0, pitch))
+                let index = next.replace(next.get() + 1);
+                let texture = (buffer.new_texture(&descriptor(), Some(index), 0, pitch))
                     .unwrap_or_else(|e| panic!("{name}: {e}"));
                 assert!(
                     texture.managed_over().is_some(),
@@ -517,7 +523,9 @@ entry:
             let buffer =
                 (crate::tests::managed::on_device::new_managed(&device, cpu.id, 0, LEN, 0))
                     .unwrap_or_else(|e| panic!("{name}: {e}"));
-            let texture = (buffer.new_texture(&descriptor(), None, 0, pitch))
+            // A colour render target takes an index.
+            (device.grant_indices(IndexClass::Texture, 4096, 1)).expect("a grant");
+            let texture = (buffer.new_texture(&descriptor(), Some(4096), 0, pitch))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(
                 texture.managed_over().is_some(),

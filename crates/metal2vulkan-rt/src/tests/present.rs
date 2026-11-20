@@ -17,8 +17,8 @@
 //! image stands in for destroying the swapchain, under the same rule (every use complete).
 //!
 //! - Under a device cfg, on every device of the cfg's kind, under the validation layer, for a
-//!   render-target drawable (home: the attachment layout) and a shader-read one at an index (home:
-//!   shader-read-only): three frames of acquire, a pass, present and the stand-in present. The
+//!   render-target drawable (home: the attachment layout) and a shader-read one (home:
+//!   shader-read-only), each at an index: three frames of acquire, a pass, present and the stand-in present. The
 //!   first clears, the second loads and stores what the first left (the move home after a present
 //!   starts in the present layout and keeps the texels), the third clears again. The first and
 //!   third present from the test's thread once `wait_until_scheduled` returns, beside a scheduled
@@ -424,14 +424,11 @@ mod on_device {
             // `BGRA8Unorm`'s bytes: blue, green, red, alpha.
             let first_texels = [0u8, 153, 51, 255].repeat(32);
             let third_texels = [102u8, 0, 255, 255].repeat(32);
-            for (usage, index, barriers) in [
-                (TextureUsage::RENDER_TARGET, None, 3),
-                (read_render, Some(4096), 5),
+            for (usage, index, barriers, kind) in [
+                (TextureUsage::RENDER_TARGET, 4097, 3, "render-target"),
+                (read_render, 4096, 5, "shader-read"),
             ] {
-                let kind = match index {
-                    Some(_) => "shader-read",
-                    None => "render-target",
-                };
+                let index = Some(index);
                 let info = swapchain(USAGE);
                 let stand_in = StandIn::new(&device, &info);
                 let textures = counters.gauges().textures;
@@ -710,22 +707,21 @@ mod on_device {
                 ClearColor::new(0.2, 0.6, 0.0, 1.0),
                 ClearColor::new(1.0, 0.0, 0.4, 1.0),
             ];
-            for (usage, image_usage, indexed, kind) in [
-                (TextureUsage::RENDER_TARGET, colour, false, "render-target"),
+            // Each drawable at an index of its own, a colour render target's among them.
+            for (usage, image_usage, first, kind) in [
+                (TextureUsage::RENDER_TARGET, colour, 4096, "render-target"),
                 (
                     read_render,
                     colour | vk::ImageUsageFlags::SAMPLED,
-                    true,
+                    8192,
                     "shader-read",
                 ),
             ] {
                 let chain = headless.swapchain(&device, image_usage);
                 let count = chain.images.len() as u32;
-                if indexed {
-                    device
-                        .grant_indices(IndexClass::Texture, 4096, count)
-                        .expect("a grant");
-                }
+                device
+                    .grant_indices(IndexClass::Texture, first, count)
+                    .expect("a grant");
                 let textures = counters.gauges().textures;
                 let mut d = descriptor(usage);
                 d.pixel_format = chain.pixel_format;
@@ -733,7 +729,7 @@ mod on_device {
                 d.height = chain.info.image_extent.height;
                 let drawables: Vec<Texture> = (chain.images.iter().zip(0..))
                     .map(|(&image, at)| {
-                        let index = indexed.then_some(4096 + at);
+                        let index = Some(first + at);
                         // SAFETY: the image is one of the swapchain's, made with `chain.info` on
                         // the device, not acquired; the swapchain goes as the guide says, below.
                         unsafe { device.new_drawable_texture(&d, index, image, &chain.info) }
@@ -888,13 +884,17 @@ mod on_device {
             let stand_ins = [StandIn::new(&device, &info), StandIn::new(&device, &info)];
             let readies = [semaphore(&device), semaphore(&device)];
             let outs = [arena.buffer(), arena.buffer()];
+            // Each a colour render target, at an index of its own.
+            (device.grant_indices(IndexClass::Texture, 4096, 2)).expect("a grant");
+            let next = std::cell::Cell::new(4096);
             let drawables = stand_ins.each_ref().map(|stand_in| {
+                let index = next.replace(next.get() + 1);
                 // SAFETY: the stand-in is made with `info` on the device, in the undefined
                 // layout, and is destroyed as a swapchain may be, below.
                 unsafe {
                     device.new_drawable_texture(
                         &descriptor(TextureUsage::RENDER_TARGET),
-                        None,
+                        Some(index),
                         stand_in.image,
                         &info,
                     )
@@ -1039,7 +1039,7 @@ mod on_device {
             let unsampled = info.image_usage(USAGE & !vk::ImageUsageFlags::SAMPLED);
             let read_render = TextureUsage::SHADER_READ | render;
             device
-                .grant_indices(IndexClass::Texture, 4096, 1)
+                .grant_indices(IndexClass::Texture, 4096, 2)
                 .expect("a grant");
             assert_eq!(
                 refusal(name, made(&descriptor(read_render), Some(4096), &unsampled)),
@@ -1054,10 +1054,15 @@ mod on_device {
                 "{name}: shader-read usage without an index"
             );
 
-            let drawable = made(&descriptor(render), None, &info)
+            assert_eq!(
+                refusal(name, made(&descriptor(render), None, &info)),
+                Refusal::TextureIndex { index: None },
+                "{name}: a colour render target without an index"
+            );
+            let drawable = made(&descriptor(render), Some(4097), &info)
                 .unwrap_or_else(|error| panic!("{name}: a drawable's texture: {error}"));
             let plain = device
-                .new_texture(&descriptor(render), None)
+                .new_texture_for_views(&descriptor(render))
                 .expect("a texture");
             let queue = device.new_command_queue(4).expect("a queue");
             let presenting = queue.command_buffer().expect("a command buffer");

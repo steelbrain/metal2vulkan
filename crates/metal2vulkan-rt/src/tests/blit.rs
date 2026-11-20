@@ -1946,7 +1946,10 @@ pub(crate) mod on_device {
                 bytes_per_row: 256,
                 bytes_per_image: 0,
             };
-            let texture = (device.new_managed_texture(&d, None, &named, &[place(0), place(1024)]))
+            // A colour render target takes an index.
+            (device.grant_indices(IndexClass::Texture, 4096, 1)).expect("a grant");
+            let places = [place(0), place(1024)];
+            let texture = (device.new_managed_texture(&d, Some(4096), &named, &places))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let queue = device.new_command_queue(4).expect("a queue");
             let counters = device.counters();

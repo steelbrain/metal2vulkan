@@ -587,7 +587,7 @@ impl crate::ComputeDevice for Device {
             Storage::Managed => rt::StorageMode::Managed,
             Storage::Private => rt::StorageMode::Private,
         };
-        match class(texture.usage) {
+        match class(texture.pixel_format, texture.usage) {
             Some(class) => self.place(class, |index| {
                 self.device.new_texture(&descriptor, Some(index))
             }),
@@ -606,7 +606,7 @@ impl crate::ComputeDevice for Device {
         let view = |index| {
             parent.new_texture_view(pixel_format, texture_type, 0..1, slices.clone(), index)
         };
-        match class(texture.usage) {
+        match class(pixel_format, texture.usage) {
             Some(class) => self.place(class, |index| view(Some(index))),
             None => view(None).map_err(error),
         }
@@ -620,11 +620,16 @@ impl crate::ComputeDevice for Device {
     }
 }
 
-/// The index class of a texture of `usage`, where shaders reach it: unknown usage is every
-/// usage, as the runtime takes it; a texture no shader reaches takes no index.
-fn class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
+/// The index class of a texture of `pf` and `usage`, where shaders reach it, as the runtime takes
+/// it: unknown usage is every usage; shader-read or shader-write usage, or a colour render target,
+/// which a fragment function reads through its attachment; a depth or stencil target shaders
+/// neither read nor write takes no index.
+fn class(pf: rt::PixelFormat, usage: rt::TextureUsage) -> Option<rt::IndexClass> {
     let reached = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
-    (usage.is_empty() || usage.intersects(reached)).then_some(rt::IndexClass::Texture)
+    let color_target = usage.contains(rt::TextureUsage::RENDER_TARGET)
+        && !metal2vulkan::metal::format::is_depth_stencil(pf);
+    (usage.is_empty() || usage.intersects(reached) || color_target)
+        .then_some(rt::IndexClass::Texture)
 }
 
 impl crate::Texture for rt::Texture {

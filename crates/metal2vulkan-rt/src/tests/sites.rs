@@ -79,7 +79,8 @@ mod on_device {
             TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, width, height);
         d.usage = TextureUsage::RENDER_TARGET;
         d.storage_mode = StorageMode::Shared;
-        (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: a texture: {error}"))
+        (device.new_texture_for_views(&d))
+            .unwrap_or_else(|error| panic!("{name}: a texture: {error}"))
     }
 
     /// Writes the whole of `texture`, of `width` by `height`, from the host.

@@ -50,7 +50,7 @@ mod on_device {
         d.mipmap_level_count = levels;
         d.usage = TextureUsage::RENDER_TARGET;
         d.storage_mode = StorageMode::Shared;
-        (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"))
+        (device.new_texture_for_views(&d)).unwrap_or_else(|error| panic!("{name}: {error}"))
     }
 
     /// Level `level` of an `RGBA8Unorm` texture, row by row.

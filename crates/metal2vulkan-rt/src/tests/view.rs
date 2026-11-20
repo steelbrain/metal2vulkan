@@ -664,14 +664,16 @@ mod on_device {
             d.array_length = 2;
             d.mipmap_level_count = 2;
             d.usage = TextureUsage::RENDER_TARGET;
-            let texture = (device.new_managed_texture(&d, None, &named, &places))
+            // A colour render target takes an index, and so does its view.
+            (device.grant_indices(IndexClass::Texture, 4096, 2)).expect("a grant");
+            let texture = (device.new_managed_texture(&d, Some(4096), &named, &places))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let view = (texture.new_texture_view(
                 PixelFormat::RGBA8Unorm,
                 TextureType::Type2D,
                 1..2,
                 1..2,
-                None,
+                Some(4097),
             ))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
             let region = Region {

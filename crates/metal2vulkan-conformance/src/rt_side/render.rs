@@ -167,7 +167,7 @@ impl RtSide<'_> {
             if let Some(why) = over.unsafe_stride() {
                 return Err(Failure::named("WouldEndMetalsProcess", why));
             }
-            let index = self.on.texture_index(usage);
+            let index = self.on.texture_index(spec.format, usage);
             let buffer = self.held(over.buffer)?;
             let texture = (buffer.new_texture(&descriptor, index, over.offset, over.bytes_per_row))
                 .map_err(of_rt)?;
@@ -191,8 +191,7 @@ impl RtSide<'_> {
             }
             descriptor.sample_count = spec.samples;
         }
-        let index = (spec.shader_read || spec.shader_write || spec.unknown_usage)
-            .then(|| self.on.next_index(rt::IndexClass::Texture));
+        let index = self.on.texture_index(spec.format, usage);
         let texture = (self.on.device.new_texture(&descriptor, index)).map_err(of_rt)?;
         Ok(self.keep_texture(texture))
     }

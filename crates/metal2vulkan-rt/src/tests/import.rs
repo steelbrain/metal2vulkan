@@ -350,7 +350,7 @@ pub(crate) mod on_device {
             let mut plain_d = d;
             plain_d.usage = TextureUsage::RENDER_TARGET;
             plain_d.storage_mode = StorageMode::Shared;
-            let plain = (device.new_texture(&plain_d, None))
+            let plain = (device.new_texture_for_views(&plain_d))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let source: Vec<u8> = (0..row * rows).map(|i| (i % 241) as u8 ^ 0x3c).collect();
             let whole = Region {

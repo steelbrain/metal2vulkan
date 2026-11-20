@@ -779,6 +779,8 @@ planes' first use, so `Surface::wait_until_ready()` returns at once.
   still fault the device.
 - An app buffer too large for the consumer's map budget is copied, on drivers whose dma-buf query
   offers a non-host-visible type first.
+- A block freed before a submission used it waits on the block-maker thread for its bind, and a
+  ring take that needs a new ring block can wait behind it.
 - rt caps a buffer at 2 GiB (`MAX_BUFFER_LENGTH`), where the M3's Metal allows 38.88 GiB
   (`maxBufferLength`, 41,747,087,360 bytes), about twenty times as much: shaders reach a buffer's
   bytes by 32-bit offsets from its bind address, and lifting the cap would put 64-bit offset
@@ -905,8 +907,8 @@ made, with no lock, and never rewritten for layouts.
   elements: element `i + 65,536` is texture `i`'s second element, which a draw pushes in place of
   the texture's own index while it reads an attachment of its pass through the texture. Through
   the attachment feedback loop it is the texture's view in the feedback layout, written with
-  element `i` for a texture whose image a pass may move there (a shader-read colour render target
-  not in place over a buffer); on a device without the loop it is the texture's view of its image's
+  element `i` for a texture whose image a pass may move there (a colour render target not in place
+  over a buffer); on a device without the loop it is the texture's view of its image's
   shadow (Render encoders), written at the first draw that reads through it where the texture
   still owns index `i`. It is a null descriptor otherwise, and no grant reaches it.
 - A shader masks the index of a texture ID it reads from an argument buffer to its low 16 bits,
@@ -954,17 +956,22 @@ made, with no lock, and never rewritten for layouts.
   (`requiresDedicatedAllocation`; preferring one is no reason), where it is larger than a Private
   block (64 MiB), or where the blocks' memory type does not serve it. A place is free again once
   the image is freed; one empty texture block is kept, and another that empties goes back to the
-  pool. `index` is given exactly where shaders reach the texture, shader-read or shader-write
-  usage (`Refusal::TextureIndex` otherwise), from a live `IndexClass::Texture` grant, whatever
+  pool. `index` is given exactly where shaders reach the texture (`Refusal::TextureIndex`
+  otherwise): shader-read or shader-write usage, or render-target usage of a colour pixel format
+  (one with no depth or stencil), which a fragment function reads through its attachment, as
+  Metal gives every texture a `gpuResourceID`; from a live `IndexClass::Texture` grant, whatever
   the usage. `TextureUsage` with no bits is Metal's unknown usage: shader read and write, render
   target and pixel-format view.
-- The image's usage is the descriptor's plus transfer source and destination. Its home layout is
-  general where it has a storage element, shader-read-only where shaders only read it, and the
-  attachment layout where only render passes use it. Its elements of set 1 are written before the
-  call returns, with that layout, and never rewritten. The image moves from undefined to home in
-  the upload of the next commit, ahead of every command buffer committed after the call, or ahead
-  of its first copy; until then nothing holds it, so a texture
-  released first is freed at once, with nothing submitted.
+- The image's usage is the descriptor's plus transfer source and destination, and, for a colour
+  render target where the device reads attachments, sampled, with the feedback usage where it has
+  the attachment feedback loop (Render encoders). Its home layout is general where it has a storage
+  element, shader-read-only where shaders only read it, and the attachment layout where only render
+  passes use it. Its elements of set 1 are written before the call returns, with that layout, and
+  never rewritten; a colour render target shaders neither read nor write leaves both null, so a
+  slot that binds it reads Metal's nil texture, and writes only its second element (Set 1). The
+  image moves from undefined to home in the upload of the next commit, ahead of every command
+  buffer committed after the call, or ahead of its first copy; until then nothing holds it, so a
+  texture released first is freed at once, with nothing submitted.
 - A texture's image lists the formats Metal views the texture as that the device holds in a
   viewed form of the image format's compatibility class, and is then mutable
   (`VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT` with a `VkImageFormatListCreateInfo`, its own format
@@ -2616,11 +2623,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   target, where the device reads attachments (Floor, Attachment reads): through the attachment
   feedback loop where the device has it, else through a copy. The texture reaches the
   attachment's level and layer, the fragment function reads it and nothing writes it, and its
-  image is a shader-read colour render target not in place over a buffer, which one attachment of
-  the pass renders: its home is shader-read-only, or general where it has a storage view (made for
-  shader writes, or of an unknown usage, where the device stores its format), and its image takes
-  the feedback usage where the device's image format query offers it beside the rest, the storage
-  usage included. Vulkan's feedback layout asks the attachment and sampled usages beside it and
+  image is a colour render target not in place over a buffer, which one attachment of the pass
+  renders: its home is general where it has a storage view (made for shader writes, or of an
+  unknown usage, where the device stores its format), shader-read-only where shaders read it,
+  else the attachment layout, and its image takes the sampled and feedback usages where the
+  device's image format query offers them beside the rest, the storage usage included; where it
+  refuses them, the image is made without them and a draw that reads it is `Gap::Draw`. A pass
+  that reads no attachment through it records no move of it. Vulkan's feedback layout asks the attachment and sampled usages beside it and
   bars none (VUID-VkImageMemoryBarrier2-srcQueueFamilyIndex-07006); in it the image is only
   rendered and sampled. Through the feedback loop, at the pass's first such draw the rendering
   ends, one barrier moves the whole image to the feedback layout (the attachment's level and layer
@@ -2658,8 +2667,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   barrier, and it begins again), and through a copy copies what it reads into the shadow again: a
   pass of N fetching draws records N - 1 such barriers, or N - 1 copies. The texture is a 2D
   texture (a 2D multisample one in a multisampled pass) whose first level and slice the pass
-  renders, made with an index, of a shader-read colour render target's image, with a storage view
-  or not: a texture of its own image, or a surface plane's (Exported surfaces).
+  renders, made with an index, of a colour render target's image, read by shaders or not, with a
+  storage view or not: a texture of its own image, or a surface plane's (Exported surfaces).
 - `memory_barrier` after a draw of the encoder that wrote memory ends the rendering, records one
   barrier and begins the rendering again, loading what it stored. After draws that only rendered,
   in a pass that moved an image to the feedback layout, the barrier is owed to the next draw that

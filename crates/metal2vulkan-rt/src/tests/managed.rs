@@ -146,8 +146,8 @@ pub(crate) mod on_device {
     use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::{
         Block, BlockId, Buffer, BytesPlace, CommandBuffer, CommandBufferStatus,
-        ComputePipelineState, Device, DispatchType, Error, MemoryClass, PixelFormat, Refusal,
-        Region, StorageMode, TextureDescriptor, TextureType, TextureUsage,
+        ComputePipelineState, Device, DispatchType, Error, IndexClass, MemoryClass, PixelFormat,
+        Refusal, Region, StorageMode, TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
     use std::time::Instant;
@@ -1011,7 +1011,9 @@ pub(crate) mod on_device {
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, SIDE, SIDE);
             d.mipmap_level_count = 2;
             d.usage = TextureUsage::RENDER_TARGET;
-            let texture = (device.new_managed_texture(&d, None, &named, &places))
+            // A colour render target takes an index.
+            (device.grant_indices(IndexClass::Texture, 4096, 1)).expect("a grant");
+            let texture = (device.new_managed_texture(&d, Some(4096), &named, &places))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(texture.descriptor().storage_mode, StorageMode::Managed);
             let image = |level: u32| {
@@ -1086,7 +1088,8 @@ pub(crate) mod on_device {
 
             // Places a copy does not read, and a texture without named bytes.
             let refused = |places: &[BytesPlace], bytes: &Buffer, what: &str| -> (u32, u32) {
-                match device.new_managed_texture(&d, None, bytes, places) {
+                // Refused before the index is placed.
+                match device.new_managed_texture(&d, Some(4097), bytes, places) {
                     Err(Error::Refused(Refusal::ManagedTextureBytes { level, slice })) => {
                         (level, slice)
                     }
@@ -1117,8 +1120,8 @@ pub(crate) mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(refused(&places, &unmapped, "Private"), (0, 0));
             d.storage_mode = StorageMode::Managed;
-            let plain =
-                (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let plain = (device.new_texture_for_views(&d))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             match plain.upload_region(whole(SIDE), 0, 0) {
                 Err(Error::Refused(Refusal::ManagedTextureBytes { level: 0, slice: 0 })) => {}
                 Err(error) => panic!("{name}: an upload without named bytes: {error}"),
@@ -1158,7 +1161,9 @@ pub(crate) mod on_device {
             let mut d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, SIDE, SIDE);
             d.usage = TextureUsage::RENDER_TARGET;
-            let texture = (device.new_managed_texture(&d, None, &named, &places))
+            // A colour render target takes an index.
+            (device.grant_indices(IndexClass::Texture, 4096, 1)).expect("a grant");
+            let texture = (device.new_managed_texture(&d, Some(4096), &named, &places))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             (texture.upload_region(whole(SIDE), 0, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));

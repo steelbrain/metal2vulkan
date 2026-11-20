@@ -221,12 +221,13 @@ pub(crate) mod on_device {
         values.iter().flat_map(|v| v.to_le_bytes()).collect()
     }
 
-    /// A 2D render target of `format`, `SIDE` a side.
+    /// A 2D render target of `format`, `SIDE` a side, with no index of its own
+    /// ([`Device::new_texture_for_views`]).
     pub(crate) fn target(device: &Device, format: PixelFormat, usage: TextureUsage) -> Texture {
         let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
         d.usage = usage;
         d.storage_mode = StorageMode::Shared;
-        (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{format:?}: {error}"))
+        (device.new_texture_for_views(&d)).unwrap_or_else(|error| panic!("{format:?}: {error}"))
     }
 
     /// The texels of `texture`, `unit` bytes each.

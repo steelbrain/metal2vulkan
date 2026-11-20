@@ -2809,7 +2809,7 @@ pub(crate) mod on_device {
             let a = arena.buffer();
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
             d.usage = TextureUsage::RENDER_TARGET;
-            let texture = device.new_texture(&d, None).expect("a texture");
+            let texture = device.new_texture_for_views(&d).expect("a texture");
             let _grant = (device.grant_indices(IndexClass::Sampler, 1, 1)).expect("an index");
             let state =
                 (device.new_sampler_state(&SamplerDescriptor::new(), 1)).expect("a sampler state");
@@ -2912,7 +2912,7 @@ pub(crate) mod on_device {
             let event = shared_event(&device);
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
             d.usage = TextureUsage::RENDER_TARGET;
-            let texture = device.new_texture(&d, None).expect("a texture");
+            let texture = device.new_texture_for_views(&d).expect("a texture");
             let queue = queue(&device);
             let command_buffer = queue.command_buffer().expect("a command buffer");
             fill(&command_buffer, &a, 3);
@@ -3002,8 +3002,8 @@ pub(crate) mod on_device {
                         ),
                         ("enqueue", refused(in_later.enqueue())),
                         (
-                            "new_texture",
-                            refused(in_device.new_texture(&d, None).map(drop)),
+                            "new_texture_for_views",
+                            refused(in_device.new_texture_for_views(&d).map(drop)),
                         ),
                     ];
                     let _ = answered.send(lines);
@@ -3024,7 +3024,7 @@ pub(crate) mod on_device {
                     "new_buffer in a Private block, not zeroed"
                     | "new_buffer zeroed in a Shared block"
                     | "enqueue"
-                    | "new_texture" => "Ok(())".to_string(),
+                    | "new_texture_for_views" => "Ok(())".to_string(),
                     _ => refusal.clone(),
                 };
                 assert_eq!(*answer, want, "{name}: {call}");

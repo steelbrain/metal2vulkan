@@ -221,7 +221,9 @@ mod on_device {
     /// Clears and stores land, loads keep, the area cuts, a slice of an array is its own; a pass
     /// alone is one submission, three barriers and one pass where an attachment moves (a
     /// shader-read texture's), and one barrier, its command buffer's end, where every attachment
-    /// renders at home; each view is made once and freed with its texture.
+    /// renders at home, colour targets made for rendering alone among them (they take an index and
+    /// the attachment-read usages, and a pass that does not fetch does not move them); each view is
+    /// made once and freed with its texture.
     #[test]
     fn every_device_clears_loads_and_stores_render_attachments() {
         each_device("render_passes", |name, _, device| {
@@ -246,7 +248,7 @@ mod on_device {
                 [4, 2],
                 1,
                 render,
-                None,
+                Some(4097),
             );
             let stencil = texture(
                 &device,
@@ -264,7 +266,7 @@ mod on_device {
                 [2, 2],
                 1,
                 render,
-                None,
+                Some(4098),
             );
             let level0 = write(&colors, 0, 0, 4, 1);
             write(&colors, 1, 0, 4, 2);
@@ -664,7 +666,7 @@ mod on_device {
                 [4, 4],
                 1,
                 TextureUsage::RENDER_TARGET,
-                None,
+                Some(4097),
             );
             let sampled = texture(
                 &device,

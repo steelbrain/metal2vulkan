@@ -413,9 +413,12 @@ pub enum Refusal {
         /// The first index of the grant where an object lives.
         index: u32,
     },
-    /// A texture whose usage shaders reach (read or write) made without an index, or one of no
-    /// such usage made with one ([`Device::new_texture`](crate::Device::new_texture)). A texture
-    /// shaders reach only through its views is made without one
+    /// A texture shaders reach made without an index, or one they do not reach made with one
+    /// ([`Device::new_texture`](crate::Device::new_texture)). Shaders reach a texture made for
+    /// shader reads or writes, and a colour render target (a render-target usage of a pixel
+    /// format with no depth or stencil), which a fragment function reads through its attachment;
+    /// a depth or stencil target made for neither they do not. A texture shaders reach only
+    /// through its views is made without one
     /// ([`Device::new_texture_for_views`](crate::Device::new_texture_for_views)). Metal has no
     /// counterpart: Metal gives every texture a resource ID itself.
     ///
@@ -1825,9 +1828,10 @@ impl fmt::Display for Refusal {
                 f,
                 "a texture no shader reaches takes no index, and {index} was given"
             ),
-            Refusal::TextureIndex { index: None } => {
-                f.write_str("a texture shaders read or write takes an index, and none was given")
-            }
+            Refusal::TextureIndex { index: None } => f.write_str(
+                "a texture shaders read or write, or a colour render target, takes an index, and \
+                 none was given",
+            ),
             Refusal::TextureZeroExtent => f.write_str("a texture has a width, height or depth of 0"),
             Refusal::TextureExtentForType => {
                 f.write_str("the texture's height or depth is not 1 where its type needs 1")

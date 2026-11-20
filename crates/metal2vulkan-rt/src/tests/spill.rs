@@ -81,7 +81,7 @@ mod on_device {
             let mut d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 512, 512);
             d.usage = TextureUsage::RENDER_TARGET;
-            let texture = match device.new_texture(&d, None) {
+            let texture = match device.new_texture_for_views(&d) {
                 Ok(texture) => Some(texture),
                 Err(error) if error.is_out_of_device_memory() => None,
                 Err(error) => panic!("{name}: a texture: {error}"),

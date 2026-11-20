@@ -203,12 +203,15 @@ impl RtDevice {
         }
     }
 
-    /// The next texture index ([`RtDevice::next_index`]) for a texture of `usage` where a shader
-    /// reaches it (shader read or write, or no bit, which the runtime takes as every usage), and
+    /// The next texture index ([`RtDevice::next_index`]) for a texture of `pf` and `usage` where a
+    /// shader reaches it (shader read or write, no bit, which the runtime takes as every usage, or
+    /// a colour render target, which a fragment function reads through its attachment), and
     /// `None` where none does, as the runtime's texture makers take an index.
-    fn texture_index(&self, usage: rt::TextureUsage) -> Option<u32> {
+    fn texture_index(&self, pf: rt::PixelFormat, usage: rt::TextureUsage) -> Option<u32> {
         let reached = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
-        (usage.is_empty() || usage.intersects(reached))
+        let color_target = usage.contains(rt::TextureUsage::RENDER_TARGET)
+            && !metal2vulkan::metal::format::is_depth_stencil(pf);
+        (usage.is_empty() || usage.intersects(reached) || color_target)
             .then(|| self.next_index(rt::IndexClass::Texture))
     }
 
@@ -772,7 +775,7 @@ impl Side for RtSide<'_> {
         query: &crate::texture_query::HeapTextureQuery,
     ) -> Answer<Option<crate::buffer_texture::BufferTextureFacts>> {
         let descriptor = queried(query);
-        let index = self.on.texture_index(descriptor.usage);
+        let index = (self.on).texture_index(descriptor.pixel_format, descriptor.usage);
         let texture = (self.on.device.new_texture(&descriptor, index))
             .map_err(|error| Failure::of_rt(&error))?;
         let facts = texture_facts(&texture);
@@ -791,7 +794,7 @@ impl Side for RtSide<'_> {
         let (buffer, _blocks) =
             work::buffer_of(self.on, request.buffer_length, request.buffer_storage)?;
         let descriptor = queried(&request.descriptor);
-        let index = self.on.texture_index(descriptor.usage);
+        let index = (self.on).texture_index(descriptor.pixel_format, descriptor.usage);
         let made = buffer.new_texture(&descriptor, index, request.offset, request.bytes_per_row);
         let texture = made.map_err(|error| Failure::of_rt(&error))?;
         let facts = texture_facts(&texture);
@@ -834,7 +837,7 @@ impl Side for RtSide<'_> {
     /// does not make is its typed error, recorded as the failure it is.
     fn makes_texture(&mut self, query: &crate::texture_query::HeapTextureQuery) -> Answer<bool> {
         let descriptor = queried(query);
-        let index = self.on.texture_index(descriptor.usage);
+        let index = (self.on).texture_index(descriptor.pixel_format, descriptor.usage);
         let texture = (self.on.device.new_texture(&descriptor, index))
             .map_err(|error| Failure::of_rt(&error))?;
         self.encoder_notes.extend(texture.precision_note());
@@ -1048,8 +1051,8 @@ impl Side for RtSide<'_> {
         };
         let levels = range(request.first_level, request.level_count, "a level")?;
         let slices = range(request.first_slice, request.slice_count, "a slice")?;
-        let index = self.on.texture_index(texture.descriptor().usage);
         let (format, texture_type) = (request.format, request.texture_type);
+        let index = self.on.texture_index(format, texture.descriptor().usage);
         let view = match request.call {
             ViewCall::PixelFormat | ViewCall::LevelsSlices => {
                 texture.new_texture_view(format, texture_type, levels, slices, index)
@@ -1190,9 +1193,7 @@ impl Side for RtSide<'_> {
         );
         descriptor.usage = crate::runtime_side::usage_of(spec.role);
         descriptor.storage_mode = rt::StorageMode::Shared;
-        let reached = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
-        let index = (descriptor.usage.intersects(reached))
-            .then(|| self.on.next_index(rt::IndexClass::Texture));
+        let index = (self.on).texture_index(descriptor.pixel_format, descriptor.usage);
         let of_rt = |error: rt::Error| Failure::of_rt(&error);
         let texture = (self.on.device.new_texture(&descriptor, index)).map_err(of_rt)?;
         if !bytes.is_empty() {
@@ -1235,7 +1236,8 @@ impl Side for RtSide<'_> {
             false => rt::StorageMode::Shared,
         };
         descriptor.swizzle = request.swizzle;
-        let index = |usage| self.on.texture_index(usage);
+        let pf = descriptor.pixel_format;
+        let index = |usage| self.on.texture_index(pf, usage);
         let of_rt = |error: rt::Error| Failure::of_rt(&error);
         let texture = match request.over {
             None => self
@@ -1747,7 +1749,7 @@ impl Side for RtSide<'_> {
         let mut descriptor =
             rt::TextureDescriptor::new(rt::TextureType::Type2D, format, width, height);
         descriptor.usage = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
-        let index = self.on.texture_index(descriptor.usage);
+        let index = (self.on).texture_index(descriptor.pixel_format, descriptor.usage);
         let (offset, bytes_per_row) = over.planes[0];
         let texture = (self
             .held(buffer)?

@@ -348,8 +348,9 @@ impl Arrays {
     /// Places a texture at `index` ([`Grants::place`]) and writes its elements before another
     /// object can be placed there: the sampled-texture array's with `sampled` and its layout, a
     /// null descriptor where it is `None`, the storage-texture array's with `storage`, and with
-    /// `looped` the second element (`index` plus [`TEXTURES`]) with the sampled view in the
-    /// attachment feedback layout. A texture without a storage view, or without a second element
+    /// `looped` the second element (`index` plus [`TEXTURES`]) with that view, the texture's
+    /// sampled view, in the attachment feedback layout: a colour render target shaders do not
+    /// read has it there alone. A texture without a storage view, or without a second element
     /// written here, leaves that element null, as every element starts, unless it displaced a
     /// texture, which may have had one: then it writes that element null, so nothing stale
     /// answers there. A null second element is written shader-read-only on every device, as
@@ -377,7 +378,7 @@ impl Arrays {
             Option<(vk::ImageView, vk::ImageLayout)>,
             Option<vk::ImageView>,
         ),
-        looped: bool,
+        looped: Option<vk::ImageView>,
     ) -> Result<Owner, Error> {
         let mut grants = lock(&self.grants);
         let Placed { owner, displaced } = grants.place(IndexClass::Texture, index)?;
@@ -386,9 +387,8 @@ impl Arrays {
         }
         let storage = storage.or(displaced.then(vk::ImageView::null));
         let second = match looped {
-            true => sampled
-                .map(|(view, _)| (view, vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)),
-            false => (displaced && self.seconds).then(|| {
+            Some(view) => Some((view, vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)),
+            None => (displaced && self.seconds).then(|| {
                 (
                     vk::ImageView::null(),
                     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,

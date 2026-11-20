@@ -49,7 +49,7 @@ pub(super) fn hold(
         )
     })?;
     let (_block, heap) = work::heap_of(on, heap_size, Storage::Private)?;
-    let index = on.texture_index(descriptor.usage);
+    let index = on.texture_index(descriptor.pixel_format, descriptor.usage);
     let texture = (on.device.new_heap_texture(descriptor, index, heap, align))
         .map_err(|error| on.failure(&error))?;
     round_trip(on, queue, descriptor, &texture)

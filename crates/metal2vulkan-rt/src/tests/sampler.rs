@@ -198,8 +198,8 @@ mod on_device {
             compute.end_encoding();
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
             d.usage = TextureUsage::RENDER_TARGET;
-            let color =
-                (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let color = (device.new_texture_for_views(&d))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut pass = RenderPassDescriptor::default();
             pass.color_attachments[0].texture = Some(color);
             let mut render = (command_buffer.render_command_encoder(&pass))

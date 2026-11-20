@@ -46,7 +46,7 @@ mod on_device {
             let out = (device.new_buffer(block.id, 256, 64, None)).expect("a buffer");
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
             d.usage = TextureUsage::RENDER_TARGET;
-            let texture = device.new_texture(&d, None).expect("a texture");
+            let texture = device.new_texture_for_views(&d).expect("a texture");
             let queue = device.new_command_queue(4).expect("a queue");
             let layout = BufferLayout {
                 offset: 0,

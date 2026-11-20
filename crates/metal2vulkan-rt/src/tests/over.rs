@@ -220,7 +220,7 @@ mod on_device {
             let mut plain_d = d;
             plain_d.usage = TextureUsage::RENDER_TARGET;
             plain_d.storage_mode = StorageMode::Shared;
-            let plain = (device.new_texture(&plain_d, None))
+            let plain = (device.new_texture_for_views(&plain_d))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             // The count sees a texture's allocation: a plain texture's.
             assert_ne!(
@@ -270,13 +270,14 @@ mod on_device {
             // A render target over the buffer, which a device may not hold in place.
             let mut r = d;
             r.usage = TextureUsage::RENDER_TARGET;
-            let target = buffer.new_texture(&r, None, offset, pitch).map(|_| ());
+            // A colour render target takes an index; a refusal below comes before its placement.
+            let target = buffer.new_texture(&r, Some(3), offset, pitch).map(|_| ());
             println!("over: {name}: a render target over a buffer: {target:?}");
 
             // What Metal's layout rules refuse, and what is not held in place.
             let d = r;
             let refused = |d: &TextureDescriptor, offset: u64, pitch: u64, what: &str| match buffer
-                .new_texture(d, None, offset, pitch)
+                .new_texture(d, Some(4), offset, pitch)
             {
                 Err(Error::Refused(Refusal::BufferTextureLayout {
                     offset: o,
@@ -290,9 +291,12 @@ mod on_device {
             refused(&d, offset, ROW - 4, "rows closer than a row");
             refused(&d, offset, pitch + 2, "rows off a texel");
             refused(&d, offset + 2, pitch, "an offset off a texel");
-            let gap = |d: &TextureDescriptor, what: &str| match buffer
-                .new_texture(d, None, offset, pitch)
-            {
+            let gap = |d: &TextureDescriptor, what: &str| match buffer.new_texture(
+                d,
+                Some(4),
+                offset,
+                pitch,
+            ) {
                 Err(Error::Unsupported(Gap::TextureOverBuffer { pixel_format })) => {
                     assert_eq!(pixel_format, d.pixel_format, "{name}: {what}")
                 }
@@ -368,7 +372,8 @@ mod on_device {
             let counters = device.counters();
             let queue = device.new_command_queue(4).expect("a queue");
             let first = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            // The sampled texture's index, and the render target's: a colour one takes one.
+            (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
             for height in [3, 4] {
                 let rows = u64::from(height) * pitch;
                 let block = (device.take_block(MemoryClass::Shared, AT + rows + TAIL))
@@ -394,7 +399,7 @@ mod on_device {
                 );
                 d.usage = TextureUsage::RENDER_TARGET;
                 let size = device.linear_subresource_size(&d);
-                let target = (buffer.new_texture(&d, None, 0, pitch))
+                let target = (buffer.new_texture(&d, Some(first + 1), 0, pitch))
                     .unwrap_or_else(|error| panic!("{name}: {height} rows: {error}"));
                 let copied = target.copied_over().is_some();
                 let past = size.is_some_and(|size| size > rows);

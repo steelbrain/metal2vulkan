@@ -76,7 +76,7 @@ mod on_device {
         td.sample_count = 4;
         td.usage = TextureUsage::RENDER_TARGET;
         td.storage_mode = StorageMode::Private;
-        let made = device.new_texture(&td, None);
+        let made = device.new_texture_for_views(&td);
         if let Err(error) = &made {
             println!("{name}: no 4-sample {format:?}: {error}");
         }
@@ -164,8 +164,8 @@ mod on_device {
             rd.array_length = 2;
             rd.usage = TextureUsage::RENDER_TARGET;
             rd.storage_mode = StorageMode::Shared;
-            let into =
-                (device.new_texture(&rd, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let into = (device.new_texture_for_views(&rd))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut p = pass(&samples, None);
             assert_eq!(
                 p.precision_note(),

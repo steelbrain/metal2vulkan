@@ -138,7 +138,8 @@ impl RtSide<'_> {
             rt::TextureDescriptor::new(rt::TextureType::Type2D, fill.format, width, height);
         target.usage = rt::TextureUsage::RENDER_TARGET;
         target.storage_mode = rt::StorageMode::Private;
-        let target = on.device.new_texture(&target, None).map_err(of_rt)?;
+        let index = on.texture_index(target.pixel_format, target.usage);
+        let target = on.device.new_texture(&target, index).map_err(of_rt)?;
         let bound = (fill.buffers.iter())
             .map(|&handle| self.held(handle).cloned())
             .collect::<Answer<Vec<rt::Buffer>>>()?;
@@ -207,17 +208,18 @@ impl RtSide<'_> {
     }
 
     /// [`crate::case::Side::render_target`]: a Shared 2D render target of the mesh family's
-    /// format, which no shader reaches.
+    /// format, at an index as the runtime takes one for a colour render target.
     pub(super) fn mesh_target(&mut self, width: u32, height: u32) -> Answer<Handle> {
         let format = rt::PixelFormat::RGBA32Uint;
         let mut descriptor =
             rt::TextureDescriptor::new(rt::TextureType::Type2D, format, width, height);
         descriptor.usage = rt::TextureUsage::RENDER_TARGET;
         descriptor.storage_mode = rt::StorageMode::Shared;
+        let index = (self.on).texture_index(descriptor.pixel_format, descriptor.usage);
         let texture = self
             .on
             .device
-            .new_texture(&descriptor, None)
+            .new_texture(&descriptor, index)
             .map_err(of_rt)?;
         Ok(keep(&mut self.textures, texture))
     }

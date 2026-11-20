@@ -15,7 +15,7 @@ mod on_device {
     use crate::tests::command::on_device::each_device;
     use crate::texture::TextureObject;
     use crate::{
-        DispatchType, Error, Gap, HeapRange, MemoryClass, PixelFormat, Refusal, Region,
+        DispatchType, Error, Gap, HeapRange, IndexClass, MemoryClass, PixelFormat, Refusal, Region,
         StorageMode, TextureDescriptor, TextureType, TextureUsage,
     };
     use std::sync::Arc;
@@ -69,7 +69,7 @@ mod on_device {
             let mut textures = Vec::new();
             let mut offset = 0;
             while offset + fit.size <= heap.len {
-                let texture = (device.new_heap_texture(&d, None, heap, offset))
+                let texture = (device.new_heap_texture_for_views(&d, heap, offset))
                     .unwrap_or_else(|error| panic!("{name}: at {offset}: {error}"));
                 assert_eq!(
                     texture.image_size().next_multiple_of(granularity),
@@ -115,12 +115,12 @@ mod on_device {
             }
 
             // Aliasing, as a Metal heap's aliasable resources do.
-            let alias = (device.new_heap_texture(&d, None, heap, 0))
+            let alias = (device.new_heap_texture_for_views(&d, heap, 0))
                 .unwrap_or_else(|error| panic!("{name}: an alias: {error}"));
 
             // Placements that do not lie in the heap.
             let refused = |heap: HeapRange, offset: u64, what: &str| match device
-                .new_heap_texture(&d, None, heap, offset)
+                .new_heap_texture_for_views(&d, heap, offset)
             {
                 Err(Error::Refused(Refusal::HeapTexturePlace {
                     offset: at,
@@ -223,13 +223,14 @@ mod on_device {
             );
             assert_eq!(texture.gpu_resource_id().index, 0, "{name}: no index");
 
-            // Through a view and back.
+            // Through a view and back, a colour render target's view at an index.
+            (device.grant_indices(IndexClass::Texture, 4096, 1)).expect("a grant");
             let view = (texture.new_texture_view(
                 PixelFormat::RGBA8Unorm,
                 TextureType::Type2D,
                 0..1,
                 0..1,
-                None,
+                Some(4096),
             ))
             .unwrap_or_else(|error| panic!("{name}: a view: {error}"));
             let whole = Region {

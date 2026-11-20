@@ -125,8 +125,8 @@ mod on_device {
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 64, 64);
             td.usage = TextureUsage::RENDER_TARGET;
             td.storage_mode = StorageMode::Private;
-            let texture =
-                (device.new_texture(&td, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let texture = (device.new_texture_for_views(&td))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             let placed = counters.gauges().texture_block_bytes - gauged.texture_block_bytes;
             let own = counters.gauges().texture_own_bytes - gauged.texture_own_bytes;
             assert!(

@@ -19,14 +19,17 @@ the same IDs on every run, and a replay reproduces them.
 | Class | Index | Object | Arrays it is valid in |
 |---|---|---|---|
 | nil | 0 | nil (the ID 0) | none |
-| texture | 1 to 65,535 | a texture of any usage a shader reaches: `MTLTextureUsageShaderRead`, `MTLTextureUsageShaderWrite`, or `MTLTextureUsageUnknown` | the sampled-image array and the storage-image array |
+| texture | 1 to 65,535 | a texture of any usage a shader reaches: `MTLTextureUsageShaderRead`, `MTLTextureUsageShaderWrite`, `MTLTextureUsageUnknown`, or `MTLTextureUsageRenderTarget` of a colour pixel format, which a fragment function reads through its attachment | the sampled-image array and the storage-image array |
 | sampler | 1 to 3,999 | a sampler | the sampler arrays |
 
 A texture of any usage may be placed at any index of the texture class. A texture with a storage
 element (shader-write or unknown usage, of a format the device stores through a storage image
 declared without a format) writes the element of both image arrays at its index; any other
-texture writes its sampled-image element and leaves its storage-image element null. A texture no
-shader reaches has no index. A texture view takes its own index of the texture class. A texture
+texture writes its sampled-image element and leaves its storage-image element null. A colour
+render target made for neither shader reads nor writes leaves both null, so a slot that binds it
+reads nil; a draw that reads it as an attachment of its own pass reads the runtime's second element
+at its index plus 65,536, which no resource ID reaches. A texture no shader reaches, a depth or
+stencil target made for neither, has no index. A texture view takes its own index of the texture class. A texture
 buffer has no index: it is a typed refusal under these domains.
 
 An index has one owner, the object placed there last, as Metal's later texture at a resource ID

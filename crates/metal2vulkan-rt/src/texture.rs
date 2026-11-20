@@ -360,17 +360,19 @@ pub(crate) struct Image {
     backing: Backing,
     /// The memory's bytes.
     bytes: u64,
-    /// The view of the sampled-texture array's element, where shaders read the texture.
+    /// The sampled view: the sampled-texture array's element, where shaders read the texture, and
+    /// the view a draw reads an attachment through (`attachment_reads`), which a colour render
+    /// target not read has for that alone.
     sampled: Option<vk::ImageView>,
     /// The view of the storage-texture array's element, where shaders write it and the device
     /// stores its format through a storage image without a format.
     storage: Option<vk::ImageView>,
     /// The layout the image is in outside a copy, which its elements name.
     home: vk::ImageLayout,
-    /// A draw may read an attachment of its own pass through a texture over the image (a
-    /// shader-read colour render target not in place over a buffer, its home shader-read-only, or
-    /// general where it has a storage view, on a device that reads attachments): each such
-    /// texture has a second element of the sampled-texture array, at its index plus
+    /// A draw may read an attachment of its own pass through a texture over the image (a colour
+    /// render target not in place over a buffer, on a device that reads attachments; its home is
+    /// general where it has a storage view, shader-read-only where shaders read it, else the
+    /// attachment layout): each such texture has a second element of the sampled-texture array, at its index plus
     /// [`TEXTURES`](crate::floor::TEXTURES). Through the attachment feedback loop the image has
     /// the feedback usage and the element names the feedback layout, which a pass moves the whole
     /// image to from its home, and back, for a draw that reads it; on a device without the loop
@@ -855,8 +857,12 @@ impl Device {
     /// memory, placed in a texture block ([`Texture`]), which reads zero until written: the
     /// runtime's choice, where Metal does not say what a new texture holds (the module docs).
     /// `index` is given exactly where shaders reach the texture (shader-read or shader-write
-    /// usage), and is then an index of a live [`IndexClass::Texture`](crate::IndexClass::Texture)
-    /// grant, whatever the usage. The texture's elements of set 1 are written before the call
+    /// usage, or render-target usage of a colour pixel format, which a fragment function reads
+    /// through its attachment; [`Refusal::TextureIndex`]), and is then an index of a live
+    /// [`IndexClass::Texture`](crate::IndexClass::Texture) grant, whatever the usage. A colour
+    /// render target shaders neither read nor write writes only its second element there, the
+    /// one a draw reads it through as an attachment, and a slot that binds it reads Metal's nil
+    /// texture. The texture's elements of set 1 are written before the call
     /// returns, and its image moved to its home layout ahead of every command buffer committed
     /// after it. Until the submission of the next commit nothing else holds the texture: released
     /// first, it is freed at once.
@@ -1191,8 +1197,7 @@ impl Device {
                 missing: missing.as_raw(),
             }));
         }
-        let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
-        if reached != index.is_some() {
+        if reached(d.pixel_format, usage) != index.is_some() {
             return Err(Error::Refused(Refusal::TextureIndex { index }));
         }
         // Views of the image's own format take its whole usage, which the swapchain's creation
@@ -1200,7 +1205,7 @@ impl Device {
         let mut made = Made::default();
         // SAFETY: the image is the device's and bound (the caller's contract), of the plan's
         // format, and has the plan's usage.
-        let views = unsafe { made.views(&core.device, image, &shape, &plan) };
+        let views = unsafe { made.views(&core.device, image, &shape, &plan, plan.usage) };
         if views.is_err() {
             // SAFETY: nothing else holds the views; `made` holds no image.
             unsafe { made.destroy(core) };
@@ -1246,7 +1251,7 @@ impl Device {
                         &core.counters,
                         index,
                         (sampled, storage),
-                        false,
+                        None,
                     )
                 }?;
                 Some((index, owner))
@@ -1286,9 +1291,8 @@ impl Device {
     ) -> Result<Texture, Error> {
         let d = *descriptor;
         let (shape, plan, usage) = self.prepare(&d)?;
-        let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
         let index = match reach {
-            Reach::Index(index) if reached != index.is_some() => {
+            Reach::Index(index) if reached(d.pixel_format, usage) != index.is_some() => {
                 return Err(Error::Refused(Refusal::TextureIndex { index }));
             }
             Reach::Index(index) => index,
@@ -1432,7 +1436,8 @@ impl Device {
         // image as `image` drops.
         let index = match index {
             Some(index) => {
-                let sampled = sampled.map(|view| (view, home));
+                let element = sampled.filter(|_| plan.read).map(|view| (view, home));
+                let looped = sampled.filter(|_| image.looped());
                 // SAFETY: the texture's views are live; its image is in its home layout whenever
                 // work uses it, the upload of the next commit going first.
                 let owner = unsafe {
@@ -1440,8 +1445,8 @@ impl Device {
                         &core.device,
                         &core.counters,
                         index,
-                        (sampled, storage),
-                        image.looped(),
+                        (element, storage),
+                        looped,
                     )
                 }?;
                 Some((index, owner))
@@ -1505,8 +1510,15 @@ struct Plan {
     format: vk::Format,
     usage: vk::ImageUsageFlags,
     samples: vk::SampleCountFlags,
-    /// The sampled view's component mapping and aspect, where shaders read the texture.
+    /// The sampled view's component mapping and aspect, where shaders read the texture or, for
+    /// a colour render target, where a draw may read it as an attachment of its own pass
+    /// ([`Plan::reads_attachments`]); `plan` drops it from a colour render target whose draws
+    /// read no attachment through it.
     sampled: Option<(vk::ComponentMapping, vk::ImageAspectFlags)>,
+    /// Whether shaders read the texture: its sampled view is its sampled-texture element. A
+    /// colour render target not read has the view for its second element alone, and its element
+    /// stays the null one, which a slot that binds it reads as Metal's nil texture.
+    read: bool,
     /// Whether the texture has a storage view.
     storage: bool,
     /// Whether a storage view of the plan's format reads without a format: the format's
@@ -1545,23 +1557,28 @@ struct Plan {
 
 impl Plan {
     /// The usage of a linear image of the plan, over a buffer in place: without the feedback
-    /// usage, as no pass moves it to the feedback layout.
+    /// usage, as no pass moves it to the feedback layout, and without the sampled usage where
+    /// shaders do not read the texture, as a colour render target takes it for attachment reads
+    /// alone.
     fn linear_usage(&self) -> vk::ImageUsageFlags {
-        self.usage & !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT
+        let mut usage = self.usage & !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        if !self.read {
+            usage &= !vk::ImageUsageFlags::SAMPLED;
+        }
+        usage
     }
 
     /// Whether a draw may read an attachment of its own pass through a texture of the plan, where
-    /// its image takes the feedback usage or a shadow: a shader-read colour render target, with a
-    /// storage view or not, on a device that reads attachments. Vulkan's feedback layout asks the
-    /// attachment and sampled usages beside the feedback usage
-    /// (`VUID-VkImageMemoryBarrier2-srcQueueFamilyIndex-07006`) and bars none, the storage usage
-    /// included; in it the image is only rendered and sampled.
+    /// its image takes the feedback usage or a shadow: a colour render target, read by shaders or
+    /// not, with a storage view or not, on a device that reads attachments, as Metal reads any
+    /// render target. Vulkan's feedback layout asks the attachment and sampled usages beside the
+    /// feedback usage (`VUID-VkImageMemoryBarrier2-srcQueueFamilyIndex-07006`) and bars none, the
+    /// storage usage included; in it the image is only rendered and sampled. A target not read
+    /// takes the sampled usage for the reads alone (`plan`).
     fn reads_attachments(&self, core: &Core) -> bool {
-        let render =
-            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
         core.attachment_reads
-            && self.usage.contains(vk::ImageUsageFlags::SAMPLED)
-            && self.usage.intersects(render)
+            && self.sampled.is_some()
+            && self.usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
             && self.aspects == vk::ImageAspectFlags::COLOR
     }
 
@@ -2001,10 +2018,14 @@ fn plan(
     };
     // A draw may read an attachment of its own pass through such a texture
     // (`crate::render_encoder`), where the device reads attachments: in the feedback layout where
-    // it has the attachment feedback loop, else through a copy into the image's shadow.
+    // it has the attachment feedback loop, else through a copy into the image's shadow. The image
+    // takes the sampled usage for it where shaders do not read the texture.
     let mut attachment_reads = plan.reads_attachments(core);
     let looped = attachment_reads && core.feedback.is_some();
     let mut image_usage = plan.usage;
+    if attachment_reads {
+        image_usage |= vk::ImageUsageFlags::SAMPLED;
+    }
     if looped {
         image_usage |= vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
     }
@@ -2026,20 +2047,25 @@ fn plan(
         info = info.flags(plan.flags(shape));
         properties = core.image_format_properties(&info);
     }
-    // A format the device makes without the feedback usage alone is made so, and its draws read
-    // no attachment of their own pass through it.
-    if properties.is_none() && looped {
+    // A format the device makes without the usages the attachment reads add alone is made so,
+    // and its draws read no attachment of their own pass through it.
+    if properties.is_none() && attachment_reads {
         attachment_reads = false;
-        image_usage &= !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        image_usage = plan.usage;
         properties = core.image_format_properties(&info.usage(image_usage));
     }
-    let properties = properties.ok_or_else(gap)?;
-    // Likewise a format the device makes no shadow of.
-    if attachment_reads && !looped {
+    // Likewise a format the device makes no shadow of: a target shaders do not read is then made
+    // without the sampled usage.
+    if properties.is_some() && attachment_reads && !looped {
         attachment_reads = core
             .image_format_properties(&info.usage(SHADOW_USAGE))
             .is_some();
+        if !attachment_reads && image_usage != plan.usage {
+            image_usage = plan.usage;
+            properties = core.image_format_properties(&info.usage(image_usage));
+        }
     }
+    let properties = properties.ok_or_else(gap)?;
     let max = properties.max_extent;
     let max_extent = [max.width, max.height, max.depth];
     if shape.extent.iter().zip(max_extent).any(|(&e, m)| e > m)
@@ -2061,6 +2087,9 @@ fn plan(
     plan.usage = image_usage;
     plan.attachment_reads = attachment_reads;
     plan.cube = cube;
+    if !plan.read && !attachment_reads {
+        plan.sampled = None;
+    }
     Ok(plan)
 }
 
@@ -2112,6 +2141,16 @@ fn view_formats(
         list.clear();
     }
     list
+}
+
+/// Whether shaders reach a texture of `pf` and `usage` (Metal's unknown usage already its four
+/// bits), which takes an index exactly where they do ([`Refusal::TextureIndex`]): it is read or
+/// written, or it is a colour render target (a pixel format with no depth or stencil), which a
+/// fragment function reads through its attachment, as Metal gives every texture a
+/// `gpuResourceID`. A depth or stencil target shaders neither read nor write is not reached.
+fn reached(pf: PixelFormat, usage: TextureUsage) -> bool {
+    usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE)
+        || (usage.contains(TextureUsage::RENDER_TARGET) && !formats::is_depth_stencil(pf))
 }
 
 /// What a texture of `d` and `usage` holds in its views, as its own image or as a view of
@@ -2202,7 +2241,10 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         vk::ImageAspectFlags::COLOR
     };
     let unit = copy_unit(pf, format, metal_aspects, block.size, d.sample_count);
-    let sampled = match read {
+    // A colour render target has a sampled view where shaders read it or a draw may read it as an
+    // attachment of its own pass; `plan` gives an image the sampled usage for the second.
+    let color_target = image_usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT);
+    let sampled = match read || color_target {
         true => Some((
             components(mapping.components.into(), d.swizzle).ok_or_else(gap)?,
             view_aspect,
@@ -2214,6 +2256,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         usage: image_usage,
         samples,
         sampled,
+        read,
         storage,
         storage_reads,
         home,
@@ -2625,22 +2668,26 @@ impl Made {
         // type its requirements allow.
         unsafe { device.bind_image_memory(image, memory, offset) }
             .map_err(Error::vulkan("vkBindImageMemory"))?;
-        // SAFETY: the image is bound, of the plan's format, and has its usage.
-        let (sampled, storage) = unsafe { self.views(device, image, shape, plan) }?;
+        // SAFETY: the image is bound, of the plan's format, and has `info`'s usage.
+        let usage = info.usage;
+        let (sampled, storage) = unsafe { self.views(device, image, shape, plan, usage) }?;
         Ok((image, backing, requirements.size, sampled, storage))
     }
 
-    /// Makes `image`'s views of `plan`: its sampled view and its storage view, where it has them.
+    /// Makes `image`'s views of `plan`: its sampled view, where it has one and the image's
+    /// `usage` the sampled usage, and its storage view, where it has one.
     ///
     /// # Safety
     ///
-    /// `image` is the device's, bound, of the plan's format, and has the plan's usage.
+    /// `image` is the device's, bound, of the plan's format, and has `usage`, the storage usage
+    /// among it where the plan has a storage view.
     unsafe fn views(
         &mut self,
         device: &ash::Device,
         image: vk::Image,
         shape: &Shape,
         plan: &Plan,
+        usage: vk::ImageUsageFlags,
     ) -> Result<(Option<vk::ImageView>, Option<vk::ImageView>), Error> {
         let mut view = |components, aspect| {
             let (view_type, format) = (shape.view_type, plan.format);
@@ -2652,8 +2699,10 @@ impl Made {
             Ok::<_, Error>(view)
         };
         let sampled = match plan.sampled {
-            Some((components, aspect)) => Some(view(components, aspect)?),
-            None => None,
+            Some((components, aspect)) if usage.contains(vk::ImageUsageFlags::SAMPLED) => {
+                Some(view(components, aspect)?)
+            }
+            _ => None,
         };
         let storage = match plan.storage {
             true => Some(view(
@@ -3342,8 +3391,7 @@ impl Texture {
         if !usable.contains(vk::ImageUsageFlags::SAMPLED) {
             plan.sampled = None;
         }
-        let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
-        if reached != index.is_some() {
+        if reached(d.pixel_format, usage) != index.is_some() {
             return Err(Error::Refused(Refusal::TextureIndex { index }));
         }
         let core = &inner.core;
@@ -3402,7 +3450,8 @@ impl Texture {
         let shadow = ShadowView::of(&inner.image, &plan, index, shape.view_type, range);
         let index = match index {
             Some(index) => {
-                let sampled = sampled.map(|view| (view, inner.image.home));
+                let element = (sampled.filter(|_| plan.read)).map(|view| (view, inner.image.home));
+                let looped = sampled.filter(|_| inner.image.looped());
                 // SAFETY: the view's image views are live; the image is in its home layout
                 // whenever work uses it.
                 let owner = unsafe {
@@ -3410,8 +3459,8 @@ impl Texture {
                         &core.device,
                         &core.counters,
                         index,
-                        (sampled, storage),
-                        inner.image.looped(),
+                        (element, storage),
+                        looped,
                     )
                 }?;
                 Some((index, owner))
@@ -4519,8 +4568,7 @@ impl Device {
         let d = *descriptor;
         let checked = self.prepare(&d).and_then(|(shape, plan, usage)| {
             // With no index, a plane shaders reach is reached through its views alone.
-            let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
-            if index.is_some() && !reached {
+            if index.is_some() && !reached(d.pixel_format, usage) {
                 return Err(Error::Refused(Refusal::TextureIndex { index }));
             }
             let missing = plan.linear_usage() & !made.usage;
@@ -4543,7 +4591,8 @@ impl Device {
         let mut views = Made::default();
         // SAFETY: the image is the device's and bound, of the plan's format or mutable with it
         // listed, with the plan's usage and more, which the plan's format's features hold.
-        let made_views = unsafe { views.views(&core.device, made.image, &shape, &plan) };
+        let made_views =
+            unsafe { views.views(&core.device, made.image, &shape, &plan, made.usage) };
         let (sampled, storage) = match made_views {
             Ok(made_views) => made_views,
             Err(error) => {
@@ -4608,7 +4657,8 @@ impl Device {
         // image as `image` drops.
         let index = match index {
             Some(index) => {
-                let sampled = sampled.map(|view| (view, home));
+                let element = sampled.filter(|_| plan.read).map(|view| (view, home));
+                let looped = sampled.filter(|_| image.looped());
                 // SAFETY: the texture's views are live; its image is in its home layout whenever
                 // work uses it: the upload that moves it goes ahead of that work, or it is general
                 // after the other API's access.
@@ -4617,8 +4667,8 @@ impl Device {
                         &core.device,
                         &core.counters,
                         index,
-                        (sampled, storage),
-                        image.looped(),
+                        (element, storage),
+                        looped,
                     )
                 }?;
                 Some((index, owner))

@@ -637,7 +637,6 @@ fn set_texture_descriptor(call: &Call, d: &mut rt::TextureDescriptor) -> Result<
     Ok(())
 }
 
-/// The class of a texture's index: none where no shader reaches it.
 /// Every slice of a texture of `d`, as a view counts them: a cube's six faces each one.
 fn whole_slices(d: &rt::TextureDescriptor) -> Range<u32> {
     let faces = match d.texture_type {
@@ -650,9 +649,16 @@ fn whole_slices(d: &rt::TextureDescriptor) -> Range<u32> {
     }
 }
 
-fn texture_class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
+/// The class of the index of a texture of `pf` and `usage`, where shaders reach it, as the runtime
+/// takes it (`rt::Refusal::TextureIndex`): unknown usage, shader-read or shader-write usage, or a
+/// colour render target, which a fragment function reads through its attachment; none for a depth
+/// or stencil target shaders neither read nor write.
+fn texture_class(pf: rt::PixelFormat, usage: rt::TextureUsage) -> Option<rt::IndexClass> {
     let reached = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
-    (usage.is_empty() || usage.intersects(reached)).then_some(rt::IndexClass::Texture)
+    let color_target = usage.contains(rt::TextureUsage::RENDER_TARGET)
+        && !metal2vulkan::metal::format::is_depth_stencil(pf);
+    (usage.is_empty() || usage.intersects(reached) || color_target)
+        .then_some(rt::IndexClass::Texture)
 }
 
 /// How long the device has, once the backend ends or drops, to finish its GPU work and stop its
@@ -1361,7 +1367,10 @@ impl NewRuntime {
             Some((range, offset)) => device.new_heap_texture(descriptor, index, range, offset),
             None => device.new_texture(descriptor, index),
         };
-        match (texture_class(descriptor.usage), outside) {
+        match (
+            texture_class(descriptor.pixel_format, descriptor.usage),
+            outside,
+        ) {
             (Some(class), false) => self.place(call, class, None, |index| make(Some(index))),
             (Some(class), true) => self.place_outside(call, class, |index| make(Some(index))),
             (None, _) => make(None).map_err(failed(call)),
@@ -1896,7 +1905,7 @@ impl NewRuntime {
             });
             made
         };
-        let made = match texture_class(usage) {
+        let made = match texture_class(descriptor.pixel_format, usage) {
             Some(class) => self.place(call, class, None, |index| noted(Some(index))),
             None => noted(None).map_err(failed(call)),
         };

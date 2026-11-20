@@ -310,13 +310,14 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
         }
         Resource::Texture { spec } => {
             let d = descriptor(spec)?;
-            let texture = (device.new_texture(&d, on.texture_index(d.usage))).map_err(of_rt)?;
+            let texture = (device.new_texture(&d, on.texture_index(d.pixel_format, d.usage)))
+                .map_err(of_rt)?;
             Ok(Made::Texture(texture))
         }
         Resource::HeapTexture { heap, spec, offset } => {
             let d = descriptor(spec)?;
             let range = heap_at(*heap)?;
-            let index = on.texture_index(d.usage);
+            let index = on.texture_index(d.pixel_format, d.usage);
             let texture = (device.new_heap_texture(&d, index, range, *offset)).map_err(of_rt)?;
             Ok(Made::Texture(texture))
         }
@@ -327,7 +328,7 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
             bytes_per_row,
         } => {
             let d = descriptor(spec)?;
-            let index = on.texture_index(d.usage);
+            let index = on.texture_index(d.pixel_format, d.usage);
             let texture = (buffer_at(*buffer)?.new_texture(&d, index, *offset, *bytes_per_row))
                 .map_err(of_rt)?;
             Ok(Made::Texture(texture))
@@ -352,7 +353,7 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
             let (level, slice) = (narrow(*level, "a level")?, narrow(*slice, "a slice")?);
             let levels = level..level + narrow(*level_count, "a level count")?;
             let slices = slice..slice + narrow(*slice_count, "a slice count")?;
-            let index = on.texture_index(parent.descriptor().usage);
+            let index = on.texture_index(format, parent.descriptor().usage);
             let view =
                 (parent.new_texture_view(format, kind, levels, slices, index)).map_err(of_rt)?;
             Ok(Made::Texture(view))
