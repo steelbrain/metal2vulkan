@@ -116,7 +116,7 @@ fn form(run: &ComputeRun) -> (bool, Option<u32>) {
     let module = &run.census.modules[0];
     (
         module.strategies.contains(WIDEST_PIN),
-        module.subgroup.required_size,
+        module.subgroup.and_then(|shape| shape.required_size),
     )
 }
 

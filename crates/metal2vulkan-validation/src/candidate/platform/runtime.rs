@@ -456,6 +456,8 @@ fn make(
     }
     let mut constexprs: BTreeMap<[u64; 2], u32> = BTreeMap::new();
     let first = rt::IndexClass::Sampler.range().start;
+    // A numbered sampler of a kind this run does not know fails it, once the make returns.
+    let mut unknown = None;
     let numbered = |samplers: &[NumberedSampler]| {
         let ids = samplers.iter().map(|sampler| match sampler {
             NumberedSampler::Constexpr(words) => {
@@ -463,6 +465,10 @@ fn make(
                 *constexprs.entry(*words).or_insert(next)
             }
             NumberedSampler::Read | NumberedSampler::Write => 0,
+            other => {
+                unknown = Some(format!("{other:?}"));
+                0
+            }
         });
         Ok::<Vec<u32>, rt::Error>(ids.collect())
     };
@@ -480,7 +486,14 @@ fn make(
             peak.unwrap_or(0)
         )));
     }
-    made.map_err(|error| runtime_error("the pipeline's make", error))
+    let made = made.map_err(|error| runtime_error("the pipeline's make", error))?;
+    match unknown {
+        Some(sampler) => Err(ExecutorError::Failed(format!(
+            "the pipeline numbers a sampler of a kind a run through the runtime does not know: \
+             {sampler}"
+        ))),
+        None => Ok(made),
+    }
 }
 
 /// A buffer of the run: a Shared block of its own, and the buffer over it holding the bytes.
