@@ -38,13 +38,22 @@ pub(super) struct Prepass {
     buffers: HashMap<u64, u64>,
     /// Each live compute pipeline state's id to the position of the call that made it.
     states: HashMap<u64, u64>,
-    /// Each live compute encoder's command buffer (its making's position), state and threadgroup
-    /// memory lengths.
-    encoders: HashMap<u64, (u64, u64, Vec<(u32, u32)>)>,
+    /// Each live compute encoder's.
+    encoders: HashMap<u64, Encoder>,
     /// The dispatches due so far, with their state's making's position.
     seen: HashSet<(u64, Ahead)>,
     /// The dispatches due at each position, in stream order.
     due: HashMap<u64, Vec<Ahead>>,
+}
+
+/// What a compute encoder set so far.
+struct Encoder {
+    /// Its command buffer's making's position.
+    buffer: u64,
+    /// The state it set, 0 for none.
+    state: u64,
+    /// The threadgroup memory lengths it set, as (index, length) pairs in index order.
+    lengths: Vec<(u32, u32)>,
 }
 
 /// A size argument's three extents.
@@ -79,7 +88,13 @@ impl Prepass {
                 self.states.insert(call.result, position);
             } else if s.starts_with("computeCommandEncoder") {
                 if let Some(&buffer) = self.buffers.get(&call.receiver) {
-                    self.encoders.insert(call.result, (buffer, 0, Vec::new()));
+                    let lengths = Vec::new();
+                    let encoder = Encoder {
+                        buffer,
+                        state: 0,
+                        lengths,
+                    };
+                    self.encoders.insert(call.result, encoder);
                 }
             }
             return;
@@ -89,7 +104,7 @@ impl Prepass {
         };
         match s {
             "setComputePipelineState:" => {
-                encoder.1 = call.args.first().and_then(Value::as_object).unwrap_or(0);
+                encoder.state = call.args.first().and_then(Value::as_object).unwrap_or(0);
             }
             "setThreadgroupMemoryLength:atIndex:" => {
                 let get = |at: usize| {
@@ -98,7 +113,7 @@ impl Prepass {
                         .and_then(|v| u32::try_from(v).ok())
                 };
                 if let (Some(length), Some(index)) = (get(0), get(1)) {
-                    let lengths = &mut encoder.2;
+                    let lengths = &mut encoder.lengths;
                     match lengths.binary_search_by_key(&index, |&(at, _)| at) {
                         Ok(at) => lengths[at].1 = length,
                         Err(at) => lengths.insert(at, (index, length)),
@@ -111,7 +126,8 @@ impl Prepass {
                 else {
                     return;
                 };
-                let (buffer, state, lengths) = (encoder.0, encoder.1, encoder.2.clone());
+                let (buffer, state) = (encoder.buffer, encoder.state);
+                let lengths = encoder.lengths.clone();
                 let Some(&made) = self.states.get(&state) else {
                     return;
                 };

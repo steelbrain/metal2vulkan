@@ -955,7 +955,9 @@ mod on_device {
     /// grid's texels and nothing past them, with no first-use wait. A grid two deep runs in
     /// workgroups of its tile on a `VkPipeline` made at that dispatch: one wait, the same
     /// texels. A column 256 deep, whose tile is 1 by 1 by 256, deeper than 64, runs its tile as
-    /// one row of 256 threads on every device: one wait, its one texel.
+    /// one row of 256 threads on every device: one wait, its one texel. A grid eight deep whose
+    /// dispatch `prepare_dispatch` prepared first finds its tile's `VkPipeline` made, the one the
+    /// call made: no wait, the same texels.
     #[test]
     fn every_device_runs_an_image_only_kernel_in_square_workgroups() {
         let Some(library) = library() else {
@@ -1022,8 +1024,24 @@ mod on_device {
                 "{name}: the square workgroups' pipeline, made with the state"
             );
             let queue = device.new_command_queue(4).expect("a queue");
-            for (grid, depth, waits) in [([20, 12], 1, 0), ([20, 12], 2, 1), ([1, 1], 256, 1)] {
+            let runs = [
+                ([20, 12], 1, 0, false),
+                ([20, 12], 2, 1, false),
+                ([1, 1], 256, 1, false),
+                ([20, 12], 8, 0, true),
+            ];
+            for (grid, depth, waits, prepared) in runs {
                 fill(&output, OUT, [0.0; 4]);
+                if prepared {
+                    let ahead = counters.metrics();
+                    let threads = crate::Dispatch::Threads([grid[0], grid[1], depth]);
+                    down.prepare_dispatch(threads, [4, 4, 1], &[]);
+                    let made = counters.metrics().made_ahead_variants - ahead.made_ahead_variants;
+                    assert_eq!(
+                        made, 1,
+                        "{name}: {depth} deep: the call made its tile's pipeline"
+                    );
+                }
                 let before = counters.metrics();
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = command_buffer

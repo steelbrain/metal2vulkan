@@ -1426,6 +1426,7 @@ enum	metal2vulkan-rt::CommandBufferError	#[derive(Clone, Copy, Debug, PartialEq,
 enum	metal2vulkan-rt::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum CommandBufferStatus
 enum	metal2vulkan-rt::CompareFunction	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum CompareFunction
 enum	metal2vulkan-rt::ConsumerFeature	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ConsumerFeature
+enum	metal2vulkan-rt::Dispatch	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum Dispatch
 enum	metal2vulkan-rt::DispatchType	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum DispatchType
 enum	metal2vulkan-rt::DrawKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DrawKind
 enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
@@ -2422,6 +2423,10 @@ field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
 field	metal2vulkan-rt::Metrics.long_take_zero_writes	pub long_take_zero_writes: Timed
+field	metal2vulkan-rt::Metrics.made_ahead_lowering_nanos	pub made_ahead_lowering_nanos: u64
+field	metal2vulkan-rt::Metrics.made_ahead_lowerings	pub made_ahead_lowerings: u64
+field	metal2vulkan-rt::Metrics.made_ahead_variant_nanos	pub made_ahead_variant_nanos: u64
+field	metal2vulkan-rt::Metrics.made_ahead_variants	pub made_ahead_variants: u64
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
 field	metal2vulkan-rt::Metrics.maker_makes	pub maker_makes: Timed
 field	metal2vulkan-rt::Metrics.maker_wait_max_nanos	pub maker_wait_max_nanos: u64
@@ -9716,6 +9721,7 @@ method	metal2vulkan-rt::ComputePipelineDescriptor::uses_direct_arguments	pub fn 
 method	metal2vulkan-rt::ComputePipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, _dimensions: [u32; 3]) -> Result<u64, Error>
 method	metal2vulkan-rt::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
 method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
+method	metal2vulkan-rt::ComputePipelineState::prepare_dispatch	pub fn prepare_dispatch(&self, dispatch: Dispatch, threads_per_threadgroup: [u32; 3], threadgroup_memory_lengths: &[(u32, u32)])
 method	metal2vulkan-rt::ComputePipelineState::required_threads_per_threadgroup	pub fn required_threads_per_threadgroup(&self) -> [u32; 3]
 method	metal2vulkan-rt::ComputePipelineState::static_threadgroup_memory_length	pub fn static_threadgroup_memory_length(&self) -> u32
 method	metal2vulkan-rt::ComputePipelineState::support_indirect_command_buffers	pub fn support_indirect_command_buffers(&self) -> bool
@@ -13882,6 +13888,9 @@ variant	metal2vulkan-rt::CompareFunction::Never	Never
 variant	metal2vulkan-rt::CompareFunction::None	None
 variant	metal2vulkan-rt::CompareFunction::NotEqual	NotEqual
 variant	metal2vulkan-rt::ConsumerFeature::SamplerYcbcrConversion	SamplerYcbcrConversion
+variant	metal2vulkan-rt::Dispatch::Indirect	Indirect
+variant	metal2vulkan-rt::Dispatch::Threadgroups	Threadgroups([u32; 3])
+variant	metal2vulkan-rt::Dispatch::Threads	Threads([u32; 3])
 variant	metal2vulkan-rt::DispatchType::Concurrent	Concurrent
 variant	metal2vulkan-rt::DispatchType::Serial	Serial
 variant	metal2vulkan-rt::DrawKind::AttachmentFormats	AttachmentFormats

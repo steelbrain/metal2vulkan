@@ -17,7 +17,10 @@
 //! and a read through a buffer argument bound to nothing reads the nil buffer's zeros.
 //! Threadgroup memory, a declared array's and a threadgroup argument's, reads zero until the
 //! program writes it, in a dispatch's later threadgroups, in a second dispatch and on the
-//! emulated-SIMD-group module alike.
+//! emulated-SIMD-group module alike. A dispatch that `prepare_dispatch` prepared with its own
+//! arguments finds its pipeline, and the lowering it needs (the partial-threadgroups or the
+//! emulated-SIMD-group variant), made by the call, and what the runtime records and submits is
+//! the same with the calls and without.
 //!
 //! `llvm-as` assembles the kernels; without it a test skips visibly.
 
@@ -552,6 +555,373 @@ mod on_device {
                 },
                 state.precision_notes().len()
             );
+        });
+    }
+
+    /// How a prepared case dispatches.
+    #[derive(Clone, Copy, Debug)]
+    enum How {
+        Threads,
+        Groups,
+        Indirect,
+    }
+
+    /// Records `how` over `grid` (threads, or threadgroup counts) at `size` of
+    /// `icb_replay_grid_template` on `device`, its threadgroup memory `length` at index 0, waits
+    /// for it, and checks its answer against Metal's. The dispatch's own answer.
+    fn grid_template_run(
+        name: &str,
+        device: &Device,
+        state: &ComputePipelineState,
+        (grid, size, how): ([u32; 3], [u32; 3], How),
+        length: u32,
+    ) -> Result<(), Error> {
+        let threads = match how {
+            How::Threads => grid,
+            How::Groups | How::Indirect => std::array::from_fn(|axis| grid[axis] * size[axis]),
+        };
+        let slots = threads.iter().product::<u32>().max(1);
+        let want = grid_template(threads, size, [1000, slots]);
+        let mut buffers = Buffers::new(device, 1 << 16);
+        let out = buffers.buffer(4 * u64::from(slots));
+        let arguments = buffers.buffer(16);
+        write(&arguments, 0, &le_bytes(&grid));
+        let queue = device.new_command_queue(4).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder = command_buffer
+            .compute_command_encoder(DispatchType::Serial)
+            .expect("an encoder");
+        encoder.set_compute_pipeline_state(state).expect("a state");
+        encoder
+            .set_threadgroup_memory_length(length, 0)
+            .expect("a length");
+        encoder
+            .set_bytes(&le_bytes(&[1000, slots]), 0)
+            .expect("the parameters");
+        encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
+        let dispatched = match how {
+            How::Threads => encoder.dispatch_threads(grid, size),
+            How::Groups => encoder.dispatch_threadgroups(grid, size),
+            How::Indirect => {
+                encoder.dispatch_threadgroups_with_indirect_buffer(&arguments, 0, size)
+            }
+        };
+        encoder.end_encoding();
+        command_buffer.commit().expect("a commit");
+        finished(name, &command_buffer);
+        assert_eq!(command_buffer.error(), None, "{name}");
+        if dispatched.is_ok() && slots > 1 {
+            assert_eq!(
+                words(&out, 0, want.len()),
+                want,
+                "{name}: {how:?} {grid:?} by {size:?}"
+            );
+        }
+        dispatched
+    }
+
+    /// `ComputePipelineState::prepare_dispatch` makes what a dispatch of `icb_replay_grid_template`,
+    /// an observing kernel, then finds made: for a whole `dispatchThreads` grid, a ragged one (its
+    /// partial-threadgroups variant, lowered on the calling thread), a `dispatchThreadgroups` grid
+    /// and an indirect dispatch, each prepared with the dispatch's own arguments, the call makes
+    /// exactly one pipeline (and the ragged grid one lowering), and the dispatch adds no first-use
+    /// wait and makes nothing. A `dispatchThreadgroups` grid whose threads saturate on an axis,
+    /// and a `dispatchThreads` grid of exactly `u32::MAX` threads on a size that does not divide
+    /// it, prepared alone, make what a small grid of the same call and size then runs with no
+    /// wait: the whole module and the partial-threadgroups variant. A second call with the same
+    /// arguments makes nothing. A call for what the dispatch records nothing for (a grid with no
+    /// threads) or refuses (a threadgroup past Metal's, threadgroup memory past the device's)
+    /// makes nothing, and the dispatch answers as it does unprepared. Each answer is Metal's.
+    #[test]
+    fn every_device_finds_made_what_prepare_dispatch_made() {
+        use crate::Dispatch;
+
+        let Some(descriptor) = descriptor("icb_replay_grid_template") else {
+            return;
+        };
+        each_device("compute_prepare", |name, _, device| {
+            let raw = device.raw();
+            // SAFETY: the physical device is the instance's.
+            let shared = unsafe {
+                raw.instance
+                    .get_physical_device_properties(raw.physical_device)
+                    .limits
+                    .max_compute_shared_memory_size
+            };
+            let state = state(name, &device, &descriptor);
+            let counters = device.counters();
+            let length = |size: [u32; 3]| (4 * size.iter().product::<u32>()).next_multiple_of(16);
+            // What is prepared, at what size; the dispatch that then runs; the pipelines and
+            // lowerings the call makes.
+            let cases = [
+                (
+                    Dispatch::Threads([8, 4, 1]),
+                    [4, 2, 1],
+                    ([8, 4, 1], How::Threads),
+                    1,
+                    0,
+                ),
+                (
+                    Dispatch::Threads([10, 3, 1]),
+                    [4, 2, 1],
+                    ([10, 3, 1], How::Threads),
+                    1,
+                    1,
+                ),
+                (
+                    Dispatch::Threadgroups([3, 2, 1]),
+                    [2, 2, 1],
+                    ([3, 2, 1], How::Groups),
+                    1,
+                    0,
+                ),
+                (
+                    Dispatch::Indirect,
+                    [1, 1, 4],
+                    ([1, 1, 2], How::Indirect),
+                    1,
+                    0,
+                ),
+                (
+                    Dispatch::Threadgroups([u32::MAX, 1, 1]),
+                    [2, 1, 1],
+                    ([3, 1, 1], How::Groups),
+                    1,
+                    0,
+                ),
+                (
+                    Dispatch::Threads([u32::MAX, 1, 1]),
+                    [2, 1, 1],
+                    ([3, 1, 1], How::Threads),
+                    1,
+                    0,
+                ),
+            ];
+            for (prepared, size, (grid, how), made, lowered) in cases {
+                let lengths = [(0, length(size))];
+                let before = counters.metrics();
+                state.prepare_dispatch(prepared, size, &lengths);
+                let ahead = counters.metrics();
+                assert_eq!(
+                    (
+                        ahead.made_ahead_variants - before.made_ahead_variants,
+                        ahead.made_ahead_lowerings - before.made_ahead_lowerings,
+                        ahead.pipelines_created - before.pipelines_created,
+                    ),
+                    (made, lowered, made),
+                    "{name}: {prepared:?} by {size:?}: what the call made"
+                );
+                state.prepare_dispatch(prepared, size, &lengths);
+                let again = counters.metrics();
+                assert_eq!(
+                    (again.made_ahead_variants, again.pipelines_created),
+                    (ahead.made_ahead_variants, ahead.pipelines_created),
+                    "{name}: {prepared:?} by {size:?}: a second call makes nothing"
+                );
+                grid_template_run(name, &device, &state, (grid, size, how), length(size))
+                    .unwrap_or_else(|error| panic!("{name}: {how:?} {grid:?}: {error}"));
+                let after = counters.metrics();
+                assert_eq!(
+                    (
+                        after.first_use_waits - again.first_use_waits,
+                        after.pipelines_created - again.pipelines_created,
+                        after.translations - again.translations,
+                    ),
+                    (0, 0, 0),
+                    "{name}: {how:?} {grid:?} by {size:?}: the dispatch found it made"
+                );
+            }
+            // What the dispatch records nothing for, or refuses: the call makes nothing.
+            let refusals = [
+                (
+                    ([0, 4, 1], [4, 4, 1], How::Threads),
+                    length([4, 4, 1]),
+                    true,
+                ),
+                (([8, 1, 1], [2048, 1, 1], How::Threads), 16, false),
+                (([8, 1, 1], [8, 1, 1], How::Threads), shared + 16, false),
+            ];
+            for ((grid, size, how), length, runs) in refusals {
+                let before = counters.metrics();
+                state.prepare_dispatch(Dispatch::Threads(grid), size, &[(0, length)]);
+                let ahead = counters.metrics();
+                assert_eq!(
+                    (
+                        ahead.made_ahead_variants - before.made_ahead_variants,
+                        ahead.made_ahead_lowerings - before.made_ahead_lowerings,
+                        ahead.pipelines_created - before.pipelines_created,
+                    ),
+                    (0, 0, 0),
+                    "{name}: {grid:?} by {size:?} at {length}: the call made nothing"
+                );
+                let answer = grid_template_run(name, &device, &state, (grid, size, how), length);
+                match (runs, answer) {
+                    (true, Ok(())) => {}
+                    (false, Err(Error::Refused(Refusal::ThreadgroupSize { .. }))) => {}
+                    (false, Err(Error::Limit(Limit::ThreadgroupMemory { .. }))) => {}
+                    (_, answer) => panic!("{name}: {grid:?} by {size:?} at {length}: {answer:?}"),
+                }
+                let after = counters.metrics();
+                assert_eq!(
+                    after.pipelines_created - ahead.pipelines_created,
+                    0,
+                    "{name}: {grid:?} by {size:?} at {length}: the dispatch made nothing"
+                );
+            }
+            println!(
+                "{name}: prepared dispatches found made: {} kinds, 3 that make nothing",
+                cases.len()
+            );
+        });
+    }
+
+    /// `prepare_dispatch` of `simd_float_products` in threadgroups of 80, which are not whole
+    /// SIMD groups of a kernel that runs only whole ones, lowers its emulated-SIMD-group variant
+    /// on the calling thread and makes that variant's pipeline: the dispatch then adds no
+    /// first-use wait and makes nothing. On a device whose module runs any threadgroup, the call
+    /// makes the size's pipeline alone. A device that cannot pin SIMD groups at 32 has no state
+    /// of the kernel, and the test says so.
+    #[test]
+    fn every_device_prepares_the_emulated_simdgroup_variant() {
+        use crate::Dispatch;
+
+        let Some(descriptor) = descriptor_of("gsm2_simd_products", "simd_float_products") else {
+            return;
+        };
+        each_device("compute_prepare_simd", |name, _, device| {
+            let state = match device
+                .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
+            {
+                Ok(state) => state,
+                Err(Error::Unsupported(Gap::KernelInput)) => {
+                    println!(
+                        "{name}: SIMD groups not pinnable at 32; the tier's kernel is refused"
+                    );
+                    return;
+                }
+                Err(error) => panic!("{name}: {error}"),
+            };
+            let emulates = !state.inner.compiled.whole.interface.multiples.is_empty();
+            let counters = device.counters();
+            let (groups, size) = ([3, 1, 1], [80, 1, 1]);
+            let before = counters.metrics();
+            state.prepare_dispatch(Dispatch::Threadgroups(groups), size, &[]);
+            let ahead = counters.metrics();
+            assert_eq!(
+                (
+                    ahead.made_ahead_variants - before.made_ahead_variants,
+                    ahead.made_ahead_lowerings - before.made_ahead_lowerings,
+                ),
+                (1, u64::from(emulates)),
+                "{name}: what the call made"
+            );
+            assert_eq!(
+                emulated_made(&state),
+                emulates,
+                "{name}: the emulated module"
+            );
+            let threads = groups[0] * size[0];
+            let mut buffers = Buffers::new(&device, 1 << 16);
+            let a = buffers.buffer(u64::from(threads) * 4);
+            let out = buffers.buffer(u64::from(threads) * 16);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            encoder.set_buffer(Some(&a), 0, 0).expect("a buffer");
+            encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
+            encoder
+                .dispatch_threadgroups(groups, size)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.first_use_waits - ahead.first_use_waits,
+                    after.pipelines_created - ahead.pipelines_created,
+                ),
+                (0, 0),
+                "{name}: the dispatch found it made"
+            );
+            println!("{name}: threadgroups of 80 prepared, emulated {emulates}");
+        });
+    }
+
+    /// One run of `icb_replay_grid_template`'s dispatches on `device`, each prepared first where
+    /// `prepare`: the counts of what the runtime recorded and submitted.
+    fn recorded_counts(
+        name: &str,
+        device: &Device,
+        descriptor: &ComputePipelineDescriptor,
+        prepare: bool,
+    ) -> Vec<(&'static str, u64)> {
+        let state = state(name, device, descriptor);
+        let counters = device.counters();
+        let before = counters.metrics();
+        let runs = [
+            ([10, 3, 1], [4, 2, 1], How::Threads),
+            ([8, 4, 1], [4, 2, 1], How::Threads),
+            ([3, 2, 1], [4, 2, 1], How::Groups),
+            ([1, 1, 2], [1, 1, 320], How::Groups),
+            ([1, 1, 2], [1, 1, 8], How::Indirect),
+        ];
+        for (grid, size, how) in runs {
+            let length = (4 * size.iter().product::<u32>()).next_multiple_of(16);
+            if prepare {
+                let dispatch = match how {
+                    How::Threads => crate::Dispatch::Threads(grid),
+                    How::Groups => crate::Dispatch::Threadgroups(grid),
+                    How::Indirect => crate::Dispatch::Indirect,
+                };
+                state.prepare_dispatch(dispatch, size, &[(0, length)]);
+            }
+            grid_template_run(name, device, &state, (grid, size, how), length)
+                .unwrap_or_else(|error| panic!("{name}: {how:?} {grid:?}: {error}"));
+        }
+        let after = counters.metrics();
+        vec![
+            ("submissions", after.submissions - before.submissions),
+            ("submit_infos", after.submit_infos - before.submit_infos),
+            ("passes", after.passes - before.passes),
+            ("barriers", after.barriers - before.barriers),
+            ("bytes_copied", after.bytes_copied - before.bytes_copied),
+            (
+                "pipelines_created",
+                after.pipelines_created - before.pipelines_created,
+            ),
+            ("translations", after.translations - before.translations),
+            ("ring_writes", after.ring_writes - before.ring_writes),
+            ("pushes", after.pushes - before.pushes),
+        ]
+    }
+
+    /// What the runtime records of a run of dispatches is the same with each prepared first and
+    /// without: on two devices of one physical device, the same dispatches of
+    /// `icb_replay_grid_template` (whole, ragged, threadgroup counts, deep and indirect) submit,
+    /// pass, barrier, copy, push and write their ring alike, make the same pipelines and
+    /// translations, and answer Metal's words.
+    #[test]
+    fn every_device_records_the_same_with_and_without_prepare_dispatch() {
+        let Some(descriptor) = descriptor("icb_replay_grid_template") else {
+            return;
+        };
+        each_device("compute_prepare_recorded", |name, instance, device| {
+            let devices = devices_of_the_cfgs_kind(instance);
+            let (_, physical) = (devices.iter())
+                .find(|(other, _)| other == name)
+                .expect("the device's own physical device");
+            let plain = recorded_counts(name, &device, &descriptor, false);
+            let second = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let prepared = recorded_counts(name, &second, &descriptor, true);
+            drop(second);
+            assert_eq!(plain, prepared, "{name}: what was recorded and submitted");
+            println!("{name}: recorded alike with and without prepare_dispatch: {plain:?}");
         });
     }
 

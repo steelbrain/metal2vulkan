@@ -2073,7 +2073,33 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   longest in `first_use_wait_max_nanos`, and again by where it waited, each with its count, time
   and longest: `first_use_variant_waits` (a kernel's pipeline for a new workgroup size,
   threadgroup memory lengths or tiles), `first_use_lowering_waits` (a later lowering the reaper
-  made) and `first_use_line_waits` (a render content's line-class pipeline).
+  or a `prepare_dispatch` call made) and `first_use_line_waits` (a render content's line-class
+  pipeline).
+- `ComputePipelineState::prepare_dispatch(Dispatch, threads_per_threadgroup,
+  threadgroup_memory_lengths)` has no Metal counterpart: it is a hook for a consumer's pre-pass.
+  Metal compiles a compute state whole when the state is made; here a kernel's `VkPipeline` waits
+  for the dispatch's threadgroup size and threadgroup memory lengths, and an observing kernel's
+  ragged grid, or a threadgroup that is not whole subgroups, for its later lowering. A consumer
+  that reads a command buffer's dispatches before it encodes them may pass each one's own
+  arguments: its grid as its call took it (`Dispatch::Threads` for `dispatchThreads:`,
+  `Dispatch::Threadgroups` for `dispatchThreadgroups:`, `Dispatch::Indirect` for the indirect
+  form), its threadgroup size, and the encoder's `setThreadgroupMemoryLength:atIndex:` settings,
+  in stream order, on threads of its own; rt starts none. The call decides what the dispatch
+  runs as the dispatch decides it (one function serves both), lowers a variant the dispatch would
+  wait for on the calling thread, then makes the variant's `VkPipeline`. It returns at once where
+  that is made, or another thread is lowering or making it. A make runs outside the kernel's
+  lock, its variant marked pending, so makes of different variants run at once; only a dispatch
+  waits, and only for its own variant's make, a first-use wait. The call makes nothing where the
+  dispatch would refuse its threadgroup size or threadgroup memory, or would record nothing (a
+  grid with no threads, a kernel that writes no memory), and reports no error: the dispatch
+  reports its own. What the dispatch checks of the encoder's bindings is not checked. A make
+  that failed is made again by the next call or dispatch that needs it. What a dispatch records
+  is the same whether or not its pipeline was made ahead. `Metrics::made_ahead_variants` and
+  `made_ahead_lowerings` count what the calls made, with their time in `made_ahead_variant_nanos`
+  and `made_ahead_lowering_nanos`.
+- Each lowering on a calling thread is one translation within its own 500 MiB ceiling, so the
+  caller's width multiplies the bound: calls on 4 threads at once hold at most 2 GiB of
+  translation.
 - `ComputePipelineState::precision_notes` carries the translator's notes of where the kernel's
   answers may differ from Metal's on this device, fixed per operation: those of the modules made
   with the state, and the emulated-SIMD-group module's once it is lowered. A kernel compiled

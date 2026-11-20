@@ -9,7 +9,7 @@
 //! its threads, so every workgroup is within the floor's `maxComputeWorkGroupSize`, whatever the
 //! threadgroup size.
 
-use crate::encoder::{choose, image_tile, Choice, Direct, Module};
+use crate::encoder::{choose, image_tile, Choice, Direct, Dispatch, Module};
 use crate::floor::{WORKGROUP_INVOCATIONS, WORKGROUP_SIZE};
 use crate::pipeline::{Form, SQUARE};
 use metal2vulkan::pipeline::{grid_tile, DEEP_THREADGROUP, GRID_TILE_THREADS};
@@ -229,4 +229,37 @@ fn a_threadgroup_deeper_than_the_floor_runs_as_one_row() {
         (Module::Whole, [1, 1, 256], [1, 1, 256])
     );
     assert_eq!(workgroup(choice.local), [256, 1, 1]);
+}
+
+/// The grid `ComputePipelineState::prepare_dispatch` decides from (`Dispatch::direct`) is the
+/// one each dispatch call forms, so the pre-pass and the dispatch choose alike: a
+/// `dispatchThreadgroups` grid is its counts with their threads, a product that passes `u32::MAX`
+/// saturating, and never ragged, so an observing kernel runs its whole module there; a
+/// `dispatchThreads` grid of exactly `u32::MAX` threads on a size that does not divide it is
+/// ragged, its partial-threadgroups variant; an indirect dispatch has no grid, its whole module
+/// at its own size.
+#[test]
+fn a_prepared_dispatch_takes_the_grid_its_call_forms() {
+    let sized = Form::Sized { partial: None };
+    let size = [2, 1, 1];
+    let saturated = Dispatch::Threadgroups([u32::MAX, 3, 1]).direct(size);
+    let want = Direct {
+        groups: [u32::MAX, 3, 1],
+        threads: [u32::MAX, 3, 1],
+        ragged: false,
+    };
+    assert_eq!(saturated, Some(want));
+    assert_eq!(choose(&sized, saturated, size).module, Module::Whole);
+    let max = Dispatch::Threads([u32::MAX, 1, 1]).direct(size);
+    assert_eq!(max, Some(threads_of([u32::MAX, 1, 1], size)));
+    assert_eq!(
+        max.map(|max| (max.groups, max.ragged)),
+        Some(([1 << 31, 1, 1], true))
+    );
+    assert_eq!(choose(&sized, max, size).module, Module::Partial);
+    let whole = Dispatch::Threads([8, 4, 1]).direct([4, 2, 1]);
+    assert_eq!(whole, Some(threads_of([8, 4, 1], [4, 2, 1])));
+    assert_eq!(choose(&sized, whole, [4, 2, 1]).module, Module::Whole);
+    assert_eq!(Dispatch::Indirect.direct(size), None);
+    assert_eq!(choose(&sized, None, size).module, Module::Whole);
 }
