@@ -1833,7 +1833,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   region and up to 28 buffer addresses, each kernel pushing only the bytes it reads. Fields past it
   go to a 16-byte aligned block in the parameter ring, whose address is a field in the window: a
   kernel with more than 28 buffers. `Counters::metrics`' `ring_writes` counts each block and each
-  `set_bytes` copy.
+  `set_bytes` copy. A bind marks its own slot: the next dispatch checks that slot alone (its
+  buffer's alignment, its texture's storage) and fills its fields alone, with the dispatch
+  region, which each launch carries; a change of pipeline state, or of the module a dispatch
+  runs, checks and fills every slot. The block goes into the ring again only where one of its
+  fields changed, and a dispatch pushes only the words of the window its command buffer does not
+  hold, as a draw does (see Render encoders): a kernel of 30 buffers dispatched three times with
+  the same bindings writes one block and pushes once.
   `set_bytes` copies its bytes into the ring at the call, as Metal copies them. The ring is 2 MiB
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
   64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block

@@ -74,7 +74,7 @@
 //! carries [`PrecisionNote::DepthDenormals`].
 
 use crate::buffer::{Buffer, BufferInner, BufferObject};
-use crate::command::{Building, CommandBuffer};
+use crate::command::{cover, Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Face, Tests};
 use crate::device::Core;
@@ -2866,16 +2866,6 @@ fn fill_push(
         bytes[at..at + len].copy_from_slice(&word.to_le_bytes()[..len]);
     }
     (written, filled)
-}
-
-/// The bytes from the first of `a` and `b` to the end of the last: either where the other is
-/// empty.
-fn cover(a: Range<usize>, b: Range<usize>) -> Range<usize> {
-    match (a.is_empty(), b.is_empty()) {
-        (true, _) => b,
-        (_, true) => a,
-        _ => a.start.min(b.start)..a.end.max(b.end),
-    }
 }
 
 /// The copy of `area` from an image into its shadow, of `aspects`, at the same place in both.

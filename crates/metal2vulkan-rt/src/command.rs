@@ -251,6 +251,16 @@ impl Pushed {
     }
 }
 
+/// The bytes from the first of `a` and `b` to the end of the last: either where the other is
+/// empty.
+pub(crate) fn cover(a: Range<usize>, b: Range<usize>) -> Range<usize> {
+    match (a.is_empty(), b.is_empty()) {
+        (true, _) => b,
+        (_, true) => a,
+        _ => a.start.min(b.start)..a.end.max(b.end),
+    }
+}
+
 /// What the GPU uses: the recorder, the segments, and the blocks kept until retirement.
 pub(crate) struct Gpu {
     pub(crate) recorder: Option<Recorder>,
