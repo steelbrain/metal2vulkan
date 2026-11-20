@@ -652,6 +652,9 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
 /// The command buffers a play dumps and where (`--dump-command-buffers`, `--dump-dir`).
 type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
 
+/// The frames whose present a play checks (`--check-presents`), and where it keeps their bytes.
+type Presents = (Vec<u64>, PathBuf);
+
 /// Play `reader` through `backend` into `report`, taking snapshots or not, to the last frame where
 /// one is given, dumping the command buffers where asked, checking the shown texture at the
 /// listed frames' presents and keeping its bytes in the directory given, and on the new runtime,
@@ -666,7 +669,7 @@ fn run<B: Backend>(
         bool,
         Option<usize>,
         Dumped,
-        (Vec<u64>, PathBuf),
+        Presents,
         Option<&Path>,
     ),
 ) -> i32 {
