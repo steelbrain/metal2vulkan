@@ -1829,7 +1829,8 @@ fn an_emulated_pipeline_reads_the_primitive_id_from_the_patch_position() {
 /// Under the identity domains (`Device::from_queries`' profile), a tessellation pipeline's control
 /// stage reads the factors through their address: the layout binds nothing, the interface states
 /// `PushField::TessellationFactorAddress` as a vertex-stage placement at the tessellation state's
-/// push offset (a multiple of 8, past the functions' fields), the evaluation stage reaches its
+/// push offset (0, below the post-tessellation function's window, which starts at
+/// `push::TESSELLATION_BASE`), the evaluation stage reaches its
 /// pulled buffers through their pushed addresses with their strides, and every module passes L3,
 /// on each committed profile with `tessellationShader`, `bufferDeviceAddress` and `shaderInt64`.
 /// The stream's state (`fractionalOdd`, maximum 64, per patch, counter-clockwise) and Metal's
@@ -1905,8 +1906,13 @@ fn under_the_identity_domains_the_control_stage_reads_the_factors_by_address() {
                 "{stem}"
             );
             let vertex = &p.interface.push[0];
-            let end = vertex.push_range.map_or(0, |(o, s)| o + s);
-            assert!(ts.push_offset >= end, "{stem}: past the functions' fields");
+            assert_eq!(ts.push_offset, 0, "{stem}: below the functions' fields");
+            let base = crate::lower::push::TESSELLATION_BASE;
+            assert!(
+                (vertex.push_range).is_none_or(|(offset, _)| offset >= base),
+                "{stem}: the vertex function's fields from {base}: {:?}",
+                vertex.push_range
+            );
             let slot = |index| SlotRef {
                 stage: Stage::Vertex,
                 class: SlotClass::Buffer,
