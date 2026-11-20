@@ -9,13 +9,15 @@
 //! - an argument buffer the CPU cannot reach: a Private buffer a blit filled, which `ab_read`
 //!   reads through;
 //! - pointer indexing, and an argument buffer that points at others: `ab_indexed`'s thread `g`
-//!   reads the texture of element `g` of an array of argument buffers a pointer member reaches.
-//!   The translator's identity domains, which every state the runtime makes is translated under,
-//!   do not lower that read yet (its plan reads the root table): the state is a typed refusal
-//!   naming the form, a known gap of the runtime's README, and the test asserts it.
+//!   reads the texture of element `g` of an array of argument buffers a pointer member reaches;
+//! - buffers behind device addresses (`ab_pointers`): `ab_sum` adds two buffers an argument
+//!   buffer's two pointer members reach, `ab_address` reads a buffer through a `gpuAddress` the
+//!   CPU wrote into a constant buffer, and `ab_slot_address` stores a slot pointer converted to an
+//!   integer, which is the slot's `gpuAddress` plus its offsets.
 //!
-//! The program writes each texture member itself, as the texture's `gpuResourceID`, as tier 2's
-//! layout lets it. The floor holds every feature tier 2 rests on (buffer device addresses, and the
+//! The program writes each texture member itself, as the texture's `gpuResourceID`, and each
+//! pointer member as the buffer's `gpu_address` plus the offset an encoder's `setBuffer:offset:`
+//! names, as tier 2's layout lets it. The floor holds every feature tier 2 rests on (buffer device addresses, and the
 //! set-1 arrays' runtime descriptor arrays, partial binding and update-after-bind of sampled and
 //! storage images), so the tier is a floor fact.
 //!
@@ -26,11 +28,10 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
         ArgumentBuffersTier, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState,
-        Device, DispatchType, Error, FunctionDescriptor, IndexClass, Library, MemoryClass,
-        PixelFormat, Region, Resource, ResourceUsage, StageSource, Texture, TextureDescriptor,
-        TextureType, TextureUsage,
+        Device, DispatchType, FunctionDescriptor, IndexClass, Library, MemoryClass, PixelFormat,
+        Region, Resource, ResourceUsage, StageSource, Texture, TextureDescriptor, TextureType,
+        TextureUsage,
     };
-    use metal2vulkan::error::{Feature, Needs};
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
     /// The fixture `name`'s library, or None where `llvm-as` is missing.
@@ -318,44 +319,203 @@ mod on_device {
         });
     }
 
-    /// The form the identity domains' refusal of `ab_indexed` names: its plan reads the texture
-    /// handle through the root table, whose address they do not push.
-    const POINTER_INDEXED_FORM: &str = "an encoder value the function reads as RootTableAddress";
-
-    /// The bound argument buffer holds the address of an array of argument buffers, each holding a
-    /// texture, and thread `g` reads the texture of element `g` (`ab_indexed`): the state is the
-    /// translator's typed refusal, `Unsupported{IdentityDomains}`, not implemented, naming the
-    /// form ([`POINTER_INDEXED_FORM`]).
+    /// The bound argument buffer holds the address of an array of four argument buffers, each
+    /// holding a texture, and thread `g` reads texel (0, 0) of the texture of element `g`
+    /// (`ab_indexed`).
     #[test]
-    fn every_device_refuses_the_texture_an_argument_buffer_a_pointer_member_reaches_holds() {
+    fn every_device_reads_the_texture_an_argument_buffer_a_pointer_member_reaches_holds() {
         let Some(library) = library("ab_tier2") else {
             return;
         };
         each_device("argument_tier_indexed", |name, _, device| {
-            let function = library.function("ab_indexed").expect("the kernel");
-            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-                FunctionDescriptor::new(function),
-            ));
-            let made = device
-                .new_compute_pipeline_state(&descriptor, |samplers| Ok(vec![0; samplers.len()]));
-            match made {
-                Err(Error::Translation(metal2vulkan::error::Error::Unsupported(refusal))) => {
-                    assert_eq!(
-                        (refusal.feature, refusal.needs),
-                        (Feature::IdentityDomains, Needs::NotImplemented),
-                        "{name}"
-                    );
-                    assert_eq!(
-                        refusal.symbol.map(|form| form.to_string()).as_deref(),
-                        Some(POINTER_INDEXED_FORM),
-                        "{name}"
-                    );
-                }
-                other => panic!("{name}: {:?}", other.map(|_| "a state")),
+            let read = state(name, &device, &library, "ab_indexed");
+            let grant = (device.grant_indices(IndexClass::Texture, 1, 4))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let textures: Vec<Texture> = (TEXELS.iter().zip(1..))
+                .map(|(texel, index)| texture(name, &device, 1, index, std::slice::from_ref(texel)))
+                .collect();
+            let mut shared = Shared::new(&device);
+            let ids: Vec<u8> = (textures.iter())
+                .flat_map(|t| t.gpu_resource_id().to_bits().to_le_bytes())
+                .collect();
+            let held = shared.of(&device, &ids);
+            let table = shared.of(&device, &held.gpu_address().to_le_bytes());
+            let out = shared.of(&device, &[0; 64]);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder.set_compute_pipeline_state(&read).expect("a state");
+            encoder.set_buffer(Some(&table), 0, 0).expect("table");
+            encoder.set_buffer(Some(&out), 0, 1).expect("out");
+            (encoder.use_resource(Resource::Buffer(&held), ResourceUsage::READ))
+                .expect("the held argument buffers");
+            for texture in &textures {
+                (encoder.use_resource(Resource::Texture(texture), ResourceUsage::READ))
+                    .expect("a texture");
             }
-            println!(
-                "{name}: ab_indexed refused under the identity domains: {POINTER_INDEXED_FORM}"
+            (encoder.dispatch_threadgroups([1, 1, 1], [4, 1, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert_eq!(float4s(&out, 4), TEXELS, "{name}");
+            drop((textures, command_buffer));
+            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!("{name}: the textures argument buffers a pointer member reaches hold, read");
+        });
+    }
+
+    /// Threads of `ab_pointers`' kernels, in two threadgroups.
+    const THREADS: u32 = 64;
+
+    /// The `count` words at the start of `buffer`, read once its writer completed.
+    fn words<T: Copy>(buffer: &Buffer, count: usize) -> Vec<T> {
+        let contents = buffer.contents().expect("a Shared buffer");
+        // SAFETY: the work that wrote the buffer completed, and its writes reach the host; the
+        // buffer holds at least `count` words of `T`, at its start, which is 256-byte aligned.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr().cast::<T>(), count) }.to_vec()
+    }
+
+    /// The bytes of `values`.
+    fn u32_bytes(values: impl IntoIterator<Item = u32>) -> Vec<u8> {
+        values.into_iter().flat_map(u32::to_le_bytes).collect()
+    }
+
+    /// One dispatch of `state` over [`THREADS`] threads, with `bound` at buffer indices 0 and 1
+    /// and `used` made resident (`useResource`, read).
+    fn dispatch(
+        name: &str,
+        device: &Device,
+        state: &ComputePipelineState,
+        bound: [&Buffer; 2],
+        used: &[&Buffer],
+    ) {
+        let queue = device.new_command_queue(1).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder =
+            (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+        encoder.set_compute_pipeline_state(state).expect("a state");
+        for (index, buffer) in (0..).zip(bound) {
+            encoder
+                .set_buffer(Some(buffer), 0, index)
+                .expect("a buffer");
+        }
+        for buffer in used {
+            (encoder.use_resource(Resource::Buffer(buffer), ResourceUsage::READ))
+                .expect("a buffer");
+        }
+        (encoder.dispatch_threadgroups([2, 1, 1], [THREADS / 2, 1, 1]))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        encoder.end_encoding();
+        command_buffer.commit().expect("a commit");
+        finished(name, &command_buffer);
+        assert_eq!(command_buffer.error(), None, "{name}");
+    }
+
+    /// An argument buffer whose two pointer members, as an argument encoder writes them at index
+    /// 0, hold the addresses of two buffers, the second 16 bytes past its buffer's start: thread
+    /// `i` stores `a[i] + b[i]` (`ab_sum`).
+    #[test]
+    fn every_device_sums_the_buffers_an_argument_buffers_pointer_members_reach() {
+        let Some(library) = library("ab_pointers") else {
+            return;
+        };
+        each_device("argument_tier_pointer_members", |name, _, device| {
+            let sum = state(name, &device, &library, "ab_sum");
+            let mut shared = Shared::new(&device);
+            let a = shared.of(&device, &u32_bytes((0..THREADS).map(|k| 0x1000 + k)));
+            let b = shared.of(
+                &device,
+                &u32_bytes((0..THREADS + 4).map(|k| 0x7000_0000 + 3 * k)),
             );
+            let members: Vec<u8> = [a.gpu_address(), b.gpu_address() + 16]
+                .iter()
+                .flat_map(|address| address.to_le_bytes())
+                .collect();
+            let args = shared.of(&device, &members);
+            let out = shared.of(&device, &u32_bytes((0..THREADS).map(|_| 0)));
+            dispatch(name, &device, &sum, [&args, &out], &[&a, &b]);
+            let want: Vec<u32> = (0..THREADS)
+                .map(|i| (0x1000 + i) + (0x7000_0000 + 3 * (4 + i)))
+                .collect();
+            assert_eq!(words::<u32>(&out, THREADS as usize), want, "{name}");
+            println!("{name}: two buffers summed through an argument buffer's pointer members");
+        });
+    }
+
+    /// A constant buffer whose bytes hold a buffer's `gpuAddress` plus 8, as the CPU wrote it:
+    /// thread `i` stores the word `i` past that address (`ab_address`).
+    #[test]
+    fn every_device_reads_a_buffer_through_a_gpu_address_the_cpu_wrote() {
+        let Some(library) = library("ab_pointers") else {
+            return;
+        };
+        each_device("argument_tier_stored_address", |name, _, device| {
+            let read = state(name, &device, &library, "ab_address");
+            let mut shared = Shared::new(&device);
+            let read_from = shared.of(
+                &device,
+                &u32_bytes((0..THREADS + 2).map(|k| 0xA000_0000 | k)),
+            );
+            let held = shared.of(&device, &(read_from.gpu_address() + 8).to_le_bytes());
+            let out = shared.of(&device, &u32_bytes((0..THREADS).map(|_| 0)));
+            dispatch(name, &device, &read, [&held, &out], &[&read_from]);
+            let want: Vec<u32> = (0..THREADS).map(|i| 0xA000_0000 | (2 + i)).collect();
+            assert_eq!(words::<u32>(&out, THREADS as usize), want, "{name}");
+            println!("{name}: a buffer read through a gpuAddress the CPU wrote");
+        });
+    }
+
+    /// A slot pointer converted to an integer: thread `i` stores the address of element `i` of
+    /// buffer 0, bound 16 bytes past its buffer's start, and increments the element through the
+    /// same pointer (`ab_slot_address`). The address is the buffer's `gpuAddress` plus 16 plus
+    /// `4 i`.
+    #[test]
+    fn every_device_answers_a_slot_pointer_converted_to_an_integer_as_its_gpu_address() {
+        let Some(library) = library("ab_pointers") else {
+            return;
+        };
+        each_device("argument_tier_slot_address", |name, _, device| {
+            let convert = state(name, &device, &library, "ab_slot_address");
+            let mut shared = Shared::new(&device);
+            let elements: Vec<u32> = (0..THREADS + 4).map(|k| 0x500 + 7 * k).collect();
+            let buf = shared.of(&device, &u32_bytes(elements.iter().copied()));
+            let out = shared.of(&device, &vec![0; 8 * THREADS as usize]);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder
+                .set_compute_pipeline_state(&convert)
+                .expect("a state");
+            encoder.set_buffer(Some(&buf), 16, 0).expect("buf");
+            encoder.set_buffer(Some(&out), 0, 1).expect("out");
+            (encoder.dispatch_threadgroups([2, 1, 1], [THREADS / 2, 1, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let want: Vec<u64> = (0..u64::from(THREADS))
+                .map(|i| buf.gpu_address() + 16 + 4 * i)
+                .collect();
+            assert_eq!(
+                words::<u64>(&out, THREADS as usize),
+                want,
+                "{name}: the addresses"
+            );
+            let mut incremented = elements.clone();
+            for e in &mut incremented[4..] {
+                *e += 1;
+            }
+            assert_eq!(
+                words::<u32>(&buf, elements.len()),
+                incremented,
+                "{name}: the elements"
+            );
+            println!("{name}: a slot pointer converted to an integer is its gpuAddress");
         });
     }
 }

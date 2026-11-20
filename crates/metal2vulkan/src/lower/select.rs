@@ -1926,7 +1926,8 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 
 /// Under the identity domains on profile `p`, the plans lowered so far: a kernel, or on the floor's
 /// push window (`PushWindow::Floor`, `Device::from_queries`' profile) a vertex or fragment
-/// function, that reaches memory only through its buffer slots' device addresses, its textures'
+/// function, that reaches memory only through its buffer slots' device addresses, the device
+/// addresses it loads or makes from integers (`access::dynamic`, no root table), its textures'
 /// and runtime samplers' resource IDs and its constexpr samplers' pushed indices, with no
 /// descriptor and no state of a bound texture or sampler but its resource ID's
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). The values it reads of the encoder are

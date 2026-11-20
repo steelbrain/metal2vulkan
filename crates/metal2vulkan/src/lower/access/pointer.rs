@@ -39,12 +39,12 @@
 //!   word first, and `SlotGuestBase` is placed as a `uvec2` on every profile (the same eight
 //!   bytes).
 //!
-//! **Stored and converted pointers on Profile F** ([`PointerValue::ToInt`],
-//! [`PointerValue::StorePointer`]). Without device addresses an escaping slot root stays static
-//! (`memory::plan`), so `ptrtoint` of a static fat pointer (or of the null constant) is its
-//! Metal address as above, truncated to the integer's width (a `bool` its low bit), and a stored
-//! one is that address as an 8-byte leaf through a static-root destination (stored pointers are
-//! guest addresses). On Profile A such a pointer is wide.
+//! **Stored and converted pointers on Profile F and under the identity domains**
+//! ([`PointerValue::ToInt`], [`PointerValue::StorePointer`]). Without root entries an escaping
+//! slot root stays static (`memory::plan`), so `ptrtoint` of a static fat pointer (or of the null
+//! constant) is its Metal address as above, truncated to the integer's width (a `bool` its low
+//! bit), and a stored one is that address as an 8-byte leaf through a static-root destination
+//! (stored pointers are guest addresses). On Profile A's resident table such a pointer is wide.
 //!
 //! **Handles of the other families.** A command buffer, pipeline state, acceleration structure, or
 //! function table loaded from an argument buffer, or any access-family instruction on one, is
@@ -432,7 +432,8 @@ fn compare(
 }
 
 /// Whether stored or converted pointer `v` takes the static form here: a static fat pointer
-/// (which on Profile A never escapes), or the null constant on a profile without device addresses.
+/// (which escapes only without root entries: on Profile F and under the identity domains), or the
+/// null constant on a profile without device addresses.
 /// Every other pointer is `dynamic`'s (or refused there).
 fn static_escape(cx: &SelectCx<'_>, v: Value) -> Result<Option<Kind>, Error> {
     if !buffer_space(cx, v) {
@@ -473,7 +474,7 @@ fn address_leaf(cx: &SelectCx<'_>, ty: TypeId, align: Option<Align>) -> Result<L
 
 /// A store of pointer `val` (taking the static form) through `ptr`: a leaf store of its
 /// address through a static-root destination. A destination in the blob, an arena, or behind a
-/// wide pointer is refused (a wide one needs device addresses, which make `val` wide too).
+/// wide pointer is refused (on Profile A's resident table a wide one makes `val` wide too).
 fn store_pointer(
     cx: &mut SelectCx<'_>,
     val: Value,

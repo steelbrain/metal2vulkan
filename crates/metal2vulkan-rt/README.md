@@ -98,8 +98,11 @@ them over this crate's items:
 - `Device::argument_buffers_support` is `MTLArgumentBuffersTier2` on every device above the
   floor, which holds buffer device addresses and the set-1 arrays' runtime descriptor arrays,
   partial binding and update-after-bind of sampled and storage images. The device tests
-  `argument_tier` read and write the writable textures an argument buffer holds, and read
-  through an argument buffer a kernel wrote and a Private one. Some forms both tiers promise are
+  `argument_tier` read and write the writable textures an argument buffer holds, read through
+  an argument buffer a kernel wrote and a Private one, read the texture of an argument buffer a
+  pointer member reaches, read buffers through an argument buffer's pointer members and through a
+  `gpuAddress` the CPU wrote into a buffer, and answer a buffer argument's pointer converted to
+  an integer as its `gpuAddress` plus the offsets. Some forms both tiers promise are
   refused at the making of a state (the known gaps of pipeline states).
 
 ### Teardown
@@ -857,8 +860,11 @@ the Direct3D 11 texture's payload until it is freed.
   without device addresses): 0.27 to 0.51 ms a MB across the runs. A buffer in the exported
   allocation takes the same GPU time at its first fill as at its second, 14.15 and 14.09 ms at
   P010's size. The ready wait is 1.12 and 0.61 ms.
-- A shader uses a buffer's `gpuAddress` directly, unchecked: a stale one, of a released buffer, can
-  still fault the device.
+- A shader uses a buffer's `gpuAddress` directly, unchecked, wherever the program holds one: a
+  pointer member of an argument buffer, an address it wrote into a buffer, a pointer it made from
+  an integer. The stored word must be a buffer's `gpu_address` plus an offset inside that buffer,
+  and a buffer the consumer did not place at the address its guest asked for has a `gpu_address`
+  other than that one. A stale address, of a released buffer, can still fault the device.
 - An app buffer too large for the consumer's map budget is copied, on drivers whose dma-buf query
   offers a non-host-visible type first.
 - A block freed before a submission used it waits on the block-maker thread for its bind, and a
@@ -2387,18 +2393,6 @@ or does not check is rebuilt from the generations' names, with young counted ful
   domains, which every state is translated under: a state over a function that holds one is
   `Error::Translation` of `Unsupported{IdentityDomains}`, not implemented, whose symbol names the
   first form it holds. By form:
-  - tier 2's pointer indexing to a texture: a texture behind a pointer member of an argument
-    buffer, read in the argument buffer that pointer reaches, whose plan reads the root table
-    ("an encoder value the function reads as RootTableAddress"). The translator test
-    `a_texture_of_an_argument_buffer_a_pointer_member_reaches_is_refused_under_the_identity_domains`
-    and the device test `argument_tier` assert it;
-  - a buffer reached through a pointer member of an argument buffer, or through a `gpuAddress`
-    the program stored in a buffer, and a pointer the function makes from an integer, whose
-    plan reads the root table as the pointer indexing above does (the same symbol): a plain
-    kernel that reads a buffer through an argument buffer's pointer member is refused so. No
-    test yet;
-  - a kernel that turns a buffer argument's pointer into an integer, which the translator takes
-    as a wide pointer read through the root table (the same symbol): no test yet;
   - a sample, gather or comparison of an argument buffer's texture, and a depth texture of one
     both compared and sampled without comparison: no test yet;
   - an argument buffer's sampler, and an array of samplers: no test yet;

@@ -8,9 +8,9 @@
 //!   (`super::roots::wide_roots`), so a pointer and its operands share one width. On a profile with
 //!   device addresses (Profile A), a buffer slot root whose pointer escapes (stored as a value, or
 //!   `ptrtoint`) joins that component: its address may come back as a loaded pointer, and a wide
-//!   pointer's guest address is exact. On Profile F it stays static, and its stored or converted
-//!   address is `SlotGuestBase` plus its displacement. Such a slot's window is `Whole` when its own
-//!   accesses give none.
+//!   pointer's guest address is exact. On Profile F, and under the identity domains, it stays
+//!   static, and its stored or converted address is `SlotGuestBase` plus its displacement. Such a
+//!   slot's window is `Whole` when its own accesses give none.
 //! - **Slots**: every buffer or argument-buffer parameter an instruction reaches, and every
 //!   accessed element of a buffer table (an `array_ref` of buffers), with its access set, its
 //!   proven [`Window`], and whether it needs its guest base (`PushField::SlotGuestBase`:
@@ -944,13 +944,14 @@ impl Planner<'_> {
 
     /// Every buffer slot root (a parameter or a buffer-table element) whose pointer escapes,
     /// paired with the dynamic root: the sets that join it to the dynamic component, on a profile
-    /// with device addresses only (Profile F has no root entries; its escaping roots stay static).
-    /// A constant global's address has no guest address to escape as (the blob is no resident
-    /// allocation), so it stays out and its stored pointer is refused. A working table charged to
-    /// the ledger.
+    /// with root entries only. Profile F has none, and the identity domains no root table, where a
+    /// loaded pointer is the device address it holds: there an escaping root stays static, and its
+    /// stored or converted address is `SlotGuestBase` plus its displacement. A constant global's
+    /// address has no guest address to escape as (the blob is no resident allocation), so it stays
+    /// out and its stored pointer is refused. A working table charged to the ledger.
     fn escaping_roots(&self, m: &mut Meter) -> Result<Vec<[Root; 2]>, Error> {
         let mut out = Vec::new();
-        if !self.addressed {
+        if !self.addressed || crate::lower::access::identity(self.p) {
             return Ok(out);
         }
         for (r, u) in &self.prov.uses {

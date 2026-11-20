@@ -211,17 +211,18 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   (`PushField::FetchedColor { color, texels }`, `texels` the read's numeric class), and a
   read-only signed-integer attachment joins `signed_color_attachments`. Every precision note is
   static there: no constant or binder decides one. So far they lower a kernel that reaches memory
-  through its buffer slots and reads, writes, sizes or tests for nil its texture slots and its
-  argument buffers' textures, and samples its texture slots through its runtime sampler slots
-  and its constexpr samplers. Any other function is refused as `Unsupported{IdentityDomains}`,
+  through its buffer slots and the device addresses it loads (an argument buffer's pointer
+  member, a stored `gpuAddress`) or makes from integers, and reads, writes, sizes or tests for nil
+  its texture slots and its argument buffers' textures, those of an argument buffer a pointer
+  member reaches included, and samples its texture slots through its runtime sampler slots and
+  its constexpr samplers. Any other function is refused as `Unsupported{IdentityDomains}`,
   whose symbol names the first such form the function holds: one that samples through an
   argument buffer's sampler or an array of samplers or samples an argument buffer's texture,
   emulates a sampler's anisotropy, samples a 1D texture or at pixel coordinates through a bicubic
   filter, uses a texture buffer, a slot's levels or swizzle, a two-plane, extended-range or
   sRGB-twin form, reads an argument buffer's texture
-  through another numeric type or as raw texels, reads the texture of an argument buffer that a
-  pointer another argument buffer holds reaches (it reads the root table, `RootTableAddress`), or
-  uses any other state of a texture or sampler beyond its ID.
+  through another numeric type or as raw texels, or uses any other state of a texture or sampler
+  beyond its ID.
   An argument buffer's texture reads the element at its ID's index masked to its low 16 bits,
   so a bad ID reads an element of the arrays ([RESOURCE-ID.md](RESOURCE-ID.md)); the change that
   first lowers an argument buffer's sampler masks its index the same way.
@@ -1611,11 +1612,13 @@ for dependency in &pipeline.dependencies {
   `setBytes` copy, or of the consumer's nil buffer where nothing is bound), less 2^31, modulo
   2^64. An access through the slot adds its 32-bit byte offset plus 2^31, modulo 2^32,
   zero-extended, to that word; a pointer compare, a pulled vertex fetch and an access from the
-  word below it add the 2^31 back to read the address itself. A slot pointer converted to an
-  integer is a wide pointer, which reads the root table: the identity domains refuse it. The
-  binder (`BindingPlan::instantiate_*`) of a device that compiles under the identity domains
-  writes the word so. A pointer loaded from an argument buffer is the address the buffer holds,
-  unbiased. A texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased.
+  word below it add the 2^31 back to read the address itself, and so does a slot pointer
+  converted to an integer or stored, which is the slot's address plus its offset. The binder
+  (`BindingPlan::instantiate_*`) of a device that compiles under the identity domains writes the
+  word so. A pointer loaded from memory (an argument buffer's pointer member, a `gpuAddress` the
+  program stored) and a pointer made from an integer are the device address the word holds,
+  unbiased and used directly, unchecked: there is no root table, no `PushField::RootTableAddress`
+  and no search. A texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased.
 - Under the identity domains with containment on, a buffer slot that an access may reach at a
   byte offset that is not a translation-time constant (an index the memory plan does not prove
   one value, a looping `memcpy` or `memset`, a pulled fetch) also reads

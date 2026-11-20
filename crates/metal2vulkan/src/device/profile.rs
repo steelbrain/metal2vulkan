@@ -1100,10 +1100,11 @@ pub enum PointerDomain {
     ResidentTable,
     /// Pointers are device addresses used directly: a `device` or `constant` pointer is the
     /// 64-bit Vulkan device address of the byte it names, as Metal's `gpuAddress` is, and a
-    /// buffer slot is reached at its own address, pushed, uncontained. Needs
+    /// buffer slot is reached at its own address, pushed, uncontained, and a pointer loaded from
+    /// memory or made from an integer is the address it holds, used directly. Needs
     /// `bufferDeviceAddress` and `shaderInt64`. So far it lowers a kernel that reaches memory
-    /// only through its buffer slots, and, on `Device::from_queries`' profile, a vertex or
-    /// fragment function that does; any other function is refused as
+    /// only through its buffer slots and such addresses, and, on `Device::from_queries`' profile,
+    /// a vertex or fragment function that does; any other function is refused as
     /// [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
     Identity,
 }

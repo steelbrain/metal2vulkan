@@ -397,37 +397,6 @@ fn a_slot_pointer_used_as_a_value_is_its_metal_address() {
     }
 }
 
-/// A slot pointer converted to an integer (`ptrtoint`) is a wide pointer, which reads the root
-/// table: the identity domains refuse the kernel as `Unsupported{IdentityDomains}`, not
-/// implemented, where the default domains compile it.
-#[test]
-fn a_slot_pointer_converted_to_an_integer_is_refused_under_the_identity_domains() {
-    use super::engine_pointer_memory::{assemble, kernel};
-    let body = "  %p = getelementptr inbounds i8, ptr addrspace(1) %b0, i64 20
-  %a = ptrtoint ptr addrspace(1) %p to i64
-  store i64 %a, ptr addrspace(1) %b1, align 8
-";
-    let name = "slot_to_int";
-    let Some(bc) = assemble(name, &kernel(name, 2, body, "")) else {
-        return;
-    };
-    for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
-        compile(&bc, name, &default).unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
-        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        match compile(&bc, name, &p) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!(
-                    (u.feature, u.needs),
-                    (Feature::IdentityDomains, Needs::NotImplemented),
-                    "{stem}"
-                );
-            }
-            other => panic!("{stem}: {other:?}"),
-        }
-    }
-}
-
 /// The harness's sampling kernels (`fixtures/public/harness/workloads.ll`, our own), assembled.
 fn workloads() -> Option<Vec<u8>> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -840,46 +809,6 @@ fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
                 }
                 other => panic!("{stem}: {entry}: {other:?}"),
             }
-        }
-    }
-}
-
-const POINTER_INDEXED_FORM: &str = "an encoder value the function reads as RootTableAddress";
-
-/// Argument buffers tier 2's forms under the identity domains (`engine/ab_tier2`): a kernel that
-/// copies a texture member from one argument buffer to another (`ab_copy`) and one that reads a
-/// texel through an argument buffer's texture (`ab_read`) are lowered, and one that reads the
-/// texture of an argument buffer a pointer member of the bound one reaches (`ab_indexed`) is
-/// refused as `Unsupported{IdentityDomains}`, not implemented, naming the form the gate refuses
-/// ([`POINTER_INDEXED_FORM`]), where the default domains compile it.
-#[test]
-fn a_texture_of_an_argument_buffer_a_pointer_member_reaches_is_refused_under_the_identity_domains()
-{
-    let Some(bc) = assemble("ab_tier2") else {
-        return;
-    };
-    for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
-        compile(&bc, "ab_indexed", &default)
-            .unwrap_or_else(|e| panic!("{stem}: ab_indexed: default domains: {e}"));
-        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        for entry in ["ab_copy", "ab_read"] {
-            compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {entry}: {e}"));
-        }
-        match compile(&bc, "ab_indexed", &p) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!(
-                    (u.feature, u.needs),
-                    (Feature::IdentityDomains, Needs::NotImplemented),
-                    "{stem}"
-                );
-                assert_eq!(
-                    u.symbol.map(|form| form.to_string()).as_deref(),
-                    Some(POINTER_INDEXED_FORM),
-                    "{stem}"
-                );
-            }
-            other => panic!("{stem}: {other:?}"),
         }
     }
 }
