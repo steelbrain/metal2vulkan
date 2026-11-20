@@ -1215,7 +1215,7 @@ const-value	metal2vulkan-rt::floor::BORDER_SWIZZLE_EXTENSIONS	&[ash::ext::custom
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
-const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME]
+const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME, ash::ext::external_memory_host::NAME, ash::khr::external_memory_fd::NAME, ash::ext::external_memory_dma_buf::NAME, ash::khr::external_memory_win32::NAME, ash::ext::queue_family_foreign::NAME, ash::ext::image_drm_format_modifier::NAME, ash::nv::linear_color_attachment::NAME]
 const-value	metal2vulkan-rt::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-rt::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-rt::floor::VERSION	vk::API_VERSION_1_3
@@ -1434,6 +1434,7 @@ enum	metal2vulkan-rt::Gap	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exh
 enum	metal2vulkan-rt::ImportHandle	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum ImportHandle
 enum	metal2vulkan-rt::IndexClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndexClass
 enum	metal2vulkan-rt::Limit	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Limit
+enum	metal2vulkan-rt::LinearPlanePassKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LinearPlanePassKind
 enum	metal2vulkan-rt::LoadAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LoadAction
 enum	metal2vulkan-rt::MemoryClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum MemoryClass
 enum	metal2vulkan-rt::MultisampleDepthResolveFilter	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MultisampleDepthResolveFilter
@@ -2652,6 +2653,7 @@ field	metal2vulkan-rt::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
 field	metal2vulkan-rt::floor::Features.divisor	pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.feedback_loop	pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>
 field	metal2vulkan-rt::floor::Features.feedback_loop_dynamic	pub feedback_loop_dynamic: vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>
+field	metal2vulkan-rt::floor::Features.linear_attachment	pub linear_attachment: vk::PhysicalDeviceLinearColorAttachmentFeaturesNV<'static>
 field	metal2vulkan-rt::floor::Features.maximal_reconvergence	pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.portability	pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.robustness2	pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>
@@ -13904,6 +13906,7 @@ variant	metal2vulkan-rt::Gap::HeapTexture	HeapTexture { pixel_format: PixelForma
 variant	metal2vulkan-rt::Gap::ImageblockLength	ImageblockLength
 variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
 variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
+variant	metal2vulkan-rt::Gap::LinearPlanePass	LinearPlanePass { kind: LinearPlanePassKind }
 variant	metal2vulkan-rt::Gap::LodClamps	LodClamps
 variant	metal2vulkan-rt::Gap::MemorylessTexture	MemorylessTexture
 variant	metal2vulkan-rt::Gap::MipmapFilter	MipmapFilter { pixel_format: PixelFormat }
@@ -13944,6 +13947,9 @@ variant	metal2vulkan-rt::Limit::TextureSamples	TextureSamples { sample_count: u3
 variant	metal2vulkan-rt::Limit::TextureSize	TextureSize { extent: [u32; 3], layers: u32, max_extent: [u32; 3], max_layers: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupThreads	ThreadgroupThreads { size: [u32; 3], max: u32 }
+variant	metal2vulkan-rt::LinearPlanePassKind::DepthStencil	DepthStencil
+variant	metal2vulkan-rt::LinearPlanePassKind::OtherColor	OtherColor
+variant	metal2vulkan-rt::LinearPlanePassKind::Resolve	Resolve
 variant	metal2vulkan-rt::LoadAction::Clear	Clear
 variant	metal2vulkan-rt::LoadAction::DontCare	DontCare
 variant	metal2vulkan-rt::LoadAction::Load	Load

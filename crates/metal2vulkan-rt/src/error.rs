@@ -1083,10 +1083,11 @@ pub enum Gap {
     },
     /// A surface plane in place ([`Device::new_exported_surface`](crate::Device::new_exported_surface))
     /// whose texture's uses ask an image usage its linear tiling lacks (storage, for one): the
-    /// device's linear image does not hold that usage. A plane whose tiling lacks sampling,
-    /// rendering or either copy takes the copy form instead.
+    /// device's linear image does not hold that usage, as the image format query of the tiling
+    /// does not offer it or the tiling's format features lack what the optimal image has for it.
+    /// A plane whose tiling lacks sampling, rendering or either copy takes the copy form instead.
     ///
-    /// Basis: device (the image format query of the plane's tiling).
+    /// Basis: device (the image format query and the format features of the plane's tiling).
     SurfaceUsage {
         /// The plane's pixel format.
         pixel_format: PixelFormat,
@@ -1221,6 +1222,47 @@ pub enum Gap {
         /// What the draw asks for.
         kind: DrawKind,
     },
+    /// A render pass over a surface plane that renders as a linear colour attachment alone, in a
+    /// shape the device does not render
+    /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)):
+    /// what `kind` names. Such a plane is an opaque handle's plane in place
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)) whose format's
+    /// `LINEAR` tiling renders only through `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`,
+    /// on a device that enabled `linearColorAttachment` (`VK_NV_linear_color_attachment`). A pass
+    /// whose colour attachments are all such planes, with no depth or stencil attachment and no
+    /// resolve into one, renders. Metal's counterpart is a render pass over a texture of an
+    /// IOSurface's plane.
+    ///
+    /// Basis: device (VK_NV_linear_color_attachment renders such a format as a colour attachment
+    /// only "as long as all the color attachments in the render pass instance have
+    /// VK_IMAGE_TILING_LINEAR tiling"; the RTX 3090's driver lost the device rendering a linear
+    /// colour attachment beside a depth or stencil attachment).
+    LinearPlanePass {
+        /// What the pass sets beside the plane, or into it.
+        kind: LinearPlanePassKind,
+    },
+}
+
+/// What a render pass sets beside a surface plane that renders as a linear colour attachment
+/// alone, or into it, that the device does not render ([`Gap::LinearPlanePass`]). Metal's
+/// counterpart is the render pass descriptor's other attachments beside a texture of an
+/// IOSurface's plane.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LinearPlanePassKind {
+    /// A colour attachment that is not such a plane: an image of the runtime's own, or a plane
+    /// whose tiling renders through the colour attachment feature itself. Vulkan's rule: such a
+    /// format renders as a colour attachment only where every colour attachment of the pass is a
+    /// `LINEAR` image of a format with that feature.
+    OtherColor,
+    /// A depth or stencil attachment. Not Vulkan's rule but the driver's fault: on an RTX 3090
+    /// the driver lost the device rendering a linear colour attachment beside one, and the
+    /// runtime recovers from no device loss, so the shape is not used.
+    DepthStencil,
+    /// A multisample colour attachment's resolve into such a plane: a resolve attachment of the
+    /// pass is held to the rule as its colour attachments are, and the multisample attachment is
+    /// never `LINEAR`.
+    Resolve,
 }
 
 /// What a render pipeline state asks that the runtime does not build ([`Gap::RenderPipeline`]).
@@ -2151,6 +2193,26 @@ impl fmt::Display for Gap {
             Gap::TextureView { kind } => write!(f, "a texture view that changes {kind:?} is not built"),
             Gap::RenderPass { kind } => write!(f, "a render pass with {kind:?} is not built"),
             Gap::Draw { kind } => write!(f, "a draw with {kind:?} is not built"),
+            Gap::LinearPlanePass { kind } => {
+                f.write_str(
+                    "a render pass over a surface plane that renders as a linear colour \
+                     attachment alone is not rendered on this device ",
+                )?;
+                f.write_str(match kind {
+                    LinearPlanePassKind::OtherColor => {
+                        "beside a colour attachment that is not such a plane: Vulkan renders one \
+                         only where every colour attachment of the pass is linear"
+                    }
+                    LinearPlanePassKind::DepthStencil => {
+                        "beside a depth or stencil attachment: the driver lost the device on \
+                         that shape"
+                    }
+                    LinearPlanePassKind::Resolve => {
+                        "as a multisample attachment's resolve target: Vulkan renders one only \
+                         where every attachment of the pass is linear"
+                    }
+                })
+            }
         }
     }
 }

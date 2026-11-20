@@ -31,6 +31,7 @@ mod kernels;
 mod large;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod layouts;
+mod linear_planes;
 #[cfg(m2v_gpu)]
 mod locks;
 mod lowered;

@@ -48,7 +48,10 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// exports' ([`Device::new_exported_block`](crate::Device::new_exported_block)): the fd's and
 /// the dma-buf's again, an NT handle's, and the foreign queue family a dma-buf's ownership
 /// transfers name, and the DRM format modifier, through which a dma-buf's surface lies in place
-/// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)).
+/// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), and
+/// `VK_NV_linear_color_attachment`, with its `linearColorAttachment` feature where the device
+/// reports it, through which an opaque handle's surface plane whose `LINEAR` tiling renders only
+/// as a linear colour attachment lies in place.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
@@ -61,6 +64,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::external_memory_win32::NAME,
     ash::ext::queue_family_foreign::NAME,
     ash::ext::image_drm_format_modifier::NAME,
+    ash::nv::linear_color_attachment::NAME,
 ];
 
 /// The device extensions of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`
@@ -238,6 +242,9 @@ pub struct Features {
     /// where the device lists it, and enabled, both features, where it reports
     /// `borderColorSwizzleFromImage` ([`BORDER_SWIZZLE_EXTENSIONS`]).
     pub border_swizzle: vk::PhysicalDeviceBorderColorSwizzleFeaturesEXT<'static>,
+    /// `VkPhysicalDeviceLinearColorAttachmentFeaturesNV`, of `VK_NV_linear_color_attachment`:
+    /// read and enabled only where the device lists it ([`OPTIONAL_EXTENSIONS`]).
+    pub linear_attachment: vk::PhysicalDeviceLinearColorAttachmentFeaturesNV<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -285,6 +292,9 @@ macro_rules! feature {
     };
     (@structure border_swizzle) => {
         "VkPhysicalDeviceBorderColorSwizzleFeaturesEXT"
+    };
+    (@structure linear_attachment) => {
+        "VkPhysicalDeviceLinearColorAttachmentFeaturesNV"
     };
     (@translator) => {
         None
@@ -464,6 +474,16 @@ pub(crate) const BORDER_SWIZZLE: &[Feature] = &[
     feature!(border_swizzle.border_color_swizzle),
     feature!(border_swizzle.border_color_swizzle_from_image),
 ];
+
+/// The feature of `VK_NV_linear_color_attachment` (one of [`OPTIONAL_EXTENSIONS`]), which Vulkan
+/// requires of a device that lists it: enabled where the device lists the extension and reports
+/// it. It adds no form: an exported surface's plane takes one of the surface's two forms by the
+/// device's queries, and with it a `LINEAR` image whose format renders through
+/// `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` alone holds the plane in place, rendered
+/// only as Vulkan's rule for such images allows (`Gap::LinearPlanePass`). The translator is not
+/// told of it.
+pub(crate) const LINEAR_ATTACHMENTS: &[Feature] =
+    &[feature!(linear_attachment.linear_color_attachment)];
 
 /// What the translator's shaders may use of what device creation enables: each enabled feature of
 /// `capabilities` the translator names, and each enabled extension it names.
@@ -648,8 +668,8 @@ pub struct Capabilities {
     /// [`ATTACHMENT_READ_EXTENSIONS`]: a draw reads an attachment through the attachment feedback
     /// loop.
     pub feedback_loop: bool,
-    /// The features device creation enables: every one the floor requires, each of the optional
-    /// and step-rate ones the device reports, the attachment-read ones where
+    /// The features device creation enables: every one the floor requires, each of the optional,
+    /// step-rate and linear-attachment ones the device reports, the attachment-read ones where
     /// [`feedback_loop`](Self::feedback_loop) holds, and the border-swizzle ones where the device
     /// reports both.
     pub features: Features,
@@ -762,6 +782,7 @@ unsafe fn query(
         let divisor_listed = listed(ash::khr::vertex_attribute_divisor::NAME)
             || listed(ash::ext::vertex_attribute_divisor::NAME);
         let border_swizzle_listed = listed(ash::ext::border_color_swizzle::NAME);
+        let linear_attachment_listed = listed(ash::nv::linear_color_attachment::NAME);
 
         let Features {
             core,
@@ -776,6 +797,7 @@ unsafe fn query(
             feedback_loop_dynamic,
             divisor,
             border_swizzle,
+            linear_attachment,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -805,6 +827,9 @@ unsafe fn query(
         if border_swizzle_listed {
             features = features.push_next(&mut *border_swizzle);
         }
+        if linear_attachment_listed {
+            features = features.push_next(&mut *linear_attachment);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -818,6 +843,7 @@ unsafe fn query(
         feedback_loop_dynamic.p_next = std::ptr::null_mut();
         divisor.p_next = std::ptr::null_mut();
         border_swizzle.p_next = std::ptr::null_mut();
+        linear_attachment.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -921,6 +947,11 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     if border_swizzle {
         for feature in BORDER_SWIZZLE {
             *(feature.field)(&mut features) = vk::TRUE;
+        }
+    }
+    if listed(ash::nv::linear_color_attachment::NAME) {
+        for feature in LINEAR_ATTACHMENTS {
+            *(feature.field)(&mut features) = *(feature.field)(&mut reported);
         }
     }
     Ok(Capabilities {

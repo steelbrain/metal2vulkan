@@ -267,6 +267,12 @@ pub(crate) struct Core {
     /// (`floor::Capabilities::attachment_reads`): through the feedback loop where `feedback` is
     /// set, else through a copy of the image into its shadow (`crate::shadow`).
     pub(crate) attachment_reads: bool,
+    /// Device creation enabled `linearColorAttachment` (`VK_NV_linear_color_attachment`, where
+    /// the device lists it): an opaque handle's surface plane whose format's `LINEAR` tiling
+    /// renders through `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` alone lies in place
+    /// (`crate::surface`), its image marked, and a pass renders it only where Vulkan's rule for
+    /// such images holds ([`Gap::LinearPlanePass`](crate::Gap::LinearPlanePass)).
+    pub(crate) linear_attachments: bool,
     /// The depth and stencil resolve modes a render pass may resolve by.
     pub(crate) resolve_modes: ResolveModes,
     /// The longest block: the device's `maxMemoryAllocationSize` or `maxBufferSize`, whichever is
@@ -504,6 +510,7 @@ impl Device {
             mut feedback_loop_dynamic,
             mut divisor,
             mut border_swizzle,
+            mut linear_attachment,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
         // the device's queries offer that import: it changes no other path, as only that import
@@ -550,6 +557,9 @@ impl Device {
         }
         if enabled(ash::ext::border_color_swizzle::NAME) {
             features = features.push_next(&mut border_swizzle);
+        }
+        if enabled(ash::nv::linear_color_attachment::NAME) {
+            features = features.push_next(&mut linear_attachment);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
@@ -700,6 +710,8 @@ impl Device {
             calibrated,
             feedback,
             attachment_reads: capabilities.attachment_reads,
+            linear_attachments: (capabilities.features.linear_attachment).linear_color_attachment
+                == vk::TRUE,
             resolve_modes,
             max_block_len,
             max_allocations,

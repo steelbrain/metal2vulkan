@@ -39,7 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 75 | 75 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 28 | 28 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 29 | 29 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -57,7 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 20 | 20 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 1 | 27 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 2 | 27 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -737,7 +737,7 @@ Columns:
 | `TextureCopy` | `BlitCommandEncoder::copy_from_texture` that no single `vkCmdCopyImage` in the floor makes | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 copies none of these with one command; each is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)` | `-` |
 | `TextureOverBuffer` | A texture over a buffer (`Buffer::new_texture`) the runtime does not make | every device (a public call's own check of its arguments) | `ours`: the in-place linear image and the copy form take one 2D color image | 4: `crates/metal2vulkan-rt/src/texture.rs (check_over)`, `crates/metal2vulkan-rt/src/texture.rs (make)` (+2) | `-` |
 | `HeapTexture` | A heap texture the runtime does not place (`Device::new_heap_texture`, `Device::new_heap_texture_for_views` and `Device::heap_texture_size_and_align`) | every device (a public call's own check of its arguments) | `ours`: heap textures are built for Private heaps of placeable images | 2: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`, `crates/metal2vulkan-rt/src/texture.rs (heap_source)` | `-` |
-| `SurfaceUsage` | A surface plane in place (`Device::new_exported_surface`) whose texture's uses ask an image usage its linear tiling lacks (storage, for one) | at the device's limit | `device`: the image format query of the plane's tiling | 3: `crates/metal2vulkan-rt/src/d3d11.rs (d3d11_plane)`, `crates/metal2vulkan-rt/src/surface.rs (plane)` (+1) | `-` |
+| `SurfaceUsage` | A surface plane in place (`Device::new_exported_surface`) whose texture's uses ask an image usage its linear tiling lacks (storage, for one) | at the device's limit | `device`: the image format query and the format features of the plane's tiling | 3: `crates/metal2vulkan-rt/src/d3d11.rs (d3d11_plane)`, `crates/metal2vulkan-rt/src/surface.rs (plane)` (+1) | `-` |
 | `D3d11SurfaceBuffer` | The buffer of a surface of Direct3D 11 textures (`Surface::buffer` of `Device::import_d3d11_surface`'s, a Windows host's) | every device (a public call's own check of its arguments) | `ours`: each plane is a Direct3D 11 texture of its own, imported into memory of its own as an optimal image, so no one memory holds the picture's bytes for a buffer | 1: `crates/metal2vulkan-rt/src/surface.rs (buffer)` | `-` |
 | `BufferCopyAlignment` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose bytes no copy command in the floor addresses,... | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an aligned offset; each is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)` | `-` |
 | `FillAlignment` | `BlitCommandEncoder::fill_buffer` of a range that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal fills byte... | every device (a public call's own check of its arguments) | `ours`: `vkCmdFillBuffer` writes whole words; a byte fill is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (fill_range)` | `-` |
@@ -747,6 +747,7 @@ Columns:
 | `TextureView` | `Texture::new_texture_view` of a kind Metal makes and the runtime does not build | every device (a public call's own check of its arguments) | `ours`: the replay streams' views that compute binds are same-format views of every slice, 2D views of one slice of a 2D array, and level subranges, swizzled or not; each other kind is built when a replay stream binds one | 1: `crates/metal2vulkan-rt/src/texture.rs (view)` | `-` |
 | `RenderPass` | A render pass of something the runtime does not build yet (`CommandBuffer::render_command_encoder`) | every device (a public call's own check of its arguments) | `ours`: the replay streams' passes render into one to two color attachments and a stencil or a depth attachment, each a level of a 2D texture of one sample, with no resolve and a clear depth of 1, none naming two textures for its depth and stencil; each other kind is built when a replay stream makes one; `DepthStencilViews` and `ClearDepth` are what Vulkan's rendering under the floor takes no form of | 5: `crates/metal2vulkan-rt/src/pass.rs (check)`, `crates/metal2vulkan-rt/src/pass.rs (ops)` (+3) | `-` |
 | `Draw` | A draw or render encoder state the runtime does not build yet (`RenderCommandEncoder`) | every device (a public call's own check of its arguments) | `ours`: the replay streams draw lines and triangles through one viewport Vulkan's is, with pipeline states of their pass's formats, under depth biases with no clamp, filled and clipped; each other kind is built when a replay stream draws one), and device for [`DrawKind::DividedBaseInstance`] (a device that does not report `supportsNonZeroFirstInstance` | 13: `crates/metal2vulkan-rt/src/render_encoder.rs (attachment_reads, 2 sites)`, `crates/metal2vulkan-rt/src/render_encoder.rs (draw)` (+10) | `-` |
+| `LinearPlanePass` | A render pass over a surface plane that renders as a linear colour attachment alone, in a shape the device does not render... | at the device's limit | `device`: VK_NV_linear_color_attachment renders such a format as a colour attachment only "as long as all the color attachments in the render pass instance have VK_IMAGE_TILING_LINEAR tiling"; the RTX 3090's driver lost the device rendering a linear colour attachment beside a depth or stencil attachment | 1: `crates/metal2vulkan-rt/src/pass.rs (check)` | `-` |
 
 ## Appendix: every site
 
@@ -1359,4 +1360,5 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::TextureView`: `crates/metal2vulkan-rt/src/texture.rs (view)`
 - `rt:Gap::RenderPass`: `crates/metal2vulkan-rt/src/pass.rs (check)`; `crates/metal2vulkan-rt/src/pass.rs (ops)`; `crates/metal2vulkan-rt/src/pass.rs (resolve)`; `crates/metal2vulkan-rt/src/render_encoder.rs (later_store)`; `crates/metal2vulkan-rt/src/texture.rs (attachment)`
 - `rt:Gap::Draw`: `crates/metal2vulkan-rt/src/render_encoder.rs (attachment_reads, 2 sites)`; `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`; `crates/metal2vulkan-rt/src/render_encoder.rs (draw_patches)`; `crates/metal2vulkan-rt/src/render_encoder.rs (primitives)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_depth_bias)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_depth_clip_mode)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_scissor_rects)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_triangle_fill_mode)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_viewport)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_viewports)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_visibility_result_mode)`; `crates/metal2vulkan-rt/src/render_encoder.rs (shadow_copies)`
+- `rt:Gap::LinearPlanePass`: `crates/metal2vulkan-rt/src/pass.rs (check)`
 

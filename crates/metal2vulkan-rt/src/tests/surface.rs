@@ -1457,9 +1457,14 @@ mod on_device {
 /// Each copy-form reason the layout's verdicts give, by construction from synthetic answers: the
 /// ones no lab device produces (`Tiling`, `Dedicated`, `MemoryType`) among them.
 mod verdicts {
-    use crate::surface::{opaque_pitch, opaque_starts, tiling_verdict, type_of, PlaneShape};
+    use crate::surface::{
+        held_usage, linear_alone, opaque_pitch, opaque_starts, tiling_verdict, type_of, PlaneShape,
+    };
     use crate::SurfaceCopy;
-    use ash::vk::{ExternalMemoryFeatureFlags as F, ImageUsageFlags as U};
+    use ash::vk::{
+        ExternalMemoryFeatureFlags as F, FormatFeatureFlags2 as FF, ImageTiling as Tiling,
+        ImageUsageFlags as U,
+    };
 
     const IN_PLACE: U = U::from_raw(
         U::SAMPLED.as_raw()
@@ -1491,6 +1496,64 @@ mod verdicts {
             Err(SurfaceCopy::Dedicated { plane: 1 })
         );
         assert_eq!(tiling_verdict(1, IN_PLACE | U::STORAGE, both), Ok(()));
+    }
+
+    /// The RTX 3090's and the RTX 5080 Laptop GPU's linear tiling features (NVIDIA 620.70.06,
+    /// `VkFormatProperties3`) of `R8_UNORM`, and of the other 8-bit, 16-bit and 10-bit plane
+    /// formats, whose `DRM_FORMAT_MOD_LINEAR` modifier has the same word: it has
+    /// `LINEAR_COLOR_ATTACHMENT_NV`, not `COLOR_ATTACHMENT`, where their optimal tiling's 32-bit
+    /// word differs in `COLOR_ATTACHMENT` alone. The test's optimal word is this one with the
+    /// colour attachment feature for the linear bit.
+    const NVIDIA_LINEAR: FF = FF::from_raw(0x0800_4041_8001_dd03);
+
+    /// A plane renders through `LINEAR_COLOR_ATTACHMENT_NV` only as a `LINEAR` image on a device
+    /// that enabled `linearColorAttachment`, and is then marked: NVIDIA's opaque handle's planes
+    /// lie in place with the feature and take the copy form without it, and its dma-buf planes,
+    /// modifier images, take the copy form either way. A tiling with the colour attachment feature
+    /// itself holds the plane unmarked in both tilings, and one that lacks a feature the optimal
+    /// image has for a usage (blending, the linear filter) does not hold that usage.
+    #[test]
+    fn a_plane_renders_through_the_linear_bit_only_as_a_linear_image_with_the_feature() {
+        let optimal = (NVIDIA_LINEAR & !FF::LINEAR_COLOR_ATTACHMENT_NV) | FF::COLOR_ATTACHMENT;
+        let wanted = IN_PLACE | U::STORAGE;
+        let both = F::EXPORTABLE | F::IMPORTABLE;
+        let (linear, modifier) = (Tiling::LINEAR, Tiling::DRM_FORMAT_MODIFIER_EXT);
+        let held = held_usage(wanted, NVIDIA_LINEAR, optimal, linear, true);
+        assert_eq!(held, wanted, "LINEAR, with the feature");
+        assert_eq!(tiling_verdict(0, held, both), Ok(()));
+        assert!(linear_alone(held, NVIDIA_LINEAR), "marked");
+        for (tiling, enabled, what) in [
+            (linear, false, "LINEAR, without the feature"),
+            (modifier, true, "the modifier, with the feature"),
+            (modifier, false, "the modifier, without the feature"),
+        ] {
+            let held = held_usage(wanted, NVIDIA_LINEAR, optimal, tiling, enabled);
+            assert_eq!(held, wanted & !U::COLOR_ATTACHMENT, "{what}");
+            assert_eq!(
+                tiling_verdict(0, held, both),
+                Err(SurfaceCopy::Tiling { plane: 0 }),
+                "{what}"
+            );
+        }
+        for tiling in [linear, modifier] {
+            for enabled in [false, true] {
+                let held = held_usage(wanted, optimal, optimal, tiling, enabled);
+                assert_eq!(held, wanted, "the plain bit");
+                assert!(!linear_alone(held, optimal), "the plain bit, unmarked");
+            }
+        }
+        let unblended = NVIDIA_LINEAR & !FF::COLOR_ATTACHMENT_BLEND;
+        assert_eq!(
+            held_usage(wanted, unblended, optimal, linear, true),
+            wanted & !U::COLOR_ATTACHMENT,
+            "no blending"
+        );
+        let unfiltered = optimal & !FF::SAMPLED_IMAGE_FILTER_LINEAR;
+        assert_eq!(
+            held_usage(wanted, unfiltered, optimal, linear, true),
+            wanted & !U::SAMPLED,
+            "no linear filter"
+        );
     }
 
     #[test]

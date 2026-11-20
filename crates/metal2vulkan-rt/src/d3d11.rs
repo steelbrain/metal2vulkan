@@ -345,6 +345,7 @@ impl Device {
             view_formats: list,
             block: None,
             general: true,
+            linear_attachment: false,
         })
     }
 }

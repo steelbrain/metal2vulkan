@@ -302,6 +302,9 @@ pub(crate) struct Attachment {
     pub(crate) format: vk::Format,
     /// The image's samples, one bit (`VkSampleCountFlags`).
     pub(crate) samples: vk::SampleCountFlags,
+    /// The image renders as a linear colour attachment alone (`Image::linear_attachment`), so a
+    /// pass renders it only beside other such images ([`Gap::LinearPlanePass`]).
+    pub(crate) linear: bool,
 }
 
 /// A texture's bytes in a buffer, which [`Texture::replace_region`] and [`Texture::get_bytes`]
@@ -392,6 +395,11 @@ pub(crate) struct Image {
     view_formats: Vec<vk::Format>,
     /// The image is cube-compatible ([`Plan`]'s `cube`), so a cube view takes six of its layers.
     cube: bool,
+    /// A surface plane's `LINEAR` image whose format renders only through
+    /// `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` (`crate::surface`): Vulkan renders it
+    /// as a colour attachment only where every colour attachment of the pass is such an image,
+    /// which a pass's begin holds ([`Gap::LinearPlanePass`]). False for every other image.
+    linear_attachment: bool,
     /// The layout its move home starts from: undefined; preinitialized for a texture over a buffer
     /// in place, whose move home keeps the bytes.
     first: vk::ImageLayout,
@@ -708,6 +716,7 @@ impl Image {
             usage: plan.usage,
             view_formats: plan.view_formats.clone(),
             cube: plan.cube,
+            linear_attachment: false,
             first: vk::ImageLayout::UNDEFINED,
             homed: AtomicBool::new(false),
             zero: None,
@@ -1228,6 +1237,7 @@ impl Device {
             usage: swapchain.image_usage,
             view_formats: Vec::new(),
             cube: false,
+            linear_attachment: false,
             first: vk::ImageLayout::UNDEFINED,
             // No move home until the consumer acquires it.
             homed: AtomicBool::new(true),
@@ -1425,6 +1435,7 @@ impl Device {
             usage: plan.usage,
             view_formats: plan.view_formats.clone(),
             cube: plan.cube,
+            linear_attachment: false,
             first,
             homed: AtomicBool::new(false),
             zero,
@@ -1769,8 +1780,9 @@ fn over_texel(d: &TextureDescriptor, plan: &Plan) -> Result<u64, Error> {
 /// The format features an image of `usage` is used by, which a linear image is to keep where the
 /// device's optimal image of its format has them: copies (a blit encoder's copies and fills are
 /// transfers; the runtime records no image blit); sampling and its linear filter; a shader's
-/// reads, writes and atomics without a format; rendering and blending.
-fn kept_features(usage: vk::ImageUsageFlags) -> vk::FormatFeatureFlags2 {
+/// reads, writes and atomics without a format; rendering and blending. A texture over a buffer
+/// takes this test, as a surface plane in place does (`crate::surface::held_usage`).
+pub(crate) fn kept_features(usage: vk::ImageUsageFlags) -> vk::FormatFeatureFlags2 {
     type F = vk::FormatFeatureFlags2;
     let mut kept = F::TRANSFER_SRC | F::TRANSFER_DST;
     if usage.contains(vk::ImageUsageFlags::SAMPLED) {
@@ -4135,6 +4147,7 @@ pub(crate) trait TextureObject {
             extent: [(d.width >> level).max(1), (d.height >> level).max(1)],
             format: self.object().format,
             samples: vk::SampleCountFlags::from_raw(d.sample_count),
+            linear: image.linear_attachment,
         })
     }
 
@@ -4510,6 +4523,10 @@ pub(crate) struct SurfaceImage {
     /// Direct3D 11 texture's, which Vulkan takes as general after Direct3D 11's access (section
     /// 12.5.2).
     pub(crate) general: bool,
+    /// The image is `LINEAR` and its format renders only through
+    /// `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` (`crate::surface::Query::plane`):
+    /// the image is marked ([`Image`]'s `linear_attachment`).
+    pub(crate) linear_attachment: bool,
 }
 
 /// Destroys a surface plane's image not wrapped in a texture, and frees its own import.
@@ -4642,6 +4659,7 @@ impl Device {
             usage: made.usage,
             view_formats: made.view_formats,
             cube: false,
+            linear_attachment: made.linear_attachment,
             first: match general {
                 true => home,
                 false => vk::ImageLayout::UNDEFINED,

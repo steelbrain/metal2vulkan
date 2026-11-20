@@ -35,10 +35,16 @@
 //! action stores the multisample texels too, as a `DontCare` store does: a rendering the encoder
 //! ends early and begins again resolves again as it ends, and its last resolve holds the pass's
 //! whole result.
+//!
+//! A surface plane that renders as a linear colour attachment alone ([`Attachment::linear`]:
+//! `VK_NV_linear_color_attachment`'s `LINEAR` image, `crate::surface`) renders only in a pass whose
+//! colour attachments are all such planes, with no depth or stencil attachment and no resolve
+//! into one; any other pass over one is refused as it begins ([`Gap::LinearPlanePass`], decided
+//! by [`linear_shape`] from one mark an attachment).
 
 use crate::buffer::{Buffer, BufferObject};
 use crate::device::Core;
-use crate::error::{Error, Gap, Refusal, RenderPassKind};
+use crate::error::{Error, Gap, LinearPlanePassKind, Refusal, RenderPassKind};
 use crate::texture::{Attachment, Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
@@ -616,7 +622,8 @@ impl Pass {
     /// Err: [`Refusal::OtherDevice`] for another device's texture or visibility result buffer;
     /// [`Refusal::AttachmentUsage`]; [`Refusal::AttachmentPlace`]; [`Refusal::AttachmentFormat`];
     /// [`Refusal::ResolveTexture`]; [`Refusal::ResolveFormat`]; [`Gap::RenderPass`];
-    /// [`Error::Vulkan`] where an attachment's view cannot be made.
+    /// [`Gap::LinearPlanePass`] for a shape [`linear_shape`] names; [`Error::Vulkan`] where an
+    /// attachment's view cannot be made.
     pub(crate) fn check(core: &Arc<Core>, d: &RenderPassDescriptor) -> Result<Pass, Error> {
         let gap = |kind| Error::Unsupported(Gap::RenderPass { kind });
         let mine = |texture: &Texture| match texture.is_of(core) {
@@ -836,6 +843,15 @@ impl Pass {
             reach: [u32::MAX; 2],
             samples: vk::SampleCountFlags::empty(),
         };
+        let colors = pass.colors.iter().flatten();
+        let shape = linear_shape(
+            colors.clone().map(|t| t.attachment.linear),
+            colors.filter_map(|t| t.resolve.as_ref().map(|r| r.attachment.linear)),
+            pass.depth.is_some() || pass.stencil.is_some(),
+        );
+        if let Some(kind) = shape {
+            return Err(Error::Unsupported(Gap::LinearPlanePass { kind }));
+        }
         // Vulkan renders one sample count into every attachment of a pass
         // (VUID-VkRenderingInfo-multisampledRenderToSingleSampled-06857).
         let mut samples = vk::SampleCountFlags::empty();
@@ -866,6 +882,35 @@ impl Pass {
             pass.reach[axis] = area.next_multiple_of(REACH).min(level[axis]);
         }
         Ok(pass)
+    }
+}
+
+/// What a pass sets that Vulkan's rule for images that render as linear colour attachments alone
+/// does not render ([`Attachment::linear`], a surface plane's: `VK_NV_linear_color_attachment`
+/// renders such a format "as long as all the color attachments in the render pass instance have
+/// `VK_IMAGE_TILING_LINEAR` tiling"), from each colour attachment's mark (`colors`), each colour
+/// resolve's (`resolves`) and whether the pass has a depth or a stencil attachment: a resolve
+/// into a marked image, a marked colour attachment beside a depth or stencil attachment (the
+/// driver lost the device on that shape), or beside an unmarked colour attachment. `None` where
+/// nothing is marked, and where every colour attachment is marked with nothing else set.
+pub(crate) fn linear_shape(
+    colors: impl IntoIterator<Item = bool>,
+    resolves: impl IntoIterator<Item = bool>,
+    depth_or_stencil: bool,
+) -> Option<LinearPlanePassKind> {
+    if resolves.into_iter().any(|linear| linear) {
+        return Some(LinearPlanePassKind::Resolve);
+    }
+    let (marked, unmarked) = colors
+        .into_iter()
+        .fold((false, false), |(marked, unmarked), linear| {
+            (marked || linear, unmarked || !linear)
+        });
+    match (marked, depth_or_stencil, unmarked) {
+        (false, _, _) => None,
+        (true, true, _) => Some(LinearPlanePassKind::DepthStencil),
+        (true, false, true) => Some(LinearPlanePassKind::OtherColor),
+        (true, false, false) => None,
     }
 }
 

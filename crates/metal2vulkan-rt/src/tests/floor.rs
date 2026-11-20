@@ -5,9 +5,10 @@
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
     Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BORDER_SWIZZLE,
-    BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL,
-    OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY, PRIVATE_MEMORY, REQUIRED,
-    RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
+    BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, LINEAR_ATTACHMENTS,
+    MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY,
+    PRIVATE_MEMORY, REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS,
+    VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -1147,6 +1148,37 @@ fn the_border_swizzle_is_enabled_where_the_device_reports_it_from_the_image() {
     assert_eq!(answer(&device), (0, 0), "reported, not listed");
 }
 
+/// A device that lists `VK_NV_linear_color_attachment` is given it, and `linearColorAttachment`
+/// where it reports it (Vulkan requires it of every device that lists the extension); one that
+/// reports the feature without listing the extension is given neither. The translator is told of
+/// neither.
+#[test]
+fn the_linear_attachment_is_enabled_where_listed_and_reported() {
+    use crate::floor::shader_enables;
+    let name = ash::nv::linear_color_attachment::NAME;
+    let floor = shader_enables(&decide(&at_the_floor()).unwrap_or_else(|below| panic!("{below}")));
+    let answer = |device: &Queried| {
+        let capabilities = decide(device).unwrap_or_else(|below| panic!("{below}"));
+        assert_eq!(
+            shader_enables(&capabilities),
+            floor,
+            "what the translator is told"
+        );
+        (
+            capabilities.extensions.contains(&name),
+            (capabilities.features.linear_attachment).linear_color_attachment == vk::TRUE,
+        )
+    };
+    let mut device = at_the_floor();
+    assert_eq!(answer(&device), (false, false), "at the floor");
+    device.features.linear_attachment.linear_color_attachment = vk::TRUE;
+    assert_eq!(answer(&device), (false, false), "reported, not listed");
+    device.extensions.push(name.to_owned());
+    assert_eq!(answer(&device), (true, true), "listed and reported");
+    device.features.linear_attachment.linear_color_attachment = vk::FALSE;
+    assert_eq!(answer(&device), (true, false), "listed, not reported");
+}
+
 /// A device reads attachments where its descriptor limits hold the sampled-texture array's second
 /// elements: through the attachment feedback loop where it lists both extensions and reports both
 /// features, which device creation then enables, and through a copy of the image where it does
@@ -1389,6 +1421,10 @@ fn the_readme_states_the_floor() {
             ["Border-swizzle feature", "Structure", "Used for"],
             BORDER_SWIZZLE,
         ),
+        (
+            ["Linear-attachment feature", "Structure", "Used for"],
+            LINEAR_ATTACHMENTS,
+        ),
     ] {
         let stated: BTreeSet<(String, String)> = table(&section, &header)
             .into_iter()
@@ -1483,6 +1519,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut feedback_loop_dynamic,
             mut divisor,
             mut border_swizzle,
+            mut linear_attachment,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -1512,6 +1549,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(ash::ext::border_color_swizzle::NAME) {
             features = features.push_next(&mut border_swizzle);
+        }
+        if enabled(ash::nv::linear_color_attachment::NAME) {
+            features = features.push_next(&mut linear_attachment);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

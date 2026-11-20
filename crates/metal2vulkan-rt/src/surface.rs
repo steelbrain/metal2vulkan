@@ -10,7 +10,10 @@
 //!   `DRM_FORMAT_MOD_LINEAR` (`VK_EXT_image_drm_format_modifier`), each on its own dedicated
 //!   import of the surface's memory, which is freed once the imports and the handle exist, as the
 //!   imports and the handle hold its payload. An opaque handle's planes are `LINEAR` images bound
-//!   in one exportable allocation that holds no buffer.
+//!   in one exportable allocation that holds no buffer. Each image's own tiling holds what the
+//!   device's optimal image of its format has for its usage ([`held_usage`]); one that renders
+//!   through `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` alone ([`linear_alone`]) is
+//!   marked, and renders only in a pass of such images (`Gap::LinearPlanePass`).
 //! - **The copy form.** The surface is an exported block ([`Device::new_exported_block`]) and
 //!   each plane's texture is a texture over a buffer in it ([`Buffer::new_texture`]), an optimal
 //!   image the submissions copy the bytes into and back (`crate::over`). The answer names why
@@ -310,9 +313,21 @@ struct Query<'a> {
     instance: &'a ash::Instance,
     physical: vk::PhysicalDevice,
     handle: ExportHandle,
+    /// The device enabled `linearColorAttachment` (`Core::linear_attachments`).
+    linear_attachments: bool,
 }
 
 impl Query<'_> {
+    /// A query of `core`'s device for planes shared through `handle`.
+    fn new(core: &Core, handle: ExportHandle) -> Query<'_> {
+        Query {
+            instance: core.instance.vk(),
+            physical: core.physical,
+            handle,
+            linear_attachments: core.linear_attachments,
+        }
+    }
+
     /// The tiling the handle's planes take in place.
     fn tiling(&self) -> vk::ImageTiling {
         match self.handle {
@@ -368,22 +383,76 @@ impl Query<'_> {
         })
     }
 
+    /// The format features of `format` in the handle's tiling, its image's own (`LINEAR`'s for an
+    /// opaque handle, the `DRM_FORMAT_MOD_LINEAR` modifier's for a dma-buf, none where the device
+    /// lists no such modifier for the format), and in the optimal tiling.
+    fn features(&self, format: vk::Format) -> (vk::FormatFeatureFlags2, vk::FormatFeatureFlags2) {
+        let mut three = vk::FormatProperties3::default();
+        let mut properties = vk::FormatProperties2::default().push_next(&mut three);
+        // SAFETY: `physical` is `instance`'s, which is Vulkan 1.3.
+        unsafe {
+            (self.instance).get_physical_device_format_properties2(
+                self.physical,
+                format,
+                &mut properties,
+            )
+        };
+        let (linear, optimal) = (three.linear_tiling_features, three.optimal_tiling_features);
+        if self.handle != ExportHandle::DmaBuf {
+            return (linear, optimal);
+        }
+        let mut list = vk::DrmFormatModifierPropertiesList2EXT::default();
+        let mut properties = vk::FormatProperties2::default().push_next(&mut list);
+        // SAFETY: as above; a dma-buf's query runs where the device enabled the modifier
+        // extension.
+        unsafe {
+            (self.instance).get_physical_device_format_properties2(
+                self.physical,
+                format,
+                &mut properties,
+            )
+        };
+        let mut entries = vec![
+            vk::DrmFormatModifierProperties2EXT::default();
+            list.drm_format_modifier_count as usize
+        ];
+        let mut list = vk::DrmFormatModifierPropertiesList2EXT::default()
+            .drm_format_modifier_properties(&mut entries);
+        let mut properties = vk::FormatProperties2::default().push_next(&mut list);
+        // SAFETY: as above; `entries` holds the count the device answered.
+        unsafe {
+            (self.instance).get_physical_device_format_properties2(
+                self.physical,
+                format,
+                &mut properties,
+            )
+        };
+        let written = list.drm_format_modifier_count as usize;
+        let own = (entries.iter().take(written))
+            .find(|entry| entry.drm_format_modifier == MOD_LINEAR)
+            .map_or(vk::FormatFeatureFlags2::empty(), |entry| {
+                entry.drm_format_modifier_tiling_features
+            });
+        (own, optimal)
+    }
+
     /// The plane's image in place: its usage, every bit of `IN_PLACE_USAGE`, storage and the
-    /// plan's usage that the query offers, with the feedback usage where the plan asks it and the
-    /// query offers it with the rest and the export features alike, and its view-format list, the
-    /// plan's formats the tiling samples (none where the query refuses it), and the export
-    /// features; `Err` with the copy form's reason, or the gap of a usage the plan asks that the
-    /// tiling lacks.
+    /// plan's usage that its tiling holds ([`held_usage`]) and the query offers, with the
+    /// feedback usage where the plan asks it and the query offers it with the rest and the export
+    /// features alike, its view-format list, the plan's formats the tiling samples (none where
+    /// the query refuses it), and whether it renders as a linear colour attachment alone
+    /// ([`linear_alone`]), so marked; `Err` with the copy form's reason, or the gap of a usage the
+    /// plan asks that the tiling lacks.
     fn plane(
         &self,
         at: usize,
         plan: &PlanePlan,
         pixel_format: crate::PixelFormat,
-    ) -> Result<Result<(vk::ImageUsageFlags, Vec<vk::Format>), SurfaceCopy>, Error> {
+    ) -> Result<Result<(vk::ImageUsageFlags, Vec<vk::Format>, bool), SurfaceCopy>, Error> {
         let wanted = IN_PLACE_USAGE | vk::ImageUsageFlags::STORAGE | plan.usage;
-        let offered = (0..32)
-            .map(|bit| vk::ImageUsageFlags::from_raw(1u32 << bit))
-            .filter(|&bit| wanted.contains(bit) && !bit.is_empty())
+        let (own, optimal) = self.features(plan.format);
+        let held = held_usage(wanted, own, optimal, self.tiling(), self.linear_attachments);
+        let offered = usage_bits(held)
             .filter(|&bit| self.external(plan.format, bit, &[]).is_some())
             .fold(vk::ImageUsageFlags::empty(), |all, bit| all | bit);
         if !offered.contains(IN_PLACE_USAGE) {
@@ -428,13 +497,66 @@ impl Query<'_> {
         if let Err(reason) = tiling_verdict(at, offered, features) {
             return Ok(Err(reason));
         }
+        let alone = linear_alone(offered, own);
         let looped = offered | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
         let keeps = |features| tiling_verdict(at, looped, features).is_ok();
         if plan.looped && self.external(plan.format, looped, &list).is_some_and(keeps) {
-            return Ok(Ok((looped, list)));
+            return Ok(Ok((looped, list, alone)));
         }
-        Ok(Ok((offered, list)))
+        Ok(Ok((offered, list, alone)))
     }
+}
+
+/// Each bit of `usage`, lowest first.
+fn usage_bits(usage: vk::ImageUsageFlags) -> impl Iterator<Item = vk::ImageUsageFlags> {
+    (0..32)
+        .map(|bit| vk::ImageUsageFlags::from_raw(1u32 << bit))
+        .filter(move |&bit| usage.contains(bit))
+}
+
+/// The bits of `wanted` that a plane's image in place holds in its own tiling's format features
+/// (`own`: the `LINEAR` tiling's for an opaque handle, the `DRM_FORMAT_MOD_LINEAR` modifier's for
+/// a dma-buf): for each, what the device's optimal image of the format (`optimal`) has for that
+/// usage ([`kept_features`](crate::texture::kept_features)), and for the colour attachment usage
+/// the colour attachment feature itself, as a view of that usage asks
+/// (`VUID-VkImageViewCreateInfo-usage-08931`). That feature is the plain
+/// `VK_FORMAT_FEATURE_2_COLOR_ATTACHMENT_BIT`, or `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`
+/// where the device enabled `linearColorAttachment` (`linear_attachments`) and the image's
+/// `tiling` is `LINEAR`. Vulkan sets that bit "for renderable color formats in the
+/// linearTilingFeatures" alone, and a modifier's image is not `LINEAR`, so in a modifier's
+/// features it holds nothing.
+pub(crate) fn held_usage(
+    wanted: vk::ImageUsageFlags,
+    own: vk::FormatFeatureFlags2,
+    optimal: vk::FormatFeatureFlags2,
+    tiling: vk::ImageTiling,
+    linear_attachments: bool,
+) -> vk::ImageUsageFlags {
+    type F = vk::FormatFeatureFlags2;
+    let linear = linear_attachments && tiling == vk::ImageTiling::LINEAR;
+    let own = match linear && own.contains(F::LINEAR_COLOR_ATTACHMENT_NV) {
+        true => own | F::COLOR_ATTACHMENT,
+        false => own,
+    };
+    usage_bits(wanted)
+        .filter(|&bit| {
+            let mut needs = optimal & crate::texture::kept_features(bit);
+            if bit == vk::ImageUsageFlags::COLOR_ATTACHMENT {
+                needs |= F::COLOR_ATTACHMENT;
+            }
+            own.contains(needs)
+        })
+        .fold(vk::ImageUsageFlags::empty(), |all, bit| all | bit)
+}
+
+/// Whether a plane's image of `usage`, of a format whose own tiling has the features `own`,
+/// renders as a linear colour attachment alone: it renders, and `own` lacks the plain colour
+/// attachment feature, so [`held_usage`] held it through
+/// `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`. Such an image is marked: a pass renders
+/// it only beside other such images (`Gap::LinearPlanePass`).
+pub(crate) fn linear_alone(usage: vk::ImageUsageFlags, own: vk::FormatFeatureFlags2) -> bool {
+    usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        && !own.contains(vk::FormatFeatureFlags2::COLOR_ATTACHMENT)
 }
 
 /// Whether plane `at`'s tiling holds it in place, from the query's answers: the usage it offers,
@@ -841,19 +963,17 @@ impl Device {
     ) -> Result<Result<InPlace, SurfaceCopy>, Error> {
         let core = self.core();
         let device = &core.device;
-        let query = Query {
-            instance: core.instance.vk(),
-            physical: core.physical,
-            handle: spec.handle,
-        };
+        let query = Query::new(core, spec.handle);
         let mut made: Vec<Made> = Vec::with_capacity(plans.len());
+        // Whether each plane's image renders as a linear colour attachment alone.
+        let mut alone = Vec::with_capacity(plans.len());
         let copy =
             |made: Vec<Made>, reason: SurfaceCopy| -> Result<Result<InPlace, SurfaceCopy>, Error> {
                 destroy(device, made);
                 Ok(Err(reason))
             };
         for (at, (plane, plan)) in spec.planes.iter().zip(plans).enumerate() {
-            let (usage, list) = match query.plane(at, plan, plane.descriptor.pixel_format) {
+            let (usage, list, linear) = match query.plane(at, plan, plane.descriptor.pixel_format) {
                 Ok(Ok(found)) => found,
                 Ok(Err(reason)) => return copy(made, reason),
                 Err(error) => {
@@ -861,6 +981,7 @@ impl Device {
                     return Err(error);
                 }
             };
+            alone.push(linear);
             step!("queries");
             // SAFETY: the query accepted the image; the handle's extensions are enabled.
             let image = unsafe {
@@ -948,8 +1069,8 @@ impl Device {
             memory_type: index,
         };
         let source = Source::Opaque(Arc::clone(&block), spec.handle, index);
-        let images = (made.into_iter())
-            .map(|m| SurfaceImage {
+        let images = (made.into_iter().zip(alone))
+            .map(|(m, linear)| SurfaceImage {
                 image: m.image,
                 backing: Backing::InBlock,
                 bytes: m.needs.size,
@@ -958,6 +1079,7 @@ impl Device {
                 view_formats: m.list,
                 block: Some(Arc::clone(&block)),
                 general: false,
+                linear_attachment: linear,
             })
             .collect();
         let planes = (starts.iter())
@@ -988,20 +1110,17 @@ impl Device {
         use std::os::fd::{AsRawFd, IntoRawFd};
         let core = self.core();
         let device = &core.device;
-        let query = Query {
-            instance: core.instance.vk(),
-            physical: core.physical,
-            handle: spec.handle,
-        };
+        let query = Query::new(core, spec.handle);
         let vulkan = |call: &'static str| move |result: vk::Result| Error::Vulkan { call, result };
         // Each plane's image with the implicit list: the driver's own pitch.
         let mut chosen = Vec::with_capacity(plans.len());
         let mut pitch = 0u64;
         for (at, (plane, plan)) in spec.planes.iter().zip(plans).enumerate() {
-            let (usage, list) = match query.plane(at, plan, plane.descriptor.pixel_format)? {
-                Ok(found) => found,
-                Err(reason) => return Ok(Err(reason)),
-            };
+            let (usage, list, linear) =
+                match query.plane(at, plan, plane.descriptor.pixel_format)? {
+                    Ok(found) => found,
+                    Err(reason) => return Ok(Err(reason)),
+                };
             step!("queries");
             // SAFETY: the query accepted the image; the extensions are enabled.
             let implicit = unsafe {
@@ -1016,7 +1135,7 @@ impl Device {
             .map_err(vulkan("vkCreateImage"))?;
             pitch = pitch.max(implicit.layout.row_pitch);
             destroy(device, vec![implicit]);
-            chosen.push((usage, list));
+            chosen.push((usage, list, linear));
             step!("images");
         }
         let max = self.core().max_block_len;
@@ -1032,7 +1151,7 @@ impl Device {
                 destroy(device, made);
                 Ok(Err(reason))
             };
-        for (at, ((plane, plan), (usage, list))) in
+        for (at, ((plane, plan), (usage, list, _))) in
             spec.planes.iter().zip(plans).zip(&chosen).enumerate()
         {
             let parts = (plan.format, *usage, list.as_slice());
@@ -1230,7 +1349,8 @@ impl Device {
         };
         free_block();
         step!("export");
-        for (m, (memory, size)) in made.into_iter().zip(imported.into_iter().zip(sizes)) {
+        let imports = imported.into_iter().zip(sizes);
+        for ((m, (memory, size)), (_, _, linear)) in made.into_iter().zip(imports).zip(chosen) {
             images.push(SurfaceImage {
                 image: m.image,
                 backing: Backing::Import(memory, size),
@@ -1240,6 +1360,7 @@ impl Device {
                 view_formats: m.list,
                 block: None,
                 general: false,
+                linear_attachment: linear,
             });
         }
         let export = Export {

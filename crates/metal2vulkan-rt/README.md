@@ -608,7 +608,10 @@ writes reach with no copy. What a consumer passes to get it, by handle:
   import with device addresses beside plane imports without them).
 - `ExportHandle::OpaqueFd` and `ExportHandle::OpaqueWin32`: each plane's format's `LINEAR` tiling
   offers sampling, rendering and both copies, exportable and importable as the handle, not only
-  in an allocation of its own. The pitch is the driver's own for each plane's `LINEAR` image: the
+  in an allocation of its own. Rendering there is the colour attachment feature, or, where device
+  creation enabled `linearColorAttachment` (Floor, Linear attachments),
+  `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`: such a plane renders as a linear colour
+  attachment alone (below). The pitch is the driver's own for each plane's `LINEAR` image: the
   planes' pitches must be equal and a multiple of `pitch_multiple` and of the texels, and each
   start a multiple of its image's alignment, past the plane before's requirement. The images are
   bound in one exportable allocation that holds no buffer, counted in `Gauges::exports`. Measured
@@ -618,6 +621,28 @@ writes reach with no copy. What a consumer passes to get it, by handle:
   surface is copied (`SurfaceCopy::Pitch`: its rows are 1,920 bytes) while the 2160p and P010
   ones are in place. The Radeon 780M and RX 550 (RADV, Mesa 26.2.6) round rows up to 256, at an
   alignment of 256, and take every one of them in place at either.
+
+A tiling offers a plane's usage where the handle's image format query
+(`vkGetPhysicalDeviceImageFormatProperties2` of the plane's format in that tiling, external as the
+handle) offers it, and the tiling's own format features (`LINEAR`'s, or the
+`DRM_FORMAT_MOD_LINEAR` modifier's) hold what the device's optimal image of the format has for
+it: both copies; sampling and its linear filter; storage, its atomics, and its reads and writes
+without a format; rendering and blending, as a texture over a buffer in place is tested. Rendering
+is the colour attachment feature itself, for which
+`VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` stands only in a `LINEAR` image's features on
+a device that enabled `linearColorAttachment`: Vulkan sets that bit "for renderable color formats
+in the linearTilingFeatures" alone, so it holds no dma-buf plane in place.
+
+A plane in place through that bit renders as a linear colour attachment alone, and its image is
+marked: Vulkan renders such a format "as long as all the color attachments in the render pass
+instance have VK_IMAGE_TILING_LINEAR tiling". A pass over a marked plane begins where every colour
+attachment is a marked plane, both planes of a picture as two colour attachments of one pass
+among them, with no depth or stencil attachment; any other is refused as it begins,
+`Gap::LinearPlanePass` naming its `LinearPlanePassKind`: `OtherColor`, a colour attachment that is
+not a marked plane; `DepthStencil`, a depth or stencil attachment, which is not Vulkan's rule but
+the driver's fault (an RTX 3090 lost the device rendering a linear colour attachment beside one,
+and the runtime recovers from no device loss); `Resolve`, a multisample attachment resolving into
+a marked plane. A plane whose tiling has the colour attachment feature itself is not marked.
 
 Storage joins an image's usage where its tiling offers it; a usage a plane's texture asks that its
 tiling lacks is `Gap::SurfaceUsage`. A plane given no index whose usage reaches shaders is reached
@@ -746,11 +771,12 @@ planes' first use, so `Surface::wait_until_ready()` returns at once.
     (`SurfaceCopy::NoModifier`, `SurfaceCopy::Tiling`): the device offers no in-place form for it.
     On the Radeon RX 550 (Polaris 12) the driver lists no modifier extension, and its plain
     `LINEAR` images refuse the dma-buf handle.
-  - A two-plane dma-buf surface on NVIDIA (`SurfaceCopy::Start`): on the RTX 3090 the driver
-    makes a `DRM_FORMAT_MOD_LINEAR` image stated at a nonzero offset (32 and 256 measured) but
-    lays it at offset 0, which `vkGetImageSubresourceLayout` reports, so the second plane's image
-    does not lie at its start. The opaque fd surface of the same planes is in place where its
-    pitch multiple divides the driver's pitch (above).
+  - A dma-buf surface on NVIDIA (`SurfaceCopy::Tiling`): on the RTX 3090 and the RTX 5080 Laptop
+    GPU (NVIDIA 620.70.06) the `DRM_FORMAT_MOD_LINEAR` modifier's features carry
+    `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`, not the colour attachment feature, for
+    every plane format it is listed for, and that bit holds no modifier's image in place
+    (Exported surfaces); the other formats measured have no such modifier there. The opaque fd surface of the same planes is in place where its pitch multiple
+    divides the driver's pitch (above), its planes marked.
   - A layout the device cannot meet (`SurfaceCopy::Pitch`, `SurfaceCopy::Start`): a pitch or
     start the consumer asks that the driver's linear images do not take. A pitch multiple of
     4,096 takes `SurfaceCopy::Pitch` on every device measured: the Radeon 780M, the RTX 3090,
@@ -2655,7 +2681,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   slot reads every level and layer its texture reaches. What is new to the shadow is copied as one
   area where it is one (a wider scissor's band), else as the whole read, with no look-ahead. At the
   pass's first draw, where the pass cleared the attachment and every read of its level and layer
-  lies in it alone and inside the Metal's render area, the shadow's level and layer is cleared to
+  lies in it alone and inside Metal's render area, the shadow's level and layer is cleared to
   the pass's clear colour between the same barriers instead of copied (the shadow is of the
   attachment's format, so the clear writes the texels the pass's did); a draw of the pass before
   it, of any pipeline, leaves the copy.
@@ -2737,6 +2763,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   texture at its first level and slice, a texture of an image another attachment of the pass
   shares (two planes of one surface), and every attachment on a device without the attachment
   reads.
+- A pass over a surface plane that renders as a linear colour attachment alone (Exported
+  surfaces: an opaque handle's plane in place through
+  `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`, every plane format measured on the RTX 3090
+  and the RTX 5080 Laptop GPU) is refused as it begins, `Gap::LinearPlanePass`, where it sets a
+  colour attachment that is not such a plane (`OtherColor`), a depth or stencil attachment
+  (`DepthStencil`, the driver's fault: an RTX 3090 lost the device on that shape, and the runtime
+  recovers from no device loss), or resolves a multisample attachment into one (`Resolve`). A
+  pass of such planes alone renders.
 - A surface plane whose texture's usage holds `ShaderRead` and `RenderTarget`, where the handle's
   image format query (`vkGetPhysicalDeviceImageFormatProperties2`: the plane's format, the
   handle's linear tiling, external as the handle, with the feedback usage added) refuses the
@@ -2992,6 +3026,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_external_memory_win32` | device, where listed | exporting a block as an NT handle (`Device::new_exported_block`) |
 | `VK_EXT_queue_family_foreign` | device, where listed | the foreign queue family that a dma-buf export's ownership transfers name |
 | `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
+| `VK_NV_linear_color_attachment` | device, where listed | an opaque handle's surface planes in place whose `LINEAR` tiling renders as a linear colour attachment alone, through the linear-attachment feature below |
 | `VK_EXT_custom_border_color` | device, where reported from the image | Vulkan requires it of a device that enables the border swizzle below; none of its features is enabled |
 | `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
 
@@ -3231,6 +3266,22 @@ swizzle. Without it Vulkan leaves that texel undefined (Known gaps of textures).
 |---|---|---|
 | `borderColorSwizzle` | `VkPhysicalDeviceBorderColorSwizzleFeaturesEXT` | Vulkan requires it of a device that lists the extension; enabled with the one below |
 | `borderColorSwizzleFromImage` | `VkPhysicalDeviceBorderColorSwizzleFeaturesEXT` | an opaque-black border through a swizzled view, read through the view's mapping with no mapping on the sampler |
+
+### Linear attachments
+
+Where the device lists `VK_NV_linear_color_attachment`, device creation enables it, and its
+feature below where the device reports it, which Vulkan requires of a device that lists it. It
+adds no form: an exported surface's plane takes one of the surface's two forms by the device's
+queries, and with the feature an opaque handle's `LINEAR` image whose format's linear tiling
+features carry `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` in place of the colour
+attachment bit holds the plane in place, rendered only beside other such planes (Exported
+surfaces). The RTX 3090 and the RTX 5080 Laptop GPU (NVIDIA 620.70.06) list it; their linear
+tiling carries that bit, not the colour attachment bit, for every plane format measured, and so
+does their `DRM_FORMAT_MOD_LINEAR` modifier for each of those formats it is listed for.
+
+| Linear-attachment feature | Structure | Used for |
+|---|---|---|
+| `linearColorAttachment` | `VkPhysicalDeviceLinearColorAttachmentFeaturesNV` | a `LINEAR` surface plane rendered as a linear colour attachment |
 
 The test `tests::floor` holds these tables equal to the code, checks that each missing item is
 named, and, under `--cfg m2v_gpu` or `--cfg m2v_cpu_icd`, checks every device the machine's

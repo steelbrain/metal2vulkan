@@ -7,6 +7,10 @@
 //!   format and for `A8Unorm` held in `R8_UNORM`; an integer channel's is truncated toward zero
 //!   and saturated to its width, NaN 0; a format only a shader clears (extended range, bfloat)
 //!   has none.
+//! - A pass over images that render as linear colour attachments alone (surface planes,
+//!   `crate::tests::linear_planes`) renders where every colour attachment is one and nothing else
+//!   is set; a resolve into one, one beside a depth or stencil attachment, and one beside another
+//!   colour attachment are each `Gap::LinearPlanePass` of its kind.
 //! - Under a device cfg, on every device of the cfg's kind: a pass clears a mipmap level of a
 //!   shader-read texture (which it moves to the attachment layout and back), an integer texture
 //!   and a stencil texture, and stores each, the other level kept; a pass that loads and stores
@@ -66,6 +70,51 @@ fn load_actions_are_one_to_one_and_plain_store_actions_store() {
         }
         other => panic!("CustomSampleDepthStore: {:?}", other.map(|_| "ops")),
     }
+}
+
+/// A pass over images that render as linear colour attachments alone (marked) renders where every
+/// colour attachment is marked, one or two of them, with no depth or stencil attachment and no
+/// resolve into one; a resolve into a marked image, a marked one beside a depth or stencil
+/// attachment, and one beside an unmarked colour attachment are each its own gap. A pass that
+/// marks nothing is not held to the rule, whatever it sets.
+#[test]
+fn a_pass_of_marked_planes_renders_them_alone() {
+    use crate::pass::linear_shape;
+    use crate::LinearPlanePassKind as Kind;
+    let none: [bool; 0] = [];
+    assert_eq!(linear_shape([true], none, false), None, "one marked plane");
+    assert_eq!(linear_shape([true, true], none, false), None, "two");
+    assert_eq!(
+        linear_shape([false, false], [false], true),
+        None,
+        "none marked"
+    );
+    assert_eq!(linear_shape(none, none, true), None, "a depth pass");
+    assert_eq!(
+        linear_shape([true, false], none, false),
+        Some(Kind::OtherColor),
+        "beside an unmarked colour"
+    );
+    assert_eq!(
+        linear_shape([false, true], none, false),
+        Some(Kind::OtherColor),
+        "after an unmarked colour"
+    );
+    assert_eq!(
+        linear_shape([true], none, true),
+        Some(Kind::DepthStencil),
+        "beside a depth or stencil attachment"
+    );
+    assert_eq!(
+        linear_shape([true, true], none, true),
+        Some(Kind::DepthStencil),
+        "two beside a depth or stencil attachment"
+    );
+    assert_eq!(
+        linear_shape([false], [true], false),
+        Some(Kind::Resolve),
+        "a multisample attachment resolving into one"
+    );
 }
 
 /// The clear values of each kind of channel.
