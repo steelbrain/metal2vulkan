@@ -650,8 +650,9 @@ struct State {
 thread_local! {
     /// Where this thread makes memory ahead of need, its device's submit calls: on the block-maker
     /// thread ([`run`]), its internals among what it makes, and in the device's making while it
-    /// makes the first allocations ([`stock`]). Each of its allocations and frees waits them out
-    /// after it ([`passed`]), and its allocations' times count apart from the consumer's.
+    /// makes the first allocations ([`stock`]). Each of its allocations and frees waits out the
+    /// submit calls its previous one met ([`maker_call`]), and its allocations' times count apart
+    /// from the consumer's.
     static MAKER: RefCell<Option<Arc<SubmitCalls>>> = const { RefCell::new(None) };
 }
 
@@ -666,20 +667,21 @@ fn on_maker() -> bool {
     MAKER.with_borrow(Option::is_some)
 }
 
-/// After each `vkAllocateMemory` and `vkFreeMemory` call, as it returned: on a thread that makes
-/// memory ahead of need, waits until every submit call of its device that was inside the driver
-/// then has returned ([`SubmitCalls::wait_out`]), so a driver that holds a submit through memory
-/// calls made back to back holds it through this one alone. On every other thread nothing.
-pub(crate) fn passed() {
-    MAKER.with_borrow(|maker| {
-        if let Some(calls) = maker {
-            calls.wait_out();
-        }
-    });
+/// `call`, one `vkAllocateMemory`: on a thread that makes memory ahead of need, it starts once
+/// every submit call of its device that was inside the driver as the thread's previous memory call
+/// returned has returned, and the submit calls inside the driver as it returns are the ones the
+/// thread's next memory call waits out ([`SubmitCalls::call`]). So a driver that holds a submit
+/// through memory calls made back to back holds it through one of them alone. On every other
+/// thread it is the call alone.
+pub(crate) fn maker_call<R>(call: impl FnOnce() -> R) -> R {
+    MAKER.with_borrow(|maker| match maker {
+        Some(calls) => calls.call(call),
+        None => call(),
+    })
 }
 
-/// `vkFreeMemory` of `memory`, the form of every free the block-maker thread makes: there,
-/// marked for the submissions made during it ([`SubmitCalls::freeing`]), and then [`passed`].
+/// `vkFreeMemory` of `memory`, the form of every free the block-maker thread makes: there, as
+/// [`maker_call`], and marked for the submissions made during it ([`SubmitCalls::freeing`]).
 ///
 /// # Safety
 ///
@@ -1336,11 +1338,11 @@ pub(crate) fn stock(core: &Core) {
 /// ones first of all; it frees each imported or exported block given back, then runs an import's
 /// release; it makes an allocation of a class that holds no wholly free unit ([`State::whole`]),
 /// having the consumer map it before it joins the pool; and it frees each allocation idle for
-/// [`IDLE_AGE_NANOS`], after the consumer's unmap of it, one at a time. After each of its
-/// allocations and frees it waits out the submit calls inside the driver as the call returned
-/// ([`passed`]). It sleeps until the next change, or until the oldest idle allocation reaches the
-/// idle age. Stopped, it makes nothing more: what is asked of it and not made, the calls that need
-/// it make.
+/// [`IDLE_AGE_NANOS`], after the consumer's unmap of it, one at a time. Each of its allocations
+/// and frees starts once the submit calls inside the driver as its previous one returned have
+/// returned ([`maker_call`]), and what it made is handed on as its call returns. It sleeps until
+/// the next change, or until the oldest idle allocation reaches the idle age. Stopped, it makes
+/// nothing more: what is asked of it and not made, the calls that need it make.
 pub(crate) fn run(core: Arc<Core>) {
     make_ahead_here(Some(Arc::clone(&core.submit_calls)));
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1503,8 +1505,7 @@ pub(crate) unsafe fn allocate_spilling(
 /// `counters`' blocks gauge, refused with [`Limit::MemoryAllocations`] before the driver is called
 /// where `max`, the device's `maxMemoryAllocationCount`, are live. Each free falls the gauge. The
 /// call's time is counted on the block-maker thread or on the consumer's, and on the consumer's
-/// at `site` too, where the call names one. On the block-maker thread the call is then
-/// [`passed`].
+/// at `site` too, where the call names one. On the block-maker thread it is a [`maker_call`].
 ///
 /// # Safety
 ///
@@ -1519,11 +1520,12 @@ pub(crate) unsafe fn allocate(
     if !counters.rise_below(Gauge::Blocks, u64::from(max)) {
         return Err(Error::Limit(Limit::MemoryAllocations { max }));
     }
-    let start = crate::host_time();
-    // SAFETY: the caller's.
-    let allocated = unsafe { device.allocate_memory(info, None) };
-    let nanos = crate::host_time().saturating_sub(start);
-    passed();
+    let (allocated, nanos) = maker_call(|| {
+        let start = crate::host_time();
+        // SAFETY: the caller's.
+        let allocated = unsafe { device.allocate_memory(info, None) };
+        (allocated, crate::host_time().saturating_sub(start))
+    });
     let maker = on_maker();
     counters.allocation_time(nanos, maker);
     if let (false, Some(site)) = (maker, site) {

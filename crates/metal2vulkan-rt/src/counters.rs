@@ -752,9 +752,9 @@ impl Counters {
         a.maker_wait_max_nanos.fetch_max(nanos, Relaxed);
     }
 
-    /// A `vkAllocateMemory` or `vkFreeMemory` made ahead of need, after which the thread waited
-    /// `waited` nanoseconds for the submit calls inside the driver as it returned, `None` where
-    /// none was ([`Metrics::maker_memory_calls`]).
+    /// A `vkAllocateMemory` or `vkFreeMemory` made ahead of need, before which the thread waited
+    /// `waited` nanoseconds for the submit calls its previous one met, `None` where none was left
+    /// inside the driver ([`Metrics::maker_memory_calls`]).
     pub(crate) fn maker_memory_call(&self, waited: Option<u64>) {
         let a = &self.atomics;
         a.maker_memory_calls.fetch_add(1, Relaxed);
@@ -1425,13 +1425,12 @@ pub struct Metrics {
     /// the block-maker thread's (the runtime's fixed-size internals, the pool's units, and the
     /// frees of idle allocations and of the imported and exported blocks given back), and each
     /// class's first allocation in the device's making. A driver may hold a submit made during
-    /// such a call until it returns, and through calls made back to back, so after each one the
-    /// thread waits until every one of the runtime's `vkQueueSubmit2` calls that was inside the
-    /// driver as it returned has returned: a submit waits out at most one of these calls.
+    /// such a call until it returns, and through calls made back to back, so each one starts once
+    /// every one of the runtime's `vkQueueSubmit2` calls that was inside the driver as the
+    /// previous one returned has returned: a submit waits out at most one of these calls.
     pub maker_memory_calls: u64,
-    /// Of [`maker_memory_calls`](Self::maker_memory_calls), those after which a
-    /// `vkQueueSubmit2` call was inside the driver, which the thread waited for; after the others
-    /// it went straight on.
+    /// Of [`maker_memory_calls`](Self::maker_memory_calls), those that waited before they started
+    /// for a `vkQueueSubmit2` call the previous one met; the others started at once.
     pub maker_yields: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) those waits took, in total.
     pub maker_yield_nanos: u64,

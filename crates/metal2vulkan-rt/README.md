@@ -873,18 +873,19 @@ planes' first use, so `Surface::wait_until_ready()` returns at once.
   frees was in progress.
 - NVIDIA's Linux driver holds a submit made while another thread is inside `vkAllocateMemory` or
   `vkFreeMemory` until that call returns, device-local memory included, and calls made back to
-  back hold it through all of them. So after each of its allocations and frees the block-maker
-  thread waits until every `vkQueueSubmit2` call of rt's that was inside the driver as its call
-  returned has returned, and with none inside it goes straight on: a submit waits out at most one
-  of its calls, the one it met. Its calls are the makes of the pool's 16 MiB units and of the
+  back hold it through all of them. So as each of its allocations and frees returns, the
+  block-maker thread marks the `vkQueueSubmit2` calls of rt's inside the driver then, and starts
+  its next one only once all of them have returned; with none left inside it goes straight on, and
+  what it made is handed on as its call returns. A submit waits out at most one of its calls, the
+  one it met. Its calls are the makes of the pool's 16 MiB units and of the
   runtime's fixed-size internals, and the frees of idle allocations and of the imported and
   exported blocks given back. `Metrics::maker_memory_calls` counts them, `maker_yields` the ones
   after which it waited, and `maker_yield_nanos` the time. A single call still holds a submit for
   its own length: a take longer than a unit allocates its own length on the consumer's thread,
   with no wait, and that allocation goes back to the driver in one free of its whole length. In a
   standalone program on an RTX 3090 (driver 620.70.06), giving back 1 GiB of Shared memory in
-  16 MiB frees made back to back held the worst submit for 75.3 ms, and with this wait after each
-  free for 20.6 ms; at every unit length measured the worst hold with the wait was 0.90 to 0.96
+  16 MiB frees made back to back held the worst submit for 75.3 ms, and with this wait between
+  the frees for 20.6 ms; at every unit length measured the worst hold with the wait was 0.90 to 0.96
   times the longest single free, and with no submit made the wait added nothing. In a 336-second
   guest walk on an RTX 3090 (driver 620.70.06, rt at 7096fa7de3, whose block-maker thread made its
   calls back to back), every submit of 5 ms or more overlapped such calls on other threads for 97
