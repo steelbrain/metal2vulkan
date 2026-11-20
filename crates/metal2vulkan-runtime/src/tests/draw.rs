@@ -973,6 +973,54 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A state of a vertex function that writes `[[point_size]]` (`rt6_point`) is refused under
+    /// the line and the triangle class (`Refusal::PointSizeTopology`), as Metal's creation is, and
+    /// made under the unspecified and the point class.
+    #[test]
+    fn every_device_refuses_a_point_size_function_under_the_line_and_triangle_class() {
+        use metal2vulkan::metal::PrimitiveTopologyClass as Class;
+
+        let Some(engine) = library(&engine_dir().join("rt6_render_state.ll")) else {
+            return;
+        };
+        let function = |name: &str| {
+            StageSource::Function(FunctionDescriptor::new(
+                engine.function(name).expect("the function"),
+            ))
+        };
+        let mut sized = RenderPipelineDescriptor::new(function("rt6_point"));
+        sized.fragment = Some(function("rt6_white"));
+        sized.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        each_device("draw_point_size_class", |name, _, device| {
+            for class in [
+                Class::Unspecified,
+                Class::Point,
+                Class::Line,
+                Class::Triangle,
+            ] {
+                let mut d = sized.clone();
+                d.input_primitive_topology = class;
+                let made =
+                    device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers);
+                match (class, made) {
+                    (Class::Line | Class::Triangle, Err(Error::Refused(refusal))) => assert_eq!(
+                        refusal,
+                        Refusal::PointSizeTopology { class },
+                        "{name}: {class:?}"
+                    ),
+                    (Class::Line | Class::Triangle, Err(error)) => {
+                        panic!("{name}: {class:?}: {error}")
+                    }
+                    (Class::Line | Class::Triangle, Ok(_)) => panic!("{name}: {class:?}: made"),
+                    (_, made) => {
+                        made.unwrap_or_else(|error| panic!("{name}: {class:?}: {error}"));
+                    }
+                }
+            }
+            println!("{name}: a point-size function's state refused under Line and Triangle");
+        });
+    }
+
     /// A stencil state that replaces marks the top half; one that tests keeps a later draw there.
     #[test]
     fn every_device_marks_and_tests_the_stencil() {

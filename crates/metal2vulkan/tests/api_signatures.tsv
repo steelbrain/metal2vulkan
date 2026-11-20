@@ -10500,6 +10500,7 @@ variant	metal2vulkan-runtime::Refusal::NotDrawable	NotDrawable
 variant	metal2vulkan-runtime::Refusal::NotExported	NotExported { block: BlockId }
 variant	metal2vulkan-runtime::Refusal::OtherDevice	OtherDevice
 variant	metal2vulkan-runtime::Refusal::PatchDraw	PatchDraw
+variant	metal2vulkan-runtime::Refusal::PointSizeTopology	PointSizeTopology { class: PrimitiveTopologyClass }
 variant	metal2vulkan-runtime::Refusal::ResolveFormat	ResolveFormat { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Refusal::ResolveTexture	ResolveTexture
 variant	metal2vulkan-runtime::Refusal::SamplerArgumentIndex	SamplerArgumentIndex { index: u32 }

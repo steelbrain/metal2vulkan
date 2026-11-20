@@ -6,7 +6,7 @@ use crate::floor::BelowFloor;
 use crate::import::ImportHandle;
 use crate::memory::{BlockId, MemoryClass};
 use ash::vk;
-use metal2vulkan::metal::{PixelFormat, TextureType};
+use metal2vulkan::metal::{PixelFormat, PrimitiveTopologyClass, TextureType};
 use std::{fmt, io};
 
 /// What a failing call returns.
@@ -292,6 +292,18 @@ pub enum Refusal {
     /// at a quad patch draw with no tessellation factor buffer, where the same draw with one set
     /// runs and paints the target, the API validation layer off).
     NoTessellationFactorBuffer,
+    /// [`Device::new_render_pipeline_state`](crate::Device::new_render_pipeline_state) of a vertex
+    /// function that writes `[[point_size]]` under the line or the triangle input primitive
+    /// topology class (`inputPrimitiveTopology`). The point and the unspecified class make it.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, every class crossed with both shapes
+    /// of vertex function: Metal's pipeline creation fails with `Vertex shader writes point size
+    /// but inputPrimitiveTopology is MTLPrimitiveTopologyClassLine`, and its `Triangle`
+    /// counterpart; the conformance crate's `topology-class-point-size-function` compares it).
+    PointSizeTopology {
+        /// The class the descriptor names: `Line` or `Triangle`.
+        class: PrimitiveTopologyClass,
+    },
     /// A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`,
     /// `setBufferOffset`, `setThreadgroupMemoryLength`).
     ///
@@ -1953,6 +1965,11 @@ impl fmt::Display for Refusal {
             Refusal::NoTessellationFactorBuffer => {
                 f.write_str("a draw of patches needs a tessellation factor buffer")
             }
+            Refusal::PointSizeTopology { class } => write!(
+                f,
+                "the vertex function writes a point size, which the {class:?} input primitive \
+                 topology class does not take"
+            ),
             Refusal::BufferIndex { index } => {
                 write!(f, "buffer index {index} is past the 31 entries")
             }

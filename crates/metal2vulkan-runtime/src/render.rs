@@ -59,7 +59,7 @@
 use crate::cache::{self, Lowerings};
 use crate::counters::{FirstUse, Gauge, Metric};
 use crate::device::{lock, Core};
-use crate::error::{Error, Gap, RenderPipelineKind};
+use crate::error::{Error, Gap, Refusal, RenderPipelineKind};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
 use crate::pass::Pass;
@@ -299,10 +299,11 @@ impl crate::Device {
     ///
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::RenderPipeline`] for what the runtime does not
-    /// build, naming it; [`Refusal::SamplerIds`](crate::Refusal::SamplerIds) where `sampler_ids`
-    /// answers another count; [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted)
-    /// for a constexpr sampler's index;
-    /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
+    /// build, naming it; [`Refusal::PointSizeTopology`](crate::Refusal::PointSizeTopology) for a
+    /// vertex function that writes `[[point_size]]` under the line or the triangle class;
+    /// [`Refusal::SamplerIds`](crate::Refusal::SamplerIds) where `sampler_ids` answers another
+    /// count; [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted) for a constexpr
+    /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
     pub fn new_render_pipeline_state(
         &self,
         descriptor: &RenderPipelineDescriptor,
@@ -842,6 +843,17 @@ impl RenderCompiled {
         let translator = &core.translator;
         let pipeline = translating(core, || translator.compile_render_pipeline(lowered, budget))
             .map_err(Error::Translation)?;
+        // Metal makes no pipeline of a vertex function that writes `[[point_size]]` under the line
+        // or the triangle class.
+        let class = lowered.input_primitive_topology;
+        if pipeline.graphics.writes_point_size
+            && matches!(
+                class,
+                PrimitiveTopologyClass::Line | PrimitiveTopologyClass::Triangle
+            )
+        {
+            return Err(Error::Refused(Refusal::PointSizeTopology { class }));
+        }
         if let Some(kind) = unbuilt(&pipeline, translator.profile().enabled()) {
             return Err(Error::Unsupported(Gap::RenderPipeline { kind }));
         }

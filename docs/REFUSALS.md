@@ -32,7 +32,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 75 | 75 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 76 | 76 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
 
@@ -46,7 +46,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 20 | 20 | 0 | 0 | 35 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 21 | 20 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 2 | 28 | 0 | 0 | 0 |
 
@@ -278,6 +278,7 @@ Columns:
 | `NoPipeline` | A dispatch or a draw with no pipeline state set | every device (a public call's own check of its arguments) | `metal-documented`: a compute dispatch needs a compute pipeline state set first, and a draw a render pipeline state | 3: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)` (+1) | `-` |
 | `PatchDraw` | A draw of patches with a render pipeline state whose vertex function is not a post-tessellation one, or a draw of primitives with one whose vertex... | every device (a public call's own check of its arguments) | `metal-measured`: an M4: plain Metal stops its process over a patch draw with a pipeline that is not a tessellation one, its validation off; Metal's validation stops a draw of primitives with a tessellation pipeline | 1: `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)` | `-` |
 | `NoTessellationFactorBuffer` | A draw of patches while the encoder has no tessellation factor buffer (`setTessellationFactorBuffer:offset:instanceStride:`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal ends the process, SIGSEGV, at a quad patch draw with no tessellation factor buffer, where the same draw with one set runs and paints the target, the API validation layer off | 1: `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)` | `-` |
+| `PointSizeTopology` | `Device::new_render_pipeline_state` of a vertex function that writes `[[point_size]]` under the line or the triangle input primitive topology... | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, every class crossed with both shapes of vertex function: Metal's pipeline creation fails with `Vertex shader writes point size but inputPrimitiveTopology is MTLPrimitiveTopologyClassLine`, and its `Triangle` counterpart; the conformance crate's `topology-class-point-size-function` compares it | 1: `crates/metal2vulkan-runtime/src/render.rs (of)` | `-` |
 | `BufferIndex` | A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`, `setBufferOffset`, `setThreadgroupMemoryLength`) | every device (a public call's own check of its arguments) | `metal-documented`: the buffer argument table has 31 entries per stage | 2: `crates/metal2vulkan-runtime/src/encoder.rs (slot)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (slot)` | `-` |
 | `TextureArgumentIndex` | A texture argument index past Metal's 128 entries (`setTexture`) | every device (a public call's own check of its arguments) | `metal-documented`: the texture argument table has 128 entries per stage on Apple GPUs | 2: `crates/metal2vulkan-runtime/src/encoder.rs (set_texture)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (set_texture)` | `-` |
 | `SamplerArgumentIndex` | A sampler argument index past Metal's 16 entries (`setSamplerState`) | every device (a public call's own check of its arguments) | `metal-documented`: the sampler argument table has 16 entries per stage | 2: `crates/metal2vulkan-runtime/src/encoder.rs (set_sampler_state)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (set_sampler_state)` | `-` |
@@ -572,6 +573,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::NoPipeline`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (draw_reaches)`
 - `rt:Refusal::PatchDraw`: `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)`
 - `rt:Refusal::NoTessellationFactorBuffer`: `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)`
+- `rt:Refusal::PointSizeTopology`: `crates/metal2vulkan-runtime/src/render.rs (of)`
 - `rt:Refusal::BufferIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (slot)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (slot)`
 - `rt:Refusal::TextureArgumentIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (set_texture)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_texture)`
 - `rt:Refusal::SamplerArgumentIndex`: `crates/metal2vulkan-runtime/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_sampler_state)`

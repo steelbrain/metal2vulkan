@@ -2751,17 +2751,20 @@ or does not check is rebuilt from the generations' names, with young counted ful
   (`Metrics::first_use_waits`, `first_use_line_waits`, `first_use_point_waits`). Of the two replay streams' 537 render contents
   drawn, 527 draw only triangles and 2 lines and triangles; a content drawn only as lines (8 of
   them) makes a triangle `VkPipeline` it never uses.
-- A point is as wide as the `PointSize` the vertex module writes: the function's
-  `[[point_size]]`, stored as Metal's largest point, 511 pixels, where it is past it, which the
-  device draws through `largePoints` (Floor) and clamps to its `pointSizeRange`
-  (`PrecisionNote::DevicePointSize` where the range ends below 511), or 1.0 for a function
-  without one. Metal draws a point of a function without `[[point_size]]` only under a state whose
-  descriptor names the point class, 1 pixel wide; under any other class it rasterizes nothing and
-  runs the vertex function all the same (Metal probes, an M4), so such a draw records its points
-  behind an empty scissor: the vertex function runs, its stores land, and no fragment runs.
-  A point near the viewport's edge or the clip volume is clipped or culled by the device's own
-  rule (its `pointClippingBehavior` and the driver's handling of the viewport), as Metal states no
-  rule for it (docs/API.md, section 10).
+- A point is as wide as the `PointSize` the vertex module writes: the function's `[[point_size]]`,
+  stored as Metal's largest point, 511 pixels, where it is past it, which the device draws through
+  `largePoints` (Floor) and clamps to its `pointSizeRange` (`PrecisionNote::DevicePointSize` where
+  the range ends below 511), or 1.0 for a function without one, and 1.0 too where the function's
+  size is not greater than 0: a zero, a negative or a NaN, which Vulkan's `PointSize` does not take
+  (Metal's answer for them is undocumented and unmeasured). Metal draws a point of a function
+  without `[[point_size]]` only under a state whose descriptor names the point class, 1 pixel wide;
+  under any other class it rasterizes nothing and runs the vertex function all the same (Metal
+  probes, an M4), so such a draw records its points behind an empty scissor: the vertex function
+  runs, its stores land, and no fragment runs. A state whose vertex function writes `[[point_size]]`
+  under the line or the triangle class is refused at its make (`Refusal::PointSizeTopology`), as
+  Metal's creation refuses it. A point near the viewport's edge or the clip volume is clipped or
+  culled by the device's own rule (its `pointClippingBehavior` and the driver's handling of the
+  viewport), as Metal states no rule for it (docs/API.md, section 10).
 - A post-tessellation vertex function's state draws its patches through the device's tessellator
   (`tessellationShader`, Floor). Its one `VkPipeline` is the patch class's, made with the state:
   the translator's synthesized vertex stage (each patch one vertex of a `PATCH_LIST` of one control
