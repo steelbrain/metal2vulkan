@@ -183,14 +183,14 @@ fn from_queries_records_the_device_denormals_of_a_float_product() {
 /// A narrow mask over a signed clamp, to exactly 16 bits' range, of a sum of two values
 /// sign-extended from 16 bits ([`NARROW_CLAMP`]), on an NVIDIA Ampere GA10x description (the RTX
 /// 50's capture under the RTX 3090's identity): `Device::from_queries` clears its high bits with
-/// `OpBitFieldUExtract`, as on every device.
+/// `OpBitwiseAnd`, as on every device, and emits no `OpBitFieldUExtract` for it.
 #[test]
-fn from_queries_clears_a_narrow_value_by_an_extract_on_ga10x() {
+fn from_queries_clears_a_narrow_value_by_an_and_on_ga10x() {
     use crate::budget::SPIRV_WORDS;
     use crate::lower::select::LowerInputs;
     use crate::pipeline::compile::{compile_bitcode_kept, EntryRef};
     use crate::pipeline::testing::{llvm_assemble_text, meter, AssembleError};
-    use crate::spirv::ir::Inst;
+    use crate::spirv::ir::{BinOp, Inst};
     let bc = match llvm_assemble_text(NARROW_CLAMP) {
         Ok(bc) => bc,
         Err(AssembleError::Missing(why)) => {
@@ -203,19 +203,31 @@ fn from_queries_clears_a_narrow_value_by_an_extract_on_ga10x() {
     desc.driver_id = Some(vk::DriverId::NVIDIA_PROPRIETARY);
     desc.vendor_id = 0x10de;
     desc.device_id = 0x2204;
-    // The unsigned extracts of the kernel compiled on `p`.
-    let extracts = |p: &DeviceProfile| {
+    // The bitwise ANDs and the unsigned extracts of the kernel compiled on `p`.
+    let counts = |p: &DeviceProfile| {
         let entry = EntryRef::Name("narrow_clamp");
         let inputs = LowerInputs::new();
         let compiled = compile_bitcode_kept(&bc, entry, p, &inputs, &mut meter(), SPIRV_WORDS);
         let (_, _, module) = compiled.expect("compiled");
-        module
-            .blocks()
-            .iter()
-            .flat_map(|b| b.insts.iter())
+        let insts = || module.blocks().iter().flat_map(|b| b.insts.iter());
+        let ands = insts()
+            .filter(|n| {
+                matches!(
+                    n.inst,
+                    Inst::Binary {
+                        op: BinOp::BitwiseAnd,
+                        ..
+                    }
+                )
+            })
+            .count();
+        let extracts = insts()
             .filter(|n| matches!(n.inst, Inst::BitFieldExtract { signed: false, .. }))
-            .count()
+            .count();
+        (ands, extracts)
     };
     let queried = Device::from_queries(desc, DevicePolicy::default()).unwrap();
-    assert!(extracts(queried.profile()) > 0, "from_queries: no extract");
+    let (ands, extracts) = counts(queried.profile());
+    assert!(ands > 0, "from_queries: no AND");
+    assert_eq!(extracts, 0, "from_queries: an extract");
 }

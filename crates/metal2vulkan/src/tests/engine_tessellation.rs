@@ -532,8 +532,7 @@ fn a_gated_off_control_point_field_reads_zero_unfetched() {
 }
 
 /// A `ushort` `[[patch_id]]` or `[[instance_id]]` holds the low 16 bits of its 32-bit patch input
-/// zero-extended: each load of the input is cleared past them, by `OpBitFieldUExtract` of offset 0
-/// and count 16.
+/// zero-extended: each load of the input is cleared past them, by `OpBitwiseAnd` with `0xffff`.
 #[test]
 fn ushort_patch_and_instance_indices_are_masked() {
     let Some(bc) = fixture() else { return };
@@ -549,8 +548,8 @@ fn ushort_patch_and_instance_indices_are_masked() {
                 .map(|c| c[1])
                 .collect()
         };
-        let (zeros, sixteens) = (constants(0), constants(16));
-        let extracts = instructions(&words, crate::spv::Op::BitFieldUExtract);
+        let masks = constants(0xffff);
+        let ands = instructions(&words, crate::spv::Op::BitwiseAnd);
         let loads = instructions(&words, crate::spv::Op::Load);
         for location in [
             TessellationStage::PATCH_INDEX_LOCATION,
@@ -576,8 +575,8 @@ fn ushort_patch_and_instance_indices_are_masked() {
             );
             for x in loaded {
                 assert!(
-                    extracts.iter().any(|e| {
-                        e[2] == x && zeros.contains(&e[3]) && sixteens.contains(&e[4])
+                    ands.iter().any(|a| {
+                        (a[2] == x && masks.contains(&a[3])) || (a[3] == x && masks.contains(&a[2]))
                     }),
                     "{stem}: a load of location {location} is not cleared past 16 bits"
                 );
