@@ -3035,14 +3035,5 @@ pub(crate) fn queried_formats() -> Vec<vk::Format> {
     set.into_iter().collect()
 }
 
-/// The Vulkan formats of `pf`'s candidates, none for a format without one.
-#[cfg(test)]
-pub(crate) fn candidate_formats(pf: PixelFormat) -> Vec<vk::Format> {
-    match repr(pf) {
-        Repr::Candidates(_, c) => c.iter().map(|c| c.format).collect(),
-        _ => Vec::new(),
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests;
