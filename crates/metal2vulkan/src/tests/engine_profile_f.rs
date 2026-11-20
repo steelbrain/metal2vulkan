@@ -193,6 +193,34 @@ fn refused_also_for_formatless(
         })
 }
 
+/// Whether `floor` refuses naming formats' formatless storage-image access alone (every way a set
+/// of formats read or written without a format): on a description without the formatless
+/// features (`runtime-floor` without them) no format states that access, so what the formatless
+/// floor accepts through its formatless bits is refused so.
+fn refused_for_formatless_access(floor: &Result<std::sync::Arc<FunctionArtifact>, Error>) -> bool {
+    use crate::device::requirements::FormatUsage;
+    let Err(Error::Unsupported(b)) = floor else {
+        return false;
+    };
+    let Needs::AnyOf(ways) = &b.needs else {
+        return false;
+    };
+    !ways.is_empty()
+        && ways.iter().all(|way| {
+            !way.is_empty()
+                && way.iter().all(|c| {
+                    matches!(
+                        c,
+                        Capability::Format {
+                            usage: FormatUsage::StorageImageReadWithoutFormat
+                                | FormatUsage::StorageImageWriteWithoutFormat,
+                            ..
+                        }
+                    )
+                })
+        })
+}
+
 /// Whether `floor` refuses the storage format of a slot whose format the module fixes as an
 /// extended one (a `ulong` texture is `RG32Uint` whatever is bound): its ways are
 /// `shaderStorageImageExtendedFormats`, which neither floor has, or the formatless access the slot
@@ -228,7 +256,8 @@ fn refused_for_a_fixed_extended_format(
 
 /// Every public fixture compiled for a Profile F device uses the static-root descriptor machinery
 /// only and passes L3; and the device without device addresses refuses exactly what the formatless
-/// floor accepts only through its formatless storage-image bits, or refuses as the formatless
+/// floor accepts only through its formatless storage-image bits (asking for a storage format, or
+/// naming formats' formatless access), or refuses as the formatless
 /// floor does naming those bits too, or refuses a module-fixed extended format that the formatless
 /// floor declares formatless.
 #[test]
@@ -266,7 +295,9 @@ fn profile_f_functions_reach_every_buffer_through_a_descriptor() {
                     && !refused_for_a_fixed_extended_format(&results[1])
                 {
                     assert!(
-                        formatless == "ok" && floor.starts_with("NeedsInput{StorageTextureFormat"),
+                        formatless == "ok"
+                            && (floor.starts_with("NeedsInput{StorageTextureFormat")
+                                || refused_for_formatless_access(&results[1])),
                         "{name} {entry}: {FORMATLESS_FLOOR} {formatless}, {PROFILE_F} {floor}"
                     );
                     format_needed += 1;

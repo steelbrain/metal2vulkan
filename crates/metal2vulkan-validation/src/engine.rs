@@ -1537,7 +1537,8 @@ mod tests {
         assert_eq!(missing.outcome.label(), "invalid_descriptor", "{missing:?}");
     }
 
-    /// A fragment function of more colors than vk12-floor draws at once (four), refused alone, is
+    /// A fragment function of more colors than a device draws at once (four: `runtime-floor` with
+    /// four color attachments, below the runtime's floor of eight), refused alone, is
     /// translated as each color group of the pipeline of its colors, every module checked by L3:
     /// five and seven colors in two groups, colors 0 and 5 in one renumbered. One that writes
     /// memory keeps its limit refusal, which a pipeline of more groups meets at link. On lavapipe
@@ -1553,8 +1554,20 @@ mod tests {
             }
             Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected color_groups.ll: {why}"),
         };
-        for (stem, groups) in [("runtime-floor", 2), ("lavapipe", 1)] {
-            let profile = load_profile(stem).unwrap();
+        let four = {
+            let mut description = load_description("runtime-floor").unwrap();
+            description.limits.max_color_attachments = 4;
+            description.limits.max_fragment_output_attachments = 4;
+            metal2vulkan::device::Device::from_queries(
+                description,
+                metal2vulkan::device::DevicePolicy::default(),
+            )
+            .unwrap()
+            .profile()
+            .clone()
+        };
+        let lavapipe = load_profile("lavapipe").unwrap();
+        for (stem, profile, groups) in [("four colors", four, 2), ("lavapipe", lavapipe, 1)] {
             for (entry, modules) in [("cg_five", groups), ("cg_seven", groups), ("cg_sparse", 1)] {
                 let (attempt, pending) = translate_new_unvalidated(&bitcode, entry, &profile, None);
                 assert_eq!(attempt.outcome, Outcome::Translated, "{entry} on {stem}");
@@ -1568,8 +1581,8 @@ mod tests {
             }
             let counts = translate_new(&bitcode, "cg_counts", &profile, None);
             let expected = match stem {
-                "runtime-floor" => "device_capability_missing",
-                _ => "translated",
+                "lavapipe" => "translated",
+                _ => "device_capability_missing",
             };
             assert_eq!(
                 counts.outcome.label(),

@@ -2154,7 +2154,14 @@ mod tests {
         let mut enabled = EnableSet::new();
         enabled.features.insert(VkFeature::RobustBufferAccess);
         let opened = opened_description(description.clone(), &enabled).unwrap();
-        assert_eq!(opened.features, enabled.features);
+        // Vulkan 1.3 core holds the two dynamic-state features, so a 1.3 description keeps them
+        // beside what the context enabled.
+        let mut kept = enabled.features.clone();
+        kept.extend([
+            VkFeature::ExtendedDynamicState,
+            VkFeature::ExtendedDynamicState2,
+        ]);
+        assert_eq!(opened.features, kept);
         assert!(opened.extensions.is_empty());
         assert_eq!(opened.api_version, ApiVersion::V1_3);
 
