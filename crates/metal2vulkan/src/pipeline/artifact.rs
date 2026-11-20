@@ -1826,15 +1826,14 @@ pub enum PrecisionNote {
     /// value itself), on a device with `shaderFloat16` whose float controls do not make that
     /// conversion Metal's (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for
     /// 16 bits, under which ANV and RADV round through the conversion exactly and record no
-    /// note): NVIDIA, whose driver folds the conversion's round trip even under those controls
-    /// (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK, lavapipe, and any device
-    /// without them. NVIDIA's modules compute under those controls all the same: a `half` `+`,
+    /// note): NVIDIA, whose driver folds the conversion's round trip even under those controls,
+    /// MoltenVK, lavapipe, and any device without them. NVIDIA's modules compute under those controls all the same: a `half` `+`,
     /// `-`, `*`, `/` and `sqrt` there are the device's 16-bit instructions, whose results take
     /// no such rounding. Without them Vulkan leaves the conversion's rounding mode and its 16-bit
     /// denormals to the device. Also recorded under those controls on RADV where the `half` is the
     /// result of an `f32` addition, subtraction, multiply or fused multiply-add: its compiler fuses
-    /// the operation into the conversion and rounds the exact result once
-    /// (`DriverWorkaround::HalfConversionFusedWithArithmetic`), one unit in the last place from
+    /// the operation into the conversion and rounds the exact result once, one unit in the last
+    /// place from
     /// Metal's `half` of the `float` result where that result lies on a `half` midpoint. On a
     /// device `Device::from_queries` made, which reads no driver identity, every device with those
     /// controls takes the pair (NVIDIA's included), and every module that rounds through it records

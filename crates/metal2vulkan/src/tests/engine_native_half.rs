@@ -10,7 +10,7 @@
 //! The kernels read two `float`s from buffer 0 and store one result after them: a `half` sum of
 //! the two narrowed, and the first narrowed alone; and, under the float controls, a `float` sum,
 //! product and fused multiply-add of the two rounded to `half`, which a driver may fuse into the
-//! narrowing (`DriverWorkaround::HalfConversionFusedWithArithmetic`). `llvm-as` assembles the
+//! narrowing (RADV's does). `llvm-as` assembles the
 //! module; without it the compiling tests skip visibly.
 
 use crate::air::{self, SpecRequest};
@@ -150,14 +150,11 @@ fn interpret_bytes(bitcode: &[u8], entry: &str, p: &DeviceProfile, bytes: Vec<u8
 }
 
 /// The form a profile's `half` roundings take: the controlled conversion where the profile has
-/// `shaderFloat16` and its float controls and its driver keeps the round trip (not NVIDIA's,
-/// `DriverWorkaround::HalfConversionPairFolded`), else the conversion with `shaderFloat16`, else
-/// the quantize.
+/// `shaderFloat16` and its float controls, else the conversion with `shaderFloat16`, else the
+/// quantize.
 fn expected(p: &DeviceProfile) -> QuantizeForm {
     let float16 = p.fields().leaf.float16;
-    let folds = (p.workarounds())
-        .contains(&crate::device::profile::DriverWorkaround::HalfConversionPairFolded);
-    if float16 && controlled_modes(p).is_some() && !folds {
+    if float16 && controlled_modes(p).is_some() {
         QuantizeForm::Controlled
     } else if float16 {
         QuantizeForm::Converted

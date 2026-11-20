@@ -2306,8 +2306,7 @@ pub fn unorm8_tile_value(
 /// from 65520 up: each rounding of Metal's blend arithmetic. Where the module rounds to `half` by
 /// the device's conversion under the 16-bit float controls ([`QuantizeForm::Controlled`]: the
 /// profile has `shaderFloat16`, `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve`
-/// for 16 bits, and a driver that keeps the conversion and its widening, not one with
-/// `DriverWorkaround::HalfConversionPairFolded`; [`narrow::quantize_form`]), that conversion and
+/// for 16 bits; [`narrow::quantize_form`]), that conversion and
 /// its widening ([`narrow::round`]): two instructions, Metal's `half(float)` by the Vulkan spec
 /// (conversions are correctly rounded, to nearest even under `RoundingModeRTE`, denormals kept
 /// under `DenormPreserve`, zero signs and infinities under `SignedZeroInfNanPreserve`), as the

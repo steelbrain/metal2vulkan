@@ -1025,10 +1025,9 @@ fn rebuild(
 }
 
 /// Hold `m`'s `half` values at 16 bits (the module docs), where it computes `half` in 16 bits;
-/// the caller asks only under the 16-bit float controls (`narrow::half_controls`), whatever the
-/// module's rounding form: on a driver that folds the conversion's round trip
-/// (`DriverWorkaround::HalfConversionPairFolded`) a narrowing a held value reads at 16 bits is no
-/// round trip. What no
+/// the caller asks only under the 16-bit float controls (`narrow::half_controls`): on a driver
+/// that folds the conversion's round trip (NVIDIA's) a narrowing a held value reads at 16 bits is
+/// no round trip. What no
 /// instruction reads afterwards leaves the module, and its interface and requirements are derived
 /// again.
 pub fn hold(m: &mut TypedModule, meter: &mut Meter) -> Result<Held, Error> {

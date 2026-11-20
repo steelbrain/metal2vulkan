@@ -7,10 +7,9 @@
 //! Vulkan spec (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits, and
 //! the modes the device's independence ties to them), it is that conversion and its widening, each
 //! decorated `NoContraction`, in an entry declaring those modes ([`QuantizeForm::Controlled`],
-//! [`controlled_modes`]), where the driver keeps the pair (not NVIDIA's,
-//! `DriverWorkaround::HalfConversionPairFolded`, whose round trip is the device's conversion,
-//! [`quantize_form`]): Metal's rounding by the Vulkan spec, but a driver's compiler may fold the
-//! pair or fuse the operation computing the value into the narrowing, so the module records
+//! [`controlled_modes`], [`quantize_form`]): Metal's rounding by the Vulkan spec, but a driver's
+//! compiler may fold the pair (NVIDIA's does, even under those controls) or fuse the operation
+//! computing the value into the narrowing, so the module records
 //! `PrecisionNote::NativeHalfConversion` on every device, a static note of the rounding. Elsewhere, where the
 //! profile has `shaderFloat16`, it is the device's conversion to 16 bits and its widening
 //! ([`QuantizeForm::Converted`]), recording `PrecisionNote::NativeHalfConversion`; without it, the
@@ -58,7 +57,7 @@
 mod merges;
 
 use crate::budget::Meter;
-use crate::device::profile::{DriverWorkaround, Independence};
+use crate::device::profile::Independence;
 use crate::device::DeviceProfile;
 use crate::error::Error;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
@@ -141,14 +140,15 @@ pub fn round(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> 
 
 /// How profile `p`'s modules round an `f32` to `half` ([`QuantizeForm`]): the device's conversion
 /// to 16 bits and back under the float controls that make it Metal's by the Vulkan spec where the
-/// profile computes under them ([`half_controls`]) and its driver keeps the pair, not one that
-/// folds it (`DriverWorkaround::HalfConversionPairFolded`, NVIDIA's) ([`QuantizeForm::Controlled`]),
-/// else that conversion as it is where the profile has `shaderFloat16`
-/// ([`QuantizeForm::Converted`]), else the device's `OpQuantizeToF16` ([`QuantizeForm::Device`]).
+/// profile computes under them ([`half_controls`]) ([`QuantizeForm::Controlled`]), else that
+/// conversion as it is where the profile has `shaderFloat16` ([`QuantizeForm::Converted`]), else
+/// the device's `OpQuantizeToF16` ([`QuantizeForm::Device`]). A driver's compiler may fold the
+/// controlled pair (NVIDIA's does): no query tells which, so the pair takes
+/// `PrecisionNote::NativeHalfConversion` on every device, whose bound is a result not rounded at
+/// all.
 pub fn quantize_form(p: &DeviceProfile) -> QuantizeForm {
     let float16 = p.fields().leaf.float16;
-    let folds = (p.fields().workarounds).contains(&DriverWorkaround::HalfConversionPairFolded);
-    if half_controls(p) && !folds {
+    if half_controls(p) {
         QuantizeForm::Controlled
     } else if float16 {
         QuantizeForm::Converted
@@ -237,8 +237,7 @@ fn controlled(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Val
 /// instructions (`super::f16_arithmetic`, `super::divide`, `super::math`, `super::fma`), the module
 /// holds its `half` values at 16 bits (`spirv::half_hold`), and a widening from bits or a narrowing
 /// to them records no note. Whether its `f32` results round through the conversion and its widening
-/// too is [`quantize_form`]'s: not on a driver that folds that pair
-/// (`DriverWorkaround::HalfConversionPairFolded`).
+/// too is [`quantize_form`]'s.
 pub fn half_controls(p: &DeviceProfile) -> bool {
     p.fields().leaf.float16 && controlled_modes(p).is_some()
 }

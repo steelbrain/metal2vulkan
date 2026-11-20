@@ -3400,10 +3400,9 @@ fn lower_bounded<K>(
     // `NoContraction`, under the float controls that make it Metal's, computed by the device's
     // 16-bit arithmetic, which they make Metal's too, or read from its bits by the device's
     // widening, which they make exact but for a NaN's bits: the entry declares them, and so
-    // requires the device's float-controls properties for them, and no fact. On a driver that
-    // folds the round trip (`DriverWorkaround::HalfConversionPairFolded`, so `Converted`) the
-    // pair's rounding is the device's whatever the entry declares, recorded below, and the rest
-    // is Metal's under them as elsewhere.
+    // requires the device's float-controls properties for them, and no fact. A driver may fold
+    // the round trip whatever the entry declares (NVIDIA's does): the pair's rounding is then the
+    // device's, the static note recorded below, and the rest is Metal's under them.
     let declares_controls =
         controls && (widens || crate::lower::arith::narrow::computes_in_16_bits(&module) || fused);
     if declares_controls {
