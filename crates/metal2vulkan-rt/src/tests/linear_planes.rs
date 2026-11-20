@@ -12,9 +12,9 @@
 //! without it the test skips visibly.
 //!
 //! The census: a one-plane surface of each of 16 plane formats at four usages (shader read, with
-//! render target, with shader write, with both), in each handle the device exports, lies in place
-//! with the render target usage only where its tiling renders it through a feature Vulkan defines
-//! for that image: the colour
+//! render target, with shader write, with both), in each handle the device exports. A plane in
+//! place is an image with the colour attachment usage whatever its uses, so it lies in place only
+//! where its tiling renders it through a feature Vulkan defines for that image: the colour
 //! attachment feature in the tiling's own features (`LINEAR`'s for an opaque handle, the
 //! `DRM_FORMAT_MOD_LINEAR` modifier's for a dma-buf, each read by the test itself), or
 //! `LINEAR_COLOR_ATTACHMENT_NV` in an opaque handle's `LINEAR` tiling on a device that enabled
@@ -242,10 +242,10 @@ mod on_device {
                     let plain = own.is_some_and(|f| f.contains(F::COLOR_ATTACHMENT));
                     let nv = own.is_some_and(|f| f.contains(F::LINEAR_COLOR_ATTACHMENT_NV));
                     let linear = handle != ExportHandle::DmaBuf && enabled && nv;
+                    let own = own.map_or("none".to_owned(), |f| format!("{:#x}", f.as_raw()));
                     let mut line = format!(
-                        "plane census: {name}: {handle:?} {format:?}: own features {}: colour \
-                         attachment {plain}, linear colour attachment {nv};",
-                        own.map_or("none".to_owned(), |f| format!("{:#x}", f.as_raw()))
+                        "plane census: {name}: {handle:?} {format:?}: own features {own}: colour \
+                         attachment {plain}, linear colour attachment {nv};"
                     );
                     for (label, usage) in USAGES {
                         d.usage = usage;
@@ -264,14 +264,10 @@ mod on_device {
                             Ok((surface, export)) => {
                                 (surface.wait_until_ready())
                                     .unwrap_or_else(|error| panic!("{name}: {error}"));
-                                let renders = usage.contains(TextureUsage::RENDER_TARGET);
                                 assert!(
-                                    export.form != SurfaceForm::InPlace
-                                        || !renders
-                                        || plain
-                                        || linear,
+                                    export.form != SurfaceForm::InPlace || plain || linear,
                                     "{name}: {handle:?} {format:?} {label} in place, its tiling's \
-                                     features {own:?}, linearColorAttachment {enabled}"
+                                     features {own}, linearColorAttachment {enabled}"
                                 );
                                 format!("{:?}", export.form)
                             }

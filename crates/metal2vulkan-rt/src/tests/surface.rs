@@ -1519,7 +1519,7 @@ mod verdicts {
         let both = F::EXPORTABLE | F::IMPORTABLE;
         let (linear, modifier) = (Tiling::LINEAR, Tiling::DRM_FORMAT_MODIFIER_EXT);
         let held = held_usage(wanted, NVIDIA_LINEAR, optimal, linear, true);
-        assert_eq!(held, wanted, "LINEAR, with the feature");
+        assert_eq!(held.as_raw(), wanted.as_raw(), "LINEAR, with the feature");
         assert_eq!(tiling_verdict(0, held, both), Ok(()));
         assert!(linear_alone(held, NVIDIA_LINEAR), "marked");
         for (tiling, enabled, what) in [
@@ -1528,7 +1528,8 @@ mod verdicts {
             (modifier, false, "the modifier, without the feature"),
         ] {
             let held = held_usage(wanted, NVIDIA_LINEAR, optimal, tiling, enabled);
-            assert_eq!(held, wanted & !U::COLOR_ATTACHMENT, "{what}");
+            let unrendered = wanted & !U::COLOR_ATTACHMENT;
+            assert_eq!(held.as_raw(), unrendered.as_raw(), "{what}");
             assert_eq!(
                 tiling_verdict(0, held, both),
                 Err(SurfaceCopy::Tiling { plane: 0 }),
@@ -1538,20 +1539,20 @@ mod verdicts {
         for tiling in [linear, modifier] {
             for enabled in [false, true] {
                 let held = held_usage(wanted, optimal, optimal, tiling, enabled);
-                assert_eq!(held, wanted, "the plain bit");
+                assert_eq!(held.as_raw(), wanted.as_raw(), "the plain bit");
                 assert!(!linear_alone(held, optimal), "the plain bit, unmarked");
             }
         }
         let unblended = NVIDIA_LINEAR & !FF::COLOR_ATTACHMENT_BLEND;
         assert_eq!(
-            held_usage(wanted, unblended, optimal, linear, true),
-            wanted & !U::COLOR_ATTACHMENT,
+            held_usage(wanted, unblended, optimal, linear, true).as_raw(),
+            (wanted & !U::COLOR_ATTACHMENT).as_raw(),
             "no blending"
         );
         let unfiltered = optimal & !FF::SAMPLED_IMAGE_FILTER_LINEAR;
         assert_eq!(
-            held_usage(wanted, unfiltered, optimal, linear, true),
-            wanted & !U::SAMPLED,
+            held_usage(wanted, unfiltered, optimal, linear, true).as_raw(),
+            (wanted & !U::SAMPLED).as_raw(),
             "no linear filter"
         );
     }
