@@ -464,7 +464,7 @@ fn make(
             }
             NumberedSampler::Read | NumberedSampler::Write => 0,
         });
-        Ok(ids.collect())
+        Ok::<Vec<u32>, rt::Error>(ids.collect())
     };
     let started = Instant::now();
     let (made, peak) = crate::worker::alloc::bounded(crate::worker::MEMORY_LIMIT_BYTES, || {
