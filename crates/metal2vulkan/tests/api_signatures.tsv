@@ -1420,15 +1420,12 @@ enum	metal2vulkan::bind::indirect_commands::RecordError	#[derive(Clone, Copy, De
 enum	metal2vulkan::bind::indirect_commands::RecordField	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum RecordField
 enum	metal2vulkan::bind::indirect_commands::StateSource	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum StateSource
 enum	metal2vulkan::cache::ArtifactError	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ArtifactError
-enum	metal2vulkan::device::Containment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Containment
-enum	metal2vulkan::device::ContainmentPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ContainmentPolicy
 enum	metal2vulkan::device::DriverWorkaround	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverWorkaround
 enum	metal2vulkan::device::Exposure	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Exposure
 enum	metal2vulkan::device::FloatControl	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FloatControl
 enum	metal2vulkan::device::FloatWidth	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FloatWidth
 enum	metal2vulkan::device::FormatUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FormatUsage
 enum	metal2vulkan::device::FunctionStorage	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum FunctionStorage
-enum	metal2vulkan::device::GuestIsolation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum GuestIsolation
 enum	metal2vulkan::device::HandleDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HandleDomain
 enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Independence
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
@@ -3264,9 +3261,7 @@ field	metal2vulkan::device::DeviceDescription.rgba4_opaque_black_swizzled	pub rg
 field	metal2vulkan::device::DeviceDescription.robust_buffer_access_update_after_bind	pub robust_buffer_access_update_after_bind: bool
 field	metal2vulkan::device::DeviceDescription.subgroup	pub subgroup: SubgroupProperties
 field	metal2vulkan::device::DeviceDescription.vendor_id	pub vendor_id: u32
-field	metal2vulkan::device::DevicePolicy.containment	pub containment: ContainmentPolicy
 field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: HandleDomain
-field	metal2vulkan::device::DevicePolicy.isolation	pub isolation: GuestIsolation
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::EnableSet.extensions	pub extensions: BTreeSet<VkExtension>
 field	metal2vulkan::device::EnableSet.features	pub features: BTreeSet<VkFeature>
@@ -8034,14 +8029,13 @@ method	metal2vulkan::device::DeviceDescription::has	pub fn has(&self, feature: V
 method	metal2vulkan::device::DeviceDescription::has_format_feature_flags2	pub fn has_format_feature_flags2(&self) -> bool
 method	metal2vulkan::device::DeviceDescription::new	pub fn new(api_version: ApiVersion) -> DeviceDescription
 method	metal2vulkan::device::DeviceDescription::query	pub unsafe fn query(instance: &ash::Instance, physical_device: avk::PhysicalDevice, instance_api_version: ApiVersion) -> Result<DeviceDescription, Error>
-method	metal2vulkan::device::DeviceDescription::recommended_enables	pub fn recommended_enables(&self, policy: &DevicePolicy) -> EnableSet
+method	metal2vulkan::device::DeviceDescription::recommended_enables	pub fn recommended_enables(&self) -> EnableSet
 method	metal2vulkan::device::DeviceDescription::required_enables	pub fn required_enables(&self, requirements: &Requirements) -> Result<EnableSet, Capability>
 method	metal2vulkan::device::DeviceDescription::with_enabled	pub fn with_enabled(mut self, enabled: &EnableSet) -> Result<DeviceDescription, Error>
 method	metal2vulkan::device::DeviceProfile::addressed_needs	pub fn addressed_needs(&self) -> Vec<Capability>
 method	metal2vulkan::device::DeviceProfile::check	pub fn check(&self, req: &Requirements) -> Result<(), Capability>
 method	metal2vulkan::device::DeviceProfile::checks_buffers_in_shader	pub fn checks_buffers_in_shader(&self) -> bool
 method	metal2vulkan::device::DeviceProfile::compile_entry	pub fn compile_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<CompiledFunction, Error>, CompileReport)
-method	metal2vulkan::device::DeviceProfile::containment	pub fn containment(&self) -> Containment
 method	metal2vulkan::device::DeviceProfile::descriptors	pub fn descriptors(&self) -> &DescriptorCaps
 method	metal2vulkan::device::DeviceProfile::device_drops_texel_writes	pub fn device_drops_texel_writes(&self, texel_buffer: bool) -> bool
 method	metal2vulkan::device::DeviceProfile::device_reads_texels	pub fn device_reads_texels(&self, texel_buffer: bool) -> bool
@@ -8054,6 +8048,7 @@ method	metal2vulkan::device::DeviceProfile::interpolation_function_needs	pub fn 
 method	metal2vulkan::device::DeviceProfile::limits	pub fn limits(&self) -> &Limits
 method	metal2vulkan::device::DeviceProfile::link_standalone	pub fn link_standalone(&self, f: &CompiledFunction) -> Result<StandaloneModule, Error>
 method	metal2vulkan::device::DeviceProfile::plan_entry	pub fn plan_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<EntryPlan, Error>, CompileReport)
+method	metal2vulkan::device::DeviceProfile::robustness	pub fn robustness(&self) -> Robustness
 method	metal2vulkan::device::DeviceProfile::simd_tier	pub fn simd_tier(&self, class: &SimdClass, stage: Stage) -> Result<Tier, Unsupported>
 method	metal2vulkan::device::DeviceProfile::specialized_entry	pub fn specialized_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> Result<Entry, Error>
 method	metal2vulkan::device::DeviceProfile::spirv_validation	pub fn spirv_validation(&self) -> SpirvValidation
@@ -10995,10 +10990,6 @@ variant	metal2vulkan::bind::indirect_commands::StateSource::Parent	Parent
 variant	metal2vulkan::cache::ArtifactError::Corrupt	Corrupt
 variant	metal2vulkan::cache::ArtifactError::Stale	Stale
 variant	metal2vulkan::cache::ArtifactError::WrongDevice	WrongDevice
-variant	metal2vulkan::device::Containment::On	On { robust: Robustness }
-variant	metal2vulkan::device::Containment::UnsafeOff	UnsafeOff
-variant	metal2vulkan::device::ContainmentPolicy::Contained	Contained
-variant	metal2vulkan::device::ContainmentPolicy::UnsafeOff	UnsafeOff
 variant	metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals	ClippedCoverageNotMetals
 variant	metal2vulkan::device::DriverWorkaround::TessellatorNotMetals	TessellatorNotMetals
 variant	metal2vulkan::device::Exposure::Core	Core(ApiVersion)
@@ -11031,8 +11022,6 @@ variant	metal2vulkan::device::FormatUsage::UniformTexelBuffer	UniformTexelBuffer
 variant	metal2vulkan::device::FormatUsage::VertexBuffer	VertexBuffer
 variant	metal2vulkan::device::FunctionStorage::Assumed	Assumed(u64)
 variant	metal2vulkan::device::FunctionStorage::Measured	Measured(u64)
-variant	metal2vulkan::device::GuestIsolation::Off	Off
-variant	metal2vulkan::device::GuestIsolation::On	On
 variant	metal2vulkan::device::HandleDomain::Identity	Identity
 variant	metal2vulkan::device::HandleDomain::Table	Table
 variant	metal2vulkan::device::Independence::All	All

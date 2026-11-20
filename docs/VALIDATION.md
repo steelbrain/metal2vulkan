@@ -453,7 +453,8 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   case through the public API in a killable compile worker, executes exactly what the binder plans,
   and compares the observations with Metal's. Every context runs under the validation layer, in a
   robustness leg: the stated leg enables every robustness feature the device states, and the
-  `robustness-off` leg none, so both containment encodings run.
+  `robustness-off` leg none, so both encodings of a buffer-slot access's bounds run (the
+  device's robustness and the shader's check).
 - **Through the runtime.** On Linux, in the stated leg and without a profile restriction, a kernel
   case of buffers (device buffer arrays included), threadgroup memory, function constants and
   linked functions, dispatched by threads or threadgroups and observing a buffer, runs through

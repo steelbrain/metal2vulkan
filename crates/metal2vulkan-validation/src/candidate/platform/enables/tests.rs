@@ -3,7 +3,7 @@ use crate::acceptance::{derived_profile, opened_description};
 use crate::coverage::{Leg, ROBUSTNESS_FEATURES};
 use crate::engine::{committed_profiles, load_description};
 use metal2vulkan::device::ApiVersion;
-use metal2vulkan::device::Device;
+use metal2vulkan::device::{Device, DevicePolicy};
 use std::collections::BTreeMap;
 
 /// A chain that supports every member.

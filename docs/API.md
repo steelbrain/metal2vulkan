@@ -113,7 +113,7 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   offset reads and writes the buffer's bytes there. Outside the buffer, a load reads zero and a
   store or atomic does nothing (section 5). An access at a constant offset is not checked. A
   pointer loaded from memory or made from an integer, null included, is used as given: no binding
-  bounds its accesses, so the containment and isolation of the default domains do not hold for
+  bounds its accesses, so the bounds the default domains place on an access do not hold for
   it. A slot
   whose argument states an alignment of at least 4 (`air.arg_type_align_size`) is reached from
   that address as it is: each access is at the pushed word plus its 32-bit byte offset plus 2^31,
@@ -574,7 +574,7 @@ through buffer arguments it reads at any index.
   signature on a module that still declares function constants) refuses the pipeline at a call
   that survives specialization, `Unsupported` with `Feature::Linking`.
 - **Threadgroup memory.** No threadgroup memory access is
-  contained: a load or store, atomic, memory intrinsic, pointer cell or imageblock access of a
+  bounded: a load or store, atomic, memory intrinsic, pointer cell or imageblock access of a
   threadgroup arena, and a typed threadgroup object's index, run as the program states them, and
   one past the memory is undefined, as in Metal. A kernel whose every threadgroup access is a
   whole, aligned `float` (a scalar or a vector of two to four), with no atomic, memory intrinsic,
