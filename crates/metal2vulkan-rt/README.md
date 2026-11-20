@@ -1501,6 +1501,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 
 ### Known gaps
 
+- A lost device is not recovered. After a loss, the device and everything made on it stay dead:
+  its buffers, textures, heaps, pipeline states, queues and events, and every device address and
+  resource ID it handed out. Every later commit ends `DeviceLost`. The consumer may make a new device
+  on the same instance and make its resources again there; nothing carries over, and an address or
+  resource ID from the lost device names nothing on the new one. Vulkan gives an imported allocation
+  no way to take a chosen device address (`VUID-VkMemoryAllocateInfo-opaqueCaptureAddress-03333`),
+  so a guest's addresses cannot be kept across a new device.
 - Command buffers committed while an earlier one of their queue runs are reported complete
   together, at the last one's end, where Metal reports each at its own. Measured with the harness
   row `long_4cb` (four command buffers committed together, two runs in flight): on an RTX 2080,
