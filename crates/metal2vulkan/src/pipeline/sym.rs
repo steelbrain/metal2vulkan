@@ -1301,7 +1301,8 @@ pub enum PushField {
     /// Under the identity domains, the device address (`u64`) of 16 bytes of zeros, at a multiple
     /// of 16, that nothing writes: a load of a buffer slot checked against its `SlotBounds`
     /// reads each of its units there where the check fails, so it reads zero (`docs/API.md`,
-    /// section 5).
+    /// section 5). Being a multiple of 16 it is never `u64::MAX`, the value a floor stage whose
+    /// tail it is returns on (`lower::push::emit_tail_guard`).
     ZeroAddress,
     /// Under the identity domains, a buffer slot's buffer (`uvec2`): the bytes of the buffer before
     /// the slot's bind offset (the bind offset), then the buffer's length; for a `set*Bytes` copy 0
@@ -1309,8 +1310,17 @@ pub enum PushField {
     /// from the bind offset, read as signed, that is not a translation-time constant is checked
     /// against the buffer, `(len >= n) && (m + before <= len - n)` in `u32`, as `m + before <
     /// len - min(len, n - 1)` with the limit made once per slot and size: outside, a load reads
-    /// zero at `ZeroAddress` and a store or atomic runs nothing (`docs/API.md`, section 5).
+    /// zero at `ZeroAddress` and a store or atomic runs nothing (`docs/API.md`, section 5). A
+    /// buffer is at most 2 GiB, so the length is never `u32::MAX`: a floor stage whose tail it is
+    /// returns where both words are all ones (`lower::push::emit_tail_guard`), which the consumer
+    /// never pushes.
     SlotBounds(SlotRef),
+    /// On `Device::from_queries`' profile (`PushWindow::Floor`), the zero word (`u32`) a stage
+    /// whose pushed fields include no tail kind (`lower::push::tail_kind`) pushes as its tail,
+    /// `lower::push::HOLE_BYTES` above them, and returns where it is non-zero: the consumer pushes
+    /// it zero with the stage's other fields, so the branch is never taken. No placement lists it
+    /// among its fields: it is the push-block member at `PushPlacement::tail_word`.
+    TailWord,
 }
 
 /// A relocatable literal: which decoration operand the serializer reserved, and for what.

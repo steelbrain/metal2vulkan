@@ -5955,6 +5955,7 @@ field	metal2vulkan::pipeline::PushPlacement.argument_table_size	pub argument_tab
 field	metal2vulkan::pipeline::PushPlacement.fields	pub fields: Vec<PlacedField>
 field	metal2vulkan::pipeline::PushPlacement.push_range	pub push_range: Option<(u32, u32)>
 field	metal2vulkan::pipeline::PushPlacement.stage	pub stage: Stage
+field	metal2vulkan::pipeline::PushPlacement.tail_word	pub tail_word: Option<u32>
 field	metal2vulkan::pipeline::RenderPipeline.dependencies	pub dependencies: Vec<RuntimeDependency>
 field	metal2vulkan::pipeline::RenderPipeline.graphics	pub graphics: GraphicsState
 field	metal2vulkan::pipeline::RenderPipeline.interface	pub interface: PipelineInterface
@@ -17107,6 +17108,7 @@ variant	metal2vulkan::pipeline::PushField::Specialized	Specialized(SpecKey)
 variant	metal2vulkan::pipeline::PushField::StageInRegion	StageInRegion
 variant	metal2vulkan::pipeline::PushField::StageInStride	StageInStride(u32)
 variant	metal2vulkan::pipeline::PushField::StorageKeptChannels	StorageKeptChannels
+variant	metal2vulkan::pipeline::PushField::TailWord	TailWord
 variant	metal2vulkan::pipeline::PushField::TessellationChunk	TessellationChunk
 variant	metal2vulkan::pipeline::PushField::TessellationFactorAddress	TessellationFactorAddress
 variant	metal2vulkan::pipeline::PushField::TessellationFactorInstanceStride	TessellationFactorInstanceStride

@@ -927,6 +927,7 @@ codec_enum! {
         SlotBounds(f0),
         ZeroAddress,
         FetchedColor { color, texels },
+        TailWord,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }
@@ -1169,7 +1170,7 @@ codec_struct! {
     AccessSet { read, write }
     StageDescriptor { slot, ty, count }
     StageSpec { key, size, default, unread_bits }
-    PushPlacement { stage, fields, push_range, argument_table_size }
+    PushPlacement { stage, fields, push_range, argument_table_size, tail_word }
     PlacedField { field, loc, size }
     ThreadgroupArgument { stage, index, alignment }
     StageIo {

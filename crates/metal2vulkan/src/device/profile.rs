@@ -688,7 +688,8 @@ pub(crate) enum PushWindow {
     /// 128 bytes, what Vulkan guarantees (`maxPushConstantsSize`): `Device::new`'s profile.
     Guaranteed,
     /// 256 bytes, the new runtime's floor for `maxPushConstantsSize`, which every captured device
-    /// reports: a dispatch region and 28 buffer addresses. `Device::from_queries`' profile.
+    /// reports: a dispatch region and 24 buffer addresses below a stage's tail
+    /// (`lower::push::tail`). `Device::from_queries`' profile.
     Floor,
 }
 

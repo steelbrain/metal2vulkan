@@ -9,7 +9,9 @@
 //!   (`ArgumentTableAddress`), the addresses that fit after it, and reads the rest from the block
 //!   at their placed offsets, with no descriptor; it passes L3 and computes its answer on the CPU
 //!   interpreter. On `Device::from_queries`' profile, whose kernel window is 256 bytes, the same
-//!   kernel pushes all 21 addresses with no block, and one of 31 slots, Metal's most, all 31.
+//!   kernel pushes all 21 addresses with no block, below its tail word; one of 31 slots, Metal's
+//!   most, pushes its block's address and 27 slot addresses below the tail word at 248, and reads
+//!   the other 4 from the block.
 //! - A kernel that reads grid builtins (`grid`, generated) declares no `MultiRegion` constant and
 //!   reads Metal's grid from its pushed `DispatchRegion` on every dispatch: whole, split in two
 //!   pieces at a base, and indirect (a zero grid, its grid `NumWorkgroups · L`) store the same
@@ -1526,11 +1528,13 @@ fn slot_addresses_past_the_window_are_read_from_the_pushed_parameter_block() {
 }
 
 /// On `Device::from_queries`' profile a kernel's push window is 256 bytes (`PushWindow::Floor`):
-/// the same kernel's 21 slot addresses are all pushed, with no block, and so are a kernel's 31,
-/// Metal's most buffer slots (248 bytes). Each computes its answer.
+/// the same kernel's 21 slot addresses are all pushed, with no block, below its tail word 24 bytes
+/// above them (`PushPlacement::tail_word`). A kernel's 31, Metal's most buffer slots, would end
+/// past the floor with the word: its block's address and 27 slot addresses end at 224, the word is
+/// at 248, and the other 4 are read from the block. Each computes its answer.
 #[test]
-fn the_floor_window_pushes_every_slot_address_of_a_kernel_without_a_region() {
-    for reads in [READS, 30] {
+fn the_floor_window_pushes_a_kernel_s_slot_addresses_below_its_tail_word() {
+    for (reads, in_window) in [(READS, READS as usize + 1), (30, 27)] {
         let Some(bc) = assemble_text("many", &many_of(reads)) else {
             return;
         };
@@ -1540,12 +1544,12 @@ fn the_floor_window_pushes_every_slot_address_of_a_kernel_without_a_region() {
             let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
             let (first, pushed, spilled, table) = many_placed(stem, device.profile(), &bc, reads);
             let what = format!("{stem}, {} slots", reads + 1);
-            assert_eq!(pushed.len(), (reads + 1) as usize, "{what}");
-            assert!(spilled.is_empty(), "{what}");
-            assert_eq!(table, 0, "{what}");
-            assert_ne!(
-                first.map(|(f, _)| f),
-                Some(PushField::ArgumentTableAddress),
+            assert_eq!(pushed.len(), in_window, "{what}");
+            assert_eq!(spilled.len(), (reads + 1) as usize - in_window, "{what}");
+            assert_eq!(table, if spilled.is_empty() { 0 } else { 32 }, "{what}");
+            assert_eq!(
+                first.map(|(f, _)| f) == Some(PushField::ArgumentTableAddress),
+                !spilled.is_empty(),
                 "{what}"
             );
         }

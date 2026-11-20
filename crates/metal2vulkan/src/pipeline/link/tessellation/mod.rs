@@ -219,6 +219,7 @@ impl ControlPlan {
                 .collect(),
             push_range: Some((push_offset, self.push_bytes().0)),
             argument_table_size: 0,
+            tail_word: None,
         })
     }
 

@@ -143,6 +143,10 @@ fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<Declared> {
         };
         d.push.push(mb.push_member(f.field, ty, offset)?);
     }
+    // The floor's tail word, above every placed field (`PushPlacement::tail_word`).
+    if let Some(at) = plan.push.tail_word {
+        d.push.push(mb.push_member(PushField::TailWord, u32_, at)?);
+    }
     if !d.push.is_empty() {
         d.push_global = Some(mb.push_global()?);
     }
@@ -460,6 +464,22 @@ impl<'a> EmitCx<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Where the plan's placement ends with a tail (`lower::push::tail`): read it from the push
+    /// block, and return where it holds the value the consumer never pushes there
+    /// ([`crate::lower::push::emit_tail_guard`]).
+    fn emit_tail_guard(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+        let Some(field) = crate::lower::push::tail(&self.plan.push) else {
+            return Ok(());
+        };
+        let member = (self.decl.push.iter()).find(|m| m.field == field);
+        match (member, self.decl.push_global) {
+            (Some(member), Some(push)) => {
+                crate::lower::push::emit_tail_guard(fb, push, member.index, field)
+            }
+            _ => Err(self.fail("a placed tail the push block does not hold")),
+        }
     }
 
     /// Checked slot `slot`'s bounds (`PushField::SlotBounds`), split: its buffer's bytes before
@@ -1462,6 +1482,8 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
             // the other hooks emit, where every invocation of the simdgroup is active.
             let r = crate::lower::simd::emit_entry(&mut em.cx, &mut fb)
                 .and_then(|()| em.cx.load_push_fields(&mut fb))
+                // The floor's tail, read in the first block (`lower::push::emit_tail_guard`).
+                .and_then(|()| em.cx.emit_tail_guard(&mut fb))
                 // The bound values the function reads as data, right after their fields.
                 .and_then(|()| crate::lower::specialized::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))

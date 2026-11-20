@@ -1089,6 +1089,12 @@ pub struct PushPlacement {
     /// Under the identity domains it is the size of the parameter block at
     /// `PushField::ArgumentTableAddress`, which no descriptor binds.
     pub argument_table_size: u32,
+    /// On `Device::from_queries`' profile, where a stage whose pushed fields include no tail kind
+    /// reads its tail word (`PushField::TailWord`, 4 bytes at this offset, 24 bytes or more above
+    /// its fields, with which `push_range` ends): the consumer pushes it zero with the fields.
+    /// `None` for any other stage, and on any other profile.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub tail_word: Option<u32>,
 }
 
 impl PushPlacement {

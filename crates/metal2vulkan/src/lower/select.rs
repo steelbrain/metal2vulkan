@@ -1687,6 +1687,10 @@ fn finish(
         &cx.push,
     );
     access::accept_placement(&cx, &placement)?;
+    // On the floor every stage that pushes more than one short field ends with its tail, a hole
+    // above the others, so every load a driver widens from them stays inside its upload.
+    push::check_floor(cx.profile.push_window(), &placement)
+        .map_err(|detail| Error::Internal(InternalError::new(InternalKind::Invariant, detail)))?;
 
     // A kernel compiled for dispatches with a partial simdgroup emulates its simdgroups whatever
     // tier the profile's subgroups give them, and depends on that variant. A kernel whose lockstep

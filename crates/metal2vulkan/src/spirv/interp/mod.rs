@@ -376,6 +376,15 @@ pub struct Resources {
 fn specialized_push(m: &TypedModule, spec: &BTreeMap<SpecKey, u64>, mut push: Vec<u8>) -> Vec<u8> {
     use crate::pipeline::sym::PushField;
     for member in m.push_members() {
+        // The floor's tail word, which a runtime pushes zero.
+        if member.field == PushField::TailWord {
+            let end = member.offset as usize + 4;
+            if push.len() < end {
+                push.resize(end, 0);
+            }
+            push[end - 4..end].fill(0);
+            continue;
+        }
         let PushField::Specialized(key) = member.field else {
             continue;
         };

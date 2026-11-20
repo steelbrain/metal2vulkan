@@ -140,7 +140,7 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   never writes it, so the consumer places it at a multiple of 16 and leaves it unchanged while
   the command reads it. A kernel's window is 128 bytes
   (256 on a device made by `Device::from_queries`, whose runtime's floor requires that much
-  `maxPushConstantsSize`: a dispatch region and 28 buffer addresses). On such a device a render
+  `maxPushConstantsSize`: a dispatch region and 24 buffer addresses below its tail). On such a device a render
   pipeline's two functions share one 256-byte range: the vertex function's window is `[0, 248)`,
   and the fragment function's runs from the vertex function's end to 256. A
   vertex function is lowered without knowing its fragment function, so it leaves the last 8
@@ -148,7 +148,16 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   costs only a vertex function whose own fields pass 248 bytes, which spills where it would have
   filled them. The fields only a checked access reads
   (`PushField::ZeroAddress` and each `PushField::SlotBounds`) come last in the order, so they
-  are the first to move to the block. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
+  are the first to move to the block. On a device made by `Device::from_queries` each function's
+  push ends with its tail, 24 bytes or more above its other pushed fields: its highest
+  `PushField::SlotBounds` or `PushField::ZeroAddress`, moved there, or where it pushes neither, the
+  zero word `PushField::TailWord` at `PushPlacement::tail_word`, with which its `push_range` ends;
+  a function that pushes one field of 8 bytes or fewer has none. A driver that uploads a stage's
+  push bytes up to the highest one the stage reads then holds every load it widens from the other
+  fields. The function returns at its start where its tail holds what the consumer never pushes
+  there (a tail word other than zero, bounds whose two words are both all ones, a zero-range
+  address of all ones), so the consumer pushes the tail word zero with the other fields; the
+  bytes of the hole are not read. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
   every dispatch: a dispatch the host knows states Metal's grid and its piece's first threadgroup
   there, and an indirect dispatch a zero grid, whose kernel takes `NumWorkgroups` times its
   workgroup size. On a device made by `Device::new` it declares no `MultiRegion` constant. On one

@@ -1871,9 +1871,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   API validation refuses the bind offset. Plain Metal runs such a dispatch at addresses of its
   own; `docs/API.md` section 10 says which.
 - Parameters: fields in the push window, `[0, 256)` on every device, are pushed: the dispatch
-  region and up to 28 buffer addresses, each kernel pushing only the bytes it reads. Fields past it
-  go to a 16-byte aligned block in the parameter ring, whose address is a field in the window: a
-  kernel with more than 28 buffers. `Counters::metrics`' `ring_writes` counts each block and each
+  region and up to 24 buffer addresses below the kernel's tail (`docs/API.md` section 5), each
+  kernel pushing only the bytes it reads. Fields past it go to a 16-byte aligned block in the
+  parameter ring, whose address is a field in the window: a kernel with more than 24 buffers. `Counters::metrics`' `ring_writes` counts each block and each
   `set_bytes` copy.
   `set_bytes` copies its bytes into the ring at the call, as Metal copies them. The ring is 2 MiB
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
@@ -3241,7 +3241,7 @@ A Boolean limit's minimum is 1,
 | `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
 | `maxPerStageUpdateAfterBindResources` | `131072` | both texture arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
 | `maxUpdateAfterBindDescriptorsInAllPools` | `143072` | all five arrays |
-| `maxPushConstantsSize` | `256` | per-command values: a compute kernel's dispatch region and 28 buffer addresses, anything larger in a block whose address is pushed; a render pipeline's vertex and fragment functions' values in the same 256 bytes, dense by link, anything larger in a block whose address is pushed |
+| `maxPushConstantsSize` | `256` | per-command values: a compute kernel's dispatch region and 24 buffer addresses below its tail, anything larger in a block whose address is pushed; a render pipeline's vertex and fragment functions' values in the same 256 bytes, dense by link, anything larger in a block whose address is pushed |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |
