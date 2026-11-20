@@ -592,13 +592,6 @@ SOURCES = [
             "sha256": "86bc23122d165c02808b913be956569b1a35ef976e150aea410a5248cad4c003",
         },
     },
-    {
-        "name": "swiftshader",
-        "kind": "gpuinfo",
-        "below_floor": True,
-        "report": 38278,
-        "sha256": "122ca1fd87e5fc588a4acfd48eb2428519867c6104ea48e54520da746405fcb5",
-    },
 ]
 
 

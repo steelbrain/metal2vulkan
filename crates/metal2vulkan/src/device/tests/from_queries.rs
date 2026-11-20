@@ -143,8 +143,8 @@ entry:
 /// A device whose `maxPushConstantsSize` is below the 256 bytes of the push window every stage is
 /// lowered for is below the floor: `Unsupported{PushWindow}`, needing `MaxPushConstantsSize` 256.
 /// The descriptions below it are committed apart (`validation/profiles/below-floor/`, this test's
-/// input alone): `vk12-floor`, the Vulkan 1.2 minimum, and `swiftshader`, each with 128. Every
-/// committed profile is above it.
+/// input alone): `vk12-floor`, the Vulkan 1.2 minimum, with 128. Every committed profile is above
+/// it.
 #[test]
 fn a_push_window_below_256_bytes_is_below_the_floor() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -156,7 +156,7 @@ fn a_push_window_below_256_bytes_is_below_the_floor() {
         .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
     below.sort();
-    assert_eq!(below, ["swiftshader", "vk12-floor"]);
+    assert_eq!(below, ["vk12-floor"]);
     for stem in &below {
         let text = std::fs::read_to_string(dir.join(format!("{stem}.json"))).expect("readable");
         let description = DeviceDescription::from_khronos_json(&text, None).expect("parses");
