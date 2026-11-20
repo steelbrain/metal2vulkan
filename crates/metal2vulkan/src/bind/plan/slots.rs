@@ -16,7 +16,7 @@ use crate::metal;
 use crate::pipeline::artifact::RuntimeDependency;
 use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::interface::SlotInterface;
-use crate::pipeline::interface::{AccessSet, BufferForm, BufferSlot, DescriptorView, Window};
+use crate::pipeline::interface::{AccessSet, BufferForm, BufferSlot, Window};
 use crate::pipeline::layout::{BindingSource, PipelineLayout};
 use crate::pipeline::sym::{
     PushField, SampledType, SlotClass, SlotRef, SnapshotForm, SpecKey, Stage,
