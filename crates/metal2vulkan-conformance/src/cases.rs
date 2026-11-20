@@ -126,6 +126,7 @@ pub mod mesh_draws;
 pub mod mesh_partial_barriers;
 pub mod mesh_pipeline_descriptors;
 pub mod mesh_pipeline_reflection;
+pub mod nan_integer_conversions;
 pub mod nearest_positions;
 pub mod norm_storage_writes;
 pub mod padded_blends;
@@ -629,6 +630,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     }
     cases.push(Box::new(buffer_bind_off_alignment::BufferBindOffAlignment));
     cases.push(Box::new(threadgroup_start::ThreadgroupStart));
+    cases.push(Box::new(nan_integer_conversions::NanIntegerConversions));
     cases
 }
 
