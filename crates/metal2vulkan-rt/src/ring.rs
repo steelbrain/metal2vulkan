@@ -35,7 +35,7 @@ use crate::floor;
 use crate::memory::{self, Internal, Mapping};
 use ash::vk;
 use std::ptr::NonNull;
-use std::sync::{Condvar, Mutex, PoisonError};
+use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
 
 /// A chunk's length: the most one write takes.
 pub(crate) const CHUNK: u64 = 64 * 1024;
@@ -50,6 +50,10 @@ const ALIGN: u64 = 16;
 /// The device's ring.
 pub(crate) struct Ring {
     state: Mutex<State>,
+    /// The nil buffer's address, once asked ([`Ring::nil`]), read with no lock.
+    nil: OnceLock<u64>,
+    /// The zero range's address, once asked ([`Ring::zero`]), read with no lock.
+    zero: OnceLock<u64>,
     /// A block made, or chunks given back, while a block was being made.
     changed: Condvar,
     /// For the device tests: where set, the making of a block, the block-maker thread's or a
@@ -62,10 +66,6 @@ pub(crate) struct Ring {
 struct State {
     blocks: Vec<RingBlock>,
     free: Vec<Chunk>,
-    /// The nil buffer's address, once asked ([`Ring::nil`]).
-    nil: Option<u64>,
-    /// The zero range's address, once asked ([`Ring::zero`]).
-    zero: Option<u64>,
     /// Who makes the next block.
     next: Next,
 }
@@ -112,10 +112,10 @@ impl Ring {
             state: Mutex::new(State {
                 blocks: Vec::new(),
                 free: Vec::new(),
-                nil: None,
-                zero: None,
                 next: Next::Maker,
             }),
+            nil: OnceLock::new(),
+            zero: OnceLock::new(),
             changed: Condvar::new(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             park: Mutex::new(None),
@@ -193,40 +193,36 @@ impl Ring {
     /// The nil buffer's address (the module docs): a chunk of zeros, taken and zeroed at the
     /// first ask and never given back, so no command buffer writes it.
     pub(crate) fn nil(&self, core: &Core) -> Result<u64, Error> {
-        self.kept(core, |state| &mut state.nil)
+        self.kept(core, &self.nil)
     }
 
     /// The zero range's address (the module docs): a chunk of zeros taken as the nil buffer's
     /// is, which nothing is bound to, so nothing writes it. A multiple of 16.
     pub(crate) fn zero(&self, core: &Core) -> Result<u64, Error> {
-        self.kept(core, |state| &mut state.zero)
+        self.kept(core, &self.zero)
     }
 
     /// The address of the chunk of zeros `which` holds, taken and zeroed at its first ask and
-    /// never given back.
-    fn kept(&self, core: &Core, which: fn(&mut State) -> &mut Option<u64>) -> Result<u64, Error> {
-        if let Some(address) = *which(&mut lock(&self.state)) {
+    /// never given back. Every later ask reads it with no lock and no locked instruction: a draw
+    /// or a dispatch whose bindings changed asks again (the lock budget, `crate::tests::locks`).
+    fn kept(&self, core: &Core, which: &OnceLock<u64>) -> Result<u64, Error> {
+        if let Some(&address) = which.get() {
             return Ok(address);
         }
         let chunk = self.take(core)?;
         // SAFETY: the chunk is out of every command buffer's hands and no pending work reads it:
         // the host alone writes it, once.
         unsafe { std::ptr::write_bytes(chunk.host.at(0).as_ptr(), 0, CHUNK as usize) };
-        let mut state = lock(&self.state);
-        match *which(&mut state) {
+        let address = *which.get_or_init(|| chunk.address);
+        if address != chunk.address {
             // Another thread's ask made it first: the chunk goes back.
-            Some(address) => {
-                state.free.push(chunk);
-                if state.next != Next::Unasked {
-                    self.changed.notify_all();
-                }
-                Ok(address)
-            }
-            None => {
-                *which(&mut state) = Some(chunk.address);
-                Ok(chunk.address)
+            let mut state = lock(&self.state);
+            state.free.push(chunk);
+            if state.next != Next::Unasked {
+                self.changed.notify_all();
             }
         }
+        Ok(address)
     }
 
     /// Takes back a retired command buffer's chunks.
@@ -264,8 +260,8 @@ impl Ring {
             }
         }
         state.free.clear();
-        state.nil = None;
-        state.zero = None;
+        self.nil.take();
+        self.zero.take();
         freed
     }
 }
