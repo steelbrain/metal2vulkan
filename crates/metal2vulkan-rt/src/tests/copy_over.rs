@@ -974,4 +974,74 @@ entry:
             (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
         });
     }
+    /// While a texture over a buffer in an image of its own lives, a dispatch that writes a
+    /// buffer costs no more after its segment wrote 4096 other buffers (a fill each) than after
+    /// it wrote none: what a segment wrote is a set, not a list each write searches.
+    #[test]
+    fn every_device_writes_past_many_written_buffers_at_no_cost() {
+        use metal2vulkan_devtools::instructions::InstructionCounter;
+        const WRITTEN: u64 = 4096;
+        const COUNTED: u32 = 512;
+        each_device("over written", |name, _, device| {
+            let Ok(mut counter) = InstructionCounter::new() else {
+                println!("{name}: no instruction counter here");
+                return;
+            };
+            let ok = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let kernel = add(&device);
+            let (cpu, buffer, texture) = copied(name, &device, TextureUsage::SHADER_READ);
+            let small = (device.take_block(MemoryClass::Shared, WRITTEN * 16))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let written: Vec<Buffer> = (0..WRITTEN)
+                .map(|at| {
+                    (device.new_buffer(small.id, at * 16, 16, None))
+                        .unwrap_or_else(|e| panic!("{name}: {e}"))
+                })
+                .collect();
+            let mut arena = Arena::new(&device);
+            let words = [arena.buffer(), arena.buffer(), arena.buffer()];
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut per: Vec<u64> = Vec::new();
+            for many in [false, true] {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                if many {
+                    let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                    for buffer in &written {
+                        ok(encoder.fill_buffer(buffer, 0..16, 0x5a));
+                    }
+                    encoder.end_encoding();
+                }
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                ok(encoder.set_compute_pipeline_state(&kernel));
+                for (slot, buffer) in words.iter().enumerate() {
+                    ok(encoder.set_buffer(Some(buffer), 0, slot as u32));
+                }
+                // One dispatch first, so the counted ones record what changed alone.
+                ok(encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1]));
+                let ((), dispatched) = (counter.measure(|| {
+                    for _ in 0..COUNTED {
+                        ok(encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1]));
+                    }
+                }))
+                .expect("a count");
+                encoder.end_encoding();
+                draw::run(name, &command_buffer);
+                per.push(dispatched / u64::from(COUNTED));
+            }
+            let (none, many) = (per[0], per[1]);
+            println!(
+                "{name}: user-space instructions a dispatch while a texture over a buffer lives: \
+                 {none} after no write in its segment, {many} after {WRITTEN} buffers written"
+            );
+            assert!(
+                many * 10 <= none * 11,
+                "{name}: a dispatch past {WRITTEN} buffers written: {many} instructions against \
+                 {none}"
+            );
+            drop((texture, buffer, written, words, arena, kernel, queue));
+            (device.release_block(small)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        });
+    }
 }

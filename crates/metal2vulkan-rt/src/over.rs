@@ -32,18 +32,25 @@
 //!
 //! A command hands over what it reaches ([`Reached`]): each texture says itself whether it is such
 //! a texture, and a buffer it only reads owes nothing while no texture the segment used has an
-//! image ahead of its buffer ([`Overs::ahead`]), so a command looks at nothing else.
+//! image ahead of its buffer ([`Overs::ahead`]), so a command looks at nothing else. What a
+//! segment wrote is kept in sets by id, so a write costs one lookup however many the segment made.
 
 use crate::buffer::BufferObject;
 use crate::copy_out;
 use crate::counters::{Counters, Metric};
 use crate::device::lock;
 use crate::hazard::Access;
+use crate::kept::AddressHasher;
 use crate::record::{memory_barrier, Reach};
 use crate::texture::{Image, OverCopy, TextureInner, TextureObject};
 use ash::vk;
+use std::collections::HashSet;
+use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
+
+/// Buffer ids, each once (an id hashes as an object's address does).
+type Ids = HashSet<usize, BuildHasherDefault<AddressHasher>>;
 
 /// A resource a command reaches, as the copies read it: a texture, which says itself whether it
 /// lives in an image of its own over a buffer, or a buffer, by its id.
@@ -68,22 +75,19 @@ pub(crate) fn copied(texture: Option<&Arc<TextureInner>>) -> u32 {
 pub(crate) struct Overs {
     /// The textures it used; once it has ended, those that lean on the leading copy alone.
     used: Vec<Used>,
-    /// The buffers the segment's commands wrote, by id, each with the texture whose copy back
-    /// wrote it, `None` for any other write: each pair once.
-    written: Vec<(u32, Option<u32>)>,
+    /// The buffers the used textures lie over, by id.
+    under: Ids,
+    /// The buffers the segment's commands wrote other than by a copy back, by id.
+    wrote: Ids,
+    /// The buffers copies back wrote, by id, each with the texture whose copy it was: each pair
+    /// once.
+    backed: Vec<(u32, u32)>,
     /// A command of the segment wrote through an address outside its resources, or was recorded
     /// while no such texture lived, its writes untracked.
     unbound: bool,
     /// The textures used whose images a command wrote since their bytes last went back
     /// (`Used::buffer_stale`).
     ahead: usize,
-}
-
-/// Adds `write` to `written` where it is not there yet.
-fn note(written: &mut Vec<(u32, Option<u32>)>, write: (u32, Option<u32>)) {
-    if !written.contains(&write) {
-        written.push(write);
-    }
 }
 
 /// A texture over a buffer in an image of its own that a segment used.
@@ -106,24 +110,27 @@ struct Used {
 /// What a held group's ended segments wrote, as [`Overs`] keeps it.
 #[derive(Default)]
 pub(crate) struct Leans {
-    written: Vec<(u32, Option<u32>)>,
+    wrote: Ids,
+    backed: Vec<(u32, u32)>,
     unbound: bool,
 }
 
 impl Leans {
     /// Whether `later`, an ended segment after these in one submission, leans on the leading copy
-    /// for a buffer these wrote: where so, it leads a new group.
+    /// for a buffer these wrote (a texture's own copy back aside): where so, it leads a new group.
     pub(crate) fn conflicts(&self, later: &Overs) -> bool {
         (later.used.iter()).any(|used| {
             self.unbound
-                || (self.written.iter())
-                    .any(|&(written, by)| written == used.buffer && by != Some(used.texture))
+                || self.wrote.contains(&(used.buffer as usize))
+                || (self.backed.iter())
+                    .any(|&(buffer, by)| buffer == used.buffer && by != used.texture)
         })
     }
 
     /// Adds the writes of `later`, an ended segment.
     pub(crate) fn join(&mut self, later: &Overs) {
-        self.written.extend_from_slice(&later.written);
+        self.wrote.extend(&later.wrote);
+        self.backed.extend_from_slice(&later.backed);
         self.unbound |= later.unbound;
     }
 }
@@ -192,10 +199,13 @@ impl Overs {
             return false;
         };
         let buffer = buffer.id();
-        let wrote = self.unbound || self.written.iter().any(|&(b, _)| b == buffer);
+        let wrote = self.unbound
+            || self.wrote.contains(&(buffer as usize))
+            || self.backed.iter().any(|&(backed, _)| backed == buffer);
         if wrote {
             copies.into.push(copy);
         }
+        self.under.insert(buffer as usize);
         self.used.push(Used {
             texture: id,
             copy,
@@ -215,7 +225,10 @@ impl Overs {
                 back.push(used.copy);
                 used.buffer_stale = false;
                 self.ahead -= 1;
-                note(&mut self.written, (used.buffer, Some(used.texture)));
+                let pair = (used.buffer, used.texture);
+                if !self.backed.contains(&pair) {
+                    self.backed.push(pair);
+                }
             }
         }
     }
@@ -251,12 +264,14 @@ impl Overs {
                 }
                 Reached::Buffer(id) => id,
             };
-            for used in &mut self.used {
-                if used.buffer == buffer {
-                    used.image_stale = true;
+            if self.under.contains(&(buffer as usize)) {
+                for used in &mut self.used {
+                    if used.buffer == buffer {
+                        used.image_stale = true;
+                    }
                 }
             }
-            note(&mut self.written, (buffer, None));
+            self.wrote.insert(buffer as usize);
         }
         if unbound {
             self.unbound = true;
