@@ -1830,8 +1830,12 @@ fn a_refused_stage_in_row_is_its_refusal_alone() {
         let Verdict::Refused { at, .. } = &replayed.verdict else {
             panic!("{}: not refused alone: {}", case.name(), replayed.verdict);
         };
+        // Each refused site is its path and our error.
+        let at_pipeline = |refused: &String| {
+            (refused.split_once(": ")).is_some_and(|(site, _)| site.ends_with("/pipeline"))
+        };
         assert!(
-            at.len() > 1 && at.iter().all(|site| site.ends_with("/pipeline")),
+            at.len() > 1 && at.iter().all(at_pipeline),
             "{}: {at:?}",
             case.name()
         );
