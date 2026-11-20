@@ -91,6 +91,7 @@ fn ranges_under_load_never_overlap_and_end_whole() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
+    use crate::texture::TextureObject;
     use crate::{
         Device, DeviceOptions, Gauges, IndexClass, MemoryClass, PixelFormat, TextureDescriptor,
         TextureType,
