@@ -664,17 +664,33 @@ mod on_device {
             let mut points = Vec::new();
             let mut held = Vec::new();
             let mut run = None;
+            // Each step's submissions counted, progress seen and the completion thread's round,
+            // which a failed check names.
+            let mut trace = Vec::new();
+            let mut step = |label: &str| {
+                trace.push(format!(
+                    "{label}: {} sent, {} seen, busy {}",
+                    device.counters().metrics().submissions,
+                    core.done.completed(),
+                    core.done.busy()
+                ))
+            };
             behind_busy(name, &device, &queue, |busy, _, _| {
+                step("behind the busy work");
                 replace(name, &texture, side, 0xC3);
                 points.push(core.work.ready_point());
+                step("first replace");
                 let first = queue.command_buffer().expect("a command buffer");
                 (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
                 first.commit().expect("a commit");
+                step("first commit");
                 replace(name, &texture, side, 0xD4);
                 points.push(core.work.ready_point());
+                step("second replace");
                 let next = queue.command_buffer().expect("a command buffer");
                 copy_out(name, &next, &texture, side, &out);
                 next.commit().expect("a commit");
+                step("next commit");
                 // The group goes before the busy work ends, at the run `behind_busy` set: sent
                 // once a busy one retires, it would go at the run their own runs leave, member by
                 // member where a loaded host measured them long.
@@ -682,6 +698,7 @@ mod on_device {
                 let sent = device.counters().metrics().submissions;
                 queue.send_now(&next);
                 within(name, || device.counters().metrics().submissions > sent);
+                step("sent");
                 busy.open();
                 held.extend([first, next]);
             });
@@ -699,7 +716,7 @@ mod on_device {
             assert_eq!(
                 carried[0], carried[1],
                 "{name}: the two uploads went in one submission: they went in submissions \
-                 {carried:?}, the queue's expected run {run:?} ns as the group went"
+                 {carried:?}, the queue's expected run {run:?} ns as the group went; {trace:?}"
             );
             assert!(
                 read(&out) == vec![0xD4; len as usize],
