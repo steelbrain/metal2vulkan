@@ -13,7 +13,8 @@
 //!   4-sample `Depth32Float` attachment resolves by `Sample0` on every device, and by `Min` and
 //!   `Max` where the device's depth resolve modes have them (else `ResolveFilter`): a pixel half
 //!   covered keeps sample 0's depth, the least or the greatest. A stencil resolve by
-//!   `DepthResolvedSample` is `ResolveFilter`.
+//!   `DepthResolvedSample` is `ResolveFilter`. A pass that resolves nothing walks no resolve
+//!   as its encoder begins and ends; one that resolves walks its resolves.
 
 use crate::error::{Error, Refusal};
 use crate::pass::resolving;
@@ -140,6 +141,52 @@ mod on_device {
 
     fn gap(kind: RenderPassKind) -> Error {
         Error::Unsupported(Gap::RenderPass { kind })
+    }
+
+    /// The walks of passes' resolves on this thread so far.
+    fn walks() -> u64 {
+        crate::pass::RESOLVE_WALKS.with(std::cell::Cell::get)
+    }
+
+    /// The module's walks: none for a pass that resolves nothing, as its encoder begins and ends.
+    #[test]
+    fn every_device_walks_no_resolve_for_a_pass_that_resolves_nothing() {
+        each_device("resolve_walks", |name, _, device| {
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let encode = |d: &crate::RenderPassDescriptor| {
+                let before = walks();
+                let encoder = (command_buffer.render_command_encoder(d))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                encoder.end_encoding();
+                walks() - before
+            };
+            let single = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            assert_eq!(
+                encode(&pass(&single, None)),
+                0,
+                "{name}: a pass that resolves nothing"
+            );
+            let samples = four(name, &device, PixelFormat::RGBA8Unorm)
+                .unwrap_or_else(|error| panic!("{name}: Vulkan requires 4 samples: {error}"));
+            let mut p = pass(&samples, None);
+            assert_eq!(
+                encode(&p),
+                0,
+                "{name}: a 4-sample pass that resolves nothing"
+            );
+            p.color_attachments[0].store_action = StoreAction::MultisampleResolve;
+            p.color_attachments[0].resolve_texture = Some(single.clone());
+            assert!(
+                encode(&p) > 0,
+                "{name}: a pass that resolves walks its resolve"
+            );
+            run(name, &command_buffer);
+        });
     }
 
     /// The module's color resolve and its refusals.

@@ -613,15 +613,23 @@ fn begin(
     descriptor: &RenderPassDescriptor,
 ) -> Result<(Pass, vk::CommandBuffer), Error> {
     let pass = Pass::check(core, descriptor)?;
-    // The attachments and the resolve textures, which the pass writes.
-    let written =
-        || (pass.targets().map(|t| &t.texture)).chain(pass.resolves().map(|r| &r.texture));
-    let overs: Vec<(u32, Access)> = written()
-        .map(|texture| (texture.hazard_id(), Access::ReadWrite))
+    // The attachments, and where the pass resolves the resolve textures, which the pass writes:
+    // a pass that resolves nothing walks no resolve.
+    let mut overs: Vec<(u32, Access)> = (pass.targets())
+        .map(|t| (t.texture.hazard_id(), Access::ReadWrite))
         .collect();
-    for texture in written() {
-        building.keep_texture(texture);
-        building.wrote_texture_managed(texture);
+    if pass.resolving {
+        overs.extend((pass.resolves()).map(|r| (r.texture.hazard_id(), Access::ReadWrite)));
+    }
+    for t in pass.targets() {
+        building.keep_texture(&t.texture);
+        building.wrote_texture_managed(&t.texture);
+    }
+    if pass.resolving {
+        for r in pass.resolves() {
+            building.keep_texture(&r.texture);
+            building.wrote_texture_managed(&r.texture);
+        }
     }
     // Kept as Metal's pass holds it, and no access declared: no draw writes it while `Disabled`
     // is the only mode built.
@@ -633,21 +641,25 @@ fn begin(
     let command = building.ordered_command()?;
     // Marked after `ordered_command`, as a blit's copy marks it: the host reads a texture over a
     // Shared buffer's bytes in the buffer.
-    if written().any(|texture| texture.host_reads()) {
+    let host_reads = pass.targets().any(|t| t.texture.host_reads())
+        || (pass.resolving && pass.resolves().any(|r| r.texture.host_reads()));
+    if host_reads {
         building.wrote_host();
     }
     building.overs_after(&overs, false);
     building.count(Metric::Passes);
     let earlier = [memory_barrier(Reach::Commands)];
-    let away: Vec<vk::ImageMemoryBarrier2> = (pass.targets())
+    let mut away: Vec<vk::ImageMemoryBarrier2> = (pass.targets())
         .filter(|t| t.moves())
         .map(|t| t.barrier(t.attachment.home, t.layout))
-        .chain(
+        .collect();
+    if pass.resolving {
+        away.extend(
             (pass.resolves())
                 .filter(|r| r.moves())
                 .map(|r| r.barrier(r.attachment.home, r.layout)),
-        )
-        .collect();
+        );
+    }
     let device = &core.device;
     // A pass that opens its command buffer and moves no attachment needs no first barrier: each
     // earlier command buffer on the queue ended with one that orders it before every later
@@ -2393,7 +2405,7 @@ impl RenderCommandEncoder {
         let later = [memory_barrier(Reach::Commands)];
         let looped = vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
         let moved = &self.moved;
-        let back: Vec<vk::ImageMemoryBarrier2> = (self.pass.targets())
+        let mut back: Vec<vk::ImageMemoryBarrier2> = (self.pass.targets())
             .filter(|t| t.moves() && !moved.iter().any(|m| m.hazard == t.texture.hazard_id()))
             .map(|t| t.barrier(t.layout, t.attachment.home))
             .chain(
@@ -2401,18 +2413,22 @@ impl RenderCommandEncoder {
                     .iter()
                     .map(|m| layout_barrier(m.image, m.whole, looped, m.home)),
             )
-            .chain(
+            .collect();
+        if self.pass.resolving {
+            back.extend(
                 (self.pass.resolves())
                     .filter(|r| r.moves())
                     .map(|r| r.barrier(r.layout, r.attachment.home)),
-            )
-            .collect();
+            );
+        }
         let device = &core.device;
         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
         // into while the encoder holds it.
         unsafe { device.cmd_end_rendering(self.command) };
-        for _ in self.pass.resolves() {
-            building.count(Metric::Resolves);
+        if self.pass.resolving {
+            for _ in self.pass.resolves() {
+                building.count(Metric::Resolves);
+            }
         }
         if back.is_empty() {
             // Nothing moves home: the barrier that orders the pass before later commands is the
