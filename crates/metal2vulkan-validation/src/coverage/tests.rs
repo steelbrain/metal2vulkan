@@ -838,11 +838,11 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
     };
     // The form each target is exercised as: the declared one, but a buffer as its compiled slot
     // reaches it. A device address that compiles to a descriptor view is a storage buffer, and so
-    // is the `constant` buffer every robustness-off leg views as a storage buffer, checked in the
-    // shader: a uniform view is only ever left to the device's robustness.
-    let form = |fixture: &str, stem: &str, leg: Leg, declared: ContainmentForm| match fixture {
+    // is `ob1_uniform_buffer`'s `constant` buffer, which each thread reads at its own index: a read
+    // whose address may differ between the lanes takes the slot's storage view on every device.
+    let form = |fixture: &str, stem: &str, _: Leg, declared: ContainmentForm| match fixture {
         "ob1_device_address" if stem == "swiftshader" => F::StorageBuffer,
-        "ob1_uniform_buffer" if leg == Leg::RobustnessOff => F::StorageBuffer,
+        "ob1_uniform_buffer" => F::StorageBuffer,
         _ => declared,
     };
     for (fixture, targets) in fixtures {

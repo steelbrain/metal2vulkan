@@ -1,6 +1,7 @@
 //! Lane reads end to end: every profile gives a `constant` slot a uniform view could read its
-//! uniform view, whether some read reaches it at an address that may differ between the lanes
-//! that run it together or every read is at a uniform address, whatever the GPU's identity.
+//! storage view where some read reaches it at an address that may differ between the lanes that
+//! run it together, and its uniform view where every read is at a uniform address, whatever the
+//! GPU's identity.
 //!
 //! The kernels read a `constant` table of 64 words (`air.buffer_size` 256, a `Bounded` window):
 //! `lane_table` at the thread's position, `loop_table` in a loop over a bound read from the table,
@@ -119,13 +120,15 @@ fn table_form(bc: &[u8], entry: &str, p: &DeviceProfile, what: &str) -> BufferFo
 }
 
 /// The identity decides nothing: NVIDIA's captures under the IDs of the RTX 5080 Laptop GPU, the
-/// RTX 3090 and the RTX 2080 give every kernel's table its uniform view; and so does RADV.
+/// RTX 3090 and the RTX 2080 give `lane_table`'s table its storage view and the other kernels'
+/// their uniform view; and so does RADV.
 #[test]
-fn a_per_lane_constant_read_keeps_its_uniform_view() {
+fn a_per_lane_constant_read_takes_its_storage_view_on_every_device() {
     let Some(bc) = assemble() else {
         return;
     };
     let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
+    let storage = BufferForm::Descriptor(DescriptorView::Storage);
     for (stem, id) in [
         ("nvidia-rtx5080-laptop", None),
         ("nvidia-rtx5080-laptop", Some(0x2204)),
@@ -134,10 +137,14 @@ fn a_per_lane_constant_read_keeps_its_uniform_view() {
         ("amd-rdna3-radv", None),
     ] {
         let p = profile(stem, id);
-        for entry in ["lane_table", "loop_table", "field_table"] {
+        for (entry, form) in [
+            ("lane_table", storage),
+            ("loop_table", uniform),
+            ("field_table", uniform),
+        ] {
             assert_eq!(
                 table_form(&bc, entry, &p, stem),
-                uniform,
+                form,
                 "{stem} {id:?} {entry}"
             );
         }
