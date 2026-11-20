@@ -719,12 +719,14 @@ mod on_device {
     }
 
     /// The device's making makes one allocation of each class before it returns, before the
-    /// block-maker thread started, each wholly free, so the thread makes none. A Shared take of a
-    /// byte, a range of the first, leaves the class no wholly free unit: the block-maker thread
-    /// makes the next, off the taker's thread. Once it has, a take of a whole unit, 16 MiB, lands
-    /// in it and allocates nothing on this thread, and the block-maker thread makes the next in
-    /// turn. Under a rule that made an allocation only once the class's free bytes ran low, the
-    /// small take would set nothing off and the 16 MiB take would allocate on its own thread.
+    /// block-maker thread started, each wholly free, so the thread makes none. In each class, a
+    /// take of a byte, a range of the first, leaves the class no wholly free unit: the block-maker
+    /// thread makes the next, off the taker's thread. Once it has, a take of a whole unit, 16 MiB,
+    /// lands in it and allocates nothing on this thread, counted at its class's take site as one
+    /// take landed ahead of its 16 MiB and no allocation, and the block-maker thread makes the
+    /// next in turn. The small take, in the class's first allocation, is not counted landed ahead.
+    /// Under a rule that made an allocation only once the class's free bytes ran low, the small
+    /// take would set nothing off and the 16 MiB take would allocate on its own thread.
     #[test]
     fn every_device_makes_a_class_s_next_allocation_once_it_holds_no_wholly_free_unit() {
         let instance = crate::tests::validation::instance(&[]);
@@ -753,48 +755,71 @@ mod on_device {
                 (INTERNALS + 2, len, len),
                 "{name}: the internals and the first allocations"
             );
-            let small = (device.take_block(MemoryClass::Shared, 1))
-                .unwrap_or_else(|error| panic!("{name}: a small block: {error}"));
-            // The block-maker thread makes the next unit. The wait is bounded and asserts
-            // nothing, so a rule that makes none fails at the whole take below, which then
-            // allocates on this thread.
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !core.pool.stocked(MemoryClass::Shared) && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(1));
+            // Each class's take site, whose allocations and takes landed ahead count apart.
+            let site = |metrics: &Metrics, class: MemoryClass| match class {
+                MemoryClass::Shared => metrics.shared_take_allocations,
+                MemoryClass::Private => metrics.private_take_allocations,
+            };
+            let mut held = Vec::new();
+            for (at, class) in [MemoryClass::Shared, MemoryClass::Private]
+                .into_iter()
+                .enumerate()
+            {
+                let start = counters.metrics();
+                let small = (device.take_block(class, 1))
+                    .unwrap_or_else(|error| panic!("{name}: a small {class:?} block: {error}"));
+                // The class's first allocation, made in the device's making, is not one the
+                // block-maker thread made ahead while the class held no wholly free unit.
+                assert_eq!(
+                    site(&counters.metrics(), class),
+                    site(&start, class),
+                    "{name}: the small {class:?} take landed in the class's first allocation"
+                );
+                // The block-maker thread makes the next unit. The wait is bounded and asserts
+                // nothing, so a rule that makes none fails at the whole take below, which then
+                // allocates on this thread.
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !core.pool.stocked(class) && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                let ahead = counters.metrics();
+                let whole = (device.take_block(class, len))
+                    .unwrap_or_else(|error| panic!("{name}: a {class:?} block of 16 MiB: {error}"));
+                let taken = counters.metrics();
+                let (was, now) = (site(&ahead, class), site(&taken, class));
+                assert_eq!(
+                    (
+                        taken.consumer_allocations - ahead.consumer_allocations,
+                        now.count - was.count,
+                        now.takes_ahead - was.takes_ahead,
+                        now.takes_ahead_bytes - was.takes_ahead_bytes,
+                    ),
+                    (0, 0, 1, len),
+                    "{name}: the 16 MiB {class:?} take did not land in the unit made ahead, \
+                     {} allocations made ahead after the small take",
+                    ahead.blocks_made - start.blocks_made
+                );
+                assert_eq!(whole.offset, 0, "{name}: a wholly free {class:?} unit");
+                let next = made + 2 * (at as u64 + 1);
+                wait_until("the class's next allocation", || {
+                    counters.metrics().blocks_made == next && core.pool.stocked(class)
+                });
+                held.push((small, whole));
             }
-            let ahead = counters.metrics();
-            let whole = (device.take_block(MemoryClass::Shared, len))
-                .unwrap_or_else(|error| panic!("{name}: a block of 16 MiB: {error}"));
-            let taken = counters.metrics();
-            let site = |metrics: &Metrics| metrics.take_allocations.count;
-            assert_eq!(
-                (
-                    taken.consumer_allocations - ahead.consumer_allocations,
-                    site(&taken) - site(&ahead)
-                ),
-                (0, 0),
-                "{name}: the 16 MiB take allocated on this thread, {} allocations made ahead \
-                 after the small take",
-                ahead.blocks_made - made
-            );
-            assert_eq!(whole.offset, 0, "{name}: a wholly free unit");
-            wait_until("the next Shared allocation", || {
-                counters.metrics().blocks_made == made + 2 && core.pool.stocked(MemoryClass::Shared)
-            });
             let metrics = counters.metrics();
             assert_eq!(
                 (
                     metrics.block_bytes_made - before.block_bytes_made,
                     metrics.consumer_allocations
                 ),
-                (2 * len, before.consumer_allocations),
-                "{name}: two allocations of 16 MiB, both off this thread"
+                (4 * len, before.consumer_allocations),
+                "{name}: two allocations of 16 MiB a class, all off this thread"
             );
             assert!(
                 metrics.maker_allocation_nanos > before.maker_allocation_nanos,
                 "{name}: the block-maker thread's allocation time"
             );
-            drop((small, whole));
+            drop(held);
             drop(device);
             assert_eq!(
                 counters.gauges(),

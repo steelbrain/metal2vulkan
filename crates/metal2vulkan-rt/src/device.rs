@@ -910,7 +910,7 @@ impl Device {
         if core.closed() {
             return Err(Error::Quiesced);
         }
-        let memory = core.take_memory(class, len, Site::Take)?;
+        let memory = core.take_memory(class, len, Site::take(class))?;
         let info = memory.info();
         let block = memory::Block::new(memory, Arc::clone(core));
         Ok(Block::claim(core, info, block))

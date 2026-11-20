@@ -2438,6 +2438,7 @@ field	metal2vulkan-rt::Metrics.pipeline_cache_lock_waits	pub pipeline_cache_lock
 field	metal2vulkan-rt::Metrics.pipeline_cache_looks_skipped	pub pipeline_cache_looks_skipped: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.private_long_reuses	pub private_long_reuses: u64
+field	metal2vulkan-rt::Metrics.private_take_allocations	pub private_take_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.push_bytes	pub push_bytes: u64
 field	metal2vulkan-rt::Metrics.pushes	pub pushes: u64
 field	metal2vulkan-rt::Metrics.pushes_held	pub pushes_held: u64
@@ -2446,6 +2447,7 @@ field	metal2vulkan-rt::Metrics.ring_block_allocations	pub ring_block_allocations
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.sampler_element_writes	pub sampler_element_writes: u64
 field	metal2vulkan-rt::Metrics.shared_long_reuses	pub shared_long_reuses: u64
+field	metal2vulkan-rt::Metrics.shared_take_allocations	pub shared_take_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.sparse_binds	pub sparse_binds: u64
 field	metal2vulkan-rt::Metrics.staging_buffer_allocations	pub staging_buffer_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.staging_region_allocations	pub staging_region_allocations: SiteAllocations
@@ -2461,7 +2463,6 @@ field	metal2vulkan-rt::Metrics.surface_waits	pub surface_waits: u64
 field	metal2vulkan-rt::Metrics.surfaces_copied	pub surfaces_copied: u64
 field	metal2vulkan-rt::Metrics.surfaces_in_place	pub surfaces_in_place: u64
 field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64
-field	metal2vulkan-rt::Metrics.take_allocations	pub take_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.take_lock_waits	pub take_lock_waits: Timed
 field	metal2vulkan-rt::Metrics.take_makes	pub take_makes: Timed
 field	metal2vulkan-rt::Metrics.take_maps	pub take_maps: Timed
@@ -2577,7 +2578,10 @@ field	metal2vulkan-rt::ScissorRect.x	pub x: u64
 field	metal2vulkan-rt::ScissorRect.y	pub y: u64
 field	metal2vulkan-rt::SiteAllocations.bytes	pub bytes: u64
 field	metal2vulkan-rt::SiteAllocations.count	pub count: u64
+field	metal2vulkan-rt::SiteAllocations.longest_bytes	pub longest_bytes: u64
 field	metal2vulkan-rt::SiteAllocations.longest_nanos	pub longest_nanos: u64
+field	metal2vulkan-rt::SiteAllocations.takes_ahead	pub takes_ahead: u64
+field	metal2vulkan-rt::SiteAllocations.takes_ahead_bytes	pub takes_ahead_bytes: u64
 field	metal2vulkan-rt::SizeAndAlign.align	pub align: u64
 field	metal2vulkan-rt::SizeAndAlign.size	pub size: u64
 field	metal2vulkan-rt::StencilDescriptor.depth_failure_operation	pub depth_failure_operation: StencilOperation

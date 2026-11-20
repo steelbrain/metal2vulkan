@@ -18,7 +18,7 @@ mod on_device {
     use std::sync::atomic::Ordering::Relaxed;
 
     /// Each site's counter in `metrics`, by name.
-    fn sites(metrics: &Metrics) -> [(&'static str, SiteAllocations); 7] {
+    fn sites(metrics: &Metrics) -> [(&'static str, SiteAllocations); 8] {
         [
             ("texture", metrics.texture_allocations),
             ("texture block", metrics.texture_block_allocations),
@@ -26,12 +26,14 @@ mod on_device {
             ("staging region", metrics.staging_region_allocations),
             ("staging buffer", metrics.staging_buffer_allocations),
             ("zero source", metrics.zero_source_allocations),
-            ("take", metrics.take_allocations),
+            ("shared take", metrics.shared_take_allocations),
+            ("private take", metrics.private_take_allocations),
         ]
     }
 
-    /// The sites whose counters moved from `before` to `after`, each with the calls and bytes it
-    /// added and its longest call after; a longest call never falls.
+    /// The sites whose allocations moved from `before` to `after`, each with the calls and bytes
+    /// it added and its longest call after; a longest call never falls. A take that landed in a
+    /// unit made ahead allocated nothing, so it moves no site here.
     fn moved(before: &Metrics, after: &Metrics) -> Vec<(&'static str, u64, u64, u64)> {
         (sites(before).into_iter())
             .zip(sites(after))
@@ -41,7 +43,10 @@ mod on_device {
                     "{name}: a longest call fell"
                 );
             })
-            .filter(|((_, was), (_, now))| was != now)
+            .filter(|((_, was), (_, now))| {
+                (was.count, was.bytes, was.longest_nanos)
+                    != (now.count, now.bytes, now.longest_nanos)
+            })
             .map(|((name, was), (_, now))| {
                 (
                     name,
@@ -253,13 +258,19 @@ mod on_device {
 
         // A take longer than any free range allocates; a short one fits a free range.
         let mut taken = Vec::new();
-        step(name, device, "a 64 MiB take", &[("take", 64 * MIB)], || {
-            taken.push(
-                device
-                    .take_block(MemoryClass::Shared, 64 * MIB)
-                    .expect("a take"),
-            );
-        });
+        step(
+            name,
+            device,
+            "a 64 MiB take",
+            &[("shared take", 64 * MIB)],
+            || {
+                taken.push(
+                    device
+                        .take_block(MemoryClass::Shared, 64 * MIB)
+                        .expect("a take"),
+                );
+            },
+        );
         step(name, device, "a 4 KiB take", &[], || {
             taken.push(
                 device

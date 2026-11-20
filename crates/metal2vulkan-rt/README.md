@@ -204,12 +204,15 @@ in its memory.
   pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared allocation made beside it.
   `Metrics::consumer_allocation_nanos` and `consumer_allocation_max_nanos` count the time of
   allocations made on the consumer's threads, and `maker_allocation_nanos` those of the
-  block-maker thread. Seven of the consumer's sites are
-  counted apart, each as a `SiteAllocations` (calls, bytes and the longest call):
+  block-maker thread. Eight of the consumer's sites are
+  counted apart, each as a `SiteAllocations` (calls, bytes, the longest call and its bytes):
   `texture_allocations` (a texture's allocation of its own), `texture_block_allocations`,
   `ring_block_allocations`, `staging_region_allocations`, `staging_buffer_allocations` (a copy
-  larger than the staging region), `zero_source_allocations` and `take_allocations` (a take that
-  no free range fits). A take's parts are timed apart, each as a `Timed` (calls, bytes, total
+  larger than the staging region), `zero_source_allocations`, and `shared_take_allocations` and
+  `private_take_allocations` (a take of each class that no free range fits). At the three sites
+  of takes from the pool, `SiteAllocations::takes_ahead` and `takes_ahead_bytes` count the takes
+  that landed instead in a unit the block-maker thread made ahead, each the first to land in it:
+  takes that would otherwise have allocated there. A take's parts are timed apart, each as a `Timed` (calls, bytes, total
   and longest time, the longest call's bytes and whether it made an allocation of its own, and
   the calls over 1, 5 and 20 ms): `Metrics::takes` (each take whole, a
   texture block's among them), `take_lock_waits` (its wait for the pool's lock), `take_makes`

@@ -496,6 +496,10 @@ struct Allocation {
     /// one it was made for, until it is idle again
     /// ([`Gauges::shared_long_reused_bytes`](crate::Gauges::shared_long_reused_bytes)).
     reused: bool,
+    /// Made by the block-maker thread while its class held no wholly free unit ([`run`]), and no
+    /// take has landed in it yet: the first take that does is counted at its site
+    /// ([`SiteAllocations::takes_ahead`](crate::SiteAllocations::takes_ahead)).
+    ahead: bool,
 }
 
 impl Allocation {
@@ -857,7 +861,10 @@ impl Pool {
         if state.stop {
             return Err(Error::Quiesced);
         }
-        if let Some((carve, idle_since, long)) = state.fit(class, len, align) {
+        if let Some((carve, idle_since, long, ahead)) = state.fit(class, len, align) {
+            if ahead {
+                self.counters.site_take_ahead(site, len);
+            }
             if let Some(since) = idle_since {
                 (self.counters).reused_idle(crate::host_time().saturating_sub(since));
             }
@@ -1137,13 +1144,14 @@ impl State {
     /// Reserves `len` bytes at a multiple of `align` in the class's allocations that serve a take
     /// of `len` ([`Allocation::serves`]), counting a block live there: the first such free range,
     /// in the order the allocations were made. With the range, when the allocation became idle
-    /// where it was, and whether it is a long allocation.
+    /// where it was, whether it is a long allocation, and whether it is the first take to land
+    /// in a unit the block-maker thread made ahead ([`Allocation::ahead`]).
     fn fit(
         &mut self,
         class: MemoryClass,
         len: u64,
         align: u64,
-    ) -> Option<(Carve, Option<u64>, bool)> {
+    ) -> Option<(Carve, Option<u64>, bool, bool)> {
         let (allocation, base) = (self.allocations[class.index()].iter_mut())
             .filter(|allocation| allocation.serves(len))
             .find_map(|allocation| {
@@ -1156,7 +1164,9 @@ impl State {
         if long {
             allocation.reused = true;
         }
-        Some((allocation.carve(base), idle_since, long))
+        let ahead = allocation.ahead;
+        allocation.ahead = false;
+        Some((allocation.carve(base), idle_since, long, ahead))
     }
 
     /// The class's idle allocations the idle rule weighs, as when each became idle and its memory,
@@ -1355,7 +1365,10 @@ pub(crate) fn run(core: Arc<Core>) {
             state = pool.lock();
             match made {
                 // Idle from now: the reserve, which the idle rule does not weigh.
-                Some(allocation) => state.allocations[class.index()].push(allocation),
+                Some(mut allocation) => {
+                    allocation.ahead = true;
+                    state.allocations[class.index()].push(allocation);
+                }
                 None => state.failed[class.index()] = true,
             }
             pool.settle(&mut state, class);
@@ -1561,6 +1574,7 @@ fn make_allocation(
         idle_since: crate::host_time(),
         retiring: false,
         reused: false,
+        ahead: false,
     };
     core.counters.count(Metric::BlocksMade);
     core.counters.allocated(len);

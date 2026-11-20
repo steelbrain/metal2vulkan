@@ -72,7 +72,8 @@ pub(crate) enum FirstUse {
 }
 
 /// A [`Part`]'s longest call: its nanoseconds, its bytes, and whether it made an allocation of
-/// its own ([`Timed::longest_made`]).
+/// its own ([`Timed::longest_made`]); a [`Site`]'s longest allocation, its nanoseconds and bytes
+/// ([`SiteAllocations::longest_bytes`]).
 #[derive(Clone, Copy, Default)]
 struct Longest {
     nanos: u64,
@@ -321,12 +322,24 @@ pub(crate) enum Site {
     StagingBuffer,
     /// [`Metrics::zero_source_allocations`].
     ZeroSource,
-    /// [`Metrics::take_allocations`].
-    Take,
+    /// [`Metrics::shared_take_allocations`].
+    SharedTake,
+    /// [`Metrics::private_take_allocations`].
+    PrivateTake,
+}
+
+impl Site {
+    /// The site of the consumer's takes of `class` ([`Device::take_block`](crate::Device::take_block)).
+    pub(crate) fn take(class: crate::MemoryClass) -> Site {
+        match class {
+            crate::MemoryClass::Shared => Site::SharedTake,
+            crate::MemoryClass::Private => Site::PrivateTake,
+        }
+    }
 }
 
 /// The number of [`Site`]s.
-const SITES: usize = Site::Take as usize + 1;
+const SITES: usize = Site::PrivateTake as usize + 1;
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
 ///
@@ -370,8 +383,10 @@ struct Atomics {
     consumer_allocation_max_nanos: AtomicU64,
     maker_allocation_nanos: AtomicU64,
     /// Each [`Site`]'s allocations, at its index: their count, their bytes and the longest's
-    /// nanoseconds.
-    sites: [[AtomicU64; 3]; SITES],
+    /// nanoseconds; then its takes that landed in an allocation made ahead, their count and bytes.
+    sites: [[AtomicU64; 5]; SITES],
+    /// Each [`Site`]'s longest allocation, at its index, set whole by the call that passes it.
+    site_longest: [Mutex<Longest>; SITES],
     maker_waits: AtomicU64,
     maker_wait_max_nanos: AtomicU64,
     dispatches_without_effects: AtomicU64,
@@ -735,10 +750,30 @@ impl Counters {
     /// A `vkAllocateMemory` of `bytes` that took `nanos` nanoseconds at `site`, on a thread of the
     /// consumer's ([`Metrics::texture_allocations`] and the other sites').
     pub(crate) fn site_allocation(&self, site: Site, bytes: u64, nanos: u64) {
-        let [count, total, longest] = &self.atomics.sites[site as usize];
+        let [count, total, longest, ..] = &self.atomics.sites[site as usize];
         count.fetch_add(1, Relaxed);
         total.fetch_add(bytes, Relaxed);
-        longest.fetch_max(nanos, Relaxed);
+        // As a part's longest call ([`Counters::timed`]): only a call past the longest so far
+        // takes the lock.
+        if nanos > longest.fetch_max(nanos, Relaxed) {
+            let record = &self.atomics.site_longest[site as usize];
+            let mut record = record.lock().unwrap_or_else(PoisonError::into_inner);
+            if nanos > record.nanos {
+                *record = Longest {
+                    nanos,
+                    bytes,
+                    made: true,
+                };
+            }
+        }
+    }
+
+    /// A take of `bytes` at `site` that landed in an allocation the block-maker thread made ahead
+    /// of need, the first take to land in it ([`SiteAllocations::takes_ahead`]).
+    pub(crate) fn site_take_ahead(&self, site: Site, bytes: u64) {
+        let [.., ahead, ahead_bytes] = &self.atomics.sites[site as usize];
+        ahead.fetch_add(1, Relaxed);
+        ahead_bytes.fetch_add(bytes, Relaxed);
     }
 
     /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
@@ -962,11 +997,16 @@ impl Counters {
     pub fn metrics(&self) -> Metrics {
         let a = &self.atomics;
         let site = |site: Site| {
-            let [count, bytes, longest] = &a.sites[site as usize];
+            let [count, bytes, longest, ahead, ahead_bytes] = &a.sites[site as usize];
+            let record =
+                *(a.site_longest[site as usize].lock()).unwrap_or_else(PoisonError::into_inner);
             SiteAllocations {
                 count: count.load(Relaxed),
                 bytes: bytes.load(Relaxed),
                 longest_nanos: longest.load(Relaxed),
+                longest_bytes: record.bytes,
+                takes_ahead: ahead.load(Relaxed),
+                takes_ahead_bytes: ahead_bytes.load(Relaxed),
             }
         };
         let first_use =
@@ -1030,7 +1070,8 @@ impl Counters {
             staging_region_allocations: site(Site::StagingRegion),
             staging_buffer_allocations: site(Site::StagingBuffer),
             zero_source_allocations: site(Site::ZeroSource),
-            take_allocations: site(Site::Take),
+            shared_take_allocations: site(Site::SharedTake),
+            private_take_allocations: site(Site::PrivateTake),
             maker_waits: a.maker_waits.load(Relaxed),
             maker_wait_max_nanos: a.maker_wait_max_nanos.load(Relaxed),
             shared_long_reuses: a.shared_long_reuses.load(Relaxed),
@@ -1304,7 +1345,9 @@ pub struct Metrics {
     pub texture_allocations: SiteAllocations,
     /// Those of texture blocks: a texture's place that no texture block had room for took a
     /// Private block, and no free range of the pool, which the block-maker thread keeps a wholly
-    /// free 16 MiB unit of ahead per class, fit it, so the take allocated.
+    /// free 16 MiB unit of ahead per class, fit it, so the take allocated. Its
+    /// [`takes_ahead`](SiteAllocations::takes_ahead) are the texture blocks that landed in such a
+    /// unit instead.
     pub texture_block_allocations: SiteAllocations,
     /// Those of the parameter ring's 2 MiB blocks: a write into the ring that found no chunk free
     /// where the block-maker thread, which makes each block ahead of need, made none (its make
@@ -1321,10 +1364,15 @@ pub struct Metrics {
     /// textures copy from, which the block-maker thread makes as its first work: made by the
     /// first such fill or texture only where that make failed.
     pub zero_source_allocations: SiteAllocations,
-    /// Those of takes from the pool that no free range fit: the consumer's
-    /// ([`Device::take_block`](crate::Device::take_block)). Texture blocks' are
+    /// Those of the consumer's takes of Shared blocks
+    /// ([`Device::take_block`](crate::Device::take_block)) that no free range fit; its
+    /// [`takes_ahead`](SiteAllocations::takes_ahead) are those that landed in a unit the
+    /// block-maker thread made ahead instead.
+    pub shared_take_allocations: SiteAllocations,
+    /// As [`shared_take_allocations`](Self::shared_take_allocations), of the consumer's takes of
+    /// Private blocks. Texture blocks' are
     /// [`texture_block_allocations`](Self::texture_block_allocations).
-    pub take_allocations: SiteAllocations,
+    pub private_take_allocations: SiteAllocations,
     /// Calls that waited for the block-maker thread's make of one of the runtime's fixed-size
     /// internals they need, which it makes off every caller's thread: the zero source, a
     /// parameter ring block or the staging region (the sites above). Such a
@@ -1561,7 +1609,9 @@ pub struct Metrics {
     /// Allocations a take made for itself on the consumer's thread, where no free range fit it:
     /// `vkCreateBuffer`, `vkAllocateMemory`, `vkBindBufferMemory`, the buffer's address and, for a
     /// Shared one, `vkMapMemory`, together; their bytes the allocations'. The `vkAllocateMemory`
-    /// calls alone are [`take_allocations`](Self::take_allocations).
+    /// calls alone are [`shared_take_allocations`](Self::shared_take_allocations),
+    /// [`private_take_allocations`](Self::private_take_allocations) and
+    /// [`texture_block_allocations`](Self::texture_block_allocations).
     pub take_makes: Timed,
     /// The consumer's [`BlockMappings::map`](crate::BlockMappings::map) of those allocations, on
     /// the take's thread; their bytes the allocations'.
@@ -1633,7 +1683,8 @@ pub struct Timed {
 /// No Metal counterpart: the `vkAllocateMemory` calls one site of the runtime made on the
 /// consumer's threads, inside its calls ([`Metrics::texture_allocations`] and the other
 /// sites'): each call, whether it succeeded or not, timed alone with
-/// [`host_time`](crate::host_time).
+/// [`host_time`](crate::host_time). At a site of takes from the pool, also the takes that memory
+/// made ahead of need served instead ([`takes_ahead`](Self::takes_ahead)).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SiteAllocations {
@@ -1644,6 +1695,19 @@ pub struct SiteAllocations {
     /// The longest call, in nanoseconds; a maximum since the device was made, so the difference
     /// of two reads does not apply to it.
     pub longest_nanos: u64,
+    /// The bytes the longest call asked for; with [`longest_nanos`](Self::longest_nanos), from
+    /// the same call.
+    pub longest_bytes: u64,
+    /// At a site of takes from the pool ([`Metrics::shared_take_allocations`],
+    /// [`Metrics::private_take_allocations`], [`Metrics::texture_block_allocations`]): the takes
+    /// that landed in an allocation the block-maker thread made ahead of need while the class
+    /// held no wholly free unit, each the first take to land in it, so that no allocation made
+    /// before it had room for the take. Each is a take that would otherwise have allocated at
+    /// the site, on the consumer's thread. A take landing in a class's first allocation, made in
+    /// the device's making, is not among them. 0 at the other sites.
+    pub takes_ahead: u64,
+    /// Those takes' bytes, each the block's length.
+    pub takes_ahead_bytes: u64,
 }
 
 /// A thread's slot in [`Gauges::threads`], given back as it drops.
