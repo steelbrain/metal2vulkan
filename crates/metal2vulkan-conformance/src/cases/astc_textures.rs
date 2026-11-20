@@ -80,7 +80,7 @@
 //! Metal's own 8-bit codes, which their slots read through the twin's sRGB view, the device's own
 //! decode (`srgb-texel-decode`, a native note that loosens no value), so they name **no tolerance
 //! at all**: through Metal's own texture unit they are exact, and a value another device's decode
-//! moves is a `known-gaps.tsv` row of its venue. An `_HDR` format names none: its twin holds
+//! moves is a `known-gaps-rt.tsv` row of its venue. An `_HDR` format names none: its twin holds
 //! Metal's halves exactly.
 //!
 //! Nothing here can fault a GPU: one compute pass a read, one read-only texture, one buffer, one

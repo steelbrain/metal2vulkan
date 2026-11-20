@@ -1107,10 +1107,10 @@ fn the_lockstep_cases_declare_the_reconvergence_note() {
 fn a_declared_notice_does_not_excuse_an_undeclared_one() {
     let declared = Degradation::GradFromBias;
     // Neither is one of the device's native answers, which the suite declares for every case
-    // ([`crate::replay::NATIVE_NOTES`]).
+    // ([`crate::replay::NATIVE_NOTES`]). In code order, the order the rows come in.
     let undeclared = [
-        Degradation::PixelSamplerScaling,
         Degradation::BicubicFilterArithmetic,
+        Degradation::PixelSamplerScaling,
     ];
     let bytes = words(&[1, 2]);
     let case = WordsCase {
@@ -1274,7 +1274,7 @@ fn the_native_notes_hold_every_native_kind_once() {
 /// No case names a native note, at the notices site or at a value. The suite declares each one
 /// for every case, so a case's own declaration states the suite's rule a second time; and a value
 /// loosened by one is a tolerance the note's own documentation says validation derives from none.
-/// A value the device's native answer moves is a `known-gaps.tsv` row instead, scoped to the
+/// A value the device's native answer moves is a `known-gaps-rt.tsv` row instead, scoped to the
 /// venue whose device answers so.
 #[test]
 fn no_case_names_a_native_note() {
@@ -5241,13 +5241,13 @@ fn every_cases_inputs_are_the_ones_its_recording_was_taken_from() {
 /// bitcode `llvm-as` assembles from one.
 ///
 /// `llvm-as`'s output is a function of the text *and the assembler's release*: the same
-/// `fixtures/public/fragment_constant_color.ll` assembles to `1a4cc972040870f8` under Homebrew
-/// LLVM 23.1.4 and to `38d752a345c98db2` under 23.1.1. So a fingerprint holding those bytes can
-/// only match on the host that assembled them, and nine cases of the archive and dynamic-library
+/// `fixtures/public/fragment_constant_color.ll` assembles to `1a4cc972040870f8` under Homebrew LLVM
+/// 23.1.4 and to `38d752a345c98db2` under 23.1.1. So a fingerprint holding those bytes can only
+/// match on the host that assembled them, and nine cases of the archive and dynamic-library
 /// families read `unrecorded: the inputs this run fed are not the recording's: air differs` on
 /// every other host. The sharper cost is the one that made this a test: a case that never compared
-/// holds no verdict, so a `--check` run off the recording host reported two `known-gaps.tsv` rows
-/// as looking fixed and would have retired live ledger rows.
+/// holds no verdict, so a `--check` run off the recording host reported two `known-gaps-rt.tsv`
+/// rows as looking fixed and would have retired live ledger rows.
 ///
 /// [`crate::recording::ShaderRef`] already states the rule for a recording's own shader digests --
 /// the text is what the tree commits and what every host reads alike. This holds the **input**

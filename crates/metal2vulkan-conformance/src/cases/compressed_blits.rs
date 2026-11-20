@@ -625,9 +625,8 @@ impl Case for CompressedBlits {
         // uncompressed texture keeps its bytes through every blit, so each site a blit reaches
         // through the texture the recording's Mac compressed holds the bytes the device's copy
         // kept ([`COMPRESSED_SITES`]), where the recording holds the compressor's canonical
-        // encoding, and the runtime announces no note for it and, under the suite's exact policy,
-        // rewrites no `BGRA10_XR` texel. Every format's: the RTX 5080's run differs at exactly
-        // these seven sites for each.
+        // encoding, and the runtime announces no note for it. Every format's: the RTX 5080's run
+        // differs at exactly these seven sites for each.
         allowances.extend(
             COMPRESSED_SITES
                 .iter()

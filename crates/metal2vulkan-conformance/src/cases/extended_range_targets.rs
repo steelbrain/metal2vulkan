@@ -1015,11 +1015,11 @@ impl Case for ClearRoutes {
 
     fn allowances(&self) -> Vec<Allowance> {
         // On a venue that presents no texture compression the blit that reads `plain-16` back,
-        // through the texture the recording's Mac compressed, keeps the device's encoding where
-        // the recording holds the compressor's canonical one, and the runtime rewrites none
-        // under the suite's exact policy (`compressed_blits`'s declaration says why). Measured on
-        // the RTX 5080 Laptop: `case/plain-16/texels/*` alone differ against the recording with
-        // the key and matched before it.
+        // through the texture the recording's Mac compressed, keeps the device's encoding where the
+        // recording holds the compressor's canonical one, and the runtime announces no note for it
+        // (`compressed_blits`'s declaration says why). Measured on the RTX 5080 Laptop:
+        // `case/plain-16/texels/*` alone differ against the recording with the key and matched
+        // before it.
         vec![crate::replay::without_compression("plain-16")]
     }
 

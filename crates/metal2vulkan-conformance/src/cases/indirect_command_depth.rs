@@ -52,7 +52,7 @@
 //! row here whose answer is a **refusal of ours**: plain Metal keeps such a binding for its own
 //! getters (measured on an M3 Max) where we raise `Invalid`. That row **executes nothing**, so no
 //! over-long binding ever reaches a GPU, and the gap it holds visible is listed in
-//! `known-gaps.tsv`.
+//! `known-gaps-rt.tsv`.
 
 use crate::allowance::Allowance;
 use crate::case::STAGE_VERTEX;

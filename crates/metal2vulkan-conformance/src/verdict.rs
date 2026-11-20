@@ -183,9 +183,9 @@ impl std::fmt::Display for Verdict {
             Verdict::Divergent { found, refused } => {
                 out.write_str("divergent")?;
                 for divergence in found {
-                    // The summary first, which is the line a `known-gaps.tsv` row's answer holds,
-                    // then where to start looking. The position is a line of its own precisely so
-                    // that it is not part of the row's identity.
+                    // The summary first, which is the line a `known-gaps-rt.tsv` row's answer
+                    // holds, then where to start looking. The position is a line of its own
+                    // precisely so that it is not part of the row's identity.
                     write!(out, "\n  {divergence}")?;
                     if let Some(detail) = divergence.kind.detail() {
                         write!(out, "\n    {detail}")?;

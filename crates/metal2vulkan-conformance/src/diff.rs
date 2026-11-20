@@ -8,7 +8,7 @@
 //!
 //! # Why the summary leads and the position follows
 //!
-//! That first line is what a `known-gaps.tsv` row's `answer` field holds, so it has to be both
+//! That first line is what a `known-gaps-rt.tsv` row's `answer` field holds, so it has to be both
 //! honest and **stable**.
 //!
 //! Honest: a bound read off the first mismatch is not a bound. Of twelve rotated-target
@@ -211,7 +211,7 @@ impl DivergenceKind {
     /// Where the first differing leaf sits, for a reader who wants somewhere to start.
     ///
     /// Kept out of [`Display`](std::fmt::Display) on purpose: a walk position is not a property of
-    /// the bug, and the printed line is what a `known-gaps.tsv` row's `answer` field holds, so a
+    /// the bug, and the printed line is what a `known-gaps-rt.tsv` row's `answer` field holds, so a
     /// position in it would rename the row whenever an earlier leaf moved. The report prints this
     /// beneath the summary, where it helps and binds nothing.
     pub fn detail(&self) -> Option<String> {

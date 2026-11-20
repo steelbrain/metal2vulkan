@@ -473,8 +473,8 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 /// alone, exactly as a case's own [`notice_allowance`] does, so every value of every case still
 /// compares field by field. A value the device's answer moves is still a divergence at its own
 /// site: where the note says validation derives no tolerance from it, as nearly every one of these
-/// does, the suite loosens no value by it either, and the site is a `known-gaps.tsv` row that says
-/// what differs and whose answer it is.
+/// does, the suite loosens no value by it either, and the site is a `known-gaps-rt.tsv` row that
+/// says what differs and whose answer it is.
 pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
     use crate::degradation::Degradation as D;
     &[

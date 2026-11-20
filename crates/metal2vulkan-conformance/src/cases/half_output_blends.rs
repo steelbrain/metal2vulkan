@@ -87,7 +87,7 @@
 //! pipeline hands it the `half` widened to `float`, and the device's blend is the answer (the
 //! native-arithmetic contract): the sites where it differs from Metal's stay `divergent` rather
 //! than being loosened, because `half-output-fast-math-blend`'s own definition says validation
-//! derives no tolerance from it, and `known-gaps.tsv` carries a row for each, per venue.
+//! derives no tolerance from it, and `known-gaps-rt.tsv` carries a row for each, per venue.
 //!
 //! Nothing here can fault a GPU: single-sampled 16 by 16 targets, one full-screen triangle a pass,
 //! no loop, and every fetch inside its buffer.
@@ -989,7 +989,7 @@ mod tests {
     ///
     /// The M3 Max's own blend under MoltenVK stores the same codes into the 32-bit float formats
     /// at every word of the family; into the 16-bit float formats it blends in `float` and
-    /// converts toward zero, which is the gap `known-gaps.tsv` carries there.
+    /// converts toward zero, which is the gap `known-gaps-rt.tsv` carries there.
     ///
     /// **Only these eight sites are held, because only they were measured.** At two of the
     /// family's other sites (`sas-1msa` into the two formats that hold an alpha channel) Metal's

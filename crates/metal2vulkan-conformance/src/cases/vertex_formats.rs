@@ -134,7 +134,7 @@
 //!   (`tests::the_two_step_functions_recorded_the_same_values`), so the step axis compares no new
 //!   *Metal* value — and that is exactly what makes it load-bearing: an implementation that cannot
 //!   express the fetch in fixed-function vertex input must decode it in the shader, and the two
-//!   decodes have to agree. `known-gaps.tsv` holds five rows where ours does not.
+//!   decodes have to agree. `known-gaps-rt.tsv` holds five rows where ours does not.
 //!
 //! # The device's own bounds
 //!

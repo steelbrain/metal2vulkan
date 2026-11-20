@@ -18,7 +18,7 @@
 //! to 128-bit vectors (`LP_NATIVE_VECTOR_WIDTH=128`, the width arm64 lavapipe runs) they are 4
 //! lanes, one quad, and `counted_dependent`, `counted_store` and `counted_atomic` read 0 in the
 //! first word of each kept texel and nothing else. The note derives no tolerance, so those sites
-//! are `known-gaps.tsv` rows scoped to the width.
+//! are `known-gaps-rt.tsv` rows scoped to the width.
 //!
 //! Thirteen fragment functions, one row each: the shapes the lane measured for where Metal's
 //! compiler places the sum. Record mode runs every one of them on native Metal, so the recording

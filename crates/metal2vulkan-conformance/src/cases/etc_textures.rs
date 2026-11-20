@@ -49,7 +49,7 @@
 //! is the device's sRGB decode of the twin's codes (`srgb-texel-decode`). Both are native notes
 //! the suite declares for every case, and neither loosens a value: through Metal's own texture
 //! unit the answer is Metal's, and elsewhere a texel the device's conversion moves is a
-//! `known-gaps.tsv` row of the venue.
+//! `known-gaps-rt.tsv` row of the venue.
 //!
 //! Nothing here can fault a GPU: one compute pass a read, one read-only texture, one buffer, one
 //! thread a texel inside the texture, no loop and no sampling.

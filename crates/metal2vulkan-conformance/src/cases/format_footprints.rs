@@ -149,7 +149,7 @@
 //! every other one is refused `Unsupported { feature: Format, needs: NotImplemented }`, measured
 //! over every descriptor of every case of this family. A case that recorded a refusal at each site and went on — which is
 //! what `heap_metal_sizes` does, because the runtime answers all of its descriptors — would print
-//! some 2900 `Refused` rows and need a `known-gaps.tsv` row for each, which is a ledger nobody
+//! some 2900 `Refused` rows and need a `known-gaps-rt.tsv` row for each, which is a ledger nobody
 //! reads and therefore no ledger. So each case stops at the first site it is refused, and the
 //! family's refusal rows stand for the gap: the full list is in the orchestrator's
 //! todos, where work belongs, and the recordings hold Metal's answer for every one, which is what

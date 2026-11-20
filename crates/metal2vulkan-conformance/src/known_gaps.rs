@@ -422,15 +422,15 @@ impl std::fmt::Display for Expectation {
             } => write!(
                 out,
                 "{case} on {venue} is {expects} at {site} and the known-gaps ledger does not list \
-                 it: {answer}\n  a new gap. Fix it, or add a row to known-gaps.tsv naming the gap \
-                 it waits on"
+                 it: {answer}\n  a new gap. Fix it, or add a row to known-gaps-rt.tsv naming the \
+                 gap it waits on"
             ),
             Expectation::NoLongerHeld { gap, venue } => write!(
                 out,
                 "{} on {venue} no longer {} {}, and the known-gaps ledger still lists it\n  the \
-                 gap looks fixed: drop the row from known-gaps.tsv, or scope its venue field if it \
-                 is another venue's. The ledger must not outlive the bug it stands for.\n  the row \
-                 was waiting on: {}",
+                 gap looks fixed: drop the row from known-gaps-rt.tsv, or scope its venue field if \
+                 it is another venue's. The ledger must not outlive the bug it stands for.\n  the \
+                 row was waiting on: {}",
                 gap.case,
                 gap.expects.verb(),
                 gap.site,
@@ -493,33 +493,33 @@ pub fn parse(text: &str) -> Result<Vec<KnownGap>, String> {
         let fields: Vec<&str> = line.split('\t').collect();
         let [case, venue, expects, site, answer, waiting_on] = fields.as_slice() else {
             return Err(format!(
-                "known-gaps.tsv line {at}: {} tab-separated fields, and a row has six: the case, \
-                 the venue ({EVERY_VENUE} for every venue), the verdict it expects (refused or \
-                 divergent), the site, our answer there and the gap it waits on",
+                "known-gaps-rt.tsv line {at}: {} tab-separated fields, and a row has six: the \
+                 case, the venue ({EVERY_VENUE} for every venue), the verdict it expects \
+                 (refused or divergent), the site, our answer there and the gap it waits on",
                 fields.len()
             ));
         };
         let Some(expects) = Expects::of(expects.trim()) else {
             return Err(format!(
-                "known-gaps.tsv line {at}: {case} expects {expects:?}, and a row expects either \
+                "known-gaps-rt.tsv line {at}: {case} expects {expects:?}, and a row expects either \
                  refused — a call plain Metal answered and we did not — or divergent, a field that \
                  differs with nothing announced to justify it"
             ));
         };
         if venue.trim().is_empty() {
             return Err(format!(
-                "known-gaps.tsv line {at}: {case} names no venue. A row that holds everywhere says \
-                 so with {EVERY_VENUE}, because an empty field reads as a row nobody scoped"
+                "known-gaps-rt.tsv line {at}: {case} names no venue. A row that holds everywhere \
+                 says so with {EVERY_VENUE}, because an empty field reads as a row nobody scoped"
             ));
         }
         if waiting_on.trim().is_empty() {
             return Err(format!(
-                "known-gaps.tsv line {at}: {case} names no gap. A row is an open bug, so it says \
-                 what Metal does, what we do instead, and where the fix belongs"
+                "known-gaps-rt.tsv line {at}: {case} names no gap. A row is an open bug, so it \
+                 says what Metal does, what we do instead, and where the fix belongs"
             ));
         }
         Reason::of(waiting_on.trim())
-            .map_err(|why| format!("known-gaps.tsv line {at}: {case}: {why}"))?;
+            .map_err(|why| format!("known-gaps-rt.tsv line {at}: {case}: {why}"))?;
         rows.push(KnownGap {
             case: case.trim().to_owned(),
             venue: venue.trim().to_owned(),

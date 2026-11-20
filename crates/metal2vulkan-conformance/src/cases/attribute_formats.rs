@@ -76,8 +76,8 @@
 //!   the decoding of those sixteen is already compared exactly on the vertex path
 //!   (`vertex-format-float4`) and `tests::the_stage_in_decode_is_the_vertex_decode` holds Metal's
 //!   two fetches to one answer, so what is unknown of the stage-in path is the pipeline alone.
-//!   Asking no more also means one refused format costs one row of `known-gaps.tsv` rather than one
-//!   per leaf of a dispatch that never ran.
+//!   Asking no more also means one refused format costs one row of `known-gaps-rt.tsv` rather than
+//!   one per leaf of a dispatch that never ran.
 //!
 //! # What is not reached here, and why
 //!

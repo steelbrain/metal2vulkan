@@ -124,8 +124,8 @@ const fn part(name: &'static str, format: u32) -> Row {
 /// The rows: the stencil aspect at both sample counts and over a region inside the texture, and
 /// the 16-bit depth aspect at both sample counts.
 ///
-/// The two `Depth16Unorm` rows are **open gaps of ours**, each with a `known-gaps.tsv` row: Metal
-/// copies the buffer into the 16-bit aspect and back, and we refuse the copy in
+/// The two `Depth16Unorm` rows are **open gaps of ours**, each with a `known-gaps-rt.tsv` row:
+/// Metal copies the buffer into the 16-bit aspect and back, and we refuse the copy in
 /// (`RuntimeGap::MultisampledBufferCopy`, on a device without `maintenance8` or carrying the
 /// measured copy defect). A refusal of something plain Metal does is a bug of ours by the owner's
 /// standing rule, so the rows stay here and stay red in the ledger's own way: the run prints them

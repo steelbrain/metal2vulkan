@@ -23,7 +23,7 @@
 //!
 //! Every result compares exactly. The linear cases declare one notice of the runtime's: an
 //! extended-range texture's linear filter blends its decoded taps in the device's arithmetic
-//! (`bicubic-filter-arithmetic`), which moves their values (`known-gaps.tsv`). The note follows
+//! (`bicubic-filter-arithmetic`), which moves their values (`known-gaps-rt.tsv`). The note follows
 //! the word of the sampler bound at the runtime slot, so a nearest case announces none.
 //!
 //! Nothing here can fault a GPU: two compute passes a case, one texture, three buffers, no loop.

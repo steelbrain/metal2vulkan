@@ -50,7 +50,7 @@ const EVERY_WORD: &str = "words";
 /// transcendental functions or arithmetic announces it (`device-transcendentals`,
 /// `device-arithmetic`): the device's own answers, which the suite declares for every case
 /// (`crate::replay::NATIVE_NOTES`) and which loosen no word, so both columns compare exactly and a
-/// word the device's maths moves is a `known-gaps.tsv` row of the venue.
+/// word the device's maths moves is a `known-gaps-rt.tsv` row of the venue.
 const TANH_COLUMNS: &[Column] = &[
     Column::exact("fast-float-tanh", 0, 1),
     Column::exact("half-tanh", 1, 1),

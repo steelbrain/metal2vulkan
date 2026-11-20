@@ -426,7 +426,7 @@ pub fn must_hold(verdict: &Verdict) -> Result<(), String> {
 /// The device's native notes ([`crate::replay::NATIVE_NOTES`]) `row`'s own run announced, by code.
 ///
 /// The suite declares them for every case and they loosen no value, so a value the device's
-/// native answer moves is a `known-gaps.tsv` row whose words name the note that records it. That
+/// native answer moves is a `known-gaps-rt.tsv` row whose words name the note that records it. That
 /// row's claim is only as good as the note having fired, and nothing else in the report says so:
 /// a declared note never reads as a difference. Printed under each failing row, it is the
 /// evidence a row needs that the note fired in the case it describes, on the venue it is scoped

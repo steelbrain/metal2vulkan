@@ -108,7 +108,7 @@
 //! upper pixel and Metal the lower. Vulkan's Bresenham diamond is open
 //! (`|p - x| + |q - y| < 0.5`), so a line that only touches a diamond vertex exits no diamond and
 //! neither pixel is required of a conforming driver; the two make opposite choices and no Vulkan
-//! control decides it, which is why the cells' remaining `known-gaps.tsv` rows are the driver's
+//! control decides it, which is why the cells' remaining `known-gaps-rt.tsv` rows are the driver's
 //! own. MoltenVK leaves `strictLines` clear and its lines are Metal's own, which is why no Metal
 //! venue could read this switch either.
 //!

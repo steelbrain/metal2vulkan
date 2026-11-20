@@ -373,7 +373,7 @@ impl Case for ExtendedSwizzles {
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
         // An extended-range or padded 10-bit format's linear sample (`sl`) blends its decoded taps
         // in the device's arithmetic, announced as `bicubic-filter-arithmetic` (the M3 Max, each
-        // of the four extended-range formats); its values move by it (`known-gaps.tsv`).
+        // of the four extended-range formats); its values move by it (`known-gaps-rt.tsv`).
         //
         // Every kernel samples or gathers through the runtime sampler at `[[sampler(0)]]`, which
         // the runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice`

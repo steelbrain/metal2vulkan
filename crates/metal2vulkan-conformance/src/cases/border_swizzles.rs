@@ -297,7 +297,7 @@ impl Case for BorderSwizzles {
         // device's conversion of its codes, which the runtime announces as `device-sampling` and
         // `device-texel-conversion` off Metal's own texture unit: native notes the suite declares
         // for every case, which loosen no word. A word the device's conversion moves is a
-        // `known-gaps.tsv` row of the venue.
+        // `known-gaps-rt.tsv` row of the venue.
         //
         // The fixture's float texture is sampled through the runtime sampler at `[[sampler(0)]]`,
         // which the runtime's pipelines note as scaled

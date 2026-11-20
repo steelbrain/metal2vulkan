@@ -261,7 +261,7 @@ impl TextureRoundTrip {
 /// answering `Ok` against our `Err`, which the comparison reads as
 /// [`Refused`](crate::verdict::Verdict::Refused) — never a pass, and never buried in a count.
 ///
-/// What it costs: our typed error is not in the record, so a `known-gaps.tsv` row for such a
+/// What it costs: our typed error is not in the record, so a `known-gaps-rt.tsv` row for such a
 /// format reads `Err(NotMade)` and cannot tell one refusal of ours from another at the same site.
 /// The reason is one call away in the runtime and the lane keeps it, so the cost is a reader's
 /// convenience rather than a fact nobody holds — and it buys the alternative's absence: an error

@@ -37,7 +37,7 @@
 //! `argument-pixel-sampler-scaling` for `arg`). A device that converts an 8-bit texel to a float
 //! its own way announces `float-sample-filter`.
 //! Each notice is declared at the notices site alone, so a texel that differs still fails the case
-//! where it differs, and is a `known-gaps.tsv` row naming the note.
+//! where it differs, and is a `known-gaps-rt.tsv` row naming the note.
 //!
 //! **Subnormal coordinates.** Four more cases (`pixel-samplers-subnormal-*`, [`subnormals`]) ask
 //! the same four sources of the `RGBA8Unorm` texture, through a nearest filter under each address

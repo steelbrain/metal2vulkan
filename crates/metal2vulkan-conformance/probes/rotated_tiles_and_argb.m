@@ -4,9 +4,8 @@
 //      top-left corner is said to leave the loaded texels mirrored left to right in each 32x32 tile
 //      the draw reaches, and in place in the tiles it does not reach. A 64x16 frame is two tiles
 //      wide, so it separates the two; the 8x4 and 32x32 frames the other probe and the lane use are
-//      one tile and cannot. This is the one place the runtime is said to differ from Metal (it
-//      mirrors every tile, announced as `RotatedLoadTiles`), so the allowance that difference
-//      claims needs Metal's own answer here.
+//      one tile and cannot. A runtime that mirrors every tile differs from Metal only here, so
+//      the comparison needs Metal's own answer.
 //
 //   2. **ARGB8Unorm (format 84) as a render target.** The lane `rotated_targets` checks our
 //      ARGB8Unorm target against our *own* RGBA8Unorm target with the bytes rotated, never against

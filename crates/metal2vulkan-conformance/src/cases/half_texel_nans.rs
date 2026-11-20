@@ -68,7 +68,7 @@
 //!
 //! That stays `divergent` rather than being loosened: `device-nan-encoding`'s own definition says
 //! validation derives no tolerance from it, so a tolerance here would be the suite overruling the
-//! contract under test. `known-gaps.tsv` carries the nine rows.
+//! contract under test. `known-gaps-rt.tsv` carries the nine rows.
 //!
 //! The lane's four filtered accesses — a linear sample at the centre, a linear sample a quarter
 //! texel right of it, a gather, and the same through the runtime sampler at slot 0 — ran on the
