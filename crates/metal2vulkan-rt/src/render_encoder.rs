@@ -286,9 +286,12 @@ impl Facts {
             }
         }
         for &(table, slot, access) in &draws.textures {
-            let stored = access != Access::Read || draws.storage_reads.contains(&(table, slot));
+            let read = draws.storage_reads.contains(&(table, slot));
+            let stored = access != Access::Read || read;
             let unstored = match tables[table].texture(slot) {
-                Some(texture) if stored => texture.unstored(),
+                Some(texture) if stored => texture
+                    .unstored()
+                    .or_else(|| texture.unread().filter(|_| read)),
                 _ => None,
             };
             if let Some(pixel_format) = unstored {

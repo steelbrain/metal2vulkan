@@ -924,9 +924,12 @@ impl ComputeCommandEncoder {
             }
             let interface = &inner.whole.interface;
             for &(slot, access) in &interface.textures {
-                let stored = access != Access::Read || interface.storage_reads.contains(&slot);
+                let read = interface.storage_reads.contains(&slot);
+                let stored = access != Access::Read || read;
                 let unstored = match self.textures.get(slot as usize) {
-                    Some(Some(texture)) if stored => texture.unstored(),
+                    Some(Some(texture)) if stored => texture
+                        .unstored()
+                        .or_else(|| texture.unread().filter(|_| read)),
                     _ => None,
                 };
                 if let Some(pixel_format) = unstored {

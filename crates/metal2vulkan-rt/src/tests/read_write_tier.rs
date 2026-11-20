@@ -13,14 +13,22 @@
 //! own bit), and with its format otherwise; the test runs whichever the device takes and says how
 //! many formats took each.
 //!
-//! `llvm-as` assembles the kernels; without it the test skips visibly.
+//! Beyond the tier, formats Metal does not promise a read of: each float format below of
+//! shader-read and shader-write usage, bound to the float kernel, dispatches where the texture
+//! has a storage element its device reads without a format (its view's format's
+//! `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, the device's own answer), and is
+//! `Gap::StorageElement` at the dispatch everywhere else: such a read is outside Vulkan's valid
+//! usage (`VUID-vkCmdDispatch-OpTypeImage-07028`).
+//!
+//! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
+    use crate::texture::TextureObject;
     use crate::{
-        ComputePipelineDescriptor, ComputePipelineState, DispatchType, FunctionDescriptor,
-        IndexClass, Library, NumberedSampler, PixelFormat, ReadWriteTextureTier, Region,
+        ComputePipelineDescriptor, ComputePipelineState, DispatchType, Error, FunctionDescriptor,
+        Gap, IndexClass, Library, NumberedSampler, PixelFormat, ReadWriteTextureTier, Region,
         StageSource, TextureDescriptor, TextureType, TextureUsage,
     };
     use metal2vulkan::vk;
@@ -389,6 +397,83 @@ declare void @air.write_texture_2d.s.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
                 "read_write_tier: {name}: the 18 formats read and write, {without_format} \
                  declared without a format, {declared} with it"
             );
+        });
+    }
+
+    /// Float formats outside the tiers that a device may store: those whose storage reads without
+    /// a format some device lacks (ANV before Gfx12.5: the first four), and four it has.
+    const BEYOND: [PixelFormat; 8] = [
+        PixelFormat::BGRA8Unorm,
+        PixelFormat::BGR10A2Unorm,
+        PixelFormat::RG11B10Float,
+        PixelFormat::RGB10A2Unorm,
+        PixelFormat::RGBA16Unorm,
+        PixelFormat::RG16Float,
+        PixelFormat::RG8Unorm,
+        PixelFormat::RG32Float,
+    ];
+
+    #[test]
+    fn every_device_refuses_a_storage_read_its_device_cannot_make_without_a_format() {
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("read_write_beyond", |name, _, device| {
+            let function = library.function("rw_tier_f").expect("the kernel");
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                FunctionDescriptor::new(function),
+            ));
+            let state = (device
+                .new_compute_pipeline_state(&descriptor, |samplers| Ok(vec![0; samplers.len()])))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let grant = (device.grant_indices(IndexClass::Texture, 1, BEYOND.len() as u32))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let queue = device.new_command_queue(1).expect("a queue");
+            let mut arena = Arena::new(&device);
+            let (mut read, mut refused) = (Vec::new(), Vec::new());
+            for (at, &format) in BEYOND.iter().enumerate() {
+                let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
+                d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+                let texture = match device.new_texture(&d, Some(1 + at as u32)) {
+                    Ok(texture) => texture,
+                    // A format the device holds no texture of is another gap's.
+                    Err(Error::Unsupported(Gap::TextureFormat { .. })) => continue,
+                    Err(error) => panic!("{name}: {format:?}: {error}"),
+                };
+                let (_, optimal) = device.core().format_features(texture.format());
+                let reads = texture.unstored().is_none()
+                    && optimal.contains(ash::vk::FormatFeatureFlags2::STORAGE_READ_WITHOUT_FORMAT);
+                let out = arena.buffer();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                encoder
+                    .set_compute_pipeline_state(&state)
+                    .expect("the state");
+                encoder.set_texture(Some(&texture), 0).expect("the texture");
+                encoder.set_buffer(Some(&out), 0, 0).expect("out");
+                let dispatched = encoder.dispatch_threadgroups([1, 1, 1], [SIDE, SIDE, 1]);
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}: {format:?}");
+                match (reads, dispatched) {
+                    (true, Ok(())) => read.push(format),
+                    (
+                        false,
+                        Err(Error::Unsupported(Gap::StorageElement {
+                            slot: Some(0),
+                            pixel_format,
+                        })),
+                    ) if pixel_format == format => refused.push(format),
+                    (reads, other) => panic!(
+                        "{name}: {format:?}, its storage read without a format {reads}: {other:?}"
+                    ),
+                }
+                drop((texture, command_buffer));
+            }
+            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!("read_write_beyond: {name}: read {read:?}; refused {refused:?}");
         });
     }
 }

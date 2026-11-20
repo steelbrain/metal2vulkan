@@ -1156,16 +1156,24 @@ pub enum Gap {
     },
     /// A draw or dispatch whose function writes a texture slot, or reads one through its storage
     /// image (`access::read_write`), bound to a texture made for shader writes with no storage
-    /// element: one whose format the device does not store through a storage image without a
+    /// element, or, for a read, with one the device cannot read without a format. No storage
+    /// element: the device does not store the texture's format through a storage image without a
     /// format (an 8-bit sRGB format, `RGB9E5Float` or `BGR10A2Unorm` where the device lacks its
-    /// storage), or holds through a view of another (an `A8Unorm` held in red, an extended-range
-    /// format). Metal writes and reads such a texture; the runtime would drop the writes and read
-    /// zeros. With no slot: a dispatch whose kernel may reach a texture through its storage image
-    /// beyond its slots (an argument buffer's `access::write` or `access::read_write` texture, a
-    /// resource ID), in an encoder where `use_resource` declared a write of such a texture.
-    /// A texture reached by its resource ID with no such declaration is not found: Metal
-    /// documents no write to it (`useHeap:` declares its heap's resources read only), and its
-    /// writes are dropped.
+    /// storage), or holds it through a view of another (an `A8Unorm` held in red, an
+    /// extended-range format). Metal writes and reads such a texture; the runtime would drop the
+    /// writes and read zeros. Not read without a format: the storage element's format lacks
+    /// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which a device without
+    /// `shaderStorageImageReadWithoutFormat` answers per format (`BGRA8Unorm`, `BGR10A2Unorm` and
+    /// `RG11B10Float` among others on ANV before Gfx12.5): such a read is outside Vulkan's valid
+    /// usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and those formats are outside Metal's
+    /// read-write tiers, whose reads Metal's documentation defines. With no slot: a dispatch whose
+    /// kernel may reach a texture through its storage image beyond its slots (an argument
+    /// buffer's `access::write` or `access::read_write` texture, a resource ID), in an encoder
+    /// where `use_resource` declared a write of a texture with no storage element. A texture
+    /// reached by its resource ID with no such declaration is not found: Metal documents no write
+    /// to it (`useHeap:` declares its heap's resources read only), and its writes are dropped. A
+    /// read there of a storage element the device cannot read without a format is not found
+    /// either (the crate's README, known gaps).
     ///
     /// Basis: ours (the storage element through a view of the nearest format whose storage Vulkan
     /// requires of every device, with the translator's conversion, is the form to build).
@@ -2116,7 +2124,8 @@ impl fmt::Display for Gap {
             } => write!(
                 f,
                 "texture slot {slot}, which a function writes or reads as storage, bound to a \
-                 {pixel_format:?} texture with no storage element on this device is not built"
+                 {pixel_format:?} texture with no storage element on this device, or one it \
+                 cannot read without a format, is not built"
             ),
             Gap::StorageElement {
                 slot: None,

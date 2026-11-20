@@ -208,6 +208,8 @@ pub(crate) struct TextureInner {
     image: Arc<Image>,
     /// The format of its views: the image's, or a view's own.
     format: vk::Format,
+    /// Its views' format reads as storage without a format ([`Plan`]'s `storage_reads`).
+    storage_reads: bool,
     /// The usage its views take where their format is not the image's (`VkImageViewUsageCreateInfo`):
     /// the image's that the format's features hold. `None` where its views take the image's.
     views_usage: Option<vk::ImageUsageFlags>,
@@ -1252,6 +1254,7 @@ impl Device {
             descriptor: d,
             image,
             format: plan.format,
+            storage_reads: plan.storage_reads,
             views_usage: None,
             unit: plan.unit,
             index,
@@ -1446,6 +1449,7 @@ impl Device {
             descriptor: d,
             image,
             format: plan.format,
+            storage_reads: plan.storage_reads,
             views_usage: None,
             unit: plan.unit,
             index,
@@ -1501,6 +1505,13 @@ struct Plan {
     sampled: Option<(vk::ComponentMapping, vk::ImageAspectFlags)>,
     /// Whether the texture has a storage view.
     storage: bool,
+    /// Whether a storage view of the plan's format reads without a format: the format's
+    /// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, the format query a translator's
+    /// storage read by the formats' own bits takes, which a device without
+    /// `shaderStorageImageReadWithoutFormat` answers per format. A shader's read of a storage view
+    /// whose format lacks it is outside Vulkan's valid usage
+    /// (`VUID-vkCmdDispatch-OpTypeImage-07028`).
+    storage_reads: bool,
     home: vk::ImageLayout,
     /// A draw may read an attachment of its own pass through the texture, and each sampled view
     /// has a second element ([`Image`]'s `attachment_reads`): the image has the feedback usage on
@@ -2132,6 +2143,8 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         && mapping.emulation == FormatEmulation::Direct
         && profile.supports_format(mapping.format, FormatUsage::StorageImage)
         && profile.supports_format(mapping.format, FormatUsage::StorageImageWriteWithoutFormat);
+    let storage_reads =
+        profile.supports_format(mapping.format, FormatUsage::StorageImageReadWithoutFormat);
     let render = usage.contains(TextureUsage::RENDER_TARGET);
     let supports = |use_| profile.supports_format(mapping.format, use_);
     let mut supported = vk::ImageUsageFlags::empty();
@@ -2198,6 +2211,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         samples,
         sampled,
         storage,
+        storage_reads,
         home,
         attachment_reads: false,
         aspects,
@@ -3424,6 +3438,7 @@ impl Texture {
             },
             image: Arc::clone(&inner.image),
             format: plan.format,
+            storage_reads: plan.storage_reads,
             views_usage,
             unit: plan.unit,
             index,
@@ -4182,6 +4197,19 @@ pub(crate) trait TextureObject {
         (written && storage.is_none()).then_some(d.pixel_format)
     }
 
+    /// Where it has a storage element the device cannot read without a format, which shaders read
+    /// it as storage through (`access::read_write`): its views' format lacks
+    /// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT` ([`Plan`]'s `storage_reads`, taken at
+    /// its make). Its pixel format, which [`Gap::StorageElement`] names.
+    fn unread(&self) -> Option<PixelFormat> {
+        let inner = self.object();
+        let storage = match &inner.view {
+            Some(view) => view.views.storage,
+            None => inner.image.storage,
+        };
+        (storage.is_some() && !inner.storage_reads).then_some(inner.descriptor.pixel_format)
+    }
+
     /// Whether it reads through a swizzle other than each channel's own.
     fn swizzled(&self) -> bool {
         TextureInner::reads(self.object()) != TextureSwizzleChannels::DEFAULT
@@ -4597,6 +4625,7 @@ impl Device {
             descriptor: d,
             image,
             format: plan.format,
+            storage_reads: plan.storage_reads,
             views_usage,
             unit: plan.unit,
             index,

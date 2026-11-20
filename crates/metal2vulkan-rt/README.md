@@ -1201,6 +1201,16 @@ made, with no lock, and never rewritten for layouts.
   not built. A write through a resource ID with no such declaration is outside documented Metal
   (`useHeap:` declares its heap's resources read only) and is dropped, and a storage read there
   answers zeros.
+- A texture whose storage element the device cannot read without a format (its format lacks
+  `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which a device without
+  `shaderStorageImageReadWithoutFormat` answers per format: on ANV before Gfx12.5, `BGRA8Unorm`,
+  `BGR10A2Unorm` and `RG11B10Float` among others) is written as any other. A draw or dispatch
+  whose function reads it at a slot through its storage image (`access::read_write`) is
+  `Gap::StorageElement`. Such a format is outside Metal's read-write tiers, whose reads Metal's
+  documentation defines. A read of one through an argument buffer or a resource ID is not refused,
+  as no declaration tells it from a sample: it reads the texture's storage element without a
+  format, outside Vulkan's valid usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and the value is
+  the device's.
 - `replace_region` takes no bytes into a 32-bit float depth (`Gap::FloatDepthUpload`): Metal
   keeps any `float` there, Vulkan copies no depth outside `[0, 1]` into a depth aspect without
   `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor
