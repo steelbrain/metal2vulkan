@@ -321,7 +321,7 @@ pub(super) fn prepare(
         let checked = cx.plan.families.access.variable.contains(&choice.slot)
             && leaf::known(fb, m)?.is_none();
         if checked {
-            let bounds = cx.push_field(fb, PushField::SlotBounds(choice.slot))?;
+            let bounds = cx.slot_bounds(fb, choice.slot)?;
             let inb = psb::in_buffer(fb, m, bounds, n)?;
             if read {
                 let zero = cx.push_field(fb, PushField::ZeroAddress)?;

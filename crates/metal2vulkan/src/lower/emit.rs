@@ -249,6 +249,9 @@ enum Invariant {
     /// The root table's sink address (`access::dynamic::read_sink_host`), read at entry
     /// (`access::dynamic::emit_entry`): the root table is read-only to the dispatch.
     SinkHost,
+    /// A checked slot's `PushField::SlotBounds` split ([`EmitCx::slot_bounds`]): its buffer's
+    /// bytes before the bind offset (`false`) or its length (`true`).
+    Bounds(SlotRef, bool),
 }
 
 impl<'a> EmitCx<'a> {
@@ -431,9 +434,40 @@ impl<'a> EmitCx<'a> {
     fn load_push_fields(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
         let plan: &Plan = self.plan;
         for placed in &plan.push.fields {
-            self.push_field(fb, placed.field)?;
+            match placed.field {
+                PushField::SlotBounds(slot) => {
+                    self.slot_bounds(fb, slot)?;
+                }
+                field => {
+                    self.push_field(fb, field)?;
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Checked slot `slot`'s bounds (`PushField::SlotBounds`), split: its buffer's bytes before
+    /// the bind offset and its length, each a `u32`, where they dominate the open block.
+    /// [`EmitCx::load_push_fields`] splits them in the function's first block, so a checked
+    /// access adds no extract of its own.
+    pub(crate) fn slot_bounds(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        slot: SlotRef,
+    ) -> BResult<(SValue, SValue)> {
+        let (before, length) = (
+            Invariant::Bounds(slot, false),
+            Invariant::Bounds(slot, true),
+        );
+        if let (Some(b), Some(l)) = (self.recall(fb, before), self.recall(fb, length)) {
+            return Ok((b, l));
+        }
+        let bounds = self.push_field(fb, PushField::SlotBounds(slot))?;
+        let b = fb.composite_extract(bounds, &[0])?;
+        let l = fb.composite_extract(bounds, &[1])?;
+        self.remember(fb, before, b);
+        self.remember(fb, length, l);
+        Ok((b, l))
     }
 
     /// Load push field `field` in the open block.

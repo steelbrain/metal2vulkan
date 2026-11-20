@@ -264,7 +264,7 @@ fn address_read(
     fb: &mut FunctionBuilder<'_>,
     address: SValue,
     m: SValue,
-    (n, check): (u32, Option<(SValue, SValue)>),
+    (n, check): (u32, Option<((SValue, SValue), SValue)>),
 ) -> BResult<SourceRead> {
     let a = psb::prepare_at(fb, address, m)?;
     let mem = match check {
@@ -372,7 +372,7 @@ enum Source {
     /// (`AccessPlan::variable`).
     Address {
         address: SValue,
-        check: Option<(SValue, SValue)>,
+        check: Option<((SValue, SValue), SValue)>,
     },
 }
 
@@ -426,7 +426,7 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
             let address = super::pointer::slot_address(cx, fb, slot)?;
             let check = match checked {
                 true => Some((
-                    cx.push_field(fb, PushField::SlotBounds(slot))?,
+                    cx.slot_bounds(fb, slot)?,
                     cx.push_field(fb, PushField::ZeroAddress)?,
                 )),
                 false => None,

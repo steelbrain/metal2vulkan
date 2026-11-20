@@ -244,15 +244,18 @@ pub fn prepare_direct(base: Value, m: Value) -> PsbAccess {
 }
 
 /// Whether an `n`-byte access at the `u32` byte offset `m` from a slot's bind offset, read as
-/// signed, lies in the slot's buffer, by the slot's pushed `bounds` (`PushField::SlotBounds`, a
-/// `uvec2`: the bytes before the bind offset, then the buffer's length): `m` plus those bytes,
-/// against the length, with the normative check (`contain::in_bounds`), in `u32`. One add more
-/// than a check against the bind window. Exact as the new runtime makes no buffer longer than 2
-/// GiB: an offset that reaches before the buffer's start wraps to at least 2^31, past every
-/// length.
-pub fn in_buffer(fb: &mut FunctionBuilder<'_>, m: Value, bounds: Value, n: u32) -> BResult<Value> {
-    let before = fb.composite_extract(bounds, &[0])?;
-    let length = fb.composite_extract(bounds, &[1])?;
+/// signed, lies in the slot's buffer, by the slot's pushed bounds (`PushField::SlotBounds`, split
+/// once per function by `EmitCx::slot_bounds`): `before`, the buffer's bytes before the bind
+/// offset, and `length`, the buffer's length. `m` plus `before`, against the length, with the
+/// normative check (`contain::in_bounds`), in `u32`: one add more than a check against the bind
+/// window. Exact as the new runtime makes no buffer longer than 2 GiB: an offset that reaches
+/// before the buffer's start wraps to at least 2^31, past every length.
+pub fn in_buffer(
+    fb: &mut FunctionBuilder<'_>,
+    m: Value,
+    (before, length): (Value, Value),
+    n: u32,
+) -> BResult<Value> {
     let at = fb.binary(BinOp::IAdd, m, before)?;
     crate::memory::contain::in_bounds(fb, at, length, u64::from(n))
 }
