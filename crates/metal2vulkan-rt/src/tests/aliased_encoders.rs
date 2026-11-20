@@ -80,6 +80,14 @@ mod on_device {
         };
     }
 
+    /// The bytes `rows_read` read into `buffer`: each channel's float, written as the byte it is
+    /// over 255.
+    fn channels(buffer: &Buffer) -> Vec<u8> {
+        (held(buffer).as_chunks::<4>().0.iter())
+            .map(|f| (f32::from_ne_bytes(*f) * 255.0).round().clamp(0.0, 255.0) as u8)
+            .collect()
+    }
+
     /// Texel `(x, y)`'s four channel bytes.
     fn texel(x: u32, y: u32) -> [u8; 4] {
         let at = |c: u32| ((x * 7 + y * 13 + c * 61 + 5) % 256) as u8;
@@ -202,12 +210,7 @@ mod on_device {
         first_wrong("B after encoder 1", &held(&b), &expected);
         first_wrong("encoder 3's copy of B", &held(&copy_out), &expected);
         // Encoder 2's output: each texel's channels as floats, each the byte over 255.
-        let read: Vec<u8> = (held(&read_out).chunks_exact(4))
-            .map(|f| {
-                let value = f32::from_ne_bytes([f[0], f[1], f[2], f[3]]);
-                (value * 255.0).round().clamp(0.0, 255.0) as u8
-            })
-            .collect();
+        let read = channels(&read_out);
         let mut want = Vec::with_capacity(read.len());
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
@@ -321,14 +324,6 @@ mod on_device {
                 );
             }
         };
-        let read = |buffer: &Buffer| -> Vec<u8> {
-            (held(buffer).chunks_exact(4))
-                .map(|f| {
-                    let value = f32::from_ne_bytes([f[0], f[1], f[2], f[3]]);
-                    (value * 255.0).round().clamp(0.0, 255.0) as u8
-                })
-                .collect()
-        };
         // B: T2's texels over its rows; the sentinels elsewhere.
         let mut expected = sentinels.clone();
         let mut written = Vec::with_capacity(4 * texels as usize);
@@ -344,10 +339,10 @@ mod on_device {
         }
         first_wrong("B", &held(&b), &expected);
         match beside {
-            false => first_wrong("encoder 2's read of T2", &read(&first_read), &written),
+            false => first_wrong("encoder 2's read of T2", &channels(&first_read), &written),
             true => {
-                first_wrong("encoder 1's read of T3", &read(&first_read), &under_t3);
-                first_wrong("encoder 3's read of T3", &read(&second_read), &under_t3);
+                first_wrong("encoder 1's read of T3", &channels(&first_read), &under_t3);
+                first_wrong("encoder 3's read of T3", &channels(&second_read), &under_t3);
             }
         }
         println!("unaliased overs: {name}: beside {beside} (pitch {pitch}): {moved} copies");
