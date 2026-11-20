@@ -1,6 +1,5 @@
 //! `lower::tessellation`: a post-tessellation vertex function as a Vulkan tessellation
-//! evaluation shader, or, on a device without `tessellationShader`, as a vertex shader that draws
-//! the tessellator's triangles itself.
+//! evaluation shader.
 //!
 //! A vertex function with `[[patch(triangle|quad, N)]]` runs once per vertex the fixed-function
 //! tessellator generates, like a Vulkan `TessellationEvaluation` entry, so the module is one,
@@ -39,54 +38,17 @@
 //! - `[[base_instance]]` is the second lane of `PushField::BaseVertexInstance`, which the binder
 //!   writes with the draw's base instance: an evaluation shader has no `BaseInstance`. An indirect
 //!   draw of patches then needs its arguments on the host, which the runtime does not read yet
-//!   (`NotImplemented(IndirectDrawArguments)`). Emulated (below), it is the draw's work buffer's,
-//!   Metal's arguments for an indirect draw, and needs nothing of the host.
+//!   (`NotImplemented(IndirectDrawArguments)`).
 //! - `[[amplification_id]]` is `ViewIndex` and `[[amplification_count]]` the
 //!   `SpecKey::AmplificationCount` constant, as in a vertex function. A multiview pipeline with
 //!   tessellation stages also needs `multiviewTessellationShader`, the pipeline's to require.
 //!
 //! # Without `tessellationShader`
 //!
-//! On a device without `tessellationShader` ([`emulates`]) the function is a plain `Vertex` entry
-//! that draws the tessellator's triangles itself, and its render pipeline has no control or
-//! evaluation stage (`GraphicsState::emulated_tessellation`). It bakes in the render pipeline
-//! descriptor's tessellation state (`LoweringInputs::tessellation`, Metal's defaults without
-//! one), whose partition, winding and maximum factor decide its points ([`tessellator`]).
-//!
-//! Each patch draw first runs the tessellation scan (`bind::tessellation_scan`), which processes
-//! each patch's factors into the draw's records, one per instance and patch, and writes its
-//! chunks' indirect draws ([`work`]). Chunk `k` (`PushField::TessellationChunk`) draws the draw's
-//! triangles `[k · C, (k + 1) · C)`, three vertices each, as a `TRIANGLE_LIST` from vertex 0 of
-//! one instance. Before the function's body, the entry's wrapper ([`wrap_entry`]), for the vertex
-//! `VertexIndex` names:
-//!
-//! - takes triangle `t = VertexIndex / 3` of the chunk and its corner `VertexIndex % 3`;
-//! - finds the record that holds it by bisection over the chunk's records, from the chunk's first
-//!   record through the next chunk's (or the draw's last), each keyed by its first triangle less
-//!   the chunk's modulo `2^32`, exact within a chunk; among records of one key the last, which is
-//!   the one that draws (the ones before it draw nothing);
-//! - decodes the record's triangle `t - key` to its corner's point with the record's processed
-//!   factors and tile word (`tessellator::emit_decode`), and places it in the patch's domain
-//!   (`emit_place`): Metal's `[[position_in_patch]]`;
-//! - and from record `r = i · patchCount + p` hands the function, through `Private` variables,
-//!   what the native control stage hands the evaluation stage: `[[patch_id]]`, the patch index
-//!   buffer's index at the position `patchStart + p` where the draw binds one, else the position
-//!   (`link::tessellation::control`); `[[instance_id]]`, `i + baseInstance`; `[[base_instance]]`;
-//!   and each control point's element, `patch_id · N + k` or the control-point index buffer's
-//!   index there. Patch inputs and control points are then pulled as above.
-//!
-//! Under `LoweringInputs::primitive_id_varying` (its pipeline's fragment function reads
-//! `[[primitive_id]]`) the function also writes the patch's position `patchStart + p` to the
-//! primitive ID's flat `uint` varying (`IoRole::PrimitiveId`), which that fragment function reads
-//! as its `[[primitive_id]]`: Metal's primitive id behind the tessellator, as measured on the M3
-//! Max. A plain vertex function writes the same varying from another source on a device that
-//! cannot declare a fragment `PrimitiveId` (`lower::stage_io`); this one never takes that form,
-//! on any device. Vulkan's flat shading gives a fragment the provoking
-//! vertex's value ("Flat shading a vertex output attribute means to assign all vertices of the
-//! primitive the same value for that output. The output values assigned are those of the
-//! provoking vertex of the primitive.", Fixed-Function Vertex Post-Processing, Flat Shading); every
-//! vertex of a triangle writes its record's position, so any provoking vertex gives it. Behind an
-//! evaluation stage a fragment `[[primitive_id]]` stays refused (`NotImplemented(Tessellation)`).
+//! A device without `tessellationShader` has no stage to run the function in: it is refused
+//! (`Unsupported{Tessellation}`, naming the feature). Behind an evaluation stage a fragment
+//! `[[primitive_id]]` is refused (`NotImplemented(Tessellation)`): its primitive IDs are not
+//! built.
 //!
 //! Every attribute is pulled, so the lowering inputs must project each one it reads
 //! (`VertexFetch::Pulled`); without a projection the compile needs the vertex descriptor
@@ -109,9 +71,11 @@ use crate::air::ir::{
     ArgIdx, Body, Callee, Inst, InstId, InstKind, Type, TypeId as AirTypeId, Value,
 };
 use crate::air::Entry;
+use crate::device::requirements::VkFeature;
 use crate::device::subgroup::SimdClass;
-use crate::device::DeviceProfile;
-use crate::error::{DescriptorError, Error, Feature, LowerFamily, RuntimeInput, Unsupported};
+use crate::error::{
+    Capability, DescriptorError, Error, Feature, LowerFamily, RuntimeInput, Unsupported,
+};
 use crate::lower::access::{pulled, BufferReach};
 use crate::lower::arith::legal::{form_on, refuse_int64_interface};
 use crate::lower::arith::{self, ops, FloatFmt, Form, Held};
@@ -135,12 +99,7 @@ use crate::spirv::ir::{
     BinOp, ConstBits, Constant, ExecMode, GlslOp, IoDir, MemAccess, Type as SType,
 };
 
-mod emulated;
 pub mod factors;
-pub mod tessellator;
-pub mod work;
-
-pub use emulated::{wrap_entry, Emulation};
 
 fn not_lowered() -> Error {
     Unsupported::not_implemented(Feature::Lowering(LowerFamily::Tessellation)).into()
@@ -256,11 +215,6 @@ pub struct EvalPlan {
     pub instance: bool,
     pub view: bool,
     pub elements: bool,
-    /// Whether an emulated entry reads `[[base_instance]]` (from the draw's work buffer).
-    pub base_instance: bool,
-    /// `Some` on a device without `tessellationShader`: the entry is a plain `Vertex` entry
-    /// behind [`wrap_entry`] (the module docs).
-    pub emulated: Option<Emulation>,
     /// Every used parameter this family owns.
     pub params: Vec<EvalParam>,
     /// The members each control-point call's result has read, by call.
@@ -347,13 +301,8 @@ pub fn is_control_point_fetch(e: &Entry, f: crate::air::ir::FuncId) -> bool {
 
 /// The evaluation interface of the plan's module, for the artifact (`StageInterface`).
 pub fn interface(plan: &Plan) -> Option<TessellationStage> {
-    plan.families.tessellation.eval.as_ref().map(|e| {
-        let stage = TessellationStage::new(e.domain, e.control_points);
-        match e.emulated {
-            Some(em) => stage.emulated(em.desc),
-            None => stage,
-        }
-    })
+    (plan.families.tessellation.eval.as_ref())
+        .map(|e| TessellationStage::new(e.domain, e.control_points))
 }
 
 /// Each control-point call of `body` (of entry `e`) with the members of its result the body
@@ -488,12 +437,14 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     let Some(control_points) = control_points else {
         return Err(Unsupported::not_implemented(Feature::Tessellation).into());
     };
-    // Without `tessellationShader` the function is a plain vertex function behind the
-    // tessellator's emulation (the module docs).
-    let emulated = match emulates(cx.profile) {
-        true => Some(emulated::plan(cx, domain)?),
-        false => None,
-    };
+    // Without `tessellationShader` the device has no stage to run the function in.
+    if !cx.profile.fields().fragment.tessellation_shader {
+        return Err(Unsupported::needs(
+            Feature::Tessellation,
+            Capability::Feature(VkFeature::TessellationShader),
+        )
+        .into());
+    }
     let reads = control_point_reads(cx.entry, cx.body);
     cx.families.tessellation.eval = Some(EvalPlan {
         domain,
@@ -503,19 +454,11 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         instance: false,
         view: false,
         elements: false,
-        base_instance: false,
-        emulated,
         params: Vec::new(),
         reads,
         words: 0,
     });
     Ok(())
-}
-
-/// Whether profile `p` runs post-tessellation vertex functions as plain vertex functions behind
-/// the tessellator's emulation (the module docs): it does not enable `tessellationShader`.
-pub fn emulates(p: &DeviceProfile) -> bool {
-    !p.fields().fragment.tessellation_shader
 }
 
 fn eval<'c>(cx: &'c mut SelectCx<'_>) -> Result<&'c mut EvalPlan, Error> {
@@ -699,14 +642,6 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error
         }
         // The binder writes a draw of patches' base instance into the push field's second lane
         // (and reads an indirect draw's arguments on the host to do so).
-        // An emulated entry reads it from the draw's work buffer, Metal's arguments for an
-        // indirect draw.
-        ParamRole::Builtin(Builtin::BaseInstance) if eval(cx)?.emulated.is_some() => {
-            refuse_int64_interface(cx.entry, ty)?;
-            let form = int_scalar(form_on(cx.entry, cx.profile, ty)?)?;
-            eval(cx)?.base_instance = true;
-            Source::BaseInstance { form }
-        }
         ParamRole::Builtin(Builtin::BaseInstance) => {
             refuse_int64_interface(cx.entry, ty)?;
             let form = int_scalar(form_on(cx.entry, cx.profile, ty)?)?;
@@ -842,13 +777,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.simd != SimdClass::None {
         return Err(not_implemented());
     }
-    if let Some(em) = e.emulated {
-        let reads = (e.patch, e.elements);
-        emulated::finish(cx, reads, &em);
-    }
-    let Some(e) = cx.families.tessellation.eval.as_ref() else {
-        return Ok(());
-    };
     let objects = u64::from(e.coord)
         + u64::from(e.patch)
         + u64::from(e.instance)
@@ -896,15 +824,6 @@ pub struct Declared {
     pub instance: Option<GlobalId>,
     pub view: Option<GlobalId>,
     pub elements: Option<GlobalId>,
-    /// An emulated entry's `[[base_instance]]`, a `Private` variable its wrapper writes.
-    pub base_instance: Option<GlobalId>,
-    /// An emulated entry's `VertexIndex`, work buffer, records, and patch index and
-    /// control-point index buffers.
-    pub vertex_index: Option<GlobalId>,
-    pub work: Option<GlobalId>,
-    pub records: Option<GlobalId>,
-    pub patch_indices: Option<GlobalId>,
-    pub control_point_indices: Option<GlobalId>,
 }
 
 /// Declare the evaluation entry's inputs and add its patch domain to `modes`.
@@ -917,17 +836,6 @@ pub fn declare(
         return Ok(Declared::default());
     };
     let mut d = Declared::default();
-    if let Some(em) = &e.emulated {
-        emulated::declare(mb, e, em, &mut d)?;
-        if e.view {
-            let u32_ = mb.ty(SType::Int {
-                width: 32,
-                signed: false,
-            })?;
-            d.view = Some(mb.builtin(crate::spv::BuiltIn::ViewIndex, IoDir::Input, u32_)?);
-        }
-        return Ok(d);
-    }
     modes.push(match e.domain {
         PatchDomain::Triangle => ExecMode::Triangles,
         PatchDomain::Quad => ExecMode::Quads,
@@ -1079,13 +987,8 @@ pub fn param_value(
             ops::mask(fb, form, x)
         }
         Some(Source::BaseInstance { form }) => {
-            let x = match cx.decl.families.tessellation.base_instance {
-                Some(g) => load(cx, fb, Some(g))?,
-                None => {
-                    let v = cx.push_field(fb, PushField::BaseVertexInstance)?;
-                    fb.composite_extract(v, &[stage_io::DrawBase::Instance.lane()])?
-                }
-            };
+            let v = cx.push_field(fb, PushField::BaseVertexInstance)?;
+            let x = fb.composite_extract(v, &[stage_io::DrawBase::Instance.lane()])?;
             ops::mask(fb, form, x)
         }
         Some(Source::ViewIndex { form }) => {

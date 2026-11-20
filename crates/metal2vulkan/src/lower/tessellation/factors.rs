@@ -1,7 +1,6 @@
-//! A patch's tessellation factors read from Metal's factor buffer, as the native control stage
-//! (`pipeline::link::tessellation::control`, whose module docs state the addressing) and the
-//! emulated path's scan (`bind::tessellation_scan`) both read them: the same bytes, the same
-//! instructions. The scan is built at run time, so this file is a runtime input
+//! A patch's tessellation factors read from Metal's factor buffer, as the control stage
+//! (`pipeline::link::tessellation::control`, whose module docs state the addressing) reads them.
+//! The binder sizes a draw's factor range by [`factor_bytes`], so this file is a runtime input
 //! (`validation/build.rs`).
 
 use crate::pipeline::interface::PatchDomain;

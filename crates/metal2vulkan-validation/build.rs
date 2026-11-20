@@ -123,9 +123,8 @@ fn main() {
     // alignment (`src/memory`), the dispatch-region encoding (`src/lower/dispatch.rs`, and the
     // used-parameter walk it reads, `src/lower/users.rs`), the shader-side stencil's shadow format
     // and state word (`src/lower/fragment/stencil.rs`), an
-    // emulated mesh draw's work buffer layout (`src/lower/mesh/work.rs`), an emulated tessellation
-    // draw's work buffer layout, factor reads and tessellator, which its scan runs
-    // (`src/lower/tessellation/{work,factors,tessellator}.rs`),
+    // emulated mesh draw's work buffer layout (`src/lower/mesh/work.rs`), a patch's factor bytes
+    // (`src/lower/tessellation/factors.rs`),
     // the sRGB steps the ASTC and PVRTC decoders read (`src/lower/arith/srgb.rs`), the sRGB
     // encode the YCbCr write takes from `air.pack`'s lowering (`src/lower/arith/pack.rs`), the blend color an
     // extended-range blend reads (`src/lower/arith/extended_range/blend_color.rs`), and half-float
@@ -171,8 +170,6 @@ fn main() {
         "metal2vulkan/src/lower/arith/srgb.rs",
         "metal2vulkan/src/lower/mesh/work.rs",
         "metal2vulkan/src/lower/tessellation/factors.rs",
-        "metal2vulkan/src/lower/tessellation/tessellator.rs",
-        "metal2vulkan/src/lower/tessellation/work.rs",
         "metal2vulkan/src/memory/arena.rs",
         "metal2vulkan/src/memory/handles.rs",
         "metal2vulkan/src/memory/roots.rs",

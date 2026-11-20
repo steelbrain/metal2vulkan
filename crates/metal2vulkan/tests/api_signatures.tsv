@@ -169,24 +169,14 @@ assoc-const	metal2vulkan::bind::StatusBits::INDEX_POOL_OVERFLOW	pub const INDEX_
 assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	pub const MESH_GRID_DISCARDED: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	pub const MESH_GRID_PAST_LIMITS: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::MESH_RECORDS_OVERFLOW	pub const MESH_RECORDS_OVERFLOW: StatusBits
-assoc-const	metal2vulkan::bind::StatusBits::RECORDS_FAULTS	pub const RECORDS_FAULTS: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::REPLAY_FAULT	pub const REPLAY_FAULT: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::RESIDENT_MISS	pub const RESIDENT_MISS: StatusBits
-assoc-const	metal2vulkan::bind::StatusBits::TESSELLATION_RECORDS_OVERFLOW	pub const TESSELLATION_RECORDS_OVERFLOW: StatusBits
 assoc-const	metal2vulkan::bind::StatusWord::ALL	pub const ALL: [StatusWord; 8]
 assoc-const	metal2vulkan::bind::StencilBit::ALL	pub const ALL: [StencilBit; 8]
 assoc-const	metal2vulkan::bind::StencilSplitModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
 assoc-const	metal2vulkan::bind::StencilSplitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::StencilSplitModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::StencilSplitModule::SOURCE_BINDING	pub const SOURCE_BINDING: u32
-assoc-const	metal2vulkan::bind::TessellationDispatch::DRAW_ID	pub const DRAW_ID: usize
-assoc-const	metal2vulkan::bind::TessellationDispatch::POOL_WORDS	pub const POOL_WORDS: usize
-assoc-const	metal2vulkan::bind::TessellationScanModule::FACTORS_BINDING	pub const FACTORS_BINDING: u32
-assoc-const	metal2vulkan::bind::TessellationScanModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::TessellationScanModule::RECORDS_BINDING	pub const RECORDS_BINDING: u32
-assoc-const	metal2vulkan::bind::TessellationScanModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::TessellationScanModule::STATUS_BINDING	pub const STATUS_BINDING: u32
-assoc-const	metal2vulkan::bind::TessellationScanModule::WORK_BINDING	pub const WORK_BINDING: u32
 assoc-const	metal2vulkan::bind::TexelRows::FIRST	pub const FIRST: usize
 assoc-const	metal2vulkan::bind::TexelRows::HEIGHT	pub const HEIGHT: usize
 assoc-const	metal2vulkan::bind::TexelRows::ROW	pub const ROW: usize
@@ -456,24 +446,14 @@ assoc-const-value	metal2vulkan::bind::StatusBits::INDEX_POOL_OVERFLOW	StatusBits
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	StatusBits(1 <<10)
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	StatusBits(1 <<9)
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_RECORDS_OVERFLOW	StatusBits(1 <<5)
-assoc-const-value	metal2vulkan::bind::StatusBits::RECORDS_FAULTS	StatusBits(StatusBits::MESH_RECORDS_OVERFLOW.0 | StatusBits::TESSELLATION_RECORDS_OVERFLOW.0)
 assoc-const-value	metal2vulkan::bind::StatusBits::REPLAY_FAULT	StatusBits(1 <<2)
 assoc-const-value	metal2vulkan::bind::StatusBits::RESIDENT_MISS	StatusBits(1 <<1)
-assoc-const-value	metal2vulkan::bind::StatusBits::TESSELLATION_RECORDS_OVERFLOW	StatusBits(1 <<8)
 assoc-const-value	metal2vulkan::bind::StatusWord::ALL	[StatusWord::Status, StatusWord::ResidentMisses, StatusWord::ReplayFaults, StatusWord::MeshRecordsCursor, StatusWord::MeshFaultDraw, StatusWord::MeshFaultObjects, StatusWord::MeshFaultGroups, StatusWord::SeqCstFences]
 assoc-const-value	metal2vulkan::bind::StencilBit::ALL	[StencilBit(0), StencilBit(1), StencilBit(2), StencilBit(3), StencilBit(4), StencilBit(5), StencilBit(6), StencilBit(7)]
 assoc-const-value	metal2vulkan::bind::StencilSplitModule::DESTINATION_BINDING	1
 assoc-const-value	metal2vulkan::bind::StencilSplitModule::LOCAL_SIZE	8
 assoc-const-value	metal2vulkan::bind::StencilSplitModule::SET	0
 assoc-const-value	metal2vulkan::bind::StencilSplitModule::SOURCE_BINDING	0
-assoc-const-value	metal2vulkan::bind::TessellationDispatch::DRAW_ID	crate::lower::tessellation::work::DRAW_ID as usize
-assoc-const-value	metal2vulkan::bind::TessellationDispatch::POOL_WORDS	crate::lower::tessellation::work::POOL_WORDS as usize
-assoc-const-value	metal2vulkan::bind::TessellationScanModule::FACTORS_BINDING	3
-assoc-const-value	metal2vulkan::bind::TessellationScanModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::TessellationScanModule::RECORDS_BINDING	1
-assoc-const-value	metal2vulkan::bind::TessellationScanModule::SET	0
-assoc-const-value	metal2vulkan::bind::TessellationScanModule::STATUS_BINDING	2
-assoc-const-value	metal2vulkan::bind::TessellationScanModule::WORK_BINDING	0
 assoc-const-value	metal2vulkan::bind::TexelRows::FIRST	3
 assoc-const-value	metal2vulkan::bind::TexelRows::HEIGHT	1
 assoc-const-value	metal2vulkan::bind::TexelRows::ROW	2
@@ -983,7 +963,6 @@ enum	metal2vulkan::bind::RewriteProgram	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::bind::RewriteSource	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RewriteSource
 enum	metal2vulkan::bind::SamplerSource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum SamplerSource
 enum	metal2vulkan::bind::StatusWord	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StatusWord
-enum	metal2vulkan::bind::TessellationRecords	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TessellationRecords
 enum	metal2vulkan::bind::TextureShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum TextureShape
 enum	metal2vulkan::bind::TileMapError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum TileMapError
 enum	metal2vulkan::bind::TileMapping	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum TileMapping
@@ -2259,7 +2238,6 @@ field	metal2vulkan::bind::DrawCommands.push_constants	pub push_constants: Vec<Pu
 field	metal2vulkan::bind::DrawCommands.push_holes	pub push_holes: Vec<PushHole>
 field	metal2vulkan::bind::DrawCommands.root_tables	pub root_tables: Vec<(vk::ShaderStageFlags, RootTable)>
 field	metal2vulkan::bind::DrawCommands.specialization	pub specialization: Option<SpecializationKey>
-field	metal2vulkan::bind::DrawCommands.tessellation_dispatch	pub tessellation_dispatch: Option<TessellationDispatch>
 field	metal2vulkan::bind::DrawCommands.uses	pub uses: Vec<ResourceUse>
 field	metal2vulkan::bind::DrawCommands.vertex_strides	pub vertex_strides: Vec<(u32, u32)>
 field	metal2vulkan::bind::DrawMergeModule.layout	pub layout: PipelineLayout
@@ -2513,29 +2491,13 @@ field	metal2vulkan::bind::StatusReport.replay_fault	pub replay_fault: bool
 field	metal2vulkan::bind::StatusReport.replay_faults	pub replay_faults: ReplayFaults
 field	metal2vulkan::bind::StatusReport.resident_miss	pub resident_miss: bool
 field	metal2vulkan::bind::StatusReport.resident_misses	pub resident_misses: u32
-field	metal2vulkan::bind::StatusReport.tessellation_records_overflow	pub tessellation_records_overflow: Option<TessellationRecordsFault>
 field	metal2vulkan::bind::StencilSplitModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::StencilSplitModule.spirv	pub spirv: Arc<[u32]>
-field	metal2vulkan::bind::TessellationDispatch.arguments	pub arguments: Option<u64>
-field	metal2vulkan::bind::TessellationDispatch.factors	pub factors: Option<BufferRange>
-field	metal2vulkan::bind::TessellationDispatch.header	pub header: Vec<u32>
-field	metal2vulkan::bind::TessellationDispatch.kernel	pub kernel: crate::bind::TessellationScanKernel
-field	metal2vulkan::bind::TessellationDispatch.records	pub records: TessellationRecords
 field	metal2vulkan::bind::TessellationFactorBuffer.instance_stride	pub instance_stride: u64
 field	metal2vulkan::bind::TessellationFactorBuffer.length	pub length: u64
 field	metal2vulkan::bind::TessellationFactorBuffer.offset	pub offset: u64
 field	metal2vulkan::bind::TessellationFactors.buffer	pub buffer: Option<TessellationFactorBuffer>
 field	metal2vulkan::bind::TessellationFactors.scale	pub scale: f32
-field	metal2vulkan::bind::TessellationRecordsFault.draw	pub draw: u32
-field	metal2vulkan::bind::TessellationRecordsFault.records	pub records: u32
-field	metal2vulkan::bind::TessellationScanKernel.domain	pub domain: PatchDomain
-field	metal2vulkan::bind::TessellationScanKernel.factor_scale_enabled	pub factor_scale_enabled: bool
-field	metal2vulkan::bind::TessellationScanKernel.factor_step_function	pub factor_step_function: Step
-field	metal2vulkan::bind::TessellationScanKernel.max_tessellation_factor	pub max_tessellation_factor: u32
-field	metal2vulkan::bind::TessellationScanKernel.output_winding_order	pub output_winding_order: Winding
-field	metal2vulkan::bind::TessellationScanKernel.partition_mode	pub partition_mode: Partition
-field	metal2vulkan::bind::TessellationScanModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::TessellationScanModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::TextureFacts.address_modes	pub address_modes: metal::sampler::AddressModeMap
 field	metal2vulkan::bind::TextureFacts.array_length	pub array_length: u32
 field	metal2vulkan::bind::TextureFacts.mipmap_level_count	pub mipmap_level_count: u32
@@ -3094,9 +3056,6 @@ field	metal2vulkan::pipeline::DescriptorSetLayout.flags	pub flags: vk::Descripto
 field	metal2vulkan::pipeline::DescriptorSetLayout.set	pub set: u32
 field	metal2vulkan::pipeline::DynamicLibraries.loaded	pub loaded: BTreeMap<String, DynamicLibrary>
 field	metal2vulkan::pipeline::DynamicLibraries.preloaded	pub preloaded: Vec<DynamicLibrary>
-field	metal2vulkan::pipeline::EmulatedTessellation.control_points	pub control_points: u32
-field	metal2vulkan::pipeline::EmulatedTessellation.descriptor	pub descriptor: TessellationDescriptor
-field	metal2vulkan::pipeline::EmulatedTessellation.domain	pub domain: PatchDomain
 field	metal2vulkan::pipeline::EntryDescriptor.bitcode	pub bitcode: &'a [u8]
 field	metal2vulkan::pipeline::EntryDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan::pipeline::EntryDescriptor.entry	pub entry: EntryRef<'a>
@@ -3139,7 +3098,6 @@ field	metal2vulkan::pipeline::GraphicsState.declares_layer	pub declares_layer: b
 field	metal2vulkan::pipeline::GraphicsState.depth_format	pub depth_format: Option<vk::Format>
 field	metal2vulkan::pipeline::GraphicsState.dynamic_states	pub dynamic_states: Vec<vk::DynamicState>
 field	metal2vulkan::pipeline::GraphicsState.early_fragment_tests	pub early_fragment_tests: bool
-field	metal2vulkan::pipeline::GraphicsState.emulated_tessellation	pub emulated_tessellation: Option<EmulatedTessellation>
 field	metal2vulkan::pipeline::GraphicsState.flat_fragment_inputs	pub flat_fragment_inputs: bool
 field	metal2vulkan::pipeline::GraphicsState.fragment_imageblock	pub fragment_imageblock: Option<FragmentImageblock>
 field	metal2vulkan::pipeline::GraphicsState.fragment_writes_memory	pub fragment_writes_memory: bool
@@ -3257,7 +3215,6 @@ field	metal2vulkan::pipeline::LoweringInputs.stage_input	pub stage_input: Option
 field	metal2vulkan::pipeline::LoweringInputs.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
 field	metal2vulkan::pipeline::LoweringInputs.storage_view_slots	pub storage_view_slots: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
-field	metal2vulkan::pipeline::LoweringInputs.tessellation	pub tessellation: Option<TessellationDescriptor>
 field	metal2vulkan::pipeline::LoweringInputs.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
 field	metal2vulkan::pipeline::LoweringInputs.texel_rows	pub texel_rows: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.texture_write_rounding	pub texture_write_rounding: metal::TextureWriteRoundingMode
@@ -3675,7 +3632,6 @@ fn	metal2vulkan::bind::replay_preprocess_generated	pub fn replay_preprocess_gene
 fn	metal2vulkan::bind::replay_preprocess_module	pub fn replay_preprocess_module(device: &Device) -> Result<ReplayPreprocessModule, Error>
 fn	metal2vulkan::bind::sampler_desc	pub fn sampler_desc(device: &crate::device::Device, desc: &crate::bind::state::SamplerDescriptor, use_: SamplerUse, opaque_black: OpaqueBlackBorder, image_format: Option<vk::Format>) -> Result<vk::SamplerDesc, BindError>
 fn	metal2vulkan::bind::stencil_split_module	pub fn stencil_split_module(device: &Device, feature: Feature) -> Result<StencilSplitModule, Error>
-fn	metal2vulkan::bind::tessellation_scan_module	pub fn tessellation_scan_module(device: &Device, kernel: &TessellationScanKernel) -> Result<TessellationScanModule, Error>
 fn	metal2vulkan::bind::texel_buffer_parts	pub fn texel_buffer_parts(limits: &Limits, texels: u64) -> u32
 fn	metal2vulkan::bind::ycbcr_convert_floats_module	pub fn ycbcr_convert_floats_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
 fn	metal2vulkan::bind::ycbcr_convert_module	pub fn ycbcr_convert_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
@@ -7220,13 +7176,8 @@ method	metal2vulkan::bind::StatusBits::contains	pub const fn contains(self, othe
 method	metal2vulkan::bind::StatusWord::byte_offset	pub const fn byte_offset(self) -> u32
 method	metal2vulkan::bind::StatusWord::index	pub const fn index(self) -> u32
 method	metal2vulkan::bind::StencilBit::mask	pub fn mask(self) -> u32
-method	metal2vulkan::bind::TessellationDispatch::chunks	pub fn chunks(&self, pool_bytes: u64) -> u32
-method	metal2vulkan::bind::TessellationDispatch::draw	pub fn draw(&self, k: u32) -> (Vec<PushConstantWrite>, vk::DrawCommand)
-method	metal2vulkan::bind::TessellationDispatch::work	pub fn work(&self, chunks: u32) -> Vec<u32>
 method	metal2vulkan::bind::TessellationFactorBuffer::new	pub fn new(length: u64, offset: u64, instance_stride: u64) -> TessellationFactorBuffer
 method	metal2vulkan::bind::TessellationFactors::new	pub fn new(buffer: Option<TessellationFactorBuffer>, scale: f32) -> TessellationFactors
-method	metal2vulkan::bind::TessellationRecords::bytes	pub fn bytes(&self) -> u64
-method	metal2vulkan::bind::TessellationScanKernel::max_patch_triangles	pub fn max_patch_triangles(&self) -> u32
 method	metal2vulkan::bind::TexelRows::elements	pub fn elements(&self) -> u64
 method	metal2vulkan::bind::TexelRows::new	pub fn new(size: [u32; 2], row: u64, first: u64) -> Option<TexelRows>
 method	metal2vulkan::bind::TexelRows::size	pub fn size(&self) -> [u32; 2]
@@ -7556,7 +7507,6 @@ method	metal2vulkan::pipeline::DynamicLibraries::is_empty	pub fn is_empty(&self)
 method	metal2vulkan::pipeline::DynamicLibraries::new	pub fn new() -> DynamicLibraries
 method	metal2vulkan::pipeline::DynamicLibraries::with_loaded	pub fn with_loaded(mut self, install_name: impl Into<String>, library: DynamicLibrary) -> DynamicLibraries
 method	metal2vulkan::pipeline::DynamicLibraries::with_preloaded	pub fn with_preloaded(mut self, library: DynamicLibrary) -> DynamicLibraries
-method	metal2vulkan::pipeline::EmulatedTessellation::scan_kernel	pub fn scan_kernel(&self) -> crate::bind::TessellationScanKernel
 method	metal2vulkan::pipeline::EntryDescriptor::new	pub fn new(bitcode: &'a [u8], entry: EntryRef<'a>) -> EntryDescriptor<'a>
 method	metal2vulkan::pipeline::ExtendedRangeColor::new	pub fn new(form: metal::format::ExtendedRange, blended: bool) -> ExtendedRangeColor
 method	metal2vulkan::pipeline::ExtendedRangeColor::with_rounding	pub fn with_rounding(self, rounding: metal::TextureWriteRoundingMode) -> ExtendedRangeColor
@@ -8067,12 +8017,8 @@ struct	metal2vulkan::bind::StatusBits	#[derive(Clone, Copy, Debug, Default, Part
 struct	metal2vulkan::bind::StatusReport	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StatusReport
 struct	metal2vulkan::bind::StencilBit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct StencilBit(u8)
 struct	metal2vulkan::bind::StencilSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct StencilSplitModule
-struct	metal2vulkan::bind::TessellationDispatch	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TessellationDispatch
 struct	metal2vulkan::bind::TessellationFactorBuffer	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TessellationFactorBuffer
 struct	metal2vulkan::bind::TessellationFactors	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct TessellationFactors
-struct	metal2vulkan::bind::TessellationRecordsFault	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TessellationRecordsFault
-struct	metal2vulkan::bind::TessellationScanKernel	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TessellationScanKernel
-struct	metal2vulkan::bind::TessellationScanModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TessellationScanModule
 struct	metal2vulkan::bind::TexelRows	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct TexelRows
 struct	metal2vulkan::bind::TextureFacts	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TextureFacts
 struct	metal2vulkan::bind::TileThreadgroupArgument	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct TileThreadgroupArgument
@@ -8178,7 +8124,6 @@ struct	metal2vulkan::pipeline::ComputePipelineMetalInfo	#[cfg_attr(feature = "se
 struct	metal2vulkan::pipeline::DescriptorBinding	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorBinding
 struct	metal2vulkan::pipeline::DescriptorSetLayout	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorSetLayout
 struct	metal2vulkan::pipeline::DynamicLibraries	#[derive(Clone, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct DynamicLibraries
-struct	metal2vulkan::pipeline::EmulatedTessellation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct EmulatedTessellation
 struct	metal2vulkan::pipeline::EntryDescriptor	#[derive(Clone, Debug)] #[non_exhaustive] pub struct EntryDescriptor<'a>
 struct	metal2vulkan::pipeline::EntryPlan	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct EntryPlan
 struct	metal2vulkan::pipeline::ExtendedRangeColor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ExtendedRangeColor
@@ -10084,8 +10029,6 @@ variant	metal2vulkan::bind::StatusWord::ReplayFaults	ReplayFaults
 variant	metal2vulkan::bind::StatusWord::ResidentMisses	ResidentMisses
 variant	metal2vulkan::bind::StatusWord::SeqCstFences	SeqCstFences
 variant	metal2vulkan::bind::StatusWord::Status	Status
-variant	metal2vulkan::bind::TessellationRecords::Exact	Exact { records: u32 }
-variant	metal2vulkan::bind::TessellationRecords::Pool	Pool
 variant	metal2vulkan::bind::TextureShape::Buffer	Buffer { pixel_format: metal::PixelFormat,  swizzle: metal::TextureSwizzleChannels,  parts: u32 }
 variant	metal2vulkan::bind::TextureShape::Texture	Texture { texture_type: metal::TextureType, pixel_format: metal::PixelFormat, sample_count: u32, usage: metal::TextureUsage,  mipmap_level_count: u32,  sparse: bool,  swizzle: metal::TextureSwizzleChannels,  address_modes: metal::sampler::AddressModeMap,  offset_base_axes: u8,  ycbcr_in_place: bool,  ycbcr_planes_sampler: Option<crate::bind::YCbCrPlanesSampler>,  texel_rows: bool }
 variant	metal2vulkan::bind::TileMapError::Region	Region { level: u32, slice: u32, origin: [u32; 3], size: [u32; 3] }
@@ -10138,8 +10081,6 @@ variant	metal2vulkan::bind::WriteSource::ShadowStencil	ShadowStencil
 variant	metal2vulkan::bind::WriteSource::SnapshotTexels	SnapshotTexels { slot: u32 }
 variant	metal2vulkan::bind::WriteSource::StencilStandIn	StencilStandIn
 variant	metal2vulkan::bind::WriteSource::TessellationFactors	TessellationFactors
-variant	metal2vulkan::bind::WriteSource::TessellationRecords	TessellationRecords
-variant	metal2vulkan::bind::WriteSource::TessellationWork	TessellationWork
 variant	metal2vulkan::bind::WriteSource::TexelBuffer	TexelBuffer { slot: SlotRef, format: vk::Format, window: Window }
 variant	metal2vulkan::bind::WriteSource::TexelRows	TexelRows { slot: SlotRef, format: vk::Format }
 variant	metal2vulkan::bind::WriteSource::Texture	Texture { slot: SlotRef, view: ImageViewDesc }
@@ -11110,7 +11051,6 @@ variant	metal2vulkan::error::RuntimeInput::RenderTargetArrayIndex	RenderTargetAr
 variant	metal2vulkan::error::RuntimeInput::SampleMask	SampleMask
 variant	metal2vulkan::error::RuntimeInput::StageInputDescriptor	StageInputDescriptor { attribute: u32 }
 variant	metal2vulkan::error::RuntimeInput::StorageTextureFormat	StorageTextureFormat { slot: SlotRef }
-variant	metal2vulkan::error::RuntimeInput::TessellationDescriptor	TessellationDescriptor
 variant	metal2vulkan::error::RuntimeInput::TileAttachments	TileAttachments
 variant	metal2vulkan::error::RuntimeInput::UniformVaryings	UniformVaryings
 variant	metal2vulkan::error::RuntimeInput::VertexDescriptor	VertexDescriptor { attribute: u32 }
@@ -11416,7 +11356,6 @@ variant	metal2vulkan::pipeline::PushField::StageInRegion	StageInRegion
 variant	metal2vulkan::pipeline::PushField::StageInStride	StageInStride(u32)
 variant	metal2vulkan::pipeline::PushField::StorageKeptChannels	StorageKeptChannels
 variant	metal2vulkan::pipeline::PushField::TailWord	TailWord
-variant	metal2vulkan::pipeline::PushField::TessellationChunk	TessellationChunk
 variant	metal2vulkan::pipeline::PushField::TessellationFactorAddress	TessellationFactorAddress
 variant	metal2vulkan::pipeline::PushField::TessellationFactorInstanceStride	TessellationFactorInstanceStride
 variant	metal2vulkan::pipeline::PushField::TessellationFactorOffset	TessellationFactorOffset
@@ -11689,8 +11628,6 @@ variant	metal2vulkan::pipeline::SyntheticBinding::SamplerTable	SamplerTable
 variant	metal2vulkan::pipeline::SyntheticBinding::ShadowStencil	ShadowStencil
 variant	metal2vulkan::pipeline::SyntheticBinding::StencilStandIn	StencilStandIn
 variant	metal2vulkan::pipeline::SyntheticBinding::TessellationFactors	TessellationFactors
-variant	metal2vulkan::pipeline::SyntheticBinding::TessellationRecords	TessellationRecords
-variant	metal2vulkan::pipeline::SyntheticBinding::TessellationWork	TessellationWork
 variant	metal2vulkan::pipeline::SyntheticBinding::TileMemory	TileMemory
 variant	metal2vulkan::pipeline::UniformViewChoice::Kept	Kept
 variant	metal2vulkan::pipeline::UniformViewChoice::Spare	Spare

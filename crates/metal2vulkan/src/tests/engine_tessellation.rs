@@ -19,7 +19,7 @@ use crate::bind::{
     TessellationFactorBuffer, TessellationFactors, UseTarget, WriteSource,
 };
 use crate::budget::{Budget, SPIRV_WORDS};
-use crate::device::requirements::{VkFeature, VkLimit};
+use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
 use crate::error::{
     BindError, Capability, DescriptorError, Error, Feature, LowerFamily, Needs, RuntimeInput,
@@ -29,7 +29,7 @@ use crate::metal::{
     TessellationControlPointIndexType, TessellationFactorStepFunction, TessellationPartitionMode,
     VertexFormat, VertexStepFunction, Winding,
 };
-use crate::pipeline::artifact::{PrecisionNote, RenderPipeline, StageModule};
+use crate::pipeline::artifact::{PrecisionNote, StageModule};
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::descriptor::{
     FunctionDescriptor, RenderPipelineDescriptor, StageSource, TessellationDescriptor,
@@ -198,8 +198,7 @@ fn assert_evaluation(words: &[u32], mode: crate::spv::ExecutionMode, patch: &[u3
 }
 
 /// `[[position_in_patch]]` is `TessCoord`, `[[patch_id]]` the patch input at location 0, and the
-/// module needs `tessellationShader`; on a profile without it the function is an emulated vertex
-/// entry.
+/// module needs `tessellationShader`; on a profile without it the function is refused, naming it.
 #[test]
 fn a_quad_patch_is_an_evaluation_shader_on_every_profile_with_tessellation() {
     let Some(bc) = fixture() else { return };
@@ -228,27 +227,21 @@ fn a_quad_patch_is_an_evaluation_shader_on_every_profile_with_tessellation() {
             &[TessellationStage::PATCH_INDEX_LOCATION],
         );
     }
-    // Without it, the function is a plain vertex entry that draws the tessellator's triangles
-    // itself, baking in Metal's default tessellation state.
+    // Without it the device has no stage to run the function in.
+    let needs = Needs::AnyOf(vec![vec![Capability::Feature(
+        VkFeature::TessellationShader,
+    )]]);
     for (stem, p) in &without {
-        let a = compile(&bc, "tess_quad_buffer", p, None).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(
-            a.interface.tessellation,
-            Some(
-                TessellationStage::new(PatchDomain::Quad, 4)
-                    .emulated(TessellationDescriptor::default())
-            ),
-            "{stem}"
-        );
-        assert_eq!(a.interface.vk_stage(), vk::ShaderStage::VERTEX, "{stem}");
-        assert!(!a
-            .requirements
-            .features
-            .contains(&VkFeature::TessellationShader));
-        let (_, words) = link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let entries = instructions(&words, crate::spv::Op::EntryPoint);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0][0], crate::spv::ExecutionModel::Vertex as u32);
+        match compile(&bc, "tess_quad_buffer", p, None) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, &u.needs),
+                    (Feature::Tessellation, &needs),
+                    "{stem}"
+                )
+            }
+            other => panic!("{stem}: {:?}", other.map(|_| ())),
+        }
     }
 }
 
@@ -765,43 +758,6 @@ fn tessellation_pipeline(
     d
 }
 
-/// The emulated pipeline `d` on `dev` (of committed profile `stem`, without
-/// `tessellationShader`), or `None` where the device's vertex stage cannot bind the emulation's
-/// buffers beside the function's: a typed refusal naming `maxPerStageDescriptorStorageBuffers`
-/// at the device's own value. Any other refusal fails the test.
-fn emulated(dev: &Device, d: &RenderPipelineDescriptor, stem: &str) -> Option<RenderPipeline> {
-    match dev.compile_render_pipeline(d, &Budget::standard()) {
-        Ok(p) => Some(p),
-        Err(Error::Unsupported(u)) if u.feature == Feature::DescriptorCount => {
-            let available = u64::from(
-                dev.profile()
-                    .fields()
-                    .limits
-                    .max_per_stage_descriptor_storage_buffers,
-            );
-            let Needs::AnyOf(any) = &u.needs else {
-                panic!("{stem}: {u:?}");
-            };
-            assert!(
-                matches!(
-                    any.as_slice(),
-                    [one] if matches!(
-                        one.as_slice(),
-                        [Capability::Limit {
-                            limit: VkLimit::MaxPerStageDescriptorStorageBuffers,
-                            available: a,
-                            ..
-                        }] if *a == available
-                    )
-                ),
-                "{stem}: {u:?}"
-            );
-            None
-        }
-        Err(e) => panic!("{stem}: {e}"),
-    }
-}
-
 /// The execution modes of the module `words`' entry.
 fn modes(words: &[u32]) -> Vec<Vec<u32>> {
     instructions(words, crate::spv::Op::ExecutionMode)
@@ -815,9 +771,7 @@ fn modes(words: &[u32]) -> Vec<Vec<u32>> {
 /// pipeline of one control point per patch: the control stage owns the factor and patch index
 /// buffers' bindings, the control-point index buffer's for a control-point index type, and its push
 /// range, declares the descriptor's modes, and every module passes L3 on every committed profile
-/// with `tessellationShader`. Without it the pipeline is two stages, the post-tessellation function
-/// emulated as a `TRIANGLE_LIST` vertex stage that owns the draw's work, records and index
-/// buffers, stating the descriptor's state as its emulated tessellation.
+/// with `tessellationShader`. Without it the pipeline is refused (`Unsupported{Tessellation}`).
 #[test]
 fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation() {
     let Some(bc) = fixture() else { return };
@@ -1018,95 +972,19 @@ fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation(
             }
         }
     }
-    // Without it, two stages: the vertex function draws the tessellator's triangles as a
-    // triangle list from the draw's work buffer and records, and owns the index buffers.
-    let mut compiled = vec![0; cases.len()];
+    // Without it the pipeline is refused.
     for (stem, _) in &without {
         let dev = device(stem);
-        for (i, (entry, t, domain, points, _)) in cases.iter().enumerate() {
+        for (entry, t, ..) in &cases {
             let d = tessellation_pipeline(&bc, &fragments, entry, Some("tess_fragment"), Some(*t));
-            let Some(p) = emulated(&dev, &d, stem) else {
-                continue;
-            };
-            compiled[i] += 1;
-            let stages: Vec<vk::ShaderStage> = p.stages.iter().map(|m| m.stage).collect();
-            assert_eq!(
-                stages,
-                [vk::ShaderStage::VERTEX, vk::ShaderStage::FRAGMENT],
-                "{stem} {entry}"
-            );
-            assert_eq!(p.graphics.topology, vk::PrimitiveTopology::TRIANGLE_LIST);
-            assert!(!p
-                .graphics
-                .dynamic_states
-                .contains(&vk::DynamicState::PRIMITIVE_TOPOLOGY));
-            assert_eq!(p.graphics.tessellation, None);
-            let e = p.graphics.emulated_tessellation.expect("emulated state");
-            assert_eq!(
-                (e.domain, e.control_points, e.descriptor),
-                (*domain, *points, *t)
-            );
-            assert!(!p
-                .requirements
-                .features
-                .contains(&VkFeature::TessellationShader));
-            let vertex = vk::ShaderStage::VERTEX.flags();
-            let synthetic = |binding: SyntheticBinding| -> Vec<_> {
-                p.layout
-                    .sets
-                    .iter()
-                    .flat_map(|s| &s.bindings)
-                    .filter(|b| {
-                        b.source
-                            == BindingSource::Synthetic {
-                                stage: Stage::Vertex,
-                                binding,
-                            }
-                    })
-                    .collect()
-            };
-            for binding in [
-                SyntheticBinding::TessellationWork,
-                SyntheticBinding::TessellationRecords,
-            ] {
-                let found = synthetic(binding);
-                assert_eq!(found.len(), 1, "{stem} {entry} {binding:?}");
-                assert_eq!(found[0].stages, vertex);
-                assert_eq!(found[0].ty, vk::DescriptorType::STORAGE_BUFFER);
-            }
-            // The scan reads the factors; the pipeline does not bind them.
-            assert!(synthetic(SyntheticBinding::TessellationFactors).is_empty());
-            for binding in [
-                SyntheticBinding::PatchIndices,
-                SyntheticBinding::ControlPointIndices,
-            ] {
-                for b in synthetic(binding) {
-                    assert_eq!(b.stages, vertex, "{stem} {entry} {binding:?}");
+            match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                Err(Error::Unsupported(u)) => {
+                    assert_eq!(u.feature, Feature::Tessellation, "{stem} {entry}")
                 }
-            }
-            // The emulation draws Metal's triangles in Metal's order: no tessellation note.
-            for m in &p.stages {
-                assert_eq!(
-                    m.precision_notes
-                        .iter()
-                        .filter(|n| matches!(
-                            n,
-                            PrecisionNote::TessellationWinding
-                                | PrecisionNote::TessellationFactorEdgeCases
-                                | PrecisionNote::TessellationFractionalSpacing
-                                | PrecisionNote::TessellationTriangleOrder
-                        ))
-                        .count(),
-                    0,
-                    "{stem} {entry}"
-                );
-                check_words_valid(&m.spirv, &p.requirements, dev.profile())
-                    .unwrap_or_else(|e| panic!("{stem} {entry} {:?}: L3: {e}", m.stage));
+                other => panic!("{stem} {entry}: {:?}", other.map(|_| ())),
             }
         }
     }
-    // Each function compiles on some profile; a profile of too few storage buffers refuses it.
-    assert!(compiled.iter().all(|&n| n > 0), "{compiled:?}");
 }
 
 /// What the control stage does not implement or the device lacks is a typed refusal: a factor
@@ -1424,194 +1302,10 @@ fn a_tessellation_plan_draws_patches() {
     }
 }
 
-/// An emulated tessellation pipeline's plan binds the draw's work buffer and records and no factor
-/// buffer, and a patch draw scans: the work buffer's header holds a direct draw's arguments and the
-/// factor buffer's residual bind offset, instance stride and `half` scale, its records are its own,
-/// the scan binds the factors the draw reads (a `COMPUTE_SHADER` use), and the draw is chunk 0's
-/// `vkCmdDrawIndirect` from the work buffer, with the chunk pushed to the vertex stage. An indirect
-/// draw's records are in the pool and the consumer copies Metal's arguments into the header for
-/// the scan, so the CPU does not read them.
+/// A post-tessellation vertex function's compile key and lowering inputs are the same for every
+/// tessellation state: the state is its pipeline's control stage's, not the function's.
 #[test]
-fn an_emulated_tessellation_plan_scans_and_draws_chunks() {
-    use crate::bind::{BufferRange, TessellationRecords};
-    use crate::lower::tessellation::work;
-    let Some(bc) = fixture() else { return };
-    let Some(fragments) = assemble_text("fragments", FRAGMENTS) else {
-        return;
-    };
-    let t = TessellationDescriptor {
-        factor_step_function: TessellationFactorStepFunction::PerPatchAndPerInstance,
-        factor_scale_enabled: true,
-        ..Default::default()
-    };
-    let (_, without) = profiles();
-    let mut planned = 0;
-    for (stem, _) in &without {
-        let dev = device(stem);
-        let d = tessellation_pipeline(
-            &bc,
-            &fragments,
-            "tess_triangle_points",
-            Some("tess_fragment"),
-            Some(t),
-        );
-        let Some(p) = emulated(&dev, &d, stem) else {
-            continue;
-        };
-        planned += 1;
-        let e = p.graphics.emulated_tessellation.expect("emulated");
-        let mut state = BindState::default();
-        let mut table = StageTable::default();
-        for index in [0, 1] {
-            table.buffers.insert(
-                index,
-                BoundBuffer::Buffer {
-                    length: 4096,
-                    offset: 0,
-                    gpu_address: 0x1_0000,
-                    device_address: None,
-                    attribute_stride: None,
-                },
-            );
-        }
-        state.stages.insert(Stage::Vertex, table);
-        let (offset, stride) = (64, 256);
-        state.tessellation_factors = TessellationFactors::new(
-            Some(TessellationFactorBuffer::new(4096, offset, stride)),
-            1.3,
-        );
-        let plan = p.plan(&dev, &state.shape()).expect("plan");
-        for source in [
-            WriteSource::TessellationWork,
-            WriteSource::TessellationRecords,
-        ] {
-            assert_eq!(
-                plan.descriptors
-                    .iter()
-                    .filter(|w| w.source == source)
-                    .count(),
-                1,
-                "{stem} {source:?}"
-            );
-        }
-        assert!(!plan
-            .descriptors
-            .iter()
-            .any(|w| w.source == WriteSource::TessellationFactors));
-        assert!(plan
-            .uses
-            .iter()
-            .any(|u| u.resource == UseTarget::TessellationFactors
-                && u.stages == vk::PipelineStageFlags2::COMPUTE_SHADER));
-        let draw = DrawCall::Patches {
-            control_points: 3,
-            patch_start: 2,
-            patch_count: 5,
-            patch_index: None,
-            instance_count: 2,
-            base_instance: 1,
-            control_point_index: None,
-        };
-        let cmds = plan.instantiate_draw(&state, &draw).expect("draw");
-        let scan = cmds.tessellation_dispatch.clone().expect("a scan");
-        assert_eq!(scan.kernel, e.scan_kernel());
-        assert_eq!(scan.records, TessellationRecords::Exact { records: 10 });
-        assert_eq!(scan.records.bytes(), 10 * 32);
-        assert_eq!(scan.arguments, None);
-        // Patches 2..7 of instances 1..3, 8 bytes each, 256 bytes an instance.
-        let start = offset + 2 * 8 + 256;
-        let end = offset + 6 * 8 + 2 * 256 + 8;
-        let a = dev
-            .profile()
-            .fields()
-            .limits
-            .min_storage_buffer_offset_alignment
-            .max(4);
-        let lo = start - start % a;
-        assert_eq!(
-            scan.factors,
-            Some(BufferRange {
-                offset: lo,
-                range: end.next_multiple_of(16) - lo
-            }),
-            "{stem}"
-        );
-        let h = |w: u32| scan.header[w as usize];
-        assert_eq!(
-            [
-                h(work::PATCH_COUNT),
-                h(work::INSTANCE_COUNT),
-                h(work::PATCH_START),
-                h(work::BASE_INSTANCE),
-            ],
-            [5, 2, 2, 1]
-        );
-        // The residual from the bound range's start, modulo `2^32` (the range starts at the first
-        // factor read, past the bind offset).
-        assert_eq!(
-            h(work::FACTOR_OFFSET),
-            (offset as u32).wrapping_sub(lo as u32),
-            "{stem}"
-        );
-        assert_eq!(h(work::FACTOR_STRIDE), stride as u32);
-        // 1.3 as a `half`: 1 + 307/1024.
-        assert_eq!(f32::from_bits(h(work::SCALE)), 1.0 + 307.0 / 1024.0);
-        // Ten records, far below a chunk of triangles at the most per patch: one chunk.
-        assert_eq!(scan.chunks(0), 1);
-        let words = scan.work(1);
-        assert_eq!(words.len() as u64, work::words(1));
-        assert_eq!(words[work::CHUNKS as usize], 1);
-        let (writes, command) = scan.draw(0);
-        assert_eq!(cmds.draw, command);
-        assert_eq!(
-            command,
-            vk::DrawCommand::DrawIndirect {
-                offset: work::draw_offset(0),
-                draw_count: 1,
-                stride: 16
-            }
-        );
-        assert!(!writes.is_empty(), "{stem}");
-        for w in &writes {
-            assert_eq!(w.stages, vk::ShaderStage::VERTEX.flags(), "{stem}");
-            assert_eq!(w.bytes, 0u32.to_le_bytes());
-        }
-        let (writes, _) = scan.draw(3);
-        assert!(writes.iter().all(|w| w.bytes == 3u32.to_le_bytes()));
-        assert!(!cmds.indirect_needs_arguments, "{stem}");
-
-        let indirect = DrawCall::PatchesIndirect {
-            control_points: 3,
-            patch_index: None,
-            indirect: IndirectRef::new(9, 36),
-            control_point_index: None,
-        };
-        let cmds = plan.instantiate_draw(&state, &indirect).expect("indirect");
-        let scan = cmds.tessellation_dispatch.clone().expect("a scan");
-        assert_eq!(scan.records, TessellationRecords::Pool);
-        // Copied from their offset into the header, which the binder leaves zero.
-        assert_eq!(scan.arguments, Some(36));
-        assert_eq!(&scan.header[..4], &[0; 4]);
-        assert!(!cmds.indirect_needs_arguments, "{stem}");
-        assert!(cmds.uses.iter().any(|u| u.resource == UseTarget::Indirect
-            && u.stages == vk::PipelineStageFlags2::COMPUTE_SHADER));
-        // A pool of 1 MiB: every record it holds at the most triangles each.
-        let records = (1u64 << 20) / 32;
-        let most = u64::from(e.scan_kernel().max_patch_triangles());
-        assert_eq!(
-            u64::from(scan.chunks(1 << 20)),
-            (records * most).div_ceil(work::CHUNK_TRIANGLES).max(1)
-        );
-    }
-    assert!(planned > 0);
-}
-
-/// A post-tessellation vertex function bakes the descriptor's tessellation state into its
-/// lowering inputs, and so into its compile key, only on a device that emulates it: a native
-/// device's vertex key and inputs are the same for every tessellation state, and an emulating
-/// device's differ by state, Metal's defaults keyed as no state.
-#[test]
-fn only_an_emulated_function_keys_the_tessellation_state() {
+fn the_tessellation_state_keys_no_vertex_function() {
     let Some(bc) = fixture() else { return };
     let Some(fragments) = assemble_text("fragments", FRAGMENTS) else {
         return;
@@ -1623,7 +1317,7 @@ fn only_an_emulated_function_keys_the_tessellation_state() {
         ..Default::default()
     };
     let budget = Budget::standard();
-    let (with, without) = profiles();
+    let (with, _) = profiles();
     let keys = |dev: &Device, t: Option<TessellationDescriptor>| {
         let d = tessellation_pipeline(&bc, &fragments, "tess_quad_buffer", None, t);
         let k = dev.render_pipeline_key(&d, &budget).expect("keys");
@@ -1631,193 +1325,9 @@ fn only_an_emulated_function_keys_the_tessellation_state() {
     };
     for (stem, _) in &with {
         let dev = device(stem);
-        let (none, inputs) = keys(&dev, None);
-        assert_eq!(inputs.tessellation, None, "{stem}");
+        let none = keys(&dev, None);
         for t in [TessellationDescriptor::default(), other] {
-            assert_eq!(keys(&dev, Some(t)), (none, inputs.clone()), "{stem}");
-        }
-    }
-    for (stem, _) in &without {
-        let dev = device(stem);
-        let (none, inputs) = keys(&dev, None);
-        assert_eq!(inputs.tessellation, None, "{stem}");
-        assert_eq!(
-            keys(&dev, Some(TessellationDescriptor::default())),
-            (none, inputs),
-            "{stem}"
-        );
-        let (key, inputs) = keys(&dev, Some(other));
-        assert_eq!(inputs.tessellation, Some(other), "{stem}");
-        assert_ne!(key, none, "{stem}");
-    }
-}
-
-/// The storage buffers an emulated post-tessellation vertex function binds beside its own (the
-/// draw's work buffer and records, and the patch index buffer it reads) count toward
-/// `maxPerStageDescriptorStorageBuffers`: on a device of one fewer than the vertex stage's storage
-/// buffers the pipeline is refused, typed, naming that limit, and on one of exactly as many it
-/// compiles.
-#[test]
-fn an_emulated_function_counts_its_draw_s_buffers_against_the_stage_s_limit() {
-    let Some(bc) = fixture() else { return };
-    let Some(fragments) = assemble_text("fragments", FRAGMENTS) else {
-        return;
-    };
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/vk12-floor.json");
-    let text = std::fs::read_to_string(path).expect("profile");
-    let with_storage = |buffers: u32| {
-        let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        desc.limits.max_per_stage_descriptor_storage_buffers = buffers;
-        Device::from_queries(desc, DevicePolicy::default()).expect("device")
-    };
-    let budget = Budget::standard();
-    // Its control points and patch inputs are pulled from two buffers, which no device address
-    // stands in for.
-    let d = tessellation_pipeline(&bc, &fragments, "tess_triangle_points", None, None);
-    let roomy = with_storage(64)
-        .compile_render_pipeline(&d, &budget)
-        .expect("the pipeline");
-    assert!(roomy.graphics.emulated_tessellation.is_some());
-    let bindings: Vec<_> = roomy
-        .layout
-        .sets
-        .iter()
-        .flat_map(|s| &s.bindings)
-        .filter(|b| {
-            b.ty == vk::DescriptorType::STORAGE_BUFFER
-                && b.stages.contains(vk::ShaderStageFlags::VERTEX)
-        })
-        .collect();
-    for binding in [
-        SyntheticBinding::TessellationWork,
-        SyntheticBinding::TessellationRecords,
-        SyntheticBinding::PatchIndices,
-    ] {
-        assert!(
-            bindings.iter().any(|b| b.source
-                == BindingSource::Synthetic {
-                    stage: Stage::Vertex,
-                    binding,
-                }),
-            "{binding:?}"
-        );
-    }
-    let n = bindings.len() as u32;
-    with_storage(n)
-        .compile_render_pipeline(&d, &budget)
-        .expect("the pipeline at the stage's buffers");
-    match with_storage(n - 1).compile_render_pipeline(&d, &budget) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::DescriptorCount);
-            assert_eq!(
-                u.needs,
-                Needs::AnyOf(vec![vec![Capability::Limit {
-                    limit: VkLimit::MaxPerStageDescriptorStorageBuffers,
-                    required: u64::from(n),
-                    available: u64::from(n - 1),
-                }]])
-            );
-        }
-        other => panic!("expected a descriptor-count refusal, got {other:?}"),
-    }
-}
-
-/// Behind an emulated post-tessellation vertex function a fragment function reads its
-/// `[[primitive_id]]` from the primitive ID's flat varying (`IoRole::PrimitiveId`), which the
-/// vertex function writes as its patch's position, on every profile without `tessellationShader`:
-/// with `geometryShader`, whose fragment stage declares `PrimitiveId`, under the fragment's
-/// `LoweringInputs::primitive_id_varying`; without it, as every fragment function there reads it.
-/// The vertex function never takes the plain vertex function's form (`(VertexIndex - first) / n`):
-/// its pipeline reads no `PushField::VerticesPerPrimitive`. A pipeline whose fragment function
-/// reads no `[[primitive_id]]` carries no varying. Behind an evaluation stage it stays refused.
-#[test]
-fn an_emulated_pipeline_reads_the_primitive_id_from_the_patch_position() {
-    let Some(bc) = fixture() else { return };
-    let Some(fragments) = assemble_text("fragments", FRAGMENTS) else {
-        return;
-    };
-    let budget = Budget::standard();
-    let (with, without) = profiles();
-    let mut declaring = 0;
-    for (stem, profile) in &without {
-        let dev = device(stem);
-        let declares = !crate::pipeline::compile::primitive_id_varying_on(profile);
-        declaring += usize::from(declares);
-        for fragment in ["tess_fragment_primitive", "tess_fragment"] {
-            let d =
-                tessellation_pipeline(&bc, &fragments, "tess_quad_buffer", Some(fragment), None);
-            let k = dev.render_pipeline_key(&d, &budget).expect("keys");
-            let reads = fragment == "tess_fragment_primitive";
-            let what = format!("{stem} {fragment}");
-            let vertex_inputs = k.vertex_inputs.expect("vertex inputs");
-            let fragment_inputs = k.fragment_inputs.expect("fragment inputs");
-            assert_eq!(vertex_inputs.primitive_id_varying, reads, "{what}");
-            assert_eq!(
-                fragment_inputs.primitive_id_varying,
-                reads && declares,
-                "{what}"
-            );
-            // The stages as the pipeline compiles them: the vertex function writes the varying
-            // exactly where the fragment function reads it.
-            let role = |list: &[crate::pipeline::stage_io::IoVariable]| {
-                list.iter()
-                    .any(|v| v.role == crate::pipeline::stage_io::IoRole::PrimitiveId)
-            };
-            let stage = |source: Option<&StageSource>, inputs| match source {
-                Some(StageSource::Function(f)) => dev
-                    .compile_function(f, inputs, &budget)
-                    .unwrap_or_else(|e| panic!("{what}: {e}"))
-                    .artifact()
-                    .interface
-                    .io
-                    .clone(),
-                _ => panic!("{what}: a function stage"),
-            };
-            let vertex = stage(Some(&d.vertex), &vertex_inputs);
-            let fragment_io = stage(d.fragment.as_ref(), &fragment_inputs);
-            assert_eq!(role(&vertex.outputs), reads, "{what}: the vertex writes");
-            assert_eq!(
-                role(&fragment_io.inputs),
-                reads,
-                "{what}: the fragment reads"
-            );
-            let p = dev
-                .compile_render_pipeline(&d, &budget)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(
-                !p.interface
-                    .push
-                    .iter()
-                    .flat_map(|pl| &pl.fields)
-                    .any(|f| f.field == PushField::VerticesPerPrimitive),
-                "{what}: the plain vertex function's divisor"
-            );
-            assert!(p.graphics.flat_fragment_inputs || !reads, "{what}");
-            for m in &p.stages {
-                check_words_valid(&m.spirv, &p.requirements, dev.profile())
-                    .unwrap_or_else(|e| panic!("{what} {:?}: L3: {e}", m.stage));
-            }
-        }
-    }
-    assert!(
-        declaring < without.len(),
-        "a committed profile without geometryShader or tessellationShader"
-    );
-    for (stem, _) in &with {
-        let d = tessellation_pipeline(
-            &bc,
-            &fragments,
-            "tess_quad_buffer",
-            Some("tess_fragment_primitive"),
-            None,
-        );
-        match device(stem).compile_render_pipeline(&d, &budget) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!(u.feature, Feature::Tessellation, "{stem}");
-                assert_eq!(u.needs, Needs::NotImplemented, "{stem}");
-            }
-            other => panic!("{stem}: {:?}", other.map(|_| ())),
+            assert_eq!(keys(&dev, Some(t)), none, "{stem}");
         }
     }
 }

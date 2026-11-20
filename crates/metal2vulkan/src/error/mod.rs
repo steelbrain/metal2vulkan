@@ -1094,7 +1094,7 @@ pub enum Feature {
 
     // ---- the refused families, not implemented yet ----
     /// Tessellation: a post-tessellation vertex function and its pipeline's patch draws, through
-    /// the device's tessellation stages, or emulated on a device without `tessellationShader`.
+    /// the device's tessellation stages (`tessellationShader`).
     Tessellation,
     MeshShading,
     TileShading,
@@ -1556,19 +1556,12 @@ pub enum RuntimeInput {
     /// compiled for the pipeline again.
     RenderTargetArrayIndex,
     /// A fragment function reads its `[[primitive_id]]` from the varying its pipeline's vertex
-    /// function writes (`IoRole::PrimitiveId`: on a device that cannot declare a fragment
-    /// `PrimitiveId`, or behind a post-tessellation vertex function emulated on a device without
-    /// `tessellationShader`), and the vertex function was compiled without
+    /// function writes (`IoRole::PrimitiveId`, on a device that cannot declare a fragment
+    /// `PrimitiveId`), and the vertex function was compiled without
     /// `LoweringInputs::primitive_id_varying`, so it writes none; or the vertex function writes it
     /// and the fragment function, compiled for another vertex function, reads Vulkan's
-    /// `PrimitiveId`, which counts the tessellator's triangles there. It is compiled for the
-    /// pipeline again.
+    /// `PrimitiveId`. It is compiled for the pipeline again.
     PrimitiveId,
-    /// A post-tessellation vertex function compiled for a device without `tessellationShader`
-    /// bakes its render pipeline descriptor's tessellation state in
-    /// (`LoweringInputs::tessellation`), and was compiled for another state than its pipeline's:
-    /// it is compiled for the pipeline again.
-    TessellationDescriptor,
     /// A fragment function writes a color attachment whose format converts its float output (a
     /// normalized, sRGB or half-float format) and was compiled for other attachments, another
     /// blend state, or another device's conversion: its map of how each such output reaches the

@@ -1069,15 +1069,15 @@ fn ob3_case(fixture: &str) -> AuthoredCase {
 /// control point and a stage input are pulled through a descriptor view, left to the stated
 /// robustness or checked in the shader; an index buffer is bounded by `robustBufferAccess2` where
 /// the leg enables it and clamped by the binder elsewhere; a top-level texture array's index is
-/// clamped in the shader. The profiles without vertex stores refuse the vertex and control-point
-/// draws, which write memory, a typed refusal; a control point compiles on every other profile,
-/// through the tessellation emulation on one without `tessellationShader`.
+/// clamped in the shader. The profiles without `tessellationShader` refuse the control-point draw,
+/// a post-tessellation vertex function, and those without vertex stores the vertex draws, which
+/// write memory, each a typed refusal; a control point compiles on every other profile.
 #[test]
 fn the_ob3_fixtures_contain_each_target_by_its_fetch_on_every_profile() {
     use metal2vulkan_devtools::{engine_dir, llvm_assemble};
     let table = committed_profiles().unwrap();
-    // What each profile's description states, by stem: whether it has `robustBufferAccess2` and
-    // vertex stores. The stated description decides both legs; the robustness-off leg reads none
+    // What each profile's description states, by stem: whether it has `robustBufferAccess2`,
+    // vertex stores and `tessellationShader`. The stated description decides both legs; the robustness-off leg reads none
     // of the robustness here.
     let described = table
         .iter()
@@ -1090,6 +1090,7 @@ fn the_ob3_fixtures_contain_each_target_by_its_fetch_on_every_profile() {
             let facts = (
                 has(VkFeature::RobustBufferAccess2),
                 has(VkFeature::VertexPipelineStoresAndAtomics),
+                has(VkFeature::TessellationShader),
             );
             (stem, facts)
         })
@@ -1110,9 +1111,10 @@ fn the_ob3_fixtures_contain_each_target_by_its_fetch_on_every_profile() {
             let label = entry.tier.label();
             let stem = entry.tier.stem.as_str();
             let off = entry.tier.leg == Leg::RobustnessOff;
-            let (robust2, vertex_stores) = described[stem];
+            let (robust2, vertex_stores, tessellation) = described[stem];
             let robust = if robust2 { "robust2" } else { "robust" };
             let refused = match fixture {
+                "ob3_control_point" if !tessellation => Some("Tessellation"),
                 "ob3_vertex_input" | "ob3_index_buffer" | "ob3_control_point" => {
                     (!vertex_stores).then_some("StageStoresAndAtomics")
                 }

@@ -377,16 +377,8 @@ pub fn link(
     check_push_base(&ifaces)?;
     // A render pipeline whose vertex function is post-tessellation adds the synthesized vertex
     // and control stages: the control stage's factor and patch index buffers and push range.
-    // On a device without `tessellationShader` the vertex function draws the tessellator's
-    // triangles itself: no stage is added, and the pipeline states the emulation.
-    let emulated = match (inputs, ifaces.first().and_then(|i| i.tessellation)) {
-        (LinkInputs::Render(r), Some(stage)) if stage.emulated.is_some() => Some(
-            tessellation::emulated_state(r.tessellation.as_ref(), stage)?,
-        ),
-        _ => None,
-    };
     let plan = match (inputs, ifaces.first().and_then(|i| i.tessellation)) {
-        (LinkInputs::Render(r), Some(stage)) if stage.emulated.is_none() => {
+        (LinkInputs::Render(r), Some(stage)) => {
             tessellation::check_fragment(ifaces.get(1).copied())?;
             Some(tessellation::control_plan(
                 r.tessellation.as_ref(),
@@ -551,18 +543,6 @@ pub fn link(
             };
             let ts = control.map(|(plan, offset)| plan.state(offset));
             let mut gs = render_state(r, vs, stages.get(1).copied(), &vi, ts, p)?;
-            // An emulated tessellation pipeline draws a triangle list, which no draw changes.
-            if let Some(e) = emulated {
-                gs.topology = vk::PrimitiveTopology::TRIANGLE_LIST;
-                gs.dynamic_states.retain(|d| {
-                    !matches!(
-                        *d,
-                        vk::DynamicState::PRIMITIVE_TOPOLOGY
-                            | vk::DynamicState::PRIMITIVE_RESTART_ENABLE
-                    )
-                });
-                gs.emulated_tessellation = Some(e);
-            }
             // A band variant draws each primitive as a patch of its vertices, which no draw
             // changes.
             if let Some(b) = &band {

@@ -965,12 +965,10 @@ fn factor_template(step: metal::TessellationFactorStepFunction, bound: bool) -> 
         alignment: 16,
         max_range: 1 << 20,
         control_points: 4,
-        patch_indices: Some((0, 4)),
+        patch_indices: (0, 4),
         control_point_indices: None,
-        site: FactorSite::Control {
-            push_offset: 20,
-            binding: bound.then_some((0, 3)),
-        },
+        push_offset: 20,
+        factor_binding: bound.then_some((0, 3)),
     }
 }
 
@@ -1101,37 +1099,6 @@ fn patch_draws_bind_their_patch_index_buffers() {
         (uses[0].resource, uses[0].range),
         (UseTarget::PatchIndices, None)
     );
-    // An emulated pipeline's vertex stage reads them, where its function reads what they index,
-    // and the scan reads the arguments.
-    let mut emulated = t;
-    emulated.site = FactorSite::Scan {
-        kernel: crate::pipeline::graphics::EmulatedTessellation {
-            domain: crate::pipeline::interface::PatchDomain::Quad,
-            control_points: 4,
-            descriptor: Default::default(),
-        }
-        .scan_kernel(),
-        factors: false,
-    };
-    let uses = draw_uses(&indirect, None, Some(&emulated));
-    assert_eq!(
-        uses.iter()
-            .map(|u| (u.resource, u.stages))
-            .collect::<Vec<_>>(),
-        [
-            (
-                UseTarget::PatchIndices,
-                vk::PipelineStageFlags2::VERTEX_SHADER
-            ),
-            (UseTarget::Indirect, vk::PipelineStageFlags2::COMPUTE_SHADER)
-        ]
-    );
-    emulated.patch_indices = None;
-    let uses = draw_uses(&indirect, None, Some(&emulated));
-    assert_eq!(
-        uses.iter().map(|u| u.resource).collect::<Vec<_>>(),
-        [UseTarget::Indirect]
-    );
     assert_eq!(
         patch_draw(Some(&t), &BindState::default(), &indexed(2)),
         Err(BindError::InvalidPatchIndexBuffer { offset: 2 })
@@ -1148,7 +1115,7 @@ fn patch_draws_bind_their_patch_index_buffers() {
 fn indexed_patch_draws_bind_their_control_point_index_buffers() {
     use metal::TessellationFactorStepFunction as S;
     let mut t = factor_template(S::PerPatch, false);
-    t.control_point_indices = Some((Some((0, 5)), 2));
+    t.control_point_indices = Some(((0, 5), 2));
     let indexed = |offset, patch_index| DrawCall::Patches {
         control_points: 4,
         patch_start: 5,

@@ -1547,15 +1547,6 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
             (_, Some(fault)) => return Err(fault.clone()),
             (r, None) => r?,
         };
-        // An emulated post-tessellation vertex function's wrapper: the tessellator's point for
-        // the vertex it draws, and the function's patch inputs.
-        let func = match (
-            tessellation::wrap_entry(&mut wrapper, &mut mb, func),
-            &wrapper.fault,
-        ) {
-            (_, Some(fault)) => return Err(fault.clone()),
-            (r, None) => r?,
-        };
         let merged = em
             .cx
             .merged
@@ -1571,16 +1562,8 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
         let func = fragment::wrap_entry(&mut mb, plan, &decl.families, func)?;
         let model = match plan.stage {
             Stage::Kernel => ExecModel::GLCompute,
-            // A post-tessellation vertex function, but one emulated on a device without
-            // `tessellationShader`, a plain vertex entry.
-            Stage::Vertex
-                if plan
-                    .families
-                    .tessellation
-                    .eval
-                    .as_ref()
-                    .is_some_and(|e| e.emulated.is_none()) =>
-            {
+            // A post-tessellation vertex function.
+            Stage::Vertex if plan.families.tessellation.eval.is_some() => {
                 ExecModel::TessellationEvaluation
             }
             Stage::Vertex => ExecModel::Vertex,

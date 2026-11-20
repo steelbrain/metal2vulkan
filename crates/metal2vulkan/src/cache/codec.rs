@@ -40,9 +40,9 @@ use crate::pipeline::artifact::{
 use crate::pipeline::descriptor::TessellationDescriptor;
 use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::graphics::{
-    BandPrimitive, BlendState, ColorAttachmentState, EmulatedTessellation, FanOutState,
-    FragmentImageblock, GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState,
-    RegionFanOut, ShaderTestsUse, ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse,
+    BandPrimitive, BlendState, ColorAttachmentState, FanOutState, FragmentImageblock,
+    GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState, RegionFanOut,
+    ShaderTestsUse, ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse,
     StorageAttachmentView, TessellationState,
 };
 use crate::pipeline::interface::{
@@ -860,8 +860,6 @@ codec_enum! {
         FunctionTableSnapshot,
         MeshRecords,
         MeshWork,
-        TessellationWork,
-        TessellationRecords,
         DepthStandIn,
         StencilStandIn,
     }
@@ -909,7 +907,6 @@ codec_enum! {
         HalfBlendColor,
         SnapshotPhase,
         VerticesPerPrimitive,
-        TessellationChunk,
         MergedDrawAddress,
         AlphaTestReference,
         YCbCrInPlace(f0),
@@ -1152,7 +1149,7 @@ codec_struct! {
     SamplerArray { slot, samplers }
     LevelReads { slot, any, named, lowest_read, sampled }
     SampledLevels { sampler, highest_lod_bits, lowest_lod_bits, computed }
-    TessellationStage { domain, control_points, emulated }
+    TessellationStage { domain, control_points }
     TessellationDescriptor {
         max_tessellation_factor, partition_mode, factor_format, factor_step_function,
         output_winding_order, control_point_index_type, factor_scale_enabled,
@@ -1429,7 +1426,6 @@ codec_struct! {
         tessellation,
         fragment_imageblock, sample_shading, vertex_writes_memory, writes_viewport_index,
         storage_attachments, shadow_stencil, early_fragment_tests, mesh_records, mesh_corners,
-        emulated_tessellation,
         writes_point_size, flat_fragment_inputs,
         clip_distances, writes_depth, reads_barycentric_coord, reads_primitive_id,
         reads_position_depth,
@@ -1441,7 +1437,6 @@ codec_struct! {
         patch_control_points, domain, control_points, factor_step_function, push_offset,
         control_point_index_type,
     }
-    EmulatedTessellation { domain, control_points, descriptor }
     LineBandState { push_offset, primitive }
     FanOutState { mode, copies, push_offset }
     FragmentImageblock { mechanism, words, master, data_size, alignment }

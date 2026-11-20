@@ -4,7 +4,7 @@
 //! with [`ExecutionStatus::initial`] before the command buffer's first use and reads it back with
 //! [`ExecutionStatus::decode`] after the last one (a `SHADER_WRITE -> HOST_READ` barrier first);
 //! the resident-set miss counter, the device replay's preprocess, the index
-//! bounds pass, an absent argument's read, the mesh and tessellation scans, a sample through a
+//! bounds pass, an absent argument's read, the mesh scans, a sample through a
 //! cubic argument sampler, and a sequentially consistent fence write the words
 //! named here.
 
@@ -33,8 +33,6 @@ impl ExecutionStatus {
             u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
         };
         let bits = StatusBits(word(StatusWord::Status));
-        let tessellation_first = bits.contains(StatusBits::TESSELLATION_RECORDS_OVERFLOW)
-            && word(StatusWord::MeshFaultObjects) == 0;
         StatusReport {
             resident_miss: bits.contains(StatusBits::RESIDENT_MISS),
             resident_misses: word(StatusWord::ResidentMisses),
@@ -46,27 +44,12 @@ impl ExecutionStatus {
             mesh_grid_discarded: bits.contains(StatusBits::MESH_GRID_DISCARDED),
             mesh_grid_past_limits: bits.contains(StatusBits::MESH_GRID_PAST_LIMITS),
             mesh_records_overflow: (bits.contains(StatusBits::MESH_RECORDS_OVERFLOW)).then(|| {
-                // The fault words are the first records fault's: a tessellation draw's when its
-                // object threadgroups word is 0 (a scanned mesh draw's is at least 1), which
-                // names no mesh draw.
-                match tessellation_first {
-                    false => MeshRecordsFault {
-                        draw: word(StatusWord::MeshFaultDraw),
-                        object_threadgroups: word(StatusWord::MeshFaultObjects),
-                        mesh_threadgroups: word(StatusWord::MeshFaultGroups),
-                    },
-                    true => MeshRecordsFault::default(),
+                MeshRecordsFault {
+                    draw: word(StatusWord::MeshFaultDraw),
+                    object_threadgroups: word(StatusWord::MeshFaultObjects),
+                    mesh_threadgroups: word(StatusWord::MeshFaultGroups),
                 }
             }),
-            tessellation_records_overflow: bits
-                .contains(StatusBits::TESSELLATION_RECORDS_OVERFLOW)
-                .then(|| match tessellation_first {
-                    true => TessellationRecordsFault {
-                        draw: word(StatusWord::MeshFaultDraw),
-                        records: word(StatusWord::MeshFaultGroups),
-                    },
-                    false => TessellationRecordsFault::default(),
-                }),
         }
     }
 }
@@ -96,15 +79,8 @@ pub struct StatusReport {
     /// draw's records, or the draw's vertices passed a `u32` (`bind::MeshScanModule`), or an
     /// object arguments pass none for an emulated indirect draw's object slots
     /// (`bind::mesh_object_arguments_module`, no mesh threadgroups yet): such draws drew nothing.
-    /// The first one, as the pass saw it, where it was the command buffer's first records fault;
-    /// a fault of all zeros where a tessellation draw's was.
+    /// The command buffer's first one, as the pass saw it.
     pub mesh_records_overflow: Option<MeshRecordsFault>,
-    /// A tessellation scan found no room in the command buffer's records pool for an emulated
-    /// tessellation draw's records, or the draw's records passed a `u32`
-    /// (`bind::TessellationScanModule`): such draws drew nothing. The first one, as the scan saw
-    /// it, where it was the command buffer's first records fault; a fault of all zeros where a
-    /// mesh draw's was.
-    pub tessellation_records_overflow: Option<TessellationRecordsFault>,
     /// A function sampled through an argument buffer's sampler whose min or mag filter is
     /// `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): no result of the command buffer is then Metal's.
@@ -133,17 +109,6 @@ pub struct MeshRecordsFault {
     pub mesh_threadgroups: u32,
 }
 
-/// The first emulated tessellation draw of a command buffer that drew nothing because its records
-/// did not fit (`StatusReport::tessellation_records_overflow`).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct TessellationRecordsFault {
-    /// The consumer's number for the draw (the work buffer's `DRAW_ID` word).
-    pub draw: u32,
-    /// The records the draw needed (`patchCount · instanceCount`), saturated at `u32::MAX`.
-    pub records: u32,
-}
-
 /// A word of the `ExecutionStatus` buffer.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -157,13 +122,12 @@ pub enum StatusWord {
     /// The words of the command buffer's mesh records pool its scans reserved
     /// (`bind::MeshScanModule`). Initial 0.
     MeshRecordsCursor,
-    /// The consumer's number for the command buffer's first emulated mesh or tessellation draw
-    /// whose records did not fit ([`StatusBits::RECORDS_FAULTS`]). Initial 0.
+    /// The consumer's number for the command buffer's first emulated mesh draw whose records did
+    /// not fit ([`StatusBits::MESH_RECORDS_OVERFLOW`]). Initial 0.
     MeshFaultDraw,
-    /// That draw's object threadgroups, 0 for a tessellation draw. Initial 0.
+    /// That draw's object threadgroups. Initial 0.
     MeshFaultObjects,
-    /// The mesh threadgroups, or the tessellation records, that draw needed, saturated. Initial
-    /// 0.
+    /// The mesh threadgroups that draw needed, saturated. Initial 0.
     MeshFaultGroups,
     /// The word every sequentially consistent fence of the command buffer increments with an
     /// acquire-release atomic at the fence's scope (`lower::sync::barrier::seq_cst_order`), so
@@ -224,18 +188,15 @@ impl StatusBits {
     /// draw's records, or the draw's vertices passed a `u32`, or an object arguments pass none for
     /// an emulated indirect draw's object slots, and the draw drew nothing
     /// (`bind::MeshScanModule`, `bind::mesh_object_arguments_module`); the fault words name the
-    /// command buffer's first records fault of either kind.
+    /// command buffer's first such draw.
     pub const MESH_RECORDS_OVERFLOW: StatusBits = StatusBits(1 << 5);
     /// A function sampled, gathered, or queried through a sampler an argument buffer holds whose
     /// min or mag filter is `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): its result is the device's through a nearest
     /// placeholder, not Metal's.
     pub const CUBIC_ARGUMENT_SAMPLER: StatusBits = StatusBits(1 << 6);
-    /// A tessellation scan found no room in the command buffer's records pool for an emulated
-    /// tessellation draw's records, or the draw's records passed a `u32`, and the draw drew
-    /// nothing (`bind::TessellationScanModule`); the fault words name the command buffer's first
-    /// records fault of either kind.
-    pub const TESSELLATION_RECORDS_OVERFLOW: StatusBits = StatusBits(1 << 8);
+    // Bit 8 (an emulated tessellation draw's records fault) is not reported: a device without
+    // `tessellationShader` refuses the pipeline.
     /// An indirect mesh draw's arguments pass met a grid that Metal draws and the device cannot
     /// launch: a mesh grid past the mesh stage's limits, an unfolded object grid past the task
     /// stage's, or a folded one of more pieces than `MeshArguments::OBJECT_PIECES` (only under task
@@ -249,12 +210,6 @@ impl StatusBits {
     /// arguments pass did); the draw drew nothing (`bind::MeshArguments`,
     /// `bind::mesh_object_arguments_module`).
     pub const MESH_GRID_DISCARDED: StatusBits = StatusBits(1 << 10);
-    /// Either records fault: the command buffer's first one of either kind writes the fault
-    /// words.
-    pub const RECORDS_FAULTS: StatusBits = StatusBits(
-        StatusBits::MESH_RECORDS_OVERFLOW.0 | StatusBits::TESSELLATION_RECORDS_OVERFLOW.0,
-    );
-
     /// Every bit in `other` is set in `self`.
     pub const fn contains(self, other: StatusBits) -> bool {
         self.0 & other.0 == other.0

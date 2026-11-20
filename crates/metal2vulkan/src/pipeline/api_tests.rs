@@ -375,12 +375,6 @@ mod serde_round_trips {
                 4,
             )]),
             viewport_index_varying: true,
-            // An emulated post-tessellation vertex function's state.
-            tessellation: Some(crate::pipeline::TessellationDescriptor {
-                max_tessellation_factor: 16,
-                partition_mode: metal::TessellationPartitionMode::FractionalOdd,
-                ..Default::default()
-            }),
             max_call_stack_depth: Some(8),
             open_cl_mode: true,
             flat_grid: true,
@@ -679,12 +673,6 @@ mod serde_round_trips {
                 slot_words: 12,
             }),
             mesh_corners: Some(3),
-            // An emulated tessellation pipeline's state.
-            emulated_tessellation: Some(crate::pipeline::EmulatedTessellation {
-                domain: crate::pipeline::interface::PatchDomain::Quad,
-                control_points: 4,
-                descriptor: crate::pipeline::TessellationDescriptor::default(),
-            }),
             writes_point_size: true,
             flat_fragment_inputs: true,
             clip_distances: 2,
@@ -1318,8 +1306,6 @@ mod bind_serde_round_trips {
         round_trip(&WriteSource::TileMemory { bytes: 480 });
         round_trip(&UseTarget::PatchIndices);
         round_trip(&WriteSource::ControlPointIndices);
-        round_trip(&WriteSource::TessellationWork);
-        round_trip(&WriteSource::TessellationRecords);
         round_trip(&UseTarget::ControlPointIndices);
         round_trip(&DrawCommands {
             push_constants: Vec::new(),
@@ -1380,24 +1366,6 @@ mod bind_serde_round_trips {
                     }),
                 },
                 records: crate::bind::MeshRecordsRegion::Pool,
-            }),
-            // An emulated tessellation draw's scan.
-            tessellation_dispatch: Some(crate::bind::TessellationDispatch {
-                kernel: crate::pipeline::EmulatedTessellation {
-                    domain: crate::pipeline::interface::PatchDomain::Triangle,
-                    control_points: 3,
-                    descriptor: crate::pipeline::TessellationDescriptor::default(),
-                }
-                .scan_kernel(),
-                header: vec![2, 1, 0, 3],
-                records: crate::bind::TessellationRecords::Exact { records: 2 },
-                factors: Some(crate::bind::BufferRange {
-                    offset: 0,
-                    range: 32,
-                }),
-                arguments: None,
-                chunk_fields: vec![(vk::ShaderStageFlags::VERTEX, 12)],
-                patch_triangles: 64,
             }),
         });
         // A mesh draw's commands.

@@ -1120,8 +1120,8 @@ struct FlatDispatch {
 /// one): NVIDIA's compiler (615.71.09) refuses a module that tests a `u64` product by dividing
 /// (`b > (2^64 - 1) / a`) or a `u32` product by widening it to 64 bits and comparing it with
 /// `2^32 - 1`, where those tests sit beside the preprocess's other arithmetic, and on an RTX 3090
-/// one that tests a `u32` product by dividing (`b <= (2^32 - 1) / a`, the tessellation scan's
-/// records count) ("NVVM compilation failed: 3"), and compiles this one.
+/// one that tests a `u32` product by dividing (`b <= (2^32 - 1) / a`) ("NVVM compilation failed:
+/// 3"), and compiles this one.
 pub(crate) fn checked_mul(
     fb: &mut FunctionBuilder<'_>,
     a: Value,

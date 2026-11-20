@@ -83,8 +83,8 @@ metal2vulkan kernel.ll kernel.spv --profile device.json --emit-meta kernel.json
   place with the `device.json` a runtime repro bundle holds (a device description and policy).
 - Without `--function` it compiles the library's only kernel or vertex function. A kernel with
   `--color-format` compiles as a tile pipeline. A post-tessellation vertex function adds
-  `.tesc.spv` and `.tese.spv` modules on a device with `tessellationShader`; on one without, it is
-  the `.vert.spv` module itself, which draws the tessellator's triangles.
+  `.tesc.spv` and `.tese.spv` modules; on a device without `tessellationShader` it answers
+  `FALLBACK`, naming the feature.
 - A vertex function that returns no value, with no `--fragment`, compiles with rasterization
   disabled, the one pipeline Metal makes of it.
 - A compile that needs a pipeline input fails naming it and the option that supplies it:

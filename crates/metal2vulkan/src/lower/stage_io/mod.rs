@@ -51,10 +51,6 @@
 //!   private list form (`LoweringInputs::private_list`) runs its list's positions from its first
 //!   vertex without indices, each once, as Metal runs them: the same `(VertexIndex - first) / n`
 //!   is its list primitive's index.
-//!   A post-tessellation vertex function emulated on a device without `tessellationShader` writes
-//!   the same varying under that field, from another source: its patch's position in the draw
-//!   (`lower::tessellation::emulated`), which a fragment function compiled under the field reads
-//!   on any device, since Vulkan's `PrimitiveId` would count the tessellator's triangles there.
 //! - A `bool` varying (a vertex output or a fragment input) is a flat `uint` variable: written as
 //!   1 or 0, read as `!= 0`.
 //! - Vertex amplification: `[[amplification_id]]` is `ViewIndex` (the binder's view mask makes view
@@ -632,14 +628,6 @@ pub struct CapturedIndex {
 /// place (its block and pointer types, conversion and access chain), the load, a `u16`'s
 /// alignment and shift, and the base vertex's extract and add (at most 224, a `u16` read's).
 pub(super) const CAPTURED_INDEX_WORDS: u64 = 400;
-
-/// Plan an emulated post-tessellation vertex function's primitive ID output under
-/// `LoweringInputs::primitive_id_varying`: the index of its object, the flat `uint` varying of
-/// `IoRole::PrimitiveId` to which its entry wrapper writes its patch's position in the draw
-/// (`lower::tessellation`).
-pub fn primitive_id_varying(sp: &mut StageIoPlan) -> Result<usize, Error> {
-    plan::primitive_id(sp, IoDir::Output)
-}
 
 /// Plan the fragment's window-depth input for a fragment function that computes each sample's
 /// depth for its in-shader depth test: the index of its object, a no-perspective `float` varying of

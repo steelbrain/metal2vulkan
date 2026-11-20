@@ -215,9 +215,7 @@ fn check_raw_indices(v: &StageIo, f: &StageIo) -> Result<(), Error> {
 /// The fragment function reads `[[primitive_id]]` from its varying (`IoRole::PrimitiveId`)
 /// exactly where the vertex function `vertex` writes it (see the module docs): a vertex function
 /// compiled without `LoweringInputs::primitive_id_varying` behind one that reads it, and one that
-/// writes it (an emulated post-tessellation vertex function, behind which Vulkan's `PrimitiveId`
-/// counts the tessellator's triangles) behind one that reads Vulkan's `PrimitiveId`, are
-/// `NeedsInput(PrimitiveId)`; a fragment function linked alone reads it as any other input. A mesh
+/// writes it behind one that reads Vulkan's `PrimitiveId`, are `NeedsInput(PrimitiveId)`; a fragment function linked alone reads it as any other input. A mesh
 /// function writes none, and a mesh render pipeline whose fragment function reads the varying is
 /// refused as needing a device that declares a fragment `PrimitiveId`.
 fn check_primitive_id(

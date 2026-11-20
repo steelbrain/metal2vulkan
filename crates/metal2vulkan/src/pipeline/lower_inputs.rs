@@ -15,8 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::metal;
 use crate::pipeline::descriptor::{
-    StageInputDescriptor, TessellationDescriptor, VertexAttributeDescriptor,
-    VertexBufferLayoutDescriptor,
+    StageInputDescriptor, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
 };
 use crate::pipeline::sym::{SampledType, SlotRef, SnapshotForm, VaryingKey};
 use crate::vk;
@@ -303,10 +302,7 @@ pub struct LoweringInputs {
     /// The function's render pipeline carries Metal's `[[primitive_id]]` from its vertex function
     /// to its fragment function through a flat `uint` varying (`IoRole::PrimitiveId`), which a
     /// fragment function reads as its `[[primitive_id]]`: on a device that cannot declare a
-    /// fragment `PrimitiveId` (neither `geometryShader` nor `tessellationShader`), and behind a
-    /// post-tessellation vertex function emulated on a device without `tessellationShader`
-    /// (`LoweringInputs::tessellation`), where Vulkan's `PrimitiveId` would count the
-    /// tessellator's triangles.
+    /// fragment `PrimitiveId` (neither `geometryShader` nor `tessellationShader`).
     ///
     /// Under this field a vertex function writes the varying. A plain one writes it at each
     /// return: `(VertexIndex - first) / n` in wrapping `u32` arithmetic, `first` the draw's first
@@ -316,19 +312,13 @@ pub struct LoweringInputs {
     /// vertex, its first in a pipeline of Vulkan's default provoking vertex, at stream position
     /// `n · i` of a list's primitive `i` and `i` of a strip's, so every fragment reads its
     /// primitive's index in its instance, Metal's
-    /// `[[primitive_id]]` (Metal probes on the M3 Max, macOS 27.0.1). An emulated
-    /// post-tessellation one writes its patch's position in the draw, `patchStart + i`, at every
-    /// vertex of the patch: Metal's primitive id behind the tessellator (measured on the M3 Max,
-    /// in every instance, with or without a patch index buffer). A post-tessellation vertex
-    /// function drawn through the device's tessellation stages is refused under it
-    /// (`NotImplemented(Tessellation)`).
+    /// `[[primitive_id]]` (Metal probes on the M3 Max, macOS 27.0.1). A post-tessellation vertex
+    /// function is refused under it (`NotImplemented(Tessellation)`).
     ///
     /// A fragment function reads `[[primitive_id]]` from the varying under this field, as it does
     /// without it on a device that cannot declare a fragment `PrimitiveId`.
     /// `Device::compile_render_pipeline` sets it for a `Function` vertex stage whose pipeline's
-    /// fragment function reads `[[primitive_id]]`, on a device that cannot declare it or behind an
-    /// emulated post-tessellation vertex function, and for such a `Function` fragment stage on a
-    /// device that declares it. Link refuses a vertex function compiled without it behind a
+    /// fragment function reads `[[primitive_id]]`, on a device that cannot declare it. Link refuses a vertex function compiled without it behind a
     /// fragment function that reads the varying, and a fragment function that reads Vulkan's
     /// `PrimitiveId` behind a vertex function that writes the varying, as
     /// `NeedsInput(PrimitiveId)`. Any other function compiles as without it.
@@ -863,17 +853,6 @@ pub struct LoweringInputs {
     /// bytes, and for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub object_payload: Option<u32>,
-    /// A post-tessellation vertex function compiled for a device without `tessellationShader`,
-    /// which runs it as a plain vertex function that draws the tessellator's triangles itself
-    /// (`lower::tessellation`'s emulation), bakes its render pipeline descriptor's tessellation
-    /// state in (the partition, the winding and the maximum factor place its points): that state,
-    /// `None` for Metal's defaults (`TessellationDescriptor::default`, which canonical inputs
-    /// hold as `None`). `Device::compile_render_pipeline` sets it for such a function on such a
-    /// device only, and link refuses a function compiled for another state
-    /// (`NeedsInput(TessellationDescriptor)`). Any other function, and any function on a device
-    /// with `tessellationShader`, compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub tessellation: Option<TessellationDescriptor>,
     /// The function's render pipeline draws a rasterization-rate-mapped pass's regions several
     /// at a time (`VariantKey::region_viewports`): each region one draw of a
     /// `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT`, its viewport and scissor at the draw's

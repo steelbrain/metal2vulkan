@@ -33,9 +33,8 @@
 //!   function reads.
 //! - [`IoRole::PrimitiveId`]: Metal's `[[primitive_id]]` on a device that cannot declare a
 //!   fragment `PrimitiveId`, which the pipeline's vertex function computes for the primitive each
-//!   vertex provokes, and behind a post-tessellation vertex function emulated on a device without
-//!   `tessellationShader`, which writes its patch's position in the draw. A flat `uint` varying
-//!   for link, one key ([`VaryingKey::primitive_id`]) on both sides.
+//!   vertex provokes. A flat `uint` varying for link, one key ([`VaryingKey::primitive_id`]) on
+//!   both sides.
 //! - [`IoRole::MergedCommand`]: the command a merged draw's vertex runs, carried to its fragment
 //!   function, which reads that command's slot table. A flat `uint` varying for link, one key
 //!   ([`VaryingKey::merged_command`]) on both sides.
@@ -781,10 +780,7 @@ pub enum IoRole {
     /// whose stream position is the primitive's own times its vertex count in a list and the
     /// primitive's own in a strip, so the vertex writes its stream position over the draw's vertex
     /// count per primitive (`PushField::VerticesPerPrimitive`): Metal's count of the draw's
-    /// primitives in each instance (Metal probes on the M3 Max, macOS 27.0.1). A post-tessellation
-    /// vertex function emulated on a device without `tessellationShader`
-    /// (`GraphicsState::emulated_tessellation`) writes at every vertex of a patch the patch's
-    /// position in its draw (`patchStart + i`), Metal's `[[primitive_id]]` behind the tessellator.
+    /// primitives in each instance (Metal probes on the M3 Max, macOS 27.0.1).
     PrimitiveId,
     /// The index of the command a merged draw replay's vertex runs (`bind::DrawReplay::merged`):
     /// the flat `uint` output of a vertex function compiled under `LoweringInputs::merged_draws`,

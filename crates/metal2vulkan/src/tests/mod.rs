@@ -233,4 +233,3 @@ mod relocated_once;
 mod stage_in_element_bytes;
 mod stage_in_unread_key;
 mod stage_input_siblings;
-mod tessellator;

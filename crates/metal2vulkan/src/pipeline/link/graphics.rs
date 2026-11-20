@@ -802,7 +802,6 @@ pub fn graphics_state(
         // An emulated mesh function's pipeline states its records (`link`).
         mesh_records: None,
         mesh_corners: None,
-        emulated_tessellation: None,
         // A band variant's pipeline states its band (`link`).
         line_band: None,
         // A fan-out variant's pipeline states its fan-out (`link`).

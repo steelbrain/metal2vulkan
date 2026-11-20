@@ -42,9 +42,9 @@ const HELP: &str = r#"usage: metal2vulkan <in.metallib|in.air|in.ll> [out.spv] -
 Compiles one pipeline of the input library for the device a Khronos profile describes, and writes
 its SPIR-V. A kernel writes out.spv; a render pipeline writes one module per stage, named by
 inserting the stage before the extension (out.vert.spv, out.frag.spv; a post-tessellation vertex
-function adds out.tesc.spv and out.tese.spv on a device with tessellationShader, and is out.vert.spv
-itself, drawing the tessellator's triangles, on one without). Without out.spv the output is
-<input-without-extension>.vk.spv. A .ll input is assembled with llvm-as (LLVM 21 or newer).
+function adds out.tesc.spv and out.tese.spv, and needs tessellationShader). Without out.spv the
+output is <input-without-extension>.vk.spv. A .ll input is assembled with llvm-as (LLVM 21 or
+newer).
 
 options:
   --profile FILE           Khronos profiles JSON for the target device (this or --device is

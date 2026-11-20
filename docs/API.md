@@ -897,8 +897,6 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   and the vertex function reads each position's index, and Metal's base vertex in the word before
   the list, at the list's address (`PushHole::CaptureIndexAddress`), adding them as Metal's vertex
   ID wraps, so each position runs once and the positions count Metal's primitives.
-  Behind an emulated post-tessellation vertex function the varying carries the patch's position
-  in its draw (tessellation, below).
 - A device draws to at most the lesser of its `maxColorAttachments` and
   `maxFragmentOutputAttachments` color attachments at once (four at Vulkan's floor), where Metal
   takes eight. A pipeline whose attachments with a pixel format number more draws them in groups
@@ -967,16 +965,8 @@ evaluation stage, and the fragment stage. It draws patches only (`DrawCall::Patc
 `PatchesIndirect`), with the factors from a tessellation factor buffer. The device's tessellator
 orders the triangles (`PrecisionNote::TessellationTriangleOrder` where it is not Apple's).
 
-On a device without `tessellationShader` the pipeline is an emulation with no tessellation stage:
-the function is its vertex stage (`TRIANGLE_LIST`), and `graphics.emulated_tessellation` states
-the tessellation state it bakes in. Each patch draw's `DrawCommands::tessellation_dispatch` is a
-compute scan (`bind::tessellation_scan_module`, one workgroup) to record before the render pass,
-and chunk draws of up to 2^30 triangles that replace `draw`; `TessellationDispatch` states the
-contract (buffers, order, barriers). The scan binds four storage buffers; the vertex function
-binds two to four beside its own, counted against `maxPerStageDescriptorStorageBuffers`
-(`DescriptorCount` past it). A fragment `[[primitive_id]]` reads the patch's position in the draw
-from the primitive ID's varying (`NotImplemented(Tessellation)` behind tessellation stages), and
-an indirect patch draw's `[[base_instance]]` is read on the GPU.
+A device without `tessellationShader` refuses the function (`Unsupported{Tessellation}`, naming
+the feature), and a fragment `[[primitive_id]]` behind it is `NotImplemented(Tessellation)`.
 
 ### Mesh pipelines
 

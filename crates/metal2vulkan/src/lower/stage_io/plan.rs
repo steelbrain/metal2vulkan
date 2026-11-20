@@ -846,9 +846,7 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
         // (`IoRole::PrimitiveId`) on a device that cannot declare a fragment `PrimitiveId`
         // (neither `geometryShader` nor `tessellationShader`), where the vertex function computes
         // the primitive each vertex provokes, and under `LoweringInputs::primitive_id_varying`
-        // behind an emulated post-tessellation vertex function, which writes its patch's position:
-        // Metal's primitive id behind the tessellator, while Vulkan's `PrimitiveId` without a
-        // tessellation stage counts the draw's triangles.
+        // behind a vertex function compiled under it.
         (ParamRole::Builtin(Builtin::PrimitiveId), Stage::Fragment)
             if !declarable(cx, B::PrimitiveId) || cx.inputs.primitive_id_varying =>
         {
@@ -1750,20 +1748,15 @@ fn first_vertex(cx: &mut SelectCx<'_>) -> super::FirstVertex {
 /// vertex (the `BaseVertex` builtin with `shaderDrawParameters`, lane 0 of
 /// `PushField::BaseVertexInstance` without, as for `[[base_vertex]]`), and
 /// `PushField::VerticesPerPrimitive`. A post-tessellation vertex function's vertices are the
-/// tessellator's: one the device emulates writes its patch's position to the varying instead
-/// (`lower::tessellation::emulated`), and one drawn through the device's tessellation stages,
-/// whose primitive IDs are not built, is `NotImplemented(Tessellation)`, as for a fragment
-/// function that reads `[[primitive_id]]` behind one (`link::tessellation`). A form
+/// tessellator's, whose primitive IDs are not built: `NotImplemented(Tessellation)`, as for a
+/// fragment function that reads `[[primitive_id]]` behind one (`link::tessellation`). A form
 /// that reads its draw's indices at their address ([`captured_index_type`]) draws them as
 /// `index count` vertices from vertex 0: its first vertex is 0
 /// ([`super::FirstVertex::Zero`]). The private list form draws its list from its first vertex,
 /// as a draw without indices does.
 fn primitive_id_output(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if matches!(cx.entry.ep.stage, AirStage::Vertex { patch: Some(_) }) {
-        return match crate::lower::tessellation::emulates(cx.profile) {
-            true => Ok(()),
-            false => Err(Unsupported::not_implemented(Feature::Tessellation).into()),
-        };
+        return Err(Unsupported::not_implemented(Feature::Tessellation).into());
     }
     cx.push.insert(PushField::VerticesPerPrimitive);
     let first = match captured_index_type(cx).is_some() && !listed(cx) {
@@ -2696,8 +2689,7 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             sp.words = sp.words.saturating_add(super::WINDOW_DEPTH_WORDS);
         }
     }
-    // The primitive ID a fragment function reads from its varying (an emulated post-tessellation
-    // vertex function's is its patch's position, `lower::tessellation::emulated`).
+    // The primitive ID a fragment function reads from its varying.
     if cx.inputs.primitive_id_varying && cx.stage == Stage::Vertex {
         primitive_id_output(cx)?;
     }
@@ -3447,9 +3439,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .map(|v| u64::from(v.ty.components))
             .sum()
     };
-    // An emulated post-tessellation vertex function is a plain vertex function.
-    let evaluation = matches!(cx.entry.ep.stage, AirStage::Vertex { patch: Some(_) })
-        && !crate::lower::tessellation::emulates(cx.profile);
+    let evaluation = matches!(cx.entry.ep.stage, AirStage::Vertex { patch: Some(_) });
     let checks = match cx.stage {
         // A post-tessellation vertex function's outputs are an evaluation shader's; it has no
         // input variable of this family's.

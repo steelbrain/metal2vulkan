@@ -57,7 +57,7 @@ use crate::pipeline::compile::key::{DynamicKey, LinkedKey};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, DynamicLibraries, FunctionDescriptor, LinkedFunction,
     LinkedFunctions, LinkedList, MeshPipelineDescriptor, RenderPipelineDescriptor,
-    TessellationDescriptor, VertexDescriptor,
+    VertexDescriptor,
 };
 use crate::pipeline::interface::{SlotInterface, StageInterface};
 use crate::pipeline::sym::{SlotClass, SlotRef, Stage, VaryingKey};
@@ -88,19 +88,9 @@ pub enum InputsFrom<'a> {
     /// vertex-stage inputs (`VariantKey::lowering_inputs`), the pipeline's
     /// `maxVertexCallStackDepth` (the `u32`), whether the pipeline's fragment function reads
     /// `[[primitive_id]]` where the device carries it through a varying
-    /// ([`reads_primitive_id_varying`]), and its tessellation state (`None` for Metal's
-    /// defaults), which a post-tessellation vertex function bakes in on a device without
-    /// `tessellationShader` (`LoweringInputs::tessellation`). A plain vertex function writes the
-    /// primitive ID's varying where the device cannot declare a fragment `PrimitiveId`, and a
-    /// post-tessellation one the device emulates on any device
-    /// (`LoweringInputs::primitive_id_varying`).
-    Vertex(
-        Option<&'a VertexDescriptor>,
-        &'a VariantKey,
-        u32,
-        bool,
-        Option<&'a TessellationDescriptor>,
-    ),
+    /// ([`reads_primitive_id_varying`]). A vertex function writes the primitive ID's varying where
+    /// the device cannot declare a fragment `PrimitiveId` (`LoweringInputs::primitive_id_varying`).
+    Vertex(Option<&'a VertexDescriptor>, &'a VariantKey, u32, bool),
     /// The fragment stage of this render pipeline under a variant key: the key's fragment-stage
     /// inputs, the attachments among the pipeline's color attachments that the specialized entry
     /// writes and whose pixel format is a signed integer
@@ -238,7 +228,7 @@ impl<'a> InputsFrom<'a> {
     fn call_stack_depth(&self) -> u32 {
         match self {
             InputsFrom::Given(i) => i.max_call_stack_depth.unwrap_or(1),
-            InputsFrom::Vertex(_, _, depth, _, _) => (*depth).max(1),
+            InputsFrom::Vertex(_, _, depth, _) => (*depth).max(1),
             InputsFrom::Fragment(pass, ..) => pass.max_call_stack_depth.max(1),
         }
     }
@@ -1711,8 +1701,8 @@ pub(crate) fn primitive_id_varying_on(p: &DeviceProfile) -> bool {
 /// specialized entry (the one `entries` holds, else one made there now under `m`) declares the
 /// parameter, or a `Compiled` stage whose interface reads the varying or Vulkan's `PrimitiveId`
 /// (link refuses the second behind a vertex function that writes the varying). Called only on a
-/// device without a fragment `PrimitiveId` ([`primitive_id_varying_on`]) or without
-/// `tessellationShader` (`lower::tessellation::emulates`), so no other decodes anything.
+/// device without a fragment `PrimitiveId` ([`primitive_id_varying_on`]), so no other decodes
+/// anything.
 pub(crate) fn reads_primitive_id_varying(
     fragment: Option<&crate::pipeline::descriptor::StageSource>,
     depth: u32,
@@ -1743,14 +1733,6 @@ pub(crate) fn reads_primitive_id_varying(
         }
         None => false,
     })
-}
-
-/// Whether render pipelines on `p` may carry `[[primitive_id]]` through a varying, so that a
-/// pipeline's fragment entry is read for it ([`reads_primitive_id_varying`]): `p` cannot declare a
-/// fragment `PrimitiveId` ([`primitive_id_varying_on`]), or it emulates post-tessellation vertex
-/// functions (`lower::tessellation::emulates`), whose patch's position the fragment reads.
-pub(crate) fn primitive_id_carried_on(p: &DeviceProfile) -> bool {
-    primitive_id_varying_on(p) || crate::lower::tessellation::emulates(p)
 }
 
 /// Run `g` on the compile request of function `f`. A visible function is not a stage: it is
@@ -2844,7 +2826,7 @@ fn lower_inputs(
     match inputs {
         InputsFrom::Given(i) => Ok(given_inputs(spec, i)),
         // A post-tessellation vertex function pulls every attribute it reads.
-        InputsFrom::Vertex(desc, variant, depth, primitive_id, tessellation)
+        InputsFrom::Vertex(desc, variant, depth, primitive_id)
             if matches!(spec.ep.stage, AbiStage::Vertex { patch: Some(_) }) =>
         {
             let attributes = crate::lower::tessellation::attributes_read(spec);
@@ -2853,16 +2835,12 @@ fn lower_inputs(
             let mut out = variant.lowering_inputs(crate::pipeline::sym::Stage::Vertex);
             out.vertex_fetch = Some(projection);
             out.max_call_stack_depth = call_stack_input(depth);
-            // Only an emulated function bakes the tessellation state in, and writes its patch's
-            // position for a fragment function that reads `[[primitive_id]]`; one drawn through the
-            // device's tessellation stages is refused under the field (`lower::stage_io`).
-            if crate::lower::tessellation::emulates(p) {
-                out.tessellation = tessellation.copied();
-            }
+            // A fragment function that reads `[[primitive_id]]` behind it is refused under the
+            // field (`lower::stage_io`).
             out.primitive_id_varying = primitive_id;
             Ok(key::canonical_inputs(&out))
         }
-        InputsFrom::Vertex(desc, variant, depth, primitive_id, _) => {
+        InputsFrom::Vertex(desc, variant, depth, primitive_id) => {
             let attributes = declared_attributes(spec);
             // The primitive ID's de-indexed form and the private list form pull every attribute,
             // whatever the caller's projection would fetch in fixed function.
@@ -2902,8 +2880,8 @@ fn lower_inputs(
             // a fragment function that reads `[[viewport_array_index]]` reads 0 in its place.
             out.region_viewports = variant.region_viewports && read.viewport;
             // Behind a vertex function that writes the primitive ID's varying, on a device that
-            // declares a fragment `PrimitiveId` (behind an emulated post-tessellation vertex
-            // function): elsewhere the fragment function reads the varying without the field.
+            // declares a fragment `PrimitiveId` (one compiled under the field): elsewhere the
+            // fragment function reads the varying without the field.
             out.primitive_id_varying =
                 written.primitive_id && read.primitive_id && !primitive_id_varying_on(p);
             out.primitive_varyings = varyings_read(spec, &out)

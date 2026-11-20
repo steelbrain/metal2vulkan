@@ -226,8 +226,6 @@ pub const fn shape(f: PushField) -> FieldShape {
         | PushField::PatchIndexOffset
         | PushField::PatchIndexBound
         | PushField::ControlPointIndexOffset => FieldShape::U32,
-        // An emulated tessellation draw's chunk.
-        PushField::TessellationChunk => FieldShape::U32,
         // The row of regions a recording of a rate-mapped pass's regions draws: its first region's
         // segments of x and y.
         PushField::RegionBox => FieldShape::UVec2,

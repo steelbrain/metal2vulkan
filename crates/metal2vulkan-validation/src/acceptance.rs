@@ -1680,10 +1680,7 @@ mod tests {
     /// A post-tessellation vertex row compiles to a tessellation pipeline: the synthesized vertex
     /// and control stages before the function's evaluation stage, a patch list of one control point
     /// per patch, and the row's control-point and patch attributes pulled by the evaluation stage.
-    /// On a device without tessellation shaders it compiles to the emulation: the function as the
-    /// one vertex stage, drawing a triangle list, its attributes pulled; on one whose vertex stage
-    /// cannot bind the emulation's buffers beside the function's (the floor's four storage
-    /// buffers), it is refused typed.
+    /// On a device without tessellation shaders it is refused typed, naming the feature.
     #[test]
     fn post_tessellation_vertex_rows_compile_to_tessellation_pipelines() {
         let Some(bitcode) = fixture("tessellation.ll") else {
@@ -1726,36 +1723,16 @@ mod tests {
             // The fixed vertex stage reads no attribute: every one is pulled.
             assert!(render.vertex_input.attributes.is_empty(), "{entry}");
         }
-        for entry in ["tess_quad_buffer", "tess_triangle_points"] {
-            let RowCompile::Compiled(pipeline) = compile("roadmap-2022", entry) else {
-                panic!("{entry} did not compile on roadmap-2022");
-            };
-            let RowPipeline::Render {
-                pipeline: render, ..
-            } = *pipeline
-            else {
-                panic!("{entry} is a render pipeline");
-            };
-            let stages: Vec<_> = render.stages.iter().map(|stage| stage.stage).collect();
-            assert_eq!(stages, [vk::ShaderStage::VERTEX], "{entry}");
-            assert_eq!(render.graphics.tessellation, None, "{entry}");
-            assert!(render.graphics.emulated_tessellation.is_some(), "{entry}");
-            assert_eq!(
-                render.graphics.topology,
-                vk::PrimitiveTopology::TRIANGLE_LIST,
-                "{entry}"
-            );
-            assert!(render.vertex_input.attributes.is_empty(), "{entry}");
-        }
-        match compile("vk12-floor", "tess_triangle_points") {
-            RowCompile::NotCompiled(outcome, detail) => {
-                assert_eq!(outcome.label(), "device_capability_missing", "{detail}");
-                assert!(
-                    detail.contains("MaxPerStageDescriptorStorageBuffers"),
-                    "{detail}"
-                );
+        for profile in ["roadmap-2022", "vk12-floor"] {
+            for entry in ["tess_quad_buffer", "tess_triangle_points"] {
+                match compile(profile, entry) {
+                    RowCompile::NotCompiled(outcome, detail) => {
+                        assert_eq!(outcome.label(), "device_capability_missing", "{detail}");
+                        assert!(detail.contains("TessellationShader"), "{detail}");
+                    }
+                    other => panic!("{profile} {entry}: {other:?}"),
+                }
             }
-            other => panic!("{other:?}"),
         }
     }
 

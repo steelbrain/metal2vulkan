@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 
 pub use crate::air::canon::CommandWrites;
 use crate::metal;
-use crate::pipeline::descriptor::TessellationDescriptor;
 use crate::pipeline::sym::{PushField, ResourceSlot, SampledType, SlotRef, SpecKey, Stage};
 use crate::vk;
 
@@ -849,12 +848,6 @@ pub struct TessellationStage {
     /// `[[patch(_, N)]]`: the control points of each patch the function reads (0 when the
     /// function does not state it).
     pub control_points: u32,
-    /// `Some` for a function compiled for a device without `tessellationShader`: the module is a
-    /// plain `Vertex` entry that draws the tessellator's triangles itself
-    /// (`GraphicsState::emulated_tessellation`), baking in this render pipeline descriptor
-    /// tessellation state (`LoweringInputs::tessellation`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub emulated: Option<TessellationDescriptor>,
 }
 
 impl TessellationStage {
@@ -872,15 +865,6 @@ impl TessellationStage {
         TessellationStage {
             domain,
             control_points,
-            emulated: None,
-        }
-    }
-
-    /// This stage, emulated under the descriptor tessellation state `desc`.
-    pub fn emulated(self, desc: TessellationDescriptor) -> TessellationStage {
-        TessellationStage {
-            emulated: Some(desc),
-            ..self
         }
     }
 }
@@ -898,11 +882,10 @@ pub enum PatchDomain {
 
 impl StageInterface {
     /// The Vulkan stage of the module: the evaluation stage for a post-tessellation vertex
-    /// function (the vertex stage where it is emulated), the compute stage for an emulated object
-    /// or mesh function, else the Metal stage's.
+    /// function, the compute stage for an emulated object or mesh function, else the Metal
+    /// stage's.
     pub fn vk_stage(&self) -> vk::ShaderStage {
         match (self.tessellation, self.emulated_payload) {
-            (Some(t), _) if t.emulated.is_some() => vk::ShaderStage::VERTEX,
             (Some(_), _) => vk::ShaderStage::TESSELLATION_EVALUATION,
             (None, Some(_)) => vk::ShaderStage::COMPUTE,
             (None, None) => crate::device::derive::vk_stage(self.stage),

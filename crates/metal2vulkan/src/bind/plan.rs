@@ -194,7 +194,7 @@ pub struct GraphicsTemplate {
     /// whose pipeline is not the variant its amplification asks for sets `other_layer_variant`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) amplifications: Vec<[u32; 2]>,
-    /// A tessellation pipeline's, native or emulated: its draws draw patches.
+    /// A tessellation pipeline's: its draws draw patches.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) tessellation: Option<FactorTemplate>,
     /// The device lacks `drawIndirectFirstInstance`: an indirect draw's arguments are read on
@@ -347,9 +347,8 @@ pub(crate) struct ShadowTemplate {
     pub depth_attachment: bool,
 }
 
-/// What a patch draw of a tessellation pipeline instantiates: the push fields of the stage that
-/// reads the patch and control-point index buffers, their descriptor ranges, and the factor
-/// buffer's range, read by the control stage of a native pipeline or the scan of an emulated one.
+/// What a patch draw of a tessellation pipeline instantiates: the control stage's push range, the
+/// patch and control-point index buffers' descriptor ranges, and the factor buffer's range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct FactorTemplate {
@@ -362,40 +361,18 @@ pub(crate) struct FactorTemplate {
     pub max_range: u64,
     /// The `N` of the function's `[[patch(_, N)]]` (0 when unstated).
     pub control_points: u32,
-    /// `(set, binding)` of the patch index buffer, where a stage reads it: always a native
-    /// pipeline's control stage, an emulated function where it reads its patch index or its
-    /// control points.
-    pub patch_indices: Option<(u32, u32)>,
-    /// For a pipeline with a control-point index type, the bytes of one index (2 or 4), and
-    /// `(set, binding)` of the control-point index buffer where a stage reads it (a native
-    /// pipeline's control stage, an emulated function that reads its control points); `None` for
-    /// a pipeline without one.
-    pub control_point_indices: Option<(Option<(u32, u32)>, u64)>,
-    /// The stage that reads the factors.
-    pub site: FactorSite,
-}
-
-/// The stage that reads a tessellation pipeline's factors ([`FactorTemplate`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub(crate) enum FactorSite {
-    /// A native pipeline's control stage, whose push range holds the draw's factor and index
-    /// buffer fields.
-    Control {
-        /// The byte offset of the control stage's push range (`TessellationState::push_offset`).
-        push_offset: u32,
-        /// `(set, binding)` of the factor buffer when the plan writes it (a factor buffer is set);
-        /// `None` when the zero buffer stands in.
-        binding: Option<(u32, u32)>,
-    },
-    /// An emulated pipeline's tessellation scan (`DrawCommands::tessellation_dispatch`), whose
-    /// draws' vertex stage reads the index buffer fields from its own push window.
-    Scan {
-        /// The scan the pipeline's draws run.
-        kernel: crate::bind::TessellationScanKernel,
-        /// Whether the shape sets a factor buffer; without one the scan reads the zero buffer.
-        factors: bool,
-    },
+    /// `(set, binding)` of the patch index buffer, which the control stage reads.
+    pub patch_indices: (u32, u32),
+    /// For a pipeline with a control-point index type, `(set, binding)` of the control-point index
+    /// buffer, which the control stage reads, and the bytes of one index (2 or 4); `None` for a
+    /// pipeline without one.
+    pub control_point_indices: Option<((u32, u32), u64)>,
+    /// The byte offset of the control stage's push range (`TessellationState::push_offset`), which
+    /// holds the draw's factor and index buffer fields.
+    pub push_offset: u32,
+    /// `(set, binding)` of the factor buffer when the plan writes it (a factor buffer is set);
+    /// `None` when the zero buffer stands in.
+    pub factor_binding: Option<(u32, u32)>,
 }
 
 /// The device's and pipeline's rules for a per-bind vertex stride.
@@ -823,15 +800,13 @@ pub enum WriteSource {
     /// a new plan; the consumer resolves each write against the state it binds.
     FunctionTable { index: u32 },
     /// A patch draw's patch index buffer (`DrawCall::Patches::patch_index`), a read-only storage
-    /// buffer of the control stage (an emulated tessellation pipeline's vertex stage) over the
-    /// draw's `DescriptorRange`. A draw without one has no range for it, and the consumer binds
+    /// buffer of the control stage over the draw's `DescriptorRange`. A draw without one has no range for it, and the consumer binds
     /// the zero buffer of `min_bytes` there (`NeutralResource::ZeroBuffer`'s), whose words the
     /// stage discards: the draw pushes `PushField::PatchIndexBound` 0.
     PatchIndices { min_bytes: u32 },
     /// An indexed patch draw's control-point index buffer
     /// (`DrawCall::Patches::control_point_index`), a read-only storage buffer of the control
-    /// stage (an emulated tessellation pipeline's vertex stage) of a pipeline with a control-point
-    /// index type over the draw's `DescriptorRange`. Every draw of such a pipeline has one.
+    /// stage of a pipeline with a control-point index type over the draw's `DescriptorRange`. Every draw of such a pipeline has one.
     ControlPointIndices,
     /// The render pass's tile threadgroup memory (`SyntheticBinding::TileMemory`): a storage
     /// buffer the consumer keeps for the pass, of at least `bytes` bytes (every tile of the
@@ -856,16 +831,6 @@ pub enum WriteSource {
     /// stages' alike): the draw's region of `MeshDispatch::work_bytes`, holding
     /// `MeshDispatch::work`, bound whole ([`MeshDispatch`](crate::bind::MeshDispatch)).
     MeshWork,
-    /// An emulated tessellation draw's work buffer (`SyntheticBinding::TessellationWork`, the
-    /// vertex stage's): the draw's region holding
-    /// [`TessellationDispatch::work`](crate::bind::TessellationDispatch::work), bound whole
-    /// ([`TessellationDispatch`](crate::bind::TessellationDispatch)).
-    TessellationWork,
-    /// An emulated tessellation draw's records (`SyntheticBinding::TessellationRecords`, the
-    /// vertex stage's): the draw's `TessellationDispatch::records`, a region of its own or the
-    /// command buffer's records pool, bound whole for the scan and the draw alike
-    /// ([`TessellationDispatch`](crate::bind::TessellationDispatch)).
-    TessellationRecords,
     /// The command buffer's execution status (`SyntheticBinding::ExecutionStatus`) of a stage on
     /// a device that does not address buffers: a storage buffer of the
     /// [`ExecutionStatus`](crate::bind::ExecutionStatus) words, the same buffer every command of

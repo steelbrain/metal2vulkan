@@ -19,8 +19,7 @@
 //! ([`StatusWord::MeshRecordsCursor`], 0 before the command buffer's first scan): `T` mesh
 //! threadgroups' words. A draw whose records the rest of the pool cannot hold, or whose vertices
 //! pass a `u32`, runs and draws nothing; the scan sets [`StatusBits::MESH_RECORDS_OVERFLOW`] and,
-//! where it is the command buffer's first records fault of either kind (mesh or tessellation), the
-//! consumer's number for the draw, its object threadgroups and the mesh threadgroups it needed
+//! where it is the command buffer's first records fault, the consumer's number for the draw, its object threadgroups and the mesh threadgroups it needed
 //! (saturated) in the fault words, which
 //! [`ExecutionStatus::decode`](crate::bind::ExecutionStatus::decode) reports. Nothing is drawn
 //! short silently.
@@ -520,8 +519,7 @@ pub fn scan_typed_module() -> BResult<TypedModule> {
             let bit = k(f, StatusBits::MESH_RECORDS_OVERFLOW.0)?;
             let p = word_ptr(f, status, word)?;
             let old = f.atomic(AtomicOp::Or, p, Scope::Device, Semantics::RELAXED, bit)?;
-            let either = k(f, StatusBits::RECORDS_FAULTS.0)?;
-            let had = f.binary(BinOp::BitwiseAnd, old, either)?;
+            let had = f.binary(BinOp::BitwiseAnd, old, bit)?;
             let new = f.binary(BinOp::IEqual, had, zero)?;
             when(f, new, move |f| {
                 for (w, v) in [
@@ -665,8 +663,7 @@ pub fn object_arguments_typed_module(compute: [u32; 3]) -> BResult<TypedModule> 
         let bit = k(f, StatusBits::MESH_RECORDS_OVERFLOW.0)?;
         let p = word_ptr(f, status, word)?;
         let old = f.atomic(AtomicOp::Or, p, Scope::Device, Semantics::RELAXED, bit)?;
-        let either = k(f, StatusBits::RECORDS_FAULTS.0)?;
-        let had = f.binary(BinOp::BitwiseAnd, old, either)?;
+        let had = f.binary(BinOp::BitwiseAnd, old, bit)?;
         let new = f.binary(BinOp::IEqual, had, zero)?;
         when(f, new, move |f| {
             let zero = k(f, 0)?;

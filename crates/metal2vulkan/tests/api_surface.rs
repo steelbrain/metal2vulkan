@@ -372,7 +372,6 @@ surface! {
         struct StorageAttachmentUse N;
         enum StorageAttachmentView E;
         struct TessellationState N;
-        struct EmulatedTessellation N;
         struct AccessSet N;
         enum AttributeFetch E;
         enum BufferForm N;
@@ -472,8 +471,6 @@ surface! {
         struct MeshDispatch N;
         enum MeshGroups N;
         enum MeshRecordsRegion N;
-        struct TessellationDispatch N;
-        enum TessellationRecords N;
         fn heap_classes;
         struct HeapElements O;
         enum HeapSource E;
@@ -551,7 +548,6 @@ surface! {
         enum FragmentTests N;
         struct ExecutionStatus E;
         struct MeshRecordsFault N;
-        struct TessellationRecordsFault N;
         struct StatusBits E;
         struct StatusReport N;
         enum StatusWord N;
@@ -645,9 +641,6 @@ surface! {
         const METAL_MESH_GRID_AXIS;
         const METAL_MESH_GRID_TOTAL;
         const METAL_OBJECT_GRID_TOTAL;
-        fn tessellation_scan_module;
-        struct TessellationScanKernel N;
-        struct TessellationScanModule N;
         fn ycbcr_convert_module;
         fn ycbcr_convert_floats_module;
         fn ycbcr_texel;

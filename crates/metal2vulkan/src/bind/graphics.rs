@@ -231,18 +231,6 @@
 //!   `half` (which Metal forbids, and which keeps every float the control stage computes finite)
 //!   are `BindError`s. On a device without `drawIndirectFirstInstance` an indirect draw asks for
 //!   its arguments on the CPU (`DrawCommands::indirect_needs_arguments`).
-//!
-//!   On a device without `tessellationShader` the pipeline is emulated
-//!   (`GraphicsState::emulated_tessellation`): its Metal stages are its vertex function, as a
-//!   `VERTEX` stage, and its fragment stage, and its plan binds the draw's work buffer and records
-//!   (`WriteSource::TessellationWork`, `TessellationRecords`) and the index buffers in the vertex
-//!   stage, which reads them (`VERTEX_SHADER`) where its function reads what they index. A patch
-//!   draw, checked as above, is a tessellation scan and chunk draws
-//!   (`DrawCommands::tessellation_dispatch`, [`TessellationDispatch`]): the scan reads the factors
-//!   and an indirect draw's arguments, which the consumer copies into its work buffer
-//!   (`COMPUTE_SHADER` uses, the scan's), so no draw asks for its arguments on the CPU, and `draw`
-//!   is chunk 0's `vkCmdDrawIndirect`. A direct draw whose records pass
-//!   `maxStorageBufferRange` is refused (`Unsupported`, `Feature::Tessellation`).
 //! - **Mesh draws**. A mesh render pipeline's Metal stages are its object function, when it has one
 //!   (`TASK_EXT`), its mesh function (`MESH_EXT`) and its fragment function. It draws only mesh
 //!   draws (`DrawCall::MeshThreadgroups`, `MeshThreads`, `MeshThreadgroupsIndirect`), and only it
@@ -331,8 +319,8 @@ use crate::bind::plan::slots::{
     texel_buffer_parts_variant, used_uses, ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use crate::bind::plan::{
-    AccessClass, BindingPlan, BoundKind, ByteRange, DescriptorWrite, FactorSite, FactorTemplate,
-    FieldLocation, GraphicsTemplate, GroupLimits, GroupStage, MeshTemplate, PlannedVertexBuffer,
+    AccessClass, BindingPlan, BoundKind, ByteRange, DescriptorWrite, FactorTemplate, FieldLocation,
+    GraphicsTemplate, GroupLimits, GroupStage, MeshTemplate, PlannedVertexBuffer,
     PushFieldPlacement, PushTemplate, RecordsTemplate, ResourceUse, ShaderTestsTemplate,
     ShadowTemplate, StageTemplate, StrideRules, UseTarget, VertexBufferBind, ViewSetup,
     WriteSource,
@@ -524,11 +512,6 @@ pub struct DrawCommands {
     /// compute dispatch that runs its mesh threadgroups before `draw` draws their primitives
     /// ([`MeshDispatch`] states the consumer contract). `None` for every other draw.
     pub mesh_dispatch: Option<MeshDispatch>,
-    /// A patch draw of an emulated tessellation pipeline
-    /// (`GraphicsState::emulated_tessellation`): the scan that runs before the draw and the
-    /// chunk draws that replace `draw` ([`TessellationDispatch`] states the consumer contract).
-    /// `None` for every other draw.
-    pub tessellation_dispatch: Option<TessellationDispatch>,
     /// An indirect mesh draw on a device with `VK_EXT_mesh_shader`, whose first stage's group
     /// counts `vkCmdDrawMeshTasksIndirectEXT` requires within the device's limits: the form of the
     /// arguments pass the consumer records before the draw ([`MeshArguments`], which it makes with
@@ -592,7 +575,6 @@ impl Default for DrawCommands {
             amplifications: Vec::new(),
             specialization: None,
             mesh_dispatch: None,
-            tessellation_dispatch: None,
         }
     }
 }
@@ -714,153 +696,6 @@ pub enum MeshRecordsRegion {
     /// `maxStorageBufferRange`), which the scans reserve from front to back
     /// (`StatusWord::MeshRecordsCursor`). Its words need no initial value.
     Pool,
-}
-
-/// The work of a patch draw whose pipeline's post-tessellation vertex function runs as a plain
-/// vertex function (`GraphicsState::emulated_tessellation`, on a device without
-/// `tessellationShader`): the tessellation scan
-/// ([`tessellation_scan_module`](crate::bind::tessellation_scan_module) of
-/// [`kernel`](Self::kernel)) processes each patch's factors into the draw's records, one per
-/// instance and patch, and writes the draw's chunks' `VkDrawIndirectCommand`s; each chunk's draw
-/// then draws up to `2^30` of the draw's triangles, three vertices each, which the vertex function
-/// finds in the records (`lower::tessellation`'s module docs).
-///
-/// The consumer, outside the render pass instance the draw records into, and after every command
-/// of the pass that writes the factor buffer or Metal's indirect arguments:
-///
-/// - takes `K` = [`chunks`](Self::chunks) of the records pool's bytes (for
-///   [`TessellationRecords::Pool`]; any value for `Exact`), and makes the draw's work buffer of
-///   [`work`](Self::work)`(K)`'s words, in which it writes its number for the draw at word
-///   [`DRAW_ID`](Self::DRAW_ID), which a records fault reports
-///   (`StatusReport::tessellation_records_overflow`), and for records in the pool the pool's words
-///   at word [`POOL_WORDS`](Self::POOL_WORDS);
-/// - makes the records ([`records`](Self::records)), and writes the work buffer and the records to
-///   the plan's `WriteSource::TessellationWork` and `WriteSource::TessellationRecords` bindings of
-///   the draw's set 0, each bound whole;
-/// - for an indirect draw, copies the 16 bytes of Metal's arguments at
-///   [`arguments`](Self::arguments) into the work buffer's first 16 bytes, after the arguments'
-///   writes, and orders the copy before the scan's reads;
-/// - dispatches the scan (one workgroup) with its set over the work buffer, the records, the
-///   command buffer's `ExecutionStatus` buffer and the factor buffer's [`factors`](Self::factors)
-///   range (the zero buffer, at least 16 bytes, where it is `None`), each scan after the command
-///   buffer's earlier scans, mesh or tessellation (each reads and writes the pool's cursor);
-/// - orders the scan's writes before the draws' indirect command reads (`DRAW_INDIRECT`) and
-///   vertex shader reads (`VERTEX_SHADER`), and the factors' writes before the scan's reads
-///   (`COMPUTE_SHADER`);
-/// - then in the render pass instance records, in place of `DrawCommands::draw`, each chunk
-///   `k < K` in order: the push writes [`draw`](Self::draw)`(k)` gives, then its
-///   `vkCmdDrawIndirect` from the work buffer. A chunk past the draw's triangles draws no vertex.
-///
-/// The scan's reads of the factors and of the arguments (through their copy, which the consumer
-/// records with the scan) are `COMPUTE_SHADER` uses of the draw (`DrawCommands::uses`), and the
-/// vertex stage's of the patch and control-point index buffers `VERTEX_SHADER` ones.
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct TessellationDispatch {
-    /// The scan's pipeline state.
-    pub kernel: crate::bind::TessellationScanKernel,
-    /// The work buffer's header (`lower::tessellation::work::HEADER` words): the draw's
-    /// arguments (a direct draw's; zero for an indirect one, whose copy fills them), and the
-    /// factor buffer's residual bind offset, instance stride and scale.
-    pub header: Vec<u32>,
-    /// The records.
-    pub records: TessellationRecords,
-    /// The range of the factor buffer the scan binds, from its bind offset aligned down to
-    /// `minStorageBufferOffsetAlignment` over the factors the draw reads; `None` where the
-    /// encoder set no factor buffer, whose zero factors cull every patch.
-    pub factors: Option<BufferRange>,
-    /// For an indirect draw, the offset of Metal's arguments (`MTLDrawPatchIndirectArguments`,
-    /// 16 bytes) in the indirect buffer's `VkBuffer`, a multiple of 4, which the consumer copies
-    /// into the work buffer's first 16 bytes before the scan. `None` for a direct draw.
-    pub arguments: Option<u64>,
-    /// Where each stage that reads `PushField::TessellationChunk` holds it, in its push window.
-    pub(crate) chunk_fields: Vec<(vk::ShaderStageFlags, u32)>,
-    /// The most triangles one patch of the pipeline draws.
-    pub(crate) patch_triangles: u32,
-}
-
-impl TessellationDispatch {
-    /// The work buffer's word where the consumer writes its records pool's words, for
-    /// [`TessellationRecords::Pool`].
-    pub const POOL_WORDS: usize = crate::lower::tessellation::work::POOL_WORDS as usize;
-    /// The work buffer's word where the consumer writes its number for the draw.
-    pub const DRAW_ID: usize = crate::lower::tessellation::work::DRAW_ID as usize;
-
-    /// `K`, the draw's chunks: enough for every triangle its records can draw, at most the
-    /// pipeline's most per patch for each record. For [`TessellationRecords::Pool`] that is every
-    /// record a pool of `pool_bytes` bytes holds; `pool_bytes` is not read otherwise.
-    pub fn chunks(&self, pool_bytes: u64) -> u32 {
-        use crate::lower::tessellation::work;
-        let records = match self.records {
-            TessellationRecords::Exact { records } => u64::from(records),
-            TessellationRecords::Pool => pool_bytes / (4 * u64::from(work::RECORD_WORDS)),
-        };
-        let triangles = records.saturating_mul(u64::from(self.patch_triangles));
-        u32::try_from(work::chunks(triangles)).unwrap_or(u32::MAX)
-    }
-
-    /// The work buffer's words for `chunks` chunks: the header with `K` in it, then each
-    /// chunk's slot, zero. Its bytes are 4 per word, which the consumer binds whole.
-    pub fn work(&self, chunks: u32) -> Vec<u32> {
-        use crate::lower::tessellation::work;
-        let words = usize::try_from(work::words(chunks)).unwrap_or(usize::MAX);
-        let mut out = Vec::with_capacity(words);
-        out.extend_from_slice(&self.header);
-        out.resize(words, 0);
-        out[work::CHUNKS as usize] = chunks;
-        out
-    }
-
-    /// Chunk `k`'s draw: the push writes that make the draw chunk `k`'s
-    /// (`PushField::TessellationChunk`, in each stage that reads it), and its `vkCmdDrawIndirect`
-    /// of one command from the work buffer, whose offset is the chunk slot's.
-    pub fn draw(&self, k: u32) -> (Vec<PushConstantWrite>, vk::DrawCommand) {
-        let writes = self
-            .chunk_fields
-            .iter()
-            .map(|&(stages, offset)| PushConstantWrite {
-                stages,
-                offset,
-                bytes: k.to_le_bytes().to_vec(),
-            })
-            .collect();
-        let command = vk::DrawCommand::DrawIndirect {
-            offset: crate::lower::tessellation::work::draw_offset(k),
-            draw_count: 1,
-            stride: 16,
-        };
-        (writes, command)
-    }
-}
-
-/// The records of an emulated tessellation draw ([`TessellationDispatch`]), `32` bytes per
-/// instance and patch, which its scan and its draws bind whole.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum TessellationRecords {
-    /// A direct draw's `records` (`patchCount · instanceCount`), in a region of the draw's own
-    /// of [`bytes`](Self::bytes) bytes.
-    Exact { records: u32 },
-    /// An indirect draw's, in the command buffer's records pool (the emulated mesh draws' pool,
-    /// `MeshRecordsRegion::Pool`), which its scan reserves them from: a draw that does not fit
-    /// draws nothing and fails the command buffer
-    /// (`StatusReport::tessellation_records_overflow`).
-    Pool,
-}
-
-impl TessellationRecords {
-    /// The bytes of an `Exact` region, at least 16 (the smallest binding); 0 for the pool.
-    pub fn bytes(&self) -> u64 {
-        match *self {
-            TessellationRecords::Exact { records } => {
-                (u64::from(records) * 4 * u64::from(crate::lower::tessellation::work::RECORD_WORDS))
-                    .max(16)
-            }
-            TessellationRecords::Pool => 0,
-        }
-    }
 }
 
 /// How a direct indexed draw treats its index positions past the index buffer: the positions whose
@@ -1100,10 +935,7 @@ fn stores(a: crate::pipeline::graphics::ColorAttachmentState) -> bool {
 fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError> {
     check_slots(shape)?;
     let records = p.graphics.mesh_records.as_ref();
-    // An emulated tessellation pipeline: its post-tessellation vertex function is its vertex
-    // stage, and its draws scan their patches first.
-    let emulated_tessellation = p.graphics.emulated_tessellation;
-    let tessellation = p.graphics.tessellation.is_some() || emulated_tessellation.is_some();
+    let tessellation = p.graphics.tessellation.is_some();
     let modules = metal_stages(
         p.stages.iter().map(|m| m.stage),
         (
@@ -1805,17 +1637,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 | PushField::AmplificationLayerOffset
                 | PushField::AmplificationViewportOffset
                     if matches!(field.loc, PushLoc::Push { .. }) => {}
-                // An emulated tessellation draw's chunk, which instantiation writes before each
-                // chunk's draw, in the window as the amplification fields are; and its index
-                // buffers' fields, which it writes from the draw.
-                PushField::TessellationChunk
-                    if stage == Stage::Vertex
-                        && emulated_tessellation.is_some()
-                        && matches!(field.loc, PushLoc::Push { .. }) => {}
-                PushField::PatchIndexOffset
-                | PushField::PatchIndexBound
-                | PushField::ControlPointIndexOffset
-                    if stage == Stage::Vertex && emulated_tessellation.is_some() => {}
                 // A region-copy variant's row of regions of a recording, which instantiation
                 // writes from the state and the consumer pushes before each recording, in the
                 // window as the amplification fields are.
@@ -2065,13 +1886,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     // An emulated mesh function's records and work buffer, each draw's own.
                     SyntheticBinding::MeshRecords if records.is_some() => WriteSource::MeshRecords,
                     SyntheticBinding::MeshWork if records.is_some() => WriteSource::MeshWork,
-                    // An emulated tessellation draw's work buffer and records, each its own.
-                    SyntheticBinding::TessellationWork if emulated_tessellation.is_some() => {
-                        WriteSource::TessellationWork
-                    }
-                    SyntheticBinding::TessellationRecords if emulated_tessellation.is_some() => {
-                        WriteSource::TessellationRecords
-                    }
                     SyntheticBinding::HandleTable => {
                         planner(&mut heap)?.table(stage, set.set, b.binding)?
                     }
@@ -2469,18 +2283,13 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         .filter(|b| matches!(b.bound, BoundKind::Buffer { .. }))
         .map(|b| buffer_use(b, stage_flags(b.slot.stage)))
         .collect();
-    // The factors: the control stage's, or an emulated pipeline's scan's.
-    if factor_binding.is_some()
-        || emulated_tessellation.is_some() && shape.tessellation_factor_buffer
-    {
+    // The factors, the control stage's.
+    if factor_binding.is_some() {
         uses.push(ResourceUse {
             resource: UseTarget::TessellationFactors,
             access: AccessSet::READ,
             class: AccessClass::Storage,
-            stages: match emulated_tessellation {
-                Some(_) => vk::PipelineStageFlags2::COMPUTE_SHADER,
-                None => vk::PipelineStageFlags2::TESSELLATION_CONTROL_SHADER,
-            },
+            stages: vk::PipelineStageFlags2::TESSELLATION_CONTROL_SHADER,
             range: None,
         });
     }
@@ -2682,7 +2491,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     limits.min_storage_buffer_offset_alignment,
                     u64::from(limits.max_storage_buffer_range),
                 ),
-                shape.tessellation_factor_buffer,
             )?,
             shadow_stencil: shadow,
             mesh,
@@ -3653,11 +3461,10 @@ fn emulated_draw(
 const MIN_RECORDS_BYTES: u64 = 16;
 
 /// What a patch draw of `p` instantiates ([`FactorTemplate`]), from the layout's factor, patch
-/// index and control-point index bindings, the device's `(minStorageBufferOffsetAlignment,
-/// maxStorageBufferRange)`, and whether the shape sets a factor buffer: `None` for a pipeline
-/// that draws no patches. A native pipeline's control stage binds the patch index buffer, and the
-/// control-point index buffer exactly when the pipeline has a control-point index type; an
-/// emulated pipeline's vertex stage binds each only where it reads it.
+/// index and control-point index bindings and the device's `(minStorageBufferOffsetAlignment,
+/// maxStorageBufferRange)`: `None` for a pipeline that draws no patches. The control stage binds
+/// the patch index buffer, and the control-point index buffer exactly when the pipeline has a
+/// control-point index type.
 fn factor_template(
     p: &RenderPipeline,
     (factors, patch_indices, control_point_indices): (
@@ -3666,43 +3473,21 @@ fn factor_template(
         Option<(u32, u32)>,
     ),
     (alignment, max_range): (u64, u64),
-    factor_buffer: bool,
 ) -> Result<Option<FactorTemplate>, BindError> {
     use metal::TessellationControlPointIndexType as T;
-    let (domain, step, control_points, ty, site) =
-        match (p.graphics.tessellation, p.graphics.emulated_tessellation) {
-            (Some(t), None) => {
-                if patch_indices.is_none() {
-                    return Err(internal(
-                        "a tessellation pipeline's layout without its patch index buffer",
-                    ));
-                }
-                let site = FactorSite::Control {
-                    push_offset: t.push_offset,
-                    binding: factors,
-                };
-                let ty = t.control_point_index_type;
-                (t.domain, t.factor_step_function, t.control_points, ty, site)
-            }
-            (None, Some(e)) => {
-                let site = FactorSite::Scan {
-                    kernel: e.scan_kernel(),
-                    factors: factor_buffer,
-                };
-                let d = e.descriptor;
-                let ty = d.control_point_index_type;
-                (e.domain, d.factor_step_function, e.control_points, ty, site)
-            }
-            (None, None) => return Ok(None),
-            (Some(_), Some(_)) => {
-                return Err(internal("a tessellation pipeline both native and emulated"))
-            }
-        };
-    let read = matches!(site, FactorSite::Scan { .. }) || control_point_indices.is_some();
-    let control_point_indices = match (ty, read) {
-        (T::None, _) if control_point_indices.is_none() => None,
-        (T::UInt16, true) => Some((control_point_indices, 2)),
-        (T::UInt32, true) => Some((control_point_indices, 4)),
+    let Some(t) = p.graphics.tessellation else {
+        return Ok(None);
+    };
+    let Some(patch_indices) = patch_indices else {
+        return Err(internal(
+            "a tessellation pipeline's layout without its patch index buffer",
+        ));
+    };
+    let ty = t.control_point_index_type;
+    let control_point_indices = match (ty, control_point_indices) {
+        (T::None, None) => None,
+        (T::UInt16, Some(b)) => Some((b, 2)),
+        (T::UInt32, Some(b)) => Some((b, 4)),
         _ => {
             return Err(internal(format!(
                 "a tessellation pipeline of control-point index type {ty:?} with binding \
@@ -3711,14 +3496,15 @@ fn factor_template(
         }
     };
     Ok(Some(FactorTemplate {
-        step,
-        patch_bytes: crate::lower::tessellation::factors::factor_bytes(domain),
+        step: t.factor_step_function,
+        patch_bytes: crate::lower::tessellation::factors::factor_bytes(t.domain),
         alignment,
         max_range,
-        control_points,
+        control_points: t.control_points,
         patch_indices,
         control_point_indices,
-        site,
+        push_offset: t.push_offset,
+        factor_binding: factors,
     }))
 }
 
@@ -3744,35 +3530,29 @@ struct PatchBinding {
     stride: u32,
     /// The scale, rounded to `half` as Metal rounds it, an infinite one as `INFINITE_SCALE`.
     scale: f32,
-    /// The patch index buffer's descriptor range, where a stage binds it and the draw has one.
+    /// The patch index buffer's descriptor range, where the draw has one.
     patch_indices: Option<DescriptorRange>,
     /// Its residual bind offset.
     index_residual: u32,
     /// Whether the draw has a patch index buffer (1 or 0).
     indexed: u32,
-    /// The control-point index buffer's descriptor range, where a stage binds it.
+    /// The control-point index buffer's descriptor range, where the draw has one.
     control_point_indices: Option<DescriptorRange>,
     /// Its residual bind offset (0 without one).
     point_residual: u32,
 }
 
-/// The control stage's writes of a patch draw of a native tessellation pipeline (`factors` is
-/// the plan's, `None` for any other pipeline): [`patch_binding`]'s, as [`control_writes`] pushes
-/// and binds them.
+/// The control stage's writes of a patch draw of a tessellation pipeline (`factors` is the
+/// plan's, `None` for any other pipeline): [`patch_binding`]'s, as [`control_writes`] pushes and
+/// binds them.
 fn patch_draw(
     factors: Option<&FactorTemplate>,
     state: &BindState,
     draw: &DrawCall,
 ) -> Result<Option<(PushConstantWrite, Vec<DescriptorRange>)>, BindError> {
-    let Some(b) = patch_binding(factors, state, draw)? else {
-        return Ok(None);
-    };
-    match factors.map(|t| t.site) {
-        Some(FactorSite::Control {
-            push_offset,
-            binding,
-        }) => control_writes(b, push_offset, binding).map(Some),
-        _ => Err(internal("a native patch draw of an emulated pipeline")),
+    match (patch_binding(factors, state, draw)?, factors) {
+        (Some(b), Some(t)) => control_writes(b, t.push_offset, t.factor_binding).map(Some),
+        _ => Ok(None),
     }
 }
 
@@ -3784,7 +3564,7 @@ fn patch_draw(
 /// Metal rounds it (an infinite one as `INFINITE_SCALE`); the patch index buffer over the indices
 /// it reads (a direct draw's from its patch start, an indirect one's from the offset to the
 /// buffer's end), and the control-point index buffer over the indices it reads
-/// ([`control_point_window`]), each where a stage binds it.
+/// ([`control_point_window`]).
 fn patch_binding(
     factors: Option<&FactorTemplate>,
     state: &BindState,
@@ -3830,12 +3610,8 @@ fn patch_binding(
             bits: f.scale.to_bits(),
         });
     }
-    let factors_bound = match t.site {
-        FactorSite::Control { binding, .. } => binding.is_some(),
-        FactorSite::Scan { factors, .. } => factors,
-    };
     let (factor_range, residual, stride) =
-        match (factors_bound, f.buffer) {
+        match (t.factor_binding.is_some(), f.buffer) {
             (false, None) => (None, 0, 0),
             (true, Some(b)) => {
                 // The factors are read from any even byte: an odd offset from the byte below, and
@@ -3874,61 +3650,50 @@ fn patch_binding(
             if !offset.is_multiple_of(4) {
                 return Err(BindError::InvalidPatchIndexBuffer { offset });
             }
-            match t.patch_indices {
-                None => (None, 0, 1u32),
-                Some((set, binding)) => {
-                    let window = match *draw {
-                        DrawCall::Patches {
-                            patch_start,
-                            patch_count,
-                            ..
-                        } => Window::Bounded {
-                            start: 4 * i64::from(patch_start),
-                            len: 4 * u64::from(patch_count),
+            let (set, binding) = t.patch_indices;
+            let window = match *draw {
+                DrawCall::Patches {
+                    patch_start,
+                    patch_count,
+                    ..
+                } => Window::Bounded {
+                    start: 4 * i64::from(patch_start),
+                    len: 4 * u64::from(patch_count),
+                },
+                _ => Window::Whole,
+            };
+            let (range, residual) =
+                descriptor_range(offset, buffer.length, window, t.alignment, t.max_range).map_err(
+                    |e| match e {
+                        RangeError::TooLarge { needed } => BindError::PatchIndexRange {
+                            needed,
+                            limit: t.max_range,
                         },
-                        _ => Window::Whole,
-                    };
-                    let (range, residual) =
-                        descriptor_range(offset, buffer.length, window, t.alignment, t.max_range)
-                            .map_err(|e| match e {
-                            RangeError::TooLarge { needed } => BindError::PatchIndexRange {
-                                needed,
-                                limit: t.max_range,
-                            },
-                            RangeError::Empty => BindError::Unsupported(
-                                Unsupported::not_representable(Feature::BufferRange),
-                            ),
-                        })?;
-                    let range = DescriptorRange {
-                        set,
-                        binding,
-                        element: 0,
-                        range,
-                    };
-                    (Some(range), residual, 1u32)
-                }
-            }
+                        RangeError::Empty => BindError::Unsupported(
+                            Unsupported::not_representable(Feature::BufferRange),
+                        ),
+                    },
+                )?;
+            let range = DescriptorRange {
+                set,
+                binding,
+                element: 0,
+                range,
+            };
+            (Some(range), residual, 1u32)
         }
     };
     // The control-point index buffer: its indices from the offset (a multiple of the index
     // size, as Metal requires), over the indices the draw reads.
     let (control_point_indices, point_residual) =
         match (control_point_index, t.control_point_indices) {
-            (Some((buffer, offset)), Some((binding, size))) => {
+            (Some((buffer, offset)), Some(((set, binding), size))) => {
                 if !offset.is_multiple_of(size) {
                     return Err(BindError::InvalidControlPointIndexBuffer { offset });
                 }
-                match binding {
-                    None => (None, 0),
-                    Some((set, binding)) => {
-                        let window = control_point_window(size, draw);
-                        let (range, residual) = descriptor_range(
-                            offset,
-                            buffer.length,
-                            window,
-                            t.alignment,
-                            t.max_range,
-                        )
+                let window = control_point_window(size, draw);
+                let (range, residual) =
+                    descriptor_range(offset, buffer.length, window, t.alignment, t.max_range)
                         .map_err(|e| match e {
                             RangeError::TooLarge { needed } => BindError::ControlPointIndexRange {
                                 needed,
@@ -3938,15 +3703,13 @@ fn patch_binding(
                                 Unsupported::not_representable(Feature::BufferRange),
                             ),
                         })?;
-                        let range = DescriptorRange {
-                            set,
-                            binding,
-                            element: 0,
-                            range,
-                        };
-                        (Some(range), residual)
-                    }
-                }
+                let range = DescriptorRange {
+                    set,
+                    binding,
+                    element: 0,
+                    range,
+                };
+                (Some(range), residual)
             }
             _ => (None, 0),
         };
@@ -3967,7 +3730,7 @@ fn patch_binding(
     }))
 }
 
-/// A native tessellation pipeline's control stage's writes for a patch draw `b`
+/// A tessellation pipeline's control stage's writes for a patch draw `b`
 /// ([`patch_binding`]), whose control stage's push range is at `push_offset` and whose factor
 /// buffer binds at `binding`: its push range holds the factor buffer's residual bind offset,
 /// instance stride and scale, then the patch index buffer's residual bind offset and whether the
@@ -4010,80 +3773,6 @@ fn control_writes(
         },
         ranges,
     ))
-}
-
-/// The scan of a patch draw `draw` of an emulated tessellation pipeline of `kernel`
-/// ([`TessellationDispatch`]), whose patch and factor buffers `b` binds ([`patch_binding`]) and
-/// whose vertex stage reads the chunk at `chunk_fields`, on a device of `max_range`
-/// (`maxStorageBufferRange`). A direct draw's records are the host's to size: `patchCount ·
-/// instanceCount` of them, refused past `maxStorageBufferRange` (`Unsupported{Tessellation}`
-/// naming it with their bytes). An indirect draw's lie in the command buffer's records pool, and
-/// the consumer copies Metal's arguments from their offset, a multiple of 4, into the header.
-fn tessellation_dispatch(
-    kernel: crate::bind::TessellationScanKernel,
-    b: &PatchBinding,
-    draw: &DrawCall,
-    chunk_fields: Vec<(vk::ShaderStageFlags, u32)>,
-    max_range: u64,
-) -> Result<TessellationDispatch, BindError> {
-    use crate::lower::tessellation::work;
-    let mut header = vec![0u32; work::HEADER as usize];
-    header[work::FACTOR_OFFSET as usize] = b.residual;
-    header[work::FACTOR_STRIDE as usize] = b.stride;
-    header[work::SCALE as usize] = b.scale.to_bits();
-    let (records, arguments) = match *draw {
-        DrawCall::Patches {
-            patch_start,
-            patch_count,
-            instance_count,
-            base_instance,
-            ..
-        } => {
-            for (word, value) in [
-                (work::PATCH_COUNT, patch_count),
-                (work::INSTANCE_COUNT, instance_count),
-                (work::PATCH_START, patch_start),
-                (work::BASE_INSTANCE, base_instance),
-            ] {
-                header[word as usize] = value;
-            }
-            let total = u64::from(patch_count) * u64::from(instance_count);
-            let bytes = total * 4 * u64::from(work::RECORD_WORDS);
-            let records = u32::try_from(total)
-                .ok()
-                .filter(|_| bytes <= max_range)
-                .ok_or_else(|| {
-                    BindError::Unsupported(Unsupported::needs(
-                        Feature::Tessellation,
-                        Capability::Limit {
-                            limit: VkLimit::MaxStorageBufferRange,
-                            required: bytes,
-                            available: max_range,
-                        },
-                    ))
-                })?;
-            (TessellationRecords::Exact { records }, None)
-        }
-        DrawCall::PatchesIndirect { indirect, .. } => {
-            if !indirect.offset.is_multiple_of(4) {
-                return Err(internal(format!(
-                    "an indirect patch draw's arguments at offset {}, not a multiple of 4",
-                    indirect.offset
-                )));
-            }
-            (TessellationRecords::Pool, Some(indirect.offset))
-        }
-        _ => return Err(internal(format!("a tessellation scan of {draw:?}"))),
-    };
-    Ok(TessellationDispatch {
-        kernel,
-        header,
-        records,
-        factors: b.factors,
-        arguments,
-        chunk_fields,
-        patch_triangles: kernel.max_patch_triangles(),
-    })
 }
 
 /// The bytes of the control-point index buffer an indexed patch draw reads, relative to its
@@ -4354,7 +4043,6 @@ fn instantiate(
         amplifications: amplifications_out,
         specialization: specialization_out,
         mesh_dispatch: mesh_dispatch_out,
-        tessellation_dispatch: tessellation_dispatch_out,
         mesh_arguments: mesh_arguments_out,
         object_fold: object_fold_out,
         discards_command_buffer: discards_out,
@@ -4382,18 +4070,9 @@ fn instantiate(
     let bound = bind_buffers(&t.buffers, state, descriptor_ranges, extents)?;
     descriptor_ranges.extend(crate::bind::instantiate::texel_ranges(&t.resources, state)?);
     let tables = crate::bind::heap::table_bytes(&t.resources, state)?;
-    // A patch draw: a native pipeline's control stage's writes, or an emulated one's scan.
-    let (control, scan) = match t.tessellation.map(|t| t.site) {
-        Some(FactorSite::Scan { kernel, .. }) => {
-            let b = patch_binding(t.tessellation.as_ref(), state, draw)?;
-            (None, b.map(|b| (b, kernel)))
-        }
-        _ => (patch_draw(t.tessellation.as_ref(), state, draw)?, None),
-    };
-    // An emulated draw's instances are records, drawn as one instance.
-    if scan.is_none() {
-        multiview_instances(t.multiview_instance_limit, draw)?;
-    }
+    // A patch draw: its control stage's writes.
+    let control = patch_draw(t.tessellation.as_ref(), state, draw)?;
+    multiview_instances(t.multiview_instance_limit, draw)?;
     let resident = if t.stages.iter().any(|s| s.root_first.is_some()) {
         Some(table_entries(state))
     } else {
@@ -4534,26 +4213,6 @@ fn instantiate(
                         &vertices_per_primitive(draw, state.primitive_type, form)?.to_le_bytes(),
                     )
                 }
-                // An emulated tessellation draw's first chunk (`TessellationDispatch::draw`
-                // writes each), and its index buffers' fields.
-                PushField::TessellationChunk
-                | PushField::PatchIndexOffset
-                | PushField::PatchIndexBound
-                | PushField::ControlPointIndexOffset => {
-                    let Some((b, _)) = &scan else {
-                        return Err(internal(format!(
-                            "{:?} outside an emulated patch draw",
-                            f.field
-                        )));
-                    };
-                    let word = match f.field {
-                        PushField::PatchIndexOffset => b.index_residual,
-                        PushField::PatchIndexBound => b.indexed,
-                        PushField::ControlPointIndexOffset => b.point_residual,
-                        _ => 0,
-                    };
-                    FieldBytes::of(&word.to_le_bytes())
-                }
                 PushField::VertexBufferStride(layout) => pulled_stride(t, state, layout)?,
                 // A region-copy variant's row of regions: the state's first region's segment of
                 // x in the table's first row, which the consumer pushes again, with its row's
@@ -4679,45 +4338,15 @@ fn instantiate(
             bytes: index.to_le_bytes().to_vec(),
         });
     }
-    let tessellation_dispatch = match scan {
-        Some((b, kernel)) => {
-            let chunk_fields = t
-                .stages
-                .iter()
-                .flat_map(|st| {
-                    st.fields.iter().filter_map(|f| match (f.field, f.loc) {
-                        (PushField::TessellationChunk, PushLoc::Push { offset }) => {
-                            Some((st.flags, offset))
-                        }
-                        _ => None,
-                    })
-                })
-                .collect();
-            let max_range = t.tessellation.map(|f| f.max_range).unwrap_or_default();
-            let dispatch = tessellation_dispatch(kernel, &b, draw, chunk_fields, max_range)?;
-            descriptor_ranges.extend(b.patch_indices);
-            descriptor_ranges.extend(b.control_point_indices);
-            Some(dispatch)
-        }
-        None => None,
-    };
-    // An emulated tessellation draw draws its first chunk in place of the Metal draw's command.
-    let command = tessellation_dispatch
-        .as_ref()
-        .map_or(command, |d| d.draw(0).1);
-
     // The CPU reads the arguments of an indirect draw whose base vertex and instance the profile
     // emulates, of a multiview plan, or without `drawIndirectFirstInstance`, and of an indexed one
     // whose index fetch nothing bounds, which the GPU pass may bound instead.
-    // An emulated tessellation draw's scan reads its arguments (through their copy), and its
-    // chunk draws are one instance each, from 0.
     let arguments_elsewhere =
         (reads_base || t.multiview_instance_limit.is_some() || t.indirect_first_instance_missing)
             && matches!(
                 draw,
                 DrawCall::Indirect { .. } | DrawCall::PatchesIndirect { .. }
-            )
-            && tessellation_dispatch.is_none();
+            );
     // An indirect mesh draw's GPU-written group counts must lie within the device's limits
     // (`VUID-VkDrawMeshTasksIndirectCommandEXT-TaskEXT-07326` and its siblings): the arguments
     // pass writes the counts the draw reads.
@@ -4773,7 +4402,6 @@ fn instantiate(
     *amplifications_out = amplifications;
     *mesh_dispatch_out = mesh_dispatch;
     *specialization_out = specialization;
-    *tessellation_dispatch_out = tessellation_dispatch;
     Ok(())
 }
 
@@ -5057,12 +4685,11 @@ fn indirect_use(len: u64) -> ResourceUse {
 /// The draw's own resources, pushed onto `uses`: its index buffer (`INDEX_INPUT`; the indices of a
 /// direct draw from the
 /// index offset, the rest of the buffer for an indirect one), a patch draw's patch index buffer
-/// (`TESSELLATION_CONTROL_SHADER`, an emulated tessellation pipeline's `VERTEX_SHADER`, as
-/// storage; the indices of a direct draw's patches, the rest of the buffer for an indirect one)
-/// and control-point index buffer (likewise; the indices [`control_point_window`] bounds, of the
-/// size `factors` states), and its indirect arguments (`DRAW_INDIRECT`; 16 bytes, 20 indexed; an
-/// emulated tessellation pipeline's scan reads a patch draw's 16 in `COMPUTE_SHADER`, through their
-/// copy into its work buffer; a mesh draw's are its pipeline's to decide, `instantiate`), all read.
+/// (`TESSELLATION_CONTROL_SHADER`, as storage; the indices of a direct draw's patches, the rest of
+/// the buffer for an indirect one) and control-point index buffer (likewise; the indices
+/// [`control_point_window`] bounds, of the size `factors` states), and its indirect arguments
+/// (`DRAW_INDIRECT`; 16 bytes, 20 indexed; a mesh draw's are its pipeline's to decide,
+/// `instantiate`), all read.
 /// Ranges are relative to the draw's index offset, patch index offset, control-point index offset,
 /// and argument offset. A direct draw whose indices run past the buffer (`overrun`) reads the bytes
 /// from the index offset to [`IndexBufferRef::fetch_end`] when it is `Robust`, and only the indices
@@ -5080,21 +4707,15 @@ fn draw_uses(
         stages: vk::PipelineStageFlags2::INDEX_INPUT,
         range,
     };
-    let scanned = factors.is_some_and(|t| matches!(t.site, FactorSite::Scan { .. }));
-    // A patch draw's index buffers, read by the control stage, or an emulated pipeline's vertex
-    // stage.
+    // A patch draw's index buffers, read by the control stage.
     let control = |resource, range| ResourceUse {
         resource,
         access: AccessSet::READ,
         class: AccessClass::Storage,
-        stages: match scanned {
-            true => vk::PipelineStageFlags2::VERTEX_SHADER,
-            false => vk::PipelineStageFlags2::TESSELLATION_CONTROL_SHADER,
-        },
+        stages: vk::PipelineStageFlags2::TESSELLATION_CONTROL_SHADER,
         range,
     };
-    // Where a stage reads it: an emulated function may not.
-    let reads_patch_indices = factors.is_some_and(|t| t.patch_indices.is_some());
+    let reads_patch_indices = factors.is_some();
     if let (
         DrawCall::Patches {
             patch_index: Some(_),
@@ -5131,7 +4752,7 @@ fn draw_uses(
             ..
         },
         Some(&FactorTemplate {
-            control_point_indices: Some((Some(_), size)),
+            control_point_indices: Some((_, size)),
             ..
         }),
     ) = (*draw, factors)
@@ -5171,15 +4792,6 @@ fn draw_uses(
                 },
             }
         }))),
-        // An emulated tessellation pipeline's scan reads a patch draw's arguments, through the
-        // copy into its work buffer the consumer records with it.
-        DrawCall::PatchesIndirect { .. } if scanned => uses.push(ResourceUse {
-            resource: UseTarget::Indirect,
-            access: AccessSet::READ,
-            class: AccessClass::Storage,
-            stages: vk::PipelineStageFlags2::COMPUTE_SHADER,
-            range: Some(ByteRange { offset: 0, len: 16 }),
-        }),
         DrawCall::Indirect { indexed: None, .. } | DrawCall::PatchesIndirect { .. } => {
             uses.push(indirect_use(16))
         }

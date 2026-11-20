@@ -351,16 +351,6 @@ pub enum SyntheticBinding {
     /// which its object function writes and its mesh function and synthesized vertex stage read
     /// (`lower::mesh::work`). Declared with the mesh stage's symbols.
     MeshWork,
-    /// An emulated tessellation draw's work buffer (`GraphicsState::emulated_tessellation`): its
-    /// arguments, where its records begin and its chunks' draws, which the tessellation scan
-    /// writes and the post-tessellation vertex function reads (`lower::tessellation::work`).
-    /// Declared with the vertex stage's symbols.
-    TessellationWork,
-    /// An emulated tessellation draw's records: one per instance and patch, each its processed
-    /// factors, its first triangle and its stream state, which the tessellation scan writes and
-    /// the post-tessellation vertex function reads (`lower::tessellation::work`). Declared with
-    /// the vertex stage's symbols.
-    TessellationRecords,
     /// The stand-in of the render pass's depth attachment a fragment function that runs the
     /// draw's depth test itself tests and writes (`GraphicsState::shader_tests`): a coherent
     /// `R32f` storage image holding pixel `(x, y)`'s depth at texel `(x, y)` (its samples as the
@@ -1053,12 +1043,6 @@ pub enum PushField {
     /// That amplification's `viewportArrayIndexOffset` (`u32`), added to the viewport index and
     /// read as `AmplificationLayerOffset` is.
     AmplificationViewportOffset,
-    /// The chunk an emulated tessellation draw's `vkCmdDrawIndirect` draws (`u32`): an emulated
-    /// post-tessellation vertex function draws the triangles of the draw's chunk this field names
-    /// (`lower::tessellation::work`). Placed with the amplification fields, so the vertex stage's
-    /// window holds it (at most 44 bytes before it there: `SnapshotPhase` is a fragment
-    /// function's): the draw of each chunk writes it alone, between its draws.
-    TessellationChunk,
     /// The row of regions a recording of a rate-mapped pass's regions draws (`uvec2`;
     /// `RegionFanOut::RegionCopies`, `LoweringInputs::region_copies`): its first region's
     /// segments of x and y in the region table, `x0` and `y0`. Its vertex function draws the
@@ -1159,9 +1143,7 @@ pub enum PushField {
     /// Whether the patch draw binds a patch index buffer (`u32`, 1 or 0), a control-stage field.
     PatchIndexBound,
     /// The control-point index buffer's residual bind offset (`u32`), a control-stage field of a
-    /// pipeline with a control-point index type. An emulated post-tessellation vertex function
-    /// reads this field and the two before it in its own push window
-    /// (`GraphicsState::emulated_tessellation`).
+    /// pipeline with a control-point index type.
     ControlPointIndexOffset,
     /// The draw's band of a pipeline variant that draws its lines as bands
     /// (`VariantKey::line_band`, `link::band`): one `vec4` of the synthesized evaluation stage's

@@ -2,23 +2,15 @@
 //! `2^64 - 1`): that division is the overflow test (`b <= (2^32 - 1) / a`) NVIDIA's compiler
 //! refuses in some modules, and the modules test a product's overflow by its high word instead
 //! (`bind::replay::checked_mul`). The modules are every compute module function of `bind`, at
-//! every value of each closed parameter (every
-//! tessellation scan of each domain, partitioning, winding, step and scaling), each built on
-//! every committed profile: one a profile refuses (`Unsupported`) is skipped there, and each
+//! every value of each closed parameter, each built on every committed profile: one a profile refuses (`Unsupported`) is skipped there, and each
 //! function builds on one profile at least.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::bind::{
-    self, DepthStandInForm, PlanesCopy, RewritePhase, RewriteProgram, TessellationScanKernel,
-};
+use crate::bind::{self, DepthStandInForm, PlanesCopy, RewritePhase, RewriteProgram};
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature};
-use crate::metal::{
-    TessellationFactorStepFunction as Step, TessellationPartitionMode as Partition, Winding,
-};
-use crate::pipeline::interface::PatchDomain;
 use crate::spirv::testing::{all_ones_divisions, committed_descriptions};
 
 /// A module function at one parameter: what it is called, and its words on a device.
@@ -97,30 +89,6 @@ fn modules() -> Vec<Build> {
             format!("depth_split_module({form:?})"),
             Box::new(move |d| Ok(bind::depth_split_module(d, form, Feature::Format)?.spirv)),
         );
-    }
-    for domain in [PatchDomain::Triangle, PatchDomain::Quad] {
-        for &partition_mode in Partition::ALL {
-            for &output_winding_order in Winding::ALL {
-                for &factor_step_function in Step::ALL {
-                    for factor_scale_enabled in [false, true] {
-                        let kernel = TessellationScanKernel {
-                            domain,
-                            partition_mode,
-                            output_winding_order,
-                            max_tessellation_factor: 64,
-                            factor_step_function,
-                            factor_scale_enabled,
-                        };
-                        push(
-                            format!("tessellation_scan_module({kernel:?})"),
-                            Box::new(
-                                move |d| Ok(bind::tessellation_scan_module(d, &kernel)?.spirv),
-                            ),
-                        );
-                    }
-                }
-            }
-        }
     }
     out
 }

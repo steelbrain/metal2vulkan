@@ -749,8 +749,7 @@ pub enum PrecisionNote {
     /// rule. Measured equal to Metal's, at factors within the device's range, by a consumer's
     /// device tests on RADV (Radeon 780M, RX 7900 XTX), NVIDIA Turing, ANV (Intel Iris Xe) and
     /// MoltenVK; other drivers, lavapipe among them, and factors past the range are not measured.
-    /// A device without `tessellationShader` draws Metal's tessellator through the emulation and
-    /// records none. Recorded on the evaluation stage.
+    /// Recorded on the evaluation stage.
     ///
     /// Validation derives no tolerance from it.
     TessellationFractionalSpacing,
@@ -2013,13 +2012,11 @@ pub enum PrecisionNote {
     /// the device's tessellator orders each patch's triangles and picks each one's first corner,
     /// and where Vulkan leaves it to the implementation chooses the triangles that join a patch's
     /// rings, where Metal's tessellator draws the D3D11 reference's triangles in its own order,
-    /// each triangle's first corner by its stitch step (`lower::tessellation::tessellator`). The
-    /// domain points are Metal's; a flat varying (the first corner's), a value interpolated across
+    /// each triangle's first corner by its stitch step. The domain points are Metal's; a flat varying (the first corner's), a value interpolated across
     /// another triangulation, and the order in which a patch's triangles reach the blend or the
     /// depth test may differ: every patch measured differs on the RTX 3090, 55-95% of them on RADV
     /// and lavapipe. MoltenVK on an Apple GPU hands the patches to Metal's own tessellator and
-    /// records none; so does a pipeline on a device without `tessellationShader`, which draws
-    /// Metal's triangles in Metal's order through the emulation. Recorded on the evaluation stage.
+    /// records none. Recorded on the evaluation stage.
     /// Validation derives no tolerance from it.
     TessellationTriangleOrder,
     /// The stage's function holds a branch whose arms hold a quad or simdgroup operation that

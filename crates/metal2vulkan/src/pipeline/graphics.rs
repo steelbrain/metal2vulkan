@@ -14,7 +14,6 @@ use crate::error::{
     Attachment, Capability, Error, Feature, InternalError, InternalKind, Unsupported,
 };
 use crate::metal;
-use crate::pipeline::descriptor::TessellationDescriptor;
 use crate::pipeline::interface::{MeshRecords, PatchDomain};
 use crate::pipeline::sym::SampledType;
 use crate::vk;
@@ -166,14 +165,6 @@ pub struct GraphicsState {
     /// [`mesh_records`](Self::mesh_records) does. `None` for every other pipeline.
     #[cfg_attr(feature = "serde", serde(default))]
     pub mesh_corners: Option<u32>,
-    /// A render pipeline whose vertex function is a post-tessellation vertex function, on a
-    /// device without `tessellationShader`: the function is the pipeline's `VERTEX` module, which
-    /// draws the tessellator's triangles itself as a `TRIANGLE_LIST` from an emulated draw's
-    /// records (the binder's `DrawCommands::tessellation_dispatch` states the consumer contract),
-    /// and the pipeline has no tessellation stages (`tessellation` is `None`). `None` for every
-    /// other pipeline.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub emulated_tessellation: Option<EmulatedTessellation>,
     /// A render pipeline variant that draws its lines as bands of triangles
     /// (`VariantKey::line_band`, `pipeline::link::band`): its `topology` is `PATCH_LIST` (never
     /// dynamic), its stages the vertex stage, the band's synthesized tessellation control and
@@ -522,45 +513,6 @@ impl LineBandState {
     pub const FRONT_FACE: vk::FrontFace = crate::pipeline::link::band::LineBand::FRONT_FACE;
 }
 
-/// What a consumer and the binder need of a tessellation pipeline on a device without
-/// `tessellationShader` (`GraphicsState::emulated_tessellation`).
-///
-/// Metal draws `patchCount` patches of `instanceCount` instances from `patchStart` and
-/// `baseInstance`. Each draw of patches runs the tessellation scan
-/// ([`TessellationScanModule`](crate::bind::TessellationScanModule) of [`Self::scan_kernel`]),
-/// which reads each patch's factors from the encoder's factor buffer and writes the draw's
-/// records, one per instance and patch, and its chunks' `VkDrawIndirectCommand`s; each chunk is
-/// a draw of the pipeline, whose vertex function decodes and places the tessellator's point for
-/// the vertex it draws and reads Metal's patch index, instance index and control points' elements
-/// as the native control stage hands them. The pipeline's topology is `TRIANGLE_LIST`, not
-/// dynamic state.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct EmulatedTessellation {
-    /// The post-tessellation vertex function's patch type.
-    pub domain: PatchDomain,
-    /// Its `[[patch(_, N)]]` control points per patch (0 when unstated): a patch draw's
-    /// `numberOfPatchControlPoints` must equal a stated count.
-    pub control_points: u32,
-    /// The descriptor's tessellation state, which the vertex function bakes in.
-    pub descriptor: TessellationDescriptor,
-}
-
-impl EmulatedTessellation {
-    /// The tessellation scan the pipeline's draws run.
-    pub fn scan_kernel(&self) -> crate::bind::TessellationScanKernel {
-        crate::bind::TessellationScanKernel {
-            domain: self.domain,
-            partition_mode: self.descriptor.partition_mode,
-            output_winding_order: self.descriptor.output_winding_order,
-            max_tessellation_factor: self.descriptor.max_tessellation_factor,
-            factor_step_function: self.descriptor.factor_step_function,
-            factor_scale_enabled: self.descriptor.factor_scale_enabled,
-        }
-    }
-}
-
 impl GraphicsState {
     /// A state that draws `topology` at `rasterization_samples` and nothing else: no attachment,
     /// dynamic state, tessellation, imageblock, fetch or amplification (one view). A consumer
@@ -594,7 +546,6 @@ impl GraphicsState {
             writes_sample_mask: false,
             mesh_records: None,
             mesh_corners: None,
-            emulated_tessellation: None,
             line_band: None,
             region_fan_out: None,
             writes_point_size: false,

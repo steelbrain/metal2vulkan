@@ -56,7 +56,7 @@ pub enum DrawReplayRule {
     ArgumentsOnCpu,
     /// The state's draw bounds its indices.
     IndexBounds,
-    /// The state's draw dispatches before it draws (a mesh or tessellation dispatch).
+    /// The state's draw dispatches before it draws (an emulated mesh draw's dispatch).
     DispatchesFirst,
     /// The state's draw is amplified or draws views.
     Amplified,
@@ -287,7 +287,7 @@ pub fn draw_replay_draw(
         ),
         (commands.index_bounds_pass, DrawReplayRule::IndexBounds),
         (
-            commands.mesh_dispatch.is_some() || commands.tessellation_dispatch.is_some(),
+            commands.mesh_dispatch.is_some(),
             DrawReplayRule::DispatchesFirst,
         ),
         (

@@ -137,10 +137,6 @@ pub fn canonical_inputs(inputs: &LowerInputs) -> LowerInputs {
         .map(StageInputDescriptor::canonical);
     // A depth of 0 is taken as 1, Metal's default, which is no depth at all.
     out.max_call_stack_depth = inputs.max_call_stack_depth.filter(|&k| k > 1);
-    // Metal's default tessellation state is no state at all.
-    out.tessellation = inputs
-        .tessellation
-        .filter(|d| *d != TessellationDescriptor::default());
     // Only a tile function's threadgroup is the tile.
     out.threadgroup_size_matches_tile_size =
         inputs.threadgroup_size_matches_tile_size && inputs.tile_attachments.is_some();
@@ -314,10 +310,6 @@ pub fn function_key(
     // Appended only when set.
     if inputs.viewport_index_varying {
         h.bytes(b"viewport-index-varying");
-    }
-    // Appended only when set: canonical, so never Metal's default state.
-    if let Some(d) = inputs.tessellation {
-        h.bytes(b"tessellation").bytes(format!("{d:?}").as_bytes());
     }
     // Appended only when set: canonical, so never 1, Metal's default.
     if let Some(k) = inputs.max_call_stack_depth {

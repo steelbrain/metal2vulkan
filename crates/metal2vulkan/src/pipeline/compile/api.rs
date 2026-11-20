@@ -43,7 +43,7 @@ use crate::pipeline::compile::key::{
 };
 use crate::pipeline::compile::{
     color_group, compile_stage, compile_stage_from, dynamic_order, guarded,
-    kernel_observes_partition, linked_keys, primitive_id_carried_on, reads_primitive_id_varying,
+    kernel_observes_partition, linked_keys, primitive_id_varying_on, reads_primitive_id_varying,
     stage_inputs, vertex_push_end, FragmentPass, InputsFrom, RawIndices, StageEntries,
     NO_PRIMITIVE_VARYINGS,
 };
@@ -413,9 +413,8 @@ impl Device {
             let zeroed = with_zeroed_colors(grouped.as_ref().unwrap_or(d), v)?;
             let d = zeroed.as_ref();
             // The vertex function writes the primitive ID a fragment function reads from its
-            // varying, on a device without a fragment `PrimitiveId` or behind an emulated
-            // post-tessellation vertex function.
-            let primitive_id = match primitive_id_carried_on(p) {
+            // varying, on a device without a fragment `PrimitiveId`.
+            let primitive_id = match primitive_id_varying_on(p) {
                 true => reads_primitive_id_varying(
                     d.fragment.as_ref(),
                     d.max_fragment_call_stack_depth,
@@ -430,7 +429,6 @@ impl Device {
                     v,
                     d.max_vertex_call_stack_depth,
                     primitive_id,
-                    d.tessellation.as_ref(),
                 )
             };
             let (vertex, vertex_inputs, written, varyings, uniform, push_end) = match &d.vertex {
@@ -952,10 +950,10 @@ impl Device {
             pass.logic_operation = crate::pipeline::private_state::LogicDraw::shader(logic);
             pass
         };
-        // On a device without a fragment `PrimitiveId` or without `tessellationShader`, whether
-        // the vertex function writes the primitive ID's varying: the fragment entry specialized
-        // for that is the one its compile reads.
-        let entries = primitive_id_carried_on(p).then(StageEntries::new);
+        // On a device without a fragment `PrimitiveId`, whether the vertex function writes the
+        // primitive ID's varying: the fragment entry specialized for that is the one its compile
+        // reads.
+        let entries = primitive_id_varying_on(p).then(StageEntries::new);
         let primitive_id = match &entries {
             Some(e) => reads_primitive_id_varying(
                 d.fragment.as_ref(),
@@ -972,7 +970,6 @@ impl Device {
                 v,
                 d.max_vertex_call_stack_depth,
                 primitive_id,
-                d.tessellation.as_ref(),
             ),
             m,
         )?;

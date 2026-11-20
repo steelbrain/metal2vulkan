@@ -56,16 +56,14 @@ use std::collections::BTreeMap;
 use crate::budget::Meter;
 use crate::device::requirements::{Requirements, VkFeature, VkLimit};
 use crate::device::DeviceProfile;
-use crate::error::{
-    Capability, DescriptorError, Error, Feature, LowerFamily, RuntimeInput, Unsupported,
-};
+use crate::error::{Capability, DescriptorError, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::stage_io::fetch::encoding;
 use crate::metal::{TessellationControlPointIndexType, TessellationPartitionMode as Partition};
 use crate::pipeline::artifact::{
     PrecisionNote, Reconvergence, SpecializationLayout, StageModule, StrategyCensus,
 };
 use crate::pipeline::descriptor::{TessellationDescriptor, VertexDescriptor};
-use crate::pipeline::graphics::{EmulatedTessellation, TessellationState};
+use crate::pipeline::graphics::TessellationState;
 use crate::pipeline::interface::{
     PlacedField, PushLoc, PushPlacement, StageInterface, TessellationStage,
 };
@@ -319,27 +317,6 @@ fn checked(desc: Option<&TessellationDescriptor>) -> Result<TessellationDescript
         ));
     }
     Ok(desc)
-}
-
-/// The emulated tessellation state of a pipeline whose evaluation stage `stage` was compiled for
-/// a device without `tessellationShader` (`TessellationStage::emulated`): the descriptor's
-/// tessellation state `desc` (`None`: Metal's defaults), held to Metal's rules as
-/// [`control_plan`] holds it, but not to the device's tessellation limits (the emulation uses no
-/// tessellation stage), and the state the stage baked in (`NeedsInput(TessellationDescriptor)`
-/// otherwise: compiled for another state, the function draws another tessellation).
-pub fn emulated_state(
-    desc: Option<&TessellationDescriptor>,
-    stage: TessellationStage,
-) -> Result<EmulatedTessellation, Error> {
-    let desc = checked(desc)?;
-    if stage.emulated != Some(desc) {
-        return Err(Error::NeedsInput(RuntimeInput::TessellationDescriptor));
-    }
-    Ok(EmulatedTessellation {
-        domain: stage.domain,
-        control_points: stage.control_points,
-        descriptor: desc,
-    })
 }
 
 /// A fragment stage `fs` behind an evaluation stage: one that reads `[[primitive_id]]`, from the
