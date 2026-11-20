@@ -15,11 +15,11 @@
 //!   recorded as `PrecisionNote::DeviceNanEncoding`), so the texel must be the exact widening of
 //!   each value that is not a NaN, and a NaN for each NaN.
 //!
-//! Each runs on every committed profile under the default policy and under
-//! `DevicePolicy::exact_answers`. A module may leave a NaN's bits to the device, and then says so:
-//! a `half` read from its bits by the device's widening (every profile with `shaderFloat16`) or a
-//! NaN's bits left to the device's arithmetic and conversions, each `PrecisionNote::NativeNanEncoding`
-//! (under either policy), or the native conversion's `PrecisionNote::NativeHalfConversion`. There
+//! Each runs on every committed profile under the default policy. A module may leave a NaN's bits
+//! to the device, and then says so: a `half` read from its bits by the device's widening (every
+//! profile with `shaderFloat16`) or a NaN's bits left to the device's arithmetic and conversions,
+//! each `PrecisionNote::NativeNanEncoding`, or the native conversion's
+//! `PrecisionNote::NativeHalfConversion`. There
 //! a NaN pattern need only come back a NaN (a move through the select or the threadgroup array; a
 //! move straight to a buffer reuses the loaded bits). No other pattern may change, nor any where
 //! the module records neither note.
@@ -292,7 +292,7 @@ fn run_once(c: &Compiled, what: &str) -> Found {
 }
 
 /// Every `half` pattern comes back as its bits from each move (buffer, select, threadgroup array)
-/// and as its exact widening from the texel on every profile under every policy, but that a NaN pattern may come back
+/// and as its exact widening from the texel on every profile, but that a NaN pattern may come back
 /// another NaN where the module records the note that leaves a NaN's bits to the device (the module
 /// docs).
 #[test]

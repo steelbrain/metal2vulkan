@@ -146,7 +146,6 @@ fn validate_backend_host(backend: Backend) -> Result<(), String> {
 
 pub(crate) mod device_facts;
 pub mod engine;
-pub(crate) mod unadvertised_stage;
 pub(crate) mod unsupported_set;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

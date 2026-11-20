@@ -16,9 +16,7 @@
 
 use crate::executor_contract::DrawDepthStencil;
 use ash::vk;
-use metal2vulkan::device::DriverFact;
 use metal2vulkan::pipeline::{GraphicsState, RenderPipeline, VertexStride};
-use std::collections::BTreeSet;
 use std::ffi::CString;
 use std::time::Duration;
 
@@ -428,13 +426,9 @@ pub(super) fn front_face(state: &DrawDepthStencil) -> vk::FrontFace {
 
 /// Create the graphics pipeline of `pipeline` as `consumer` decides it: the pipeline and the
 /// duration of the `vkCreateGraphicsPipelines` call alone. The caller owns (and destroys) the
-/// pipeline. The diagnostics the executing driver's `facts` measure it to report as it makes
-/// the pipeline (`DriverFact::pipeline_creation_diagnostics`) fail no row from inside that call;
-/// those of its color attachments the driver cannot blend fail none anywhere
-/// (`MessageSink::making`).
+/// pipeline.
 pub(super) fn create_graphics_pipeline(
     device: &ash::Device,
-    facts: &BTreeSet<DriverFact>,
     pipeline: &RenderPipeline,
     consumer: &Consumer<'_>,
 ) -> Result<(vk::Pipeline, Duration), GraphicsError> {
@@ -624,17 +618,10 @@ pub(super) fn create_graphics_pipeline(
     if let Some(tessellation) = &tessellation {
         info = info.tessellation_state(tessellation);
     }
-    let expected = facts
-        .iter()
-        .flat_map(|fact| {
-            fact.pipeline_creation_diagnostics(&graphics.dynamic_states, topology, &[])
-        })
-        .collect();
     let clock = crate::budgets::CreationClock::start();
-    let created = super::device::expecting_diagnostics(expected, || {
-        // SAFETY: every pointer in `info` outlives the call; the caller destroys the result.
-        unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) }
-    });
+    // SAFETY: every pointer in `info` outlives the call; the caller destroys the result.
+    let created =
+        unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &[info], None) };
     let elapsed = clock.read();
     match created {
         Ok(pipelines) => Ok((pipelines.first().copied().unwrap_or_default(), elapsed)),

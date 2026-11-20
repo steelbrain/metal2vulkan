@@ -72,12 +72,9 @@ Reading notes for consumers of these files:
   `robustBufferAccess` as MoltenVK reports it, but MoltenVK adds no bounds check for it: on the
   captured device out-of-bounds storage and uniform buffer accesses, buffer atomics, and vertex
   fetches read and wrote the next buffer's memory, while texel buffers were contained. Validation records it as a driver limitation (`HostClass::robust_buffers_uncontained`).
-- A file states no deviation from the specifications: where a driver's answer to what they leave
-  open is Metal's (MoltenVK's lockstep, float functions, canonical NaN, sampler and cube-gradient
-  route on Apple's GPUs), the product takes it from the release-keyed table of what each driver
-  release is measured with (`crates/metal2vulkan/src/device/driver_facts.rs`),
-  keyed on the file's `driverID`, `vendorID` and `driverVersion`. The product refuses a file that
-  holds the former top-level `m2v_deviations` object.
+- A file states no deviation from the specifications, and the product reads none: its profile is
+  derived from the file's Vulkan queries alone (`Device::from_queries`). The product refuses a file
+  that holds the former top-level `m2v_deviations` object.
 - The top-level object `m2v_color_attachment_sample_counts` of a venue profile, keyed by profile
   name, states each color attachment format's own sample counts (`VkSampleCountFlagBits` names):
   the `sampleCounts` of a 2D, optimal-tiling image of the format with `COLOR_ATTACHMENT` usage,

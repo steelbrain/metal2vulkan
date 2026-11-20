@@ -242,7 +242,6 @@ fn create(context: &VulkanContext, pipeline: &RowPipeline) -> Result<Acceptance,
                 };
             let created = graphics_pipeline::create_graphics_pipeline(
                 &context.device,
-                &context.executing_driver_facts(),
                 p,
                 &graphics_pipeline::Consumer {
                     modules: &objects.modules,

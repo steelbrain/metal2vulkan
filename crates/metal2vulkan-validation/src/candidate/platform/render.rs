@@ -2159,7 +2159,6 @@ fn create_pipeline(
     let specializations = vec![(map, specialization.data.clone()); pipeline.stages.len()];
     let (created, elapsed) = graphics_pipeline::create_graphics_pipeline(
         &context.device,
-        &context.executing_driver_facts(),
         pipeline,
         &graphics_pipeline::Consumer {
             modules: &objects.modules,
