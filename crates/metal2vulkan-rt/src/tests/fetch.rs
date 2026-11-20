@@ -356,6 +356,15 @@ mod on_device {
                     if format != PixelFormat::RGBA16Float {
                         continue;
                     }
+                    // Both counted passes draw into this one plane. Where it reads through its
+                    // shadow, its first read makes the shadow, whose move home the next
+                    // submission's upload records with barriers of its own: one uncounted pass
+                    // first, so the counted ones differ only by their draws.
+                    if readable {
+                        let (drew, _) =
+                            pass_of((label.as_str(), &device, &queue), &state, plane, clear, 1);
+                        drew.unwrap_or_else(|error| panic!("{label}: the first pass: {error}"));
+                    }
                     let mut counts = Vec::new();
                     for draws in DRAWS {
                         let (drew, counted) = pass_of(
