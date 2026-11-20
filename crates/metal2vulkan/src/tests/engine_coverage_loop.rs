@@ -18,12 +18,13 @@
 //! - `coverage_loop`'s memory writers loop at four samples wherever the device makes them; each of
 //!   its functions holding one thing the loop does not fit (early fragment tests, a discard, a
 //!   derivative, a simdgroup operation, a color attachment read) is refused by that thing; its
-//!   sample-qualified varying is interpolated at each pass's sample (`InterpolateAtSample`, no
-//!   `Sample` decoration), or refused as needing the interpolation functions where withheld.
+//!   sample-qualified varying is interpolated at its samples (`InterpolateAtSample`, no `Sample`
+//!   decoration), or refused as needing the interpolation functions where withheld.
 //!
 //! - `coverage_natural`'s functions read no `[[position]]` beside a sample index or varying: each
 //!   loops.
-//! - The looping functions' sample-qualified varyings are read once, inside the loop.
+//! - The looping functions' sample-qualified varyings are read at every sample a pipeline of the
+//!   device may have, by constant, before the loop, where the whole quad runs, on every profile.
 //!
 //! Every pipeline that compiles passes L3 (`spirv-val` and requirements within the profile).
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
@@ -602,17 +603,20 @@ fn the_natural_functions_loop_over_their_covered_samples() {
 }
 
 /// A looping function's sample-qualified varying (`coverage_loop`'s `cov_loop_varying`, and
-/// `coverage_natural`'s `nat_varying`, at 2 and 4 samples) is read once, at the pass's sample,
-/// which the loop computes, on every profile that loops it. Each varying is perspective
-/// (`sample_perspective`), and no module records `PrecisionNote::ExtrapolatedInterpolation`.
+/// `coverage_natural`'s `nat_varying`, at 2 and 4 samples) is read at every sample a pipeline of
+/// the device may have, each by its constant index from 0, a power of two of them and at least
+/// the pipeline's samples, and at no computed sample, on every profile that loops it: before the
+/// loop, which the helper invocations of a partly covered quad leave at once. Each varying is
+/// perspective (`sample_perspective`), and no module records
+/// `PrecisionNote::ExtrapolatedInterpolation`.
 #[test]
-fn a_looping_function_reads_its_sample_varying_once_inside_the_loop() {
+fn a_looping_function_reads_its_sample_varying_at_every_sample_before_the_loop() {
     let (Some(loop_lib), Some(natural_lib)) =
         (library("coverage_loop"), library("coverage_natural"))
     else {
         return;
     };
-    let mut inside = 0;
+    let mut before = 0;
     for stem in stems() {
         let dev = device(&stem);
         for (lib, f) in [(&loop_lib, COV_VARYING), (&natural_lib, "nat_varying")] {
@@ -634,15 +638,19 @@ fn a_looping_function_reads_its_sample_varying_once_inside_the_loop() {
                         .contains(&PrecisionNote::ExtrapolatedInterpolation)),
                     "{what}: the extrapolation note"
                 );
-                inside += 1;
-                assert_eq!(interpolated_samples(words), [None], "{what}");
+                before += 1;
+                let reads = interpolated_samples(words);
+                let n = reads.len() as u32;
+                assert!(n.is_power_of_two() && n >= samples, "{what}: {reads:?}");
+                let every: Vec<Option<u32>> = (0..n).map(Some).collect();
+                assert_eq!(reads, every, "{what}");
                 l3(&dev, &p, &what);
             }
         }
     }
     assert!(
-        inside >= 6 * 4,
-        "{inside} pipelines read it inside the loop"
+        before >= 6 * 4,
+        "{before} pipelines read it before the loop"
     );
 }
 

@@ -26,7 +26,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 136 | 120 | 8 | 33 | 75 | 20 | 0 |
+| Translator and front-end refusals | 137 | 121 | 8 | 33 | 76 | 20 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
@@ -40,7 +40,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 42 | 56 | 0 | 0 | 38 |
+| Translator and front-end refusals | 0 | 0 | 0 | 42 | 57 | 0 | 0 | 38 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
@@ -120,7 +120,8 @@ Columns:
 | `Barycentrics` | Barycentric coordinates | devices without VkFeature::FragmentShaderBarycentric; devices without VkFeature::GeometryShader; devices without a capability the site computes (`needs`); drivers with a defect; every device (not implemented) | `ours` | 5: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (input_builtin)` (+3) | `rare`: barycentric coordinates |
 | `StencilExport` | Stencil export | devices without VkExtension::ExtShaderStencilExport; every device (not implemented) | `ours` | 5: `crates/metal2vulkan/src/bind/graphics.rs (shadow_stencil_words)`, `crates/metal2vulkan/src/lower/fragment/stencil.rs (device_form)` (+2) | `rare`: stencil from the shader |
 | `SampleRateShading` | Per-sample shading | devices without VkFeature::SampleRateShading; devices without a capability the site computes (`needs`); every device (not implemented) | `ours` | 3: `crates/metal2vulkan/src/pipeline/link/graphics.rs (sample_invocations, 3 sites)` | `rare`: per-sample shading |
-| `PullModelInterpolation` | Metal's pull-model interpolation (`interpolant` fragment inputs and their `interpolate_at_center`, `_centroid`, `_sample` and `_offset` functions)... | devices without VkProperty::InterpolateAtOffsetCentered; devices without VkProperty::InterpolateAtOffsetFromSevenSixteenths; devices without a capability the site computes (`lacks`); drivers with workaround InterpolationNeedsTheWholeQuad; every device (not implemented) | `ours` | 6: `crates/metal2vulkan/src/lower/fragment/interpolate.rs (select, 2 sites)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (interpolant, 2 sites)` (+1) | `rare`: interpolant inputs read at the centroid, a sample or an offset |
+| `PullModelInterpolation` | Metal's pull-model interpolation (`interpolant` fragment inputs and their `interpolate_at_center`, `_centroid`, `_sample` and `_offset` functions)... | devices without VkProperty::InterpolateAtOffsetCentered; devices without VkProperty::InterpolateAtOffsetFromSevenSixteenths; devices without a capability the site computes (`lacks`); every device (not implemented) | `ours` | 5: `crates/metal2vulkan/src/lower/fragment/interpolate.rs (select, 2 sites)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (interpolant, 2 sites)` (+1) | `rare`: interpolant inputs read at the centroid, a sample or an offset |
+| `DivergentInterpolation` | Metal's pull-model interpolation at a sample or an offset (`interpolate_at_sample`, `interpolate_at_offset`) outside the fragment function's first... | every device (not implemented) | `ours` | 1: `crates/metal2vulkan/src/lower/stage_io/plan.rs (interpolant_reads)` | `rare`: an interpolant read at a sample or an offset in a branch, a loop or after a discard |
 | `SamplePositions` | A render pass's custom sample positions (`setSamplePositions:count:`) on a device that takes no custom sample locations at the pass's sample... | - | `-` | 0 | `rare`: custom sample positions on a device that takes none at the pass's sample count |
 | `PixelCoverageAtSampleRate` | The pixel's coverage (`[[sample_mask]]` read) in a fragment function that runs once per sample | drivers with a defect; every device (no Vulkan mechanism); every device (not implemented) | `ours` | 3: `crates/metal2vulkan/src/lower/fragment/coverage.rs (finish)`, `crates/metal2vulkan/src/lower/simd/mod.rs (select_param)` (+1) | `rare`: coverage read at sample rate |
 | `InterfaceComponents` | Too many interface components or locations | devices short of a device limit the site names; devices without VkLimit::MaxColorAttachments; devices without VkLimit::MaxVertexInputAttributes | `device` | 4: `crates/metal2vulkan/src/pipeline/compile/color_group.rs (refusal)`, `crates/metal2vulkan/src/pipeline/link/graphics.rs (graphics_state)` (+2) | `rare`: too many varyings or attachments for a device |
@@ -460,7 +461,8 @@ Each refusal's sites, with the function that builds it.
 - `feature::Barycentrics`: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (input_builtin)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)`; `crates/metal2vulkan/src/pipeline/link/geometry.rs (not_implemented)`; `crates/metal2vulkan/src/pipeline/link/geometry.rs (refused)`
 - `feature::StencilExport`: `crates/metal2vulkan/src/bind/graphics.rs (shadow_stencil_words)`; `crates/metal2vulkan/src/lower/fragment/stencil.rs (device_form)`; `crates/metal2vulkan/src/lower/fragment/stencil.rs (not_implemented)`; `crates/metal2vulkan/src/pipeline/link/stencil.rs (shadow_stencil, 2 sites)`
 - `feature::SampleRateShading`: `crates/metal2vulkan/src/pipeline/link/graphics.rs (sample_invocations, 3 sites)`
-- `feature::PullModelInterpolation`: `crates/metal2vulkan/src/lower/fragment/interpolate.rs (select, 2 sites)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (interpolant, 2 sites)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (interpolant_reads, 2 sites)`
+- `feature::PullModelInterpolation`: `crates/metal2vulkan/src/lower/fragment/interpolate.rs (select, 2 sites)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (interpolant, 2 sites)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (interpolant_reads)`
+- `feature::DivergentInterpolation`: `crates/metal2vulkan/src/lower/stage_io/plan.rs (interpolant_reads)`
 - `feature::PixelCoverageAtSampleRate`: `crates/metal2vulkan/src/lower/fragment/coverage.rs (finish)`; `crates/metal2vulkan/src/lower/simd/mod.rs (select_param)`; `crates/metal2vulkan/src/pipeline/link/graphics.rs (sample_invocations)`
 - `feature::InterfaceComponents`: `crates/metal2vulkan/src/pipeline/compile/color_group.rs (refusal)`; `crates/metal2vulkan/src/pipeline/link/graphics.rs (graphics_state)`; `crates/metal2vulkan/src/pipeline/link/varyings.rs (assign)`; `crates/metal2vulkan/src/pipeline/link/varyings.rs (limit_error)`
 - `feature::UnmatchedVarying`: `crates/metal2vulkan/src/pipeline/link/varyings.rs (mesh_fragment)`; `crates/metal2vulkan/src/pipeline/link/varyings.rs (varyings, 2 sites)`

@@ -1317,20 +1317,6 @@ pub enum DriverWorkaround {
     /// sample-qualified varying is refused as this defect at more than one sample, as SPIRV-Cross
     /// then masks the coverage with `1 << gl_SampleID`.
     MemoryWritingFragmentsRunPerSample,
-    /// The driver's `InterpolateAtSample`, and its `InterpolateAtOffset` at an offset other than
-    /// (0, 0), read values that are not the input's in control flow that some invocations of the
-    /// quad have left, as the helper invocations of a partly covered quad leave a loop over their
-    /// coverage, which is empty. Measured on RADV (`VK_DRIVER_ID_MESA_RADV`), Mesa 26.0.8 and
-    /// 26.2.4, on the Radeon 780M with a bare Vulkan program: in a 1x1 framebuffer, whose quad
-    /// holds three helpers, a computed or a constant sample index, or a nonzero offset, inside such
-    /// a loop or branch read garbage, with or without sample shading, while the same reads in
-    /// control flow the whole quad runs, or in a quad of four covered pixels, read the sample's
-    /// position; an offset of (0, 0) reads the center inside the branch too. It is keyed on the
-    /// driver's release (`device::driver_facts`). There the loop over the covered samples reads
-    /// each sample-qualified varying at every sample a pipeline of the device may have before the
-    /// loop, where the whole quad runs, and each pass reads its sample's value
-    /// (`lower::fragment::coverage`).
-    InterpolationNeedsTheWholeQuad,
     /// The driver's `InterpolateAtSample` and `InterpolateAtOffset` of a perspective input are its
     /// value at the pixel center extrapolated along the quad's coarse derivatives,
     /// `f(center) + (f(tr) - f(tl)) * dx + (f(bl) - f(tl)) * dy` (`tl`, `tr`, `bl` the centers of

@@ -1705,10 +1705,10 @@ fn at_loop_sample(
 
 /// Read each sample-qualified varying of a function looping over its covered samples into its
 /// array ([`Declared::at_samples`]) at every sample before the loop, in the open block of the
-/// entry `fb` builds, where the driver's interpolation needs the whole quad
-/// (`DriverWorkaround::InterpolationNeedsTheWholeQuad`): the helper invocations of a partly covered
-/// quad leave the loop at once, and there that driver's interpolation at a sample reads garbage, so
-/// the reads come first, where every invocation of the quad runs. Sample `k` is read by the
+/// entry `fb` builds, on every device: the helper invocations of a partly covered quad leave the
+/// loop at once, and a device's interpolation at a sample may read the quad's other invocations
+/// (RADV's reads garbage where they have left), so the reads come first, where every invocation of
+/// the quad runs. Sample `k` is read by the
 /// constant `k`, for `k` from 0 to the most samples a pipeline of the device may have less one,
 /// each `k` but 0 under `SampleCount > k`, the pipeline's count, so no read names a sample the
 /// pipeline lacks; that condition is the same in every invocation.

@@ -15,8 +15,9 @@
 //!   offset range, requiring `InterpolateAtOffsetCentered`. The function records
 //!   `PrecisionNote::DeviceInterpolationOffset`, and no profile records
 //!   `PrecisionNote::ExtrapolatedInterpolation`.
-//! - An offset read after a discard and a centroid read of a multisampled pixel compile on every
-//!   profile whose reads they need.
+//! - A centroid read of a multisampled pixel compiles on every profile whose reads it needs.
+//! - An offset read past the first block (`pm_offset_after_discard`, behind a branch to a discard)
+//!   is not lowered on any profile, `NotImplemented(DivergentInterpolation)`.
 //! - An interpolant chosen at run time (a `select` of two) is not lowered,
 //!   `NotImplemented(PullModelInterpolation)`.
 //!
@@ -66,7 +67,7 @@ enum At {
 
 /// Each fragment function of the fixture that compiles somewhere, its color attachments' format
 /// and count, and where it reads.
-const FRAGMENTS: [(&str, PixelFormat, usize, &[At]); 10] = [
+const FRAGMENTS: [(&str, PixelFormat, usize, &[At]); 9] = [
     (
         LINEAR,
         PixelFormat::RGBA32Float,
@@ -80,12 +81,6 @@ const FRAGMENTS: [(&str, PixelFormat, usize, &[At]); 10] = [
     ("pm_offset", PixelFormat::RGBA32Float, 2, &[At::Offset]),
     (
         "pm_offset_sweep",
-        PixelFormat::RGBA32Float,
-        2,
-        &[At::Offset],
-    ),
-    (
-        "pm_offset_after_discard",
         PixelFormat::RGBA32Float,
         2,
         &[At::Offset],
@@ -294,6 +289,46 @@ fn an_interpolant_chosen_at_run_time_is_not_lowered() {
                     assert!(
                         matches!(&e, Error::Unsupported(u)
                             if u.feature == Feature::PullModelInterpolation
+                                && u.needs == Needs::NotImplemented),
+                        "{what}: {e:?}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 20, "{checked}");
+}
+
+/// An offset read past the function's first block (`pm_offset_after_discard`, whose reads follow a
+/// branch to a discard), where some of the quad's invocations may have left, is not lowered on
+/// any profile, before what the reads need is asked: `NotImplemented(DivergentInterpolation)`.
+#[test]
+fn an_offset_read_where_the_quad_may_have_left_is_not_lowered() {
+    let Some(lib) = library("pull_model_interpolants") else {
+        return;
+    };
+    let mut checked = 0;
+    for stem in stems() {
+        let dev =
+            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
+        for samples in [1, 4] {
+            let what = format!("{stem} pm_offset_after_discard at {samples}");
+            let d = render(
+                &lib,
+                "pm_offset_after_discard",
+                (PixelFormat::RGBA32Float, 2),
+                samples,
+            );
+            match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                Err(Error::Unsupported(u)) if u.feature == Feature::RasterSampleCount => {
+                    assert!(samples > 1, "{what}: {u:?}");
+                }
+                result => {
+                    let e = result.expect_err(&what);
+                    assert!(
+                        matches!(&e, Error::Unsupported(u)
+                            if u.feature == Feature::DivergentInterpolation
                                 && u.needs == Needs::NotImplemented),
                         "{what}: {e:?}"
                     );

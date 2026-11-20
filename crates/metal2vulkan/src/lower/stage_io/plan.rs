@@ -487,10 +487,9 @@ fn interpolant(cx: &mut SelectCx<'_>, b: &ParamBinding, v: &Varying) -> Result<(
 /// return, the interpolant's: every use of the parameter must be the interpolant operand of an
 /// `air.interpolate_*` call, all of one result type. Any other use (a `select` or `phi` choosing
 /// the interpolant at run time, a store, a call, another operand) is not lowered
-/// (`Feature::PullModelInterpolation`), and neither is a sample or offset read on a driver whose
-/// interpolation reads garbage where some of the quad's invocations have left the control flow
-/// (`DriverWorkaround::InterpolationNeedsTheWholeQuad`) outside the function's first block or
-/// after a discard there, where some may have.
+/// (`Feature::PullModelInterpolation`). A sample or offset read outside the function's first
+/// block, or after a discard there, where some of the quad's invocations may have left the control
+/// flow, is not lowered on any device (`Feature::DivergentInterpolation`).
 pub(super) fn interpolant_reads(
     cx: &SelectCx<'_>,
     param: u32,
@@ -498,11 +497,6 @@ pub(super) fn interpolant_reads(
     let arg = Value::Arg(ArgIdx::new(param));
     let refused =
         || -> Error { Unsupported::not_implemented(Feature::PullModelInterpolation).into() };
-    let whole_quad = cx
-        .profile
-        .fields()
-        .workarounds
-        .contains(&DriverWorkaround::InterpolationNeedsTheWholeQuad);
     let first_block_end = cx.body.blocks.values().next().map(|b| b.end);
     let mut discarded = false;
     let mut reads = BTreeSet::new();
@@ -536,15 +530,10 @@ pub(super) fn interpolant_reads(
         if uses != 1 {
             return Err(refused());
         }
-        if whole_quad
-            && matches!(i.at, InterpolateAt::Sample | InterpolateAt::Offset)
+        if matches!(i.at, InterpolateAt::Sample | InterpolateAt::Offset)
             && (discarded || first_block_end.is_none_or(|end| id >= end))
         {
-            return Err(Unsupported::driver_defect(
-                Feature::PullModelInterpolation,
-                DriverWorkaround::InterpolationNeedsTheWholeQuad,
-            )
-            .into());
+            return Err(Unsupported::not_implemented(Feature::DivergentInterpolation).into());
         }
         if ty.is_some_and(|t| t != inst.ty) {
             return Err(refused());

@@ -1385,10 +1385,18 @@ pub enum Feature {
     /// lowered: an interpolant read other than as the interpolant of one of its functions (chosen
     /// at run time, stored or passed on), or one a mesh function writes per primitive. On a device
     /// without `sampleRateShading` (which the `InterpolationFunction` capability needs), refused as
-    /// needing it; on a driver whose interpolation needs the whole quad
-    /// (`DriverWorkaround::InterpolationNeedsTheWholeQuad`), a sample or offset read in control flow
-    /// some of the quad may have left is the driver's defect.
+    /// needing it. A read at a sample or an offset where some of the quad may have left is
+    /// [`Feature::DivergentInterpolation`].
     PullModelInterpolation,
+    /// Metal's pull-model interpolation at a sample or an offset (`interpolate_at_sample`,
+    /// `interpolate_at_offset`) outside the fragment function's first block, or after a
+    /// `discard_fragment` in it, where some of the quad's invocations may have left the control
+    /// flow: not lowered, on any device. A device's `InterpolateAtSample` and `InterpolateAtOffset`
+    /// may read the quad's other invocations, and RADV's read garbage where those have left (in a
+    /// 1x1 framebuffer, whose quad holds three helper invocations), so the shape is a gap rather
+    /// than any device's answer. The same reads in the first block, before any discard, are
+    /// lowered.
+    DivergentInterpolation,
     /// A render pass's custom sample positions (`setSamplePositions:count:`) on a device that
     /// takes no custom sample locations at the pass's sample count, which is the count the grid
     /// is programmed at (`VkProperty::SampleLocationSampleCount`, named by the refusal). Only the

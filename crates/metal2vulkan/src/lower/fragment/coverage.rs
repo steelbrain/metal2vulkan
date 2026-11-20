@@ -27,11 +27,11 @@
 //! on; every other input is read at the pixel, as Metal reads it in each run.
 //!
 //! The helper invocations of a partly covered quad read an empty coverage and leave the loop at
-//! once. Where the driver's interpolation at a sample then reads garbage
-//! (`DriverWorkaround::InterpolationNeedsTheWholeQuad`, RADV), the entry reads each
-//! sample-qualified varying at every sample a pipeline of the device may have before the loop,
-//! where the whole quad runs, into a `Private` array (`stage_io::read_at_every_sample`), and each
-//! pass reads its sample's element. That driver answers a perspective varying's read at a sample
+//! once, and a device's interpolation at a sample may read the quad's other invocations (RADV's
+//! reads garbage where they have left). So on every device the entry reads each sample-qualified
+//! varying at every sample a pipeline of the device may have before the loop, where the whole quad
+//! runs, into a `Private` array (`stage_io::read_at_every_sample`), and each pass reads its
+//! sample's element. That driver answers a perspective varying's read at a sample
 //! with the pixel center's value extrapolated along the quad's derivatives
 //! (`DriverWorkaround::PerspectiveReadsExtrapolated`), its own interpolation, which the module
 //! records (`PrecisionNote::ExtrapolatedInterpolation`).
@@ -105,10 +105,8 @@ pub struct CoveragePlan {
     /// pixel's coverage, so it is compiled as written, without the loop
     /// (`CoverageLoop::DriverRunsPerSample`).
     pub driver_runs: bool,
-    /// Where the looping function reads a sample-qualified varying and the driver's interpolation
-    /// needs the whole quad (`DriverWorkaround::InterpolationNeedsTheWholeQuad`): the most samples
-    /// a pipeline of the device may have, at each of which the entry reads every such varying
-    /// before the loop.
+    /// Where the looping function reads a sample-qualified varying: the most samples a pipeline of
+    /// the device may have, at each of which the entry reads every such varying before the loop.
     pub samples_before_loop: Option<u32>,
 }
 
@@ -243,11 +241,7 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if looped && !e.ep.outputs.is_empty() {
         cx.precision.insert(PrecisionNote::LoopedSampleOutputs);
     }
-    let whole_quad = p
-        .workarounds
-        .contains(&DriverWorkaround::InterpolationNeedsTheWholeQuad);
-    let samples_before_loop =
-        (looped && sample_varying && whole_quad).then(|| most_samples(&p.limits));
+    let samples_before_loop = (looped && sample_varying).then(|| most_samples(&p.limits));
     if samples_before_loop.is_some() {
         // The entry reads the varyings at the pipeline's samples, by its count.
         cx.facts.insert(RuntimeFact::SampleCount);
