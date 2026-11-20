@@ -231,12 +231,7 @@ pub fn release_free_memory() {
     }
 }
 
-// Built with `--cfg m2v_system_alloc`, the lib test binary keeps the system allocator, as a
-// consumer's process does, so the runtime lanes' cost measurements (`draw_costs`, `commit_costs`,
-// `frame_costs`) pay no counting: each counted allocation takes a compare-and-swap loop and two
-// shared atomic maxima, 17% of the draw path's samples. Its counting tests are
-// left out there.
-#[cfg(all(test, not(m2v_system_alloc)))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

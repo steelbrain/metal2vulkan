@@ -4,8 +4,8 @@
 //! MoltenVK answers the query `sum of descriptorCount < maxPerSetDescriptors` (1212 on Apple's
 //! GPUs), though it encodes an update-after-bind set in a Metal argument buffer and runs one of
 //! 65536 elements and more as Metal runs the argument buffer
-//! (`RuntimeDriverDefect::SetLayoutSupportUnderstated`). The runtime makes a heap's set 1 there
-//! past that answer, announced (`Degradation::SetPastLayoutSupport`). The layer asks the query for
+//! (`RuntimeDriverDefect::SetLayoutSupportUnderstated`). The executor's context makes a heap's
+//! set 1 there past that answer (`platform/device.rs`). The layer asks the query for
 //! every layout past `maxPerSetDescriptors` and reports one it refuses, as Vulkan says it must
 //! (`VUID-vkCreateDescriptorSetLayout-support-09582`, "If the descriptor layout exceeds the limits
 //! reported through the physical device limits, then vkGetDescriptorSetLayoutSupport must have
@@ -17,9 +17,9 @@
 //! vkGetDescriptorSetLayoutSupport which reported this layout is not supported", read in
 //! Vulkan-ValidationLayers 1.4.363 (`CoreChecks::ValidateDescriptorSetLayoutSupport`), at
 //! `vkCreateDescriptorSetLayout`, as the lanes saw it on MoltenVK 1.4.2, alone or after the
-//! layer's note on its last report (`duplicate_message_limit`). The runtime lanes' sink
-//! passes it only once the runtime announced `Degradation::SetPastLayoutSupport`
-//! (`runtime_case.rs`). Every other message, and this one before the notice, still fails.
+//! layer's note on its last report (`duplicate_message_limit`). The executor's context's sink
+//! passes it only on a device whose driver runs such a layout (`platform/device.rs`). Every other
+//! message, and this one anywhere else, still fails.
 
 /// The message's id name.
 pub(crate) const ID_NAME: &str = "VUID-vkCreateDescriptorSetLayout-support-09582";

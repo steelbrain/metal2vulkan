@@ -15,22 +15,22 @@
 //!   barrier (as K14c's between commands), the initial pipeline, zeroed push constants (the tokens
 //!   write every byte), and `vkCmdExecuteGeneratedCommandsEXT` over its sequences with the count
 //!   the preprocess wrote ([`record_executions`]);
-//! - where the driver's own preprocessing of an execution recorded after another runs the wrong
-//!   shader, as the runtime decides it (`generated_commands::preprocess_apart`,
-//!   `RuntimeDriverDefect::ImplicitPreprocessAfterExecutionSet`), the commands layout is made for
-//!   explicit preprocessing, every command's execution is preprocessed
-//!   (`vkCmdPreprocessGeneratedCommandsEXT`) before the first runs, a barrier orders those writes
-//!   before the executions, and each runs preprocessed: no preprocessing follows an execution.
+//! - the commands layout is made for explicit preprocessing, every command's execution is
+//!   preprocessed (`vkCmdPreprocessGeneratedCommandsEXT`) before the first runs, a barrier orders
+//!   those writes before the executions, and each runs preprocessed: no preprocessing follows an
+//!   execution, a form that runs right on every driver.
 
 use super::*;
-use metal2vulkan::bind::GeneratedReplay;
-use metal2vulkan_runtime::generated_commands::{
+use crate::candidate::platform::generated_commands::{
     Commands, Execution, ExecutionSetCreateInfo, ExecutionSetPipelineInfo, ExecutionSetToken,
     GeneratedCommandsInfo, Handle, LayoutCreateInfo, LayoutToken, MemoryRequirementsInfo,
     PushConstantToken, WriteExecutionSetPipeline, EXECUTION_SET_PIPELINES, INDIRECT_BINDABLE,
     PREPROCESS_BUFFER, PREPROCESS_WRITE, TOKEN_DISPATCH, TOKEN_EXECUTION_SET, TOKEN_PUSH_CONSTANT,
 };
-pub(super) use metal2vulkan_runtime::generated_commands::{PREPROCESS_READ, PREPROCESS_STAGE};
+pub(super) use crate::candidate::platform::generated_commands::{
+    PREPROCESS_READ, PREPROCESS_STAGE,
+};
+use metal2vulkan::bind::GeneratedReplay;
 use std::collections::btree_map::Entry;
 use std::time::Duration;
 
@@ -46,9 +46,6 @@ pub(super) struct Generated<'c> {
     pipelines: Vec<vk::Pipeline>,
     execution_set: Handle,
     commands_layout: Handle,
-    /// Whether the commands layout is made for explicit preprocessing: every command's execution
-    /// is preprocessed apart before the first runs ([`record_executions`]).
-    explicit: bool,
     /// The preprocess memory's buffer and allocation ([`Generated::reserve_preprocess`]).
     preprocess: Option<(vk::Buffer, vk::DeviceMemory)>,
     /// Each command's preprocess memory, by slot: its address and size (`(0, 0)` where the
@@ -117,7 +114,6 @@ impl<'c> Generated<'c> {
             pipelines: Vec::with_capacity(prepared.len()),
             execution_set: 0,
             commands_layout: 0,
-            explicit: context.preprocesses_generated_commands_apart(),
             preprocess: None,
             reserved: Vec::new(),
             sets: Vec::new(),
@@ -184,10 +180,6 @@ impl<'c> Generated<'c> {
             LayoutToken::new(TOKEN_DISPATCH, std::ptr::null(), layout.dispatch_offset()),
         ];
         let info = LayoutCreateInfo::new(layout.stride, generated.layout.pipeline_layout, &tokens);
-        let info = match generated.explicit {
-            true => info.explicitly_preprocessed(),
-            false => info,
-        };
         // SAFETY: `info`, its tokens, and their data are live for the call.
         generated.commands_layout = unsafe { commands.create_commands_layout(&info) }
             .map_err(|error| fail(format!("create the indirect commands layout: {error}")))?;
@@ -351,9 +343,9 @@ fn bindable_pipeline(
 /// initial pipeline, zeroed push constants (the tokens write every byte of them), and the
 /// command's `vkCmdExecuteGeneratedCommandsEXT` over its sequences in the scratch at
 /// `scratch_address`, with the count the preprocess wrote and its own preprocess memory. A
-/// command that starts no segment has the count 0: its execution runs nothing. Where the layout
-/// is made for explicit preprocessing ([`Generated::explicit`]), the initial pipeline and zeroed
-/// push constants are bound first, every command's execution is preprocessed
+/// command that starts no segment has the count 0: its execution runs nothing. The layout is made
+/// for explicit preprocessing: the initial pipeline and zeroed push constants are bound first,
+/// every command's execution is preprocessed
 /// (`vkCmdPreprocessGeneratedCommandsEXT`) with that state, a barrier orders the preprocessing's
 /// writes before the executions' preprocess and indirect reads, and each execution runs
 /// preprocessed. A range whose preprocess memory was not reserved for every command records
@@ -425,30 +417,28 @@ pub(super) unsafe fn record_executions(
                 &[],
             );
         }
-        if generated.explicit {
-            bind();
-            for slot in 0..layout.slots {
-                let execution = execution(slot);
-                let info = GeneratedCommandsInfo::new(
-                    generated.execution_set,
-                    generated.commands_layout,
-                    &execution,
-                );
-                generated.commands.preprocess(command, &info);
-            }
-            let preprocessed = vk::MemoryBarrier::default()
-                .src_access_mask(PREPROCESS_WRITE)
-                .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ | PREPROCESS_READ);
-            device.cmd_pipeline_barrier(
-                command,
-                PREPROCESS_STAGE,
-                vk::PipelineStageFlags::DRAW_INDIRECT | PREPROCESS_STAGE,
-                vk::DependencyFlags::empty(),
-                &[preprocessed],
-                &[],
-                &[],
+        bind();
+        for slot in 0..layout.slots {
+            let execution = execution(slot);
+            let info = GeneratedCommandsInfo::new(
+                generated.execution_set,
+                generated.commands_layout,
+                &execution,
             );
+            generated.commands.preprocess(command, &info);
         }
+        let preprocessed = vk::MemoryBarrier::default()
+            .src_access_mask(PREPROCESS_WRITE)
+            .dst_access_mask(vk::AccessFlags::INDIRECT_COMMAND_READ | PREPROCESS_READ);
+        device.cmd_pipeline_barrier(
+            command,
+            PREPROCESS_STAGE,
+            vk::PipelineStageFlags::DRAW_INDIRECT | PREPROCESS_STAGE,
+            vk::DependencyFlags::empty(),
+            &[preprocessed],
+            &[],
+            &[],
+        );
         for slot in 0..layout.slots {
             if slot > 0 {
                 device.cmd_pipeline_barrier(
@@ -468,10 +458,7 @@ pub(super) unsafe fn record_executions(
                 generated.commands_layout,
                 &execution,
             );
-            match generated.explicit {
-                true => generated.commands.execute_preprocessed(command, &info),
-                false => generated.commands.execute(command, &info),
-            }
+            generated.commands.execute_preprocessed(command, &info);
         }
     }
     Ok(())

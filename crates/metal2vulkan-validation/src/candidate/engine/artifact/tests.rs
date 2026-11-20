@@ -201,10 +201,9 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/spirv/verify/mod.rs", spirv),
         ("metal2vulkan/src/spv.rs", "the SPIR-V grammar's opcodes and enumerants with their values, generated from Khronos's grammar: a value is fixed by the specification, and regenerating only adds or drops names, which no run can observe"),
     ]);
-    // The resolver the classifier's key test holds its inputs closed with, across the product,
-    // the AIR front end's crate, which the product imports as `crate::air`, and the runtime's
-    // crate, whose inputs reach the product through `metal2vulkan::`, each by its directory in the
-    // workspace's crates/.
+    // The resolver the classifier's key test holds its inputs closed with, across the product and
+    // the AIR front end's crate, which the product imports as `crate::air`, each by its directory
+    // in the workspace's crates/.
     let members = [
         crate::triage::classifier_inputs::Member {
             name: "metal2vulkan_air",
@@ -213,10 +212,6 @@ fn the_runtime_sources_are_the_committed_ones() {
         crate::triage::classifier_inputs::Member {
             name: "metal2vulkan",
             dir: "metal2vulkan",
-        },
-        crate::triage::classifier_inputs::Member {
-            name: "metal2vulkan_runtime",
-            dir: "metal2vulkan-runtime",
         },
     ];
     let dependencies =
@@ -231,10 +226,12 @@ fn the_runtime_sources_are_the_committed_ones() {
         unlisted.is_empty(),
         "the runtime inputs reach files that are neither inputs nor listed: {unlisted:#?}"
     );
-    for file in not_runtime.keys() {
-        assert!(
-            dependencies.contains_key(*file),
-            "{file} is listed but no runtime input reaches it"
-        );
-    }
+    let unreached = not_runtime
+        .keys()
+        .filter(|file| !dependencies.contains_key(**file))
+        .collect::<Vec<_>>();
+    assert!(
+        unreached.is_empty(),
+        "listed, but no runtime input reaches them: {unreached:#?}"
+    );
 }

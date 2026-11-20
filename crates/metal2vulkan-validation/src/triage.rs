@@ -14,7 +14,7 @@ use std::path::Path;
 /// bumps it says what changed; this comment keeps no history.
 macro_rules! analyzer_version {
     () => {
-        "structural-triage-v82"
+        "structural-triage-v83"
     };
 }
 
@@ -1947,8 +1947,6 @@ entry:
         write("metal2vulkan/build.rs", "fn main() {}\n");
         write("metal2vulkan/build_support.rs", "\n");
         write("metal2vulkan/src/lib.rs", "pub fn translate() {}\n");
-        write("metal2vulkan-runtime/Cargo.toml", "[package]\n");
-        write("metal2vulkan-runtime/src/lib.rs", "pub fn submit() {}\n");
         write("metal2vulkan-devtools/Cargo.toml", "[package]\n");
         write("metal2vulkan-devtools/src/lib.rs", "pub fn assemble() {}\n");
         for input in &inputs {
@@ -2003,17 +2001,6 @@ entry:
             "a dev-tools edit invalidates"
         );
         write("metal2vulkan-devtools/src/lib.rs", "pub fn assemble() {}\n");
-        assert_eq!(key(analyzer_version!()), current);
-        write(
-            "metal2vulkan-runtime/src/lib.rs",
-            "pub fn submit() { /* edited */ }\n",
-        );
-        assert_ne!(
-            key(analyzer_version!()),
-            current,
-            "a runtime edit invalidates"
-        );
-        write("metal2vulkan-runtime/src/lib.rs", "pub fn submit() {}\n");
         assert_eq!(key(analyzer_version!()), current);
         write(
             "metal2vulkan/src/lib.rs",
@@ -2259,6 +2246,11 @@ define void @{name}(ptr addrspace(2) %ab, ptr addrspace(1) %out) {{
                 .contains(&ToolingRequirement::MeshCompanion);
             let draw = classified.mesh_draw.expect("a mesh draw");
             assert_eq!(unresolved, !draw.missing.is_empty(), "{entry}");
+            // The engine's candidate draws no mesh render pipeline.
+            assert!(
+                (classified.tooling_requirements).contains(&ToolingRequirement::MeshRenderPipeline),
+                "{entry}"
+            );
             draw
         };
         assert_eq!(
@@ -2290,6 +2282,7 @@ define void @{name}(ptr addrspace(2) %ab, ptr addrspace(1) %out) {{
         );
         let fragment = classify(&entry_of("engine/mesh_draws.ll", "mesh_draws_fragment")).unwrap();
         assert_eq!(fragment.mesh_draw, None);
+        assert!(!(fragment.tooling_requirements).contains(&ToolingRequirement::MeshRenderPipeline));
     }
 
     /// A vertex function whose only effect is the indexed draw it encodes is observed by executing

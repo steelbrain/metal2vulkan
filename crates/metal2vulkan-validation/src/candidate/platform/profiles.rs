@@ -29,7 +29,6 @@
 use ash::vk;
 use metal2vulkan::device::ApiVersion;
 use metal2vulkan::device::{DeviceDescription, Independence};
-use metal2vulkan_runtime::{LayerSetting, LayerSettingValue};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::ffi::{c_char, CStr, CString};
@@ -407,23 +406,6 @@ impl ProfilesSettings {
         Ok(ProfilesSettings { values })
     }
 
-    /// The settings as a runtime device's options take them (`DeviceOptions::layer_settings`),
-    /// owned.
-    pub(super) fn runtime_settings(&self) -> Vec<LayerSetting> {
-        self.values
-            .iter()
-            .map(|(name, values)| {
-                let value = match values {
-                    SettingValues::Bool(value) => LayerSettingValue::Bool(*value == vk::TRUE),
-                    SettingValues::Strings { owned, .. } => {
-                        LayerSettingValue::Strings(owned.clone())
-                    }
-                };
-                LayerSetting::new(PROFILES_LAYER.to_owned(), (*name).to_owned(), value)
-            })
-            .collect()
-    }
-
     /// The settings, pointing into `self`.
     pub(super) fn settings(&self) -> Vec<vk::LayerSettingEXT<'_>> {
         self.values
@@ -439,9 +421,9 @@ impl ProfilesSettings {
                         setting.value_count = 1;
                         setting.p_values = std::ptr::from_ref(value).cast();
                     }
-                    SettingValues::Strings { pointers, .. } => {
+                    SettingValues::Strings { owned, pointers } => {
                         setting = setting.ty(vk::LayerSettingTypeEXT::STRING);
-                        setting.value_count = pointers.len() as u32;
+                        setting.value_count = owned.len() as u32;
                         setting.p_values = pointers.as_ptr().cast();
                     }
                 }

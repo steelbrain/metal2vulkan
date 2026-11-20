@@ -19,8 +19,7 @@ use std::sync::OnceLock;
 
 /// The product's source fingerprint (`validation/product_fingerprint.rs`): the translator's
 /// manifest, build inputs, and exactly the files it can compile or read (`build_support::
-/// product_hash`; a test-only module is not one), then the runtime crate's the same way, then the
-/// dev-tools crate's sources, whose `llvm-as` assembler gives a public row its bitcode. No file
+/// product_hash`; a test-only module is not one), then the dev-tools crate's sources, whose `llvm-as` assembler gives a public row its bitcode. No file
 /// under `validation/` feeds it.
 const PRODUCT_FINGERPRINT: &str = env!("METAL2VULKAN_PRODUCT_FINGERPRINT");
 
@@ -762,11 +761,6 @@ mod tests {
         write("metal2vulkan/build_support.rs", "// fingerprint inputs\n");
         write("metal2vulkan/src/lib.rs", "pub fn translate() {}\n");
         write(
-            "metal2vulkan-runtime/Cargo.toml",
-            "[package]\nname = \"runtime\"\n",
-        );
-        write("metal2vulkan-runtime/src/lib.rs", "pub fn submit() {}\n");
-        write(
             "metal2vulkan-devtools/Cargo.toml",
             "[package]\nname = \"devtools\"\n",
         );
@@ -849,17 +843,6 @@ mod tests {
             "a dev-tools edit is an input"
         );
         write("metal2vulkan-devtools/src/lib.rs", "pub fn assemble() {}\n");
-        assert_eq!(key(product()).fingerprint(), before.fingerprint());
-        write(
-            "metal2vulkan-runtime/src/lib.rs",
-            "pub fn submit() { /* edited */ }\n",
-        );
-        assert_ne!(
-            key(product()).fingerprint(),
-            before.fingerprint(),
-            "a runtime edit is an input"
-        );
-        write("metal2vulkan-runtime/src/lib.rs", "pub fn submit() {}\n");
         assert_eq!(key(product()).fingerprint(), before.fingerprint());
         write(
             "metal2vulkan/src/lib.rs",

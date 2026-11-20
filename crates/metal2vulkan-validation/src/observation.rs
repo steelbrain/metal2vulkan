@@ -5,11 +5,10 @@ use crate::executor_contract::out_of_bounds::OutOfBoundsRun;
 use crate::hash::sha256_bytes;
 use crate::observation_contract::ComparisonClass;
 use base64::Engine as _;
-use metal2vulkan_runtime::Degradation;
 use serde::{Deserialize, Serialize};
 
 /// The product's source fingerprint (`validation/product_fingerprint.rs`: the translator's sources,
-/// then the runtime crate's, and the dev-tools crate's, which assemble the public cases' bitcode).
+/// then the dev-tools crate's, which assemble the public cases' bitcode).
 /// Every candidate row's translator fingerprint is derived from it
 /// (`candidate::engine::engine_fingerprint`), so a row is current only for this product.
 pub const TRANSLATOR_FINGERPRINT: &str = env!("METAL2VULKAN_PRODUCT_FINGERPRINT");
@@ -176,10 +175,6 @@ impl ReferenceGap {
         }
     }
 }
-
-/// The member of a candidate row's `environment` that holds the codes of the degrade notices its
-/// runtime device delivered ([`Degradation::code`]): a run through `metal2vulkan_runtime`.
-pub const RUNTIME_DEGRADES: &str = "runtime_degrades";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -561,18 +556,6 @@ impl CandidateObservation {
             && base64::engine::general_purpose::STANDARD
                 .decode(&dependencies.metal.output_b64)
                 .is_ok_and(|golden| self.status_holds(dependencies.case, &golden))
-    }
-
-    /// The degradations the row's run announced ([`RUNTIME_DEGRADES`]), read through the
-    /// runtime's closed vocabulary ([`Degradation::from_code`]): a code it does not know (a
-    /// retired kind's) is none of them.
-    pub fn announced_degradations(&self) -> impl Iterator<Item = Degradation> + '_ {
-        self.environment
-            .get(RUNTIME_DEGRADES)
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|code| Degradation::from_code(code.as_str()?))
     }
 }
 

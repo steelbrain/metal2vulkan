@@ -1,6 +1,5 @@
-//! Mesh cases of the engine candidate: an object or mesh case's draw (`case::MeshDraw`) mapped for
-//! the runtime's mesh path (`runtime_case::encoded_mesh`), as the Metal oracle draws it
-//! (`metal::platform`).
+//! Mesh cases of the engine candidate: an object or mesh case's draw (`case::MeshDraw`) mapped as
+//! the Metal oracle draws it (`metal::platform`).
 //!
 //! The case's own function binds the case's resources, mapped as a render case's own stage's are
 //! ([`graphics::stage_resources`]); each partner its draw names is a function of the case's own

@@ -321,47 +321,6 @@ pub(crate) mod vulkan {
     }
 }
 
-/// Bounded waits on the Metal-like runtime's command buffers (`metal2vulkan_runtime`): the
-/// engine executor's runtime path.
-pub(crate) mod runtime {
-    use super::{settle, CompletionSource, SubmissionBackend, WaitOutcome};
-    use metal2vulkan_runtime::{CommandBuffer, CommandBufferError, CommandBufferStatus};
-    use std::time::Duration;
-
-    struct Committed<'a>(&'a CommandBuffer);
-
-    impl CompletionSource for Committed<'_> {
-        fn wait(&mut self, timeout: Duration) -> WaitOutcome {
-            if self
-                .0
-                .wait_until_completed_for(timeout.min(super::MAX_WAIT_TIMEOUT))
-                .is_err()
-            {
-                return WaitOutcome::TimedOut;
-            }
-            match (self.0.status(), self.0.error()) {
-                (CommandBufferStatus::Completed, _) => WaitOutcome::Completed,
-                (_, Some(CommandBufferError::DeviceLost)) => {
-                    WaitOutcome::SuspectedFault("the command buffer lost its device".into())
-                }
-                (status, error) => {
-                    WaitOutcome::Failed(format!("the command buffer ended {status:?}: {error:?}"))
-                }
-            }
-        }
-    }
-
-    /// Wait for `command_buffer`, committed by `operation`, under the hang protocol. Returns
-    /// only once its work is no longer in flight.
-    pub(crate) fn wait_for_command_buffer(
-        command_buffer: &CommandBuffer,
-        backend: SubmissionBackend,
-        operation: &str,
-    ) -> Result<(), String> {
-        settle(&mut Committed(command_buffer), backend, operation)
-    }
-}
-
 /// Bounded waits on the new runtime's command buffers (`metal2vulkan_rt`): the replay player's
 /// backend over it. The runtime's own wait has no bound, so the wait is on the command buffer's
 /// completed handler, after the queue's wait hint has sent it. How the command buffer ended is the

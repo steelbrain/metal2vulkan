@@ -123,6 +123,16 @@ pub enum ToolingRequirement {
     /// Metal holds them and stops there; on a device with it, it runs. A case's data on the
     /// executing device raises it, never a source's structure, so no census row carries it.
     DepthOutsideUnitRange,
+    /// An object or mesh function's row or case (`executor_contract::mesh`), or a case that runs a
+    /// pipeline template of one: the engine's candidate draws no mesh render pipeline. The Metal
+    /// oracle draws it, so a case of it stays Metal-qualified ([`Self::qualifies_on_metal`]).
+    MeshRenderPipeline,
+    /// A replayed pipeline template the engine's candidate does not replay
+    /// (`candidate::engine::replay_templates`): a compute template that binds more than buffers
+    /// and threadgroup memory or runs a stage input, or a render template that is not a
+    /// rasterization-disabled vertex function binding buffers only. A case's templates raise it,
+    /// never a source's structure, so no census row carries it.
+    ReplayedTemplateResources,
 }
 
 /// Every executor (the requirement leaves no case to author, or none to observe).
@@ -130,7 +140,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 25] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -154,6 +164,8 @@ impl ToolingRequirement {
         Self::KernelMinLodClamp,
         Self::MeshCompanion,
         Self::DepthOutsideUnitRange,
+        Self::MeshRenderPipeline,
+        Self::ReplayedTemplateResources,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -183,6 +195,8 @@ impl ToolingRequirement {
             Self::KernelMinLodClamp => "kernel_min_lod_clamp",
             Self::MeshCompanion => "mesh_companion",
             Self::DepthOutsideUnitRange => "depth_outside_unit_range",
+            Self::MeshRenderPipeline => "mesh_render_pipeline",
+            Self::ReplayedTemplateResources => "replayed_template_resources",
         }
     }
 
@@ -201,7 +215,9 @@ impl ToolingRequirement {
     ///   implementation's private layout where the engine's module decodes this crate's, and a
     ///   depth outside `[0, 1]` a case gives a depth image, which its executor raises only on a
     ///   device without `VK_EXT_depth_range_unrestricted`
-    ///   ([`ToolingRequirement::DepthOutsideUnitRange`]).
+    ///   ([`ToolingRequirement::DepthOutsideUnitRange`]), and a mesh render pipeline or a replayed
+    ///   template it does not draw or replay ([`ToolingRequirement::MeshRenderPipeline`],
+    ///   [`ToolingRequirement::ReplayedTemplateResources`]).
     ///
     /// The requirements that stopped only the old engine's candidate were retired with it.
     pub const fn stops(self) -> &'static [Executor] {
@@ -228,8 +244,19 @@ impl ToolingRequirement {
             | Self::VertexDepthStencilAttachment
             | Self::RasterizationDisabledRenderTarget
             | Self::RasterizationRateMapPlacement
-            | Self::DepthOutsideUnitRange => ENGINE,
+            | Self::DepthOutsideUnitRange
+            | Self::MeshRenderPipeline
+            | Self::ReplayedTemplateResources => ENGINE,
         }
+    }
+
+    /// Whether a case carrying this requirement is still a case to keep: the Metal oracle runs it
+    /// and its observation is evidence for a candidate that runs the family again, so the checker
+    /// accepts it with no candidate (`executor_contract::evidence_gap`), and the engine's candidate
+    /// refuses it, typed. Only [`ToolingRequirement::MeshRenderPipeline`]: its cases are qualified
+    /// on Metal.
+    pub const fn qualifies_on_metal(self) -> bool {
+        matches!(self, Self::MeshRenderPipeline)
     }
 
     /// Whose limit this requirement records. Every requirement is this crate's tooling's except
@@ -363,15 +390,28 @@ mod tests {
         }
     }
 
-    /// The mesh render pipeline's requirement: both executors draw one, an object function's
-    /// threadgroup memory among it, so only a stage nothing generates stops them
-    /// (`mesh_companion`), this crate's gap, never Metal's, which keeps the census open.
+    /// The mesh render pipeline's requirements: a stage nothing generates stops both executors
+    /// (`mesh_companion`), and the engine's candidate draws none (`mesh_render_pipeline`), whose
+    /// cases stay Metal-qualified. Both are this crate's gaps, never Metal's, which keep the census
+    /// open.
     #[test]
     fn mesh_requirements_stop_the_executors_that_do_not_draw_them_yet() {
         let requirement = ToolingRequirement::MeshCompanion;
         assert_eq!(requirement.stops(), Executor::ALL);
         assert_eq!(requirement.limit(), Limit::Tooling, "{requirement}");
         assert!(requirement.blocks_closure(), "{requirement}");
+        assert!(!requirement.qualifies_on_metal(), "{requirement}");
+        let requirement = ToolingRequirement::MeshRenderPipeline;
+        assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
+        assert!(requirement.blocks_closure(), "{requirement}");
+        assert!(requirement.qualifies_on_metal(), "{requirement}");
+        assert_eq!(
+            ToolingRequirement::ALL
+                .into_iter()
+                .filter(|requirement| requirement.qualifies_on_metal())
+                .collect::<Vec<_>>(),
+            [ToolingRequirement::MeshRenderPipeline]
+        );
     }
 
     /// Every requirement stops some executor, and an executor's name is as stable as a

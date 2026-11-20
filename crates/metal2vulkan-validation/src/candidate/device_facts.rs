@@ -1,7 +1,7 @@
 //! What an engine row records of the Vulkan device that ran it: the device's identity and driver
 //! (`VkPhysicalDeviceProperties`, `VkPhysicalDeviceDriverProperties`), the tools active on it, and
 //! the facts the row's environment has always carried beside them. The executor's own context reads
-//! its tools here, and the runtime path reads all of it through the runtime device's raw handles.
+//! its tools here.
 
 use crate::coverage::ExecutionClass;
 use ash::vk;

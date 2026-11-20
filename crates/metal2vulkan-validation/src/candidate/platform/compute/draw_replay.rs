@@ -33,9 +33,8 @@
 //!   variant's root-table holes, or the merged draw's two (`render::submit_replayed_draws`).
 //! - **After the wait**, the status: a replay fault refuses the row for the product's typed limits
 //!   and fails it otherwise (`engine::replay_fault_verdict`), then the status verdict. The census
-//!   holds the variant once per execution: the one draw of it the runtime's execution record holds.
-//!   The artifact holds it as a pipeline the authored compile census does not compile, as the
-//!   runtime path's holds every pipeline its executed commands ran.
+//!   holds the variant once per execution. The artifact holds it as a pipeline the authored
+//!   compile census does not compile.
 
 use super::device_replay::{preprocess_objects, ReplayPath};
 use super::replay::{bound_table, require_enabled, Executed};

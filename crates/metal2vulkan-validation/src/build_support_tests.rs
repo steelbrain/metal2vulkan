@@ -418,8 +418,8 @@ fn the_product_fingerprint_covers_the_front_end_crate_by_path() {
 }
 
 /// This build's product fingerprint is the walk over this workspace's translator, then the
-/// runtime's and the dev-tools crates (`product_fingerprint.rs`, which `build.rs` shares), each in
-/// its directory beside this crate, and the walk leaves out each crate's test-only modules: no file
+/// dev-tools crate (`product_fingerprint.rs`, which `build.rs` shares), each in its directory
+/// beside this crate, and the walk leaves out each crate's test-only modules: no file
 /// it lists is declared only under `#[cfg(test)]`.
 #[test]
 fn this_builds_product_fingerprint_is_the_walk_over_the_product() {
@@ -437,10 +437,6 @@ fn this_builds_product_fingerprint_is_the_walk_over_the_product() {
     assert!(product.contains(Path::new("src/indirect_commands/host.rs")));
     assert!(!product.contains(Path::new("src/pipeline/testing.rs")));
     assert!(!product.contains(Path::new("src/pipeline/api_tests.rs")));
-    // The runtime's crate by its module tree, its tests left out.
-    let runtime = files(&crates.join("metal2vulkan-runtime"));
-    assert!(runtime.contains(Path::new("src/lib.rs")));
-    assert!(!runtime.iter().any(|file| file.starts_with("src/tests")));
     // The front end's crate by its module tree, its test-only modules left out, named through the
     // translator's manifest path (`../metal2vulkan-air`).
     let inputs = product_inputs(&root);

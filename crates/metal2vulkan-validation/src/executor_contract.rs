@@ -685,6 +685,7 @@ pub fn unsupported_source_requirements(
 ) -> BTreeSet<ToolingRequirement> {
     let mut requirements = unsupported_reflection_requirements(reflection);
     requirements.extend(engine_source_requirements(reflection));
+    requirements.extend(mesh::mesh_pipeline_requirement(reflection));
     requirements.extend(rate_map::rate_map_placement_requirement(
         source_ll, reflection,
     ));
@@ -843,7 +844,9 @@ pub fn checked_requirements(
 
 /// Why the executor pair cannot evidence a case with `requirements`, or `None`: one that stops the
 /// Metal oracle leaves no observation to compare with, and one that stops the candidate leaves
-/// nothing to compare. A case both run is checkable. A requirement whose limit is Metal's own is
+/// nothing to compare, but for a requirement whose cases stay Metal-qualified
+/// ([`ToolingRequirement::qualifies_on_metal`]): such a case is checkable on Metal alone, and the
+/// candidate refuses it. A case both run is checkable. A requirement whose limit is Metal's own is
 /// named as such: no tooling can give the oracle that case.
 pub fn evidence_gap(requirements: &BTreeSet<ToolingRequirement>) -> Option<String> {
     fn joined(requirements: impl IntoIterator<Item = ToolingRequirement>) -> String {
@@ -853,12 +856,6 @@ pub fn evidence_gap(requirements: &BTreeSet<ToolingRequirement>) -> Option<Strin
             .collect::<Vec<_>>()
             .join(",")
     }
-    let names = |executor| {
-        joined(ToolingRequirement::stopping(
-            requirements.iter().copied(),
-            executor,
-        ))
-    };
     let (metal_limit, tooling): (Vec<_>, Vec<_>) =
         ToolingRequirement::stopping(requirements.iter().copied(), Executor::MetalOracle)
             .into_iter()
@@ -880,7 +877,11 @@ pub fn evidence_gap(requirements: &BTreeSet<ToolingRequirement>) -> Option<Strin
         return Some(metal.join("; "));
     }
     let candidate = Executor::EngineCandidate;
-    let stopped = names(candidate);
+    let stopped = joined(
+        ToolingRequirement::stopping(requirements.iter().copied(), candidate)
+            .into_iter()
+            .filter(|requirement| !requirement.qualifies_on_metal()),
+    );
     (!stopped.is_empty()).then(|| format!("{candidate}: {stopped} (the candidate is stopped)"))
 }
 
@@ -2974,6 +2975,19 @@ entry:
                 "kernel_min_lod_clamp (Metal cannot build the case's pipeline, so it has no \
                  reference); indirect_command_buffer (the Metal oracle cannot run the case)"
             )
+        );
+
+        // A mesh render pipeline's case stays Metal-qualified: the checker takes it, and the
+        // candidate refuses it. Beside a requirement that stops the candidate outright, only that
+        // one is named.
+        assert_eq!(evidence_gap(&set(&[R::MeshRenderPipeline])), None);
+        assert_eq!(
+            evidence_gap(&set(&[R::MeshRenderPipeline, R::RenderDeviceBufferArray])).as_deref(),
+            Some("engine_candidate: render_device_buffer_array (the candidate is stopped)")
+        );
+        assert_eq!(
+            require_executor(&set(&[R::MeshRenderPipeline]), Executor::EngineCandidate),
+            Err(set(&[R::MeshRenderPipeline]))
         );
 
         let requirements = set(&[R::RenderDeviceBufferArray]);

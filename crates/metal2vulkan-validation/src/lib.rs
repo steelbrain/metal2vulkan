@@ -5,7 +5,6 @@
 
 pub mod acceptance;
 pub mod air;
-pub mod air_library;
 pub mod air_writer;
 pub mod authored_compile;
 pub mod bitcode_audit;

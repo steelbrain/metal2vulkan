@@ -1,7 +1,6 @@
 //! Object and mesh cases over the owned fixtures `engine/mesh_draws.ll` and
 //! `engine/mesh_barrier.ll`, each with what Metal drew for it: the words of Metal's own probe of
-//! the same functions (`runtime_lane::mesh_draws`'s answers, measured on the M3 Max and an M4
-//! alike), each mesh threadgroup covering one pixel of an 8x8 pass of two `RGBA32Uint` targets
+//! the same functions (measured on the M3 Max and an M4 alike), each mesh threadgroup covering one pixel of an 8x8 pass of two `RGBA32Uint` targets
 //! with the builtins it read, and the device write the M3 Max measured with rasterization off. A
 //! mesh case observed through the generated observer fragment reads what the fixture's own
 //! fragment function writes to its first target, so Metal's answer is the same words. An object
@@ -9,8 +8,7 @@
 //! ([`crate::case::MeshObservation::Launch`]), and a mesh case under a generated object function
 //! draws the payload that function writes ([`crate::case::ObjectLaunch`]): those words follow from
 //! the fixture's source, and the Metal executor's test holds them to what the M3 Max drew.
-//! The Metal executor's tests (`metal::tests::mesh_draws`) hold the oracle to them, and the engine
-//! candidate's (`candidate::engine::runtime_run::tests`) hold the runtime's mesh path to them.
+//! The Metal executor's tests (`metal::tests::mesh_draws`) hold the oracle to them.
 
 use crate::case::{AuthoredCase, Stage};
 use crate::source::SourceRow;

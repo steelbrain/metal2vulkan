@@ -141,7 +141,6 @@ pub fn requested_policy() -> DevicePolicy {
 /// this whole process (the engine device worker's setting).
 pub(crate) fn echo_validation_messages() {
     platform::echo_validation_messages();
-    runtime_case::echo_messages();
 }
 
 fn validate_backend_host(backend: Backend) -> Result<(), String> {
@@ -159,26 +158,11 @@ fn validate_backend_host(backend: Backend) -> Result<(), String> {
 
 pub(crate) mod device_facts;
 pub mod engine;
-pub mod runtime_case;
-pub mod runtime_samples;
 pub(crate) mod unadvertised_stage;
 pub(crate) mod unsupported_set;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod platform;
-pub(crate) use platform::{runtime_restriction, Restricting, RuntimeRestriction};
-
-/// What the runtime path's second check of a profile restriction found on its device
-/// (`RuntimeRestriction::check`): the description the executor's context translates for under the
-/// profile, the members where the description the runtime read through the profiles layer differs
-/// from it (the kept ones, which the layer reads from the device), and the environment's
-/// `profiles_layer` record.
-pub(crate) struct RestrictedDevice {
-    pub(crate) translated: metal2vulkan::device::DeviceDescription,
-    pub(crate) kept: Vec<String>,
-    pub(crate) record: serde_json::Value,
-}
-
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -288,48 +272,5 @@ mod platform {
         _device: DeviceType,
     ) -> Result<crate::worker::compile::WorkerDevice, ExecutorError> {
         Err("candidate execution is supported only on Linux and macOS".into())
-    }
-
-    /// No restriction runs here ([`restrict_devices_to`] refuses one).
-    pub(crate) enum Restricting {
-        Takes(Box<RuntimeRestriction>),
-        Refused(Box<crate::candidate::engine::RunAttempt>),
-    }
-
-    /// No value: no restriction runs here.
-    pub(crate) enum RuntimeRestriction {}
-
-    impl RuntimeRestriction {
-        pub(crate) fn stem(&self) -> &str {
-            match *self {}
-        }
-
-        pub(crate) fn restrict(
-            &self,
-            _options: &mut metal2vulkan_runtime::DeviceOptions,
-        ) -> Result<(), String> {
-            match *self {}
-        }
-
-        pub(crate) fn check(
-            &self,
-            _device: &metal2vulkan_runtime::Device,
-        ) -> Result<super::RestrictedDevice, String> {
-            match *self {}
-        }
-
-        pub(crate) fn refused_on(
-            &self,
-            _executor: &str,
-        ) -> Result<crate::worker::device::OpenedDevice, String> {
-            match *self {}
-        }
-    }
-
-    pub(crate) fn runtime_restriction(
-        _device_type: DeviceType,
-        _executor: &str,
-    ) -> Result<Option<Restricting>, String> {
-        Ok(None)
     }
 }

@@ -46,11 +46,10 @@ mod tests {
     }
 
     /// Every device open goes through one of the functions that check the hang tripwire first:
-    /// validation's Vulkan context, the Metal platform, the device validation makes through the
-    /// runtime (`candidate::runtime_case::open_device`, the executor's runtime path's), and the new
-    /// runtime's device in the player and in the replay tests, each after the tripwire check in its
-    /// own file. A new raw open anywhere else in the crate fails here, before it can run, and so
-    /// does a new-runtime open ahead of its check.
+    /// validation's Vulkan context, the Metal platform, and the new runtime's device in the player
+    /// and in the replay tests, each after the tripwire check in its own file. A new raw open
+    /// anywhere else in the crate fails here, before it can run, and so does a new-runtime open
+    /// ahead of its check.
     #[test]
     fn device_opens_exist_only_behind_the_tripwire_check() {
         let root = metal2vulkan_devtools::validation_dir();
@@ -64,9 +63,6 @@ mod tests {
             concat!(".create_", "instance("),
             concat!(".enumerate_", "physical_devices("),
             concat!(".create_", "device("),
-            // The runtime's own device creation (`metal2vulkan_runtime`).
-            concat!("::system_", "default"),
-            concat!("Device::", "all"),
             // The new runtime's device creation (`metal2vulkan_rt`).
             concat!("metal2vulkan_rt::Device", "::new("),
         ];
@@ -75,14 +71,12 @@ mod tests {
             ("src/candidate/platform/device.rs", opens[3], 1),
             ("src/candidate/platform/device.rs", opens[4], 1),
             ("src/metal/platform.rs", opens[0], 1),
-            ("src/candidate/runtime_case.rs", opens[5], 1),
-            ("src/candidate/runtime_case.rs", opens[6], 1),
             // The new runtime's device: the player's and the replay tests'.
-            ("src/bin/command-replay.rs", opens[7], 1),
-            ("src/replay/rt_replay.rs", opens[7], 1),
+            ("src/bin/command-replay.rs", opens[5], 1),
+            ("src/replay/rt_replay.rs", opens[5], 1),
         ];
         let checked = concat!("refuse_if", "_tripped(");
-        for (file, open, _) in allowed.iter().filter(|(_, open, _)| *open == opens[7]) {
+        for (file, open, _) in allowed.iter().filter(|(_, open, _)| *open == opens[5]) {
             let text = std::fs::read_to_string(root.join(file)).unwrap();
             let check = text.find(checked);
             assert!(

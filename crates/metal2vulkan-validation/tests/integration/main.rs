@@ -42,5 +42,4 @@ mod public_entry_rows;
 mod published_crates;
 mod replay_completion_mark;
 mod replay_range;
-mod swept_scratch;
 mod translation_l3_stage;

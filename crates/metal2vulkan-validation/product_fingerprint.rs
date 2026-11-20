@@ -2,36 +2,23 @@
 //! translation-census keys, and of the structural-triage analyzer key, which add only versioned
 //! validation semantics to it. `build.rs` sets `METAL2VULKAN_PRODUCT_FINGERPRINT` from
 //! [`product_fingerprint`], and the crate's tests take the same function over synthetic
-//! repositories: one definition, so the build and the tests cannot walk different trees (they did
-//! when the runtime left the translator for its own crate).
+//! repositories: one definition, so the build and the tests cannot walk different trees.
 
-use crate::build_support::{hash_files, product_files, product_hash};
+use crate::build_support::{hash_files, product_hash};
 use sha2::Digest;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The product fingerprint of the workspace's crates directory `crates`, as hex: the translator's
 /// own sources (`metal2vulkan/`, `build_support::product_hash`: exactly the files it can compile or
-/// read, the AIR front end's crate and the workspace's manifest with them), then the runtime
-/// crate's (`metal2vulkan-runtime/`: its manifest and the files its module tree compiles or
-/// reads), then the dev-tools crate's (`metal2vulkan-devtools/`: its manifest and every
+/// read, the AIR front end's crate and the workspace's manifest with them), then the dev-tools
+/// crate's (`metal2vulkan-devtools/`: its manifest and every
 /// file under its `src/`), whose assemblers give the public rows and cases their bitcode, and
 /// nothing of `metal2vulkan-validation/`.
 pub fn product_fingerprint(crates: &Path) -> String {
     let mut hash = product_hash(&crates.join("metal2vulkan"));
-    hash_files(&mut hash, crates, &runtime_crate_files(crates));
     hash_files(&mut hash, crates, &devtools_files(crates));
     hex(&hash.finalize())
-}
-
-/// The runtime crate's manifest and the files its module tree compiles or reads
-/// (`build_support::product_files`), sorted.
-fn runtime_crate_files(crates: &Path) -> Vec<PathBuf> {
-    let runtime = crates.join("metal2vulkan-runtime");
-    let mut files = vec![runtime.join("Cargo.toml")];
-    files.extend(product_files(&runtime));
-    files.sort();
-    files
 }
 
 /// The dev-tools crate's manifest and every file under its `src/`, sorted.

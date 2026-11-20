@@ -1,12 +1,12 @@
 //! Vulkan device creation, enabled capabilities, and per-thread context lifetime.
 
 use super::enables::{self, Available, FeatureChain};
+use super::ignored_drivers::IgnoredDrivers;
 use super::loader_word::LoaderWord;
 use super::profiles::{
     self, ActiveTool, ProfileRestriction, ProfilesLayer, ProfilesSettings, RestrictionError,
     PROFILES_LAYER,
 };
-use crate::candidate::runtime_case::IgnoredDrivers;
 use crate::coverage::{ExecutionClass, Leg};
 use crate::gpu::wait::{self, SubmissionBackend};
 use crate::gpu::DeviceType;
@@ -460,8 +460,7 @@ pub fn echo_validation_messages() {
 /// What the validation layer reported that fails a row: every `ERROR` message, and every
 /// `WARNING` of the validation type. Bounded so a flood cannot grow without limit. The loader's
 /// own reports, at `vkCreateInstance`, of the driver manifests it ignored are the host's listing
-/// of its drivers, not the run's work: they pass as the runtime lane's `Messages` passes them
-/// ([`MessageSink::take`]).
+/// of its drivers, not the run's work: they pass ([`MessageSink::take`]).
 ///
 /// But for one message about the driver: on a context whose opened profile takes
 /// `DriverDeviation::MetalVertexSimdgroups` ([`MessageSink::unadvertised_vertex`]), the layer's
@@ -485,10 +484,17 @@ pub(super) struct MessageSink {
     /// one of them fails no row; set once the opened description is known.
     making: OnceLock<Vec<metal2vulkan::device::DriverDiagnostic>>,
     /// Whether the opened device's driver runs the descriptor set layouts its
-    /// `vkGetDescriptorSetLayoutSupport` refuses, as the runtime makes them there
-    /// (`metal2vulkan_runtime::makes_layouts_past_support`: a heap's set 1 on MoltenVK), set once
-    /// the opened description is known.
+    /// `vkGetDescriptorSetLayoutSupport` refuses ([`makes_layouts_past_support`]: a heap's set 1
+    /// on MoltenVK), set once the opened description is known.
     unsupported_sets: AtomicBool,
+}
+
+/// Whether the driver of the device `description` names runs a descriptor set layout its
+/// `vkGetDescriptorSetLayoutSupport` refuses: MoltenVK's, which runs a heap's set 1 its query
+/// refuses. The executor makes its own heap sets so there, and its sink passes the validation
+/// layer's report of such a layout ([`MessageSink::unsupported_sets`]).
+fn makes_layouts_past_support(description: &DeviceDescription) -> bool {
+    description.driver_id == Some(vk::DriverId::MOLTENVK)
 }
 
 /// One message the sink kept: its id name and text, which tell the loader's reports apart
@@ -531,7 +537,7 @@ impl MessageSink {
 
     /// The lines kept since the last call, removed: all but the loader's own reports of the
     /// driver manifests it ignored (`IgnoredDrivers`), each printed as a line of its own
-    /// (`LOADER-DRIVER`), as the runtime lane's `Messages` passes them.
+    /// (`LOADER-DRIVER`).
     fn take(&self) -> Vec<String> {
         let recorded: Vec<Recorded> = {
             let mut messages = self.messages.lock().unwrap_or_else(|p| p.into_inner());
@@ -1251,11 +1257,7 @@ fn create_instance(
         // SAFETY: every pointer in `info` outlives the call. A validated context's layer provides
         // the extensions it enables through it (`require_validation_layer`), and so does the
         // profiles layer of a restricted context or a probe (`require_profiles_layer`).
-        let instance = unsafe { entry.create_instance(info, None) };
-        // A layer registered an exit handler as the call began: the runtime's, where a runtime
-        // device lives in this process (a lane's), registers again after it.
-        metal2vulkan_runtime::program_instance_made();
-        instance
+        unsafe { entry.create_instance(info, None) }
     })
 }
 
@@ -1359,186 +1361,6 @@ pub(super) fn refused_restriction(
     }
 }
 
-/// This process's restriction as the runtime path opens its device under it: the restricted
-/// context's steps before its device, on the device `device_type` selects.
-pub(crate) enum Restricting {
-    /// The device takes P: what the runtime device's options and its second check need.
-    Takes(Box<RuntimeRestriction>),
-    /// The device lacks capabilities P states: the typed refusal, recorded as the executor's
-    /// context records it ([`restriction_refusal`](super::compute::restriction_refusal)).
-    Refused(Box<crate::candidate::engine::RunAttempt>),
-}
-
-/// What a runtime device restricted to P is made with: P, the device as it is (read through the
-/// layer with its emulation off, which the second check compares the layer's kept members with)
-/// and its identity, and the extensions the layer presents for P that P does not list, which it
-/// hides.
-pub(crate) struct RuntimeRestriction {
-    restriction: &'static ProfileRestriction,
-    native: DeviceDescription,
-    identity: serde_json::Value,
-    hidden: BTreeSet<String>,
-}
-
-/// The restricted context's steps before its device, for the runtime path's `executor`: `None`
-/// when this process runs unrestricted; else the first check ([`profiles::check_within`])
-/// decides between a typed refusal and a restriction the device takes, whose hidden extensions
-/// are read as a context reads them. Every other failure is an error, as in the context.
-pub(crate) fn runtime_restriction(
-    device_type: DeviceType,
-    executor: &str,
-) -> Result<Option<Restricting>, String> {
-    let Some(restriction) = profiles::current_restriction() else {
-        return Ok(None);
-    };
-    restricting(restriction, device_type, executor).map(Some)
-}
-
-/// [`runtime_restriction`]'s steps for `restriction`: the first check decides between a typed
-/// refusal, recorded as `executor`'s context records it, and a restriction the device takes.
-fn restricting(
-    restriction: &'static ProfileRestriction,
-    device_type: DeviceType,
-    executor: &str,
-) -> Result<Restricting, String> {
-    Ok(match first_check(restriction, device_type)? {
-        FirstCheck::Takes(restriction) => Restricting::Takes(restriction),
-        FirstCheck::Lacks(refused) => Restricting::Refused(Box::new(
-            super::compute::restriction_refusal(&refused, executor),
-        )),
-    })
-}
-
-/// The first check's ([`profiles::check_within`]) verdict on a restriction.
-enum FirstCheck {
-    /// The device takes P.
-    Takes(Box<RuntimeRestriction>),
-    /// The device lacks capabilities P states: what a typed refusal of it records.
-    Lacks(Box<RefusedRestriction>),
-}
-
-/// The restricted context's steps before its device for `restriction`, on the device
-/// `device_type` selects: the first check ([`profiles::check_within`]) decides between a refusal
-/// and a restriction the device takes, whose hidden extensions are read as a context reads them.
-/// Every other failure is an error, as in the context.
-fn first_check(
-    restriction: &'static ProfileRestriction,
-    device_type: DeviceType,
-) -> Result<FirstCheck, String> {
-    if device_type == DeviceType::Gpu {
-        crate::gpu::tripwire::refuse_if_tripped()?;
-    }
-    let entry = load_entry()?;
-    // SAFETY: a global command of a loaded entry.
-    let available = unsafe { entry.enumerate_instance_extension_properties(None) }
-        .map_err(|error| format!("enumerate Vulkan instance extensions: {error}"))?;
-    let portability = available.iter().any(|extension| {
-        extension_name(&extension.extension_name) == ash::khr::portability_enumeration::NAME
-    });
-    require_profiles_layer(&entry)?;
-    let version = restriction.context_version();
-    let (native, identity) = native_probe(&entry, device_type, portability, version)?;
-    match profiles::check_within(restriction, &native, version) {
-        Ok(()) => {}
-        Err(RestrictionError::Exceeds { gaps, .. }) => {
-            return Ok(FirstCheck::Lacks(Box::new(RefusedRestriction {
-                restriction,
-                gaps,
-                native,
-                identity,
-            })));
-        }
-        Err(error) => return Err(error.to_string()),
-    }
-    let presented = presented_extensions(&entry, device_type, portability, restriction)?;
-    let hidden = restriction.hidden(presented.iter().map(String::as_str));
-    Ok(FirstCheck::Takes(Box::new(RuntimeRestriction {
-        restriction,
-        native,
-        identity,
-        hidden,
-    })))
-}
-
-impl RuntimeRestriction {
-    /// The committed profile's stem.
-    pub(crate) fn stem(&self) -> &str {
-        &self.restriction.stem
-    }
-
-    /// `options` restricted to P as a restricted context's instance is: the profiles layer below
-    /// the validation layer (which `options` stacks first), configured with P and the hidden
-    /// extensions, and the instance at P's version ([`ProfileRestriction::context_version`]).
-    pub(crate) fn restrict(
-        &self,
-        options: &mut metal2vulkan_runtime::DeviceOptions,
-    ) -> Result<(), String> {
-        let settings =
-            ProfilesSettings::new(ProfilesLayer::Restrict(self.restriction, &self.hidden))?;
-        options.layers.push(PROFILES_LAYER.to_owned());
-        options.layer_settings.extend(settings.runtime_settings());
-        options.instance_api_version = Some(self.restriction.context_version());
-        Ok(())
-    }
-
-    /// What `executor`'s typed refusal of the restricted device itself, before it opened (a
-    /// device the runtime refuses at creation), records of the device as it is, with the
-    /// restriction it was made under (`compute::native_refused_on`, as a refusal of the
-    /// restriction records it).
-    pub(crate) fn refused_on(
-        &self,
-        executor: &str,
-    ) -> Result<crate::candidate::engine::RefusedOn, String> {
-        let layer = serde_json::json!({
-            "profile": self.restriction.stem,
-            "profile_name": self.restriction.profile_name,
-            "profile_sha256": self.restriction.sha256,
-            "hidden_extensions": self.hidden,
-        });
-        super::compute::native_refused_on(&self.native, &self.identity, executor, layer)
-    }
-
-    /// The restricted context's second check ([`profiles::check_restricted`]) on `device`,
-    /// opened with [`RuntimeRestriction::restrict`]'s options, read through its raw handles: the
-    /// layer active, its kept members the native device's, and every other member P's.
-    pub(crate) fn check(
-        &self,
-        device: &metal2vulkan_runtime::Device,
-    ) -> Result<crate::candidate::RestrictedDevice, String> {
-        let version = self.restriction.context_version();
-        // SAFETY: only physical-device queries of the device's own instance, created at P's
-        // version; nothing is created, destroyed, or submitted, and the handles are not kept.
-        let (tools, queried) = unsafe {
-            let handles = device.raw();
-            let tools =
-                profiles::active_tools(handles.entry, handles.instance, handles.physical_device)?;
-            let queried =
-                DeviceDescription::query(handles.instance, handles.physical_device, version)
-                    .map_err(|error| format!("query the restricted device: {error}"))?;
-            (tools, queried)
-        };
-        let translated =
-            profiles::check_restricted(self.restriction, &self.native, &tools, &queried, version)
-                .map_err(|error| error.to_string())?;
-        let record = serde_json::json!({
-            "tool": profiles::profiles_tool(&tools),
-            "profile": self.restriction.stem,
-            "profile_name": self.restriction.profile_name,
-            "profile_sha256": self.restriction.sha256,
-            "hidden_extensions": self.hidden,
-        });
-        let kept = profiles::differences(&translated, &queried)
-            .into_iter()
-            .map(|difference| difference.path)
-            .collect();
-        Ok(crate::candidate::RestrictedDevice {
-            translated,
-            kept,
-            record,
-        })
-    }
-}
-
 /// The device extensions the device `device_type` selects presents under `restriction`, read
 /// through an instance whose profiles layer restricts it and hides nothing, then destroyed: P's
 /// extensions and the ones the layer adds for P's version.
@@ -1578,19 +1400,6 @@ impl VulkanContext {
             .as_ref()
             .map(DeviceDescription::driver_facts)
             .unwrap_or_default()
-    }
-
-    /// Whether the device replay's generated-commands executions are preprocessed apart, as the
-    /// runtime's are on the driver that executes (`generated_commands::preprocess_apart` of its
-    /// queried description, the device as it is, under a restriction too); also where the query
-    /// failed, since preprocessing apart runs right on every driver.
-    pub(super) fn preprocesses_generated_commands_apart(&self) -> bool {
-        match &self.queried_description {
-            Ok(description) => {
-                metal2vulkan_runtime::generated_commands::preprocess_apart(description)
-            }
-            Err(_) => true,
-        }
     }
 
     /// Open a device of `device_type` for `purpose`: the only Vulkan device creation in this crate,
@@ -1849,10 +1658,9 @@ impl VulkanContext {
                 })
                 .collect();
             let _ = messages.making.set(making);
-            messages.unsupported_sets.store(
-                metal2vulkan_runtime::makes_layouts_past_support(description),
-                Ordering::Relaxed,
-            );
+            messages
+                .unsupported_sets
+                .store(makes_layouts_past_support(description), Ordering::Relaxed);
         }
         let opened = opened_description
             .clone()
@@ -1936,9 +1744,7 @@ impl VulkanContext {
         clippy::disallowed_methods,
         reason = "the one call site, after the loader word is put back"
     )]
-    pub(super) fn generated_commands(
-        &self,
-    ) -> Option<metal2vulkan_runtime::generated_commands::Commands> {
+    pub(super) fn generated_commands(&self) -> Option<super::generated_commands::Commands> {
         if !self.generated_commands {
             return None;
         }
@@ -1952,7 +1758,7 @@ impl VulkanContext {
             }
         };
         // SAFETY: each name is the extension's command of this device, which enabled it.
-        unsafe { metal2vulkan_runtime::generated_commands::Commands::load(handle, load) }
+        unsafe { super::generated_commands::Commands::load(handle, load) }
     }
 
     /// `vkGetMemoryHostPointerPropertiesEXT` (`VK_EXT_external_memory_host`), loaded through the

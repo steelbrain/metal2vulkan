@@ -1,5 +1,5 @@
 //! The stream format, the address map and the player's order, on a backend that only keeps what it
-//! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
+//! is asked (no device). The runtime backend's tests are device tests (`replay::rt_replay`).
 
 use super::addresses::AddressMap;
 use super::compare::{compare_plays, shown_differences};

@@ -907,23 +907,14 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
 }
 
 /// The deferred near-equivalent `row` ran, if it records one: in its comparison class, which its
-/// executed modules' precision notes derive, or as a degradation its run announced whose kind is
-/// the note's ([`CandidateObservation::announced_degradations`], `Degradation::precision_note`). A
-/// rate-mapped pass the runtime draws records its map only so: the runtime makes the map and
-/// announces `rasterization-rate-map`, and no executed module's notes name it. An announced kind
-/// that is no deferred note's (a cost, or another precision note) notes nothing.
+/// executed modules' precision notes derive.
 fn deferred_note(row: &CandidateObservation) -> Option<PrecisionNote> {
-    let class = match &row.comparison {
-        ComparisonClass::Unbounded(notes) => Some(notes),
-        _ => None,
+    let ComparisonClass::Unbounded(notes) = &row.comparison else {
+        return None;
     };
-    let announced = row
-        .announced_degradations()
-        .filter_map(|kind| kind.precision_note())
-        .collect::<BTreeSet<_>>();
     DEFERRED_NEAR_EQUIVALENTS
         .into_iter()
-        .find(|note| class.is_some_and(|notes| notes.contains(note)) || announced.contains(note))
+        .find(|note| notes.contains(note))
 }
 
 /// Why the product refuses one of `case`'s rasterization-rate maps (the render pass's, or a

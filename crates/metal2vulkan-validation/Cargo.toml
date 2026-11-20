@@ -30,7 +30,6 @@ metal2vulkan = { path = "../metal2vulkan", features = ["serde", "ash", "cli"] }
 # The AIR front end the product pins exactly: the same crate the product
 # builds, which validation decodes, canonicalizes, and audits AIR through.
 metal2vulkan-air = { path = "../metal2vulkan-air" }
-metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
 metal2vulkan-rt = { path = "../metal2vulkan-rt" }
 metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
 base64 = "0.22"
@@ -55,10 +54,9 @@ ash = { workspace = true, features = ["loaded"] }
 
 # Device-executing tests are gated on non-default cfgs rather than features, because the ordinary
 # gate builds with `--all-features`: `--cfg m2v_gpu` (a real GPU) and `--cfg m2v_cpu_icd` (a CPU
-# Vulkan ICD such as lavapipe). See docs/VALIDATION.md. `--cfg m2v_system_alloc` keeps the system
-# allocator in the lib test binary for the runtime lanes' cost measurements (worker/alloc.rs).
+# Vulkan ICD such as lavapipe). See docs/VALIDATION.md.
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_gpu_hazards)", "cfg(m2v_system_alloc)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)", "cfg(m2v_gpu_hazards)"] }
 
 [build-dependencies]
 sha2.workspace = true

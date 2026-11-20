@@ -1954,16 +1954,11 @@ fn checked_render_replay_cases_prepare_their_render_template() {
             "{name}"
         );
         assert_eq!(
-            prepared
-                .templates()
-                .unwrap()
-                .keys()
-                .copied()
-                .collect::<Vec<_>>(),
+            prepared.templates.keys().copied().collect::<Vec<_>>(),
             [1],
             "{name}"
         );
-        let TemplateCase::Render(template) = &prepared.templates().unwrap()[&1].mapped else {
+        let TemplateCase::Render(template) = &prepared.templates[&1].mapped else {
             panic!("{name}: the parent pipeline is a render template");
         };
         assert!(template.fragment.is_none(), "{name}");
@@ -2039,7 +2034,7 @@ fn committed_compute_replay_cases_register_their_templates_variant() {
         panic!("a kernel case");
     };
     assert_eq!(
-        replay_variants(compute, prepared_gpu.templates().unwrap()).unwrap(),
+        replay_variants(compute, &prepared_gpu.templates).unwrap(),
         edges(1)
     );
     let name = "gpu-encoded-buffers-keep-the-host-encoded-dispatches";
@@ -2048,7 +2043,7 @@ fn committed_compute_replay_cases_register_their_templates_variant() {
         panic!("{name}: a kernel case");
     };
     assert_eq!(
-        replay_variants(compute, host.templates().unwrap()).unwrap(),
+        replay_variants(compute, &host.templates).unwrap(),
         [variant(2, [8, 1, 1])],
         "{name}"
     );
@@ -2075,7 +2070,7 @@ fn committed_compute_replay_cases_register_their_templates_variant() {
     expected.extend(edges(2));
     expected.sort_by_key(|v| v.threads_per_threadgroup);
     assert_eq!(
-        replay_variants(&compute, prepared.templates.as_ref().unwrap()).unwrap(),
+        replay_variants(&compute, &prepared.templates).unwrap(),
         expected,
         "a command whose action the producer encodes registers the template's edges"
     );
@@ -2101,17 +2096,16 @@ fn committed_compute_replay_cases_register_their_templates_variant() {
     ];
     expected.sort_by_key(|v| v.threads_per_threadgroup);
     assert_eq!(
-        replay_variants(&compute, prepared.templates.as_ref().unwrap()).unwrap(),
+        replay_variants(&compute, &prepared.templates).unwrap(),
         expected
     );
 }
 
-/// A template the executor's own context cannot replay refuses a case only on that context. The
-/// committed kernel case whose patch draws run a post-tessellation template prepares, routes to the
-/// runtime, which replays every template through its own pipeline states, and keeps the context's
-/// refusal for a run the runtime hands back.
+/// A template the executor's context cannot replay refuses its case as it is prepared, by the
+/// requirement the vocabulary names: the committed kernel case whose patch draws run a
+/// post-tessellation template.
 #[test]
-fn a_template_only_the_runtime_replays_refuses_only_on_the_executors_context() {
+fn a_template_the_context_cannot_replay_refuses_its_case_by_its_requirement() {
     let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let name = "patch-draws-a-kernel-encodes-at-factor-scales-and-the-host-encodes";
     let case = CorpusStore::new(&root)
@@ -2123,12 +2117,12 @@ fn a_template_only_the_runtime_replays_refuses_only_on_the_executors_context() {
     let device = DeviceType::Cpu;
     let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device })
         .unwrap_or_else(|error| panic!("{name}: {error}"));
-    let prepared = prepare_case(device, admitted).unwrap_or_else(|error| panic!("{name}: {error}"));
-    assert_eq!(runtime_run::route(&prepared), runtime_run::Route::Runtime);
-    let refused = prepared.templates().err().expect("the context's refusal");
+    let refused = prepare_case(device, admitted)
+        .err()
+        .expect("the context's refusal");
     assert!(
-        matches!(&refused, ExecutorError::NotSupported(NotSupported::NotImplemented(why))
-            if why.contains("is not a rasterization-disabled vertex function")),
+        matches!(&refused, ExecutorError::NotSupported(NotSupported::Requirements(requirements))
+            if requirements.contains(&ToolingRequirement::ReplayedTemplateResources)),
         "{refused}"
     );
 }
@@ -2210,7 +2204,7 @@ fn k14d_replay_cases_register_their_regions_variants() {
         let Mapped::Compute(compute) = &prepared.mapped else {
             panic!("{name}: a kernel case");
         };
-        replay_variants(compute, prepared.templates().unwrap()).unwrap()
+        replay_variants(compute, &prepared.templates).unwrap()
     };
     let variants = |length: u32, sizes: &[[u32; 3]]| -> Vec<ReplayVariant> {
         let mut lengths = [0u32; 31];
@@ -2398,9 +2392,10 @@ fn replay_templates_map_only_the_families_executed_commands_run() {
         max_mesh_buffer_bind_count: 0,
         support_dynamic_attribute_stride: false,
     });
-    let error = replay_templates(&checked).err().unwrap().to_string();
+    let error = replay_templates(&checked).err().unwrap();
     assert!(
-        error.contains("is not a rasterization-disabled vertex function"),
+        matches!(&error, ExecutorError::NotSupported(NotSupported::Requirements(requirements))
+            if requirements.contains(&ToolingRequirement::ReplayedTemplateResources)),
         "{error}"
     );
 }

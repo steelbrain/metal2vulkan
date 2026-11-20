@@ -73,7 +73,7 @@ use crate::observation::{
 };
 use crate::observation_contract::ComparisonClass;
 use crate::refusal::{Refusal, RefusalObservation};
-use crate::requirement::Executor;
+use crate::requirement::{Executor, ToolingRequirement};
 use crate::store::CorpusStore;
 use crate::worker::compile::{
     compile_compute_request, compile_render_request, CompileWorker, NotCompiled, WorkerDevice,
@@ -109,7 +109,6 @@ pub mod mesh;
 #[cfg(test)]
 mod public_cases;
 pub mod resources;
-pub mod runtime_run;
 pub mod tables;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -124,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v183";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v184";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -144,8 +143,7 @@ pub struct ComputeCase {
     pub buffers: BTreeMap<u32, Vec<u8>>,
     /// Each bound buffer holding a rasterization-rate map's parameter data, by Metal buffer index:
     /// its bytes in [`ComputeCase::buffers`] are the product's data of the map, which the executor
-    /// binds; the runtime path makes the map with the runtime and copies its data into the buffer,
-    /// as the Metal oracle does with Metal's.
+    /// binds.
     pub rate_maps: BTreeMap<u32, RateMapLiteral>,
     /// Initial bytes of each argument-buffer buffer, by `(owner Metal index, field offset)`:
     /// a buffer the owner's argument buffer points to (loaded pointers). The run writes its guest
@@ -879,8 +877,7 @@ pub fn function_constants(
 /// slot ([`views_told_apart`]), so a uniform view's range starts at its bind offset in its plan
 /// (`SpecKey::RangeAtBindOffset`) on every device, as in the runtime's plan of the same binds: the
 /// runtime states its device's own alignment at the slots its pipeline reads through a uniform
-/// view, and the plans of the two are the same, so the runtime path's artifact digest is the
-/// executor's and the authored compile census's.
+/// view, and the plans of the two are the same.
 pub const VIEW_BASE_ALIGNMENT: u32 = 256;
 
 /// `state` telling [`VIEW_BASE_ALIGNMENT`] apart at every buffer slot of each of its stages, and
@@ -1223,9 +1220,8 @@ pub fn is_robustness_off_slot(environment_id: &str) -> bool {
 /// form and `profile`'s encodings) on a device that executes as `class`, or `None` for a case
 /// without targets: the run's out-of-bounds facts, before what its guards count
 /// (`TargetRun::escaped`, `TargetRun::past_end`). A target whose form the device leaves
-/// uncontained under that encoding refuses the run, so it is decided before anything is submitted:
-/// by the executor's own context before it executes, and by the runtime path before it commits
-/// (`runtime_run`).
+/// uncontained under that encoding refuses the run, so it is decided before anything is submitted,
+/// before the executor's context executes.
 pub(crate) fn out_of_bounds_run(
     class: Option<ExecutionClass>,
     profile: &DeviceProfile,
@@ -1261,8 +1257,7 @@ pub(crate) fn out_of_bounds_run(
 
 /// [`out_of_bounds_run`] for a render case's draw: how `pipeline`'s module that runs the Metal
 /// vertex function (`graphics::vertex_module`) contains each of `case`'s targets, its attributes
-/// fetched from `case`'s vertex buffers. The one decision the executor's own context and the
-/// runtime path (`runtime_run`) take for a draw.
+/// fetched from `case`'s vertex buffers.
 pub(crate) fn draw_out_of_bounds_run(
     class: Option<ExecutionClass>,
     profile: &DeviceProfile,
@@ -1291,9 +1286,8 @@ pub(crate) fn draw_out_of_bounds_run(
 
 /// Whether a draw that read `padding` index positions past where Metal's fetch stops reading its
 /// index buffer from a zero-padded copy of its indices contains them as `run`'s index buffer
-/// target states: the padded copy, of at least one such position. The executor's context and the
-/// runtime path (the draw's execution record) both hold the draw to it; a run without that target
-/// agrees with any draw.
+/// target states: the padded copy, of at least one such position. The executor's context holds
+/// the draw to it; a run without that target agrees with any draw.
 pub(crate) fn index_padding_agrees(
     run: Option<&OutOfBoundsRun>,
     padding: Option<u64>,
@@ -2008,17 +2002,8 @@ pub struct PreparedCase {
     /// The libraries the case's own function links ([`linked_modules`]).
     linked: Vec<LinkedModule>,
     /// The template of each pipeline token the case's executed commands may run, as the
-    /// executor's own context replays them ([`replay_templates`]), or why that context cannot: its
-    /// refusal of the case, which the runtime's replay does not share.
-    templates: Result<BTreeMap<u64, ReplayTemplate>, ExecutorError>,
-}
-
-impl PreparedCase {
-    /// The templates the executor's own context replays, or its refusal of the case: a case the
-    /// runtime hands back to that context fails there.
-    fn templates(&self) -> Result<&BTreeMap<u64, ReplayTemplate>, ExecutorError> {
-        self.templates.as_ref().map_err(Clone::clone)
-    }
+    /// executor's context replays them ([`replay_templates`]).
+    templates: BTreeMap<u64, ReplayTemplate>,
 }
 
 /// A pipeline template an executed command may run: its checked case (by id in
@@ -2072,10 +2057,10 @@ pub enum TemplateCase {
 /// family, so such a literal is no template here. A replayed compute template binds buffers and
 /// threadgroup memory only, and runs no stage input; a replayed render template is a
 /// rasterization-disabled vertex function (which the checker requires) that binds buffers only,
-/// with no vertex input. Every other resource of its own, and an object or mesh template, whose
-/// mesh draws only the runtime replays (`runtime_run::template_states`), is the refusal of the
-/// executor's context, before any device: of the case itself where it runs there, and kept for a
-/// run the runtime hands back where the runtime runs it (`PreparedCase::templates`).
+/// with no vertex input. A template with any other resource of its own refuses the case, before
+/// any device ([`ToolingRequirement::ReplayedTemplateResources`]), and so does an object or mesh
+/// template, whose mesh draw the executor does not draw
+/// ([`ToolingRequirement::MeshRenderPipeline`]).
 pub fn replay_templates(
     checked: &CheckedCase,
 ) -> Result<BTreeMap<u64, ReplayTemplate>, ExecutorError> {
@@ -2123,10 +2108,9 @@ pub fn replay_templates(
                     && mapped.imageblock.is_none()
                     && mapped.stage_input.is_none();
                 if !replayable {
-                    return Err(NotSupported::NotImplemented(format!(
-                        "engine candidate: the replayed template {case_id} binds more than \
-                         buffers and threadgroup memory"
-                    ))
+                    return Err(NotSupported::Requirements(
+                        [ToolingRequirement::ReplayedTemplateResources].into(),
+                    )
                     .into());
                 }
                 TemplateCase::Compute(Box::new(mapped))
@@ -2159,19 +2143,17 @@ pub fn replay_templates(
                     && resources.objects.is_empty()
                     && resources.command_buffers.is_empty();
                 if !replayable {
-                    return Err(NotSupported::NotImplemented(format!(
-                        "engine candidate: the replayed template {case_id} is not a \
-                         rasterization-disabled vertex function that binds buffers only"
-                    ))
+                    return Err(NotSupported::Requirements(
+                        [ToolingRequirement::ReplayedTemplateResources].into(),
+                    )
                     .into());
                 }
                 TemplateCase::Render(Box::new(mapped))
             }
             Stage::Object | Stage::Mesh => {
-                return Err(NotSupported::NotImplemented(format!(
-                    "engine candidate: the replayed template {case_id} is an object or mesh \
-                     function, whose mesh draws only the runtime replays"
-                ))
+                return Err(NotSupported::Requirements(
+                    [ToolingRequirement::MeshRenderPipeline].into(),
+                )
                 .into())
             }
         };
@@ -2418,23 +2400,14 @@ pub fn prepare_case(
         )?)),
     };
     let linked = linked_modules(&checked.primary.linked_functions)?;
-    let templates = replay_templates(&checked);
-    let prepared = PreparedCase {
+    let templates = replay_templates(&checked)?;
+    Ok(PreparedCase {
         device,
         checked,
         mapped,
         linked,
         templates,
-    };
-    // The runtime replays every template through its own pipeline states, so a template the
-    // executor's context cannot replay refuses device-free only a case that runs on that context; a
-    // case the runtime runs meets the refusal only if the runtime hands it back.
-    if let (Err(refused), runtime_run::Route::Executor(_)) =
-        (&prepared.templates, runtime_run::route(&prepared))
-    {
-        return Err(refused.clone());
-    }
-    Ok(prepared)
+    })
 }
 
 /// What one compile of [`case_compiles`] builds.
@@ -2556,10 +2529,8 @@ pub struct CaseCompiles<'a> {
     /// device-free compile builds on this device: a render command buffer, whose host replay
     /// compiles each command's pipeline for the bind shape of the records the producer writes on
     /// the device, and whose draw replay (`platform::compute::draw_replay`) compiles its
-    /// template's variant for the bind state of the execution's encoder, as the runtime path's
-    /// record leaves both uncovered; and a compute one the host replay runs, where the product sets
-    /// no device replay up or the case registers no variant (a case the runtime runs whose
-    /// templates the executor's context does not replay registers none).
+    /// template's variant for the bind state of the execution's encoder; and a compute one the host
+    /// replay runs, where the product sets no device replay up or the case registers no variant.
     pub host_replayed: usize,
 }
 
@@ -2592,14 +2563,7 @@ pub fn case_compiles<'a>(
     let mut host_replayed = 0;
     match &prepared.mapped {
         Mapped::Compute(compute) => {
-            // A case the runtime runs replays its templates through the runtime's own pipeline
-            // states (`prepare_case`), so the executor's context's refusal of them is not that
-            // run's: it registers no variant here, and each executed command buffer is uncovered.
-            let registered = match prepared.templates() {
-                Ok(templates) => replay_variants(compute, templates)?,
-                Err(_) if runtime_run::route(prepared) == runtime_run::Route::Runtime => Vec::new(),
-                Err(refused) => return Err(refused),
-            };
+            let registered = replay_variants(compute, &prepared.templates)?;
             let shape = compute_shape(compute, addressed, ranges).map_err(ExecutorError::Failed)?;
             let (request, libraries) = compute_request(&library, linked, compute, &shape);
             compiles.push(CaseCompile {
@@ -2698,8 +2662,6 @@ pub fn case_compiles<'a>(
                 .filter(|(_, command)| executed(command))
                 .count();
         }
-        // The pipeline the runtime compiles in the run itself (`runtime_run`), for its own
-        // stage's resources.
         Mapped::Mesh(mesh) => {
             let shape = mesh::mesh_shape(mesh, addressed, ranges)?;
             let companion = mesh
@@ -2757,7 +2719,7 @@ pub(crate) fn run_on_device(input: &DeviceInput) -> DeviceOutcome {
     match prepare_on_device(input) {
         Ok((prepared, worker)) => {
             let clock = crate::budgets::CreationClock::start();
-            let attempt = run_prepared(&prepared, input.backend, &worker);
+            let attempt = run_on_context(&prepared, input.backend, &worker);
             let timing = CaseTiming::of_one(clock.read());
             DeviceOutcome {
                 result: attempt.result.map(|run| DeviceRun {
@@ -2838,54 +2800,12 @@ fn prepare_on_device(input: &DeviceInput) -> Result<(PreparedCase, CompileWorker
     Ok((prepared, CompileWorker::current()?))
 }
 
-/// Run one prepared case on its device by the path [`runtime_run::route`] gives it: through the
-/// runtime ([`runtime_run::run`]), or on the executor's own context ([`run_on_context`]) while the
-/// runtime path waits for prerequisites of the case's family, or when the runtime raised a typed
-/// gap before it committed (the bridge). A row or refusal of the executor's context records why the
-/// runtime did not run it.
-fn run_prepared(prepared: &PreparedCase, backend: Backend, worker: &CompileWorker) -> RunAttempt {
-    let why = match runtime_run::route(prepared) {
-        runtime_run::Route::Runtime => match runtime_run::run(prepared, backend) {
-            runtime_run::RuntimeOutcome::Ran(attempt) => return *attempt,
-            runtime_run::RuntimeOutcome::Gap(gap) => runtime_run::ExecutorRun::Gap(gap),
-        },
-        runtime_run::Route::Executor(prerequisites) => {
-            runtime_run::ExecutorRun::WaitsFor(prerequisites)
-        }
-    };
-    let mut attempt = run_on_context(prepared, backend, worker);
-    let environments = attempt
-        .result
-        .as_mut()
-        .ok()
-        .map(|run| &mut run.environment)
-        .into_iter()
-        .chain(
-            attempt
-                .refused_on
-                .as_mut()
-                .map(|opened| &mut opened.environment),
-        );
-    for environment in environments {
-        if let Some(object) = environment.as_object_mut() {
-            for (key, value) in runtime_run::executor_members(&why) {
-                object.insert(key.into(), value);
-            }
-        }
-    }
-    attempt
-}
-
-/// Compile (in `worker`), bind, and execute one prepared case on the executor's own context: a
+/// Compile (in `worker`), bind, and execute one prepared case on the executor's context: a
 /// kernel case as one dispatch, a vertex or fragment case as one draw. The run's row or refusal
 /// records what it compiled, by content ([`artifact::CaseArtifact`]).
 fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWorker) -> RunAttempt {
     let case = &prepared.checked.primary.case;
-    // A template this context cannot replay refuses the case here, before any device work.
-    let templates = match prepared.templates() {
-        Ok(templates) => templates,
-        Err(refused) => return RunAttempt::of(Err(refused)),
-    };
+    let templates = &prepared.templates;
     // The worker assembles a row that retains no bitcode (a public fixture), and a companion.
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = &prepared.linked;
@@ -2958,10 +2878,9 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
                 backend,
             )
         }
-        // Only the runtime path draws a mesh render pipeline; the executor's context runs a
-        // mesh case only when the runtime handed it back (the bridge).
-        Mapped::Mesh(_) => RunAttempt::of(Err(NotSupported::NotImplemented(
-            "engine candidate: the executor's own context draws no mesh render pipeline".into(),
+        // The checker's requirements refuse a mesh case before it maps (`prepare_case`).
+        Mapped::Mesh(_) => RunAttempt::of(Err(NotSupported::Requirements(
+            [ToolingRequirement::MeshRenderPipeline].into(),
         )
         .into())),
     };
@@ -2978,8 +2897,7 @@ fn run_on_context(prepared: &PreparedCase, backend: Backend, worker: &CompileWor
 /// Record a compiled child in the run's artifact: a device-replay variant by its subject, with the
 /// preprocess module the device replay runs it under; a host replay's pipeline (for a record a
 /// producer wrote on the device) and a draw replay's variant (for the bind state of the execution's
-/// encoder) as ones the census cannot compile, as the runtime path records every pipeline its
-/// executed commands ran.
+/// encoder) as ones the census cannot compile.
 fn record_child(
     artifact: &mut artifact::CaseArtifact,
     target: &WorkerDevice,
@@ -3018,7 +2936,7 @@ fn compile_child(
     target: &WorkerDevice,
     (token, shape, command): (u64, &BindShape, &ChildCommand),
 ) -> Result<CompiledChild, ExecutorError> {
-    let template = prepared.templates()?.get(&token).ok_or_else(|| {
+    let template = prepared.templates.get(&token).ok_or_else(|| {
         ExecutorError::Failed(format!(
             "an executed command's pipeline token {token} names no template"
         ))
@@ -3108,7 +3026,7 @@ fn replay_variant_request<'a>(
     threads_per_group: [u32; 3],
     shape: &BindShape,
 ) -> Result<VariantRequest<'a>, ExecutorError> {
-    let template = prepared.templates()?.get(&token).ok_or_else(|| {
+    let template = prepared.templates.get(&token).ok_or_else(|| {
         ExecutorError::Failed(format!(
             "an executed command's pipeline token {token} names no template"
         ))

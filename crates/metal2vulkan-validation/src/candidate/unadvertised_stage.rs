@@ -15,11 +15,9 @@
 //! "`<opcode>` is used in `<stages>` which is not supported in subgroupSupportedStages
 //! (`<stages>`).", read in Vulkan-ValidationLayers v1.4.357 (its library's strings), with the
 //! stages `[VK_SHADER_STAGE_VERTEX_BIT]` at `vkCreateShaderModule`, as the lanes saw it, or
-//! `VK_SHADER_STAGE_VERTEX_BIT`. A sink passes it only where the device's profile takes the
-//! deviation: the runtime lanes' sink once the runtime announced
-//! `Degradation::UnadvertisedVertexSimdgroups` (`runtime_case.rs`), the executor's context where
-//! the profile it opened takes the deviation (`platform/device.rs`). Every other subgroup-stage
-//! message, and this one anywhere else, still fails.
+//! `VK_SHADER_STAGE_VERTEX_BIT`. The executor's context's sink passes it only where the profile it
+//! opened takes the deviation (`platform/device.rs`). Every other subgroup-stage message, and this
+//! one anywhere else, still fails.
 
 /// The message's id name.
 pub(crate) const ID_NAME: &str = "VUID-RuntimeSpirv-None-06343";

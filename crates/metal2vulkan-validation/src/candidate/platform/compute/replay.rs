@@ -146,19 +146,16 @@ pub(in crate::candidate::platform) fn execute_commands<'c, K: Ord + Copy + std::
                         ))
                     })?,
                 },
-                // The runtime path executes them (`runtime_case::encoded_execution`); the
-                // executor's own context, which runs a case only where the runtime path has a gap,
-                // draws no index or patch buffer a record names.
+                // The executor's context draws no index or patch buffer a record names, and no
+                // mesh draw.
                 Action::DrawIndexedPrimitives { .. }
                 | Action::DrawPatches { .. }
                 | Action::DrawIndexedPatches { .. }
                 | Action::DrawMeshThreadgroups { .. }
-                | Action::DrawMeshThreads { .. } => {
-                    return Err(fail(
-                        "an indexed, patch or mesh draw, which only the runtime path executes"
-                            .into(),
-                    ))
-                }
+                | Action::DrawMeshThreads { .. } => return Err(fail(
+                    "an indexed, patch or mesh draw, which the executor's context does not replay"
+                        .into(),
+                )),
             };
             let token = resolved
                 .pipeline

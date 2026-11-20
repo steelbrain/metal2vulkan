@@ -7,9 +7,8 @@ use build_support::hash_files;
 use product_fingerprint::{collect_files, product_fingerprint};
 
 fn main() {
-    // The product fingerprint (`product_fingerprint.rs`): the translator's, the runtime's, and the
-    // dev-tools crate's sources beside this crate in the workspace's crates/, and nothing of this
-    // crate.
+    // The product fingerprint (`product_fingerprint.rs`): the translator's and the dev-tools
+    // crate's sources beside this crate in the workspace's crates/, and nothing of this crate.
     println!(
         "cargo:rustc-env=METAL2VULKAN_PRODUCT_FINGERPRINT={}",
         product_fingerprint(Path::new(".."))
@@ -106,17 +105,15 @@ fn main() {
     // the sRGB steps the ASTC and PVRTC decoders read (`src/lower/arith/srgb.rs`), the sRGB
     // transfer and half conversions the mipmap filter takes from `air.pack`'s lowering
     // (`src/lower/arith/pack.rs`), the blend color an
-    // extended-range blend reads (`src/lower/arith/extended_range/blend_color.rs`), half-float
-    // conversion, and the Metal-like runtime (`metal2vulkan-runtime/src`, with the measured answers
-    // it reads), through which the executor runs the families that have moved onto it. The
-    // translator's paths above are below its crate (`metal2vulkan/src/...`). Each path is a product
-    // file below the workspace's crates/ directory, this crate's parent: those listed here, the
-    // binder's Rust sources under `metal2vulkan/src/bind/`, and every file under
-    // `metal2vulkan-runtime/src/`, test modules aside (`runtime_files`, so a file added under
-    // either joins), all sorted as strings. The guard test in `candidate::engine::artifact`
-    // requires this hash to be the one validation pins (`runtime-sources.sha256`), and the inputs
-    // to be closed over the module files their non-test code reaches (each is an input, or listed
-    // there with why a run does not depend on it beyond the artifact digest).
+    // extended-range blend reads (`src/lower/arith/extended_range/blend_color.rs`), and half-float
+    // conversion. The translator's paths above are below its crate (`metal2vulkan/src/...`). Each
+    // path is a product file below the workspace's crates/ directory, this crate's parent: those
+    // listed here and the binder's Rust sources under `metal2vulkan/src/bind/`, test modules aside
+    // (`runtime_files`, so a file added there joins), all sorted as strings. The guard test in
+    // `candidate::engine::artifact` requires this hash to be the one validation pins
+    // (`runtime-sources.sha256`), and the inputs to be closed over the module files their non-test
+    // code reaches (each is an input, or listed there with why a run does not depend on it beyond
+    // the artifact digest).
     let listed = [
         "metal2vulkan-air/src/canon/function_table.rs",
         "metal2vulkan-air/src/canon/rate_map_data.rs",
@@ -183,13 +180,6 @@ fn main() {
     runtime_files(
         &product,
         Path::new("metal2vulkan/src/bind"),
-        Walk::Sources,
-        &mut runtime_inputs,
-    );
-    runtime_files(
-        &product,
-        Path::new("metal2vulkan-runtime/src"),
-        Walk::Files,
         &mut runtime_inputs,
     );
     runtime_inputs.sort();
@@ -223,21 +213,12 @@ fn crate_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// What a walked directory gives the runtime's inputs.
-#[derive(Clone, Copy, PartialEq)]
-enum Walk {
-    /// Every file: the runtime crate's sources and the measured answers they read.
-    Files,
-    /// The Rust sources alone: the binder (`metal2vulkan/src/bind/`), whose non-test code reads no data file
-    /// (its `.txt` files are its tests' measured answers).
-    Sources,
-}
-
-/// Every file below `relative` under `product` that `walk` takes, but test modules (a `tests`
-/// directory, a `tests.rs` or `*_tests.rs` file) and hidden files, pushed as paths relative to
-/// `product` with `/` separators. Cargo reruns this script when anything under the directory
-/// changes, so a file added there joins the runtime's inputs.
-fn runtime_files(product: &Path, relative: &Path, walk: Walk, output: &mut Vec<String>) {
+/// Every Rust source below `relative` under `product` but test modules (a `tests` directory, a
+/// `tests.rs` or `*_tests.rs` file) and hidden files, pushed as paths relative to `product` with
+/// `/` separators: the binder's (`metal2vulkan/src/bind/`), whose non-test code reads no data file
+/// (its `.txt` files are its tests' measured answers). Cargo reruns this script when anything
+/// under the directory changes, so a file added there joins the runtime's inputs.
+fn runtime_files(product: &Path, relative: &Path, output: &mut Vec<String>) {
     let directory = product.join(relative);
     println!("cargo:rerun-if-changed={}", directory.display());
     let entries = fs::read_dir(&directory)
@@ -251,12 +232,9 @@ fn runtime_files(product: &Path, relative: &Path, walk: Walk, output: &mut Vec<S
         let path = relative.join(&name);
         if entry.path().is_dir() {
             if name != "tests" {
-                runtime_files(product, &path, walk, output);
+                runtime_files(product, &path, output);
             }
-        } else if name != "tests.rs"
-            && !name.ends_with("_tests.rs")
-            && (walk == Walk::Files || name.ends_with(".rs"))
-        {
+        } else if name != "tests.rs" && !name.ends_with("_tests.rs") && name.ends_with(".rs") {
             output.push(path.to_string_lossy().replace('\\', "/"));
         }
     }

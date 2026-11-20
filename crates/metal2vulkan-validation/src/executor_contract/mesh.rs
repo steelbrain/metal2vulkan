@@ -2,8 +2,11 @@
 //! or case needs that the executors do not supply, decided from its reflected structure
 //! ([`ShaderInterface::mesh_stage`], its bindings) and, for a case, the stages its draw names
 //! ([`MeshDraw`]). Classification and the case checker read the one function,
-//! [`mesh_requirements`]. Both executors draw a mesh render pipeline: the Metal oracle
-//! (`metal::platform`) and the engine's candidate through the runtime (`runtime_case`).
+//! [`mesh_requirements`]. The Metal oracle draws a mesh render pipeline (`metal::platform`); the
+//! engine's candidate draws none ([`mesh_pipeline_requirement`]).
+//!
+//! - [`ToolingRequirement::MeshRenderPipeline`]: every object or mesh function's row or case, which
+//!   the engine's candidate does not draw. Its cases stay Metal-qualified.
 //!
 //! - [`ToolingRequirement::MeshCompanion`]: a stage the pipeline needs that nothing supplies.
 //!   Metal links a mesh render pipeline from an object function (optional), a mesh function, and a
@@ -207,6 +210,15 @@ pub fn sets_mesh_outputs(source_ll: &str) -> bool {
                 if !matches!(op, Mesh::PrimitiveCount | Mesh::ThreadgroupsPerGrid)
         )
     })
+}
+
+/// [`ToolingRequirement::MeshRenderPipeline`] for a row or case whose entry's reflection is
+/// `reflection`, where it is an object or mesh function: the engine's candidate draws no mesh
+/// render pipeline. Classification and the case checker read it with the source's other
+/// requirements (`executor_contract::unsupported_source_requirements`).
+pub fn mesh_pipeline_requirement(reflection: &ShaderInterface) -> Option<ToolingRequirement> {
+    matches!(reflection.stage, ShaderStage::Object | ShaderStage::Mesh)
+        .then_some(ToolingRequirement::MeshRenderPipeline)
 }
 
 /// The mesh requirements of a row or case (`draw` `None` for a row) whose entry's reflection is
@@ -550,5 +562,17 @@ mod tests {
         let reflection = inspect(&kernel, Stage::Kernel, "copy_word", &[]).unwrap();
         assert_eq!(reflection.mesh_stage, None);
         assert!(mesh_requirements(&kernel, &reflection, None).is_empty());
+        assert_eq!(mesh_pipeline_requirement(&reflection), None);
+        for (stage, entry) in [
+            (Stage::Object, "mesh_draws_object"),
+            (Stage::Mesh, "mesh_draws_mesh"),
+        ] {
+            let (_, reflection) = reflected(&module, stage, entry);
+            assert_eq!(
+                mesh_pipeline_requirement(&reflection),
+                Some(ToolingRequirement::MeshRenderPipeline),
+                "{entry}"
+            );
+        }
     }
 }
