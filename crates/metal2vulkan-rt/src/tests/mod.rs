@@ -30,6 +30,7 @@ mod import;
 mod import_overs;
 mod import_time;
 mod kept;
+mod kernel_input;
 mod kernel_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kernels;

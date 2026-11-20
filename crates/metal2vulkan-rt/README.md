@@ -1930,7 +1930,7 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `[[grid_size]]` read, pushed at each later dispatch. A dispatch of a kernel that reads it on an
   encoder that set none is `Gap::NoStageInRegion`: what Metal's kernel reads then is not
   established. A kernel with a `[[stage_in]]` argument, which fetches by the region, is
-  `Gap::KernelInput` at its state's creation.
+  `Gap::KernelInput` of `KernelInputKind::StageIn` at its state's creation.
 - `use_heap` is `useHeap:`, for the block a heap's memory is: the command buffer keeps the block
   until it retires, as it keeps a used buffer's block, so a heap given back while the work runs
   stays valid under it. It declares no access (Metal states no retention for it; keeping is the
@@ -2262,19 +2262,18 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   reaches is in no slot.
 - A state answers Metal's `staticThreadgroupMemoryLength`
   (`ComputePipelineState::static_threadgroup_memory_length`), rounded up to 16 bytes as Metal
-  reports it, without the threadgroup memory the runtime adds beside it, and
-  `threadExecutionWidth` (`thread_execution_width`), 32 on every device: a kernel that observes
-  its SIMD group runs it 32 wide, and one that does not cannot tell its width.
-  `imageblockMemoryLengthForDimensions:` (`imageblock_memory_length_for_dimensions`) answers 0
-  for a kernel that declares no imageblock, as Metal does. A kernel that reaches an imageblock
-  has no state (`Gap::KernelInput`); one that declares an imageblock it never reaches, or whose
-  compile kept no reflection to tell, answers `Gap::ImageblockLength`, as no case measures
-  Metal's length. `requiredThreadsPerThreadgroup` (`required_threads_per_threadgroup`) is the
-  descriptor's size, `[0, 0, 0]` where it set none, as the M3 recordings
-  `pipeline-facts-compute-plain` and `pipeline-facts-compute-described` answer, and
-  `supportIndirectCommandBuffers` (`support_indirect_command_buffers`) is false: a descriptor
-  that asks for indirect command buffers is refused at the making
-  (`Gap::IndirectCommandBuffers`).
+  reports it, without the threadgroup memory the runtime adds beside it, and `threadExecutionWidth`
+  (`thread_execution_width`), 32 on every device: a kernel that observes its SIMD group runs it 32
+  wide, and one that does not cannot tell its width. `imageblockMemoryLengthForDimensions:`
+  (`imageblock_memory_length_for_dimensions`) answers 0 for a kernel that declares no imageblock, as
+  Metal does. A kernel that reaches an imageblock has no state (`Gap::KernelInput` of
+  `KernelInputKind::RuntimeFact`); one that declares an imageblock it never reaches, or whose
+  compile kept no reflection to tell, answers `Gap::ImageblockLength`, as no case measures Metal's
+  length. `requiredThreadsPerThreadgroup` (`required_threads_per_threadgroup`) is the descriptor's
+  size, `[0, 0, 0]` where it set none, as the M3 recordings `pipeline-facts-compute-plain` and
+  `pipeline-facts-compute-described` answer, and `supportIndirectCommandBuffers`
+  (`support_indirect_command_buffers`) is false: a descriptor that asks for indirect command buffers
+  is refused at the making (`Gap::IndirectCommandBuffers`).
 
 ### The cache directory
 
@@ -2434,14 +2433,15 @@ or does not check is rebuilt from the generations' names, with young counted ful
   does not require, and no second form is chosen by it). Each such make at a dispatch or a draw
   is a first-use wait: on a cold play, `Metrics::first_use_waits` against
   `Metrics::made_ahead_variants` reads what the consumer's pre-pass left to the encoding threads.
-- A compute kernel with an explicit imageblock has no state (`Gap::KernelInput`). The Metal
-  Shading Language specification supports imageblocks on macOS for Apple silicon only (sections
-  5.6 and 6.14), so a device that answers `supportsImageBlocks` NO gives a guest no imageblock to
-  use. Over 34 recorded guest streams, one of them an arm64 macOS 27 boot, two such kernels are
-  made, no dispatch binds one, and no stream calls `setImageblockWidth:height:`; the compute
-  encoder has no counterpart for that call. One recording, the M3's, makes 10 states refused as
-  `Gap::KernelInput`, the count of its explicit-imageblock makes; none is dispatched (jobs
-  m3-max-58471, m3-max-58477, m3-max-58478 and m3-max-58483, and m3-max-57983 for the count).
+- A compute kernel with an explicit imageblock has no state (`Gap::KernelInput` of
+  `KernelInputKind::RuntimeFact`). The Metal Shading Language specification supports imageblocks on
+  macOS for Apple silicon only (sections 5.6 and 6.14), so a device that answers
+  `supportsImageBlocks` NO gives a guest no imageblock to use. Over 34 recorded guest streams, one
+  of them an arm64 macOS 27 boot, two such kernels are made, no dispatch binds one, and no stream
+  calls `setImageblockWidth:height:`; the compute encoder has no counterpart for that call. One
+  recording, the M3's, makes 10 states refused as `Gap::KernelInput`, the count of its
+  explicit-imageblock makes; none is dispatched (jobs m3-max-58471, m3-max-58477, m3-max-58478 and
+  m3-max-58483, and m3-max-57983 for the count).
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
   content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
   (`Metrics::first_use_waits`), through the device's pipeline cache. In each of the two recorded
@@ -2467,12 +2467,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   layout and its pipeline cache cost nothing measurable there. The cost is paid once per driver
   cache: the driver keeps compiled pipelines across processes, and the same modules compiled again
   in a new process took 45 to 48 µs.
-- A kernel that reads anything the encoder does not supply yet, a function table, a
-  `[[stage_in]]` fetch, or a sampler or texture state the translator would take
-  from the bound object rather than from its resource ID, is refused (`Gap::KernelInput`). So is
-  a state for indirect command buffers (`Gap::IndirectCommandBuffers`), and a kernel that encodes
-  commands into one, which the translator refuses
-  (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
+- A kernel that reads anything the encoder does not supply yet, a function table, a `[[stage_in]]`
+  fetch, or a sampler or texture state the translator would take from the bound object rather than
+  from its resource ID, is refused (`Gap::KernelInput`, whose `KernelInputKind` names what the
+  runtime found: `Slot` for a function table, `StageIn` for a `[[stage_in]]` fetch). So is a state
+  for indirect command buffers (`Gap::IndirectCommandBuffers`), and a kernel that encodes commands
+  into one, which the translator refuses (`Unsupported{GpuEncodedIndirectCommands,
+  NotImplemented}`).
 - A threadgroup that is not whole SIMD groups of a kernel whose SIMD groups run one per subgroup
   of 32 is refused (`Gap::PartialSimdgroups`) where the state has no emulated-SIMD-group module:
   for a kernel the consumer compiled (`StageSource::Compiled`), and where the translator refuses
