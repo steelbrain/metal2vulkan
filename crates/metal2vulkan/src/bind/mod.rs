@@ -221,8 +221,7 @@ pub use texel_parts::{part_texels, texel_buffer_parts};
 pub use texel_rows::TexelRows;
 pub use tile_map::{SparseTileMap, TileMapError, TileMapping};
 pub use ycbcr_convert::{
-    ycbcr_convert_floats_module, ycbcr_convert_module, ycbcr_read, ycbcr_texel, YCbCrCodes,
-    YCbCrConversion, YCbCrConvertModule, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange,
+    ycbcr_read, ycbcr_texel, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange,
 };
 pub use ycbcr_in_place::{YCbCrInPlace, YCbCrPlanesSampler};
 pub use ycbcr_write::{ycbcr_store, ycbcr_write, ycbcr_write_module, YCbCrWriteModule};

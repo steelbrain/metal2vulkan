@@ -631,18 +631,14 @@ surface! {
         const METAL_MESH_GRID_AXIS;
         const METAL_MESH_GRID_TOTAL;
         const METAL_OBJECT_GRID_TOTAL;
-        fn ycbcr_convert_module;
-        fn ycbcr_convert_floats_module;
         fn ycbcr_texel;
         fn ycbcr_read;
-        struct YCbCrConvertModule N;
         struct YCbCrPlanes N;
         struct YCbCrInPlace N;
         struct YCbCrPlanesSampler N;
         struct TexelRows N;
         fn part_texels;
         fn texel_buffer_parts;
-        struct YCbCrConversion N;
         struct YCbCrCodes N;
         enum YCbCrOutput N;
         enum YCbCrRange N;

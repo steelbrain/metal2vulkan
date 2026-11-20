@@ -44,16 +44,6 @@ fn modules() -> Vec<Build> {
             );
         }
     }
-    for conversion in crate::bind::ycbcr_convert::conversions() {
-        push(
-            format!("ycbcr_convert_module({conversion:?})"),
-            Box::new(move |d| Ok(bind::ycbcr_convert_module(d, conversion)?.spirv)),
-        );
-        push(
-            format!("ycbcr_convert_floats_module({conversion:?})"),
-            Box::new(move |d| Ok(bind::ycbcr_convert_floats_module(d, conversion)?.spirv)),
-        );
-    }
     for copy in PlanesCopy::ALL {
         push(
             format!("planes_split_module({copy:?})"),

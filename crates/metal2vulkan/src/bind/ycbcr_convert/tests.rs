@@ -1,33 +1,19 @@
-//! The YCbCr conversion kernel on the CPU interpreter, against the conversion Metal's reads were
-//! measured to follow and against Metal's own reads of our probes' surfaces.
+//! The YCbCr conversion's CPU model, against the conversion Metal's reads were measured to follow
+//! and against Metal's own reads of our probes' surfaces.
 
 use super::{
-    conversions, srgb_step, typed_module, ycbcr_read, ycbcr_texel, YCbCrCodes, YCbCrConversion,
-    YCbCrConvertModule, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange, BYTES, IMAGE, SHAPE,
-    SRGB_KNOTS,
+    srgb_step, ycbcr_read, ycbcr_texel, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrPlanes,
+    YCbCrRange, SRGB_KNOTS,
 };
 use crate::metal::format::{ycbcr_format, ChromaSubsampling};
 use crate::metal::PixelFormat;
-use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
-use crate::spirv::testing::{assert_valid, committed_profiles, sharded_tests};
-
-#[test]
-fn the_ycbcr_conversion_kernels_are_valid_on_every_committed_profile() {
-    for (_, p) in committed_profiles().expect("profiles") {
-        for conversion in conversions() {
-            for floats in [false, true] {
-                assert_valid(typed_module(conversion, floats).expect("module"), &p);
-            }
-        }
-    }
-}
 
 /// The codes of `pf`'s layout.
 fn codes_of(pf: PixelFormat) -> YCbCrCodes {
     YCbCrCodes::of(ycbcr_format(pf).expect("a two-plane format")).expect("converted")
 }
 
-/// The 4:2:0 formats whose layouts the module converts.
+/// The 4:2:0 formats whose layouts the model converts.
 const HELD: [PixelFormat; 6] = [
     PixelFormat::YCBCR84202P,
     PixelFormat::YCBCR104202P,
@@ -37,7 +23,7 @@ const HELD: [PixelFormat; 6] = [
     PixelFormat::RGB84202P,
 ];
 
-/// The 4:2:2 and 4:4:4 formats whose layouts the module converts, each [`HELD`]'s layout at its
+/// The 4:2:2 and 4:4:4 formats whose layouts the model converts, each [`HELD`]'s layout at its
 /// place with that chroma (the codes).
 const HELD_SUBSAMPLED: [[PixelFormat; 6]; 2] = [
     [
@@ -58,7 +44,7 @@ const HELD_SUBSAMPLED: [[PixelFormat; 6]; 2] = [
     ],
 ];
 
-/// The packed formats whose layouts the module converts: 4:2:0, 4:2:2 and 4:4:4, converted and
+/// The packed formats whose layouts the model converts: 4:2:0, 4:2:2 and 4:4:4, converted and
 /// their `_sRGB` twins.
 const HELD_PACKED: [PixelFormat; 6] = [
     PixelFormat::YCBCR104202PPACKED,
@@ -69,27 +55,27 @@ const HELD_PACKED: [PixelFormat; 6] = [
     PixelFormat::YCBCR104442PPACKEDSRGB,
 ];
 
-/// The packed layouts the module converts.
+/// The packed layouts the model converts.
 fn packed_layouts() -> [YCbCrCodes; 6] {
     HELD_PACKED.map(codes_of)
 }
 
-/// The 4:2:0 layouts the module converts: `YCBCR8_420_2P`'s, `YCBCR10_420_2P`'s,
+/// The 4:2:0 layouts the model converts: `YCBCR8_420_2P`'s, `YCBCR10_420_2P`'s,
 /// `RGB10_420_2P`'s, the two `_sRGB` twins', and `RGB8_420_2P`'s.
 fn layouts() -> [YCbCrCodes; 6] {
     HELD.map(codes_of)
 }
 
-/// The 4:2:2 and 4:4:4 layouts the module converts.
+/// The 4:2:2 and 4:4:4 layouts the model converts.
 fn subsampled_layouts() -> impl Iterator<Item = YCbCrCodes> {
     HELD_SUBSAMPLED.into_iter().flatten().map(codes_of)
 }
 
-/// The module converts the 4:2:0, 4:2:2 and 4:4:4 layouts of unpacked 8- and 10-bit codes read
-/// converted, through the sRGB curve or as codes, and of packed 10-bit codes read converted or
-/// through the sRGB curve, and no other two-plane format's.
+/// The conversion models the 4:2:0, 4:2:2 and 4:4:4 layouts of unpacked 8- and 10-bit codes
+/// read converted, through the sRGB curve or as codes, and of packed 10-bit codes read converted
+/// or through the sRGB curve, and no other two-plane format's ([`YCbCrCodes::of`]).
 #[test]
-fn the_module_converts_the_measured_layouts_alone() {
+fn the_model_converts_the_measured_layouts_alone() {
     let held: Vec<PixelFormat> = PixelFormat::ALL
         .iter()
         .copied()
@@ -157,7 +143,7 @@ fn the_module_converts_the_measured_layouts_alone() {
     }
 }
 
-/// One surface: its planes' bytes as the bytes binding holds them, and where they lie.
+/// One surface: its planes' bytes and where they lie.
 struct Surface {
     bytes: Vec<u8>,
     planes: YCbCrPlanes,
@@ -243,7 +229,7 @@ impl Surface {
             .iter()
             .rev()
             .fold(0u32, |word, &b| (word << 8) | u32::from(b));
-        (word >> shift) & codes.max()
+        (word >> shift) & ((1 << codes.bits) - 1)
     }
 
     /// The texels every texel reads, row by row, by the module docs' rule.
@@ -283,148 +269,6 @@ impl Surface {
         }
         out
     }
-
-    /// The kernel's texels: each channel's `v` of `v / 2048` or of `v / 8192` (checked to be
-    /// one), or its code, both invocation orders alike; alpha checked to be 1.
-    fn converted(&self) -> Vec<[u16; 3]> {
-        let output = self.planes.codes.output;
-        let m = typed_module(self.planes.conversion(), false).expect("module");
-        let [w, h] = self.planes.size;
-        let groups = [w, h].map(|n| n.div_ceil(YCbCrConvertModule::LOCAL_SIZE));
-        let mut runs = Vec::new();
-        for order in [Order::Forward, Order::Reverse] {
-            let part = |slot, bytes: Vec<u8>| Buffer {
-                slot: Some(slot),
-                address: None,
-                bytes,
-            };
-            let shape = YCbCrConvertModule::shape(&self.planes);
-            let res = Resources {
-                buffers: vec![part(SHAPE, shape.to_vec()), part(BYTES, self.bytes.clone())],
-                push: Vec::new(),
-                spec: Default::default(),
-            };
-            let cfg = Config {
-                order,
-                workgroups: [groups[0], groups[1], 1],
-                ..Config::default()
-            };
-            let image = Image::new(IMAGE, [w, h, 1], 1, 1, 1);
-            let (outcome, images) = run_with_images(&m, &cfg, res, vec![image]).expect("run");
-            assert_eq!(outcome.buffers[1], self.bytes, "the bytes are only read");
-            let texels: Vec<[u16; 3]> = images[0]
-                .texels
-                .iter()
-                .map(|t| match output {
-                    YCbCrOutput::Codes => {
-                        let (packed, bits) = (t[0], self.planes.codes.bits);
-                        assert_eq!(packed >> (3 * bits), u32::MAX >> (3 * bits), "alpha 1");
-                        std::array::from_fn(|c| {
-                            ((packed >> (bits * c as u32)) & self.planes.codes.max()) as u16
-                        })
-                    }
-                    YCbCrOutput::Converted | YCbCrOutput::Srgb => {
-                        let grid = match output {
-                            YCbCrOutput::Srgb => 8192.0,
-                            _ => 2048.0,
-                        };
-                        assert_eq!(f32::from_bits(t[3]), 1.0, "alpha 1");
-                        std::array::from_fn(|c| {
-                            let v = f32::from_bits(t[c]) * grid;
-                            assert!(
-                                v == v.round() && (0.0..=grid).contains(&v),
-                                "{v} off the grid"
-                            );
-                            v as u16
-                        })
-                    }
-                })
-                .collect();
-            runs.push(texels);
-        }
-        assert_eq!(runs[0], runs[1], "order independent");
-        runs.swap_remove(0)
-    }
-}
-
-impl Surface {
-    /// The floats module's texels ([`super::ycbcr_convert_floats_module`]), as `f32`s.
-    fn floats(&self) -> Vec<[f32; 4]> {
-        let m = typed_module(self.planes.conversion(), true).expect("module");
-        let [w, h] = self.planes.size;
-        let groups = [w, h].map(|n| n.div_ceil(YCbCrConvertModule::LOCAL_SIZE));
-        let part = |slot, bytes: Vec<u8>| Buffer {
-            slot: Some(slot),
-            address: None,
-            bytes,
-        };
-        let shape = YCbCrConvertModule::shape(&self.planes);
-        let res = Resources {
-            buffers: vec![part(SHAPE, shape.to_vec()), part(BYTES, self.bytes.clone())],
-            push: Vec::new(),
-            spec: Default::default(),
-        };
-        let cfg = Config {
-            workgroups: [groups[0], groups[1], 1],
-            ..Config::default()
-        };
-        let image = Image::new(IMAGE, [w, h, 1], 1, 1, 1);
-        let (_, images) = run_with_images(&m, &cfg, res, vec![image]).expect("run");
-        images[0]
-            .texels
-            .iter()
-            .map(|t| std::array::from_fn(|c| f32::from_bits(t[c])))
-            .collect()
-    }
-}
-
-/// The floats module writes each texel the conversion reads as floats: a converted texel's
-/// `v / 2048` and an sRGB one's `v / 8192`, bit for bit, and a code read as codes as its code over
-/// the largest, within a thousandth of a code; alpha 1.
-#[test]
-fn the_floats_module_writes_the_texels_as_floats() {
-    let mut random = Random(0x5eed_f10a);
-    for codes in layouts().into_iter().chain(subsampled_layouts()) {
-        let mask = (1u16 << codes.bits) - 1;
-        let size = [17, 9];
-        let [w, h] = size;
-        for conversion in CONVERSIONS {
-            let luma: Vec<u16> = (0..w * h)
-                .map(|_| u16::from_le_bytes([random.next(), random.next()]) & mask)
-                .collect();
-            let [cw, ch] = YCbCrPlanes::new(size, [0; 2], [0; 2], conversion, codes).chroma_size();
-            let chroma: Vec<u16> = (0..2 * cw * ch)
-                .map(|_| u16::from_le_bytes([random.next(), random.next()]) & mask)
-                .collect();
-            let rows = [48, row_bytes(codes, 2 * cw).next_multiple_of(16)];
-            let surface = Surface::new(
-                size,
-                512,
-                rows,
-                (conversion, codes),
-                &|x, y| luma[(y * w + x) as usize],
-                &|x, y| {
-                    let i = (2 * (y * cw + x)) as usize;
-                    [chroma[i], chroma[i + 1]]
-                },
-            );
-            let model = surface.modelled();
-            for (i, (got, want)) in surface.floats().iter().zip(&model).enumerate() {
-                assert_eq!(got[3], 1.0, "{codes:?} texel {i}: alpha 1");
-                for c in 0..3 {
-                    let want = f32::from(want[c]);
-                    match codes.output {
-                        YCbCrOutput::Converted => assert_eq!(got[c], want / 2048.0),
-                        YCbCrOutput::Srgb => assert_eq!(got[c], want / 8192.0),
-                        YCbCrOutput::Codes => {
-                            let code = got[c] * f32::from(mask);
-                            assert!((code - want).abs() < 1e-3, "{codes:?} {i}: {code} {want}");
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Where code `index` of the row whose first byte is at `row` lies: its unit's first byte, and
@@ -436,7 +280,7 @@ fn place(codes: YCbCrCodes, row: u32, index: u32) -> (u32, u32) {
     }
 }
 
-/// The ranges and matrices the module converts.
+/// The ranges and matrices the model converts.
 const CONVERSIONS: [(YCbCrRange, YCbCrMatrix); 6] = [
     (YCbCrRange::Video, YCbCrMatrix::Bt601),
     (YCbCrRange::Video, YCbCrMatrix::Bt709),
@@ -522,16 +366,15 @@ fn digest(texels: &[[u16; 3]]) -> u32 {
         })
 }
 
-/// The kernel reads one surface exactly as Metal read it.
+/// The model reads one surface exactly as Metal read it.
 #[test]
-fn the_kernel_reads_a_surface_as_metal_does() {
+fn the_model_reads_a_surface_as_metal_does() {
     let size = [40, 24];
     let planes = Random(5).planes(size);
     let surface = surface_of(size, 0, [64, 64], CONVERSIONS[0], &planes);
-    let got = surface.converted();
+    let got = surface.modelled();
     assert_eq!(got[..4], METAL_FIRST_TEXELS);
     assert_eq!(digest(&got), METAL_READ_DIGEST);
-    assert_eq!(got, surface.modelled());
 }
 
 /// Metal's `read()` of a two-plane texture over a CoreVideo surface whose planes `ycf3.swift`
@@ -1136,10 +979,10 @@ const METAL_PROBE_READS: [MetalRead; 40] = [
     },
 ];
 
-/// The kernel reads 10-bit surfaces, converted and as codes, the sRGB twins' 8- and 10-bit ones,
+/// The model reads 10-bit surfaces, converted and as codes, the sRGB twins' 8- and 10-bit ones,
 /// 8-bit ones as codes, and packed ones, exactly as Metal read them.
 #[test]
-fn the_kernel_reads_the_probes_surfaces_as_metal_does() {
+fn the_model_reads_the_probes_surfaces_as_metal_does() {
     for r in METAL_PROBE_READS {
         let [luma_row, luma_rows, chroma_row, chroma_rows] = r.rows;
         let mut random = Random::ycf3(r.seed);
@@ -1152,10 +995,9 @@ fn the_kernel_reads_the_probes_surfaces_as_metal_does() {
             r.conversion,
             codes_of(r.pf),
         );
-        let got = surface.converted();
+        let got = surface.modelled();
         assert_eq!(got[..4], r.first, "{:?} seed {}", r.pf, r.seed);
         assert_eq!(digest(&got), r.digest, "{:?} seed {}", r.pf, r.seed);
-        assert_eq!(got, surface.modelled(), "{:?} seed {}", r.pf, r.seed);
     }
 }
 
@@ -1180,141 +1022,7 @@ fn codes_of_zero_read_metals_green() {
     }
 }
 
-/// Every luma code under a sweep of uniform chroma, which the filter keeps as it is, for each
-/// 4:2:0 layout, range and matrix: the kernel's arithmetic is the conversion's at every luma
-/// code. Eight tests, each the cases whose index is its shard modulo eight.
-fn every_luma_code_converts_as_the_model_does(shard: usize, shards: usize) {
-    // `YCBCR10_420_2P_PACKED`'s too: its codes read from their words (the arithmetic after is
-    // the unpacked twins').
-    let packed = codes_of(PixelFormat::YCBCR104202PPACKED);
-    let chromas: [(u16, u16); 6] = [
-        (0, 0),
-        (16, 240),
-        (128, 128),
-        (240, 16),
-        (255, 255),
-        (90, 200),
-    ];
-    let cases = layouts().into_iter().chain([packed]).flat_map(|codes| {
-        CONVERSIONS
-            .into_iter()
-            .flat_map(move |conversion| chromas.map(|chroma| (codes, conversion, chroma)))
-    });
-    let mut checked = 0;
-    for (codes, conversion, (cb, cr)) in cases.skip(shard).step_by(shards) {
-        let max = (1u16 << codes.bits) - 1;
-        let width = u32::from(max) + 1;
-        let [cb, cr] = [cb, cr].map(|c: u16| c * (max / 255));
-        let surface = Surface::new(
-            [width, 2],
-            16,
-            [
-                row_bytes(codes, width),
-                row_bytes(codes, 2 * width.div_ceil(2)),
-            ]
-            .map(|n| n.next_multiple_of(16)),
-            (conversion, codes),
-            &|x, _| x as u16,
-            &|_, _| [cb, cr],
-        );
-        let got = surface.converted();
-        let want: Vec<[u16; 3]> = (0..2)
-            .flat_map(|_| (0..=max).map(|y| ycbcr_read(codes, conversion, [y, cb, cr])))
-            .collect();
-        assert_eq!(got, want, "{codes:?} {conversion:?} at chroma ({cb}, {cr})");
-        checked += 1;
-    }
-    assert!(checked > 0, "shard {shard} of {shards} checked no case");
-}
-
-sharded_tests!(
-    every_luma_code_converts_as_the_model_does = every_luma_code_converts_as_the_model_does(
-        shard_0 => 0,
-        shard_1 => 1,
-        shard_2 => 2,
-        shard_3 => 3,
-        shard_4 => 4,
-        shard_5 => 5,
-        shard_6 => 6,
-        shard_7 => 7,
-    )
-);
-
-/// Random surfaces of odd and even sizes, one texel among them, with rows wider than the planes
-/// and planes past the bytes' start: the chroma filter at every edge, every 4:2:0 layout and
-/// every conversion.
-#[test]
-fn random_surfaces_convert_as_the_model_does() {
-    random_surfaces_of(layouts(), Random(77));
-}
-
-/// As [`random_surfaces_convert_as_the_model_does`], for the 4:2:2 and 4:4:4 layouts: the
-/// filter along the halved axis alone, and none along a direct one.
-#[test]
-fn subsampled_random_surfaces_convert_as_the_model_does() {
-    random_surfaces_of(subsampled_layouts(), Random(78));
-}
-
-/// As [`random_surfaces_convert_as_the_model_does`], for the packed layouts: three codes to a
-/// word, a row's last word partly past its codes.
-#[test]
-fn packed_random_surfaces_convert_as_the_model_does() {
-    random_surfaces_of(packed_layouts(), Random(79));
-}
-
-/// The bytes of a row of `n` codes of `codes`.
-fn row_bytes(codes: YCbCrCodes, n: u32) -> u32 {
-    codes.units(u64::from(n)) as u32 * codes.bytes
-}
-
-/// The kernel and the model of random surfaces of `layouts`, every conversion.
-fn random_surfaces_of(layouts: impl IntoIterator<Item = YCbCrCodes>, mut random: Random) {
-    let shapes: [([u32; 2], u32, [u32; 2]); 4] = [
-        ([1, 1], 0, [16, 16]),
-        ([33, 17], 48, [80, 80]),
-        ([2, 3], 16, [16, 32]),
-        ([17, 9], 512, [48, 48]),
-    ];
-    for codes in layouts {
-        let mask = (1u16 << codes.bits) - 1;
-        for conversion in CONVERSIONS {
-            for (size, at, rows) in shapes {
-                let [w, h] = size;
-                let luma: Vec<u16> = (0..w * h)
-                    .map(|_| u16::from_le_bytes([random.next(), random.next()]) & mask)
-                    .collect();
-                let [cw, ch] =
-                    YCbCrPlanes::new(size, [0; 2], [0; 2], conversion, codes).chroma_size();
-                let chroma: Vec<u16> = (0..2 * cw * ch)
-                    .map(|_| u16::from_le_bytes([random.next(), random.next()]) & mask)
-                    .collect();
-                // A 4:4:4 plane's rows hold twice a 4:2:0 one's pairs.
-                let rows = [
-                    rows[0],
-                    rows[1].max(row_bytes(codes, 2 * cw).next_multiple_of(16)),
-                ];
-                let surface = Surface::new(
-                    size,
-                    at,
-                    rows,
-                    (conversion, codes),
-                    &|x, y| luma[(y * w + x) as usize],
-                    &|x, y| {
-                        let i = (2 * (y * cw + x)) as usize;
-                        [chroma[i], chroma[i + 1]]
-                    },
-                );
-                assert_eq!(
-                    surface.converted(),
-                    surface.modelled(),
-                    "{codes:?} {conversion:?} {size:?}"
-                );
-            }
-        }
-    }
-}
-
-/// The sRGB knots are the curve's (the module docs): each the step of `1 / 8192` nearest
+/// The sRGB knots are the curve's (the module docs' sRGB rule): each the step of `1 / 8192` nearest
 /// `8192 · srgb(16 j / 8192)`, which no knot lies within `10^-4` of a tie of, so `f64`'s curve
 /// decides each; and the line between two knots rounds a remainder of 8 to the even step.
 #[test]
@@ -1339,170 +1047,4 @@ fn the_srgb_knots_are_the_curves() {
     assert_eq!(srgb_step(8), 0);
     assert_eq!(srgb_step(24), 2);
     assert_eq!(srgb_step(8192), 8192);
-}
-
-/// The module of `conversion` as [`super::ycbcr_convert_module`] emits it, with the fixed
-/// bindings of [`YCbCrConvertModule`].
-fn module_words(conversion: YCbCrConversion, floats: bool) -> Vec<u32> {
-    let m = typed_module(conversion, floats).expect("module");
-    let r = crate::spirv::serialize::serialize(m).expect("the module serializes");
-    crate::spirv::serialize::relocate(&r, &super::binding_of).expect("the bindings number")
-}
-
-/// The instructions of `words` (after the header): each opcode with its operand words.
-fn ops(words: &[u32]) -> Vec<(u32, &[u32])> {
-    let mut out = Vec::new();
-    let mut at = 5;
-    while at < words.len() {
-        let count = (words[at] >> 16) as usize;
-        assert!(
-            count > 0 && at + count <= words.len(),
-            "the instruction at {at}"
-        );
-        out.push((words[at] & 0xffff, &words[at + 1..at + count]));
-        at += count;
-    }
-    out
-}
-
-/// The variable of `words` bound at `binding` in the module's set.
-fn binding_variable(words: &[u32], binding: u32) -> u32 {
-    let mut found = None;
-    for (op, operands) in ops(words) {
-        if op == crate::spv::Op::Decorate as u32
-            && operands.get(1) == Some(&(crate::spv::Decoration::Binding as u32))
-            && operands.get(2) == Some(&binding)
-        {
-            assert_eq!(found, None, "one variable at binding {binding}");
-            found = Some(operands[0]);
-        }
-    }
-    found.unwrap_or_else(|| panic!("a variable at binding {binding}"))
-}
-
-/// How many values `words` loads through `variable`: the loads of the pointers its access chains
-/// make of it.
-fn loads_through(words: &[u32], variable: u32) -> usize {
-    let mut pointers = vec![variable];
-    for (op, operands) in ops(words) {
-        if op == crate::spv::Op::AccessChain as u32 && pointers.contains(&operands[2]) {
-            pointers.push(operands[1]);
-        }
-    }
-    ops(words)
-        .iter()
-        .filter(|(op, operands)| {
-            *op == crate::spv::Op::Load as u32 && pointers.contains(&operands[2])
-        })
-        .count()
-}
-
-/// An invocation loads the shape's six words alone — the texture's size and its planes' first
-/// bytes and rows — whatever its conversion: the module resolves the codes' bits, their unit's
-/// bytes and shifts, the chroma subsampling, the output, the range and the matrix as it is built,
-/// so no invocation loads or branches on any of them.
-#[test]
-fn an_invocation_loads_the_shapes_six_words_alone() {
-    assert_eq!(YCbCrConvertModule::SHAPE_WORDS, 6);
-    for conversion in conversions() {
-        for floats in [false, true] {
-            let words = module_words(conversion, floats);
-            let shape = binding_variable(&words, YCbCrConvertModule::SHAPE_BINDING);
-            assert_eq!(
-                loads_through(&words, shape),
-                YCbCrConvertModule::SHAPE_WORDS as usize,
-                "{conversion:?} floats={floats}"
-            );
-        }
-    }
-}
-
-/// A module divides only where its own conversion divides: by three for a packed unit's codes,
-/// and by the largest code for a full-range luma term. An unpacked video-range conversion, which
-/// a 4:2:0 video surface names, divides not at all.
-#[test]
-fn a_module_divides_only_where_its_conversion_does() {
-    for conversion in conversions() {
-        for floats in [false, true] {
-            let words = module_words(conversion, floats);
-            let divides = ops(&words)
-                .iter()
-                .filter(|(op, _)| *op == crate::spv::Op::UDiv as u32)
-                .count();
-            let own = conversion.codes.packed || conversion.range == YCbCrRange::Full;
-            assert_eq!(divides > 0, own, "{conversion:?} floats={floats}");
-        }
-    }
-}
-
-/// A conversion whose chroma plane halves fewer axes is a smaller module: a 4:4:4 texel reads its
-/// own chroma pair, a 4:2:2 one two taps of its row and a 4:2:0 one four, so each layout's module
-/// holds fewer instructions than the layout below it at every output.
-#[test]
-fn a_module_shrinks_with_the_chroma_its_conversion_settles() {
-    for (i, &pf) in HELD.iter().enumerate() {
-        let chain = [pf, HELD_SUBSAMPLED[0][i], HELD_SUBSAMPLED[1][i]];
-        let counts = chain.map(|pf| {
-            let conversion =
-                YCbCrConversion::of(codes_of(pf), (YCbCrRange::Video, YCbCrMatrix::Bt709));
-            ops(&module_words(conversion, false)).len()
-        });
-        assert!(
-            counts[0] > counts[1] && counts[1] > counts[2],
-            "{chain:?}: {counts:?}"
-        );
-    }
-}
-
-/// The conversions a two-plane YCbCr texture can name, which bound the modules a device holds:
-/// the 24 layouts the module converts, each read converted or through the sRGB curve under the
-/// six ranges and matrices and each read as codes under one, 114 in all (228 with their floats
-/// twins). A conversion is the layout, range and matrix alone: two textures of different sizes
-/// over planes at different places name one conversion and read through one module.
-#[test]
-fn the_conversions_a_texture_can_name_are_these_alone() {
-    let layouts: Vec<YCbCrCodes> = PixelFormat::ALL
-        .iter()
-        .copied()
-        .filter_map(|pf| ycbcr_format(pf).and_then(YCbCrCodes::of))
-        .collect();
-    assert_eq!(layouts.len(), 24);
-    let as_codes = layouts
-        .iter()
-        .filter(|c| c.output == YCbCrOutput::Codes)
-        .count();
-    assert_eq!(as_codes, 6);
-    let all = conversions();
-    assert_eq!(
-        all.len(),
-        CONVERSIONS.len() * (layouts.len() - as_codes) + as_codes
-    );
-    assert_eq!(all.len(), 114);
-    for codes in layouts {
-        for conversion in CONVERSIONS {
-            let named = YCbCrConversion::of(codes, conversion);
-            assert!(all.contains(&named), "{codes:?} {conversion:?}");
-            match codes.output {
-                // A layout read as codes reads neither range nor matrix.
-                YCbCrOutput::Codes => assert_eq!(
-                    named,
-                    YCbCrConversion::of(codes, (YCbCrRange::Video, YCbCrMatrix::Bt601))
-                ),
-                YCbCrOutput::Converted | YCbCrOutput::Srgb => {
-                    assert_eq!((named.range, named.matrix), conversion)
-                }
-            }
-            // The texture's size and its planes' places are the shape's, not the module's.
-            let small = YCbCrPlanes::new([16, 8], [0, 32], [512, 32], conversion, codes);
-            let large = YCbCrPlanes::new(
-                [3840, 2160],
-                [4096, 7680],
-                [16_596_992, 7680],
-                conversion,
-                codes,
-            );
-            assert_eq!(small.conversion(), named);
-            assert_eq!(large.conversion(), named);
-        }
-    }
 }

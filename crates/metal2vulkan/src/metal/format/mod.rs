@@ -131,7 +131,7 @@ pub enum FormatEmulation {
     ExtendedRange,
     /// Apple's two-plane YCbCr formats this crate holds ([`ycbcr`]), which Metal makes only over
     /// an IOSurface's two planes and reads as RGB: held as texels of exactly Metal's values,
-    /// which the consumer computes from the planes' bytes (`bind::ycbcr_convert_module`):
+    /// which the consumer computes from the planes' bytes (`bind::ycbcr_read`, Metal's conversion):
     /// `R16G16B16A16_SFLOAT` of a converted format's (a grid of `1/2048`),
     /// `R32G32B32A32_SFLOAT` of an `_sRGB` twin's (a grid of `1/8192`), and
     /// `A2B10G10R10_UNORM_PACK32` of the codes. Exact for a sampled image a function reads or
