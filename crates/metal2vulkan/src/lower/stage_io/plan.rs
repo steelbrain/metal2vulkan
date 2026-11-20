@@ -2858,7 +2858,7 @@ fn captured_param(
 /// (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`): one compiled without
 /// `replay_bindings`, or under an input that reads the draw's own vertex or instance indices or
 /// draws it more than once (the primitive ID's varying or de-indexed form, the private list form,
-/// amplifications drawn apart, tessellation).
+/// amplifications drawn apart).
 fn merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     let i = cx.inputs;
     if !i.replay_bindings
@@ -2866,7 +2866,6 @@ fn merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         || i.primitive_id_indices.is_some()
         || i.private_list
         || i.amplification_draws.is_some()
-        || i.tessellation.is_some()
     {
         return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
     }

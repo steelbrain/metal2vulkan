@@ -524,11 +524,9 @@ pub fn link(
     let (vertex_input, graphics) = match inputs {
         LinkInputs::Render(r) => {
             let vs = ifaces.first().ok_or_else(|| missing_stage(Stage::Vertex))?;
-            let vi = match (control, emulated) {
-                (Some(_), _) | (_, Some(_)) => {
-                    tessellation::vertex_input_state(vs, r.vertex_descriptor.as_ref())?
-                }
-                (None, None) => {
+            let vi = match control {
+                Some(_) => tessellation::vertex_input_state(vs, r.vertex_descriptor.as_ref())?,
+                None => {
                     let vi = vertex::vertex_input_state(
                         vs,
                         r.vertex_descriptor.as_ref(),
