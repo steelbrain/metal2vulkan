@@ -11162,7 +11162,6 @@ variant	metal2vulkan::device::DriverWorkaround::FloatDenormalsKeptUnderHalfContr
 variant	metal2vulkan::device::DriverWorkaround::FunctionsInlinedAtEveryCall	FunctionsInlinedAtEveryCall
 variant	metal2vulkan::device::DriverWorkaround::HalfConversionFusedWithArithmetic	HalfConversionFusedWithArithmetic
 variant	metal2vulkan::device::DriverWorkaround::HalfConversionPairFolded	HalfConversionPairFolded
-variant	metal2vulkan::device::DriverWorkaround::InterpolationNeedsTheWholeQuad	InterpolationNeedsTheWholeQuad
 variant	metal2vulkan::device::DriverWorkaround::LoadsForwardedIntoLoops	LoadsForwardedIntoLoops
 variant	metal2vulkan::device::DriverWorkaround::LocalizedLoadsForwardedPastAtomicsAndCalls	LocalizedLoadsForwardedPastAtomicsAndCalls
 variant	metal2vulkan::device::DriverWorkaround::MemoryWritingFragmentsRunPerSample	MemoryWritingFragmentsRunPerSample
@@ -11870,6 +11869,7 @@ variant	metal2vulkan::error::Feature::DereferenceLoadedPointer	DereferenceLoaded
 variant	metal2vulkan::error::Feature::DescriptorCount	DescriptorCount
 variant	metal2vulkan::error::Feature::DirectCall	DirectCall
 variant	metal2vulkan::error::Feature::DivergentImplicitLod	DivergentImplicitLod
+variant	metal2vulkan::error::Feature::DivergentInterpolation	DivergentInterpolation
 variant	metal2vulkan::error::Feature::DualSourceBlending	DualSourceBlending
 variant	metal2vulkan::error::Feature::DynamicCall	DynamicCall
 variant	metal2vulkan::error::Feature::ExtendedRangeBlend	ExtendedRangeBlend(ExtendedRangeBlend)
