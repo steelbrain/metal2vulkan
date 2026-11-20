@@ -1349,7 +1349,7 @@ fn every_accepted_difference_a_case_names_is_an_entry() {
 
 /// Every answer Metal recorded to `heapTextureSizeAndAlignWithDescriptor:` is loosened on the new
 /// runtime's run, both of its numbers, by the entry saying they are the device's own
-/// (`texture_query::device_own_sizes`); the new runtime's side holds them to their property
+/// (`texture_query::DEVICE_OWN_SIZES`); the new runtime's side holds them to their property
 /// instead. An answer the allowances missed would compare the device's numbers with Metal's, which
 /// the entry says they are not; one they reach past would excuse a site that is no answer.
 #[test]

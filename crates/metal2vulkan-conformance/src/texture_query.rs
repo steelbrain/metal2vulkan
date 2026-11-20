@@ -16,7 +16,6 @@
 //! private formats (`Unspecialized`, the 4:2:2 pair, the two-plane extended-range pair) and one of
 //! Apple's private usage bits as readily as a public one.
 
-use crate::allowance::{Allowance, Justification, Loosening};
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
 
 /// The storage mode a case asks a resource for: three of Metal's four modes, and the suite's one
@@ -334,25 +333,13 @@ impl SizeAndAlign {
 
 /// `docs/API.md` section 10's entry for the new runtime's answer to
 /// `heapTextureSizeAndAlignWithDescriptor:`: the device's own size and alignment, not Metal's.
+///
+/// Each case that records the answer of a query at `case/<query>/size-and-align` names it at
+/// `case/<query>/size-and-align/Ok/*`, `Unchecked`: on the new runtime's run the two numbers are
+/// not compared with Metal's, and the runtime's side holds each to a property instead, answering
+/// the failure where it does not hold (the alignment a power of two; a Private query's texture
+/// placed at `align` in a heap of `align + size` bytes, and its first slice read back where the
+/// runtime moves the format's bytes). On the old runtime's run nothing is loosened. A refusal is
+/// not an answer, so a site where one side answers and the other refuses still diverges.
 pub const DEVICE_OWN_SIZES: &str =
     "the-new-runtime-s-heap-texture-size-and-alignment-are-the-device-s-own";
-
-/// The allowances of a case that records the answer to `heapTextureSizeAndAlignWithDescriptor:`
-/// of each of `queries` at its `leaf` (`case/<query>/<leaf>`): on the new runtime's run the two
-/// numbers of an answer are not compared with Metal's ([`DEVICE_OWN_SIZES`]), and the runtime's
-/// side holds each to a property instead, answering the failure where it does not hold (the
-/// alignment a power of two; a Private query's texture placed at `align` in a heap of
-/// `align + size` bytes, and its first slice read back where the runtime moves the format's
-/// bytes). On the old runtime's run nothing is loosened. A refusal is not an answer, so a site
-/// where one side answers and the other refuses still diverges.
-pub fn device_own_sizes(queries: &[HeapTextureQuery], leaf: &str) -> Vec<Allowance> {
-    (queries.iter())
-        .map(|query| {
-            Allowance::new(
-                format!("case/{}/{leaf}/Ok/*", query.site()),
-                Loosening::Unchecked,
-                Justification::new_runtime_accepted(DEVICE_OWN_SIZES),
-            )
-        })
-        .collect()
-}

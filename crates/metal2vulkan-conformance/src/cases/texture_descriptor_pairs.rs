@@ -160,6 +160,7 @@
 //! for it on any format but `R32Uint` (measured again this round on `RGBA8Unorm`), and the formats
 //! are the plain ones this tree already makes textures of.
 
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{made, Abort, Case, Input, MetalSource, Side};
 use crate::heap_query::{HeapSpec, QueriedResource};
 use crate::sparse_query::SparseTextureSpec;
@@ -629,12 +630,15 @@ impl Case for DescriptorPairs {
                 metal2vulkan_runtime::Degradation::MemorylessTextureBuffer.code(),
             ));
         }
-        // The new runtime's footprints are the device's own, held by their property and not by
-        // Metal's numbers (`texture_query::device_own_sizes`).
-        named.extend(crate::texture_query::device_own_sizes(
-            &self.queries,
-            site::QUERY,
-        ));
+        // The new runtime's answers are the device's own, held by their property and not by
+        // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
+        named.extend(self.queries.iter().map(|query| {
+            Allowance::new(
+                format!("case/{}/{}/Ok/*", query.site(), site::QUERY),
+                Loosening::Unchecked,
+                Justification::new_runtime_accepted(crate::texture_query::DEVICE_OWN_SIZES),
+            )
+        }));
         named
     }
 

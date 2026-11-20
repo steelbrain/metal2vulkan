@@ -36,6 +36,7 @@
 //! the runtime first, where an `Invalid` answer is a recorded value and nothing else, and only a
 //! table that answers no `Invalid` anywhere is ever handed to Metal.
 
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Input, MetalSource, Side};
 use crate::texture_query::{HeapTextureQuery as Q, Storage};
 use crate::transcript::{Node, Observed, Sites, Value};
@@ -379,11 +380,14 @@ impl Case for HeapSizeCase {
             false => Vec::new(),
         };
         // The new runtime's answers are the device's own, held by their property and not by
-        // Metal's numbers (`texture_query::device_own_sizes`).
-        named.extend(crate::texture_query::device_own_sizes(
-            &self.queries,
-            site::QUERY,
-        ));
+        // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
+        named.extend(self.queries.iter().map(|query| {
+            Allowance::new(
+                format!("case/{}/{}/Ok/*", query.site(), site::QUERY),
+                Loosening::Unchecked,
+                Justification::new_runtime_accepted(crate::texture_query::DEVICE_OWN_SIZES),
+            )
+        }));
         named
     }
 

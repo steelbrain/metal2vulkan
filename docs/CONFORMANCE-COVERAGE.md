@@ -38,8 +38,8 @@ Its limits, measured rather than asserted:
 | of the reachable, exercised by the suite's Metal leg | 815 |
 | of the reachable, not exercised | 163 |
 | share of the reachable exercised | 83% |
-| of those exercised, no case reaching it loosens anything | 556 |
-| of those exercised, a case reaching it loosens some site | 259 |
+| of those exercised, no case reaching it loosens anything | 523 |
+| of those exercised, a case reaching it loosens some site | 292 |
 | case modules | 177 |
 | committed recordings | 1317 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
@@ -536,11 +536,11 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `metal_run` | 1233 |
 | cases whose Metal answer is `carried` | 80 |
 | cases whose Metal answer is `never_returned` | 4 |
-| modules that loosen a measured value | 18 |
-| tolerances in all | 20 |
+| modules that loosen a measured value | 23 |
+| tolerances in all | 26 |
 | modules declaring a notice (loosening no value) | 143 |
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
-| justifications named | `Degradation`, `AcceptedDifference`, `NewRuntimeAccepted`, `WithoutCompression`, `NewRuntimeNotice` |
+| justifications named | `Degradation`, `NewRuntimeAccepted`, `AcceptedDifference`, `NewRuntimeNotice`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 132 |
 | `Side` methods the Metal leg reaches an SDK item through | 126 |
@@ -560,7 +560,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `alpha_coverage_pairs` | 17 | 17 | every field | 121 |
 | `argument_encoder_crossings` | 4 | 4 | every field | 58 |
 | `argument_encoders` | 5 | 5 | every field | 85 |
-| `astc_textures` | 42 | 42 | 1 tolerance(s): `Degradation` | 43 |
+| `astc_textures` | 42 | 42 | 2 tolerance(s): `Degradation`, `NewRuntimeNotice` | 43 |
 | `attribute_formats` | 2 | 2 | every field | 48 |
 | `attribute_strides` | 4 | 4 | every field | 51 |
 | `binary_archives` | 6 | 6 | every field | 41 |
@@ -611,7 +611,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `fence_orders` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 27 |
 | `fetch_ordered` | 6 | 6 | every field | 124 |
 | `format_copies` | 16 | 16 | every field | 48 |
-| `format_footprints` | 6 | 6 | every field | 21 |
+| `format_footprints` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 21 |
 | `fragment_imageblock_reflection` | 1 | 1 | every field | 74 |
 | `frame_chains` | 1 | 1 | every field | 148 |
 | `fresh_contents` | 87 | 87 | 1 tolerance(s): `Degradation` | 50 |
@@ -624,7 +624,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `half_write_nans` | 7 | 7 | every field | 33 |
 | `handler_waits` | 3 | 0 | every field | 0 |
 | `heap_facts` | 5 | 5 | every field | 35 |
-| `heap_metal_sizes` | 7 | 7 | every field | 15 |
+| `heap_metal_sizes` | 7 | 7 | 1 tolerance(s): `NewRuntimeAccepted` | 15 |
 | `host_detach` | 1 | 1 | every field | 18 |
 | `host_page_writes` | 4 | 4 | every field | 132 |
 | `indirect_command_depth` | 6 | 6 | every field | 199 |
@@ -649,7 +649,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `pass_attachment_pairs` | 2 | 2 | every field | 124 |
 | `pass_bound_pairs` | 1 | 1 | every field | 125 |
 | `pass_bytes` | 4 | 4 | every field | 26 |
-| `pass_sequence_actions` | 2 | 2 | every field | 140 |
+| `pass_sequence_actions` | 2 | 2 | 1 tolerance(s): `NewRuntimeAccepted` | 140 |
 | `pass_start_reads` | 14 | 14 | 2 tolerance(s): `AcceptedDifference` | 130 |
 | `pipeline_descriptors` | 3 | 3 | every field | 77 |
 | `pipeline_facts` | 9 | 9 | every field | 77 |
@@ -708,7 +708,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `texture_accesses` | 1 | 1 | every field | 20 |
 | `texture_buffer_fills` | 3 | 0 | every field | 0 |
 | `texture_buffer_tails` | 1 | 1 | every field | 58 |
-| `texture_descriptor_pairs` | 5 | 5 | every field | 57 |
+| `texture_descriptor_pairs` | 5 | 5 | 1 tolerance(s): `NewRuntimeAccepted` | 57 |
 | `texture_fills` | 54 | 2 | 1 tolerance(s): `Degradation` | 53 |
 | `texture_view_casts` | 5 | 5 | every field | 89 |
 | `texture_views` | 4 | 4 | every field | 48 |
@@ -733,7 +733,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `wide_points` | 1 | 1 | every field | 124 |
 | `ycbcr_gathers` | 4 | 4 | every field | 52 |
 | `ycbcr_minify` | 2 | 2 | every field | 52 |
-| `ycbcr_textures` | 2 | 2 | every field | 41 |
+| `ycbcr_textures` | 2 | 2 | 1 tolerance(s): `NewRuntimeAccepted` | 41 |
 
 ## Every implemented item
 

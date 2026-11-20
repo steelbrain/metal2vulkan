@@ -163,7 +163,7 @@
 //! the point: the gap was a number in a generated document and it is now a row of the report
 //! naming the format, the descriptor and both answers.
 
-use crate::allowance::Allowance;
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Input, MetalSource, Side, TextureRole, TextureSpec};
 use crate::texture_query::{HeapTextureQuery as Q, Storage};
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
@@ -598,12 +598,15 @@ impl Case for FootprintCase {
         if self.shared_texture_buffers {
             named.push(crate::replay::shared_memory_notice());
         }
-        // The new runtime's footprints are the device's own, held by their property and not by
-        // Metal's numbers (`texture_query::device_own_sizes`).
-        named.extend(crate::texture_query::device_own_sizes(
-            &self.queries,
-            site::QUERY,
-        ));
+        // The new runtime's answers are the device's own, held by their property and not by
+        // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
+        named.extend(self.queries.iter().map(|query| {
+            Allowance::new(
+                format!("case/{}/{}/Ok/*", query.site(), site::QUERY),
+                Loosening::Unchecked,
+                Justification::new_runtime_accepted(crate::texture_query::DEVICE_OWN_SIZES),
+            )
+        }));
         named
     }
 

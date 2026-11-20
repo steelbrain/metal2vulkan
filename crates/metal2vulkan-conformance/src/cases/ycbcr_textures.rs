@@ -50,7 +50,7 @@
 //! and one dispatch of 960 threads, and the one pair it hands Metal — format 500 over a `420v`
 //! surface — is the pair the committed probe already ran on this machine.
 
-use crate::allowance::Allowance;
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{made, Abort, Bindings, Case, Failure, Input, MetalSource, PlaneTexture, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -139,11 +139,16 @@ impl Case for FormatDescriptors {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The new runtime's answers are the device's own, held by their property and not by
-        // Metal's numbers (`texture_query::device_own_sizes`).
-        let queries: Vec<Q> = (self.queries().into_iter())
-            .map(|(query, _)| query)
-            .collect();
-        crate::texture_query::device_own_sizes(&queries, site::QUERY)
+        // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
+        (self.queries().into_iter())
+            .map(|(query, _)| {
+                Allowance::new(
+                    format!("case/{}/{}/Ok/*", query.site(), site::QUERY),
+                    Loosening::Unchecked,
+                    Justification::new_runtime_accepted(crate::texture_query::DEVICE_OWN_SIZES),
+                )
+            })
+            .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
