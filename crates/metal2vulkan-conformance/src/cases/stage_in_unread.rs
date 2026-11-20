@@ -881,32 +881,35 @@ impl Case for StageInUnread {
             let at = |site: &str| format!("{}/{site}", row.name);
             // A pipeline either side refuses is recorded at its own site and the sweep carries on,
             // so one refused row compares as a refusal there while every other row still compares.
-            let pipeline = probe(
+            // The row stops at its refusal: the sites after it are the other side's alone, which
+            // the comparison folds under the refusal (`compare`'s walk), so a refused row is one
+            // refusal and not a divergence for each leaf of a dispatch that never ran.
+            let Some(pipeline) = probe(
                 sites,
                 &at("pipeline"),
                 side.compute_pipeline_with_stage_input(library, ENTRY, &row.stage_input()),
                 |_| Value::Absent,
-            );
+            ) else {
+                continue;
+            };
             let out = made(sites, &at("buffer/out"), side.buffer(&output()))?;
-            if let Some(pipeline) = pipeline {
-                let command_buffer = made(
-                    sites,
-                    &at("dispatch"),
-                    side.dispatch_threads(
-                        pipeline,
-                        &Bindings::buffers(&[out, source]),
-                        &[REGION],
-                        [THREADS, 1, 1],
-                        [THREADS, 1, 1],
-                    ),
-                )?;
-                call(
-                    sites,
-                    &at("status"),
-                    side.wait(command_buffer),
-                    Clone::clone,
-                )?;
-            }
+            let command_buffer = made(
+                sites,
+                &at("dispatch"),
+                side.dispatch_threads(
+                    pipeline,
+                    &Bindings::buffers(&[out, source]),
+                    &[REGION],
+                    [THREADS, 1, 1],
+                    [THREADS, 1, 1],
+                ),
+            )?;
+            call(
+                sites,
+                &at("status"),
+                side.wait(command_buffer),
+                Clone::clone,
+            )?;
             let bytes = call(
                 sites,
                 &at("read-back"),

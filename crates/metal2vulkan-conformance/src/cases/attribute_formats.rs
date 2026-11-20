@@ -584,38 +584,39 @@ impl Case for AttributeFormats {
             let at = |site: &str| format!("{}/{site}", row.name());
             // A pipeline either side refuses is recorded at its own site and the sweep carries on,
             // so one refused row compares as a refusal there while every other row still compares.
-            // Its output then stays at the filler on that side, which is the same shape as every
-            // other row's: a refusal never arrives as a missing site.
-            let pipeline = probe(
+            // The row stops at its refusal: the sites after it are the other side's alone, which
+            // the comparison folds under the refusal (`compare`'s walk), so a refused row is one
+            // refusal and not a divergence for each leaf of a dispatch that never ran.
+            let Some(pipeline) = probe(
                 sites,
                 &at("pipeline"),
                 side.compute_pipeline_with_stage_input(library, ENTRY, &row.stage_input()),
                 |_| Value::Absent,
-            );
+            ) else {
+                continue;
+            };
             let output = made(
                 sites,
                 &at("buffer/output"),
                 side.buffer(&vec![FILLER; OUTPUT_BYTES]),
             )?;
-            if let Some(pipeline) = pipeline {
-                let command_buffer = made(
-                    sites,
-                    &at("dispatch"),
-                    side.dispatch_threads(
-                        pipeline,
-                        &Bindings::buffers(&[output, source]),
-                        &[REGION],
-                        [ROWS as u32, 1, 1],
-                        [ROWS as u32, 1, 1],
-                    ),
-                )?;
-                call(
-                    sites,
-                    &at("status"),
-                    side.wait(command_buffer),
-                    Clone::clone,
-                )?;
-            }
+            let command_buffer = made(
+                sites,
+                &at("dispatch"),
+                side.dispatch_threads(
+                    pipeline,
+                    &Bindings::buffers(&[output, source]),
+                    &[REGION],
+                    [ROWS as u32, 1, 1],
+                    [ROWS as u32, 1, 1],
+                ),
+            )?;
+            call(
+                sites,
+                &at("status"),
+                side.wait(command_buffer),
+                Clone::clone,
+            )?;
             let bytes = call(
                 sites,
                 &at("read-back"),

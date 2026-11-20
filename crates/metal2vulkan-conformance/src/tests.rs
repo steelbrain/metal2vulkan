@@ -1802,6 +1802,43 @@ fn a_typed_error_where_metal_answered_is_refused_not_divergent() {
     assert!(printed.contains("let the case run"), "{printed}");
 }
 
+/// A compute stage-in row our side refuses stops at its refusal. The sites the case records after
+/// it are Metal's alone, which the comparison folds under the refusal, so the row reads as the
+/// refusal and not as a divergence for each leaf of a dispatch that never ran: before the rows
+/// stopped there, a refused row's read-back stayed at the filler and every one of its attributes,
+/// its thread index and its tail read as divergent (390 sites over the two cases on lavapipe).
+#[test]
+fn a_refused_stage_in_row_is_its_refusal_alone() {
+    let mut replayed_cases = 0;
+    for case in crate::cases::all() {
+        if !matches!(
+            case.name(),
+            "attribute-format-fetches" | "stage-in-unread-attributes"
+        ) {
+            continue;
+        }
+        let recording = crate::recording::read(case.name()).unwrap();
+        let mut side = StubSide::new(Vec::new()).refusing(
+            "compute_pipeline_with_stage_input",
+            Failure::named(
+                "Error::Unsupported",
+                "the kernel reads an input the compute encoder does not supply yet",
+            ),
+        );
+        let replayed = replay_against(case.as_ref(), &mut side, &recording).unwrap();
+        let Verdict::Refused { at, .. } = &replayed.verdict else {
+            panic!("{}: not refused alone: {}", case.name(), replayed.verdict);
+        };
+        assert!(
+            at.len() > 1 && at.iter().all(|site| site.ends_with("/pipeline")),
+            "{}: {at:?}",
+            case.name()
+        );
+        replayed_cases += 1;
+    }
+    assert_eq!(replayed_cases, 2);
+}
+
 /// A refusal whose recording never took a validated leg says so, rather than reading as a case
 /// Metal's validation let through. The two are different facts and the report must tell them
 /// apart: one is a bug of ours, the other is a missing measurement.
