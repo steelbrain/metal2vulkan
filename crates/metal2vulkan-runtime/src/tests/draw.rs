@@ -145,7 +145,7 @@ pub(crate) mod on_device {
     /// The side of the targets.
     pub(crate) const SIDE: u32 = 8;
     /// The constexpr sampler's index the test gives `sampled_fragment`.
-    const CONSTEXPR: u32 = 3;
+    pub(crate) const CONSTEXPR: u32 = 3;
 
     /// The library of `ll`, or None where `llvm-as` is missing.
     pub(crate) fn library(ll: &Path) -> Option<Library> {

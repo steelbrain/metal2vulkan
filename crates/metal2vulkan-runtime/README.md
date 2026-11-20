@@ -1339,7 +1339,11 @@ made, with no lock, and never rewritten for layouts.
   stops them: an empty range of levels or slices, or one past the parent's
   (`Refusal::TextureViewRange`), a slice count the view's type does not take
   (`Refusal::TextureViewSlices`), and another pixel format of a texture made without
-  `PixelFormatView` usage (`Refusal::TextureViewFormat`).
+  `PixelFormatView` usage (`Refusal::TextureViewFormat`). A view of another format of a texture
+  without `PixelFormatView` usage that the image's own Vulkan format holds, its component mapping
+  alone another (an `A8Unorm` view of an `R8Unorm` texture, both `R8_UNORM`), which Metal's
+  validation stops, is made, as plain Metal makes it; one that needs another Vulkan format stays
+  refused, as making every image mutable for it would cost every texture.
 - `Device::new_texture_for_views(descriptor)` has no Metal counterpart of its own: a texture as
   `new_texture` makes it, of any usage, with no index. Shaders reach it only through its views,
   each at an index of its own, which a view of a texture shaders reach takes as above. It is the

@@ -13,7 +13,10 @@
 //! combination of it over its parent's, in its descriptor and its resource ID's word, over a
 //! texture of any usage. A view of another pixel format Metal views the texture as (its sRGB
 //! sibling, or with `PixelFormatView` usage a same-size colour format) reads its parent's bytes,
-//! and one of a format Metal does not view it as is `Refusal::TextureViewFormat`; a texture of
+//! and one of a format Metal does not view it as is `Refusal::TextureViewFormat`. Without that
+//! usage, a view the image's own Vulkan format holds is made as plain Metal makes it (an `A8Unorm`
+//! view of an `R8Unorm` texture, which a draw samples as its parent's red byte in alpha), and one
+//! that needs another Vulkan format is `Refusal::TextureViewFormat`; a texture of
 //! Metal's unknown usage (0) takes every usage, `PixelFormatView`'s views among them. Every gauge
 //! comes back to zero with the device, the views' image views among them. A view of a Managed
 //! texture writes the texture's own named bytes. A command buffer keeps a view it uses after its
@@ -29,11 +32,14 @@ mod on_device {
 
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::{each_device, finished, shared_event, within};
+    use crate::tests::draw::on_device::{
+        descriptor, examples, pass, read, run, target, vertices, Buffers, CONSTEXPR, SIDE,
+    };
     use crate::{
         Buffer, BufferLayout, BytesPlace, CommandQueue, Device, Error, Gap, IndexClass,
-        MemoryClass, PixelFormat, PrecisionNote, Refusal, Region, StorageMode, Texture,
-        TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType,
-        TextureUsage, TextureViewKind,
+        MemoryClass, PixelFormat, PrecisionNote, PrimitiveType, Refusal, Region, StorageMode,
+        Texture, TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels,
+        TextureType, TextureUsage, TextureViewKind,
     };
     use metal2vulkan::metal::resource_word::TextureWord;
 
@@ -585,6 +591,87 @@ mod on_device {
                     }
                 }
             }
+        });
+    }
+
+    /// An `A8Unorm` view of an `R8Unorm` texture of `ShaderRead` usage alone, which Metal's
+    /// validation stops and plain Metal makes (probe `texture_view_rules.m`, case `r8-a8`, an
+    /// Apple M3 Max under macOS 27.0.1, job m3-max-59523), is made in the image's own `R8_UNORM`:
+    /// each pixel of a draw sampling it reads its parent's red byte as alpha, `(0, 0, 0, r)`. An
+    /// `R8Uint` view of the same texture, which another Vulkan format holds, stays
+    /// `Refusal::TextureViewFormat`.
+    #[test]
+    fn every_device_samples_an_a8_view_of_an_r8_texture_as_its_red_byte_in_alpha() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "sampled_fragment", PixelFormat::RGBA8Unorm);
+        each_device("a8_view_of_r8", |name, _, device| {
+            for (class, first) in [(IndexClass::Texture, 4096), (IndexClass::Sampler, 1)] {
+                (device.grant_indices(class, first, 4))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            let state = (device.new_render_pipeline_state(&d, |_| Ok(vec![CONSTEXPR])))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut sd =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::R8Unorm, SIDE, SIDE);
+            sd.usage = TextureUsage::SHADER_READ;
+            sd.storage_mode = StorageMode::Shared;
+            let parent = (device.new_texture(&sd, Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let red: Vec<u8> = (0..SIDE * SIDE)
+                .map(|i| match i {
+                    0 => 0,
+                    i if i == SIDE * SIDE - 1 => 255,
+                    i => (i * 37 + 11) as u8,
+                })
+                .collect();
+            let whole = Region {
+                origin: [0; 3],
+                size: [SIDE, SIDE, 1],
+            };
+            let row = u64::from(SIDE);
+            (parent.replace_region(whole, 0, 0, crate::HostBytes::from(&red[..]), row, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let view = |format| {
+                parent.new_texture_view(format, TextureType::Type2D, 0..1, 0..1, Some(4097))
+            };
+            assert!(
+                matches!(
+                    view(PixelFormat::R8Uint),
+                    Err(Error::Refused(Refusal::TextureViewFormat { .. }))
+                ),
+                "{name}: an R8Uint view without PixelFormatView usage"
+            );
+            let alpha = (view(PixelFormat::A8Unorm))
+                .unwrap_or_else(|error| panic!("{name}: the A8Unorm view: {error}"));
+            assert_eq!(
+                alpha.descriptor().pixel_format,
+                PixelFormat::A8Unorm,
+                "{name}"
+            );
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_fragment_texture(Some(&alpha), 0));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let expected: Vec<u8> = red.iter().flat_map(|&r| [0, 0, 0, r]).collect();
+            assert_eq!(read(&color, 4), expected, "{name}: each pixel (0, 0, 0, r)");
+            println!("{name}: an A8Unorm view of an R8Unorm texture read its red bytes as alpha");
         });
     }
 

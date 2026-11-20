@@ -586,17 +586,20 @@ pub enum Refusal {
         slice_count: u32,
     },
     /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a pixel format Metal does
-    /// not view the texture as: without `PixelFormatView` usage, any but its own, its sRGB sibling
-    /// and a combined depth and stencil format's stencil
-    /// (`metal2vulkan::metal::format::views_without_usage`); with it, any but those and the
-    /// uncompressed colour formats of the same bytes a texel
-    /// (`metal2vulkan::metal::format::views_with_usage`).
+    /// not view the texture as: with `PixelFormatView` usage, any but its own, its sRGB sibling, a
+    /// combined depth and stencil format's stencil and the uncompressed colour formats of the same
+    /// bytes a texel (`metal2vulkan::metal::format::views_with_usage`); without it, also those
+    /// colour formats but one held in the image's own Vulkan format, its component mapping alone
+    /// another, which Metal's validation stops and the runtime makes, as plain Metal makes it.
     ///
     /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the
-    /// conformance crate, job m3-max-43677: Metal's validation layer stops an `R32Uint` view of an
-    /// `RGBA8Unorm` texture of `ShaderRead` usage, `Texture View Validation`, and makes it where
-    /// the usage adds `PixelFormatView`; Apple's `makeTextureView` and
-    /// `MTLTextureUsage.pixelFormatView` pages state the rest).
+    /// conformance crate, jobs m3-max-43677 and m3-max-59523: Metal's validation layer stops a
+    /// view of another format of a texture of `ShaderRead` usage, `R32Uint`, `RGBA8Uint`,
+    /// `BGRA8Unorm` and `BGRA8Unorm_sRGB` of `RGBA8Unorm`, `A8Unorm`, `R8Snorm` and `R8Uint` of
+    /// `R8Unorm`, `R16Unorm` of `RG8Unorm`, "texture usage (0x01) doesn't specify
+    /// MTLTextureUsagePixelFormatView (0x10)", and makes it where the usage adds
+    /// `PixelFormatView`; plain Metal makes each, a blit out of it reading the texture's bytes;
+    /// Apple's `makeTextureView` and `MTLTextureUsage.pixelFormatView` pages state the rest).
     TextureViewFormat {
         /// The texture's pixel format.
         texture: PixelFormat,

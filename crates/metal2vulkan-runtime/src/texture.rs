@@ -3488,7 +3488,10 @@ impl Texture {
     /// Err: [`Refusal::TextureViewRange`] for an empty range of levels or slices or one past the
     /// texture's, [`Refusal::TextureViewSlices`] for a slice count the view's type does not take,
     /// and [`Refusal::TextureViewFormat`] for another pixel format of a texture made with a usage
-    /// that is not empty and lacks `PixelFormatView`, as Metal's validation stops them;
+    /// that is not empty and lacks `PixelFormatView`, as Metal's validation stops them, but one
+    /// held in the texture image's own Vulkan format, its component mapping alone another (an
+    /// `A8Unorm` view of an `R8Unorm` texture), which Metal's validation stops and is made, as
+    /// plain Metal makes it;
     /// [`Gap::TextureView`] for another kind Metal makes, naming it;
     /// [`Refusal::TextureIndex`], [`Refusal::IndicesNotGranted`] as [`Device::new_texture`];
     /// [`Error::Vulkan`] where a view cannot be made.
@@ -3564,17 +3567,21 @@ impl Texture {
             }));
         }
         let gap = |kind| Err(Error::Unsupported(Gap::TextureView { kind }));
-        let viewable = match p.usage.is_empty() || p.usage.contains(TextureUsage::PIXEL_FORMAT_VIEW)
-        {
-            true => formats::views_with_usage(p.pixel_format, pixel_format),
-            false => formats::views_without_usage(p.pixel_format, pixel_format),
-        };
-        if !viewable {
-            return Err(Error::Refused(Refusal::TextureViewFormat {
+        let refused = || {
+            Err(Error::Refused(Refusal::TextureViewFormat {
                 texture: p.pixel_format,
                 view: pixel_format,
-            }));
+            }))
+        };
+        // Without `PixelFormatView` usage Metal's validation stops a view of any other format but
+        // the sRGB sibling and a combined format's stencil, and plain Metal makes it of any format
+        // the usage would view: such a view is made where its Vulkan format is the image's own.
+        let flagged = p.usage.is_empty() || p.usage.contains(TextureUsage::PIXEL_FORMAT_VIEW);
+        if !formats::views_with_usage(p.pixel_format, pixel_format) {
+            return refused();
         }
+        let own_format_only =
+            !flagged && !formats::views_without_usage(p.pixel_format, pixel_format);
         let every_slice = slice_count == self::slices(p);
         let fits = match texture_type {
             T::Type2D => slice_count == 1,
@@ -3624,9 +3631,12 @@ impl Texture {
         // makes of a texture's own descriptor alone.
         let (shape, usage) = checked(&d)?;
         let mut plan = form(&inner.core, &d, usage)?;
+        let image = &inner.image;
+        if own_format_only && plan.format != image.format {
+            return refused();
+        }
         // Another format is built where the image lists it; its views take the image's usage
         // that the format's features hold.
-        let image = &inner.image;
         let views_usage = match plan.format == image.format {
             true => None,
             false if image.view_formats.contains(&plan.format) => {
