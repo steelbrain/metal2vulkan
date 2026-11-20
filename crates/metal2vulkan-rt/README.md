@@ -1439,11 +1439,12 @@ made, with no lock, and never rewritten for layouts.
   record at most 4,096 calls and keep at most 64 MiB on their own account: the staging buffers of
   copies larger than the staging region, and the textures and blocks released while they held
   them. A call that finds them past either submits them and waits for them to complete before
-  recording, so nothing grows without a commit. The release of memory another API shares that
-  they hold (a surface plane's image, an exported block) submits them at once, with no wait, so it
-  is freed with no later call; any other release they hold waits for the next submission or the
-  bound. `Metrics::held_releases` and `held_release_bytes` count every release they held, and
-  `held_release_starts` those that were the first since they came to hold the object. While
+  recording, so nothing grows without a commit. The release of an object they hold that is
+  shared outside rt (a surface plane's image, or an exported block) submits them at once, with no
+  wait, so it is freed with no later call; any other release they hold waits for the next
+  submission or the bound. `Metrics::held_releases` and `held_release_bytes` count every release
+  they held, and `held_release_starts` those that were the first since they came to hold the
+  object. While
   fewer than three of a queue's submissions are not yet seen complete, each of its command buffers
   goes at once, alone. While three are, the ones committed meanwhile are held in one group, each
   scheduled as it joins, and the group goes when it holds sixteen, when a completion leaves fewer
