@@ -31,7 +31,8 @@ const OVER_NANOS: [u64; 3] = [1_000_000, 5_000_000, 20_000_000];
 const LONG_SUBMIT_CALL: u64 = 100_000_000;
 
 /// The buckets of each stage histogram of [`Metrics`]
-/// ([`commit_to_scheduled`](Metrics::commit_to_scheduled) and the three after it).
+/// ([`commit_to_scheduled`](Metrics::commit_to_scheduled) and the three after it, and
+/// [`event_holds`](Metrics::event_holds)).
 pub(crate) const STAGE_BUCKETS: usize = 23;
 
 /// The stage histogram bucket of a span of `nanos` nanoseconds: 0 under 2 us, `i` from 2^i us
@@ -426,6 +427,7 @@ struct Atomics {
     queue_lock_wait_max_nanos: AtomicU64,
     /// Each [`Stage`]'s histogram, at its index.
     stages: [[AtomicU64; STAGE_BUCKETS]; 4],
+    event_holds: [AtomicU64; STAGE_BUCKETS],
     passes: AtomicU64,
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
@@ -737,6 +739,12 @@ impl Counters {
     /// ([`Metrics::commit_to_scheduled`] and the three after it).
     pub(crate) fn stage(&self, stage: Stage, nanos: u64) {
         self.atomics.stages[stage as usize][stage_bucket(nanos)].fetch_add(1, Relaxed);
+    }
+
+    /// A segment the submit thread held `nanos` nanoseconds for an event's value
+    /// ([`Metrics::event_holds`]).
+    pub(crate) fn event_hold(&self, nanos: u64) {
+        self.atomics.event_holds[stage_bucket(nanos)].fetch_add(1, Relaxed);
     }
 
     /// An allocation of `bytes` made for blocks ([`Metrics::block_bytes_made`]).
@@ -1205,6 +1213,7 @@ impl Counters {
             scheduled_to_gpu_start: stage(Stage::ScheduledToGpuStart),
             gpu_run: stage(Stage::GpuRun),
             gpu_end_to_handler: stage(Stage::GpuEndToHandler),
+            event_holds: (a.event_holds.each_ref()).map(|n| n.load(Relaxed)),
             passes: a.passes.load(Relaxed),
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
@@ -1474,6 +1483,15 @@ pub struct Metrics {
     /// round's command buffers in order, so the span holds the earlier ones' retirements and
     /// handlers in the round.
     pub gpu_end_to_handler: [u64; STAGE_BUCKETS],
+    /// Segments the submit thread held for an event's value that neither the host had set nor a
+    /// signal submitted to the driver promised: a value the host sets later, or one a command
+    /// buffer not yet submitted signals. A wait whose signal is submitted is not held: it goes to
+    /// the driver with its segment's submission. By the span from when the submit thread, with
+    /// nothing left to stage, found the segment waiting, to its staging once the value was set or
+    /// its signal submitted, in the buckets of
+    /// [`commit_to_scheduled`](Self::commit_to_scheduled). Counted as each is staged; one that
+    /// ends unstaged counts none.
+    pub event_holds: [u64; STAGE_BUCKETS],
     /// Encoders recorded: compute, blit and render.
     pub passes: u64,
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each

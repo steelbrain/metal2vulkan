@@ -56,7 +56,7 @@ use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, CopyIn, Modified};
 use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Pending, Segment};
 use crate::complete;
-use crate::counters::{Gauge, Metric, Site};
+use crate::counters::{Counters, Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
@@ -236,6 +236,10 @@ struct Fifo {
     /// The progress value at which the last command buffer it ended with nothing held retires:
     /// the next retires no earlier.
     behind: u64,
+    /// Its head's segment the submit thread holds for an event's value neither set nor promised
+    /// by a submitted signal, as the command buffer's number and the segment's index, and the
+    /// host time the thread, with nothing left to stage, found it so ([`WorkState::mark_holds`]).
+    held_since: Option<(u64, usize, u64)>,
 }
 
 struct Entry {
@@ -1325,6 +1329,7 @@ impl WorkState {
                     in_flight: VecDeque::new(),
                     send_through: 0,
                     behind: 0,
+                    held_since: None,
                 });
                 self.fifos.len() - 1
             }
@@ -1369,6 +1374,27 @@ impl WorkState {
         };
         entry.pending = Some(pending);
         entry.error = error;
+    }
+
+    /// With nothing left to stage at `now`: each queue's head whose next segment waits for an
+    /// event's value neither set nor promised by a submitted signal is held from `now`, where it
+    /// was not held already ([`Metrics::event_holds`](crate::Metrics::event_holds)).
+    fn mark_holds(&mut self, now: u64) {
+        for fifo in &mut self.fifos {
+            let Some(Entry {
+                pending: Some(pending),
+                error: None,
+                ..
+            }) = fifo.entries.front()
+            else {
+                continue;
+            };
+            let at = (pending.seq, pending.next);
+            let marked = (fifo.held_since).is_some_and(|(seq, next, _)| (seq, next) == at);
+            if !marked && !ready(&pending.gpu.segments[pending.next]) {
+                fifo.held_since = Some((at.0, at.1, now));
+            }
+        }
     }
 
     /// The FIFO whose head goes next: of the committed heads that are ended or whose next segment
@@ -1436,6 +1462,7 @@ impl WorkState {
         &mut self,
         now: u64,
         busy: bool,
+        counters: &Counters,
         joined: &mut Vec<Joined>,
         ended: &mut Vec<Ended>,
     ) -> Step {
@@ -1577,6 +1604,12 @@ impl WorkState {
             }
         }
         let staged = stage(segment, &mut group.watch);
+        let at = (pending.seq, pending.next);
+        if let Some((.., since)) =
+            (fifo.held_since).take_if(|&mut (seq, next, _)| (seq, next) == at)
+        {
+            counters.event_hold(now.saturating_sub(since));
+        }
         // An event's signal goes at once: nothing waits on it behind a held group. So does a
         // presenting command buffer's signal of the consumer's semaphore, which its present waits on
         // once the command buffer is scheduled.
@@ -1915,10 +1948,14 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
     let mut sent = false;
     loop {
         let busy = core.done.busy();
-        let index = match state.step(times::host_time(), busy, &mut joined, &mut ended) {
+        let now = times::host_time();
+        let index = match state.step(now, busy, &core.counters, &mut joined, &mut ended) {
             Step::Idle => match state.unheld(busy) {
                 Some(index) => index,
-                None => break,
+                None => {
+                    state.mark_holds(now);
+                    break;
+                }
             },
             Step::Staged => continue,
             Step::Goes(index) => index,
