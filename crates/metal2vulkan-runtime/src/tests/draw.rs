@@ -3204,4 +3204,126 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             println!("{name}: each state drew its own sample count");
         });
     }
+
+    /// A descriptor's private sample mask keeps only its samples' colours, as Metal ANDs it with
+    /// the coverage (`GraphicsState::sample_mask`): `spc_num_samples` returns the sample count
+    /// into an `R32Uint` `SIDE` square cleared to 0, covered by `ido_full`'s fullscreen triangle.
+    /// At one sample the state of a mask of 0 leaves every pixel at its clear, where the state of
+    /// the same functions without a mask, made first on the same device, draws 1: a mask is part
+    /// of the content, so neither state's pipeline serves the other. At 4 samples a mask of
+    /// `0b0101` writes samples 0 and 2 alone, each copied out by `ido_samples`.
+    #[test]
+    fn every_device_keeps_only_the_samples_of_a_private_sample_mask() {
+        let (Some(counts), Some(order)) = (
+            library(&engine_dir().join("spc_num_samples.ll")),
+            library(&engine_dir().join("ido_draw_order.ll")),
+        ) else {
+            return;
+        };
+        let function = |library: &Library, name: &str| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let descriptor = |samples, mask| {
+            let mut d = RenderPipelineDescriptor::new(function(&order, "ido_full"));
+            d.fragment = Some(function(&counts, "spc_num_samples"));
+            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
+            d.raster_sample_count = samples;
+            d.private.sample_mask = mask;
+            d
+        };
+        let (unmasked, masked, odd) = (
+            descriptor(1, u64::MAX),
+            descriptor(1, 0),
+            descriptor(4, 0b0101),
+        );
+        each_device("private_sample_mask", |name, _, device| {
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            for (d, expected) in [(&unmasked, 1), (&masked, 0)] {
+                let made = state(name, &device, d);
+                let flat = target(&device, PixelFormat::R32Uint, TextureUsage::RENDER_TARGET);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&flat, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                draw(encoder.set_render_pipeline_state(&made));
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let bytes = read(&flat, 4);
+                let words: Vec<u32> = (bytes.as_chunks::<4>().0.iter())
+                    .map(|&word| u32::from_le_bytes(word))
+                    .collect();
+                let mask = d.private.sample_mask;
+                assert_eq!(
+                    words,
+                    [expected; (SIDE * SIDE) as usize],
+                    "{name}: one sample under the mask {mask:#x}"
+                );
+            }
+
+            (device.grant_indices(IndexClass::Texture, 1, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut td = TextureDescriptor::new(
+                TextureType::Type2DMultisample,
+                PixelFormat::R32Uint,
+                SIDE,
+                SIDE,
+            );
+            td.sample_count = 4;
+            td.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+            td.storage_mode = StorageMode::Private;
+            let samples = match device.new_texture(&td, Some(1)) {
+                Ok(samples) => samples,
+                Err(Error::Limit(crate::Limit::TextureSamples { .. })) => {
+                    println!("{name}: one sample masked; no 4-sample R32Uint target to mask four");
+                    return;
+                }
+                Err(error) => panic!("{name}: {error}"),
+            };
+            let four = state(name, &device, &odd);
+            let function = order.function("ido_samples").expect("the kernel");
+            let kernel = (device.new_compute_pipeline_state(
+                &crate::ComputePipelineDescriptor::new(StageSource::Function(
+                    FunctionDescriptor::new(function),
+                )),
+                |samplers| Ok(vec![0; samplers.len()]),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut buffers = Buffers::new(&device);
+            let out = buffers.of(&device, &[0xffu8; 4 * 4 * (SIDE * SIDE) as usize]);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&samples, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_render_pipeline_state(&four));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            encoder.end_encoding();
+            let mut compute = (command_buffer.compute_command_encoder(crate::DispatchType::Serial))
+                .expect("an encoder");
+            compute
+                .set_compute_pipeline_state(&kernel)
+                .expect("the state");
+            compute.set_texture(Some(&samples), 0).expect("a texture");
+            compute.set_buffer(Some(&out), 0, 0).expect("a buffer");
+            (compute.dispatch_threadgroups([1, 1, 1], [SIDE, SIDE, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            compute.end_encoding();
+            run(name, &command_buffer);
+            let contents = out.contents().expect("a Shared buffer");
+            // SAFETY: the buffer holds four words for each of the `SIDE` square's pixels, which
+            // the finished dispatch wrote and whose writes reach the host.
+            let words = unsafe {
+                std::slice::from_raw_parts(
+                    contents.as_ptr().cast::<u32>(),
+                    4 * (SIDE * SIDE) as usize,
+                )
+            };
+            for (pixel, got) in words.chunks(4).enumerate() {
+                assert_eq!(got, [4, 0, 4, 0], "{name}: pixel {pixel}'s samples");
+            }
+            drop(samples);
+            println!("{name}: each mask kept its own samples");
+        });
+    }
 }

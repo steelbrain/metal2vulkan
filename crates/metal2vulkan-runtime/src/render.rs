@@ -237,7 +237,8 @@ struct Module {
 }
 
 /// The fixed-function state of a content's `VkPipeline`s, as Vulkan takes it: the descriptor's
-/// vertex layout, attachments, blending and sample count, as the translator states them.
+/// vertex layout, attachments, blending, sample count and private sample mask, as the translator
+/// states them.
 struct Fixed {
     bindings: Vec<vk::VertexInputBindingDescription>,
     /// Each instance-rate binding's divisor other than 1, a per-instance step rate the translator
@@ -249,6 +250,10 @@ struct Fixed {
     alpha_to_coverage: bool,
     /// `alphaToOneEnabled`, the device's own (`alphaToOne`, which the floor requires).
     alpha_to_one: bool,
+    /// The descriptor's private sample mask and sample coverage as one mask of the samples the
+    /// draws write (`GraphicsState::sample_mask`), Vulkan's `pSampleMask`; `None` where it keeps
+    /// every sample or the fragment function applies it itself.
+    sample_mask: Option<u32>,
     blends: Vec<vk::PipelineColorBlendAttachmentState>,
     /// The logic operation the translator states (private render state), the device's own
     /// (`logicOp`, which the floor requires); `None` with the operation off, or copy or no-op,
@@ -290,8 +295,9 @@ impl crate::Device {
     /// Built: one vertex and at most one fragment function, colour attachments of any format the
     /// translator maps for the device, a depth and a stencil attachment of a format the device
     /// renders depth or stencil in (its format query, through the translator's mapping; another
-    /// is the translator's refusal), one sample, and every blend state,
-    /// write mask and vertex descriptor of static strides Vulkan's fixed-function state takes with
+    /// is the translator's refusal), the raster sample count with the private sample mask and
+    /// sample coverage, the private logic operation, and every blend state, write mask and
+    /// vertex descriptor of static strides Vulkan's fixed-function state takes with
     /// what device creation enables; what else the translator states is refused at the creation,
     /// by kind.
     ///
@@ -767,6 +773,7 @@ impl Fixed {
             samples: vk::SampleCountFlags::from_raw(g.rasterization_samples.as_raw()),
             alpha_to_coverage: g.alpha_to_coverage,
             alpha_to_one: g.alpha_to_one,
+            sample_mask: g.sample_mask,
             blends,
             logic_op: (g.logic_op).map(|op| vk::LogicOp::from_raw(op.as_raw())),
             colors,
@@ -1101,10 +1108,20 @@ impl RenderCompiled {
         if topology == vk::PrimitiveTopology::LINE_LIST && !lines_by_device_rule(fixed) {
             rasterization = rasterization.push_next(&mut line);
         }
-        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+        // The private sample mask, which the translator states (`GraphicsState::sample_mask`)
+        // where Vulkan's mask keeps the samples Metal's keeps. Its one word is the first 32
+        // samples'; Vulkan's
+        // `pSampleMask` "has a length equal to ⌈rasterizationSamples / 32⌉ words", and a second
+        // keeps every sample past them.
+        let words = fixed.sample_mask.map(|mask| [mask, u32::MAX]);
+        let count = fixed.samples.as_raw().div_ceil(32) as usize;
+        let mut multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(fixed.samples)
             .alpha_to_coverage_enable(fixed.alpha_to_coverage)
             .alpha_to_one_enable(fixed.alpha_to_one);
+        if let Some(words) = &words {
+            multisample = multisample.sample_mask(&words[..count.min(words.len())]);
+        }
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default();
         let mut blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&fixed.blends);
         if let Some(op) = fixed.logic_op {
