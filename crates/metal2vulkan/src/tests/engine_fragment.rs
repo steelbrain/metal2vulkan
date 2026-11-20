@@ -4205,8 +4205,10 @@ fn a_returned_stencil_and_sample_mask_are_tested_in_the_shader() {
             assert_eq!(
                 base.plan(&radv, &shape(tests)).map(|_| ()),
                 Err(BindError::Unsupported(
-                    crate::error::Unsupported::not_implemented(Feature::FramebufferFetch)
-                        .at_attachment(crate::error::Attachment::Depth)
+                    crate::error::Unsupported::not_implemented(
+                        Feature::MultisampledShaderDepthTest
+                    )
+                    .at_attachment(crate::error::Attachment::Depth)
                 )),
                 "{name} at 4x under {tests:?}"
             );

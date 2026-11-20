@@ -532,7 +532,8 @@ fn a_gated_off_control_point_field_reads_zero_unfetched() {
 }
 
 /// A `ushort` `[[patch_id]]` or `[[instance_id]]` holds the low 16 bits of its 32-bit patch input
-/// zero-extended: each load of the input is masked.
+/// zero-extended: each load of the input is cleared past them, by `OpBitFieldUExtract` of offset 0
+/// and count 16.
 #[test]
 fn ushort_patch_and_instance_indices_are_masked() {
     let Some(bc) = fixture() else { return };
@@ -541,12 +542,15 @@ fn ushort_patch_and_instance_indices_are_masked() {
         let a = compile(&bc, "tess_short_ids", p, None).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let (_, words) = link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let decorations = instructions(&words, crate::spv::Op::Decorate);
-        let masks: Vec<u32> = instructions(&words, crate::spv::Op::Constant)
-            .iter()
-            .filter(|c| c.get(2) == Some(&0xffff))
-            .map(|c| c[1])
-            .collect();
-        let ands = instructions(&words, crate::spv::Op::BitwiseAnd);
+        let constants = |value: u32| -> Vec<u32> {
+            instructions(&words, crate::spv::Op::Constant)
+                .iter()
+                .filter(|c| c.get(2) == Some(&value))
+                .map(|c| c[1])
+                .collect()
+        };
+        let (zeros, sixteens) = (constants(0), constants(16));
+        let extracts = instructions(&words, crate::spv::Op::BitFieldUExtract);
         let loads = instructions(&words, crate::spv::Op::Load);
         for location in [
             TessellationStage::PATCH_INDEX_LOCATION,
@@ -572,10 +576,10 @@ fn ushort_patch_and_instance_indices_are_masked() {
             );
             for x in loaded {
                 assert!(
-                    ands.iter().any(|a| {
-                        (a[2] == x && masks.contains(&a[3])) || (a[3] == x && masks.contains(&a[2]))
+                    extracts.iter().any(|e| {
+                        e[2] == x && zeros.contains(&e[3]) && sixteens.contains(&e[4])
                     }),
-                    "{stem}: a load of location {location} is not masked to 16 bits"
+                    "{stem}: a load of location {location} is not cleared past 16 bits"
                 );
             }
         }
