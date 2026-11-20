@@ -319,7 +319,6 @@ impl Case for BufferTargetClear {
         // One set of bytes is loosened: a `DontCare` row's texels, which Apple's page lets the GPU
         // replace with arbitrary data (`DONT_CARE_TEXELS`, `dont_care_texels`). The padding and the
         // bytes before and after the target compare exactly, Metal's against ours.
-        //
         self.row.dont_care_texels()
     }
 

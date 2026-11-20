@@ -245,7 +245,6 @@ impl Case for ExtendedRangeBlend {
         // the device's arithmetic, so every row announces `extended-range-blend-source`, a native
         // note the suite declares for every case (`crate::replay::NATIVE_NOTES`); the codes still
         // compare exactly, and a site the device's arithmetic moves is a known gap.
-        //
         vec![crate::replay::notice_allowance(
             Degradation::HalfOutputFastMathBlend.code(),
         )]
