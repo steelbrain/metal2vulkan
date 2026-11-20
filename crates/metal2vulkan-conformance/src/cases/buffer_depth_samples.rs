@@ -6,9 +6,10 @@
 //! `offset + y * bytesPerRow + (x * n + s) * bpp`, the samples outside a region keep the clear, and
 //! the copy back out returns the buffer bit for bit" — measured by a probe on an **Apple M4**.
 //! Every call on the path is public: a render pass that clears and draws nothing,
-//! `copyFromBuffer:toTexture:` into the depth or stencil aspect, a dispatch that reads every sample,
-//! and `copyFromTexture:toBuffer:` back. So record mode **runs** these cases on the oracle, and the
-//! recordings hold Metal's own numbers on an Apple M3 Max, macOS 27.0.1. Nothing is carried.
+//! `copyFromBuffer:toTexture:` into the depth or stencil aspect, a dispatch that reads every
+//! sample, and `copyFromTexture:toBuffer:` back. So record mode **runs** these cases on the oracle,
+//! and the recordings hold Metal's own numbers on an Apple M3 Max, macOS 27.0.1. Nothing is
+//! carried.
 //!
 //! **One case per row**, as the multisample fill family does, so a sample count the venue does not
 //! render stops that row alone and the suite counts it
