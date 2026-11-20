@@ -1032,7 +1032,9 @@ fn every_kind_is_a_catalogued_precision_note() {
 
 #[test]
 fn a_notice_we_announce_and_metal_does_not_is_divergent_until_it_is_named() {
-    let kind = Degradation::ALL[0];
+    // Not one of the device's native answers, which the suite declares for every case
+    // ([`crate::replay::NATIVE_NOTES`]).
+    let kind = Degradation::GradFromBias;
     let bytes = words(&[1, 2]);
     let plain = WordsCase::new("words", 2);
     let recording = recording_of(&plain, plain.transcript(bytes.clone(), "Completed", &[]), 3);
@@ -1433,8 +1435,8 @@ fn every_recorded_heap_texture_answer_is_held_by_its_property() {
 /// fires on its own code being announced.
 #[test]
 fn two_notice_declarations_both_fire_when_both_notices_are_announced() {
-    let first = Degradation::ALL[0];
-    let second = Degradation::ALL[1];
+    let first = Degradation::GradFromBias;
+    let second = Degradation::PixelSamplerScaling;
     let bytes = words(&[1, 2]);
     let case = WordsCase {
         allowances: vec![
@@ -1465,7 +1467,7 @@ fn two_notice_declarations_both_fire_when_both_notices_are_announced() {
 /// value tolerance used, or a tolerance nothing checked would read as checked.
 #[test]
 fn a_value_tolerance_does_not_fire_just_because_its_notice_was_announced() {
-    let kind = Degradation::ALL[0];
+    let kind = Degradation::GradFromBias;
     let bytes = words(&[1, 2]);
     let case = WordsCase {
         allowances: vec![
@@ -1495,8 +1497,8 @@ fn a_value_tolerance_does_not_fire_just_because_its_notice_was_announced() {
 /// no run announces still reads as never fired.
 #[test]
 fn a_notice_declaration_whose_notice_is_quiet_still_reads_as_never_fired() {
-    let fired = Degradation::ALL[0];
-    let quiet = Degradation::ALL[1];
+    let fired = Degradation::GradFromBias;
+    let quiet = Degradation::PixelSamplerScaling;
     let bytes = words(&[1, 2]);
     let case = WordsCase {
         allowances: vec![
@@ -1551,9 +1553,9 @@ fn the_notice_walk_names_its_site_and_totals_its_codes() {
 /// no second allowance saying so again.
 #[test]
 fn a_notice_named_anywhere_in_the_case_is_declared() {
-    let at_the_site = Degradation::ALL[0];
-    let at_a_value = Degradation::ALL[1];
-    let quiet = Degradation::ALL[2];
+    let at_the_site = Degradation::GradFromBias;
+    let at_a_value = Degradation::PixelSamplerScaling;
+    let quiet = Degradation::BicubicFilterArithmetic;
     let case = WordsCase {
         allowances: vec![
             crate::replay::notice_allowance(at_the_site.code()),
@@ -1592,7 +1594,7 @@ fn a_notice_named_anywhere_in_the_case_is_declared() {
 
 #[test]
 fn an_allowance_whose_notice_did_not_fire_fails_the_case() {
-    let kind = Degradation::ALL[0];
+    let kind = Degradation::GradFromBias;
     let case = WordsCase {
         allowances: vec![Allowance::new(
             "case/output",
@@ -1618,8 +1620,8 @@ fn an_allowance_whose_notice_did_not_fire_fails_the_case() {
 /// cases this way, over digests that matched Metal exactly.
 #[test]
 fn any_one_of_a_sites_allowances_firing_justifies_the_difference() {
-    let fired = Degradation::ALL[1];
-    let quiet = Degradation::ALL[0];
+    let fired = Degradation::PixelSamplerScaling;
+    let quiet = Degradation::GradFromBias;
     let bytes = words(&[1, 2]);
     let plain = WordsCase::new("words", 2);
     let recording = recording_of(&plain, plain.transcript(bytes.clone(), "Completed", &[]), 3);
@@ -1645,7 +1647,7 @@ fn any_one_of_a_sites_allowances_firing_justifies_the_difference() {
 /// case's allowance there a digest-only site could never be loosened at all.
 #[test]
 fn a_digest_only_site_compares_under_its_allowance() {
-    let kind = Degradation::ALL[0];
+    let kind = Degradation::GradFromBias;
     let case = WordsCase {
         allowances: vec![
             Allowance::new(
