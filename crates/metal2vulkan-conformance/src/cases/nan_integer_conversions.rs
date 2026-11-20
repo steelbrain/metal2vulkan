@@ -11,9 +11,10 @@
 //!
 //! One case over two owned fixtures, the same program compiled two ways, because the lowering's
 //! NaN test takes two forms: `nan_to_int`, without fast math, whose entries keep a float operation
-//! with no fast-math flags, so its module declares `SignedZeroInfNanPreserve` where the device
-//! supports it and the test reads the float; and `nan_to_int_fast`, under the default fast math
-//! that Metal's programs are compiled with, whose module declares none, so the test reads the bits.
+//! with no fast-math flags, so its module declares `SignedZeroInfNanPreserve` for the source widths
+//! where the device supports it and the test reads the float (`OpIsNan`); and `nan_to_int_fast`,
+//! under the default fast math that Metal's programs are compiled with, whose float operations all
+//! carry the flags, so the test reads the bits.
 //! Each fixture runs a kernel and a fragment function, the latter one texel of a one-row
 //! `RGBA32Uint` target an invocation, which a full-screen triangle covers. Every input takes five
 //! invocations of each, which answer its twenty words: `char`, `uchar`, `short`, `ushort`, `int`,
