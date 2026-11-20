@@ -130,7 +130,9 @@ mod on_device {
         ))
         .expect("get_bytes");
         bytes
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|t| {
                 std::array::from_fn(|i| u32::from_le_bytes(t[i * 4..i * 4 + 4].try_into().unwrap()))
             })
