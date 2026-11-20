@@ -19,11 +19,11 @@
 //! Each cell runs one command buffer over its own 8 by 8 `RGBA16Float` attachment of four
 //! samples.
 //!
-//! - **Pass A** clears the attachment to [`CLEAR`] and draws the fullscreen triangle into each
+//! - **Pass A** clears the attachment to `CLEAR` and draws the fullscreen triangle into each
 //!   2 by 2 cell of the grid under a sample mask of the cell's own index, so cell `i` holds white
 //!   on the samples of `i`'s bits and the clear on the rest: every one of the sixteen masks, the
 //!   empty one included, which no draw names.
-//! - **Pass B** loads the attachment, draws into cell 0 alone under [`B_MASK`], and stores and
+//! - **Pass B** loads the attachment, draws into cell 0 alone under `B_MASK`, and stores and
 //!   resolves into resolve B.
 //! - **The reads**: a kernel reads every sample of the attachment after pass B, and two blits read
 //!   resolve A (where pass A resolves) and resolve B.
