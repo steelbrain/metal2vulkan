@@ -445,7 +445,8 @@ mod on_device {
 
     /// A compositor's composite in `format` on `device`, over host memory it imports holding the
     /// CPU's texels: T75, a texture shaders read over the compositor's buffer, then T11, a
-    /// render target over the drawer's buffer over the same bytes, each in an image of its own;
+    /// render target shaders also read over the drawer's buffer over the same bytes, never used,
+    /// each in an image of its own;
     /// two Private targets, a reference in place over a block of its own, and one command buffer
     /// whose two passes, over the backdrop, each draw T75's texel at each pixel into a target,
     /// the first target first. Each target then reads the CPU's texels. Each texture's place is
@@ -482,8 +483,8 @@ mod on_device {
         let read = (compositor.new_texture(&d, Some(first), 0, pitch))
             .unwrap_or_else(|error| panic!("{name}: T75: {error}"));
         let read_id = live.enter(name, &read);
-        d.usage = TextureUsage::RENDER_TARGET;
-        let drawn = (drawer.new_texture(&d, None, 0, pitch))
+        d.usage = TextureUsage::SHADER_READ | TextureUsage::RENDER_TARGET;
+        let drawn = (drawer.new_texture(&d, Some(first + 4), 0, pitch))
             .unwrap_or_else(|error| panic!("{name}: T11: {error}"));
         let drawn_id = live.enter(name, &drawn);
         assert!(
@@ -593,8 +594,8 @@ mod on_device {
             let mut d = TextureDescriptor::new(TextureType::Type2D, format, side, side);
             d.usage = TextureUsage::RENDER_TARGET;
             d.storage_mode = StorageMode::Private;
-            let target =
-                (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let target = (device.new_texture_for_views(&d))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             let id = live.enter(name, &target);
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut p = pass(&target, None);
@@ -641,7 +642,7 @@ mod on_device {
             }
             let handle = device.core().device.handle();
             let first = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, first, 4)).expect("a grant");
+            (device.grant_indices(IndexClass::Texture, first, 5)).expect("a grant");
             let live = Live::default();
             let textures = || device.counters().gauges().textures;
             for beside in [false, true] {
@@ -659,7 +660,7 @@ mod on_device {
                     d.usage = TextureUsage::RENDER_TARGET;
                     let checks: Vec<(usize, Texture)> = (0..16)
                         .map(|_| {
-                            let check = (device.new_texture(&d, None))
+                            let check = (device.new_texture_for_views(&d))
                                 .unwrap_or_else(|error| panic!("{name}: {error}"));
                             (live.enter(name, &check), check)
                         })
