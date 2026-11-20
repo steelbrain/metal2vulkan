@@ -53,16 +53,25 @@ mod on_device {
         /// The same bytes as one-page shared mappings of a memfd of twice their length, each at a
         /// page of the memfd of its own scattered over it: as many mappings as pages (Linux).
         Scattered,
+        /// As a virtual machine's RAM is viewed (Linux): a memfd of twice the length, every page
+        /// written first and sealed against growing, shrinking and further seals, and one-page
+        /// runs of its scattered pages each mapped shared and fixed over an anonymous private
+        /// reservation made without a reserve.
+        Guest,
     }
 
     /// The memory kinds timed, with their names: the allocator's, and on Linux one shared memfd
-    /// mapping and one-page mappings of scattered pages of a memfd.
+    /// mapping, one-page mappings of scattered pages of a memfd, and a guest RAM view.
     fn kinds() -> &'static [(&'static str, Kind)] {
         if cfg!(target_os = "linux") {
             &[
                 ("anonymous", Kind::Anonymous),
                 ("one shared memfd mapping", Kind::Shared),
                 ("one-page memfd mappings, scattered", Kind::Scattered),
+                (
+                    "a guest RAM view: one-page runs over a reservation",
+                    Kind::Guest,
+                ),
             ]
         } else {
             &[("anonymous", Kind::Anonymous)]
@@ -88,7 +97,7 @@ mod on_device {
                     NonNull::new(unsafe { std::alloc::alloc(layout) }).expect("an allocation");
                 (pointer, Some(layout))
             } else {
-                (map_shared(len, kind == Kind::Scattered), None)
+                (map_shared(len, kind), None)
             };
             for at in (0..len as usize).step_by(4096) {
                 // SAFETY: `at` is inside the memory.
@@ -117,15 +126,36 @@ mod on_device {
         }
     }
 
-    /// `len` bytes of shared mappings of a new memfd: one mapping of a memfd of `len` bytes, or
-    /// (`scattered`) one mapping a page, the pages of a memfd of twice `len` taken at a stride
-    /// prime to its page count, so no two neighbouring mappings merge.
+    /// `len` bytes of shared mappings of a new memfd, by `kind` ([`Kind`]): one mapping of a memfd
+    /// of `len` bytes; or one mapping a page, the pages of a memfd of twice `len` taken at a stride
+    /// prime to its page count, so no two neighbouring mappings merge, over a shared mapping of
+    /// the memfd's start (`Scattered`) or over an anonymous reservation of a memfd written and
+    /// sealed first (`Guest`).
     #[cfg(target_os = "linux")]
-    fn map_shared(len: u64, scattered: bool) -> NonNull<u8> {
-        use std::os::fd::AsRawFd;
+    fn map_shared(len: u64, kind: Kind) -> NonNull<u8> {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
         const PAGE: u64 = 4096;
         const STRIDE: u64 = 7919;
-        let memfd = memfd(if scattered { 2 * len } else { len });
+        let file = if kind == Kind::Shared { len } else { 2 * len };
+        let memfd = if kind == Kind::Guest {
+            // SAFETY: a new memfd, owned at once.
+            let memfd = unsafe {
+                let fd = libc::memfd_create(
+                    c"m2v-guest-ram".as_ptr(),
+                    libc::MFD_ALLOW_SEALING | libc::MFD_CLOEXEC,
+                );
+                assert!(fd >= 0, "a memfd");
+                OwnedFd::from_raw_fd(fd)
+            };
+            // SAFETY: the memfd is ours.
+            assert_eq!(
+                unsafe { libc::ftruncate(memfd.as_raw_fd(), file as libc::off_t) },
+                0
+            );
+            memfd
+        } else {
+            memfd(file)
+        };
         let map = |at: *mut libc::c_void, bytes: u64, flags: libc::c_int, offset: u64| {
             // SAFETY: a mapping of the memfd's bytes at `offset`, inside its length, which
             // outlives the fd; where `at` is not null, it is inside the test's own reservation.
@@ -142,16 +172,44 @@ mod on_device {
             assert_ne!(mapped, libc::MAP_FAILED, "a mapping");
             mapped
         };
-        if !scattered {
+        if kind == Kind::Shared {
             return NonNull::new(map(std::ptr::null_mut(), len, 0, 0).cast()).expect("a mapping");
         }
+        let base = if kind == Kind::Guest {
+            // Every page of the file written first, then the file sealed.
+            let whole = map(std::ptr::null_mut(), file, 0, 0);
+            for at in (0..file).step_by(PAGE as usize) {
+                // SAFETY: `at` is inside the whole file's mapping.
+                unsafe { whole.cast::<u8>().add(at as usize).write(1) };
+            }
+            // SAFETY: the mapping above, of `file` bytes, which nothing uses any more.
+            assert_eq!(unsafe { libc::munmap(whole, file as usize) }, 0);
+            let seals = libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+            // SAFETY: the memfd is ours, made with sealing allowed.
+            let sealed = unsafe { libc::fcntl(memfd.as_raw_fd(), libc::F_ADD_SEALS, seals) };
+            assert_eq!(sealed, 0, "the seals");
+            // SAFETY: a new anonymous private reservation, made without a reserve.
+            let reserved = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    len as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+                    -1,
+                    0,
+                )
+            };
+            assert_ne!(reserved, libc::MAP_FAILED, "a reservation");
+            reserved
+        } else {
+            map(std::ptr::null_mut(), len, 0, 0)
+        };
         let pages = len / PAGE;
         assert_ne!(
             (2 * pages) % STRIDE,
             0,
             "the stride is prime to the memfd's pages"
         );
-        let base = map(std::ptr::null_mut(), len, 0, 0);
         for page in 0..pages {
             let from = (page * STRIDE) % (2 * pages);
             // SAFETY: the page lies inside `base`'s `len` bytes, which the test mapped above.
@@ -163,7 +221,7 @@ mod on_device {
 
     /// Off Linux the test maps no memfd: its kinds there are the allocator's alone.
     #[cfg(not(target_os = "linux"))]
-    fn map_shared(_: u64, _: bool) -> NonNull<u8> {
+    fn map_shared(_: u64, _: Kind) -> NonNull<u8> {
         unreachable!("a memfd off Linux")
     }
 
@@ -336,24 +394,61 @@ mod on_device {
         "the claims' lock",
     ];
 
-    /// Dma-bufs of `memfd`'s consecutive ranges of `lens`, with their lengths.
+    /// Dma-bufs of `memfd`'s consecutive ranges of `lens`, with their lengths; or (`scattered`)
+    /// each of its own one-page runs of `memfd`, a memfd of twice their sum, at a stride prime to
+    /// its page count, through one `UDMABUF_CREATE_LIST` a dma-buf.
     #[cfg(target_os = "linux")]
-    fn dma_chunks(memfd: &OwnedFd, lens: &[u64]) -> Vec<(OwnedFd, u64)> {
+    fn dma_chunks(memfd: &OwnedFd, lens: &[u64], scattered: bool) -> Vec<(OwnedFd, u64)> {
+        const PAGE: u64 = 4096;
+        const STRIDE: u64 = 7919;
+        let pages = 2 * lens.iter().sum::<u64>() / PAGE;
         let mut at = 0;
         (lens.iter())
             .map(|&len| {
-                let fd = udmabuf(memfd, at, len).expect("a dma-buf");
+                let fd = if scattered {
+                    let runs: Vec<(u64, u64)> = (at / PAGE..(at + len) / PAGE)
+                        .map(|page| ((page * STRIDE) % pages * PAGE, PAGE))
+                        .collect();
+                    udmabuf_runs(memfd, &runs).expect("a dma-buf of runs")
+                } else {
+                    udmabuf(memfd, at, len).expect("a dma-buf")
+                };
                 at += len;
                 (fd, len)
             })
             .collect()
     }
 
+    /// A dma-buf of `memfd`'s `runs` (offset, length) in order, through `/dev/udmabuf`'s
+    /// `UDMABUF_CREATE_LIST`; `None` where the kernel offers no `/dev/udmabuf` or no list.
+    #[cfg(target_os = "linux")]
+    fn udmabuf_runs(memfd: &OwnedFd, runs: &[(u64, u64)]) -> Option<OwnedFd> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        // `_IOW('u', 0x43, struct udmabuf_create_list)`, the list's 8-byte head.
+        const UDMABUF_CREATE_LIST: libc::c_ulong = 0x4008_7543;
+        const UDMABUF_FLAGS_CLOEXEC: u64 = 1;
+        let device = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/udmabuf")
+            .ok()?;
+        // The head (flags, count) and then each item (memfd, padding, offset, size), in u64s
+        // laid out as the kernel's structs on a little-endian host.
+        let mut words = vec![UDMABUF_FLAGS_CLOEXEC | ((runs.len() as u64) << 32)];
+        for &(offset, size) in runs {
+            words.extend([memfd.as_raw_fd() as u32 as u64, offset, size]);
+        }
+        // SAFETY: the ioctl reads the head and its `count` items, which `words` holds through it.
+        let fd = unsafe { libc::ioctl(device.as_raw_fd(), UDMABUF_CREATE_LIST, words.as_ptr()) };
+        // SAFETY: a non-negative return is a new fd.
+        (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+
     /// The whole call's time over dma-bufs of `memfd`'s ranges of `lens`, in nanoseconds; the
     /// dma-bufs made before it, and the block dropped and its release waited for after it.
     #[cfg(target_os = "linux")]
-    fn dma_whole(device: &Device, memfd: &OwnedFd, lens: &[u64]) -> u128 {
-        let chunks = dma_chunks(memfd, lens);
+    fn dma_whole(device: &Device, memfd: &OwnedFd, lens: &[u64], scattered: bool) -> u128 {
+        let chunks = dma_chunks(memfd, lens, scattered);
         let (release, released) = releasing();
         let start = Instant::now();
         let made = device.import_dma_bufs(chunks, release);
@@ -368,13 +463,18 @@ mod on_device {
     /// nanoseconds, made by hand: the bind signals a timeline of the test's own, waited for
     /// before what the steps made is destroyed, all outside the times.
     #[cfg(target_os = "linux")]
-    fn dma_parts(device: &Device, memfd: &OwnedFd, lens: &[u64]) -> [u128; DMA_PARTS.len()] {
+    fn dma_parts(
+        device: &Device,
+        memfd: &OwnedFd,
+        lens: &[u64],
+        scattered: bool,
+    ) -> [u128; DMA_PARTS.len()] {
         use std::os::fd::{AsRawFd, IntoRawFd};
         let core = device.core();
         let ash = &core.device;
         let fds = (core.imports.dma_buf.as_ref()).expect("dma-buf imports");
         let handle = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
-        let chunks = dma_chunks(memfd, lens);
+        let chunks = dma_chunks(memfd, lens, scattered);
         let len: u64 = lens.iter().sum();
         let timeline = crate::event::timeline(ash).expect("a timeline");
         let mut times = [0u128; DMA_PARTS.len()];
@@ -483,8 +583,9 @@ mod on_device {
         sorted[sorted.len() / 2]
     }
 
-    /// `Device::import_dma_bufs` of 8 dma-bufs over 29 MiB of one memfd, each a whole number of
-    /// granules, whole and by step, each `REPS` times, with the runtime's queue idle and then
+    /// `Device::import_dma_bufs` of 8 dma-bufs over 29 MiB of one memfd, each one run of a whole
+    /// number of granules, and of 8 dma-bufs of 64 scattered one-page runs each, whole and by
+    /// step, each `REPS` times, with the runtime's queue idle and then
     /// beside a thread committing small fills all along: each one's median and longest, and the
     /// whole's median less the steps' summed median, printed. On an instance without the
     /// validation layer, whose own cost would be the count.
@@ -498,43 +599,66 @@ mod on_device {
                 return;
             };
             let chunk = ((29u64 << 20) / 8).next_multiple_of(granule);
-            let lens = [chunk; 8];
-            let memfd = memfd(chunk * 8);
-            if udmabuf(&memfd, 0, granule).is_none() {
+            let runs = (64u64 << 12).next_multiple_of(granule);
+            let probe = memfd(granule);
+            if udmabuf(&probe, 0, granule).is_none() {
                 println!("dma-buf import time: {name}: no /dev/udmabuf here; not timed");
                 return;
             }
-            for arm in ["idle", "busy"] {
-                let stop = Arc::new(AtomicBool::new(false));
-                let worker = (arm == "busy").then(|| busy(device.clone(), Arc::clone(&stop)));
-                let mut wholes = Vec::with_capacity(REPS);
-                let mut by_part = vec![Vec::with_capacity(REPS); DMA_PARTS.len()];
-                for _ in 0..REPS {
-                    wholes.push(dma_whole(&device, &memfd, &lens));
-                    let steps = dma_parts(&device, &memfd, &lens);
-                    for (times, took) in by_part.iter_mut().zip(steps) {
-                        times.push(took);
-                    }
+            let shapes = [
+                (
+                    format!("8 chunks of {chunk} bytes, one run each"),
+                    chunk,
+                    false,
+                ),
+                (
+                    format!("8 chunks of {runs} bytes, one-page runs each, scattered"),
+                    runs,
+                    true,
+                ),
+            ];
+            for (shape, chunk, scattered) in shapes {
+                let lens = [chunk; 8];
+                let memfd = memfd(if scattered { 16 * chunk } else { 8 * chunk });
+                if scattered && udmabuf_runs(&memfd, &[(0, 4096)]).is_none() {
+                    println!(
+                        "dma-buf import time: {name}: {shape}: no UDMABUF_CREATE_LIST; not timed"
+                    );
+                    continue;
                 }
-                stop.store(true, Ordering::Relaxed);
-                let commits = worker.map_or(0, |worker| worker.join().expect("the busy thread"));
-                let sums: Vec<u128> = (0..REPS)
-                    .map(|rep| by_part.iter().map(|times| times[rep]).sum())
-                    .collect();
-                let rest = median(&wholes).saturating_sub(median(&sums));
-                println!(
-                    "dma-buf import time: {name}: 8 chunks of {chunk} bytes, granule {granule}, \
+                for arm in ["idle", "busy"] {
+                    let stop = Arc::new(AtomicBool::new(false));
+                    let worker = (arm == "busy").then(|| busy(device.clone(), Arc::clone(&stop)));
+                    let mut wholes = Vec::with_capacity(REPS);
+                    let mut by_part = vec![Vec::with_capacity(REPS); DMA_PARTS.len()];
+                    for _ in 0..REPS {
+                        wholes.push(dma_whole(&device, &memfd, &lens, scattered));
+                        let steps = dma_parts(&device, &memfd, &lens, scattered);
+                        for (times, took) in by_part.iter_mut().zip(steps) {
+                            times.push(took);
+                        }
+                    }
+                    stop.store(true, Ordering::Relaxed);
+                    let commits =
+                        worker.map_or(0, |worker| worker.join().expect("the busy thread"));
+                    let sums: Vec<u128> = (0..REPS)
+                        .map(|rep| by_part.iter().map(|times| times[rep]).sum())
+                        .collect();
+                    let rest = median(&wholes).saturating_sub(median(&sums));
+                    println!(
+                        "dma-buf import time: {name}: {shape}, granule {granule}, \
                      {arm} ({commits} commits beside): the whole call {}; its steps by hand \
                      summed {}; the rest (the whole's median less the steps') {:.3} ms",
-                    shown(&wholes),
-                    shown(&sums),
-                    rest as f64 / 1e6
-                );
-                for (part, times) in DMA_PARTS.iter().zip(&by_part) {
-                    println!(
-                        "dma-buf import time: {name}: {arm}: {part} {}",
-                        shown(times)
+                        shown(&wholes),
+                        shown(&sums),
+                        rest as f64 / 1e6
                     );
+                    for (part, times) in DMA_PARTS.iter().zip(&by_part) {
+                        println!(
+                            "dma-buf import time: {name}: {shape}, {arm}: {part} {}",
+                            shown(times)
+                        );
+                    }
                 }
             }
         });
