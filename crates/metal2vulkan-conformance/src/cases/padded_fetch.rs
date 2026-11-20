@@ -9,8 +9,7 @@
 //! `half4` one alike (the M3 Max under macOS 27.0.1, `probes/padded_fetch.m`), and the missing
 //! lanes of a one- or two-channel format as `(0, 0, 1)`. After a clear, or an earlier draw of the
 //! same pass, Metal's tile holds the clear's `half`, or the draw's output rounded to `half` toward
-//! zero, unclamped, which the stored codes do not keep: the runtime announces
-//! `extended-range-blends-stored-codes` there, and those cases record the difference.
+//! zero, unclamped, which the stored codes do not keep; those cases record the difference.
 //!
 //! Each case is a 128 x 64 target, color 0 of the padded format, beside an `RGBA32Float` color 1;
 //! the owned fixture `pfx_fetch`'s `pfx_fetch_read` (a `float4` input) or `pfx_fetch_read_half`

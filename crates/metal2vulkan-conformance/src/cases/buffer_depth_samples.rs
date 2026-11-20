@@ -142,8 +142,7 @@ const fn part(name: &'static str, format: u32) -> Row {
 ///   denormals, every NaN payload, both infinities, -1, 1, the float after 1, 2 and the largest
 ///   float all come back unchanged, and the samples outside a region keep the clear. Ours differs
 ///   at **one element of all four rows** — copy unit 1, the edge value **-0**, which Metal keeps
-///   and we answer as +0 — and the runtime announces `drawn-depth-copy`, which names exactly that.
-///   It is an announced difference, but the suite has no way to say it: an
+///   and we answer as +0. The suite has no way to allow that alone: an
 ///   [`Allowance`](crate::allowance::Allowance) covers a **site**, and loosening a 46,656-byte site
 ///   to tolerate four bytes would throw away the comparison that makes the row worth having. A
 ///   per-element allowance on a bytes site is what these rows are waiting for.

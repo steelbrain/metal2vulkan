@@ -67,11 +67,6 @@ use crate::transcript::{ByteLayout, Digest, Element, Node, Observed, Sites};
 
 /// The fixture whose `a4_index_word` is `out[t] = in[3t + 1]`: an elementwise read of a plain
 /// buffer and a write of the heap-placed one, with **no simdgroup operation**.
-///
-/// A simdgroup move would be the obvious kernel to reuse here, and it is the wrong one: the
-/// runtime announces `emulated-simdgroups` for one, and whether that notice is still in hand when
-/// this case runs depends on which case drained it first in the same process. A case whose verdict
-/// moves with its neighbours is not a case, so this one runs a kernel that announces nothing.
 const FIXTURE: &str = "a4_index_word";
 const ENTRY: &str = "a4_index_word";
 

@@ -72,14 +72,11 @@ impl Storage {
 /// reads.
 ///
 /// `allowGPUOptimizedContents` is a field, and was not always: it is left at Metal's default, on,
-/// everywhere but the one family that is **about** it
-/// ([`crate::cases::texture_descriptor_pairs`]), because with it off the runtime announces
-/// `optimized-depth-stencil-texture` on MoltenVK for a depth or stencil texture, and a case whose
-/// subject is Metal's arithmetic should not carry a device's announcement as well. That is why the
-/// family that turns it off states a **colour** format in every such row, and why the field
-/// fingerprints and names itself only where it is off — a descriptor that leaves it at Metal's
-/// default fingerprints exactly as it did before the field existed, so every recording taken
-/// before it stays the answer to the inputs it was taken from.
+/// everywhere but the one family that is **about** it ([`crate::cases::texture_descriptor_pairs`]),
+/// which states a **colour** format in every such row. The field fingerprints and names itself only
+/// where it is off — a descriptor that leaves it at Metal's default fingerprints exactly as it did
+/// before the field existed, so every recording taken before it stays the answer to the inputs it
+/// was taken from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapTextureQuery {
     pub texture_type: TextureType,

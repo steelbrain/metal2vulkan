@@ -464,10 +464,10 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 /// (`device-signed-zero-inf-nan`, `device-anisotropic-filter`, `device-point-size`,
 /// `restricted-depth-range`), of an emulation's own precision (`grad-from-bias`,
 /// `pixel-sampler-scaling`, `bicubic-filter-arithmetic`), of a Metal form not measured or not built
-/// (`blended-write-rounding`, `unmeasured-resolve`, `device-interpolation`, `reduction-order`), a
-/// native answer whose catalogue entry states the bound the cases that read it hold it to (the
-/// device's decode of a block-compressed texture's blocks, `compressed-texel-decode`, which only a
-/// case that makes such a texture can announce), and every performance or validity notice.
+/// (`blended-write-rounding`, `device-interpolation`, `reduction-order`), a native answer whose
+/// catalogue entry states the bound the cases that read it hold it to (the device's decode of a
+/// block-compressed texture's blocks, `compressed-texel-decode`, which only a case that makes such
+/// a texture can announce), and every performance or validity notice.
 ///
 /// **It declares the notice, and nothing about a value.** Each entry loosens the notices site
 /// alone, exactly as a case's own [`notice_allowance`] does, so every value of every case still

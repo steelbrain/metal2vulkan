@@ -1390,9 +1390,7 @@ fn drawn_pipeline_spec() -> RenderPipelineSpec<'static> {
 /// buffers, so a command that bound the wrong offset draws the other's rectangle or colour.
 ///
 /// Neither holds a barrier, unlike [`super::indirect_commands::RENDER_DRAWN`]'s: the two
-/// rectangles cover disjoint columns, so the order is immaterial, and leaving the barrier out keeps
-/// this row's answer free of the `render-pass-split` notice that row announces — which is what lets
-/// the pass state here be compared with nothing loosened.
+/// rectangles cover disjoint columns, so the order is immaterial.
 fn drawn_commands(pipeline: Handle, rects: Handle, colors: Handle) -> Vec<EncodedCommand> {
     (0..RECTS.len() as u64)
         .map(|at| {

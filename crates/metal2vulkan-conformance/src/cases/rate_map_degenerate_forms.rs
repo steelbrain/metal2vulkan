@@ -177,9 +177,8 @@ impl Case for DegenerateFormCase {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The same two declarations `rate-map-zero-screen-width` makes, because the map is its map:
-        // the notice a `Shared` read-back buffer provokes, and the rate-map degradation the runtime
-        // announces when it makes a map that is not the identity. `0` by `64` at a half is not: its
+        // The same declaration `rate-map-zero-screen-width` makes, because the map is its map: the
+        // rate-map degradation the runtime announces when it makes a map that is not the identity. `0` by `64` at a half is not: its
         // vertical axis lays 64 screen pixels into 33 physical ones, so a pass over it would be
         // drawn region by region, a near-equivalent the runtime declares (`docs/API.md`'s degrade
         // catalogue). Metal announces nothing, so the notices set is the one field that may differ,

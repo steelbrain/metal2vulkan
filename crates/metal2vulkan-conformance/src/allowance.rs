@@ -275,8 +275,7 @@ pub enum Loosening {
     AnyOf(Vec<Value>),
     /// An integer zero exactly where the recorded one is: any nonzero value stands for any other.
     /// For a value whose contract states only whether it is zero, such as a `Boolean` visibility
-    /// result, which is the device's own nonzero value where Metal's M3 Max writes 1
-    /// (`device-boolean-visibility`).
+    /// result, where Metal's M3 Max writes 1.
     Nonzero,
     /// The value is not compared. The justification still has to hold, and the report says the
     /// field went unchecked.

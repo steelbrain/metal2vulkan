@@ -495,9 +495,7 @@ fn storage_crossings() -> DescriptorPairs {
 
 /// `allowGPUOptimizedContents` against the extent, the type, the usage and the storage mode.
 ///
-/// Every row states a **colour** format: with the property off the runtime announces
-/// `optimized-depth-stencil-texture` on MoltenVK for a depth or stencil texture, and a case whose
-/// subject is Metal's arithmetic should not carry a device's announcement as well.
+/// Every row states a **colour** format.
 fn plain_contents() -> DescriptorPairs {
     let mut queries = Vec::new();
     const ROWS: &[(TextureType, [u32; 3], u32, u32)] = &[

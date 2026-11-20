@@ -948,25 +948,23 @@ impl Case for SamplerCrossings {
         // below sits at the notices site alone. Every state here is one a device's own sampler
         // holds -- nearest or linear filters, the five address modes Vulkan has an enumerator for,
         // a border colour, a level clamp and a comparison -- so nothing is emulated; what is
-        // declared is what a device announces about its own sampling and its own memory.
+        // declared is what a device announces about its own sampling.
         //
-        // The one declared is the `Shared` buffer each row writes its samples into, for all eight
-        // rows (the RTX 5080). Where the device filters a float texture its own way
-        // (`float-sample-filter`, the address-mode triples and the three mip-filter rows on
-        // llvmpipe and the 5080), the note is the device's own answer, which the suite declares
-        // for every case (`crate::replay::NATIVE_NOTES`).
+        // Where the device filters a float texture its own way (`float-sample-filter`, the
+        // address-mode triples and the three mip-filter rows on llvmpipe and the 5080), the note is
+        // the device's own answer, which the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`).
         //
         // The `compare-filters` row's `Depth32Float` texture: on a device without
-        // `VK_EXT_depth_range_unrestricted` (MoltenVK on the M3 Max) its upload clamps into
-        // [0, 1] (`restricted-depth-upload`) and the comparing stage records that its texels hold
-        // no value outside it (`restricted-depth-range`). Its depths all lie in [0, 1], so
-        // neither moves a sample: measured there, the notices site is the whole of the
-        // difference.
+        // `VK_EXT_depth_range_unrestricted` (MoltenVK on the M3 Max) the comparing stage records
+        // that its texels hold no value outside [0, 1] (`restricted-depth-range`). Its depths all
+        // lie in [0, 1], so the note moves no sample: measured there, the notices site is the
+        // whole of the difference.
         //
-        // Every row samples through the runtime sampler at `[[sampler(0)]]`, which the new
-        // runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice` holds
-        // why). Measured through the rt side on lavapipe, the Radeon 780M and the RX 550: it fired
-        // for every row the side does not refuse (the axis and mip-filter rows).
+        // Every row samples through the runtime sampler at `[[sampler(0)]]`, which the runtime's
+        // pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice` holds why).
+        // Measured through the rt side on lavapipe, the Radeon 780M and the RX 550: it fired for
+        // every row the side does not refuse (the axis and mip-filter rows).
         let mut allowances = vec![crate::replay::pixel_sampler_scaling_notice()];
         // The opaque-black axis-border rows read that border, which the runtime's sampler
         // states note on every device (`crate::replay::swizzled_border_notice`).
