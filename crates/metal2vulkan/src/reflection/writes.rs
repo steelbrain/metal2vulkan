@@ -231,16 +231,6 @@ impl SlotWrites {
         &self.fragment
     }
 
-    /// The tile function's arguments; none for a pipeline without a tile stage.
-    pub fn tile_slots(&self) -> &[SlotWrite] {
-        &self.tile
-    }
-
-    /// The object function's arguments; none for a pipeline without an object stage.
-    pub fn object_slots(&self) -> &[SlotWrite] {
-        &self.object
-    }
-
     /// The mesh function's arguments; none for a pipeline without a mesh stage.
     pub fn mesh_slots(&self) -> &[SlotWrite] {
         &self.mesh

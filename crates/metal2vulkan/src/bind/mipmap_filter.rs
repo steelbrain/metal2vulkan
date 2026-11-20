@@ -349,29 +349,6 @@ impl MipmapFilterChain {
         layout::layout(pixel_format).map(|l| l.bytes)
     }
 
-    /// The format of the sampled view through which `plan`'s `fetch` reads the first level of an
-    /// image of Vulkan format `image`: the image's own, or the UNORM twin of an 8-bit sRGB format
-    /// (the same bytes, its codes undecoded). `None` where no fetch recovers the texels.
-    pub fn fetch_format(image: Format) -> Option<Format> {
-        let view = match image {
-            Format::R8_SRGB => Format::R8_UNORM,
-            Format::R8G8_SRGB => Format::R8G8_UNORM,
-            Format::R8G8B8A8_SRGB => Format::R8G8B8A8_UNORM,
-            Format::B8G8R8A8_SRGB => Format::B8G8R8A8_UNORM,
-            other => other,
-        };
-        fetch::components(view).map(|_| view)
-    }
-
-    /// Whether a fetch of a sampled view of `format` reads the device's conversion of each texel
-    /// (a normalized or 16-bit float format: `plan`'s `fetch` there needs a device measured to
-    /// return values whose recovery reads every code back) rather than its bits (the
-    /// extended-range formats' integer carriers, read in place on any device). `false` too for a
-    /// format no fetch reads.
-    pub fn fetch_converts(format: Format) -> bool {
-        fetch::components(format).is_some_and(|components| !fetch::integer(&components))
-    }
-
     /// The levels of this chain on the CPU, from the bytes of the first level (every layer, as
     /// the scratch buffer holds them), every level in order, the first included: the kernel's
     /// operations in its order, each `f32` operation rounded once as IEEE does (none

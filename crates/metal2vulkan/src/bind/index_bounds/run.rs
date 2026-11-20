@@ -202,23 +202,6 @@ impl IndexBoundsRun {
             .collect()
     }
 
-    /// The bytes of the words of a run of `draws` draws.
-    pub fn words_bytes(draws: u32) -> u64 {
-        4 * u64::from(Self::HEADER_WORDS) + u64::from(draws) * Self::SLOT_BYTES
-    }
-
-    /// The byte of the words at which slot `slot`'s first draw's `VkDrawIndexedIndirectCommand`
-    /// lies: over the Metal index buffer, where every position lies inside it.
-    pub fn first_draw_offset(slot: u32) -> u64 {
-        Self::slot_offset(slot) + IndexBoundsPass::FIRST_DRAW_OFFSET
-    }
-
-    /// The byte of the words at which slot `slot`'s second draw's `VkDrawIndexedIndirectCommand`
-    /// lies: over the pool, where any position lies past the buffer.
-    pub fn second_draw_offset(slot: u32) -> u64 {
-        Self::slot_offset(slot) + IndexBoundsPass::SECOND_DRAW_OFFSET
-    }
-
     /// The byte of the words at which slot `slot` starts.
     fn slot_offset(slot: u32) -> u64 {
         4 * u64::from(Self::HEADER_WORDS) + u64::from(slot) * Self::SLOT_BYTES

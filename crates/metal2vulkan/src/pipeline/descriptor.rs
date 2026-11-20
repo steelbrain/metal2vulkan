@@ -92,36 +92,6 @@ impl FunctionDescriptor {
         self
     }
 
-    /// This descriptor with a library in `libraries.loaded` for each install name the stage's
-    /// search reaches that it lacks, as Metal loads them at pipeline creation: `load` gives the
-    /// library at an install name, or `None` where none loads. The install names come in the order
-    /// [`DynamicLibraries`] searches them (a loaded library's own after those already reached), and
-    /// loading stops at the first that `load` gives none for: compiling then refuses any import
-    /// that survives specialization (`NeedsInput(DynamicLibrary)`), as Metal fails such a creation
-    /// and makes the others. A library `loaded` already holds is used as it is.
-    pub fn with_loaded_dependencies(
-        mut self,
-        mut load: impl FnMut(&str) -> Option<DynamicLibrary>,
-    ) -> FunctionDescriptor {
-        loop {
-            let unloaded = crate::pipeline::compile::dynamic_order(
-                &self.function,
-                &self.linked,
-                &self.libraries,
-            )
-            .unloaded
-            .map(str::to_owned);
-            let Some(name) = unloaded else {
-                return self;
-            };
-            match load(&name) {
-                Some(library) => {
-                    self.libraries.loaded.insert(name, library);
-                }
-                None => return self,
-            }
-        }
-    }
 }
 
 /// The dynamic libraries a pipeline stage links (`MTLDynamicLibrary`): its preloaded libraries, and

@@ -220,16 +220,6 @@ impl AstcDecode {
         }
     }
 
-    /// The Metal pixel format whose texels the twin's of `texels` are: `RGBA8Unorm`,
-    /// `RGBA16Float` or `RGBA32Float`.
-    pub fn texel_pixel_format(self, texels: AstcTexels) -> PixelFormat {
-        match self.form(texels) {
-            AstcTexels::Unorm8 => PixelFormat::RGBA8Unorm,
-            AstcTexels::Half => PixelFormat::RGBA16Float,
-            AstcTexels::Float => PixelFormat::RGBA32Float,
-        }
-    }
-
     /// The bytes of a twin's texel of `texels` ([`form`](Self::form)'s): 4, 8 or 16.
     pub fn texel_bytes(self, texels: AstcTexels) -> u32 {
         match self.form(texels) {

@@ -754,37 +754,7 @@ impl SampledLevels {
 }
 
 impl LevelReads {
-    /// The highest level, counted from the view's first, that the slot's reads reach, where
-    /// `sampled` answers for each of its samplers' samples the highest level they reach through
-    /// the sampler the runtime binds ([`SampledLevels::level`]); `None` where a read may reach
-    /// any level ([`LevelReads::any`]) or `sampled` answers `None`. A view of the same first level
-    /// and more levels than this answers every read of the slot as the whole view does: each
-    /// reads the same level and texels (Image Level(s) Selection, at a level of detail that does
-    /// not depend on the level count).
-    pub fn highest_level(&self, sampled: impl Fn(&SampledLevels) -> Option<u32>) -> Option<u32> {
-        if self.any {
-            return None;
-        }
-        let mut highest = self.named.unwrap_or(0);
-        for samples in &self.sampled {
-            highest = highest.max(sampled(samples)?);
-        }
-        Some(highest)
-    }
 
-    /// The lowest level, counted from the view's first, that the slot's reads may reach, where
-    /// `sampled` answers for each of its samplers' samples the lowest level they may reach
-    /// through the sampler the runtime binds ([`SampledLevels::lowest`]): 0 where a read may reach
-    /// any level ([`LevelReads::any`]); `None` where no read reaches a level's texels (a size
-    /// query, a level-count containment's comparison). Over a view of the same first level whose
-    /// last level is lower, a read reaches that last level in its place.
-    pub fn lowest_level(&self, sampled: impl Fn(&SampledLevels) -> u32) -> Option<u32> {
-        if self.any {
-            return Some(0);
-        }
-        let samples = self.sampled.iter().map(sampled);
-        self.lowest_read.into_iter().chain(samples).min()
-    }
 }
 
 /// An emulated mesh function's records: what each of its threadgroups writes to the draw's records
@@ -943,23 +913,6 @@ pub enum PatchDomain {
 }
 
 impl PipelineInterface {
-    /// The buffer slots of `stage` (bit `i` for index `i`, below 64) its function reads through a
-    /// uniform view ([`BufferForm::uniform_view`]): the slots whose bind offset class can tell the
-    /// device's view base alignment apart (`StageTable::at_bind_views`).
-    pub fn uniform_view_buffers(&self, stage: Stage) -> u64 {
-        self.buffers_where(stage, BufferForm::uniform_view)
-    }
-
-    /// The buffer slots of `stage` (bit `i` for index `i`, below 64) its function reads through a
-    /// storage view (`BufferForm::Descriptor(DescriptorView::Storage)`): on a profile that takes
-    /// `DriverWorkaround::PushReadsLengthenThreadPayload`, the slots whose bind offset class can
-    /// tell offset 0 apart (`StageTable::zero_offset_views`), where such a view's
-    /// `SpecKey::RangeAtBindOffset` reads it at its bind offset alone.
-    pub fn storage_view_buffers(&self, stage: Stage) -> u64 {
-        self.buffers_where(stage, |form| {
-            form == BufferForm::Descriptor(DescriptorView::Storage)
-        })
-    }
 
     /// The buffer slots of `stage` (bit `i` for index `i`, below 64) whose form `takes`.
     fn buffers_where(&self, stage: Stage, takes: impl Fn(BufferForm) -> bool) -> u64 {

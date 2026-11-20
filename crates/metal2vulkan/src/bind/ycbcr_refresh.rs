@@ -78,15 +78,10 @@ impl YCbCrRefreshModule {
     /// The state's word that says a conversion completed from the copy: 0 where none did, which
     /// takes the conversion's group count whatever the words.
     pub const COMPLETED: u32 = 3;
-    /// The state's words: the `VkDispatchIndirectCommand`, then
-    /// [`COMPLETED`](Self::COMPLETED).
-    pub const STATE_WORDS: u32 = 4;
     /// Invocations of one workgroup, along x: one word each.
     pub const LOCAL_SIZE: u32 = 64;
     /// Bytes of the `COMPUTE` push-constant range at offset 0: the shape.
     pub const PUSH_BYTES: u32 = 16;
-    /// The largest first word in either binding the shape holds.
-    pub const MOST_FIRST_WORD: u32 = 0xffff;
     /// The words one row of workgroups covers: 1024 workgroups across.
     pub const ROW_WORDS: u32 = Self::LOCAL_SIZE * 1024;
 

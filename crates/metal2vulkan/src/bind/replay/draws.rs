@@ -284,12 +284,6 @@ impl DrawReplayLayout {
         self.resident_offset - PARAMS_BYTES
     }
 
-    /// Where, in the parameters of a replay that reads its range ([`DrawReplay::range_read`]),
-    /// the consumer copies the range's 8 bytes (`location`, then `length`) before the preprocess
-    /// runs, from the scratch's start; the host uploads zero there.
-    pub fn range_offset(&self) -> u64 {
-        self.params_offset() + P_RANGE
-    }
 }
 
 /// The preprocess of one draw replay: what the consumer uploads into the scratch (of

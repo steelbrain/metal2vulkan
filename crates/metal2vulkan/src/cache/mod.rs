@@ -97,13 +97,6 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 556;
 /// keeps no history.
 pub const RUNTIME_VERSION: u32 = 2542;
 
-/// The digest of the sources this build of the crate was compiled from: SHA-256, as lowercase hex,
-/// of the manifest, the build script, and exactly the files the crate roots' module tree compiles
-/// or reads. A cache of translations across builds keys on it beside [`SEMANTICS_VERSION`] and
-/// [`ARTIFACT_FORMAT_VERSION`], so a build of other sources never reads another build's output,
-/// even when no version moved. An edit to a test-only module leaves it unchanged.
-pub const SOURCE_DIGEST: &str = env!("M2V_SOURCE_DIGEST");
-
 /// Writes a digest as lowercase hex.
 pub(crate) fn write_hex(f: &mut fmt::Formatter<'_>, name: &str, hash: &Hash256) -> fmt::Result {
     f.write_str(name)?;

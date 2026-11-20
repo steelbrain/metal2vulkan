@@ -620,13 +620,6 @@ impl IndexRewritePass {
         self
     }
 
-    /// The parameters as the bytes to upload at the rewrite words' start.
-    pub fn parameter_bytes(&self) -> Vec<u8> {
-        self.parameters
-            .iter()
-            .flat_map(|w| w.to_le_bytes())
-            .collect()
-    }
 }
 
 /// The consumer's words, by index into the rewrite words.

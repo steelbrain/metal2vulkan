@@ -313,63 +313,6 @@ fn type_size_align(ty: DataType) -> Option<(u64, u64, ArgumentType)> {
 }
 
 impl ArgumentBufferLayout {
-    /// The layout `newArgumentEncoderWithArguments:` makes of `descriptors` (the module docs).
-    /// Refused as Metal refuses: no descriptors, a data type no argument has, and a constant block
-    /// alignment on a constant that does not start its block.
-    pub fn from_descriptors(
-        descriptors: &[ArgumentDescriptor],
-    ) -> Result<ArgumentBufferLayout, ArgumentLayoutError> {
-        if descriptors.is_empty() {
-            return Err(ArgumentLayoutError::NoDescriptors);
-        }
-        let mut cursor = 0u64;
-        let mut alignment = 1u64;
-        let mut in_block = false;
-        let mut members = Vec::with_capacity(descriptors.len());
-        for (position, d) in descriptors.iter().enumerate() {
-            let (size, natural, ty) =
-                type_size_align(d.data_type).ok_or(ArgumentLayoutError::DataType {
-                    position,
-                    data_type: d.data_type,
-                })?;
-            let mut align = natural;
-            if ty == ArgumentType::Constant {
-                if d.constant_block_alignment != 0 {
-                    if in_block {
-                        return Err(ArgumentLayoutError::ConstantBlockAlignment { position });
-                    }
-                    align = align.max(u64::from(d.constant_block_alignment));
-                }
-                in_block = true;
-            } else {
-                in_block = false;
-            }
-            let count = d.array_length.max(1);
-            let offset = metal_align(cursor, align).ok_or(ArgumentLayoutError::TooLarge)?;
-            cursor = size
-                .checked_mul(u64::from(count))
-                .and_then(|bytes| offset.checked_add(bytes))
-                .ok_or(ArgumentLayoutError::TooLarge)?;
-            alignment = alignment.max(natural);
-            members.push(ArgumentMember {
-                id: d.index,
-                count,
-                ids_per_element: 1,
-                offset,
-                stride: size,
-                size,
-                ty,
-                layout: None,
-            });
-        }
-        // Type alignments are powers of two, so this rounds up.
-        let encoded_length = metal_align(cursor, alignment).ok_or(ArgumentLayoutError::TooLarge)?;
-        Ok(ArgumentBufferLayout {
-            encoded_length,
-            alignment,
-            members,
-        })
-    }
 
     /// Where argument `index` lands: in the last member whose indices hold it, inside a struct
     /// member's element as that element's layout says. `None` when no member holds it.
@@ -417,34 +360,6 @@ impl ArgumentBufferLayout {
 }
 
 impl ArgumentBufferLayout {
-    /// The layout `newArgumentEncoderWithBufferBinding:` makes of reflected buffer binding
-    /// `binding` (a library's, [`Function::reflection`](crate::library::Function::reflection), or
-    /// a pipeline's): from its struct type as the reflection states it, by the argument buffer's
-    /// rule or the plain buffer's (the module docs). A binding with no struct type answers
-    /// Metal's encoder of no bytes, alignment 1, with or without API validation. Refused, as
-    /// `Unsupported` ([`Feature::Reflection`]) since Metal's encoder of them is unmeasured: a
-    /// plain buffer's member that is no constant (a pointer, say), a member whose data type no
-    /// argument has, and an argument buffer's struct array whose elements take no ids of their
-    /// own; an array of arrays, as Metal's encoder creation raises.
-    pub fn from_buffer_binding(
-        binding: &BufferBinding,
-    ) -> Result<ArgumentBufferLayout, ArgumentLayoutError> {
-        let Some(st) = binding.buffer_struct_type() else {
-            return Ok(ArgumentBufferLayout {
-                encoded_length: 0,
-                alignment: 1,
-                members: Vec::new(),
-            });
-        };
-        if binding
-            .buffer_pointer_type()
-            .is_some_and(PointerType::element_is_argument_buffer)
-        {
-            reflected_layout(st, Some(binding.buffer_alignment()), Rule::ArgumentBuffer)
-        } else {
-            reflected_layout(st, None, Rule::PlainBuffer)
-        }
-    }
 }
 
 /// Which of Metal's two rules lays out a reflected struct (the module docs).

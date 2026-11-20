@@ -82,8 +82,6 @@ impl IndexGatherPlanModule {
     pub const LOCAL_SIZE: u32 = 128;
     /// The most draws of an indirect run.
     pub const MAX_DRAWS: u32 = 512;
-    /// The bytes of each draw's command in the draws' binding (its stride).
-    pub const DRAW_BYTES: u64 = 20;
 }
 
 /// The arguments' binding symbol ([`IndexGatherPlanModule::ARGUMENTS_BINDING`]).

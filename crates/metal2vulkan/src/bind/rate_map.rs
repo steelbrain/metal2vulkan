@@ -497,13 +497,6 @@ pub struct RasterizationRateMap {
 }
 
 impl RasterizationRateMap {
-    /// The alignment, in bytes, of the parameter data in its buffer
-    /// (`parameterBufferSizeAndAlign.align`).
-    pub const PARAMETER_DATA_ALIGNMENT: u64 = 4;
-
-    /// The parameter data's size in bytes (`parameterBufferSizeAndAlign.size`): 24,624, Metal's
-    /// for every map ([`Self::parameter_data_size`]).
-    pub const PARAMETER_DATA_SIZE: u64 = format::BYTES as u64;
 
     /// Compile `desc` (`newRasterizationRateMapWithDescriptor:`) by this module's rule, Apple
     /// M3's, or refuse it ([`RateMapError::Unpinned`]) outside the bounds the rule is measured in.
@@ -590,27 +583,6 @@ impl RasterizationRateMap {
             layers,
             &vertical,
         ))
-    }
-
-    /// [`Self::new`] of `desc`, its tables written over `earlier`, the parameter data's words a
-    /// map held, as Metal's private `resetUsingDescriptor:` writes them: every entry this map's
-    /// tables write ([`Self::words`] holds which: each table's lines, and zero words past them),
-    /// and every other word as `earlier` holds it. So a map reset to fewer layers, or to a smaller
-    /// screen, keeps the entries past its own (measured on an Apple M3 Max under macOS 27.0.1:
-    /// every word of maps of no layers reset from maps of one and two layers and from a taller
-    /// screen). Words past `earlier`'s are zero. Only the parameter data differs from
-    /// [`Self::new`]'s map: the CPU coordinate maps read no entry past a map's own.
-    pub fn new_over(
-        desc: &RateMapDescriptor,
-        earlier: &[u32],
-    ) -> Result<RasterizationRateMap, RateMapError> {
-        let mut map = RasterizationRateMap::new(desc)?;
-        let mut words = vec![0u32; format::WORDS as usize];
-        let kept = earlier.len().min(words.len());
-        words[..kept].copy_from_slice(&earlier[..kept]);
-        map.encode_into(&mut words);
-        map.words = words;
-        Ok(map)
     }
 
     /// Whether every layer's every tile spans as many screen pixels as physical ones: the map

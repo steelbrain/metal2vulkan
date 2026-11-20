@@ -298,30 +298,6 @@ pub fn ulong_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
 }
 
 impl Device {
-    /// Every neutral resource a plan on this device can ask for, in a fixed order, so the
-    /// consumer can create them up front: zero and sink buffers, both samplers, and the neutral of
-    /// every image class the profile can declare (`neutral::image_classes` and
-    /// `neutral::ulong_classes`).
-    pub fn neutral_kinds(&self) -> Vec<NeutralResource> {
-        let profile = self.profile();
-        let mut kinds = BTreeSet::from([
-            NeutralResource::ZeroBuffer {
-                min_bytes: zero_buffer_bytes(profile),
-            },
-            NeutralResource::Sink {
-                min_bytes: NeutralResource::SINK_BYTES,
-            },
-            NeutralResource::Sampler { compare: false },
-            NeutralResource::Sampler { compare: true },
-        ]);
-        kinds.extend(
-            image_classes(profile)
-                .iter()
-                .chain(&ulong_classes(profile))
-                .filter_map(NeutralResource::for_image),
-        );
-        kinds.into_iter().collect()
-    }
 }
 
 /// Bytes of the `ZeroBuffer` neutral on `profile`: large enough for any uniform-buffer view

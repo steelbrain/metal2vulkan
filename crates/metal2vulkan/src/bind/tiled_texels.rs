@@ -132,15 +132,6 @@ impl TiledLevelMove {
         }
     }
 
-    /// The level, its elements 32-bit float depths that the move into the image clamps into
-    /// `[0, 1]` ([`clamps_depth`](Self::clamps_depth)).
-    pub const fn clamping_depth(self) -> TiledLevelMove {
-        TiledLevelMove {
-            clamps_depth: true,
-            ..self
-        }
-    }
-
     /// The invocations that move the level: a word of its tight elements each, into the image;
     /// a word of its tiled regions each, back.
     pub const fn invocations(&self, into_tight: bool) -> u32 {

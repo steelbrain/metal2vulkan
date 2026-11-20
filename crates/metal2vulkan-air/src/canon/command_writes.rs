@@ -127,12 +127,6 @@ impl CommandWrites {
         self.operations & bits != 0
     }
 
-    /// Whether a draw it makes may pass the primitive type of raw value `raw` (`MTLPrimitiveType`;
-    /// a value past Metal's five is never one).
-    pub const fn may_draw_primitive_type(self, raw: u32) -> bool {
-        raw < 5 && self.primitive_types & (1 << raw) != 0
-    }
-
     /// The writes of one operation `op`, called by `call`.
     fn of(op: IndirectCommand, call: &Call, parts: &ModuleParts) -> CommandWrites {
         use IndirectCommand as C;

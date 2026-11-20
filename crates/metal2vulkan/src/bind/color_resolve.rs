@@ -267,11 +267,6 @@ impl ColorResolveFormat {
         }
     }
 
-    /// The word whose attachment's samples the format holds ([`word`](Self::word)), if any.
-    pub fn held_word(self) -> Option<WordAttachment> {
-        self.word
-    }
-
     /// The extended-range form whose raw codes the format holds
     /// ([`extended_range`](Self::extended_range)), if any.
     pub fn extended(self) -> Option<ExtendedRange> {
@@ -336,21 +331,6 @@ impl ColorResolveFormat {
             device_srgb: self.srgb(),
             written_raw: self.written_raw && !self.srgb(),
             ..self
-        }
-    }
-
-    /// Whether the sRGB channels take the device's decode and encode
-    /// ([`device_srgb`](Self::device_srgb)).
-    pub fn decodes_on_device(self) -> bool {
-        self.device_srgb
-    }
-
-    /// The format of the view the result is written through: the raw twin's where
-    /// [`written_raw`](Self::written_raw), else the format.
-    pub fn written_format(self) -> Format {
-        match self.written_raw {
-            true => self.raw_format(),
-            false => self.format,
         }
     }
 

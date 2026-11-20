@@ -142,11 +142,6 @@ impl ChromaDecode {
         Format::R8G8B8A8_UNORM
     }
 
-    /// The Metal format of the twin's texels.
-    pub fn texel_pixel_format(self) -> PixelFormat {
-        PixelFormat::RGBA8Unorm
-    }
-
     /// Vulkan's format of the pairs, which a sampler Y′CbCr conversion reads (the module docs):
     /// `G8B8G8R8_422_UNORM` (`G0 B G1 R`) or `B8G8R8G8_422_UNORM` (`B G0 R G1`).
     pub fn format(self) -> Format {

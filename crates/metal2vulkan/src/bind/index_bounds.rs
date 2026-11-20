@@ -107,8 +107,6 @@ impl IndexBoundsPass {
     pub const FIRST_DRAW_OFFSET: u64 = 32;
     /// The second draw's `VkDrawIndexedIndirectCommand` in the bounds words.
     pub const SECOND_DRAW_OFFSET: u64 = 52;
-    /// The fill's `VkDispatchIndirectCommand` in the bounds words.
-    pub const FILL_DISPATCH_OFFSET: u64 = 72;
     /// The pool's header: its counter, then reserved bytes; its index bytes follow, where the
     /// second draw binds the pool as its index buffer.
     pub const POOL_HEADER_BYTES: u64 = 16;
@@ -165,13 +163,6 @@ impl IndexBoundsPass {
         })
     }
 
-    /// The parameters as the bytes to upload at the bounds words' start.
-    pub fn parameter_bytes(&self) -> Vec<u8> {
-        self.parameters
-            .iter()
-            .flat_map(|w| w.to_le_bytes())
-            .collect()
-    }
 }
 
 /// The consumer's parameter words, by index into the bounds words.

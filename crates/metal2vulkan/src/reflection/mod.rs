@@ -407,22 +407,6 @@ impl ComputePipelineDescriptor {
         Ok(ComputePipelineReflection { bindings })
     }
 
-    /// Whether the kernel uses a direct texture or sampler argument (`[[texture(n)]]`,
-    /// `[[sampler(n)]]`, a texture array among them) that the pipeline's
-    /// [`reflection`](Self::reflection) lists as used, of the entry its constants specialize where
-    /// they decide one: what `newComputePipelineStateWithDescriptor:` refuses with
-    /// `supportIndirectCommandBuffers`. It decides from the arguments' roles and use alone, so an
-    /// argument whose reflection Metal's answer has not been measured for, which `reflection`
-    /// refuses, decides nothing here. It decodes the kernel's AIR under `budget`; a kernel the
-    /// compile layer already compiled (`StageSource::Compiled`) answers from what its compile kept.
-    ///
-    /// Refused: a compiled kernel that kept no reflection (`Unsupported` with
-    /// `Feature::Reflection`), and the decode's and specialization's own errors.
-    pub fn uses_direct_arguments(&self, budget: &crate::Budget) -> Result<bool, Error> {
-        let mut m = Meter::new(budget);
-        stage_direct(&self.kernel, self.max_call_stack_depth, &mut m)
-    }
-
     /// What the kernel may store through each slot its arguments bind
     /// ([`writes`](crate::reflection::SlotWrite), whose rules are
     /// [`reflection`](crate::reflection)'s), of the entry its constants specialize where they

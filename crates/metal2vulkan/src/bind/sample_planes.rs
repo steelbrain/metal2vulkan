@@ -116,14 +116,6 @@ impl PlanesCopy {
             .then_some(copy)
     }
 
-    /// The copy format of the sample planes of a color attachment of `format`: its bits copy
-    /// ([`PlanesCopy::for_format`]), else [`PlanesCopy::Alpha8`] for `A8_UNORM`, whose one 8-bit
-    /// unorm channel its own views' `float`s keep. `None` for another format.
-    pub fn for_planes(format: Format) -> Option<PlanesCopy> {
-        PlanesCopy::for_format(format)
-            .or_else(|| (format == Format::A8_UNORM).then_some(PlanesCopy::Alpha8))
-    }
-
     /// The Vulkan format of the copy's views: an unsigned-integer one, or `A8_UNORM` for
     /// [`PlanesCopy::Alpha8`].
     pub fn format(self) -> Format {

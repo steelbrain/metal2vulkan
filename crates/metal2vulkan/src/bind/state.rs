@@ -560,11 +560,6 @@ impl CompensatedViewport {
         }
     }
 
-    /// This compensation, scaling a point's `x` and `y` by `guard`.
-    pub fn with_guard(self, guard: [f32; 2]) -> CompensatedViewport {
-        CompensatedViewport { guard, ..self }
-    }
-
     /// This compensation, bit `i` of `mirrors` set where viewport `i` is mirrored.
     pub fn with_mirrors(self, mirrors: u32) -> CompensatedViewport {
         CompensatedViewport { mirrors, ..self }
@@ -623,14 +618,6 @@ impl ArgumentSampler {
             desc,
             resource_id,
             element: None,
-        }
-    }
-
-    /// This state at `element` of the sampler arrays under [`HeapPlacement::ResourceId`].
-    pub fn at_element(self, element: u32) -> ArgumentSampler {
-        ArgumentSampler {
-            element: Some(element),
-            ..self
         }
     }
 
@@ -734,14 +721,6 @@ impl TessellationFactorBuffer {
 }
 
 impl BindState {
-    /// The [`view_base_alignment`](Self::view_base_alignment) of a device of `limits`: the larger
-    /// of its `minUniformBufferOffsetAlignment` and 16, the descriptor base alignment of a Metal
-    /// buffer slot's uniform view; 0 (none told apart) past `u32`.
-    pub fn view_base_alignment_of(limits: &Limits) -> u32 {
-        let alignment =
-            crate::memory::views::base_alignment(limits.min_uniform_buffer_offset_alignment);
-        u32::try_from(alignment).unwrap_or(0)
-    }
 
     /// The projection of this state that can change a plan: per stage, which slots are bound and
     /// with what kind of resource, whether a buffer has a device address, its per-bind stride, its
@@ -802,20 +781,6 @@ impl BindState {
     /// list in token order is compared in place, making nothing.
     pub fn has_shape(&self, shape: &BindShape) -> bool {
         self.is_shape(shape, &mut None)
-    }
-
-    /// The position among `shapes` of the first that is this state's shape (of which
-    /// [`has_shape`](Self::has_shape) answers true), found without making the shape: its used
-    /// resources' shape is made at most once, however many shapes it is compared with, and only
-    /// where it lists any in no token order and a shape's every other field matches.
-    pub fn position_of_shape<'s>(
-        &self,
-        shapes: impl IntoIterator<Item = &'s BindShape>,
-    ) -> Option<usize> {
-        let mut used = None;
-        shapes
-            .into_iter()
-            .position(|shape| self.is_shape(shape, &mut used))
     }
 
     /// Whether `shape` is this state's shape ([`has_shape`](Self::has_shape)), its used
@@ -927,63 +892,6 @@ impl BindState {
             && self.far_vertex_buffers == *far_vertex_buffers
             && self.region_viewports == *region_viewports
             && self.region_fan_out.map(|(mode, _)| mode) == *region_fan_out
-    }
-
-    /// The key of this state's shape beside its used resources, worked out in place, making no
-    /// shape: [`BindShape::key_beside_used`]'s answer for every shape of which
-    /// [`has_shape_beside_used`](Self::has_shape_beside_used) answers true. A consumer that keeps
-    /// shapes with their keys compares whole only those whose key is the state's: a shape of
-    /// another key is not its shape. A hash of every field the comparison reads: two shapes of
-    /// one key may still differ, and it is fixed within a build alone.
-    pub fn shape_key_beside_used(&self) -> u64 {
-        let mut key = FxHasher::default();
-        let alignment = self.view_base_alignment;
-        for (stage, t) in self.stages.iter().filter(|(_, t)| !t.has_empty_shape()) {
-            let buffers = (t.buffers.iter()).map(|(i, b)| {
-                (
-                    *i,
-                    b.shape(t.class_alignment(*i, alignment), t.buffer_ranges),
-                )
-            });
-            let textures = t.textures.iter().map(|(i, x)| (*i, x.shape()));
-            let samplers = t.samplers.iter().map(|(i, s)| (*i, s.shape()));
-            key_stage(&mut key, *stage, (buffers, textures, samplers));
-            t.threadgroup_lengths.hash(&mut key);
-        }
-        KeyRest {
-            vertex_amplification: &self.vertex_amplification,
-            imageblock_size: self.imageblock_size,
-            render_target_array_length: self.render_target_array_length,
-            tessellation_factor_buffer: self.tessellation_factors.buffer.is_some(),
-            render_area: self.render_area,
-            argument_samplers: (
-                capacity_class(self.argument_samplers.len()),
-                (self.argument_samplers.iter())
-                    .fold(0, |all, s| all | sampler_key(&s.desc.shape())),
-            ),
-            function_tables: FunctionTablesShape::of(&self.function_tables),
-            tile_threadgroup: &self.tile_threadgroup,
-            viewport_compensation: self.viewport_compensation.map(|c| c.compensation),
-            zeroed_colors: &self.zeroed_colors,
-            dropped_colors: &self.dropped_colors,
-            kept_imageblock_bytes: self.kept_imageblock_bytes,
-            depth_clamp_range: self.depth_clamp_range.is_some(),
-            rotated_weights: self.rotated_weights,
-            mesh_last_first: self.mesh_last_first,
-            line_band: self.line_band.map(|(primitive, _)| primitive),
-            interlocked_colors: &self.interlocked_colors,
-            fragment_tests: self.fragment_tests,
-            extended_shadows: &self.extended_shadows,
-            snapshot_textures: &self.snapshot_textures,
-            primitive_id_indices: self.primitive_id_indices,
-            quad_primitive_ids: self.quad_primitive_ids,
-            private_list: self.private_list,
-            far_vertex_buffers: &self.far_vertex_buffers,
-            region_viewports: self.region_viewports,
-            region_fan_out: self.region_fan_out.map(|(mode, _)| mode),
-        }
-        .hash(&mut key);
-        key.finish()
     }
 
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing
@@ -2036,106 +1944,7 @@ pub struct BindShape {
 }
 
 impl BindShape {
-    /// The shape a plan of a pipeline whose runtime dependencies are `dependencies` is planned
-    /// and keyed by: this shape with each bound texture's level count 1 but at the slots whose
-    /// levels the pipeline reads (`RuntimeFact::StorageTextureLevels` and
-    /// `StorageTextureLevelViews`), and each used texture's 1 (a heap array views level 0 alone).
-    /// The plan reads a texture's level count only at those slots, so it is the same plan, and
-    /// bound textures of other level counts that a function only samples, or writes at level 0,
-    /// share it. Borrowed where nothing changes.
-    pub fn for_plan(&self, dependencies: &[RuntimeDependency]) -> Cow<'_, BindShape> {
-        let reads_levels = |stage: Stage, index: u32| {
-            dependencies.iter().any(|d| match d.fact {
-                RuntimeFact::StorageTextureLevels { slot }
-                | RuntimeFact::StorageTextureLevelViews { slot } => {
-                    slot.stage == stage && slot.class == SlotClass::Texture && slot.index == index
-                }
-                _ => false,
-            })
-        };
-        let unread = |stage: Stage, index: u32, shape: &TextureShape| {
-            matches!(shape, TextureShape::Texture { mipmap_level_count, .. } if *mipmap_level_count != 1)
-                && !reads_levels(stage, index)
-        };
-        let used = |shape: &UsedShape| {
-            matches!(
-                shape.class,
-                UsedClass::Texture(TextureShape::Texture { mipmap_level_count, .. })
-                    if mipmap_level_count != 1
-            )
-        };
-        let changes = self.stages.iter().any(|(stage, table)| {
-            table
-                .textures
-                .iter()
-                .any(|(index, shape)| unread(*stage, *index, shape))
-        }) || self.used.values().any(used);
-        if !changes {
-            return Cow::Borrowed(self);
-        }
-        let one_level = |shape: &mut TextureShape| *shape = shape.at_one_level();
-        let mut projected = self.clone();
-        for (stage, table) in &mut projected.stages {
-            for (index, shape) in &mut table.textures {
-                if unread(*stage, *index, shape) {
-                    one_level(shape);
-                }
-            }
-        }
-        for shape in projected.used.values_mut() {
-            if let UsedClass::Texture(texture) = &mut shape.class {
-                one_level(texture);
-            }
-        }
-        Cow::Owned(projected)
-    }
 
-    /// Its key beside its used resources ([`BindState::shape_key_beside_used`], which answers
-    /// it for a state of which [`BindState::has_shape_beside_used`] answers true): a hash of
-    /// every field but `used`. Shapes equal but for `used` have one key.
-    pub fn key_beside_used(&self) -> u64 {
-        let mut key = FxHasher::default();
-        for (stage, s) in &self.stages {
-            let buffers = s.buffers.iter().map(|(i, b)| (*i, *b));
-            let textures = s.textures.iter().map(|(i, t)| (*i, *t));
-            let samplers = s.samplers.iter().map(|(i, x)| (*i, *x));
-            key_stage(&mut key, *stage, (buffers, textures, samplers));
-            s.threadgroup_lengths.hash(&mut key);
-        }
-        KeyRest {
-            vertex_amplification: &self.vertex_amplification,
-            imageblock_size: self.imageblock_size,
-            render_target_array_length: self.render_target_array_length,
-            tessellation_factor_buffer: self.tessellation_factor_buffer,
-            render_area: self.render_area,
-            argument_samplers: (
-                self.argument_samplers.class,
-                (self.argument_samplers.shapes.iter()).fold(0, |all, s| all | sampler_key(s)),
-            ),
-            function_tables: self.function_tables,
-            tile_threadgroup: &self.tile_threadgroup,
-            viewport_compensation: self.viewport_compensation,
-            zeroed_colors: &self.zeroed_colors,
-            dropped_colors: &self.dropped_colors,
-            kept_imageblock_bytes: self.kept_imageblock_bytes,
-            depth_clamp_range: self.depth_clamp_range,
-            rotated_weights: self.rotated_weights,
-            mesh_last_first: self.mesh_last_first,
-            line_band: self.line_band,
-            interlocked_colors: &self.interlocked_colors,
-            fragment_tests: self.fragment_tests,
-            extended_shadows: &self.extended_shadows,
-            snapshot_textures: &self.snapshot_textures,
-            primitive_id_indices: self.primitive_id_indices,
-            quad_primitive_ids: self.quad_primitive_ids,
-            private_list: self.private_list,
-            far_vertex_buffers: &self.far_vertex_buffers,
-            region_viewports: self.region_viewports,
-            region_fan_out: self.region_fan_out,
-        }
-        .hash(&mut key);
-        key.finish()
-    }
 }
 
 /// One stage's slots into a shape key ([`BindShape::key_beside_used`]): the stage, then each

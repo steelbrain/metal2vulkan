@@ -215,23 +215,6 @@ impl DeviceProfile {
         crate::memory::contain::device_drops_texel_writes(self, texel_buffer)
     }
 
-    /// Whether this profile runs object and mesh functions as compute work: it does not enable
-    /// `VK_EXT_mesh_shader` and `meshShader`. Then a mesh function writes its primitives as records
-    /// that a synthesized vertex stage draws (`GraphicsState::mesh_records`), each stage's
-    /// threadgroups are held to the compute stage's limits. Elsewhere they are `TaskEXT` and
-    /// `MeshEXT` entries, held to the task and mesh stages' limits, and an object function needs
-    /// `taskShader` too.
-    pub fn emulates_mesh_shading(&self) -> bool {
-        crate::lower::mesh::emulates(self)
-    }
-
-    /// Whether a function reads a two-plane YCbCr texture's planes in place where its slot reads
-    /// the texture only so (`bind::YCbCrInPlace`): on every device. The planes read in place are
-    /// sampled by Vulkan's Y′CbCr model where the sample allows it.
-    pub fn reads_ycbcr_planes_in_place(&self) -> bool {
-        self.fields.ycbcr_in_place
-    }
-
     /// The driver workarounds the profile takes: the leaf encodings it changes and the refusals of
     /// what the driver is measured to run wrong.
     pub fn workarounds(&self) -> &[DriverWorkaround] {

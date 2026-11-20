@@ -151,32 +151,6 @@ impl Error {
         }
     }
 
-    /// What this outcome is permanent for. Transient outcomes (those [`Error::retry`] calls
-    /// `Later`) are `Never` and may not enter a memo, artifact cache, or validation observation.
-    pub fn is_permanent_for(&self) -> Permanence {
-        match self {
-            Error::Cancelled | Error::Budget(_) => Permanence::Never,
-            Error::Internal(internal) if internal.kind == InternalKind::AllocationFailed => {
-                Permanence::Never
-            }
-            Error::Unsupported(u) => match u.needs {
-                Needs::AnyOf(_) => Permanence::InputAndDevice,
-                Needs::NotImplemented | Needs::NotRepresentable => Permanence::Input,
-                Needs::DriverDefect(_)
-                | Needs::RuntimeDriverDefect(_)
-                | Needs::StageBound
-                | Needs::DeviceCapability(_)
-                | Needs::MetalGpuFamily(_)
-                | Needs::MetalRefuses(_) => Permanence::InputAndDevice,
-            },
-            Error::NeedsInput(_)
-            | Error::InvalidInput(_)
-            | Error::InvalidDescriptor(_)
-            | Error::LimitExceeded(_) => Permanence::Input,
-            // The emitted module depends on the profile, so an invariant failure is keyed on both.
-            Error::Internal(_) => Permanence::InputAndDevice,
-        }
-    }
 }
 
 impl fmt::Display for Error {
@@ -479,12 +453,6 @@ impl Unsupported {
         self
     }
 
-    /// Name the pixel format a refused texture, view, copy or attachment holds, by its Metal
-    /// enumerator name (`MTLPixelFormatRGB10A8_2P_XR10`), as [`symbol`](Self::symbol)
-    /// (diagnostics only).
-    pub fn naming_format(self, pixel_format: PixelFormat) -> Unsupported {
-        self.naming(DiagName::new(pixel_format.name()))
-    }
 }
 
 impl fmt::Display for Unsupported {

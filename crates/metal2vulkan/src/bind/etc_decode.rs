@@ -209,20 +209,6 @@ impl EtcDecode {
         }
     }
 
-    /// The Metal pixel format whose texels a twin's of `texels` are.
-    pub fn texel_pixel_format(self, texels: EtcTexels) -> PixelFormat {
-        use EtcTexels as T;
-        match (self, texels) {
-            (EtcDecode::Rgb8 | EtcDecode::Rgb8A1 | EtcDecode::Rgba8, _) => PixelFormat::RGBA8Unorm,
-            (EtcDecode::R11Unorm, T::Compact) => PixelFormat::R16Unorm,
-            (EtcDecode::R11Snorm, T::Compact) => PixelFormat::R16Snorm,
-            (EtcDecode::Rg11Unorm, T::Compact) => PixelFormat::RG16Unorm,
-            (EtcDecode::Rg11Snorm, T::Compact) => PixelFormat::RG16Snorm,
-            (EtcDecode::R11Unorm | EtcDecode::R11Snorm, T::Float) => PixelFormat::R32Float,
-            (EtcDecode::Rg11Unorm | EtcDecode::Rg11Snorm, T::Float) => PixelFormat::RG32Float,
-        }
-    }
-
     /// The values of the 16 texels of `block`, row-major (texel `(x, y)` at `4y + x`): the packed
     /// 8-bit codes, red in the low byte, or an 11-bit format's values (red, then an `RG11`
     /// format's green; 0 elsewhere).

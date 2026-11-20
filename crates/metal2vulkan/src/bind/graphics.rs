@@ -686,9 +686,6 @@ impl MeshDispatch {
     pub const DISPATCH_OFFSET: u64 = 4 * crate::lower::mesh::work::DISPATCH as u64;
     /// The byte of the work buffer where the draw's `VkDrawIndirectCommand` lies.
     pub const DRAW_OFFSET: u64 = 4 * crate::lower::mesh::work::DRAW as u64;
-    /// The byte of the work buffer where the object dispatch's `VkDispatchIndirectCommand` lies,
-    /// which the object arguments pass writes ([`object_arguments`](Self::object_arguments)).
-    pub const OBJECT_DISPATCH_OFFSET: u64 = 4 * crate::lower::mesh::work::OBJECT_DISPATCH as u64;
 }
 
 /// Where an emulated mesh draw's mesh threadgroups come from ([`MeshDispatch`]).
@@ -2919,24 +2916,6 @@ impl BindingPlan {
         instantiate(self.drawn(draw)?, state, draw, commands, Heap::Written)
     }
 
-    /// [`instantiate_draw_into`](Self::instantiate_draw_into)'s commands of `draw` of `state`, but
-    /// for the plan's heap tables, written over `commands`: every field is set as that method sets
-    /// it but `descriptor_bytes`, which holds the stage tables alone, without the heap tables that
-    /// method writes after them ([`heap_tables_into`](Self::heap_tables_into)'s for `state`). So a
-    /// consumer that keeps a state's heap tables binds every later command of a state whose heap
-    /// inputs are the same with them, and works them out once rather than at each command: their
-    /// cost grows with the resources the state makes resident and the textures its slots bind
-    /// that a handle names, a draw's other commands' with what the draw binds. An error is one
-    /// `instantiate_draw_into` answers for `state`, but for those `heap_tables_into` answers.
-    pub fn instantiate_draw_apart_into(
-        &self,
-        state: &BindState,
-        draw: &DrawCall,
-        commands: &mut DrawCommands,
-    ) -> Result<(), BindError> {
-        instantiate(self.drawn(draw)?, state, draw, commands, Heap::Apart)
-    }
-
     /// The render template `draw` instantiates: this plan's, where the draw runs on its variant.
     fn drawn(&self, draw: &DrawCall) -> Result<&GraphicsTemplate, BindError> {
         let t = self
@@ -2962,34 +2941,6 @@ impl BindingPlan {
             }
         }
         Ok(t)
-    }
-
-    /// [`instantiate_draw_into`](Self::instantiate_draw_into)'s commands of `state`, written over
-    /// `commands`, which hold that method's commands of the same draw of a state that differed
-    /// from `state` only in what the buffer, texture and sampler slots `slots` bind (a buffer or
-    /// inline bytes at any offset, a texture, a sampler state), the state's shape the same: only
-    /// what those slots decide is written again (the buffers' descriptor ranges, the
-    /// `SlotBindOffset`, `SlotGuestBase` and pulled-stride push fields that read them, and their
-    /// fixed-function vertex buffers' offsets; a texture or sampler slot decides none of the
-    /// commands, its descriptor being the caller's), so the commands are those
-    /// `instantiate_draw_into` writes. `Ok(false)` where the plan or the draw reads one of them
-    /// some other way (a device-address slot, an argument or root table, a fixed-function binding
-    /// of a per-bind stride, a texture buffer's texel range, a YCbCr texture's planes, a mesh,
-    /// patch or de-indexed draw, a uniform view a written slot may alias): `commands` then hold
-    /// no draw's commands, as after an error, and the caller instantiates whole. An error is one
-    /// `instantiate_draw_into` may answer for `state`. It is [`slot_rebinds`](Self::slot_rebinds)
-    /// of `slots` (`Ok(false)` where that answers none), then
-    /// [`rebind_draw_slots_with`](Self::rebind_draw_slots_with) of them.
-    pub fn rebind_draw_slots_into(
-        &self,
-        state: &BindState,
-        slots: &[SlotRef],
-        commands: &mut DrawCommands,
-    ) -> Result<bool, BindError> {
-        match self.slot_rebinds(slots) {
-            Some(rebinds) => self.rebind_draw_slots_with(&rebinds, state, commands),
-            None => Ok(false),
-        }
     }
 
     /// What [`rebind_draw_slots_into`](Self::rebind_draw_slots_into) of the slots `slots` works
@@ -3049,32 +3000,6 @@ impl BindingPlan {
         }
     }
 
-    /// [`instantiate_draw_apart_into`](Self::instantiate_draw_apart_into)'s commands of `draw`
-    /// for `state`, written over `commands`, which hold that method's commands of `from` for
-    /// `state`: `from` and `draw` direct draws, each without indices or with indices of any
-    /// index type and index buffer, that differ only in their arguments (whether they read
-    /// indices, their index type and index buffer, vertex or index counts and starts, the index
-    /// offset, instance count, base vertex and base instance). Only what the arguments decide is
-    /// written again: the Vulkan draw, its index overrun, the `BaseVertexInstance` push fields and
-    /// the draw's own uses (its index buffer's), so the commands are those
-    /// `instantiate_draw_apart_into` writes. `Ok(false)` where the plan reads the arguments some
-    /// other way (a stage's argument or root table, a mesh, patch or de-indexed draw, a
-    /// fixed-function vertex buffer whose fetch window the two draws set apart, which the extents
-    /// hold, a vertices-per-primitive push field of a draw with indices and one without) or the
-    /// two are no such pair: `commands` then hold no draw's commands, as after an error, and the
-    /// caller instantiates whole. An error is one `instantiate_draw_apart_into` answers for
-    /// `draw` where it answered none for `from` (its instances past a multiview limit).
-    pub fn redraw_apart_into(
-        &self,
-        state: &BindState,
-        (from, draw): (&DrawCall, &DrawCall),
-        commands: &mut DrawCommands,
-    ) -> Result<bool, BindError> {
-        match self.graphics.as_ref() {
-            Some(t) if !t.other_layer_variant => redraw_with(t, state, (from, draw), commands),
-            _ => Ok(false),
-        }
-    }
 }
 
 /// The Vulkan draw of a Metal draw, and the base vertex and first instance the

@@ -237,18 +237,6 @@ pub enum PredicationCompare {
 }
 
 impl PredicationCompare {
-    /// Metal's `comparison` argument: 0 to 5 as the variants state, and any other value
-    /// (6, 255, `2^32 + 2`, `2^64 - 1`, all measured) [`Equal`](Self::Equal), as Metal compares.
-    pub fn from_metal(comparison: u64) -> PredicationCompare {
-        match comparison {
-            1 => PredicationCompare::NotEqual,
-            2 => PredicationCompare::Greater,
-            3 => PredicationCompare::GreaterEqual,
-            4 => PredicationCompare::Less,
-            5 => PredicationCompare::LessEqual,
-            _ => PredicationCompare::Equal,
-        }
-    }
 
     fn code(self) -> u32 {
         match self {
@@ -339,12 +327,6 @@ impl PredicationStep {
     /// The bound form: the record's count of gates (a `u32`), at its own empty table's count.
     pub const BOUND_COUNT_OFFSET: u64 = PredicationStep::EMPTY_TABLE_OFFSET;
 
-    /// The bound form: the bytes of a record's binding that holds `gates` gates, and one more
-    /// past them, which a pass of the gate loop past the count reads (the module docs).
-    pub const fn bound_bytes(gates: u64) -> u64 {
-        PredicationStep::BOUND_GATES_OFFSET + (gates + 1) * PredicationStep::GATE_BYTES
-    }
-
     /// The step of `op` on the counter at device address `counter`: for an
     /// [`If`](PredicationOp::If) use [`PredicationStep::condition`].
     pub fn new(counter: u64, op: PredicationOp) -> PredicationStep {
@@ -390,11 +372,6 @@ impl PredicationStep {
             reference,
             ..self
         }
-    }
-
-    /// This loop step on the loop's flag at device address `flag`, of the loop of id `id`.
-    pub fn in_loop(self, flag: u64, id: u32) -> Self {
-        PredicationStep { flag, id, ..self }
     }
 
     /// This [`UnitEnd`](PredicationOp::UnitEnd) step writing its check word (a `u32`) at device

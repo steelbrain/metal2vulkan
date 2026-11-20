@@ -391,48 +391,6 @@ impl IndexGather {
         Some(first)
     }
 
-    /// Add an indirect `draw` to the run: its place among the run's draws, whose
-    /// `VkDrawIndexedIndirectCommand` the plan writes at that place's
-    /// [`DRAW_BYTES`](plan::IndexGatherPlanModule::DRAW_BYTES) of its draws' binding. `None`
-    /// where the run cannot take it, and is as before: a direct run, a run of
-    /// [`MAX_DRAWS`](plan::IndexGatherPlanModule::MAX_DRAWS), an arguments offset not a multiple
-    /// of 4 or arguments outside the bound bytes, an index offset not a multiple of the index
-    /// size, or indices read outside the bound bytes.
-    pub fn push_indirect(&mut self, draw: IndirectGatherDraw) -> Option<u32> {
-        let Source::Indirect {
-            arguments,
-            sequential,
-            ..
-        } = self.source
-        else {
-            return None;
-        };
-        if self.draws.len() >= plan::IndexGatherPlanModule::MAX_DRAWS as usize
-            || !draw.arguments_offset.is_multiple_of(4)
-        {
-            return None;
-        }
-        // `MTLDrawPrimitivesIndirectArguments` is four words, the indexed arguments five.
-        let words: u64 = if sequential { 4 } else { 5 };
-        let end = draw.arguments_offset.checked_add(words * 4)?;
-        if draw.arguments_offset < arguments.offset || end > arguments.offset + arguments.range {
-            return None;
-        }
-        let argument_word = u32::try_from((draw.arguments_offset - arguments.offset) / 4).ok()?;
-        let wide = draw.wide && !sequential;
-        let (byte, inside) = match sequential {
-            true => (0, 0),
-            false => {
-                let inside = whole(draw.index_offset, draw.index_end, wide);
-                self.index_words(draw.index_offset, draw.index_end, wide, inside)?
-            }
-        };
-        let place = self.draws.len() as u32;
-        self.draws
-            .push([0, 0, 0, byte, inside, u32::from(wide), 0, argument_word]);
-        Some(place)
-    }
-
     /// The run's draws.
     pub fn len(&self) -> usize {
         self.draws.len()

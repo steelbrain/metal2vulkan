@@ -113,16 +113,6 @@ impl ContinuedResult {
         }
     }
 
-    /// The same result, a sum of which is taken into its word's low half alone
-    /// ([`ContinuedResult::low_half`]).
-    #[must_use]
-    pub fn in_low_half(self) -> ContinuedResult {
-        ContinuedResult {
-            low_half: true,
-            ..self
-        }
-    }
-
     /// How the table states its combine: 0 to OR, 1 to sum, 2 to sum into the low half.
     fn how(&self) -> u32 {
         match (self.sum, self.low_half) {

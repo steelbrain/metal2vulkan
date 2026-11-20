@@ -248,17 +248,6 @@ impl StageModule {
         self.spirv.iter().flat_map(|w| w.to_le_bytes()).collect()
     }
 
-    /// The stage's precision notes where a pipeline creates it under `specialization`: every note
-    /// of [`precision_notes`](Self::precision_notes) that no
-    /// [`specialized_notes`](Self::specialized_notes) entry names, and each specialized note
-    /// one of whose clauses holds under the key's values. A constant the key does not give
-    /// reads its default ([`SpecializationLayout`]), so the empty key gives the notes of the
-    /// default specialization. Sorted, each note once. `precision_notes` itself is the answer
-    /// where no specialization is known.
-    pub fn precision_notes_under(&self, specialization: &SpecializationKey) -> Vec<PrecisionNote> {
-        self.precision_notes_bound(specialization, &|_| None)
-    }
-
     /// The stage's precision notes where a pipeline creates it under `specialization` and a draw
     /// or dispatch binds the values `bound` gives: as
     /// [`precision_notes_under`](Self::precision_notes_under), where a test of a key no pipeline's
@@ -286,19 +275,6 @@ impl StageModule {
     }
 
     /// The clauses of `note`'s [`specialized_notes`](Self::specialized_notes) entry that hold
-    /// where a pipeline creates the stage under `specialization`, as
-    /// [`precision_notes_under`](Self::precision_notes_under) reads them: the bound formats and
-    /// samplers, by slot, that leave the note on an arm that is not Metal's. Empty where no
-    /// entry names `note` or none of its clauses holds.
-    pub fn note_clauses_under(
-        &self,
-        note: PrecisionNote,
-        specialization: &SpecializationKey,
-    ) -> Vec<&SpecClause> {
-        self.note_clauses_bound(note, specialization, &|_| None)
-    }
-
-    /// The clauses of `note`'s [`specialized_notes`](Self::specialized_notes) entry that hold
     /// where a pipeline creates the stage under `specialization` and a draw or dispatch binds
     /// the values `bound` gives, as [`precision_notes_bound`](Self::precision_notes_bound) reads
     /// them.
@@ -313,26 +289,6 @@ impl StageModule {
             .filter(|s| s.note == note)
             .flat_map(|s| &s.when)
             .filter(|clause| self.clause_holds(clause, specialization, bound))
-            .collect()
-    }
-
-    /// The clauses of `note`'s [`specialized_notes`](Self::specialized_notes) entry that test
-    /// only the formats bound at texture slots ([`SpecClause::tests_bound_formats`]) and hold
-    /// where `bound` gives the class of the format bound at each slot they name
-    /// (`metal::texel_format::texel_format`), or `None` where it is not known, of which such a
-    /// test holds. A runtime reads them at a draw or dispatch, from the textures it binds: the
-    /// key of its pipeline carries no such class. Empty where no entry names `note` or none of
-    /// those clauses holds.
-    pub fn bound_format_clauses(
-        &self,
-        note: PrecisionNote,
-        bound: &dyn Fn(SlotRef) -> Option<u32>,
-    ) -> Vec<&SpecClause> {
-        self.specialized_notes
-            .iter()
-            .filter(|s| s.note == note)
-            .flat_map(|s| &s.when)
-            .filter(|clause| clause.tests_bound_formats() && clause.holds_of_bound(bound))
             .collect()
     }
 
@@ -472,29 +428,6 @@ impl SpecClause {
         self.all
             .iter()
             .all(|t| matches!(t.key, SpecKey::BoundTexelFormat(_)))
-    }
-
-    /// Whether a test reads a value a plan gives (`BindingPlan::specialized_value`) that a
-    /// pipeline's key need not carry: one the function reads as data
-    /// (`SpecKey::read_as_data`), the word of the sampler bound at a slot
-    /// (`SpecKey::BoundSamplerWord`), or what the stage's handles can name
-    /// (`SpecKey::HeapYCbCrTextures`, `SpecKey::HeapRawTextures`, `SpecKey::HeapNanFamilies`,
-    /// `SpecKey::FilteringArgumentSampler`). A runtime reads such
-    /// a clause at each draw or dispatch, from the values its plan gives
-    /// ([`StageModule::note_clauses_bound`]), or the key's where the stage declares the key as a
-    /// constant (`SpecKey::HeapRawTextures` gates the raw arms so).
-    pub fn tests_bound_values(&self) -> bool {
-        self.all.iter().any(|t| {
-            t.key.read_as_data()
-                || matches!(
-                    t.key,
-                    SpecKey::BoundSamplerWord(_)
-                        | SpecKey::HeapYCbCrTextures(_)
-                        | SpecKey::HeapRawTextures(_)
-                        | SpecKey::HeapNanFamilies(_)
-                        | SpecKey::FilteringArgumentSampler
-                )
-        })
     }
 
     /// Whether every test of the bound formats holds where `bound` gives the class of the format

@@ -183,56 +183,6 @@ impl CompiledFunction {
         &self.1
     }
 
-    /// The digest `derive` gives for `words`, where `words` are the final SPIR-V of this
-    /// function's last relocation -- the very `Arc` a pipeline's stage took from it -- and
-    /// `None` where they are not.
-    ///
-    /// A pipeline state that names a stage's module by a digest of its words asks here first: a
-    /// sweep of states over one function pair takes the same words on every creation (the
-    /// relocation slot gives back the same allocation), so without this each creation hashes
-    /// words byte-identical to the previous creation's. Pass the words a stage of the pipeline
-    /// holds and the function that would have hashed them.
-    ///
-    /// **A miss costs no `derive` call at all.** `None` is answered from the slot alone: no
-    /// hash is taken, and the caller is free to derive or not. That is what a caller in a hot
-    /// path needs to know, and it is also why the caller's own function stays the only
-    /// derivation of a stage's words that ever runs -- nothing here hashes words any other way,
-    /// so nothing keyed on such a digest can take a different value from this.
-    ///
-    /// **The digest a caller gets is always one its own `derive` produced.** The slot keeps the
-    /// function beside the digest and answers only where that function is this call's, so two
-    /// callers that hash differently never read each other's digest: a mismatch derives again
-    /// and replaces what the slot held.
-    ///
-    /// **On comparing `fn` pointers**, which is not guaranteed stable: identical-code folding
-    /// may merge two functions into one address, and one `fn` item may have several addresses
-    /// across codegen units. Both directions are harmless here. Two addresses for one function
-    /// make a mismatch, which costs a hash and gives the same digest. The dangerous direction --
-    /// two *different* hash functions reading as one -- cannot occur, because folding merges
-    /// only identical machine code and identical machine code cannot produce different digests.
-    ///
-    /// `derive` is the caller's, so it is **never called while the slot is locked**: one that
-    /// reached back into this compiled function would otherwise deadlock. The slot is locked and
-    /// read, released, `derive` is called, and the digest is stored only if the slot still holds
-    /// those words. Two threads deriving at once is benign -- the same words give the same
-    /// digest, and the last store wins.
-    pub fn relocated_words_digest(
-        &self,
-        words: &Arc<[u32]>,
-        derive: fn(&[u32]) -> crate::cache::Hash256,
-    ) -> Option<crate::cache::Hash256> {
-        match self.1.digest_of(words, derive) {
-            DigestOf::Kept(digest) => Some(digest),
-            DigestOf::Other => None,
-            // Derived with the slot released: `derive` is the caller's and may reach anywhere.
-            DigestOf::Wanted => {
-                let digest = derive(words);
-                self.1.keep_digest(words, derive, digest);
-                Some(digest)
-            }
-        }
-    }
-
     /// The key the function was compiled under.
     pub fn key(&self) -> &FunctionCompileKey {
         &self.0.key
@@ -307,19 +257,6 @@ impl CompiledFunction {
         !self.0.kernel.partition_oblivious
     }
 
-    /// Whether the function, a kernel, observes its threadgroup partition through its simdgroups
-    /// alone: its only observations are barriers of simdgroup execution scope, fences and atomics
-    /// of simdgroup scope, simdgroup and quad functions, `is_uniform`, the simdgroup size, and the
-    /// builtins `thread_index_in_simdgroup`, `thread_index_in_quadgroup` and
-    /// `threads_per_simdgroup`. It computes the same in any partition that keeps its threadgroups,
-    /// so a one-row grid in threadgroups of one row may run flat in the call's threadgroups
-    /// (`LoweringInputs`'s `call_threadgroups`). `false` for a kernel that does not observe its
-    /// partition ([`observes_threadgroup_partition`](Self::observes_threadgroup_partition)).
-    /// Decided as that one is.
-    pub fn observes_partition_through_simdgroups_alone(&self) -> bool {
-        self.0.kernel.partition_simdgroups
-    }
-
     /// Whether the function, a kernel, is image-only: it samples, gathers or reads a texture, and
     /// loads, stores and updates atomically nothing in device memory, through no load, store,
     /// atomic or call but a texture or sampler operation on a pointer into the `device` address
@@ -329,12 +266,6 @@ impl CompiledFunction {
     /// workgroups. `false` for a function that is not a kernel.
     pub fn is_image_only(&self) -> bool {
         self.0.kernel.image_only
-    }
-
-    /// The function's own `[[max_total_threads_per_threadgroup(n)]]` (`air.max_work_group_size`),
-    /// `None` without one: the most threads Metal compiles a threadgroup of the function for.
-    pub fn max_total_threads_attribute(&self) -> Option<u32> {
-        self.0.kernel.max_total_threads.filter(|&n| n > 0)
     }
 
     /// Where a fragment function linked after this vertex function pushes its fields on

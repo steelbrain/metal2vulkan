@@ -349,20 +349,6 @@ impl Device {
         })
     }
 
-    /// The key of the tile render pipeline `d` (no decode).
-    pub fn tile_pipeline_key(&self, d: &TileRenderPipelineDescriptor) -> crate::cache::PipelineKey {
-        let stage = match &d.tile {
-            StageSource::Function(f) => self.function_compile_key(f, &tile_inputs(d)),
-            StageSource::Compiled(c) => *c.key(),
-        };
-        pipeline_key(
-            b"tile",
-            &self.profile_fingerprint(),
-            &[stage],
-            &tile_fields(d),
-        )
-    }
-
     /// Compile the tile render pipeline `d` under budget `b`: its tile function, compiled under the
     /// descriptor's color attachment formats (`LoweringInputs::tile_attachments`, the color index
     /// of each attachment whose format is set), as a compute pipeline that runs one threadgroup per

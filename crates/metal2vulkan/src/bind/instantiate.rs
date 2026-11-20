@@ -226,13 +226,6 @@ impl RootTable {
     /// Byte offset of the sink entry's `host` field, which the consumer fills.
     pub const SINK_HOST_OFFSET: u32 = (SINK_ROOT * ENTRY_BYTES + HOST) as u32;
 
-    /// Byte offset of the sink entry's `guest` and `size` fields, `R0` and `N`: the 16 bytes
-    /// [`resident_fields`](Self::resident_fields) gives.
-    pub const RESIDENT_FIELDS_OFFSET: u32 = (SINK_ROOT * ENTRY_BYTES + RESIDENT_FIRST) as u32;
-
-    /// The alignment a table and a [`ResidentSet`] it is pointed at both need: one entry.
-    pub const ENTRY_ALIGNMENT: u64 = ENTRY_BYTES;
-
     /// The table's resident set, `R0 .. R0 + N` as the binder wrote it, each at its padded size.
     pub fn resident_ranges(&self) -> Vec<ResidentRange> {
         let field = |root: u64, field: u64| {
@@ -251,26 +244,6 @@ impl RootTable {
                 length: field(root, SIZE),
             })
             .collect()
-    }
-
-    /// The sink entry's `guest` and `size` fields (`R0`, then `N`, little-endian) that point a
-    /// table at `table` at the `count` entries of a [`ResidentSet`] at `set`: `R0` is
-    /// `(set - table) / 32` modulo `2^64`. `None` where `set - table` is not a multiple of 32.
-    pub fn resident_fields(table: u64, set: u64, count: u64) -> Option<[u8; 16]> {
-        let distance = set.abs_diff(table);
-        if !distance.is_multiple_of(ENTRY_BYTES) {
-            return None;
-        }
-        let entries = distance / ENTRY_BYTES;
-        // A set below the table wraps: `first * 32` is `set - table` modulo `2^64` either way.
-        let first = match set >= table {
-            true => entries,
-            false => 0u64.wrapping_sub(entries),
-        };
-        let mut fields = [0u8; 16];
-        fields[..8].copy_from_slice(&first.to_le_bytes());
-        fields[8..].copy_from_slice(&count.to_le_bytes());
-        Some(fields)
     }
 
     /// The table with `statics` (entry `2 + n` for each `(n, entry)`, every `n < first - 2`) and
@@ -375,19 +348,6 @@ impl ResidentSet {
         }
     }
 
-    /// The set of every range of `parts`, in their order: equal to [`ResidentSet::new`] of their
-    /// ranges in that order. Each part's set is joined as it is, coalesced with the parts before
-    /// it only at its head; parts whose ranges interleave by Metal address (one starting below
-    /// another of a part ahead of it) are sorted and coalesced together again.
-    pub fn of_parts<'a>(parts: impl IntoIterator<Item = &'a ResidentPart>) -> ResidentSet {
-        let parts = parts
-            .into_iter()
-            .map(|part| (&part.sorted[..], &part.set[..]));
-        ResidentSet {
-            entries: crate::bind::resident::joined(parts),
-        }
-    }
-
     /// Its entries' count, `N`.
     pub fn len(&self) -> u64 {
         self.entries.len() as u64
@@ -420,25 +380,6 @@ impl ResidentSet {
         let into = range.guest - e.guest;
         let end = u128::from(into) + u128::from(padded(range.length));
         end <= u128::from(e.size) && e.host.wrapping_add(into) == range.host
-    }
-
-    /// What a consumer points a replay preprocess's resident root table at
-    /// ([`ReplayPreprocess::resident`](crate::bind::ReplayPreprocess::resident),
-    /// [`DrawReplayPreprocess::resident`](crate::bind::DrawReplayPreprocess::resident)) for its
-    /// commands' addresses to resolve through `ranges` as they lie then (the first submission of
-    /// the command buffer that records it, say): the set of `ranges` ([`ResidentSet::new`]) in its
-    /// entries' layout, then each entry's unpadded extent (a `u64`: how many bytes from its Metal
-    /// address the ranges hold without a gap, at their own lengths), then one zero; and the set's
-    /// count `N`. The consumer uploads the bytes at a 32-byte-aligned device address `set` and
-    /// writes [`RootTable::resident_fields`] of the table, `set` and `N` over the table's own.
-    pub fn replay_bytes(ranges: impl IntoIterator<Item = ResidentRange>) -> (Vec<u8>, u64) {
-        let ranges: Vec<ResidentRange> = ranges.into_iter().collect();
-        let set = ResidentSet::new(ranges.iter().copied());
-        let allocations = ranges.iter().map(|range| (range.guest, range.length));
-        let extents = crate::bind::resident::extents_of(allocations, &set.entries);
-        let mut bytes = set.bytes();
-        bytes.extend(crate::bind::resident::extents_bytes(extents));
-        (bytes, set.len())
     }
 
     /// The set of its entries and `ranges`, coalesced.

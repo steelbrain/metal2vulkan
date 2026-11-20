@@ -120,11 +120,6 @@ impl PvrtcDecode {
         Format::R8G8B8A8_UNORM
     }
 
-    /// The Metal pixel format whose texels a twin's are: `RGBA8Unorm`.
-    pub fn texel_pixel_format(self) -> PixelFormat {
-        PixelFormat::RGBA8Unorm
-    }
-
     /// The `float` Metal reads of channel `ch` (red, green, blue, alpha) of code `c`.
     pub fn metal_value(self, ch: usize, c: u8) -> f32 {
         match self.srgb && ch < 3 {

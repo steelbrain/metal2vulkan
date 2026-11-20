@@ -68,8 +68,6 @@ impl RowsCopyModule {
     pub const LOCAL_SIZE: u32 = 64;
     /// Bytes of the `COMPUTE` push-constant range at offset 0: the rows' shape.
     pub const PUSH_BYTES: u32 = 16;
-    /// The largest first word in either binding the shape holds.
-    pub const MOST_FIRST_WORD: u32 = 0xffff;
 
     /// The push bytes of rows `width` words long, the first row's first word at word
     /// `first_source` of the source binding and `first_destination` of the destination's (each

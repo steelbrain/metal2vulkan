@@ -548,36 +548,6 @@ impl ExtendedRange {
         }
     }
 
-    /// The raw texel (the components of [`raw_format`](Self::raw_format)) Metal's `Clear` load
-    /// action stores for the clear color `color` (red, green, blue, alpha; measured on an Apple M3
-    /// Max and an M4): each channel goes through `float` and then `half`,
-    /// each rounded to nearest even, and is stored as a kernel write stores that value; the bits
-    /// Metal does not read are written as a write writes them. That is Metal's route `route` where
-    /// it is [`ClearRoute::ThroughHalf`]; a texel by [`ClearRoute::Straight`] is that route's. A
-    /// bfloat form's code is the one `route` gives. (A color fill, Apple SPI, goes through neither:
-    /// the runtime's `blit_fill`.)
-    pub fn clear_texel(self, color: [f64; 4], route: ClearRoute) -> [u32; 4] {
-        let half =
-            |v: f64| crate::float16::f16_bits_to_f32(crate::float16::f32_to_f16_bits(v as f32));
-        let straight = route == ClearRoute::Straight
-            && matches!(
-                self,
-                ExtendedRange::Bgr10 { .. } | ExtendedRange::Bgra10 { .. }
-            );
-        let codes = std::array::from_fn(|c| match (self.bfloat(), route) {
-            (true, ClearRoute::ThroughHalf) => bfloat_nearest_even(half(color[c])),
-            (true, ClearRoute::Straight) => bfloat_of_double(color[c]),
-            (false, _) if straight => self.straight_code(color[c] as f32, c == 3),
-            (false, _) => self.code(half(color[c]), c == 3),
-        });
-        let texel = self.texel(codes);
-        match (self, straight) {
-            // Bits 30 and 31 zero.
-            (ExtendedRange::Bgr10 { .. }, true) => [texel[0] & 0x3fff_ffff, 0, 0, 0],
-            _ => texel,
-        }
-    }
-
     /// The code Metal's straight clear route ([`ClearRoute::Straight`]) stores in a `BGR10_XR`
     /// or `BGRA10_XR` channel, or its alpha where `alpha`, for the `float` `v` (an Apple M4 under
     /// macOS 27.0.1: every channel of 2,574 colors of each form; the consumer's M3 Max under 26.7
@@ -608,44 +578,6 @@ impl ExtendedRange {
         (f64::from(x) + 0.5).floor().clamp(0.0, 1023.0) as u32
     }
 
-    /// Whether a render pass's `Clear` load of the clear color `color` leaves Metal's tile memory
-    /// holding the values the clear's stored codes ([`clear_texel`](Self::clear_texel)) read
-    /// back, rounded to `half`. Metal's tile memory holds each channel of a pass's
-    /// `BGR10_XR`, `BGRA10_XR` or two-plane color, and their `_sRGB` twins, as `half` until the
-    /// pass stores it, and a `Clear` load as the clear color through `float` and then `half`
-    /// (on an Apple M4 and the same probe on an Apple M3 Max): a draw that reads
-    /// or blends into the color then sees those halves, where an image of the codes holds the
-    /// codes nearest them. A padded form's tile holds its channels as `half` too, an unblended
-    /// draw's past `[0, 1]` unclamped (the M3 Max under macOS 27.0.1: a blend over a clear and
-    /// over such a draw, `probes/padded_and_bfloat_blends.m` of the conformance crate); its codes
-    /// read back
-    /// `c / 1023` (`RGB10A2Unorm_sRGB`'s alpha `c / 3`), the color of `R10Unorm_X6_sRGB` and
-    /// `RGB10A2Unorm_sRGB` through the sRGB transfer function. `None` for the bfloat forms,
-    /// whose tile memory is unmeasured.
-    pub fn clear_read_back(self, color: [f64; 4]) -> Option<bool> {
-        if self.bfloat() {
-            return None;
-        }
-        let half = |v: f32| crate::float16::f16_bits_to_f32(crate::float16::f32_to_f16_bits(v));
-        if self.padded() {
-            use crate::metal::ColorWriteMask as M;
-            let held = self.channels();
-            let lanes = [M::RED, M::GREEN, M::BLUE, M::ALPHA];
-            return Some((0..4).filter(|&c| held.contains(lanes[c])).all(|c| {
-                let tile = half(color[c] as f32);
-                tile == half(self.padded_code_value(self.code(tile, c == 3), c == 3))
-            }));
-        }
-        let channels = match self {
-            ExtendedRange::Bgr10 { .. } => 3,
-            _ => 4,
-        };
-        Some((0..channels).all(|c| {
-            let held = half(color[c] as f32);
-            held == half(self.code_value(self.code(held, c == 3), c == 3))
-        }))
-    }
-
     /// The value a padded form's code `code` of a color channel, or of alpha where `alpha`, reads:
     /// `code / 1023`, `RGB10A2Unorm_sRGB`'s alpha `code / 3`, the color of `R10Unorm_X6_sRGB` and
     /// `RGB10A2Unorm_sRGB` through the sRGB transfer function (`RG10Unorm_X12_sRGB` reads its codes
@@ -665,23 +597,6 @@ impl ExtendedRange {
             _ => linear(1023.0),
         };
         v as f32
-    }
-
-    /// The `half` values Metal's tile memory holds for a color of this form after a render
-    /// pass's `Clear` load of the clear color `color` (red, green, blue, alpha), as `f32`: each
-    /// channel through `float` and then `half`, each rounded to nearest even, and `BGR10_XR`'s
-    /// alpha 1, as a read of the tile reads it. The runtime clears the attachment's `half` shadow
-    /// to them. `None` for the padded forms, whose `half` shadow the runtime does not hold, and
-    /// the bfloat forms, whose tile memory is unmeasured.
-    pub fn clear_tile_value(self, color: [f64; 4]) -> Option<[f32; 4]> {
-        if self.padded() || self.bfloat() {
-            return None;
-        }
-        let half = |v: f32| crate::float16::f16_bits_to_f32(crate::float16::f32_to_f16_bits(v));
-        Some(std::array::from_fn(|c| match (self, c) {
-            (ExtendedRange::Bgr10 { .. }, 3) => 1.0,
-            _ => half(color[c] as f32),
-        }))
     }
 
     /// The `float` value Metal reads from the code `code` (below 1024) of a color channel, or of
@@ -1271,45 +1186,6 @@ pub fn extended_range_blend(pf: PixelFormat, profile: &DeviceProfile) -> Result<
     crate::lower::fragment::extended_range_blend(pf, profile)
 }
 
-/// Whether `pf` holds each of its 10-bit codes in the top 10 bits of its own little-endian
-/// 16-bit word, the low 6 unread: the padded formats `R10Unorm_X6` and `RG10Unorm_X12` and their
-/// `_sRGB` twins. `RGB10A2Unorm_sRGB` packs its codes in one 32-bit word instead, so it is not
-/// one of these ([`ExtendedRange::padded`] names both sets).
-///
-/// Metal makes a texture of such a format wherever it makes one of any format, in memory of its
-/// own as much as over an IOSurface's plane or a buffer. Measured on an Apple M3 Max under macOS
-/// 27.0.1 (26A434) for all four, 2D 8x8 unless said: `newTextureWithDescriptor:` answers a
-/// texture in `Shared`, `Private` and `Memoryless` storage, under `ShaderRead`,
-/// `ShaderRead | ShaderWrite` and `ShaderRead | RenderTarget` usage, with four levels, as an
-/// array of three slices, and as a texture buffer of 64 texels; an automatic, a placement and a
-/// sparse heap each place one, and `heapTextureSizeAndAlignWithDescriptor:` answers the tight
-/// linear size at an alignment of 128. A shader read answers the code's value and a shader write
-/// stores the code, a blit from a buffer lands exactly, and a render pass clears and draws into
-/// one. `newSharedTextureWithDescriptor:` makes one as well, in the `Private` storage that is the
-/// only storage any shareable texture is made in: all four formats at 2D 8x8, 2D 16x16 and a
-/// texture buffer of 8 and of 16 texels answered a shareable texture of the format, 8 of 8
-/// processes each, where `Shared`, `Managed` and `Memoryless` storage answer nil for every format
-/// alike (`RGBA8Unorm` and `R16Uint` beside these four). Only a multisample descriptor is stopped
-/// by Metal's validation.
-///
-/// Metal's own host copies of such a texture are exact only while it keeps the texture linear —
-/// `allocatedSize` equal to the tight `width * bytes * height`, which held for every height up
-/// to 8 at widths to 1024, for heights to 12 at a width of 16, and at any extent whose usage
-/// includes `ShaderWrite`. Where Metal picks its compressed layout instead (an extra 128 bytes
-/// or more in `allocatedSize`: 16x16 and 64x64 under `ShaderRead` alone) both host copies are
-/// silent no-ops: `getBytes:` leaves its destination untouched and `replaceRegion:` leaves the
-/// texture zero as a shader reads it, while a blit either way still moves the texels. The
-/// runtime's copies are exact at every extent (docs/API.md, accepted differences).
-pub fn padded_words(pf: PixelFormat) -> bool {
-    matches!(
-        pf,
-        PixelFormat::R10UnormX6
-            | PixelFormat::RG10UnormX12
-            | PixelFormat::R10UnormX6SRGB
-            | PixelFormat::RG10UnormX12SRGB
-    )
-}
-
 /// The texel extent of one block of the compressed format `pf`, `None` for an uncompressed one.
 ///
 /// Metal states this nowhere: `MTLPixelFormat` has no block-extent getter, and a program that
@@ -1893,68 +1769,6 @@ pub fn vk_format(
     Err(Unsupported::needs_any_of(Feature::Format, alternatives).into())
 }
 
-/// The swizzle, over the channels of `own`, through which a texture of `own` reads what a view
-/// of `pf` made with `swizzle` reads, where `pf` holds its texels in the very bits of `own`'s and
-/// presents them in other channels: `own` samples as its direct Vulkan format on `profile`, and
-/// one of `pf`'s candidates is [`FormatEmulation::SwizzledView`] or
-/// [`FormatEmulation::AlphaInRed`] of that format (`A8Unorm` over `R8Unorm`, read through
-/// `(Zero, Zero, Zero, Red)`). Exact for sampling and reads as that
-/// emulation is: the same bits, the same filter, the channels moved by the view's mapping, which
-/// Vulkan applies to gathered texels and border texels as to any other ("Texel Input Operations":
-/// replacement, then the component swizzle). `None` elsewhere, for `pf` equal to `own`, where
-/// `profile` takes no view of the composed mapping
-/// (`VUID-VkImageViewCreateInfo-imageViewFormatSwizzle-04465`), and where an opaque-black border
-/// would read otherwise: Vulkan leaves it undefined through a mapping other than the identity
-/// unless the device swizzles borders (`VK_EXT_border_color_swizzle`), so the swizzle is given only
-/// where Metal reads the transparent-black texel for opaque black through it
-/// ([`opaque_black_reads_transparent`](crate::metal::sampler::opaque_black_reads_transparent)),
-/// whose sampler every device reads exactly; transparent black and opaque white are defined through
-/// any mapping. A write through it stores as a swizzled texture's storage binding does
-/// (`LoweringInputs::swizzled_storage`): each of the image's channels from the first lane whose
-/// source it is, else from the channel's own lane, as Metal stores each of the view's (probe
-/// `a8write`, an M3 Max under macOS 27.0.1: an `A8Unorm` view of an `R8Unorm` texture stores the
-/// first lane whose source is alpha, else the alpha lane). So `None` too where a channel of the
-/// view that holds one of the image's is no lane's source (an `A8Unorm` view of swizzle
-/// `(Red, Green, Blue, One)`), where the two fallbacks name different lanes.
-pub fn swizzle_over(
-    pf: PixelFormat,
-    swizzle: TextureSwizzleChannels,
-    own: PixelFormat,
-    profile: &DeviceProfile,
-) -> Option<TextureSwizzleChannels> {
-    if pf == own {
-        return None;
-    }
-    let sampled = [FormatUsage::SampledImage].into();
-    let image = vk_format(own, &sampled, profile).ok()?;
-    if image.emulation != FormatEmulation::Direct {
-        return None;
-    }
-    let (_, candidates) = candidates(pf).ok()?;
-    let candidate = candidates.iter().find(|c| {
-        matches!(
-            c.emulation,
-            FormatEmulation::SwizzledView | FormatEmulation::AlphaInRed
-        ) && c.format == image.format
-    })?;
-    let mapping = swizzle.compose(candidate.components);
-    if view_mapping_gap(mapping, profile).is_some() {
-        return None;
-    }
-    let over = swizzle_of(mapping);
-    // A write stores each of the image's channels from the first lane whose source it is, else
-    // from the channel's own lane: the view's channel holding it must be some lane's source, so
-    // that the image's channel is too and both take the same lane.
-    let held = swizzle_of(candidate.components);
-    let lanes = [over.red, over.green, over.blue, over.alpha];
-    let writes = [held.red, held.green, held.blue, held.alpha]
-        .into_iter()
-        .filter(|c| !matches!(c, TextureSwizzle::Zero | TextureSwizzle::One))
-        .all(|c| lanes.contains(&c));
-    let reads = crate::metal::sampler::opaque_black_reads_transparent(own, over);
-    (reads && writes).then_some(over)
-}
-
 /// The swizzle that reads as component mapping `m` (in `TextureSwizzleChannels::compose`'s
 /// canonical form over a format's own channels): each channel from the one `m` names, from itself
 /// where `m` names none, or a constant.
@@ -2374,25 +2188,6 @@ pub fn color_record(formats: &[Option<PixelFormat>]) -> Option<Vec<Option<(u32, 
         record.push(Some((offset, block.size)));
     }
     Some(record)
-}
-
-/// Metal's `imageblockSampleLength` of a render pipeline whose fragment function declares an
-/// explicit imageblock of `data_size` bytes (`air.imageblock_data_size`) whose layouts align to
-/// `alignment`, beside color attachments that pack to `colors` bytes
-/// ([`imageblock_sample_length`]): the data, then the colors rounded up to 8 bytes and then to
-/// `alignment`; no colors add nothing. Measured on an M3 Max and an M4 over nine layouts and 23
-/// sets of color formats: a `char` with `R8Unorm` is 9, a `float4` with `R8Unorm` 32, a
-/// `packed_float4` with it 24, and a `float4` and a `float` (32 bytes) with
-/// `R8Unorm` and `RGBA32Float` 64. `None` past `u32`.
-pub fn explicit_imageblock_sample_length(
-    data_size: u32,
-    alignment: u32,
-    colors: u32,
-) -> Option<u32> {
-    let colors = colors
-        .checked_next_multiple_of(8)?
-        .checked_next_multiple_of(alignment.max(1))?;
-    data_size.checked_add(colors)
 }
 
 /// The aspects of `pf` (`COLOR`, `DEPTH`, `STENCIL`, or `DEPTH | STENCIL`), for formats with a
