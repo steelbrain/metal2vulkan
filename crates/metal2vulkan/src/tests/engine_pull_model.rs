@@ -13,8 +13,9 @@
 //!   plan sets), as Metal reads sample `i mod n`.
 //! - An offset is moved to the device's origin, a half, and clamped (`NClamp`) to its interpolation
 //!   offset range, requiring `InterpolateAtOffsetCentered`. The function records
-//!   `PrecisionNote::DeviceInterpolationOffset`, and no profile records
-//!   `PrecisionNote::ExtrapolatedInterpolation`.
+//!   `PrecisionNote::DeviceInterpolationOffset`.
+//! - A function that reads a perspective interpolant at a sample or an offset records
+//!   `PrecisionNote::ExtrapolatedInterpolation` on every profile, and no other does.
 //! - A centroid read of a multisampled pixel compiles on every profile whose reads it needs.
 //! - An offset read past the first block (`pm_offset_after_discard`, behind a branch to a discard)
 //!   is not lowered on any profile, `NotImplemented(DivergentInterpolation)`.
@@ -231,8 +232,11 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
                     reads_at(At::Offset),
                     "{what}: the offset note"
                 );
-                assert!(
-                    !noted(&p, PrecisionNote::ExtrapolatedInterpolation),
+                // Every function but `pm_linear` reads its perspective interpolant where it reads.
+                let perspective = fragment != LINEAR;
+                assert_eq!(
+                    noted(&p, PrecisionNote::ExtrapolatedInterpolation),
+                    perspective && (reads_at(At::Sample) || reads_at(At::Offset)),
                     "{what}: the extrapolation note"
                 );
                 assert_eq!(

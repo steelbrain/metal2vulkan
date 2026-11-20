@@ -1883,21 +1883,13 @@ fn note_device_interpolation(cx: &mut SelectCx<'_>, interp: Interpolation) {
 }
 
 /// Records that the fragment function reads a perspective input at a sample or an offset other
-/// than the pixel center (`InterpolateAtSample`, `InterpolateAtOffset`) on a device whose driver
-/// answers such a read with the pixel center's value extrapolated along the quad's derivatives
-/// (`DriverWorkaround::PerspectiveReadsExtrapolated`): the device's answer, which the module
-/// records. The pixel-center form of a center read (`InterpolateAtOffset` at offset 0) moves
-/// nothing and records nothing.
+/// than the pixel center (`InterpolateAtSample`, `InterpolateAtOffset`): a device may answer such
+/// a read with the pixel center's value extrapolated along the quad's derivatives (RADV does), its
+/// own interpolation, which the module records on every device. The pixel-center form of a center
+/// read (`InterpolateAtOffset` at offset 0) moves nothing and records nothing.
 fn note_extrapolated_read(cx: &mut SelectCx<'_>) {
-    if cx
-        .profile
-        .fields()
-        .workarounds
-        .contains(&DriverWorkaround::PerspectiveReadsExtrapolated)
-    {
-        cx.precision
-            .insert(PrecisionNote::ExtrapolatedInterpolation);
-    }
+    cx.precision
+        .insert(PrecisionNote::ExtrapolatedInterpolation);
 }
 
 /// The raw index's flat `uint` variable in direction `dir`: a vertex function's output, or the

@@ -2331,10 +2331,9 @@ pub enum PrecisionNote {
     /// A fragment function reads a perspective input at a sample or an offset other than the
     /// pixel center (`interpolate_at_sample`, `interpolate_at_offset`, or a sample-qualified
     /// varying a function looping over its covered samples reads at each pass's sample: `GLSL.std.450
-    /// InterpolateAtSample` or `InterpolateAtOffset`) on a device whose driver answers such a read
-    /// as the pixel center's value extrapolated along the quad's coarse derivatives
-    /// ([`DriverWorkaround::PerspectiveReadsExtrapolated`]: RADV). Metal interpolates in
-    /// perspective at the location itself. The extrapolation is first-order, so the read is off
+    /// InterpolateAtSample` or `InterpolateAtOffset`), recorded on every device: a device may
+    /// answer such a read as the pixel center's value extrapolated along the quad's coarse
+    /// derivatives, as RADV does. Metal interpolates in perspective at the location itself. The extrapolation is first-order, so the read is off
     /// by the input's curvature across the distance, which grows with the triangle's spread of
     /// clip `w` and the distance from the quad's top-left pixel: on a triangle of `w` 1, 2 and 4
     /// over a 6x6 target, up to about 1.0 in a lane whose vertices hand 3, -2 and 0.5 (the
@@ -2344,8 +2343,6 @@ pub enum PrecisionNote {
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
-    ///
-    /// [`DriverWorkaround::PerspectiveReadsExtrapolated`]: crate::device::DriverWorkaround::PerspectiveReadsExtrapolated
     ExtrapolatedInterpolation,
     /// A fragment function reads a color attachment (framebuffer fetch) on a device with neither
     /// rasterization-order color attachment access nor `fragmentShaderPixelInterlock`. It reads

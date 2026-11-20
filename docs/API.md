@@ -2410,9 +2410,9 @@ bound.
 - `metal2vulkan-degrade-extrapolated-interpolation` (precision).
   `PrecisionNote::ExtrapolatedInterpolation`: A fragment function reads a perspective input at a
   sample or an offset (`interpolate_at_sample`, `interpolate_at_offset`, or a sample-qualified
-  varying a function looping over its covered samples reads at each pass's sample) on RADV
-  (`DriverWorkaround::PerspectiveReadsExtrapolated`), whose driver answers such a read with the
-  value at the pixel center extrapolated along the quad's coarse derivatives, where Metal
+  varying a function looping over its covered samples reads at each pass's sample), recorded on
+  every device: a device may answer such a read with the value at the pixel center extrapolated
+  along the quad's coarse derivatives, as RADV does, where Metal
   interpolates in perspective at the location itself. The answer is first-order, off by the
   value's curvature across the distance, which grows with the triangle's spread of clip `w`: on a
   triangle of `w` 1, 2 and 4 over a 6x6 target, up to about 1.0 in a lane whose vertices hand 3,

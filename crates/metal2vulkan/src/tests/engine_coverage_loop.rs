@@ -607,7 +607,7 @@ fn the_natural_functions_loop_over_their_covered_samples() {
 /// the device may have, each by its constant index from 0, a power of two of them and at least
 /// the pipeline's samples, and at no computed sample, on every profile that loops it: before the
 /// loop, which the helper invocations of a partly covered quad leave at once. Each varying is
-/// perspective (`sample_perspective`), and no module records
+/// perspective (`sample_perspective`), so every module records
 /// `PrecisionNote::ExtrapolatedInterpolation`.
 #[test]
 fn a_looping_function_reads_its_sample_varying_at_every_sample_before_the_loop() {
@@ -633,7 +633,7 @@ fn a_looping_function_reads_its_sample_varying_at_every_sample_before_the_loop()
                     continue;
                 }
                 assert!(
-                    !p.stages.iter().any(|m| m
+                    p.stages.iter().any(|m| m
                         .precision_notes
                         .contains(&PrecisionNote::ExtrapolatedInterpolation)),
                     "{what}: the extrapolation note"
