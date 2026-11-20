@@ -5,7 +5,8 @@
 //! textures made and released in that block allocate nothing, and every gauge reads zero after
 //! teardown; the pool's allocations are 16 MiB of either class, a take is a range of one rounded
 //! up to 64 KiB, a longer take an allocation of its own, and a texture of 32 MiB takes a texture
-//! block of its own length.
+//! block of its own length; and the gauges count the texture blocks and the consumer's Private
+//! allocations apart, each held whole, what is placed in them, and the sparse ones.
 
 use crate::places::Ranges;
 
@@ -265,6 +266,119 @@ mod on_device {
             device
                 .release_indices(grant)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+    }
+
+    /// The consumer's Private allocations' gauges: each held whole, its blocks' bytes, and the
+    /// sparse ones, holding less than a sixteenth of their length.
+    fn takes(gauges: &Gauges) -> [u64; 4] {
+        [
+            gauges.private_take_held_bytes,
+            gauges.private_take_bytes,
+            gauges.private_take_sparse_bytes,
+            gauges.private_take_sparse_allocations,
+        ]
+    }
+
+    /// The texture blocks' gauges, as [`takes`] for the consumer's allocations.
+    fn texture_blocks(gauges: &Gauges) -> [u64; 4] {
+        [
+            gauges.texture_block_held_bytes,
+            gauges.texture_block_bytes,
+            gauges.texture_block_sparse_bytes,
+            gauges.texture_block_sparse_blocks,
+        ]
+    }
+
+    /// The gauges count the texture blocks and the consumer's Private allocations apart, on every
+    /// device: a small block alone in its unit makes the unit sparse until a sixteenth of it is
+    /// placed; a small texture alone in its texture block likewise; neither kind is counted in
+    /// the other's gauges; and once all is released only the texture block kept for the next
+    /// place is held.
+    #[test]
+    fn every_device_gauges_texture_blocks_and_private_takes_apart() {
+        let unit = MemoryClass::Private.block_len();
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            core.pool.await_internals();
+            let gauges = counters.gauges();
+            assert_eq!(
+                (takes(&gauges), texture_blocks(&gauges)),
+                ([0; 4], [0; 4]),
+                "{name}: at the start"
+            );
+
+            // A small block alone in its unit, then a sixteenth of the unit beside it.
+            let small = (device.take_block(MemoryClass::Private, 1))
+                .unwrap_or_else(|error| panic!("{name}: a small block: {error}"));
+            assert_eq!(
+                takes(&counters.gauges()),
+                [unit, small.len, unit, 1],
+                "{name}: a small block alone"
+            );
+            let more = (device.take_block(MemoryClass::Private, unit / 16))
+                .unwrap_or_else(|error| panic!("{name}: a sixteenth: {error}"));
+            assert_eq!(more.allocation, small.allocation, "{name}: one unit");
+            assert_eq!(
+                takes(&counters.gauges()),
+                [unit, small.len + more.len, 0, 0],
+                "{name}: a sixteenth placed"
+            );
+
+            // A small texture alone in its texture block, then a sixteenth of the block beside it.
+            let grant = device
+                .grant_indices(IndexClass::Texture, 4096, 2)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let tiny = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 32, 32);
+            let first = (device.new_texture(&tiny, Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: a small texture: {error}"));
+            let size = first.image_size();
+            assert_eq!(
+                texture_blocks(&counters.gauges()),
+                [unit, size, unit, 1],
+                "{name}: a small texture alone"
+            );
+            let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 512, 512);
+            let second = (device.new_texture(&d, Some(4097)))
+                .unwrap_or_else(|error| panic!("{name}: a texture of 1 MiB: {error}"));
+            let placed = size + second.image_size();
+            let gauges = counters.gauges();
+            assert_eq!(
+                (texture_blocks(&gauges), takes(&gauges)),
+                ([unit, placed, 0, 0], [unit, small.len + more.len, 0, 0]),
+                "{name}: a sixteenth placed in the texture block, the takes unchanged"
+            );
+            assert_eq!(
+                gauges.private_placed_bytes,
+                gauges.private_take_bytes + gauges.texture_block_held_bytes,
+                "{name}: the Private blocks out are the takes and the texture blocks"
+            );
+
+            drop((first, second));
+            wait_until("the textures freed", || counters.gauges().textures == 0);
+            assert_eq!(
+                texture_blocks(&counters.gauges()),
+                [unit, 0, 0, 0],
+                "{name}: the texture block kept for the next place"
+            );
+            for block in [small, more] {
+                (device.release_block(block))
+                    .unwrap_or_else(|error| panic!("{name}: a release: {error}"));
+            }
+            wait_until("the takes given back", || {
+                takes(&counters.gauges()) == [0; 4]
+            });
+            device
+                .release_indices(grant)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
     }
 }

@@ -4,8 +4,7 @@
 # which says what it covers, what it cannot see, and what blessing a change here asserts.
 #
 # Write it with `python3 scripts/api-signatures/signatures.py --bless`, which prints what moved.
-# A removed or changed line is a breaking change of a published crate, or, for metal2vulkan-runtime,
-# of the API it is published with at the cutover.
+# A removed or changed line is a breaking change of a published crate.
 assoc-const	metal2vulkan-air::bitcode::EnumAttrs::MAX_KIND	pub const MAX_KIND: u32
 assoc-const	metal2vulkan-air::bitcode::EnumAttrs::MUST_PROGRESS	pub const MUST_PROGRESS: u32
 assoc-const	metal2vulkan-air::bitcode::EnumAttrs::NO_FREE	pub const NO_FREE: u32
@@ -2141,6 +2140,10 @@ field	metal2vulkan-runtime::Gauges.private_idle_bytes	pub private_idle_bytes: u6
 field	metal2vulkan-runtime::Gauges.private_long_reused_bytes	pub private_long_reused_bytes: u64
 field	metal2vulkan-runtime::Gauges.private_placed_bytes	pub private_placed_bytes: u64
 field	metal2vulkan-runtime::Gauges.private_reserve_bytes	pub private_reserve_bytes: u64
+field	metal2vulkan-runtime::Gauges.private_take_bytes	pub private_take_bytes: u64
+field	metal2vulkan-runtime::Gauges.private_take_held_bytes	pub private_take_held_bytes: u64
+field	metal2vulkan-runtime::Gauges.private_take_sparse_allocations	pub private_take_sparse_allocations: u64
+field	metal2vulkan-runtime::Gauges.private_take_sparse_bytes	pub private_take_sparse_bytes: u64
 field	metal2vulkan-runtime::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-runtime::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-runtime::Gauges.shadow_bytes	pub shadow_bytes: u64
@@ -2160,6 +2163,9 @@ field	metal2vulkan-runtime::Gauges.surface_buffers	pub surface_buffers: u64
 field	metal2vulkan-runtime::Gauges.surface_import_bytes	pub surface_import_bytes: u64
 field	metal2vulkan-runtime::Gauges.surface_imports	pub surface_imports: u64
 field	metal2vulkan-runtime::Gauges.texture_block_bytes	pub texture_block_bytes: u64
+field	metal2vulkan-runtime::Gauges.texture_block_held_bytes	pub texture_block_held_bytes: u64
+field	metal2vulkan-runtime::Gauges.texture_block_sparse_blocks	pub texture_block_sparse_blocks: u64
+field	metal2vulkan-runtime::Gauges.texture_block_sparse_bytes	pub texture_block_sparse_bytes: u64
 field	metal2vulkan-runtime::Gauges.texture_own_bytes	pub texture_own_bytes: u64
 field	metal2vulkan-runtime::Gauges.textures	pub textures: u64
 field	metal2vulkan-runtime::Gauges.textures_copied_over	pub textures_copied_over: u64

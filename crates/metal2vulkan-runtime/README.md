@@ -333,7 +333,15 @@ in its memory.
   free ranges between blocks; `shared_buffer_bytes` and `private_buffer_bytes` count live buffers'
   lengths by their block's class, `texture_block_bytes` the placed textures' image sizes and
   `texture_own_bytes` textures' allocations of their own, and `import_bytes` and
-  `surface_import_bytes` the imports' and the surface plane imports' bytes. Once the last handle
+  `surface_import_bytes` the imports' and the surface plane imports' bytes. The texture blocks
+  and the allocations holding the consumer's Private blocks are counted apart, as nothing moves
+  a live texture or block and a block or allocation goes back only once it holds nothing:
+  `texture_block_held_bytes` counts the texture blocks whole (the one kept empty among them) and
+  `texture_block_bytes` what is placed in them; `private_take_held_bytes` counts the Private
+  allocations holding a block the consumer took, whole, and `private_take_bytes` those blocks.
+  `texture_block_sparse_bytes` with `texture_block_sparse_blocks`, and
+  `private_take_sparse_bytes` with `private_take_sparse_allocations`, count the sparse ones among
+  each, those holding something that is less than a sixteenth of their length. Once the last handle
   is gone the block's
   number names nothing
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's

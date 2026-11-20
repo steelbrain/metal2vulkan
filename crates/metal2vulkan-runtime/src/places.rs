@@ -20,7 +20,7 @@
 use crate::counters::{Gauge, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
-use crate::memory::{BlockId, Memory, MemoryClass};
+use crate::memory::{BlockId, Memory, MemoryClass, SPARSE};
 use std::sync::Mutex;
 
 /// The length of the blocks a set takes for places no longer than it.
@@ -36,6 +36,46 @@ struct PlaceBlock {
     free: Ranges,
     /// The places taken in it.
     live: usize,
+    /// Their bytes.
+    placed: u64,
+}
+
+impl PlaceBlock {
+    /// Whether it is sparse: it holds a place, and its places' bytes are less than a sixteenth
+    /// of its length
+    /// ([`Gauges::texture_block_sparse_bytes`](crate::Gauges::texture_block_sparse_bytes)).
+    fn sparse(&self) -> bool {
+        self.live > 0 && self.placed < self.memory.len / SPARSE
+    }
+
+    /// Takes or frees a place of `len` bytes (`taken`), moving the sparse gauges with it.
+    fn count(&mut self, core: &Core, len: u64, taken: bool) {
+        let was = self.sparse();
+        match taken {
+            true => {
+                self.live += 1;
+                self.placed += len;
+                core.counters.rise_by(Gauge::TextureBlockBytes, len);
+            }
+            false => {
+                self.live -= 1;
+                self.placed -= len;
+                core.counters.fall_by(Gauge::TextureBlockBytes, len);
+            }
+        }
+        let counters = &core.counters;
+        match (was, self.sparse()) {
+            (false, true) => {
+                counters.rise(Gauge::TextureBlockSparseBlocks);
+                counters.rise_by(Gauge::TextureBlockSparseBytes, self.memory.len);
+            }
+            (true, false) => {
+                counters.fall(Gauge::TextureBlockSparseBlocks);
+                counters.fall_by(Gauge::TextureBlockSparseBytes, self.memory.len);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A resource's place: `len` bytes at `offset` in a block of a set.
@@ -77,13 +117,12 @@ impl Places {
             for block in blocks.iter_mut() {
                 // The image's alignment holds in the allocation the block is a range of.
                 if let Some(offset) = block.free.take_from(len, align, block.memory.base()) {
-                    block.live += 1;
+                    block.count(core, len, true);
                     let place = Place {
                         block: block.memory.id,
                         offset,
                         len,
                     };
-                    core.counters.rise_by(Gauge::TextureBlockBytes, len);
                     return Ok((place, block.memory));
                 }
             }
@@ -97,10 +136,13 @@ impl Places {
                 return Err(Error::out_of_device_memory());
             }
             blocks = lock(&self.blocks);
+            core.counters
+                .rise_by(Gauge::TextureBlockHeldBytes, memory.len);
             blocks.push(PlaceBlock {
                 memory,
                 free: Ranges::new(memory.len),
                 live: 0,
+                placed: 0,
             });
         }
     }
@@ -108,20 +150,21 @@ impl Places {
     /// Frees `place`. Where its block empties and is longer than the block length, or another
     /// block of the set of that length is empty, the block goes back to the pool.
     pub(crate) fn release(&self, core: &Core, place: Place) {
-        core.counters.fall_by(Gauge::TextureBlockBytes, place.len);
         let mut blocks = lock(&self.blocks);
         let Some(index) = (blocks.iter()).position(|block| block.memory.id == place.block) else {
+            core.counters.fall_by(Gauge::TextureBlockBytes, place.len);
             return;
         };
         let block = &mut blocks[index];
         block.free.give(place.offset, place.len);
-        block.live -= 1;
+        block.count(core, place.len, false);
         let standard = |block: &PlaceBlock| block.memory.len == BLOCK_LEN;
         let empty = |block: &PlaceBlock| block.live == 0 && standard(block);
         let surplus = !standard(block) || blocks.iter().filter(|block| empty(block)).count() > 1;
         if blocks[index].live == 0 && surplus {
             let emptied = blocks.remove(index);
             drop(blocks);
+            (core.counters).fall_by(Gauge::TextureBlockHeldBytes, emptied.memory.len);
             core.pool.give_back(emptied.memory);
         }
     }

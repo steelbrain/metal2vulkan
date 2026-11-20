@@ -316,6 +316,20 @@ pub(crate) enum Gauge {
     SurfaceBuffers,
     /// [`Gauges::texture_block_bytes`].
     TextureBlockBytes,
+    /// [`Gauges::texture_block_held_bytes`].
+    TextureBlockHeldBytes,
+    /// [`Gauges::texture_block_sparse_bytes`].
+    TextureBlockSparseBytes,
+    /// [`Gauges::texture_block_sparse_blocks`].
+    TextureBlockSparseBlocks,
+    /// [`Gauges::private_take_held_bytes`].
+    PrivateTakeHeldBytes,
+    /// [`Gauges::private_take_bytes`].
+    PrivateTakeBytes,
+    /// [`Gauges::private_take_sparse_bytes`].
+    PrivateTakeSparseBytes,
+    /// [`Gauges::private_take_sparse_allocations`].
+    PrivateTakeSparseAllocations,
     /// [`Gauges::texture_own_bytes`].
     TextureOwnBytes,
     /// [`Gauges::shared_buffer_bytes`].
@@ -573,6 +587,13 @@ struct Atomics {
     surface_imports: AtomicU64,
     surface_buffers: AtomicU64,
     texture_block_bytes: AtomicU64,
+    texture_block_held_bytes: AtomicU64,
+    texture_block_sparse_bytes: AtomicU64,
+    texture_block_sparse_blocks: AtomicU64,
+    private_take_held_bytes: AtomicU64,
+    private_take_bytes: AtomicU64,
+    private_take_sparse_bytes: AtomicU64,
+    private_take_sparse_allocations: AtomicU64,
     texture_own_bytes: AtomicU64,
     shared_buffer_bytes: AtomicU64,
     private_buffer_bytes: AtomicU64,
@@ -1151,6 +1172,13 @@ impl Counters {
             Gauge::SurfaceImports => &a.surface_imports,
             Gauge::SurfaceBuffers => &a.surface_buffers,
             Gauge::TextureBlockBytes => &a.texture_block_bytes,
+            Gauge::TextureBlockHeldBytes => &a.texture_block_held_bytes,
+            Gauge::TextureBlockSparseBytes => &a.texture_block_sparse_bytes,
+            Gauge::TextureBlockSparseBlocks => &a.texture_block_sparse_blocks,
+            Gauge::PrivateTakeHeldBytes => &a.private_take_held_bytes,
+            Gauge::PrivateTakeBytes => &a.private_take_bytes,
+            Gauge::PrivateTakeSparseBytes => &a.private_take_sparse_bytes,
+            Gauge::PrivateTakeSparseAllocations => &a.private_take_sparse_allocations,
             Gauge::TextureOwnBytes => &a.texture_own_bytes,
             Gauge::SharedBufferBytes => &a.shared_buffer_bytes,
             Gauge::PrivateBufferBytes => &a.private_buffer_bytes,
@@ -1411,6 +1439,13 @@ impl Counters {
             surface_imports: a.surface_imports.load(Relaxed),
             surface_buffers: a.surface_buffers.load(Relaxed),
             texture_block_bytes: a.texture_block_bytes.load(Relaxed),
+            texture_block_held_bytes: a.texture_block_held_bytes.load(Relaxed),
+            texture_block_sparse_bytes: a.texture_block_sparse_bytes.load(Relaxed),
+            texture_block_sparse_blocks: a.texture_block_sparse_blocks.load(Relaxed),
+            private_take_held_bytes: a.private_take_held_bytes.load(Relaxed),
+            private_take_bytes: a.private_take_bytes.load(Relaxed),
+            private_take_sparse_bytes: a.private_take_sparse_bytes.load(Relaxed),
+            private_take_sparse_allocations: a.private_take_sparse_allocations.load(Relaxed),
             texture_own_bytes: a.texture_own_bytes.load(Relaxed),
             shared_buffer_bytes: a.shared_buffer_bytes.load(Relaxed),
             private_buffer_bytes: a.private_buffer_bytes.load(Relaxed),
@@ -2304,6 +2339,35 @@ pub struct Gauges {
     /// blocks are Private blocks, counted in [`private_placed_bytes`](Self::private_placed_bytes)
     /// whole.
     pub texture_block_bytes: u64,
+    /// Bytes of the texture blocks the device holds, each whole: the 16 MiB ones, the one kept
+    /// empty for the next place among them, and each texture's of its own length where it is
+    /// longer. Against [`texture_block_bytes`](Self::texture_block_bytes), the rest is the free
+    /// bytes between places, which no place ever moves out of.
+    pub texture_block_held_bytes: u64,
+    /// Bytes of the sparse texture blocks: those holding a place whose places' bytes are less
+    /// than a sixteenth of their length, each whole. Counted in
+    /// [`texture_block_held_bytes`](Self::texture_block_held_bytes) too.
+    pub texture_block_sparse_bytes: u64,
+    /// The sparse texture blocks
+    /// [`texture_block_sparse_bytes`](Self::texture_block_sparse_bytes) counts.
+    pub texture_block_sparse_blocks: u64,
+    /// Bytes of the pool's Private allocations that hold a block the consumer took
+    /// ([`Device::take_block`](crate::Device::take_block)), each whole: 16 MiB units, and a long
+    /// allocation that a take longer than one made for itself. No texture block lies in one: a
+    /// texture block fills its allocation. The allocations are freed only once every block in
+    /// them is given back.
+    pub private_take_held_bytes: u64,
+    /// Bytes of the Private blocks the consumer took and has not given back, which lie in those
+    /// allocations: [`private_placed_bytes`](Self::private_placed_bytes) less the texture blocks.
+    /// The live buffers placed in them are [`private_buffer_bytes`](Self::private_buffer_bytes).
+    pub private_take_bytes: u64,
+    /// Bytes of the sparse allocations among
+    /// [`private_take_held_bytes`](Self::private_take_held_bytes): those whose blocks out are
+    /// less than a sixteenth of their length, each whole.
+    pub private_take_sparse_bytes: u64,
+    /// The sparse allocations [`private_take_sparse_bytes`](Self::private_take_sparse_bytes)
+    /// counts.
+    pub private_take_sparse_allocations: u64,
     /// Bytes of textures' allocations of their own (shadows and counted copies' images among
     /// them), not in the pool.
     pub texture_own_bytes: u64,

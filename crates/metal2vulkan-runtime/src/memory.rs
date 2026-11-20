@@ -64,6 +64,12 @@ pub(crate) const IDLE_AGE_NANOS: u64 = 250_000_000;
 /// ([`Metrics::shared_remade_after_frees`](crate::Metrics::shared_remade_after_frees)): a second.
 const REMADE_WITHIN_NANOS: u64 = 1_000_000_000;
 
+/// A texture block or an allocation is sparse while it holds something and what it holds is less
+/// than its length over this: one sixteenth
+/// ([`Gauges::texture_block_sparse_bytes`](crate::Gauges::texture_block_sparse_bytes),
+/// [`Gauges::private_take_sparse_bytes`](crate::Gauges::private_take_sparse_bytes)).
+pub(crate) const SPARSE: u64 = 16;
+
 /// The idle clock, the one clock for everything the runtime gives back: what became idle at
 /// `since` and stayed idle is due at `now` ([`host_time`](crate::host_time)) once
 /// [`IDLE_AGE_NANOS`] has passed (`None`); before then, the host time it becomes due.
@@ -495,6 +501,11 @@ struct Allocation {
     free: Ranges,
     /// Its blocks handed out and not yet given back to the pool.
     live: usize,
+    /// Their bytes.
+    placed: u64,
+    /// Its block out is a texture block ([`crate::places`]), which fills its allocation: a whole
+    /// unit, or a long allocation of its own length. False once it is idle.
+    texture: bool,
     /// When it became idle, in nanoseconds of [`host_time`](crate::host_time): when it was made,
     /// or when its last live block came back. The oldest idle allocation is freed first.
     idle_since: u64,
@@ -918,7 +929,8 @@ impl Pool {
         if state.stop {
             return Err(Error::Quiesced);
         }
-        if let Some((carve, idle_since, long, ahead)) = state.fit(class, len, align) {
+        let texture = matches!(site, Site::TextureBlock);
+        if let Some((carve, idle_since, long, ahead)) = state.fit(class, len, align, texture) {
             if ahead {
                 self.counters.site_take_ahead(site, len);
             }
@@ -971,6 +983,8 @@ impl Pool {
         let base = allocation.free.take(len, align).unwrap_or(0);
         let memory = allocation.carve(base).block(id, class, len);
         allocation.live = 1;
+        allocation.placed = len;
+        allocation.texture = matches!(site, Site::TextureBlock);
         self.lock().allocations[class.index()].push(allocation);
         Ok(memory)
     }
@@ -1053,6 +1067,26 @@ impl Pool {
             .map(|allocation| allocation.len)
             .sum();
         (self.counters).long_reused_bytes(shared, reused);
+        // The consumer's Private allocations: those holding a block it took, which no texture
+        // block shares.
+        if class == MemoryClass::Private {
+            let (mut held, mut placed, mut sparse_bytes, mut sparse) = (0, 0, 0, 0);
+            for allocation in (state.allocations[index].iter())
+                .filter(|allocation| allocation.live > 0 && !allocation.texture)
+            {
+                held += allocation.len;
+                placed += allocation.placed;
+                if allocation.placed < allocation.len / SPARSE {
+                    sparse_bytes += allocation.len;
+                    sparse += 1;
+                }
+            }
+            let counters = &self.counters;
+            counters.set(Gauge::PrivateTakeHeldBytes, held);
+            counters.set(Gauge::PrivateTakeBytes, placed);
+            counters.set(Gauge::PrivateTakeSparseBytes, sparse_bytes);
+            counters.set(Gauge::PrivateTakeSparseAllocations, sparse);
+        }
     }
 
     /// The idle rule for `class` at `now` ([`host_time`](crate::host_time)): its next allocation
@@ -1082,7 +1116,9 @@ impl Pool {
         if let Some(allocation) = state.find(class, memory.memory) {
             allocation.free.give(memory.base, memory.len);
             allocation.live -= 1;
+            allocation.placed -= memory.len;
             if allocation.live == 0 {
+                allocation.texture = false;
                 // Its idle time starts now, however long ago the block was released.
                 allocation.idle_since = crate::host_time();
                 allocation.retiring = allocation.spilled;
@@ -1211,15 +1247,17 @@ impl State {
     }
 
     /// Reserves `len` bytes at a multiple of `align` in the class's allocations that serve a take
-    /// of `len` ([`Allocation::serves`]), counting a block live there: the first such free range,
-    /// in the order the allocations were made. With the range, when the allocation became idle
-    /// where it was, whether it is a long allocation, and whether it is the first take to land
-    /// in a unit the block-maker thread made ahead ([`Allocation::ahead`]).
+    /// of `len` ([`Allocation::serves`]), counting a block live there, a texture block where
+    /// `texture`: the first such free range, in the order the allocations were made. With the
+    /// range, when the allocation became idle where it was, whether it is a long allocation, and
+    /// whether it is the first take to land in a unit the block-maker thread made ahead
+    /// ([`Allocation::ahead`]).
     fn fit(
         &mut self,
         class: MemoryClass,
         len: u64,
         align: u64,
+        texture: bool,
     ) -> Option<(Carve, Option<u64>, bool, bool)> {
         let (allocation, base) = (self.allocations[class.index()].iter_mut())
             .filter(|allocation| allocation.serves(len))
@@ -1229,6 +1267,8 @@ impl State {
             })?;
         let idle_since = (allocation.live == 0).then_some(allocation.idle_since);
         allocation.live += 1;
+        allocation.placed += len;
+        allocation.texture |= texture;
         let long = !allocation.unit();
         if long {
             allocation.reused = true;
@@ -1659,6 +1699,8 @@ fn make_allocation(
         spilled,
         free: Ranges::new(len),
         live: 0,
+        placed: 0,
+        texture: false,
         idle_since: crate::host_time(),
         retiring: false,
         reused: false,
@@ -2409,6 +2451,17 @@ pub(crate) fn free_all(core: &mut Core) {
         (core.counters).idle_since(shared, 0);
         (core.counters).reserve_bytes(shared, 0);
         (core.counters).long_reused_bytes(shared, 0);
+    }
+    // The texture block kept for the next place and the blocks still taken go with their
+    // allocations.
+    for gauge in [
+        Gauge::TextureBlockHeldBytes,
+        Gauge::PrivateTakeHeldBytes,
+        Gauge::PrivateTakeBytes,
+        Gauge::PrivateTakeSparseBytes,
+        Gauge::PrivateTakeSparseAllocations,
+    ] {
+        core.counters.set(gauge, 0);
     }
     for allocation in allocations {
         core.pool.unmap(allocation.id);
