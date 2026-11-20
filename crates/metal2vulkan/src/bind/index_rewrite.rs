@@ -766,11 +766,6 @@ fn load(f: &mut FunctionBuilder<'_>, buffer: Value, index: Value) -> BResult<Val
     f.load(p, MemAccess::default())
 }
 
-fn load_at(f: &mut FunctionBuilder<'_>, buffer: Value, index: u32) -> BResult<Value> {
-    let i = k(f, index)?;
-    load(f, buffer, i)
-}
-
 fn store(f: &mut FunctionBuilder<'_>, buffer: Value, index: Value, v: Value) -> BResult<()> {
     let p = word_ptr(f, buffer, index)?;
     f.store(p, v, MemAccess::default())
