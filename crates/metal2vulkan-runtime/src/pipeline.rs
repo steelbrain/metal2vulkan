@@ -826,9 +826,10 @@ impl Compiled {
                 } else if core.caches.observed(&variant_key) {
                     Found::Unlowered
                 } else {
-                    let observes = (translator)
-                        .kernel_observes_partition(function, &inputs, &budget, entries)
-                        .map_err(Error::Translation);
+                    let observes = translating(&core, || {
+                        translator.kernel_observes_partition(function, &inputs, &budget, entries)
+                    })
+                    .map_err(Error::Translation);
                     core.note_entries();
                     if observes? {
                         cache::keep_observer(&core, &variant_key);
