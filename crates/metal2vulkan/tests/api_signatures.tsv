@@ -2413,6 +2413,7 @@ field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.private_long_reuses	pub private_long_reuses: u64
 field	metal2vulkan-rt::Metrics.pushes	pub pushes: u64
 field	metal2vulkan-rt::Metrics.pushes_held	pub pushes_held: u64
+field	metal2vulkan-rt::Metrics.resolves	pub resolves: u64
 field	metal2vulkan-rt::Metrics.ring_block_allocations	pub ring_block_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.sampler_element_writes	pub sampler_element_writes: u64
