@@ -9,9 +9,21 @@
 //! stored (a memory barrier after a draw that wrote memory, or a copy a draw needs first), so a
 //! `DontCare` store keeps the texels too, one of the outcomes Metal allows. An `Unknown` one, which
 //! the encoder sets later, stores too, as Vulkan fixes the store as the rendering begins: on a
-//! tile-based device that stores a target Metal would have discarded. The render area is the
-//! smallest attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are
-//! set.
+//! tile-based device that stores a target Metal would have discarded.
+//!
+//! A pass has two areas. Metal's render area (`Pass::area`) is the smallest attachment's level, cut
+//! to `renderTargetWidth` and `renderTargetHeight` where they are set: every scissor, the default
+//! viewport and scissor, the areas a draw reads of its own attachments and the shadows are cut to
+//! it, so no draw rasterises past it. Vulkan's render area (`Pass::reach`), where the load, store
+//! and resolve operations act, is Metal's rounded up to [`REACH`] pixels a side and cut to the
+//! smallest attachment's level, in every pass, with no call, barrier or pass of its own. A Mac
+//! clears that band too: Apple's page for the `Clear` load says "The GPU writes a value to every
+//! pixel in the attachment at the start of the render pass", and on an M3 Max and an M4 a `Clear`
+//! pass that draws cleared its area rounded up to 32 pixels a side, clipped to the attachment. So a
+//! `Clear` pass's band holds its clear value, a `Load` keeps the band, and a `DontCare` leaves it
+//! undefined, as Metal allows any value there. A resolving pass resolves the band too, from the
+//! samples its load left there. A pass whose attachments differ in size reaches the smallest level
+//! only.
 //!
 //! A store action that resolves (`MultisampleResolve`, `StoreAndMultisampleResolve`, and
 //! `Unknown` where the attachment names a resolve texture) resolves in the same rendering, by
@@ -330,9 +342,12 @@ pub struct RenderPassDescriptor {
     pub depth_attachment: RenderPassDepthAttachmentDescriptor,
     /// `stencilAttachment`.
     pub stencil_attachment: RenderPassStencilAttachmentDescriptor,
-    /// `renderTargetWidth`: where nonzero, the render area's width, cut to the attachments'.
+    /// `renderTargetWidth`: where nonzero, the width of Metal's render area, cut to the smallest
+    /// attachment's. The pass's draws are cut to that area; its load, store and resolve act on it
+    /// rounded up to 32 pixels and cut to the smallest attachment, as a Mac's `Clear` reaches.
     pub render_target_width: u32,
-    /// `renderTargetHeight`: where nonzero, the render area's height, cut to the attachments'.
+    /// `renderTargetHeight`: where nonzero, the height of Metal's render area, cut to the smallest
+    /// attachment's, rounded up as the width is for the load, store and resolve.
     pub render_target_height: u32,
     /// `visibilityResultBuffer`: `None` by default. The command buffer keeps it until it retires,
     /// and the pass leaves its bytes as they were: Metal's pass does so under either
@@ -508,8 +523,12 @@ pub(crate) fn layout_barrier(
         .subresource_range(range)
 }
 
+/// The granularity, in pixels a side, to which a pass's Vulkan render area rounds Metal's area up
+/// (`Pass::reach`).
+pub(crate) const REACH: u32 = 32;
+
 /// A pass descriptor checked against its textures: its attachments, by index for the colors,
-/// and its render area.
+/// and its two areas.
 pub(crate) struct Pass {
     /// Up to the last color attachment with a texture.
     pub(crate) colors: Vec<Option<Target>>,
@@ -517,7 +536,13 @@ pub(crate) struct Pass {
     /// (`Pass::check`), each with its own load, store and clear.
     pub(crate) depth: Option<Target>,
     pub(crate) stencil: Option<Target>,
+    /// Metal's area: the smallest attachment's level, cut to `renderTargetWidth` and
+    /// `renderTargetHeight` where they are set. Every scissor, the default viewport and scissor,
+    /// the areas a draw fetches and the shadows are cut to it.
     pub(crate) area: [u32; 2],
+    /// The Vulkan render area, where the load, store and resolve operations act: `area` rounded up
+    /// to [`REACH`] pixels a side, cut to the smallest attachment's level.
+    pub(crate) reach: [u32; 2],
     /// Every attachment's samples, one bit: the pass refuses attachments of two counts.
     pub(crate) samples: vk::SampleCountFlags,
 }
@@ -565,7 +590,7 @@ impl Pass {
             .collect();
         let depth = self.depth.as_ref().map(|t| t.info(resumed));
         let stencil = self.stencil.as_ref().map(|t| t.info(resumed));
-        let [width, height] = self.area;
+        let [width, height] = self.reach;
         let mut info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
@@ -579,7 +604,8 @@ impl Pass {
         if let Some(stencil) = &stencil {
             info = info.stencil_attachment(stencil);
         }
-        // SAFETY: as the caller states; the render area lies inside every attachment, each is a
+        // SAFETY: as the caller states; the render area (`reach`) lies inside every attachment,
+        // and every draw's scissor inside Metal's area, which lies inside it; each attachment is a
         // view of one level and layer of its image, and a depth and a stencil attachment both set
         // are one view.
         unsafe { device.cmd_begin_rendering(command, &info) };
@@ -807,6 +833,7 @@ impl Pass {
             depth,
             stencil,
             area: [u32::MAX; 2],
+            reach: [u32::MAX; 2],
             samples: vk::SampleCountFlags::empty(),
         };
         // Vulkan renders one sample count into every attachment of a pass
@@ -820,20 +847,23 @@ impl Pass {
             samples = own;
         }
         pass.samples = samples;
-        pass.area = pass.targets().fold(pass.area, |area, t| {
+        let level = pass.targets().fold([u32::MAX; 2], |level, t| {
             let extent = t.attachment.extent;
-            [area[0].min(extent[0]), area[1].min(extent[1])]
+            [level[0].min(extent[0]), level[1].min(extent[1])]
         });
-        if pass.area[0] == u32::MAX {
+        if level[0] == u32::MAX {
             return Err(gap(RenderPassKind::NoAttachment));
         }
         for (axis, set) in [d.render_target_width, d.render_target_height]
             .into_iter()
             .enumerate()
         {
-            if set > 0 {
-                pass.area[axis] = pass.area[axis].min(set);
-            }
+            let area = match set {
+                0 => level[axis],
+                set => level[axis].min(set),
+            };
+            pass.area[axis] = area;
+            pass.reach[axis] = area.next_multiple_of(REACH).min(level[axis]);
         }
         Ok(pass)
     }

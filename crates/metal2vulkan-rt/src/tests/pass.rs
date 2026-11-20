@@ -10,14 +10,20 @@
 //! - Under a device cfg, on every device of the cfg's kind: a pass clears a mipmap level of a
 //!   shader-read texture (which it moves to the attachment layout and back), an integer texture
 //!   and a stencil texture, and stores each, the other level kept; a pass that loads and stores
-//!   keeps the texels; a pass cut by `renderTargetWidth` and `renderTargetHeight` clears only its
-//!   area; a pass clears one slice of a 2D array, the other slices kept. A pass alone is one
+//!   keeps the texels; a pass cut by `renderTargetWidth` and `renderTargetHeight` to less than a
+//!   small level clears the whole level, its area rounded up to 32 pixels a side and cut to the
+//!   level; a pass clears one slice of a 2D array, the other slices kept. A pass alone is one
 //!   submission, three barriers (its two and the segment's end) and one pass, and copies no byte
 //!   of the runtime's own. Each attachment's view is made once and kept with its texture, then
 //!   freed with it. What Metal refuses is refused (a depth attachment of a colour format among
 //!   it), what a pass does not build is a gap (a depth and a stencil attachment of two textures,
 //!   and a clear depth past `[0, 1]` or NaN, among them), and either leaves the command buffer
 //!   open for another encoder.
+//! - Under a device cfg, a pass whose area is 33 pixels square in a 40-pixel target (the owned
+//!   fixture `examples/runtime_examples.ll`): its clear reaches the whole target, the area rounded
+//!   up to 64 and cut to 40, beside a draw cut to 8 by 8; a draw over the whole level, through a
+//!   viewport and a scissor rectangle of the level, writes Metal's area alone; and with no scissor
+//!   rectangle set, the scissor is Metal's area.
 
 use crate::error::{Error, Gap, RenderPassKind};
 use crate::pass::{clear_color, ops};
@@ -125,9 +131,10 @@ mod on_device {
     use crate::tests::compute::on_device::step;
     use crate::texture::TextureObject;
     use crate::{
-        ClearColor, CommandBuffer, Device, DispatchType, Error, Gap, IndexClass, LoadAction,
-        PixelFormat, Refusal, Region, RenderPassDescriptor, RenderPassKind, StorageMode,
-        StoreAction, Texture, TextureDescriptor, TextureType, TextureUsage,
+        ClearColor, CommandBuffer, Device, DispatchType, Error, Gap, IndexClass, Library,
+        LoadAction, PixelFormat, PrimitiveType, Refusal, Region, RenderPassDescriptor,
+        RenderPassKind, ScissorRect, StorageMode, StoreAction, Texture, TextureDescriptor,
+        TextureType, TextureUsage, Viewport,
     };
 
     fn texture(
@@ -335,8 +342,8 @@ mod on_device {
                 println!("{name}: the stencil's bytes are not copied on this device");
             }
 
-            // A load and store keeps the texels; a clear cut to 2x1 clears only those. Two
-            // passes, two barriers each, and no new view.
+            // A load and store keeps the texels; a clear cut to 2x1 reaches 32 pixels a side, cut
+            // to the 4x2 level: the whole level. Two passes, two barriers each, and no new view.
             let mut keep = RenderPassDescriptor::default();
             keep.color_attachments[0].texture = Some(colors.clone());
             keep.color_attachments[0].level = 1;
@@ -371,14 +378,17 @@ mod on_device {
                 3,
                 "{name}: views kept"
             );
-            let mut expect = filled(&[51, 153, 0, 255], 8);
-            expect[..8].copy_from_slice(&[255, 0, 51, 153, 255, 0, 51, 153]);
-            assert_eq!(read(&colors, 1, 0, 4), expect, "{name}: the area alone");
+            assert_eq!(
+                read(&colors, 1, 0, 4),
+                filled(&[255, 0, 51, 153], 8),
+                "{name}: the area's reach, the whole level"
+            );
 
             // Passes whose attachments render at home. The first opens its command buffer and
             // records no first barrier; each owes its second, which the next pass's first barrier
-            // or the segment's end pays: two passes are two barriers, the second loading what the
-            // first cleared. A dispatch after such a pass records the owed barrier first.
+            // or the segment's end pays: two passes are two barriers, the second, cut to 2x1,
+            // clearing the whole 4x2 level its area reaches. A dispatch after such a pass records
+            // the owed barrier first.
             let mut whole = RenderPassDescriptor::default();
             whole.color_attachments[0].texture = Some(words.clone());
             whole.color_attachments[0].load_action = LoadAction::Clear;
@@ -427,12 +437,10 @@ mod on_device {
                 (1, 2, 2),
                 "{name}: two passes at home: submissions, barriers, passes"
             );
-            let mut expect = filled(&[7, 8, 9, 10], 8);
-            expect[..8].copy_from_slice(&[1, 2, 3, 4, 1, 2, 3, 4]);
             assert_eq!(
                 read(&words, 0, 0, 4),
-                expect,
-                "{name}: the second loads the first"
+                filled(&[1, 2, 3, 4], 8),
+                "{name}: the second's reach, the whole level"
             );
             // The compute encoder is a pass of its own in `Metrics::passes`.
             assert_eq!(
@@ -463,6 +471,180 @@ mod on_device {
             ));
             within("the attachment views' free", || {
                 counters.gauges().attachment_views == views
+            });
+        });
+    }
+
+    /// The side of the reach tests' target.
+    const LEVEL: u32 = 40;
+    /// Metal's area in it, each side: rounded up to 64 and cut to the level, the whole target.
+    const AREA: u32 = 33;
+    /// The target's texels before the pass, the pass's clear and the draw's colour.
+    const PRIOR: [u8; 4] = [9, 9, 9, 9];
+    const CLEARED: [u8; 4] = [255, 0, 0, 255];
+    const DRAWN: [u8; 4] = [0, 0, 255, 255];
+
+    /// What bounds the reach tests' draw of the whole of clip space.
+    enum Bound {
+        /// A scissor rectangle of 8 by 8 at the origin.
+        Scissor8,
+        /// A viewport and a scissor rectangle of the whole level, past Metal's area.
+        WholeLevel,
+        /// A viewport of the whole level and no scissor rectangle set.
+        NoScissor,
+    }
+
+    /// A pass that clears a `LEVEL`-square target written `PRIOR` first, its area `AREA` square,
+    /// and draws the whole of clip space in blue bounded by `bound`: the target's texels after.
+    fn reach(name: &str, device: &Device, library: &Library, bound: Bound) -> Vec<u8> {
+        use crate::tests::draw::on_device::{descriptor, state, vertices, Buffers};
+        let state = state(
+            name,
+            device,
+            &descriptor(library, "colored_fragment", PixelFormat::RGBA8Unorm),
+        );
+        let mut buffers = Buffers::new(device);
+        let (positions, colors) = vertices(device, &mut buffers);
+        let target = texture(
+            device,
+            TextureType::Type2D,
+            PixelFormat::RGBA8Unorm,
+            [LEVEL, LEVEL],
+            1,
+            TextureUsage::RENDER_TARGET,
+            None,
+        );
+        let row = LEVEL as usize * 4;
+        let prior = filled(&PRIOR, (LEVEL * LEVEL) as usize);
+        let region = Region {
+            origin: [0; 3],
+            size: [LEVEL, LEVEL, 1],
+        };
+        (target.replace_region(
+            region,
+            0,
+            0,
+            crate::HostBytes::from(&prior[..]),
+            row as u64,
+            prior.len() as u64,
+        ))
+        .expect("replace_region");
+        let mut d = RenderPassDescriptor::default();
+        let c = &mut d.color_attachments[0];
+        c.texture = Some(target.clone());
+        c.load_action = LoadAction::Clear;
+        c.store_action = StoreAction::Store;
+        c.clear_color = ClearColor::new(1.0, 0.0, 0.0, 1.0);
+        d.render_target_width = AREA;
+        d.render_target_height = AREA;
+        let queue = device.new_command_queue(4).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder = (command_buffer.render_command_encoder(&d))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+        draw(encoder.set_render_pipeline_state(&state));
+        draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+        draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+        let whole = Viewport {
+            origin_x: 0.0,
+            origin_y: 0.0,
+            width: f64::from(LEVEL),
+            height: f64::from(LEVEL),
+            znear: 0.0,
+            zfar: 1.0,
+        };
+        let side = |len| ScissorRect {
+            x: 0,
+            y: 0,
+            width: len,
+            height: len,
+        };
+        match bound {
+            Bound::Scissor8 => encoder.set_scissor_rect(side(8)),
+            Bound::WholeLevel => {
+                draw(encoder.set_viewport(whole));
+                encoder.set_scissor_rect(side(u64::from(LEVEL)));
+            }
+            Bound::NoScissor => draw(encoder.set_viewport(whole)),
+        }
+        // The fixture's second triangle covers the whole of clip space, in blue.
+        draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+        encoder.end_encoding();
+        run(name, &command_buffer);
+        read(&target, 0, 0, 4)
+    }
+
+    /// Asserts `got`, `LEVEL` rows of `LEVEL` RGBA8 texels, is `want(x, y)` at every texel, naming
+    /// how many differ and the first.
+    fn texels_are(name: &str, what: &str, got: &[u8], want: impl Fn(u32, u32) -> [u8; 4]) {
+        let wrong: Vec<(u32, u32, &[u8], [u8; 4])> = (0..LEVEL)
+            .flat_map(|y| (0..LEVEL).map(move |x| (x, y)))
+            .filter_map(|(x, y)| {
+                let at = ((y * LEVEL + x) * 4) as usize;
+                let texel = &got[at..at + 4];
+                (texel != want(x, y)).then(|| (x, y, texel, want(x, y)))
+            })
+            .collect();
+        if let Some((x, y, texel, wanted)) = wrong.first() {
+            panic!(
+                "{name}: {what}: {} of {} texels differ, the first at ({x}, {y}): {texel:?}, not \
+                 {wanted:?}",
+                wrong.len(),
+                LEVEL * LEVEL
+            );
+        }
+    }
+
+    /// A clear of a 33-pixel-square area of a 40-pixel target, with a draw cut to 8 by 8, clears
+    /// the whole target: the area rounded up to 64 a side and cut to 40, as a Mac's clear reaches.
+    #[test]
+    fn every_device_clears_a_33_pixel_area_s_reach_of_a_40_pixel_target() {
+        let Some(library) = crate::tests::draw::on_device::examples() else {
+            return;
+        };
+        each_device("pass_reach_clear", |name, _, device| {
+            let got = reach(name, &device, &library, Bound::Scissor8);
+            texels_are(name, "the reach cleared", &got, |x, y| {
+                match x < 8 && y < 8 {
+                    true => DRAWN,
+                    false => CLEARED,
+                }
+            });
+        });
+    }
+
+    /// A draw over the whole level, through a viewport and a scissor rectangle of the level,
+    /// writes Metal's area alone: the scissor is cut to it, not to the area's reach.
+    #[test]
+    fn every_device_draws_nothing_past_metal_s_area() {
+        let Some(library) = crate::tests::draw::on_device::examples() else {
+            return;
+        };
+        each_device("pass_reach_draw", |name, _, device| {
+            let got = reach(name, &device, &library, Bound::WholeLevel);
+            texels_are(name, "drawn in Metal's area", &got, |x, y| {
+                match x < AREA && y < AREA {
+                    true => DRAWN,
+                    false => CLEARED,
+                }
+            });
+        });
+    }
+
+    /// With no scissor rectangle set, a draw through a viewport of the whole level writes Metal's
+    /// area alone: the default scissor is Metal's area.
+    #[test]
+    fn every_device_scissors_to_metal_s_area_where_no_rectangle_is_set() {
+        let Some(library) = crate::tests::draw::on_device::examples() else {
+            return;
+        };
+        each_device("pass_reach_scissor", |name, _, device| {
+            let got = reach(name, &device, &library, Bound::NoScissor);
+            texels_are(name, "the default scissor", &got, |x, y| {
+                match x < AREA && y < AREA {
+                    true => DRAWN,
+                    false => CLEARED,
+                }
             });
         });
     }

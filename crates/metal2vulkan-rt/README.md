@@ -2530,8 +2530,18 @@ or does not check is rebuilt from the generations' names, with young counted ful
   formats are the pass's, as its color formats are; the format query decides which depth and
   stencil formats a device renders, a texture of `RenderTarget` usage in one it does not is not
   made, and a pipeline state of one is the translator's refusal.
-- The render area is the smallest attachment's level, cut to `renderTargetWidth` and
-  `renderTargetHeight` where they are set.
+- A pass has two areas. Metal's render area is the smallest attachment's level, cut to
+  `renderTargetWidth` and `renderTargetHeight` where they are set: every scissor, the default
+  viewport and scissor, the areas a draw reads of its own attachments and the shadows are cut to
+  it, so no draw rasterises past it. Vulkan's render area, where the load, store and resolve
+  operations act, is Metal's rounded up to 32 pixels a side and cut to the smallest attachment's
+  level, in every pass, with no call, barrier or pass of its own. A Mac clears that band too:
+  Apple's page for the `Clear` load says "The GPU writes a value to every pixel in the attachment
+  at the start of the render pass", and on an M3 Max and an M4 a `Clear` pass that draws cleared
+  its area rounded up to 32 pixels a side, clipped to the attachment. So a `Clear` pass's band
+  holds its clear value, a `Load` keeps the band, and a `DontCare` leaves it undefined, as Metal
+  allows any value there. A resolving pass resolves the band too, from the samples its load left
+  there (Known gaps of render encoders).
 - A pass orders itself as a blit's copy does, with two barriers. The first runs it after every
   earlier command, makes their writes visible to it, and moves each attachment whose home layout
   is shader-read-only to the attachment layout; one whose home is general or the attachment layout
@@ -2599,7 +2609,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   fragment position and derivatives follow Metal's clip space, whose y points up, and Metal's
   front-facing winding is Vulkan's front face of the same name. A viewport of no width or height,
   or with a NaN origin x, draws nothing, as Metal's. Metal clips a draw to the pixels its viewport
-  covers, so the scissor is Metal's rectangle cut to them; a rectangle past the render area,
+  covers, so the scissor is Metal's rectangle cut to them; a rectangle past Metal's render area,
   which Metal's validation stops, is cut to it, as plain Metal cuts it. A stencil reference
   saturates at 255, as Metal stores it.
 - A draw may read an attachment of its own pass through a texture, as Metal reads a render
@@ -2623,22 +2633,22 @@ or does not check is rebuilt from the generations' names, with young counted ful
   reads an attachment through the loop, through a texture or by a fetch (below), counts in
   `Metrics::attachment_loop_reads`, its barriers in `Metrics::barriers`.
 - Through a copy, on a device without the feedback loop, and for a surface plane whose image took
-  no feedback usage (Exported surfaces), the draw reads the image's shadow: an
-  image of the same format, extent, levels and layers, made at the first draw that reads the
-  image and freed with it (`Gauges::shadows` and `shadow_bytes`). A texture that reaches the
-  attachment's level and layer reads the shadow through its second element; one that reaches
-  neither reads the image at home. Where the draw reads what the shadow does not hold, the
-  rendering ends, one barrier orders every earlier command before the copies and moves what they
-  copy to the transfer layouts, the copies are recorded (`Metrics::attachment_read_copies` and
-  `attachment_read_copy_bytes`), one barrier moves it all back, and the rendering begins again.
-  A slot the fragment function reads only at its own pixel reads the draw's scissor, a pixel
-  wider each way, clamped into its level; any other slot reads every level and layer its texture
-  reaches. What is new to the shadow is copied as one area where it is one (a wider scissor's
-  band), else as the whole read, with no look-ahead. At the pass's first draw, where the pass
-  cleared the attachment and every read of its level and layer lies in it alone and inside the
-  render area, the shadow's level and layer is cleared to the pass's clear colour between the
-  same barriers instead of copied (the shadow is of the attachment's format, so the clear writes
-  the texels the pass's did); a draw of the pass before it, of any pipeline, leaves the copy.
+  no feedback usage (Exported surfaces), the draw reads the image's shadow: an image of the same
+  format, extent, levels and layers, made at the first draw that reads the image and freed with it
+  (`Gauges::shadows` and `shadow_bytes`). A texture that reaches the attachment's level and layer
+  reads the shadow through its second element; one that reaches neither reads the image at home.
+  Where the draw reads what the shadow does not hold, the rendering ends, one barrier orders every
+  earlier command before the copies and moves what they copy to the transfer layouts, the copies
+  are recorded (`Metrics::attachment_read_copies` and `attachment_read_copy_bytes`), one barrier
+  moves it all back, and the rendering begins again. A slot the fragment function reads only at its
+  own pixel reads the draw's scissor, a pixel wider each way, clamped into its level; any other
+  slot reads every level and layer its texture reaches. What is new to the shadow is copied as one
+  area where it is one (a wider scissor's band), else as the whole read, with no look-ahead. At the
+  pass's first draw, where the pass cleared the attachment and every read of its level and layer
+  lies in it alone and inside the Metal's render area, the shadow's level and layer is cleared to
+  the pass's clear colour between the same barriers instead of copied (the shadow is of the
+  attachment's format, so the clear writes the texels the pass's did); a draw of the pass before
+  it, of any pipeline, leaves the copy.
 - A fragment function's read of a colour attachment (`[[color(n)]]`, framebuffer fetch) reads the
   attachment's texture at the fragment's own pixel, through its second element, whose index the
   draw pushes (`PushField::FetchedColor`): in the feedback layout, or through the image's shadow,
@@ -2773,6 +2783,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   streams' passes render into one or two color attachments and a stencil attachment or a
   `Depth32Float` depth attachment, each a level of a 2D texture of one sample, with `Load`,
   `Clear` and `DontCare` loads and `Store`, `DontCare` and `Unknown` stores.
+- A `Clear` pass of one layer that encodes no draw clears Metal's render area rounded up to 32
+  pixels a side, where a Mac clears the whole level and slice of a texture it keeps losslessly
+  compressed, which no Vulkan query tells. A pass whose attachments differ in size reaches the
+  smallest attachment's level alone. What a Mac's resolve writes into the resolve texture past
+  Metal's render area is unmeasured; here a resolving pass resolves that band too, so after a
+  `Load` pass the band of the resolve texture takes the resolve of the samples the attachment held
+  there.
 - An attachment whose home layout is shader-read-only (a texture of shader-read and render-target
   usage) is moved to the attachment layout and back by every pass that renders into it. A pass
   that reads it through a texture moves the whole image to the feedback layout at its first

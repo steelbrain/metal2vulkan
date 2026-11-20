@@ -1318,7 +1318,7 @@ pub struct Metrics {
     /// pass's first draw that reads the image and at a draw after a memory barrier after draws,
     /// of what the draw reads, and at another draw, of what it reads that the shadow does not
     /// hold yet. What the pass's first draw reads of the level and layer the pass cleared,
-    /// inside the render area, is no copy: the shadow's is cleared to the pass's clear colour.
+    /// inside Metal's render area, is no copy: the shadow's is cleared to the pass's clear colour.
     pub attachment_read_copies: u64,
     /// The bytes of those copies, which count in [`bytes_copied`](Self::bytes_copied) too.
     pub attachment_read_copy_bytes: u64,

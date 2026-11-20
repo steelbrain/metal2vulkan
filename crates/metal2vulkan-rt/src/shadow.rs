@@ -13,8 +13,8 @@
 //! holding nothing, so the next draw that reads the image copies what it reads again.
 //!
 //! Where the pass cleared the attachment and the draw is the pass's first, the rendered level and
-//! layer holds only the clear colour inside the render area: where every read of that level and
-//! layer lies in it alone and inside the render area, the shadow's is cleared to the same colour
+//! layer holds only the clear colour inside Metal's render area: where every read of that level
+//! and layer lies in it alone and inside that area, the shadow's is cleared to the same colour
 //! (the pass's clear value, the shadow of the attachment's format) in place of the copy, and the
 //! rest of what the draw reads is copied. A draw of the pass recorded before, of any pipeline,
 //! leaves the copy.
@@ -142,7 +142,7 @@ pub(crate) fn whole(level: u32, levels: u32, layer: u32, layers: u32, size: [u32
 
 /// Whether a clear of `rendered`, the level and layer a pass cleared that no draw of the pass has
 /// rendered since, gives the shadow what the image holds of each of `areas` that reaches it: one
-/// does, and each such lies in that level and layer alone and inside the render area `area`
+/// does, and each such lies in that level and layer alone and inside Metal's render area `area`
 /// (`[width, height]` from the level's origin), which holds only the clear colour.
 pub(crate) fn clears(areas: &[Area], rendered: (u32, u32), area: [u32; 2]) -> bool {
     let layer = rendered.1;

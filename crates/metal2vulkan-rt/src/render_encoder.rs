@@ -52,7 +52,7 @@
 //! they copy to the transfer layouts (the image's rendered level and layer from the attachment
 //! layout, the rest of it from home, the shadow from home), the copies are recorded, one barrier
 //! moves both back, and the rendering begins again. At the pass's first draw, what it reads of the
-//! level and layer the pass cleared, inside the render area, is a clear of the shadow's to the
+//! level and layer the pass cleared, inside Metal's render area, is a clear of the shadow's to the
 //! pass's clear colour instead, between the same barriers. A memory barrier after draws leaves
 //! every shadow holding nothing, so the next draw that reads an attachment copies what it reads
 //! again, after what the earlier draws rendered; it records nothing itself.
@@ -477,7 +477,8 @@ pub struct RenderCommandEncoder {
     /// The tests the encoder last recorded, none before its first draw.
     recorded: Option<Tests>,
     viewport: Viewport,
-    /// Metal's scissor rectangle cut to the render area, per axis `[first, end)`.
+    /// Metal's scissor rectangle cut to Metal's render area (`Pass::area`), per axis
+    /// `[first, end)`.
     scissor: [[u32; 2]; 2],
     cull_mode: CullMode,
     winding: Winding,
@@ -981,7 +982,7 @@ impl RenderCommandEncoder {
         Ok(())
     }
 
-    /// `setViewport:`. Metal's default covers the render area with the depth range `[0, 1]`. A
+    /// `setViewport:`. Metal's default covers Metal's render area with the depth range `[0, 1]`. A
     /// viewport of no width or height draws nothing, as Metal's; so does one whose origin's x is
     /// NaN, as plain Metal draws nothing through it. A negative height flips the draw, as Metal's.
     ///
@@ -1024,8 +1025,9 @@ impl RenderCommandEncoder {
         Ok(())
     }
 
-    /// `setScissorRect:`. Metal's default is the render area. A rectangle past the render area,
-    /// which Metal's validation stops, is cut to it, as plain Metal cuts it.
+    /// `setScissorRect:`. Metal's default is Metal's render area. A rectangle past that area,
+    /// which Metal's validation stops, is cut to it, as plain Metal cuts it; the pass's load and
+    /// store reach past it to 32-pixel rounding (`RenderPassDescriptor::render_target_width`).
     pub fn set_scissor_rect(&mut self, rect: ScissorRect) {
         let [width, height] = self.pass.area;
         let cut = |origin: u64, size: u64, limit: u32| {
@@ -1422,7 +1424,7 @@ impl RenderCommandEncoder {
             };
             let (level, layer) = s.rendered;
             // At the pass's first draw, the level and layer it cleared holds only its clear
-            // colour inside the render area: the shadow's is cleared to it in place of a copy.
+            // colour inside Metal's render area: the shadow's is cleared to it in place of a copy.
             let clear =
                 (s.cleared).filter(|_| untouched && shadow::clears(areas, s.rendered, render_area));
             let copied: Vec<Area> = match clear {
@@ -2341,7 +2343,7 @@ impl RenderCommandEncoder {
     /// The draw's scissor: the pixels it covers ([`drawn`](Self::drawn)).
     fn vk_scissor(&self) -> vk::Rect2D {
         let [x, y] = self.drawn();
-        // Each bound lies in the render area, which fits an `i32`.
+        // Each bound lies in Metal's render area, which fits an `i32`.
         vk::Rect2D {
             offset: vk::Offset2D {
                 x: x[0] as i32,
