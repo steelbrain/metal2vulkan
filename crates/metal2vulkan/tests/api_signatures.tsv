@@ -58,9 +58,6 @@ assoc-const	metal2vulkan::bind::BlockDecodeModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
 assoc-const	metal2vulkan::bind::BlockDecodeModule::TEXELS_BINDING	pub const TEXELS_BINDING: u32
-assoc-const	metal2vulkan::bind::CheckDrawModules::FETCH_BINDING	pub const FETCH_BINDING: u32
-assoc-const	metal2vulkan::bind::CheckReads::ALL	pub const ALL: [CheckReads; 3]
-assoc-const	metal2vulkan::bind::CheckView::ALL	pub const ALL: [CheckView; 3]
 assoc-const	metal2vulkan::bind::ChromaConvertModule::BYTES_BINDING	pub const BYTES_BINDING: u32
 assoc-const	metal2vulkan::bind::ChromaConvertModule::IMAGE_BINDING	pub const IMAGE_BINDING: u32
 assoc-const	metal2vulkan::bind::ChromaConvertModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
@@ -384,12 +381,6 @@ assoc-const	metal2vulkan::bind::TwoPlaneTexelsModule::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::TwoPlaneTexelsModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
 assoc-const	metal2vulkan::bind::TwoPlaneTexelsModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
 assoc-const	metal2vulkan::bind::TwoPlaneTexelsModule::TEXELS_BINDING	pub const TEXELS_BINDING: u32
-assoc-const	metal2vulkan::bind::ViewCheckModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::ViewCheckModule::OUT_BINDING	pub const OUT_BINDING: u32
-assoc-const	metal2vulkan::bind::ViewCheckModule::PUSH_BYTES	pub const PUSH_BYTES: u32
-assoc-const	metal2vulkan::bind::ViewCheckModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::ViewCheckModule::WINDOW_BINDING	pub const WINDOW_BINDING: u32
-assoc-const	metal2vulkan::bind::ViewCheckModule::WINDOW_VECS	pub const WINDOW_VECS: u32
 assoc-const	metal2vulkan::bind::VisibilityCombine::ENTRY_WORDS	pub const ENTRY_WORDS: usize
 assoc-const	metal2vulkan::bind::VisibilityCombineModule::DEST_BINDING	pub const DEST_BINDING: u32
 assoc-const	metal2vulkan::bind::VisibilityCombineModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
@@ -568,9 +559,6 @@ assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SET	0
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SHAPE_BINDING	0
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::SHAPE_WORDS	5
 assoc-const-value	metal2vulkan::bind::BlockDecodeModule::TEXELS_BINDING	2
-assoc-const-value	metal2vulkan::bind::CheckDrawModules::FETCH_BINDING	0
-assoc-const-value	metal2vulkan::bind::CheckReads::ALL	[CheckReads::Uniform, CheckReads::PerLane, CheckReads::Fields]
-assoc-const-value	metal2vulkan::bind::CheckView::ALL	[CheckView::Uniform, CheckView::Storage, CheckView::Texel]
 assoc-const-value	metal2vulkan::bind::ChromaConvertModule::BYTES_BINDING	2
 assoc-const-value	metal2vulkan::bind::ChromaConvertModule::IMAGE_BINDING	0
 assoc-const-value	metal2vulkan::bind::ChromaConvertModule::LOCAL_SIZE	8
@@ -894,12 +882,6 @@ assoc-const-value	metal2vulkan::bind::TwoPlaneTexelsModule::SET	0
 assoc-const-value	metal2vulkan::bind::TwoPlaneTexelsModule::SHAPE_BINDING	2
 assoc-const-value	metal2vulkan::bind::TwoPlaneTexelsModule::SHAPE_WORDS	13
 assoc-const-value	metal2vulkan::bind::TwoPlaneTexelsModule::TEXELS_BINDING	0
-assoc-const-value	metal2vulkan::bind::ViewCheckModule::LOCAL_SIZE	64
-assoc-const-value	metal2vulkan::bind::ViewCheckModule::OUT_BINDING	1
-assoc-const-value	metal2vulkan::bind::ViewCheckModule::PUSH_BYTES	16
-assoc-const-value	metal2vulkan::bind::ViewCheckModule::SET	0
-assoc-const-value	metal2vulkan::bind::ViewCheckModule::WINDOW_BINDING	0
-assoc-const-value	metal2vulkan::bind::ViewCheckModule::WINDOW_VECS	256
 assoc-const-value	metal2vulkan::bind::VisibilityCombine::ENTRY_WORDS	4
 assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::DEST_BINDING	1
 assoc-const-value	metal2vulkan::bind::VisibilityCombineModule::LOCAL_SIZE	64
@@ -1409,8 +1391,6 @@ enum	metal2vulkan::bind::AstcTexels	#[cfg_attr(feature = "serde", derive(serde::
 enum	metal2vulkan::bind::BoundBuffer	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BoundBuffer
 enum	metal2vulkan::bind::BoundTexture	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BoundTexture
 enum	metal2vulkan::bind::BufferShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferShape
-enum	metal2vulkan::bind::CheckReads	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CheckReads
-enum	metal2vulkan::bind::CheckView	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum CheckView
 enum	metal2vulkan::bind::ChromaDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ChromaDecode
 enum	metal2vulkan::bind::CopySource	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum CopySource
 enum	metal2vulkan::bind::DepthPick	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DepthPick
@@ -2678,10 +2658,6 @@ field	metal2vulkan::bind::BufferRanges.storage	pub storage: u32
 field	metal2vulkan::bind::BufferRanges.uniform	pub uniform: u32
 field	metal2vulkan::bind::ByteRange.len	pub len: u64
 field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
-field	metal2vulkan::bind::CheckDrawModules.fetch	pub fetch: Arc<[u32]>
-field	metal2vulkan::bind::CheckDrawModules.fragment	pub fragment: Arc<[u32]>
-field	metal2vulkan::bind::CheckDrawModules.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::CheckDrawModules.vertex	pub vertex: Arc<[u32]>
 field	metal2vulkan::bind::ChromaConvertModule.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::ChromaConvertModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ChromaSampleModule.requirements	pub requirements: Requirements
@@ -3175,8 +3151,6 @@ field	metal2vulkan::bind::VertexAmplification.view_mappings	pub view_mappings: V
 field	metal2vulkan::bind::VertexBufferBind.binding	pub binding: u32
 field	metal2vulkan::bind::VertexBufferBind.buffer_index	pub buffer_index: u32
 field	metal2vulkan::bind::VertexBufferBind.per_bind_stride	pub per_bind_stride: bool
-field	metal2vulkan::bind::ViewCheckModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::ViewCheckModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::ViewMapping.render_target_array_index_offset	pub render_target_array_index_offset: u32
 field	metal2vulkan::bind::ViewMapping.viewport_array_index_offset	pub viewport_array_index_offset: u32
 field	metal2vulkan::bind::ViewSetup.base_layer	pub base_layer: u32
@@ -4252,7 +4226,6 @@ fn	metal2vulkan-rt::host_time	pub fn host_time() -> u64
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) -> u32
 fn	metal2vulkan::bind::astc_decode_module	pub fn astc_decode_module(device: &Device, decode: AstcDecode, texels: AstcTexels) -> Result<BlockDecodeModule, Error>
-fn	metal2vulkan::bind::check_draw_modules	pub fn check_draw_modules(device: &Device) -> Result<CheckDrawModules, Error>
 fn	metal2vulkan::bind::chroma_convert_module	pub fn chroma_convert_module(device: &Device, decode: ChromaDecode) -> Result<ChromaConvertModule, Error>
 fn	metal2vulkan::bind::chroma_decode_module	pub fn chroma_decode_module(device: &Device, decode: ChromaDecode) -> Result<BlockDecodeModule, Error>
 fn	metal2vulkan::bind::chroma_sample_module	pub fn chroma_sample_module(device: &Device) -> Result<ChromaSampleModule, Error>
@@ -4338,7 +4311,6 @@ fn	metal2vulkan::bind::tessellation_scan_module	pub fn tessellation_scan_module(
 fn	metal2vulkan::bind::texel_buffer_parts	pub fn texel_buffer_parts(limits: &Limits, texels: u64) -> u32
 fn	metal2vulkan::bind::tiled_texels_module	pub fn tiled_texels_module(device: &Device) -> Result<TiledTexelsModule, Error>
 fn	metal2vulkan::bind::two_plane_texels_module	pub fn two_plane_texels_module(device: &Device) -> Result<TwoPlaneTexelsModule, Error>
-fn	metal2vulkan::bind::view_check_module	pub fn view_check_module(device: &Device, view: CheckView, reads: CheckReads) -> Result<ViewCheckModule, Error>
 fn	metal2vulkan::bind::visibility_combine_module	pub fn visibility_combine_module(device: &Device) -> Result<VisibilityCombineModule, Error>
 fn	metal2vulkan::bind::ycbcr_convert_floats_module	pub fn ycbcr_convert_floats_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
 fn	metal2vulkan::bind::ycbcr_convert_module	pub fn ycbcr_convert_module(device: &Device, conversion: YCbCrConversion) -> Result<YCbCrConvertModule, Error>
@@ -8053,7 +8025,6 @@ method	metal2vulkan::bind::UsedResource::new	pub fn new(class: ResourceClass, to
 method	metal2vulkan::bind::VertexAmplification::layer	pub fn layer(&self, a: u32, length: u32, max: u32) -> u32
 method	metal2vulkan::bind::VertexAmplification::mapping	pub fn mapping(&self, a: u32, max: u32) -> ViewMapping
 method	metal2vulkan::bind::VertexAmplification::new	pub fn new(count: u32, view_mappings: Vec<ViewMapping>) -> VertexAmplification
-method	metal2vulkan::bind::ViewCheckModule::push	pub fn push(vecs: u32, reads: u32) -> [u8; 16]
 method	metal2vulkan::bind::ViewMapping::new	pub fn new(viewport_array_index_offset: u32, render_target_array_index_offset: u32) -> Self
 method	metal2vulkan::bind::VisibilityCombine::plan	pub fn plan(results: &[ContinuedResult], alignment: u64, max_range: u32, max_groups: u32) -> Option<Vec<VisibilityCombine>>
 method	metal2vulkan::bind::VisibilityCombine::table_bytes	pub fn table_bytes(&self) -> Vec<u8>
@@ -8839,7 +8810,6 @@ struct	metal2vulkan::bind::BufferExtent	#[cfg_attr(feature = "serde", derive(ser
 struct	metal2vulkan::bind::BufferRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRange
 struct	metal2vulkan::bind::BufferRanges	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRanges
 struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
-struct	metal2vulkan::bind::CheckDrawModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct CheckDrawModules
 struct	metal2vulkan::bind::ChromaConvertModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaConvertModule
 struct	metal2vulkan::bind::ChromaSampleModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ChromaSampleModule
 struct	metal2vulkan::bind::ColorResolveFormat	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct ColorResolveFormat
@@ -8983,7 +8953,6 @@ struct	metal2vulkan::bind::UsedResource	#[cfg_attr(feature = "serde", derive(ser
 struct	metal2vulkan::bind::UsedShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct UsedShape
 struct	metal2vulkan::bind::VertexAmplification	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct VertexAmplification
 struct	metal2vulkan::bind::VertexBufferBind	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VertexBufferBind
-struct	metal2vulkan::bind::ViewCheckModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ViewCheckModule
 struct	metal2vulkan::bind::ViewMapping	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ViewMapping
 struct	metal2vulkan::bind::ViewSetup	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ViewSetup
 struct	metal2vulkan::bind::VisibilityCombine	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VisibilityCombine
@@ -10809,12 +10778,6 @@ variant	metal2vulkan::bind::BoundTexture::Buffer	Buffer { pixel_format: metal::P
 variant	metal2vulkan::bind::BoundTexture::Texture	Texture { facts: TextureFacts, resource_id: Option<u64> }
 variant	metal2vulkan::bind::BufferShape::Buffer	Buffer { attribute_stride: Option<u32>, device_address: bool, length_class: u8, offset_alignment: u32 }
 variant	metal2vulkan::bind::BufferShape::Bytes	Bytes {  attribute_stride: Option<u32> }
-variant	metal2vulkan::bind::CheckReads::Fields	Fields
-variant	metal2vulkan::bind::CheckReads::PerLane	PerLane
-variant	metal2vulkan::bind::CheckReads::Uniform	Uniform
-variant	metal2vulkan::bind::CheckView::Storage	Storage
-variant	metal2vulkan::bind::CheckView::Texel	Texel
-variant	metal2vulkan::bind::CheckView::Uniform	Uniform
 variant	metal2vulkan::bind::ChromaDecode::Bgrg	Bgrg
 variant	metal2vulkan::bind::ChromaDecode::Gbgr	Gbgr
 variant	metal2vulkan::bind::CopySource::Aspect	Aspect

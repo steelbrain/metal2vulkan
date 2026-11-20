@@ -462,14 +462,6 @@ println!("  Metal properties: {:?}", device.metal_properties());
   includes it, so an artifact never serves another device. Facts that follow the machine's memory
   (`DeviceDescription::allocation`: `maxMemoryAllocationSize`, `maxBufferSize`) are not profile
   fields, so two machines that differ only there share artifacts.
-- `DeviceDescription::measured`: the driver workarounds you measured on the device itself, which
-  the profile takes beside those its driver's identity names. Two cost facts come from such a
-  measurement alone, never from an identity: `DriverWorkaround::UniformBufferPerLaneReadsSerialize`
-  (a uniform buffer read at an address that differs between lanes costs many times a storage
-  buffer's) and `DriverWorkaround::ExternalUniformReadsSkipACache` (uniform reads of imported memory
-  are faster through a uniform texel buffer). The runtime's view check measures both
-  (`crates/metal2vulkan-runtime/README.md`); `bind::view_check_module` gives its kernels. The set is
-  a profile field, so the fingerprint and every cache key follow it.
 - `profile().spirv_validation()`: the `spirv-val` environments and relaxations every module for
   the device is valid under. The command line runs exactly these.
 - The profile's facts: `enabled()`, `limits()`, `images()`, `fragment()`, `descriptors()`, the

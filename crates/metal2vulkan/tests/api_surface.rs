@@ -765,12 +765,6 @@ surface! {
         enum PlanesCopy N;
         struct PlanesMergeModules N;
         struct PlanesSplitModule N;
-        fn check_draw_modules;
-        struct CheckDrawModules N;
-        fn view_check_module;
-        enum CheckView N;
-        enum CheckReads N;
-        struct ViewCheckModule N;
         fn interleave_merge_modules;
         fn interleave_split_module;
         struct InterleaveMergeModules N;

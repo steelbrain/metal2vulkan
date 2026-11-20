@@ -66,9 +66,8 @@
 //! depth or stencil aspect moves between images without colour copies through the draws of
 //! [`depth_stencil_copy_modules`] and the kernel of [`stencil_split_module`], and resolves where
 //! the device's resolve modes do not state Metal's filter through the draws of
-//! [`depth_stencil_resolve_modules`]. The runtime's check of render targets in place over host
-//! pages draws into one through [`check_draw_modules`]. The mipmaps of a format the device's
-//! blits cannot filter are
+//! [`depth_stencil_resolve_modules`]. The mipmaps of a format the device's blits cannot filter
+//! are
 //! a bilinear filter in `float` through the
 //! [`MipmapFilterChain`] dispatches of [`mipmap_filter_module`]. Compute commands
 //! a kernel encodes into an indirect command buffer replay on the device where it has device
@@ -139,7 +138,6 @@ pub(crate) mod acceleration;
 pub(crate) mod argument_buffer;
 pub(crate) mod astc_decode;
 pub(crate) mod block_decode;
-pub(crate) mod check_draw;
 pub(crate) mod chroma_decode;
 pub(crate) mod color_resolve;
 pub(crate) mod depth_clamp;
@@ -189,7 +187,6 @@ pub(crate) mod texel_rows;
 pub(crate) mod tile_map;
 pub(crate) mod tiled_texels;
 pub(crate) mod two_plane_texels;
-pub(crate) mod view_check;
 pub(crate) mod visibility_combine;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
@@ -207,7 +204,6 @@ pub use argument_buffer::{
 };
 pub use astc_decode::{astc_decode_module, AstcDecode, AstcTexels};
 pub use block_decode::BlockDecodeModule;
-pub use check_draw::{check_draw_modules, CheckDrawModules};
 pub use chroma_decode::{
     chroma_convert_module, chroma_decode_module, chroma_sample_module, ChromaConvertModule,
     ChromaDecode, ChromaSampleModule,
@@ -312,7 +308,6 @@ pub use state::{
     TextureShape, TileThreadgroupArgument, TileThreadgroupMemory, UsedClass, UsedResource,
     UsedShape, VertexAmplification, ViewMapping, ZERO_OFFSET_CLASS, ZERO_OFFSET_TOLD,
 };
-pub use view_check::{view_check_module, CheckReads, CheckView, ViewCheckModule};
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.
 pub use dynamic_views::{dynamic_views_module, DynamicViewsModule};
