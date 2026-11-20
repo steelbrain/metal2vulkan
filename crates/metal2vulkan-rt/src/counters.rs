@@ -384,6 +384,9 @@ struct Atomics {
     site_longest: [Mutex<Longest>; SITES],
     maker_waits: AtomicU64,
     maker_wait_max_nanos: AtomicU64,
+    maker_memory_calls: AtomicU64,
+    maker_yields: AtomicU64,
+    maker_yield_nanos: AtomicU64,
     dispatches_without_effects: AtomicU64,
     shared_long_reuses: AtomicU64,
     private_long_reuses: AtomicU64,
@@ -749,6 +752,18 @@ impl Counters {
         a.maker_wait_max_nanos.fetch_max(nanos, Relaxed);
     }
 
+    /// A `vkAllocateMemory` or `vkFreeMemory` made ahead of need, after which the thread waited
+    /// `waited` nanoseconds for the submit calls inside the driver as it returned, `None` where
+    /// none was ([`Metrics::maker_memory_calls`]).
+    pub(crate) fn maker_memory_call(&self, waited: Option<u64>) {
+        let a = &self.atomics;
+        a.maker_memory_calls.fetch_add(1, Relaxed);
+        if let Some(nanos) = waited {
+            a.maker_yields.fetch_add(1, Relaxed);
+            a.maker_yield_nanos.fetch_add(nanos, Relaxed);
+        }
+    }
+
     /// A `vkAllocateMemory` of `bytes` that took `nanos` nanoseconds at `site`, on a thread of the
     /// consumer's ([`Metrics::texture_allocations`] and the other sites').
     pub(crate) fn site_allocation(&self, site: Site, bytes: u64, nanos: u64) {
@@ -1082,6 +1097,9 @@ impl Counters {
             private_take_allocations: site(Site::PrivateTake),
             maker_waits: a.maker_waits.load(Relaxed),
             maker_wait_max_nanos: a.maker_wait_max_nanos.load(Relaxed),
+            maker_memory_calls: a.maker_memory_calls.load(Relaxed),
+            maker_yields: a.maker_yields.load(Relaxed),
+            maker_yield_nanos: a.maker_yield_nanos.load(Relaxed),
             shared_long_reuses: a.shared_long_reuses.load(Relaxed),
             private_long_reuses: a.private_long_reuses.load(Relaxed),
             allocations_mapped: a.allocations_mapped.load(Relaxed),
@@ -1403,6 +1421,20 @@ pub struct Metrics {
     /// The longest of those waits, in nanoseconds of [`host_time`](crate::host_time); a maximum
     /// since the device was made, so the difference of two reads does not apply to it.
     pub maker_wait_max_nanos: u64,
+    /// `vkAllocateMemory` and `vkFreeMemory` calls made ahead of need, off the consumer's calls:
+    /// the block-maker thread's (the runtime's fixed-size internals, the pool's units, and the
+    /// frees of idle allocations and of the imported and exported blocks given back), and each
+    /// class's first allocation in the device's making. A driver may hold a submit made during
+    /// such a call until it returns, and through calls made back to back, so after each one the
+    /// thread waits until every one of the runtime's `vkQueueSubmit2` calls that was inside the
+    /// driver as it returned has returned: a submit waits out at most one of these calls.
+    pub maker_memory_calls: u64,
+    /// Of [`maker_memory_calls`](Self::maker_memory_calls), those after which a
+    /// `vkQueueSubmit2` call was inside the driver, which the thread waited for; after the others
+    /// it went straight on.
+    pub maker_yields: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) those waits took, in total.
+    pub maker_yield_nanos: u64,
     /// Shared takes carved from a long allocation, one a take longer than the 16 MiB unit made for
     /// itself, after that take: a take of the same length, which a long allocation alone serves.
     pub shared_long_reuses: u64,
@@ -1527,9 +1559,10 @@ pub struct Metrics {
     /// Idle allocations the block-maker thread freed: one at a time, each once it had been idle,
     /// holding no live block, for 250 ms, whatever the device's queues were doing.
     pub allocations_freed: u64,
-    /// Submissions made while the block-maker thread was inside an idle allocation's
-    /// `vkFreeMemory`. A driver may hold such a submission until the free returns: on the NVIDIA
-    /// cards measured in Thunderbolt enclosures, about 1.1 ms per MiB of host-visible memory.
+    /// Submissions made while the block-maker thread was inside one of its `vkFreeMemory` calls:
+    /// an idle allocation's, an imported or exported block's given back, or one it made and could
+    /// not use. A driver may hold such a submission until the free returns: on the NVIDIA cards
+    /// measured in Thunderbolt enclosures, about 1.1 ms per MiB of host-visible memory.
     pub submissions_during_frees: u64,
     /// The frees of [`allocations_freed`](Self::allocations_freed) by how long each allocation had
     /// been idle when its free began, in buckets of under 250 ms (a spilled allocation that

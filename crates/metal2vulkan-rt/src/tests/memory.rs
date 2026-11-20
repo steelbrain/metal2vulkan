@@ -1289,7 +1289,7 @@ mod on_device {
 
             // The other three freed at their idle age, oldest first.
             wait_until("three idle Shared allocations freed", || {
-                core.pool.frees().len() == 3 && !core.pool.freeing()
+                core.pool.frees().len() == 3 && !core.submit_calls.freeing()
             });
             assert_freed_at_the_idle_age(name, &core.pool.frees());
             let unmapped = hook.unmapped();
@@ -1309,7 +1309,7 @@ mod on_device {
             let released = crate::host_time();
             device.release_block(again).expect("a release");
             wait_until("the fourth freed", || {
-                core.pool.frees().len() == 4 && !core.pool.freeing()
+                core.pool.frees().len() == 4 && !core.submit_calls.freeing()
             });
             let frees = core.pool.frees();
             assert!(
@@ -1324,7 +1324,7 @@ mod on_device {
             device.release_block(small).expect("a release");
             wait_until("the small block given back", || core.pool.holds(small_id));
             wait_until("the small block's allocation freed", || {
-                core.pool.frees().len() == 5 && !core.pool.freeing()
+                core.pool.frees().len() == 5 && !core.submit_calls.freeing()
             });
             thread::sleep(Duration::from_nanos(2 * IDLE_AGE_NANOS));
             assert_eq!(
@@ -1420,7 +1420,7 @@ mod on_device {
                 assert_eq!(whole(class), 4, "{name}: {class:?}: four wholly free units");
             }
             wait_until("six idle allocations freed", || {
-                core.pool.frees().len() == 6 && !core.pool.freeing()
+                core.pool.frees().len() == 6 && !core.submit_calls.freeing()
             });
             assert_freed_at_the_idle_age(name, &core.pool.frees());
             thread::sleep(Duration::from_nanos(2 * IDLE_AGE_NANOS));
@@ -1489,7 +1489,7 @@ mod on_device {
             let allocation = long.allocation;
             device.release_block(long).expect("a release");
             wait_until("the long allocation freed", || {
-                core.pool.frees().len() == 1 && !core.pool.freeing()
+                core.pool.frees().len() == 1 && !core.submit_calls.freeing()
             });
             let unmapped = hook.unmapped();
             assert_eq!(
@@ -1595,7 +1595,8 @@ mod on_device {
             let mut given = Vec::new();
             let mut between = None;
             let mut commits = 0;
-            let ended = |count: usize| core.pool.frees().len() == count && !core.pool.freeing();
+            let ended =
+                |count: usize| core.pool.frees().len() == count && !core.submit_calls.freeing();
             while !(given.len() == 2 && ended(2)) {
                 assert!(
                     started.elapsed() < Duration::from_secs(120),
@@ -1651,18 +1652,18 @@ mod on_device {
                     .wait_until_completed()
                     .expect("a wait outside a scheduled handler");
             };
-            core.pool.hold_frees(true);
+            core.submit_calls.hold_frees(true);
             device.release_block(blocks.remove(0)).expect("a release");
-            wait_until("a free held open", || core.pool.freeing());
+            wait_until("a free held open", || core.submit_calls.freeing());
             fill(&buffer);
             assert_eq!(
                 counters.metrics().submissions_during_frees,
                 steady.submissions_during_frees + 1,
                 "{name}: the submission during the free"
             );
-            core.pool.hold_frees(false);
+            core.submit_calls.hold_frees(false);
             wait_until("the third freed", || {
-                core.pool.frees().len() == 3 && !core.pool.freeing()
+                core.pool.frees().len() == 3 && !core.submit_calls.freeing()
             });
             fill(&buffer);
             assert_eq!(

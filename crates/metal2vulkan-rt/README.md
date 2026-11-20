@@ -869,15 +869,27 @@ planes' first use, so `Surface::wait_until_ready()` returns at once.
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one idle allocation at a time,
   at its idle age, whatever the queues are doing. `Metrics::allocations_freed` counts the frees,
-  and `Metrics::submissions_during_frees` the submits made while one was in progress.
+  and `Metrics::submissions_during_frees` the submits made while one of the block-maker thread's
+  frees was in progress.
 - NVIDIA's Linux driver holds a submit made while another thread is inside `vkAllocateMemory` or
   `vkFreeMemory` until that call returns, device-local memory included, and calls made back to
-  back hold it through all of them. In a 336-second guest walk on an RTX 3090 (driver
-  620.70.06, rt at 7096fa7de3), every submit of 5 ms or more overlapped such calls on other
-  threads for 97 to 100% of its length: a 64 MiB Shared allocation made inside a take held one
-  submit for 14.2 ms; frees of imported blocks, 0.4 to 2.9 ms each and 52 in one second, held four
-  submits for 5.2 to 6.9 ms; and the pool's trim after the workload, five 64 MiB frees of 7.7 to
-  13.9 ms made back to back, held one submit for 48.7 ms. A take that leaves its class no wholly
+  back hold it through all of them. So after each of its allocations and frees the block-maker
+  thread waits until every `vkQueueSubmit2` call of rt's that was inside the driver as its call
+  returned has returned, and with none inside it goes straight on: a submit waits out at most one
+  of its calls, the one it met. `Metrics::maker_memory_calls` counts those calls,
+  `maker_yields` the ones after which it waited, and `maker_yield_nanos` the time. A single call
+  still holds a submit for its own length, and a take that allocates on the consumer's thread
+  makes its one call with no wait. In a standalone program on an RTX 3090 (driver 620.70.06),
+  giving back 1 GiB of Shared memory in 64 MiB frees made back to back held the worst submit for
+  216 ms, and with this wait after each free for 72 ms; from 2 to 64 MiB units the worst hold
+  with the wait was 0.90 to 0.96 times the longest single free, and with no submit made the wait
+  added nothing. In a 336-second guest walk on an RTX 3090 (driver 620.70.06, rt at 7096fa7de3,
+  whose block-maker thread made its calls back to back), every submit of 5 ms or more overlapped
+  such calls on other threads for 97 to 100% of its length: a 64 MiB Shared allocation made inside
+  a take held one submit for 14.2 ms; frees of imported blocks, 0.4 to 2.9 ms each and 52 in one
+  second, held four submits for 5.2 to 6.9 ms; and the pool's trim after the workload, five 64 MiB
+  frees of 7.7 to 13.9 ms made back to back, held one submit for 48.7 ms. A take that leaves its
+  class no wholly
   free unit also sets the block-maker making the class's next allocation at once, so the take's
   own first submission can wait out that allocation: on the same card (rt at ac1896537f) a
   16 MiB Private allocation of 661 µs held the next submit for 603 µs, and on an RTX 2080 one of

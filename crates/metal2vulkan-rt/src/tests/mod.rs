@@ -37,6 +37,7 @@ mod linear_planes;
 #[cfg(m2v_gpu)]
 mod locks;
 mod lowered;
+mod maker_yield;
 mod managed;
 mod memory;
 mod mipmaps;

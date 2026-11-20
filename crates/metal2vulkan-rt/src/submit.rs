@@ -2075,7 +2075,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     }
     if ok {
         let queue = lock(&core.queues.runtime);
-        if core.pool.freeing() {
+        if core.submit_calls.freeing() {
             core.counters.count(Metric::SubmissionsDuringFrees);
         }
         // A bind of an import over several dma-bufs since the last submission: this one waits for
@@ -2107,10 +2107,14 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             // read the metrics, before the call returns here.
             core.counters.count(Metric::Submissions);
             core.counters.submitted_infos(infos.len() as u64);
+            // Inside the driver from here until the call returns, for the block-maker thread's
+            // wait after its memory calls (`crate::submit_calls`).
+            let call = core.submit_calls.enter();
             // SAFETY: every command buffer is executable and in no other pending submission;
             // every wait is on a signal submitted earlier, and every signal raises its semaphore;
             // the queue is held.
             ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
+            drop(call);
             if !ok {
                 break;
             }

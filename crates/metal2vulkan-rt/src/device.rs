@@ -24,6 +24,7 @@ use crate::record::Recorders;
 use crate::ring::Ring;
 use crate::sampler::{Constexpr, SamplerTable};
 use crate::submit::{self, Work};
+use crate::submit_calls::SubmitCalls;
 use crate::times::{StampPools, Ticks};
 use ash::vk;
 use metal2vulkan::device::{
@@ -314,6 +315,9 @@ pub(crate) struct Core {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) hold_completions: std::sync::RwLock<()>,
     pub(crate) pool: Pool,
+    /// The runtime's `vkQueueSubmit2` calls inside the driver, which the block-maker thread waits
+    /// out after each of its memory calls.
+    pub(crate) submit_calls: Arc<SubmitCalls>,
     /// What the device imports (`Device::import_dma_buf` on Unix, [`Device::import_host_memory`]).
     pub(crate) imports: Imports,
     /// What the device exports ([`Device::new_exported_block`]).
@@ -693,6 +697,7 @@ impl Device {
             granularity,
             alignment,
         );
+        let submit_calls = Arc::new(SubmitCalls::new(counters.clone()));
         let live = instance.teardowns().live();
         let core = Arc::new(Core {
             instance,
@@ -731,6 +736,7 @@ impl Device {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             hold_completions: std::sync::RwLock::new(()),
             pool,
+            submit_calls,
             imports,
             exports,
             claims: Mutex::new(HashMap::new()),

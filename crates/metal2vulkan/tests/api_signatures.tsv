@@ -2431,8 +2431,11 @@ field	metal2vulkan-rt::Metrics.made_ahead_variant_nanos	pub made_ahead_variant_n
 field	metal2vulkan-rt::Metrics.made_ahead_variants	pub made_ahead_variants: u64
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
 field	metal2vulkan-rt::Metrics.maker_makes	pub maker_makes: Timed
+field	metal2vulkan-rt::Metrics.maker_memory_calls	pub maker_memory_calls: u64
 field	metal2vulkan-rt::Metrics.maker_wait_max_nanos	pub maker_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.maker_waits	pub maker_waits: u64
+field	metal2vulkan-rt::Metrics.maker_yield_nanos	pub maker_yield_nanos: u64
+field	metal2vulkan-rt::Metrics.maker_yields	pub maker_yields: u64
 field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64
 field	metal2vulkan-rt::Metrics.over_copies	pub over_copies: u64
 field	metal2vulkan-rt::Metrics.over_copies_imported	pub over_copies_imported: u64

@@ -11,10 +11,11 @@ use crate::device::{lock, Core};
 use crate::error::{Error, Limit};
 use crate::floor;
 use crate::places::Ranges;
+use crate::submit_calls::SubmitCalls;
 use ash::vk;
+use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -547,12 +548,6 @@ pub(crate) struct Pool {
     /// The alignment of a buffer of the pool's usage, which Vulkan holds the same for every such
     /// buffer.
     alignment: u64,
-    /// Whether the block-maker thread is in an idle allocation's `vkFreeMemory`.
-    freeing: AtomicBool,
-    /// For the device tests: while set, the block-maker thread waits inside each idle
-    /// allocation's free, with [`freeing`](Self::freeing) set, before it calls `vkFreeMemory`.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    hold_frees: Mutex<bool>,
     /// For the device tests: each idle allocation the block-maker thread freed, as when it became
     /// idle, when its free began and when it ended, in nanoseconds of
     /// [`host_time`](crate::host_time).
@@ -653,10 +648,49 @@ struct State {
 }
 
 thread_local! {
-    /// Whether this thread makes allocations ahead of need: the block-maker thread ([`run`]), its
-    /// internals among them, or the device's making while it makes the first allocations
-    /// ([`stock`]). For the allocation-time metrics.
-    static ON_MAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Where this thread makes memory ahead of need, its device's submit calls: on the block-maker
+    /// thread ([`run`]), its internals among what it makes, and in the device's making while it
+    /// makes the first allocations ([`stock`]). Each of its allocations and frees waits them out
+    /// after it ([`passed`]), and its allocations' times count apart from the consumer's.
+    static MAKER: RefCell<Option<Arc<SubmitCalls>>> = const { RefCell::new(None) };
+}
+
+/// Makes this thread one that makes memory ahead of need for the device whose submit calls are
+/// `calls` ([`MAKER`]); `None` makes it one that does not.
+pub(crate) fn make_ahead_here(calls: Option<Arc<SubmitCalls>>) {
+    MAKER.set(calls);
+}
+
+/// Whether this thread makes memory ahead of need ([`MAKER`]).
+fn on_maker() -> bool {
+    MAKER.with_borrow(Option::is_some)
+}
+
+/// After each `vkAllocateMemory` and `vkFreeMemory` call, as it returned: on a thread that makes
+/// memory ahead of need, waits until every submit call of its device that was inside the driver
+/// then has returned ([`SubmitCalls::wait_out`]), so a driver that holds a submit through memory
+/// calls made back to back holds it through this one alone. On every other thread nothing.
+pub(crate) fn passed() {
+    MAKER.with_borrow(|maker| {
+        if let Some(calls) = maker {
+            calls.wait_out();
+        }
+    });
+}
+
+/// `vkFreeMemory` of `memory`, the form of every free the block-maker thread makes: there,
+/// marked for the submissions made during it ([`SubmitCalls::freeing`]), and then [`passed`].
+///
+/// # Safety
+///
+/// As `vkFreeMemory`: `memory` is `device`'s, and nothing uses it.
+pub(crate) unsafe fn free(device: &ash::Device, memory: vk::DeviceMemory) {
+    MAKER.with_borrow(|maker| match maker {
+        // SAFETY: the caller's.
+        Some(calls) => calls.free(|| unsafe { device.free_memory(memory, None) }),
+        // SAFETY: the caller's.
+        None => unsafe { device.free_memory(memory, None) },
+    });
 }
 
 /// What a block is: a range of an allocation.
@@ -725,9 +759,6 @@ impl Pool {
             counters,
             granule: GRANULE.max(granularity.next_power_of_two()),
             alignment,
-            freeing: AtomicBool::new(false),
-            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            hold_frees: Mutex::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             frees: Mutex::new(Vec::new()),
         }
@@ -752,14 +783,6 @@ impl Pool {
             Ok((state, _)) => state,
             Err(poisoned) => poisoned.into_inner().0,
         }
-    }
-
-    /// Whether the block-maker thread is in an idle allocation's `vkFreeMemory`, which a driver
-    /// may hold a submission made now for ([`Metrics::submissions_during_frees`]).
-    ///
-    /// [`Metrics::submissions_during_frees`]: crate::Metrics::submissions_during_frees
-    pub(crate) fn freeing(&self) -> bool {
-        self.freeing.load(Relaxed)
     }
 
     /// For the device tests: whether the class holds a wholly free unit ([`State::whole`]), so
@@ -792,13 +815,6 @@ impl Pool {
                 (a.id, a.len, a.live, free)
             })
             .collect()
-    }
-
-    /// For the device tests: holds each idle allocation's free, with [`freeing`](Self::freeing)
-    /// set, while `hold` is true.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn hold_frees(&self, hold: bool) {
-        *lock(&self.hold_frees) = hold;
     }
 
     /// For the device tests: each idle allocation the block-maker thread freed so far, as when
@@ -1302,7 +1318,7 @@ fn ahead(core: &Core, class: MemoryClass) -> Option<Allocation> {
 /// the class's next take or give-back.
 pub(crate) fn stock(core: &Core) {
     // Made ahead of need, as the block-maker thread's are: counted with them.
-    ON_MAKER.set(true);
+    make_ahead_here(Some(Arc::clone(&core.submit_calls)));
     for class in MemoryClass::ALL {
         let made = ahead(core, class);
         let mut state = core.pool.lock();
@@ -1312,7 +1328,7 @@ pub(crate) fn stock(core: &Core) {
         }
         core.pool.settle(&mut state, class);
     }
-    ON_MAKER.set(false);
+    make_ahead_here(None);
 }
 
 /// The block-maker thread, until the device's teardown or a quiesce stops it. Off every caller's
@@ -1320,11 +1336,13 @@ pub(crate) fn stock(core: &Core) {
 /// ones first of all; it frees each imported or exported block given back, then runs an import's
 /// release; it makes an allocation of a class that holds no wholly free unit ([`State::whole`]),
 /// having the consumer map it before it joins the pool; and it frees each allocation idle for
-/// [`IDLE_AGE_NANOS`], after the consumer's unmap of it, one at a time. It sleeps until the next
-/// change, or until the oldest idle allocation reaches the idle age. Stopped, it makes nothing
-/// more: what is asked of it and not made, the calls that need it make.
+/// [`IDLE_AGE_NANOS`], after the consumer's unmap of it, one at a time. After each of its
+/// allocations and frees it waits out the submit calls inside the driver as the call returned
+/// ([`passed`]). It sleeps until the next change, or until the oldest idle allocation reaches the
+/// idle age. Stopped, it makes nothing more: what is asked of it and not made, the calls that need
+/// it make.
 pub(crate) fn run(core: Arc<Core>) {
-    ON_MAKER.set(true);
+    make_ahead_here(Some(Arc::clone(&core.submit_calls)));
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     if let MakerTest::Park(park) = &core.maker_test {
         park.wait();
@@ -1485,7 +1503,8 @@ pub(crate) unsafe fn allocate_spilling(
 /// `counters`' blocks gauge, refused with [`Limit::MemoryAllocations`] before the driver is called
 /// where `max`, the device's `maxMemoryAllocationCount`, are live. Each free falls the gauge. The
 /// call's time is counted on the block-maker thread or on the consumer's, and on the consumer's
-/// at `site` too, where the call names one.
+/// at `site` too, where the call names one. On the block-maker thread the call is then
+/// [`passed`].
 ///
 /// # Safety
 ///
@@ -1504,7 +1523,8 @@ pub(crate) unsafe fn allocate(
     // SAFETY: the caller's.
     let allocated = unsafe { device.allocate_memory(info, None) };
     let nanos = crate::host_time().saturating_sub(start);
-    let maker = ON_MAKER.get();
+    passed();
+    let maker = on_maker();
     counters.allocation_time(nanos, maker);
     if let (false, Some(site)) = (maker, site) {
         counters.site_allocation(site, info.allocation_size, nanos);
@@ -2193,10 +2213,8 @@ fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
         core.counters.fall(Gauge::SurfaceBuffers);
         return;
     }
-    core.pool.freeing.store(true, Relaxed);
     // SAFETY: as above; nothing else is bound to the memory.
-    unsafe { core.device.free_memory(memory.memory, None) };
-    core.pool.freeing.store(false, Relaxed);
+    unsafe { free(&core.device, memory.memory) };
     core.counters.fall(Gauge::Blocks);
     match memory.own {
         Some(Own::Export(_)) => core.counters.fall(Gauge::Exports),
@@ -2214,23 +2232,16 @@ fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
 
 /// On the block-maker thread: frees an allocation the idle rule took out, after the consumer's
 /// unmap of it, and counts its idle time. The submissions made during its `vkFreeMemory` are
-/// counted.
+/// counted ([`free`]).
 fn free_idle(core: &Core, allocation: Allocation) {
     core.pool.unmap(allocation.id);
-    let pool = &core.pool;
     let since = allocation.idle_since;
     let began = crate::host_time();
     core.counters.freed_idle(began.saturating_sub(since));
-    pool.freeing.store(true, Relaxed);
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    while *lock(&pool.hold_frees) {
-        std::thread::sleep(Duration::from_millis(1));
-    }
     free_allocation(core, allocation);
-    pool.freeing.store(false, Relaxed);
     core.counters.count(Metric::AllocationsFreed);
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    lock(&pool.frees).push((since, began, crate::host_time()));
+    lock(&core.pool.frees).push((since, began, crate::host_time()));
 }
 
 /// Frees an allocation and its buffer, whose blocks are all given back or gone with the device,
@@ -2240,7 +2251,7 @@ fn free_allocation(core: &Core, allocation: Allocation) {
     // block holds it until it retires.
     unsafe {
         core.device.destroy_buffer(allocation.buffer, None);
-        core.device.free_memory(allocation.memory, None);
+        free(&core.device, allocation.memory);
     }
     core.counters.fall(Gauge::Blocks);
     (core.counters).fall_by(allocation.class.allocation_gauge(), allocation.len);

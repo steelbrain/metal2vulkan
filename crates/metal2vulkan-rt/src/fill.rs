@@ -256,7 +256,7 @@ impl Filler {
         unsafe {
             device.destroy_buffer(self.zeros, None);
             if allocated {
-                device.free_memory(self.zeros_memory, None);
+                memory::free(device, self.zeros_memory);
             }
         }
         allocated

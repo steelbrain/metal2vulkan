@@ -53,6 +53,7 @@ mod sampler;
 mod shadow;
 mod staging;
 mod submit;
+mod submit_calls;
 mod surface;
 #[cfg(test)]
 mod tests;

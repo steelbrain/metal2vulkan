@@ -225,7 +225,7 @@ impl Region {
         // SAFETY: the caller's; freeing the memory unmaps it.
         unsafe {
             core.device.destroy_buffer(self.buffer, None);
-            core.device.free_memory(self.memory, None);
+            memory::free(&core.device, self.memory);
         }
         core.counters.fall(Gauge::Blocks);
     }
@@ -357,7 +357,7 @@ fn host_buffer(
             // SAFETY: nothing uses them.
             unsafe {
                 device.destroy_buffer(buffer, None);
-                device.free_memory(memory, None);
+                memory::free(device, memory);
             }
             core.counters.fall(Gauge::Blocks);
             return Err(error);
@@ -368,7 +368,7 @@ fn host_buffer(
         // SAFETY: nothing uses them.
         unsafe {
             device.destroy_buffer(buffer, None);
-            device.free_memory(memory, None);
+            memory::free(device, memory);
         }
         core.counters.fall(Gauge::Blocks);
         return Err(Error::Vulkan {

@@ -346,7 +346,7 @@ fn make(core: &Core) -> Result<(RingBlock, u64, Mapping), Error> {
             // SAFETY: nothing uses the block.
             unsafe {
                 device.destroy_buffer(block.buffer, None);
-                device.free_memory(block.memory, None);
+                memory::free(device, block.memory);
             }
             core.counters.fall(Gauge::Blocks);
             Err(error)
