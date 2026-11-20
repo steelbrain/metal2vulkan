@@ -444,11 +444,10 @@ mod on_device {
         (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
-    /// The whole call's time over dma-bufs of `memfd`'s ranges of `lens`, in nanoseconds; the
-    /// dma-bufs made before it, and the block dropped and its release waited for after it.
+    /// The whole call's time over `chunks` (dma-bufs and their lengths), in nanoseconds; the
+    /// block dropped and its release waited for after it.
     #[cfg(target_os = "linux")]
-    fn dma_whole(device: &Device, memfd: &OwnedFd, lens: &[u64], scattered: bool) -> u128 {
-        let chunks = dma_chunks(memfd, lens, scattered);
+    fn dma_whole(device: &Device, chunks: Vec<(OwnedFd, u64)>) -> u128 {
         let (release, released) = releasing();
         let start = Instant::now();
         let made = device.import_dma_bufs(chunks, release);
@@ -459,23 +458,17 @@ mod on_device {
         took
     }
 
-    /// Each of the call's steps' time over dma-bufs of `memfd`'s ranges of `lens`, in
+    /// Each of the call's steps' time over `chunks` (dma-bufs and their lengths), in
     /// nanoseconds, made by hand: the bind signals a timeline of the test's own, waited for
     /// before what the steps made is destroyed, all outside the times.
     #[cfg(target_os = "linux")]
-    fn dma_parts(
-        device: &Device,
-        memfd: &OwnedFd,
-        lens: &[u64],
-        scattered: bool,
-    ) -> [u128; DMA_PARTS.len()] {
+    fn dma_parts(device: &Device, chunks: Vec<(OwnedFd, u64)>) -> [u128; DMA_PARTS.len()] {
         use std::os::fd::{AsRawFd, IntoRawFd};
         let core = device.core();
         let ash = &core.device;
         let fds = (core.imports.dma_buf.as_ref()).expect("dma-buf imports");
         let handle = vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
-        let chunks = dma_chunks(memfd, lens, scattered);
-        let len: u64 = lens.iter().sum();
+        let len: u64 = chunks.iter().map(|&(_, len)| len).sum();
         let timeline = crate::event::timeline(ash).expect("a timeline");
         let mut times = [0u128; DMA_PARTS.len()];
         let start = Instant::now();
@@ -632,8 +625,8 @@ mod on_device {
                     let mut wholes = Vec::with_capacity(REPS);
                     let mut by_part = vec![Vec::with_capacity(REPS); DMA_PARTS.len()];
                     for _ in 0..REPS {
-                        wholes.push(dma_whole(&device, &memfd, &lens, scattered));
-                        let steps = dma_parts(&device, &memfd, &lens, scattered);
+                        wholes.push(dma_whole(&device, dma_chunks(&memfd, &lens, scattered)));
+                        let steps = dma_parts(&device, dma_chunks(&memfd, &lens, scattered));
                         for (times, took) in by_part.iter_mut().zip(steps) {
                             times.push(took);
                         }
@@ -659,6 +652,133 @@ mod on_device {
                             shown(times)
                         );
                     }
+                }
+            }
+        });
+    }
+
+    /// `count` dma-bufs of `chunk` bytes each over `memfd`, a memfd of twice their sum, each
+    /// made by one `UDMABUF_CREATE_LIST` of `runs` runs: one or two pages each (as many of two as
+    /// the chunk's pages need past `runs`), each at a two-page slot of the memfd taken at a stride
+    /// prime to its slot count; one run a dma-buf is its own consecutive range. With each
+    /// create's time, in nanoseconds.
+    #[cfg(target_os = "linux")]
+    fn view_chunks(
+        memfd: &OwnedFd,
+        count: u64,
+        chunk: u64,
+        runs: u64,
+    ) -> (Vec<(OwnedFd, u64)>, Vec<u128>) {
+        const PAGE: u64 = 4096;
+        const STRIDE: u64 = 7919;
+        let pages = chunk / PAGE;
+        assert!(
+            runs <= pages && pages <= 2 * runs,
+            "runs of one or two pages fill the chunk"
+        );
+        let slots = count * pages;
+        assert_ne!(
+            slots % STRIDE,
+            0,
+            "the stride is prime to the memfd's slots"
+        );
+        let mut made = Vec::new();
+        let mut creates = Vec::new();
+        for c in 0..count {
+            let list: Vec<(u64, u64)> = if runs == 1 {
+                vec![(c * chunk, chunk)]
+            } else {
+                (0..runs)
+                    .map(|r| {
+                        let slot = ((c * runs + r) * STRIDE) % slots;
+                        let len = if r < pages - runs { 2 * PAGE } else { PAGE };
+                        (slot * 2 * PAGE, len)
+                    })
+                    .collect()
+            };
+            let start = Instant::now();
+            let fd = udmabuf_runs(memfd, &list).expect("a dma-buf of runs");
+            creates.push(start.elapsed().as_nanos());
+            made.push((fd, chunk));
+        }
+        (made, creates)
+    }
+
+    /// `Device::import_dma_bufs` of a guest RAM view's shape: 8 MiB in 2 dma-bufs, each made by
+    /// one `UDMABUF_CREATE_LIST` of 1,013 scattered runs of a memfd with every page written first,
+    /// against the same 8 MiB in 2 dma-bufs of one run each: whole and by step, `REPS` times with
+    /// the runtime's queue idle, and each create's time apart. On an instance without the
+    /// validation layer, whose own cost would be the count.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_device_times_a_guest_view_dma_buf_import() {
+        use std::os::fd::AsRawFd;
+        let instance = crate::tests::validation::bare(&[]);
+        on_each_device("import_view_dma_bufs_time", &instance, |name, _, device| {
+            let Some(granule) = device.dma_buf_granule() else {
+                println!("view dma-buf import time: {name}: binds no dma-buf sparse; not timed");
+                return;
+            };
+            let chunk = (4u64 << 20).next_multiple_of(granule);
+            let file = 4 * chunk;
+            let memfd = memfd(file);
+            if udmabuf_runs(&memfd, &[(0, 4096)]).is_none() {
+                println!("view dma-buf import time: {name}: no UDMABUF_CREATE_LIST; not timed");
+                return;
+            }
+            // Every page of the memfd written first.
+            // SAFETY: a new shared mapping of the memfd's `file` bytes, unmapped below.
+            let whole = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    file as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    memfd.as_raw_fd(),
+                    0,
+                )
+            };
+            assert_ne!(whole, libc::MAP_FAILED, "a mapping");
+            for at in (0..file).step_by(4096) {
+                // SAFETY: `at` is inside the mapping.
+                unsafe { whole.cast::<u8>().add(at as usize).write(1) };
+            }
+            // SAFETY: the mapping above, which nothing uses any more.
+            assert_eq!(unsafe { libc::munmap(whole, file as usize) }, 0);
+            for runs in [1013u64, 1] {
+                let mut wholes = Vec::with_capacity(REPS);
+                let mut creates = Vec::with_capacity(4 * REPS);
+                let mut by_part = vec![Vec::with_capacity(REPS); DMA_PARTS.len()];
+                for _ in 0..REPS {
+                    let (chunks, made) = view_chunks(&memfd, 2, chunk, runs);
+                    creates.extend(made);
+                    wholes.push(dma_whole(&device, chunks));
+                    let (chunks, made) = view_chunks(&memfd, 2, chunk, runs);
+                    creates.extend(made);
+                    let steps = dma_parts(&device, chunks);
+                    for (times, took) in by_part.iter_mut().zip(steps) {
+                        times.push(took);
+                    }
+                }
+                let sums: Vec<u128> = (0..REPS)
+                    .map(|rep| by_part.iter().map(|times| times[rep]).sum())
+                    .collect();
+                let rest = median(&wholes).saturating_sub(median(&sums));
+                let shape = format!("2 dma-bufs of {chunk} bytes, {runs} runs each");
+                println!(
+                    "view dma-buf import time: {name}: {shape}, granule {granule}, idle: the \
+                     whole call {}; its steps by hand summed {}; the rest (the whole's median \
+                     less the steps') {:.3} ms; each UDMABUF_CREATE_LIST (outside the call) {}",
+                    shown(&wholes),
+                    shown(&sums),
+                    rest as f64 / 1e6,
+                    shown(&creates)
+                );
+                for (part, times) in DMA_PARTS.iter().zip(&by_part) {
+                    println!(
+                        "view dma-buf import time: {name}: {shape}: {part} {}",
+                        shown(times)
+                    );
                 }
             }
         });
