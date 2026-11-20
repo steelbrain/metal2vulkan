@@ -18,6 +18,8 @@
 //   drawable    a headless CAMetalLayer's nextDrawable, framebufferOnly YES (no read-back: Metal
 //               refuses a blit out of a framebuffer-only texture)
 //   drawable-readable  the same, framebufferOnly NO, read back
+//   control     RenderTarget, but RGBA8Unorm_sRGB: a resolve Metal's validation stops (the
+//               formats differ), which shows the layer is on
 //
 // A case prints the resolve texture's usage, whether the encoder was made, the command buffer's
 // status and error, and, read back by a blit into a Shared buffer (BGRA bytes, rows tight), the
@@ -25,7 +27,7 @@
 //
 //   xcrun clang -fobjc-arc -framework Metal -framework QuartzCore -framework Foundation \
 //       -o resolve_texture_usage resolve_texture_usage.m
-//   for c in rt read readwrite drawable drawable-readable; do
+//   for c in rt read readwrite drawable drawable-readable control; do
 //     MTL_DEBUG_LAYER=1 ./resolve_texture_usage $c
 //     env -u MTL_DEBUG_LAYER ./resolve_texture_usage $c
 //   done
@@ -79,6 +81,9 @@ int main(int argc, const char **argv) {
         } else if (strcmp(name, "readwrite") == 0) {
             resolve = texture(device, color, 1,
                               MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
+        } else if (strcmp(name, "control") == 0) {
+            resolve = texture(device, MTLPixelFormatRGBA8Unorm_sRGB, 1,
+                              MTLTextureUsageRenderTarget);
         } else if (strcmp(name, "drawable") == 0 || strcmp(name, "drawable-readable") == 0) {
             CAMetalLayer *layer = [CAMetalLayer layer];
             layer.device = device;
