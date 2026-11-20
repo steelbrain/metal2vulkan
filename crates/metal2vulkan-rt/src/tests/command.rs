@@ -226,7 +226,7 @@ pub(crate) mod on_device {
     }
 
     /// Records a fill of `buffer` with `word`, keeping its block.
-    fn fill(command_buffer: &CommandBuffer, buffer: &Buffer, word: u32) {
+    pub(crate) fn fill(command_buffer: &CommandBuffer, buffer: &Buffer, word: u32) {
         let (target, offset) = buffer.device_range();
         let size = buffer.length();
         command_buffer

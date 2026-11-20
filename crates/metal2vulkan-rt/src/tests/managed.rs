@@ -58,12 +58,12 @@ fn changed_ranges_merge_where_they_overlap_or_touch() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
     use crate::buffer::BufferObject;
-    use crate::tests::command::on_device::{each_device, finished, within, Arena};
+    use crate::tests::command::on_device::{each_device, fill, finished, within, Arena};
     use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::{
-        Block, BlockId, Buffer, BytesPlace, CommandBuffer, ComputePipelineState, Device,
-        DispatchType, Error, MemoryClass, PixelFormat, Refusal, Region, StorageMode,
-        TextureDescriptor, TextureType, TextureUsage,
+        Block, BlockId, Buffer, BytesPlace, CommandBuffer, CommandBufferStatus,
+        ComputePipelineState, Device, DispatchType, Error, MemoryClass, PixelFormat, Refusal,
+        Region, StorageMode, TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
     use std::time::Instant;
@@ -566,6 +566,128 @@ pub(crate) mod on_device {
             assert_eq!(captured, if copied { 512 } else { 0 }, "{name}: captured");
             println!("managed at commit: {name}: device copy {copied}; metrics {metrics:?}");
             drop((command_buffer, held, event, queue, zero, out, arena));
+        });
+    }
+
+    /// The copy-in waits at its capture's number in the commit order, not on the command buffer
+    /// whose commit captured it (`crate::capture`): with that one held, waiting on an event of its
+    /// own or behind a held command buffer of its queue, a kernel committed after it on another
+    /// queue reads the bytes named before, at once, in either form. The capturing command buffer
+    /// is still held when the reader completes.
+    #[test]
+    fn every_device_reads_bytes_named_before_its_commit_while_the_capturing_one_waits() {
+        each_device("managed capture held", |name, _, device| {
+            let copied = !device.core().unified_memory();
+            let mut arena = Arena::new(&device);
+            let (zero, out, scratch) = (arena.buffer(), arena.buffer(), arena.buffer());
+            let cpu = (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed = (new_managed(&device, cpu.id, 0, 256, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let state = add(&device);
+            let (queue, other) = (
+                device.new_command_queue(4).expect("a queue"),
+                device.new_command_queue(4).expect("a queue"),
+            );
+            for (behind, byte) in [(false, 0xB2), (true, 0xC3)] {
+                let event = device.new_shared_event().expect("an event");
+                // Behind: an older command buffer of the queue, committed before the bytes are
+                // named, waits on the event; the capturing one waits on nothing of its own.
+                let older = behind.then(|| {
+                    let older = queue.command_buffer().expect("a command buffer");
+                    (older.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+                    fill(&older, &scratch, 1);
+                    older.commit().expect("a commit");
+                    older
+                });
+                let bytes = vec![byte; 256];
+                write(&managed, 0, &bytes);
+                (managed.did_modify_range(0, 256))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let capturing = queue.command_buffer().expect("a command buffer");
+                if !behind {
+                    (capturing.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+                }
+                fill(&capturing, &scratch, 2);
+                capturing.commit().expect("a commit");
+
+                let reader = other.command_buffer().expect("a command buffer");
+                kernel(&reader, &state, [&managed, &zero, &out]);
+                reader.commit().expect("a commit");
+                finished("the reader", &reader);
+                assert_eq!(reader.error(), None, "{name}");
+                assert_eq!(
+                    capturing.status(),
+                    CommandBufferStatus::Committed,
+                    "{name}: the capturing command buffer is held (behind: {behind})"
+                );
+                assert!(
+                    read(&out, 256) == bytes,
+                    "{name}: a later commit of another queue reads the bytes named before it, \
+                     the capturing one held (behind: {behind}, device copy: {copied})"
+                );
+                event.set_signaled_value(1);
+                finished("the capturing one", &capturing);
+                if let Some(older) = &older {
+                    finished("the older one", older);
+                }
+                drop((older, capturing, reader, event));
+            }
+            println!("managed capture held: {name}: device copy {copied}");
+            drop((managed, state, queue, other, zero, out, scratch, arena));
+            (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// The copy-in never goes ahead of an older command buffer of its queue (`crate::capture`): one
+    /// that writes the bytes shaders reach of the range, unsent behind an event wait, then the
+    /// consumer's bytes named, then a reader on the same queue. With two copies the copy-in goes
+    /// after the older one's write, and the reader reads the consumer's bytes; with one copy the
+    /// older one's write is the buffer's bytes, written after the consumer's, which the reader
+    /// reads.
+    #[test]
+    fn every_device_keeps_a_copy_in_behind_its_queue_s_older_command_buffers() {
+        each_device("managed capture order", |name, _, device| {
+            let copied = !device.core().unified_memory();
+            let mut arena = Arena::new(&device);
+            let (zero, out) = (arena.buffer(), arena.buffer());
+            let cpu = (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed = (new_managed(&device, cpu.id, 0, 256, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let state = add(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let event = device.new_shared_event().expect("an event");
+
+            let writer = queue.command_buffer().expect("a command buffer");
+            (writer.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            fill(&writer, &managed, 0x7777_7777);
+            writer.commit().expect("a commit");
+            let bytes = vec![0xD4; 256];
+            write(&managed, 0, &bytes);
+            (managed.did_modify_range(0, 256)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let reader = queue.command_buffer().expect("a command buffer");
+            kernel(&reader, &state, [&managed, &zero, &out]);
+            reader.commit().expect("a commit");
+            event.set_signaled_value(1);
+            finished("the writer", &writer);
+            finished("the reader", &reader);
+            assert_eq!((writer.error(), reader.error()), (None, None), "{name}");
+            let expected = if copied { bytes } else { vec![0x77; 256] };
+            assert!(
+                read(&out, 256) == expected,
+                "{name}: the reader reads {} (device copy: {copied})",
+                if copied {
+                    "the consumer's bytes, copied in after the older write"
+                } else {
+                    "the older write, made after the consumer's"
+                }
+            );
+            println!("managed capture order: {name}: device copy {copied}");
+            drop((
+                writer, reader, event, queue, managed, state, zero, out, arena,
+            ));
+            (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
 
