@@ -101,7 +101,7 @@ use crate::air::ir::{
 };
 use crate::air::Entry;
 use crate::budget::Meter;
-use crate::device::profile::{DriverWorkaround, FloatFunctions, NanEncoding};
+use crate::device::profile::{FloatFunctions, NanEncoding};
 use crate::device::{DeviceProfile, FloatWidth};
 use crate::error::Error;
 use crate::lower::access;
