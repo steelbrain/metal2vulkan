@@ -660,7 +660,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `shared_creator_formats` | 2 | 2 | every field | 23 |
 | `shared_events` | 2 | 2 | every field | 13 |
 | `shared_exponent_storage` | 5 | 5 | every field | 42 |
-| `simdgroup_lockstep` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 25 |
+| `simdgroup_lockstep` | 2 | 2 | 1 tolerance(s): `Degradation` | 25 |
 | `snorm_tile_store` | 7 | 7 | 1 tolerance(s): `Degradation` | 114 |
 | `sparse_heaps` | 6 | 6 | every field | 15 |
 | `sparse_mappings` | 14 | 14 | every field | 32 |

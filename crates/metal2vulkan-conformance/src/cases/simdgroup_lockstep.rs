@@ -151,22 +151,21 @@ impl Case for Lockstep {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The output words are lockstep's alone, which the runtime does not give and announces
-        // (the module documentation). And one declaration, loosening the notices site alone: both kernels
-        // hold simdgroup-scoped accesses inside divergent loops, so on a device whose answer lacks
+        // (the module documentation): the words and the notices site, loosened by that notice.
+        // And one declaration, loosening the notices site alone: both kernels hold
+        // simdgroup-scoped accesses inside divergent loops, so on a device whose answer lacks
         // maximal reconvergence (`shaderMaximalReconvergence`, the SIMD groups' query form) the
         // stage carries its static note, `DeviceReconvergence`, which the sides announce as
         // `device-reconvergence`. The device's answer decides it: a device with maximal
         // reconvergence announces nothing, and this declaration then holds nowhere.
+        let access_order = crate::degradation::Degradation::SimdgroupAccessOrder.code();
         vec![
             Allowance::new(
                 "case/output",
                 crate::allowance::Loosening::Unchecked,
-                crate::allowance::Justification::Degradation(
-                    crate::degradation::Degradation::SimdgroupAccessOrder
-                        .code()
-                        .to_owned(),
-                ),
+                crate::allowance::Justification::Degradation(access_order.to_owned()),
             ),
+            crate::replay::notice_allowance(access_order),
             crate::replay::notice_allowance(
                 crate::degradation::Degradation::DeviceReconvergence.code(),
             ),
