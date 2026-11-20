@@ -1,4 +1,4 @@
-//! What a need of a state's later variant reports (`pipeline::Lowered::kernel`), by what the
+//! What a need of a state's variant reports (`pipeline::Lowered::kernel`), by what the
 //! variant's lowering gave, with no device: the translator's refusal as the variant's own gap
 //! (`Gap::PartialSimdgroups` for the emulated-SIMD-group variant), and every other failure as
 //! itself, so a translator bug, a limit or an input the compute encoder does not supply never

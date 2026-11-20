@@ -2765,18 +2765,8 @@ impl Backend for NewRuntime {
                 "first_use_variant_wait_nanos",
                 metrics.first_use_variant_wait_nanos,
             ),
-            ("first_use_lowering_waits", metrics.first_use_lowering_waits),
-            (
-                "first_use_lowering_wait_nanos",
-                metrics.first_use_lowering_wait_nanos,
-            ),
             ("made_ahead_variants", metrics.made_ahead_variants),
             ("made_ahead_variant_nanos", metrics.made_ahead_variant_nanos),
-            ("made_ahead_lowerings", metrics.made_ahead_lowerings),
-            (
-                "made_ahead_lowering_nanos",
-                metrics.made_ahead_lowering_nanos,
-            ),
             ("blocks_made", metrics.blocks_made),
             ("block_bytes_made", metrics.block_bytes_made),
             ("shared_long_reuses", metrics.shared_long_reuses),

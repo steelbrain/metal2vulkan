@@ -838,8 +838,7 @@ impl ComputeCommandEncoder {
     ///
     /// A threadgroup that is not whole subgroups of a kernel whose tier runs only whole ones (32
     /// threads where each SIMD group is a 32-lane cluster of a 64-lane subgroup included) runs
-    /// the kernel's emulated-SIMD-group module, waiting for the reaper's lowering of it where
-    /// that is not done.
+    /// the kernel's emulated-SIMD-group module, which its state's make lowered.
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`] past Metal's limit for the
     /// kernel; [`Limit::ThreadgroupThreads`] within it and past this device's;
@@ -847,7 +846,6 @@ impl ComputeCommandEncoder {
     /// alignment, which nothing records; [`Gap::SwizzledReadWrite`]; [`Gap::BicubicTexels`];
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
     /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
-    /// [`Error::Quiesced`] where the device was quiesced before that module was lowered;
     /// [`Limit::MemoryAllocations`] where the parameter ring needs a block past the device's
     /// allocation count; [`Error::Vulkan`] where the pipeline's compile, the ring or recording
     /// fails.
@@ -1018,10 +1016,7 @@ impl ComputeCommandEncoder {
             &Grid::Direct(direct) => Some(direct),
             Grid::Indirect(..) => None,
         };
-        // The calling thread waits for a lowering the reaper makes.
-        let (choice, module, kernel) = decide(inner, direct, size, |which, refused| {
-            inner.later_kernel(which, refused)
-        })?;
+        let (choice, module, kernel) = decide(inner, direct, size)?;
         let Choice {
             local,
             nominal,
@@ -1224,14 +1219,12 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 /// [`ComputePipelineState::prepare_dispatch`]: [`choose`]'s choice, then its module, an
 /// observer's partial-threadgroups variant for a ragged grid, and the emulated variant for a
 /// threadgroup that is not whole groups of a module that runs only whole ones (the
-/// partial-threadgroups variant has none). `later` gives a variant's module, or the error its
-/// second argument makes where there is none.
-pub(crate) fn decide<'a>(
-    compiled: &'a Compiled,
+/// partial-threadgroups variant has none), each lowered with the state.
+pub(crate) fn decide(
+    compiled: &Compiled,
     direct: Option<Direct>,
     size: [u32; 3],
-    later: impl Fn(Which, &dyn Fn() -> Error) -> Result<&'a Kernel, Error>,
-) -> Result<(Choice, Module, &'a Kernel), Error> {
+) -> Result<(Choice, Module, &Kernel), Error> {
     let choice = choose(&compiled.form, direct, size);
     let partial_threadgroups = || {
         Error::Unsupported(Gap::PartialThreadgroups {
@@ -1240,7 +1233,7 @@ pub(crate) fn decide<'a>(
         })
     };
     let kernel = match choice.module {
-        Module::Partial => later(Which::Partial, &partial_threadgroups)?,
+        Module::Partial => compiled.variant_kernel(Which::Partial, partial_threadgroups)?,
         _ => &compiled.whole,
     };
     let threads = choice
@@ -1260,7 +1253,7 @@ pub(crate) fn decide<'a>(
                     width,
                 })
             };
-            let emulated = later(Which::Emulated, &partial_simdgroups)?;
+            let emulated = compiled.variant_kernel(Which::Emulated, partial_simdgroups)?;
             Ok((choice, Module::Emulated, emulated))
         }
     }

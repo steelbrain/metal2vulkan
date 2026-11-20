@@ -17,10 +17,11 @@
 //! and a read through a buffer argument bound to nothing reads the nil buffer's zeros.
 //! Threadgroup memory, a declared array's and a threadgroup argument's, reads zero until the
 //! program writes it, in a dispatch's later threadgroups, in a second dispatch and on the
-//! emulated-SIMD-group module alike. A dispatch that `prepare_dispatch` prepared with its own
-//! arguments finds its pipeline, and the lowering it needs (the partial-threadgroups or the
-//! emulated-SIMD-group variant), made by the call, and what the runtime records and submits is
-//! the same with the calls and without.
+//! emulated-SIMD-group module alike. Every module is lowered with the state, the variants
+//! included, so no dispatch makes a translation; an observing kernel's state made at its
+//! descriptor's `requiredThreadsPerThreadgroup` makes the pipelines its grids run at that size. A
+//! dispatch that `prepare_dispatch` prepared with its own arguments finds its pipeline made by the
+//! call, and what the runtime records and submits is the same with the calls and without.
 //!
 //! `llvm-as` assembles the kernels; without it a test skips visibly.
 
@@ -156,16 +157,11 @@ mod on_device {
         })
     }
 
-    /// Whether the reaper made `state`'s emulated-SIMD-group module.
+    /// Whether `state`'s make made its emulated-SIMD-group module.
     fn emulated_made(state: &ComputePipelineState) -> bool {
         use crate::pipeline::Lowered;
 
-        state
-            .inner
-            .compiled
-            .emulated
-            .as_ref()
-            .and_then(|emulated| emulated.lowered.get())
+        (state.inner.compiled.emulated.as_ref())
             .is_some_and(|lowered| matches!(lowered, Lowered::Made(..)))
     }
 
@@ -404,14 +400,14 @@ mod on_device {
     }
 
     /// `icb_replay_grid_template`, which observes its threadgroup partition (threadgroup memory,
-    /// a barrier, and every builtin of the partition), translated once at creation, plainly: a
-    /// whole `dispatchThreads` grid runs its plain module at the call's size, a ragged one its
-    /// partial-threadgroups variant, lowered at that first ragged grid, which waits for it, and
-    /// a threadgroup count past the device's limit on an axis
+    /// a barrier, and every builtin of the partition), translated at creation, plainly and as its
+    /// partial-threadgroups variant: a whole `dispatchThreads` grid runs its plain module at the
+    /// call's size, a ragged one the variant, with no translation at any dispatch, and a
+    /// threadgroup count past the device's limit on an axis
     /// runs split, each piece reading Metal's whole grid. Threadgroups deeper than 64, 1 by 1 by
     /// 320 and 2 by 3 by 100, run as one row of their threads on every device, whole, ragged and
-    /// indirect. Each answer is Metal's, and each new size or module a first-use wait. Prints the
-    /// creation's time and one lowering's.
+    /// indirect. Each answer is Metal's, and each new size or module's pipeline a first-use wait.
+    /// Prints the creation's time and one lowering's.
     #[test]
     fn every_device_runs_an_observing_kernel_at_its_own_threadgroup_size() {
         let Some(descriptor) = descriptor("icb_replay_grid_template") else {
@@ -492,8 +488,8 @@ mod on_device {
             );
             assert_eq!(
                 created.translations - made.translations,
-                1,
-                "{name}: the plain module alone at creation"
+                2,
+                "{name}: the plain module and the partial-threadgroups variant at creation"
             );
             let queue = device.new_command_queue(4).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -533,14 +529,13 @@ mod on_device {
             }
             let after = device.counters().metrics();
             assert_eq!(
-                after.translations - created.translations,
-                1,
-                "{name}: the partial-threadgroups variant, at the first ragged grid"
+                after.translations, created.translations,
+                "{name}: no translation at a dispatch, the first ragged grid's included"
             );
-            // The ragged grid's variant's lowering and its pipeline, the whole grid's size, the
-            // one-thread size; the deep size, its ragged grid's variant (its indirect dispatch
-            // runs the whole one) and the second deep size.
-            let sizes = 6 + u64::from(past.is_some());
+            // The ragged grid's variant's pipeline, the whole grid's size, the one-thread size;
+            // the deep size, its ragged grid's variant (its indirect dispatch runs the whole one)
+            // and the second deep size.
+            let sizes = 5 + u64::from(past.is_some());
             assert_eq!(
                 after.first_use_waits - created.first_use_waits,
                 sizes,
@@ -622,10 +617,9 @@ mod on_device {
 
     /// `ComputePipelineState::prepare_dispatch` makes what a dispatch of `icb_replay_grid_template`,
     /// an observing kernel, then finds made: for a whole `dispatchThreads` grid, a ragged one (its
-    /// partial-threadgroups variant, lowered on the calling thread), a `dispatchThreadgroups` grid
-    /// and an indirect dispatch, each prepared with the dispatch's own arguments, the call makes
-    /// exactly one pipeline (and the ragged grid one lowering), and the dispatch adds no first-use
-    /// wait and makes nothing. A `dispatchThreadgroups` grid whose threads saturate on an axis,
+    /// partial-threadgroups variant, lowered with the state), a `dispatchThreadgroups` grid and an
+    /// indirect dispatch, each prepared with the dispatch's own arguments, the call makes exactly
+    /// one pipeline and lowers nothing, and the dispatch adds no first-use wait and makes nothing. A `dispatchThreadgroups` grid whose threads saturate on an axis,
     /// and a `dispatchThreads` grid of exactly `u32::MAX` threads on a size that does not divide
     /// it, prepared alone, make what a small grid of the same call and size then runs with no
     /// wait: the whole module and the partial-threadgroups variant. A second call with the same
@@ -651,53 +645,36 @@ mod on_device {
             let state = state(name, &device, &descriptor);
             let counters = device.counters();
             let length = |size: [u32; 3]| (4 * size.iter().product::<u32>()).next_multiple_of(16);
-            // What is prepared, at what size; the dispatch that then runs; the pipelines and
-            // lowerings the call makes.
+            // What is prepared, at what size; the dispatch that then runs.
             let cases = [
                 (
                     Dispatch::Threads([8, 4, 1]),
                     [4, 2, 1],
                     ([8, 4, 1], How::Threads),
-                    1,
-                    0,
                 ),
                 (
                     Dispatch::Threads([10, 3, 1]),
                     [4, 2, 1],
                     ([10, 3, 1], How::Threads),
-                    1,
-                    1,
                 ),
                 (
                     Dispatch::Threadgroups([3, 2, 1]),
                     [2, 2, 1],
                     ([3, 2, 1], How::Groups),
-                    1,
-                    0,
                 ),
-                (
-                    Dispatch::Indirect,
-                    [1, 1, 4],
-                    ([1, 1, 2], How::Indirect),
-                    1,
-                    0,
-                ),
+                (Dispatch::Indirect, [1, 1, 4], ([1, 1, 2], How::Indirect)),
                 (
                     Dispatch::Threadgroups([u32::MAX, 1, 1]),
                     [2, 1, 1],
                     ([3, 1, 1], How::Groups),
-                    1,
-                    0,
                 ),
                 (
                     Dispatch::Threads([u32::MAX, 1, 1]),
                     [2, 1, 1],
                     ([3, 1, 1], How::Threads),
-                    1,
-                    0,
                 ),
             ];
-            for (prepared, size, (grid, how), made, lowered) in cases {
+            for (prepared, size, (grid, how)) in cases {
                 let lengths = [(0, length(size))];
                 let before = counters.metrics();
                 state.prepare_dispatch(prepared, size, &lengths);
@@ -705,10 +682,10 @@ mod on_device {
                 assert_eq!(
                     (
                         ahead.made_ahead_variants - before.made_ahead_variants,
-                        ahead.made_ahead_lowerings - before.made_ahead_lowerings,
                         ahead.pipelines_created - before.pipelines_created,
+                        ahead.translations - before.translations,
                     ),
-                    (made, lowered, made),
+                    (1, 1, 0),
                     "{name}: {prepared:?} by {size:?}: what the call made"
                 );
                 state.prepare_dispatch(prepared, size, &lengths);
@@ -748,10 +725,9 @@ mod on_device {
                 assert_eq!(
                     (
                         ahead.made_ahead_variants - before.made_ahead_variants,
-                        ahead.made_ahead_lowerings - before.made_ahead_lowerings,
                         ahead.pipelines_created - before.pipelines_created,
                     ),
-                    (0, 0, 0),
+                    (0, 0),
                     "{name}: {grid:?} by {size:?} at {length}: the call made nothing"
                 );
                 let answer = grid_template_run(name, &device, &state, (grid, size, how), length);
@@ -775,12 +751,12 @@ mod on_device {
         });
     }
 
-    /// `prepare_dispatch` of `simd_float_products` in threadgroups of 80, which are not whole
-    /// SIMD groups of a kernel that runs only whole ones, lowers its emulated-SIMD-group variant
-    /// on the calling thread and makes that variant's pipeline: the dispatch then adds no
-    /// first-use wait and makes nothing. On a device whose module runs any threadgroup, the call
-    /// makes the size's pipeline alone. A device that cannot pin SIMD groups at 32 has no state
-    /// of the kernel, and the test says so.
+    /// `simd_float_products`, a kernel that runs only whole SIMD groups, has its emulated-SIMD-group
+    /// variant lowered with its state; `prepare_dispatch` in threadgroups of 80, which are not
+    /// whole SIMD groups, makes that variant's pipeline and lowers nothing: the dispatch then adds
+    /// no first-use wait and makes nothing. On a device whose module runs any threadgroup, the
+    /// state has no such variant and the call makes the size's pipeline. A device that cannot pin
+    /// SIMD groups at 32 has no state of the kernel, and the test says so.
     #[test]
     fn every_device_prepares_the_emulated_simdgroup_variant() {
         use crate::Dispatch;
@@ -802,6 +778,11 @@ mod on_device {
                 Err(error) => panic!("{name}: {error}"),
             };
             let emulates = !state.inner.compiled.whole.interface.multiples.is_empty();
+            assert_eq!(
+                emulated_made(&state),
+                emulates,
+                "{name}: the emulated module, made with the state"
+            );
             let counters = device.counters();
             let (groups, size) = ([3, 1, 1], [80, 1, 1]);
             let before = counters.metrics();
@@ -810,15 +791,10 @@ mod on_device {
             assert_eq!(
                 (
                     ahead.made_ahead_variants - before.made_ahead_variants,
-                    ahead.made_ahead_lowerings - before.made_ahead_lowerings,
+                    ahead.translations - before.translations,
                 ),
-                (1, u64::from(emulates)),
+                (1, 0),
                 "{name}: what the call made"
-            );
-            assert_eq!(
-                emulated_made(&state),
-                emulates,
-                "{name}: the emulated module"
             );
             let threads = groups[0] * size[0];
             let mut buffers = Buffers::new(&device, 1 << 16);
@@ -1078,9 +1054,9 @@ mod on_device {
     /// flattened to whole SIMD groups, which runs the 64 and the 32. A device of 64-lane
     /// subgroups that cannot pin runs each SIMD group as half of one, and only whole subgroups:
     /// the 64. Whatever the module runs only whole groups of, a threadgroup of another size runs
-    /// the emulated-SIMD-group module the reaper lowered. Every answer is Metal's: the products
-    /// over each SIMD group's threads, exact in any order for these inputs. A device that cannot
-    /// pin 32 may take a tier that is refused.
+    /// the emulated-SIMD-group module the state's make lowered, so no dispatch makes a translation.
+    /// Every answer is Metal's: the products over each SIMD group's threads, exact in any order
+    /// for these inputs. A device that cannot pin 32 may take a tier that is refused.
     #[test]
     fn every_device_runs_simd_groups_at_metals_width() {
         use crate::pipeline::Lowered;
@@ -1125,6 +1101,7 @@ mod on_device {
                 );
             }
             let queue = device.new_command_queue(4).expect("a queue");
+            let made = device.counters().metrics().translations;
             for size in [64, 32, 80, 1] {
                 let threads = GROUPS * size;
                 let input: Vec<u8> = (0..threads)
@@ -1165,12 +1142,12 @@ mod on_device {
                     "{name}: the products in threadgroups of {size}"
                 );
             }
-            let emulated = state
-                .inner
-                .compiled
-                .emulated
-                .as_ref()
-                .and_then(|emulated| emulated.lowered.get());
+            assert_eq!(
+                device.counters().metrics().translations,
+                made,
+                "{name}: no translation at a dispatch"
+            );
+            let emulated = state.inner.compiled.emulated.as_ref();
             if !interface.multiples.is_empty() {
                 assert!(
                     matches!(emulated, Some(Lowered::Made(..))),
@@ -1238,12 +1215,7 @@ mod on_device {
                     want,
                     "{name}: the simdgroups of a threadgroup of {size}"
                 );
-                let emulated = state
-                    .inner
-                    .compiled
-                    .emulated
-                    .as_ref()
-                    .and_then(|emulated| emulated.lowered.get())
+                let emulated = (state.inner.compiled.emulated.as_ref())
                     .is_some_and(|lowered| matches!(lowered, Lowered::Made(..)))
                     && state
                         .inner
@@ -1339,158 +1311,6 @@ mod on_device {
         });
     }
 
-    /// A state made after the device was quiesced leaves its emulated-SIMD-group variant not
-    /// lowered, as every state does until a dispatch needs it. That need finds the reaper ended:
-    /// the variant is marked not lowered and the need refused at once (`Error::Quiesced`), so no
-    /// dispatch waits for it.
-    #[test]
-    fn every_device_marks_the_emulated_variant_of_a_state_made_after_quiesce() {
-        use crate::pipeline::{Lowered, Which};
-        use crate::{Error, Gap};
-
-        let Some(descriptor) = descriptor_of("gsm2_simd_products", "simd_float_products") else {
-            return;
-        };
-        each_device("compute_simd_quiesced", |name, _, device| {
-            assert!(device.quiesce(std::time::Duration::from_secs(10)), "{name}");
-            let Ok(state) =
-                device.new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
-            else {
-                println!("{name}: the kernel is refused; nothing to mark");
-                return;
-            };
-            let compiled = &state.inner.compiled;
-            let Some(emulated) = &compiled.emulated else {
-                println!("{name}: no emulated variant");
-                return;
-            };
-            assert!(
-                emulated.lowered.get().is_none(),
-                "{name}: not lowered at creation"
-            );
-            let refused = Error::Unsupported(Gap::PartialSimdgroups {
-                threads_per_threadgroup: [1, 1, 1],
-                width: 32,
-            });
-            assert!(
-                matches!(
-                    compiled.later_kernel(Which::Emulated, || refused),
-                    Err(Error::Quiesced)
-                ),
-                "{name}: the need refused"
-            );
-            assert!(
-                matches!(emulated.lowered.get(), Some(Lowered::Quiesced)),
-                "{name}: marked at the need"
-            );
-            println!("{name}: the emulated variant is marked not lowered at its first need");
-        });
-    }
-
-    /// The device's last handle, dropped on a consumer's thread while the reaper still works for
-    /// it, waits for that work. A ragged `dispatchThreads` grid of `icb_replay_grid_template`, on
-    /// another thread, waits for the reaper's lowering of the state's partial-threadgroups
-    /// variant. The reaper, once it has lowered that variant, parks still holding the state's
-    /// content. The test's drops of its device and state tear nothing down, as the dispatching
-    /// thread holds its own handles. That thread's last drop, after its grid ran Metal's answer,
-    /// waits for the parked reaper until the test lets it go. It makes no translation and no
-    /// `VkPipeline` more, and every gauge reads zero as it returns, `Gauges::threads` among them.
-    #[test]
-    fn every_device_s_last_drop_waits_for_the_reaper_s_work() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::{Arc, Barrier};
-        use std::time::Duration;
-
-        /// How long the parked reaper holds the last drop before the test lets it go: a drop that
-        /// did not wait for the reaper returns well within it.
-        const HELD: Duration = Duration::from_millis(250);
-        /// The ragged grid, and its threadgroup: 10 by 3 threads in groups of 4 by 2.
-        const GRID: [u32; 3] = [10, 3, 1];
-        const SIZE: [u32; 3] = [4, 2, 1];
-
-        let Some(descriptor) = descriptor("icb_replay_grid_template") else {
-            return;
-        };
-        each_device("compute_last_drop", |name, _, device| {
-            let counters = device.counters();
-            let state = state(name, &device, &descriptor);
-            let park = Arc::new(Barrier::new(2));
-            *crate::device::lock(&device.core().park_lowered) = Some(Arc::clone(&park));
-            let dropping = AtomicBool::new(false);
-            let (early, made, at_return) = std::thread::scope(|scope| {
-                let (own_device, own_state) = (device.clone(), state.clone());
-                let dropping = &dropping;
-                let counters = &counters;
-                let dispatching = scope.spawn(move || {
-                    let slots = GRID.iter().product::<u32>();
-                    let want = grid_template(GRID, SIZE, [1000, slots]);
-                    let queue = own_device.new_command_queue(1).expect("a queue");
-                    let mut buffers = Buffers::new(&own_device, 1 << 12);
-                    let out = buffers.buffer(4 * u64::from(slots));
-                    let command_buffer = queue.command_buffer().expect("a command buffer");
-                    let mut encoder = command_buffer
-                        .compute_command_encoder(DispatchType::Serial)
-                        .expect("an encoder");
-                    encoder
-                        .set_compute_pipeline_state(&own_state)
-                        .expect("a state");
-                    let threads = SIZE.iter().product::<u32>();
-                    encoder
-                        .set_threadgroup_memory_length((4 * threads).next_multiple_of(16), 0)
-                        .expect("a length");
-                    encoder
-                        .set_bytes(&le_bytes(&[1000, slots]), 0)
-                        .expect("the parameters");
-                    encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
-                    encoder
-                        .dispatch_threads(GRID, SIZE)
-                        .unwrap_or_else(|error| panic!("{name}: the ragged grid: {error}"));
-                    encoder.end_encoding();
-                    command_buffer.commit().expect("a commit");
-                    finished(name, &command_buffer);
-                    assert_eq!(command_buffer.error(), None, "{name}");
-                    assert_eq!(words(&out, 0, want.len()), want, "{name}: the ragged grid");
-                    let made = counters.metrics();
-                    dropping.store(true, Ordering::SeqCst);
-                    drop((command_buffer, out, buffers, queue, own_state, own_device));
-                    (made, counters.gauges(), counters.metrics())
-                });
-                // The reaper lowered the variant and is parked, holding the content.
-                park.wait();
-                drop((state, device));
-                within("the dispatching thread's last drop", || {
-                    dropping.load(Ordering::SeqCst)
-                });
-                std::thread::sleep(HELD);
-                let early = dispatching.is_finished();
-                // The reaper goes on, and the last drop with it.
-                park.wait();
-                let (made, gauges, metrics) = dispatching.join().expect("the dispatching thread");
-                (early, (made, metrics), gauges)
-            });
-            assert!(
-                !early,
-                "{name}: the last drop returned while the reaper still worked for the device"
-            );
-            assert_eq!(
-                at_return,
-                Gauges::default(),
-                "{name}: every gauge zero as the last drop returns"
-            );
-            let (before, after) = made;
-            assert_eq!(
-                (after.translations, after.pipelines_created),
-                (before.translations, before.pipelines_created),
-                "{name}: nothing translated or made once the last drop began"
-            );
-            println!(
-                "{name}: the last drop waited {HELD:?} for the parked reaper; every gauge zero as \
-                 it returned, {} translations and {} pipelines made before it",
-                after.translations, after.pipelines_created
-            );
-        });
-    }
-
     /// Every file the store keeps under `dir`, its count (`state`) aside: its path under it, its
     /// length and its time on disk, in order.
     fn files(dir: &Path) -> Vec<(String, u64, SystemTime)> {
@@ -1532,9 +1352,9 @@ mod on_device {
 
     /// A device on a cache directory a device before it used lowers nothing at creation, and asks
     /// the translator nothing: the tiling kernel's lowering and the observing kernel's plain one
-    /// are read from the directory with the answer that the latter observes its partition, so no
-    /// stage entry is decoded, and the tile's `VkPipeline` is made through a pipeline cache
-    /// started from the device's blob.
+    /// and partial-threadgroups variant are read from the directory, each once, so no stage entry
+    /// is decoded, and the tile's `VkPipeline` is made through a pipeline cache started from the
+    /// device's blob.
     /// The first device's writes (`Metrics::cache_bytes_written`) are at least the files' bytes,
     /// the blob among them where the device keeps one (written once creation was quiet, and again
     /// at the drop where the cache grew since); the second writes nothing and leaves every file as
@@ -1564,8 +1384,8 @@ mod on_device {
                 ];
                 let metrics = counters.metrics();
                 let counted = (metrics.translations, metrics.translations_loaded);
-                // One lowering for each kernel.
-                let want = [(2, 0), (0, 2)][round];
+                // The tiling kernel's lowering, the observing kernel's plain one and its variant.
+                let want = [(3, 0), (0, 3)][round];
                 assert_eq!(counted, want, "{name}: device {round} on the directory");
                 if round == 1 {
                     let decoded = device.core().entries.held();
@@ -2561,11 +2381,13 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
     /// The harness fixture's `row_barrier` holds no threadgroup memory and observes its
     /// threadgroup partition through `threadgroup_barrier(mem_flags::mem_device)`: each thread
     /// stores `((y << 16) | x) + 1` to its cell, then, past the barrier, copies the word of its
-    /// column in row `y ^ 1` where that row is in the grid. The state makes no pipeline, and its
-    /// grids run at their own size: 512 x 4 in 32 x 2 on the plain module, 512 x 3 in 32 x 2 and 96 x 5 in 32 x 4 on the partial-threadgroups
-    /// variant, each its own pipeline made by a first-use wait; the first of those two waits once
-    /// more, for the variant's lowering. Every read sees the other row's
-    /// word, Metal's answer: the probe
+    /// column in row `y ^ 1` where that row is in the grid. The state lowers both modules and makes
+    /// no pipeline, and its grids run at their own size: 512 x 4 in 32 x 2 on the plain module,
+    /// 512 x 3 in 32 x 2 and 96 x 5 in 32 x 4 on the partial-threadgroups variant, each its own
+    /// pipeline made by a first-use wait, with no translation. A state of the descriptor with
+    /// `requiredThreadsPerThreadgroup` 32 x 2 makes, with the state, the pipelines a whole and a
+    /// ragged grid run at that size, so its 512 x 4 and 512 x 3 grids make nothing and wait for
+    /// nothing. Every read sees the other row's word, Metal's answer: the probe
     /// `metal2vulkan-conformance/probes/row_barrier_reads.m` ran the same source over the same
     /// grids on an Apple M3 Max under macOS 27.0.1, and no word of `seen` differed from it.
     #[test]
@@ -2579,12 +2401,15 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             let state = state(name, &device, &descriptor);
             let created = device.counters().metrics();
             assert_eq!(
-                created.pipelines_created - made.pipelines_created,
-                0,
-                "{name}: no pipeline made with the state"
+                (
+                    created.pipelines_created - made.pipelines_created,
+                    created.translations - made.translations,
+                ),
+                (0, 2),
+                "{name}: no pipeline made with the state, and both modules lowered"
             );
             let queue = device.new_command_queue(4).expect("a queue");
-            let run = |grid: [u32; 3], size: [u32; 3]| {
+            let run = |state: &ComputePipelineState, grid: [u32; 3], size: [u32; 3]| {
                 let count = grid[0] * grid[1];
                 let mut buffers = Buffers::new(&device, 1 << 20);
                 let cells = buffers.buffer(4 * u64::from(count));
@@ -2595,7 +2420,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                 let mut encoder = command_buffer
                     .compute_command_encoder(DispatchType::Serial)
                     .expect("an encoder");
-                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_compute_pipeline_state(state).expect("a state");
                 encoder.set_buffer(Some(&cells), 0, 0).expect("a buffer");
                 encoder.set_buffer(Some(&seen), 0, 1).expect("a buffer");
                 (encoder.dispatch_threads(grid, size))
@@ -2618,34 +2443,52 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                     "{name}: {grid:?} in {size:?}"
                 );
             };
-            // Each grid at a size its state has not run: one pipeline, made by a first-use wait.
-            // The first grid that is not whole threadgroups waits once more, for the lowering of
-            // the partial-threadgroups variant.
+            // Each grid at a size its state has not run: one pipeline, made by a first-use wait,
+            // and no translation.
             let mut before = created;
-            for (grid, size, waits, what) in [
-                ([512, 4, 1], [32, 2, 1], 1, "the plain module at 32 x 2"),
-                (
-                    [512, 3, 1],
-                    [32, 2, 1],
-                    2,
-                    "the partial variant, lowered, at 32 x 2",
-                ),
-                ([96, 5, 1], [32, 4, 1], 1, "the partial variant at 32 x 4"),
+            for (grid, size, what) in [
+                ([512, 4, 1], [32, 2, 1], "the plain module at 32 x 2"),
+                ([512, 3, 1], [32, 2, 1], "the partial variant at 32 x 2"),
+                ([96, 5, 1], [32, 4, 1], "the partial variant at 32 x 4"),
             ] {
-                run(grid, size);
+                run(&state, grid, size);
                 let after = device.counters().metrics();
                 assert_eq!(
-                    after.pipelines_created - before.pipelines_created,
-                    1,
-                    "{name}: pipelines made by {what}"
-                );
-                assert_eq!(
-                    after.first_use_waits - before.first_use_waits,
-                    waits,
-                    "{name}: first-use waits of {what}"
+                    (
+                        after.pipelines_created - before.pipelines_created,
+                        after.first_use_waits - before.first_use_waits,
+                        after.translations - before.translations,
+                    ),
+                    (1, 1, 0),
+                    "{name}: pipelines, first-use waits and translations of {what}"
                 );
                 before = after;
             }
+            // At the descriptor's required size, the make makes what both grids run.
+            let mut required = descriptor.clone();
+            required.required_threads_per_threadgroup = Some([32, 2, 1]);
+            let sized = self::state(name, &device, &required);
+            let made = device.counters().metrics();
+            assert_eq!(
+                (
+                    made.pipelines_created - before.pipelines_created,
+                    made.translations - before.translations,
+                ),
+                (2, 2),
+                "{name}: the required size's state: its whole and ragged grids' pipelines"
+            );
+            run(&sized, [512, 4, 1], [32, 2, 1]);
+            run(&sized, [512, 3, 1], [32, 2, 1]);
+            let after = device.counters().metrics();
+            assert_eq!(
+                (
+                    after.pipelines_created - made.pipelines_created,
+                    after.first_use_waits - made.first_use_waits,
+                    after.translations - made.translations,
+                ),
+                (0, 0, 0),
+                "{name}: the required size's grids made nothing and waited for nothing"
+            );
             println!(
                 "{name}: row barrier reads checked in 512 x 4 and 512 x 3 in 32 x 2 and 96 x 5 in \
                  32 x 4, at their own size"

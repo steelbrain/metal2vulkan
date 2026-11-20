@@ -301,11 +301,6 @@ pub(crate) struct Core {
     /// the barrier twice before it allocates, once parked and once released.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) park_region: Mutex<Option<Arc<std::sync::Barrier>>>,
-    /// For the device tests: where set, the reaper, once it has lowered a content's variant and
-    /// still holding the content, meets the test at the barrier twice, once parked and once
-    /// released. It parks once: the lowering takes the barrier.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) park_lowered: Mutex<Option<Arc<std::sync::Barrier>>>,
     /// For the device tests: what the block-maker thread does with the internals asked of it
     /// ([`DeviceOptions::maker`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -729,8 +724,6 @@ impl Device {
             tick_spans: Mutex::default(),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             park_region: Mutex::new(None),
-            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            park_lowered: Mutex::new(None),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             maker_test: options.maker,
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

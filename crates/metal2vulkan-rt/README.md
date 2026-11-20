@@ -2118,7 +2118,7 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   states while a state numbering it there lives; rt does not check it. The read and write samplers
   take nothing at their indices. Once `sampler_ids` has answered, a call that fails holds none of
   the indices.
-- Every kernel is lowered once at creation. The translator answers, lowering nothing
+- Every kernel is lowered at creation, its variants with it. The translator answers, lowering nothing
   (`Device::kernel_observes_partition`), whether it observes its threadgroup partition (it holds
   threadgroup memory, a barrier, fence or atomic of threadgroup or SIMD-group scope, a SIMD-group
   or quad function, or reads a builtin of the partition; the translator decides from its AIR),
@@ -2154,8 +2154,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   own threadgroup size, unflagged. A kernel that observes its partition is
   lowered plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
   module at their own size, and a `dispatch_threads` grid that is not a whole number of
-  threadgroups runs its partial-threadgroups variant, which the reaper lowers for the first such
-  grid, which waits for it (a first-use wait). The translator gives a kernel no order of the
+  threadgroups runs its partial-threadgroups variant, which the state's creation lowers too,
+  through the cache directory. The translator gives a kernel no order of the
   accesses Apple's SIMD-group lockstep orders (docs/API.md, accepted differences), so only the
   kernel's own barriers, fences, atomics of threadgroup or SIMD-group scope, SIMD-group and quad
   functions, threadgroup memory and builtins of the partition observe it.
@@ -2178,69 +2178,64 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - Such a kernel also has an emulated-SIMD-group variant, whose SIMD groups exchange through
   threadgroup memory between workgroup barriers. A threadgroup that is not whole subgroups (one of
   80 or of 1 thread, or of 32 on a device of 64-lane subgroups) runs it at its own size, the last
-  SIMD group partly filled, as Metal runs it. The reaper lowers it, through the cache directory,
-  for the first such dispatch, which waits for it: a first-use wait. A kernel no such dispatch
-  reaches lowers no variant. In a threadgroup of one thread the module's exchanges pass no
-  barrier.
+  SIMD group partly filled, as Metal runs it. The state's creation lowers it, through the cache
+  directory, whether or not a dispatch needs it. In a threadgroup of one thread the module's
+  exchanges pass no barrier.
 - The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
   threadgroup (0, or a split piece's), the threadgroup size packed as
   `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's threads per grid; an indirect dispatch pushes a
   zero grid, and its kernel takes the grid from its threadgroup count. Outside the tiles the packed
   size is the pipeline's own workgroup size, so the kernel's `MultiRegion` constant stays at its
   default, 0, and the kernel takes the size from its workgroup size, with no decode.
-- A compiled kernel makes one `VkPipeline` per module, threadgroup size and threadgroup memory
-  lengths, on the encoding thread that first dispatches any of its states with them, which waits
-  for it. Nothing the runtime records
-  depends on when a compile finishes: there is one recorded form, made after the wait. Each such
-  wait is counted in `Metrics::first_use_waits`, with its time in `first_use_wait_nanos` and the
-  longest in `first_use_wait_max_nanos`, and again by where it waited, each with its count, time
-  and longest: `first_use_variant_waits` (a kernel's pipeline for a new workgroup size,
-  threadgroup memory lengths or tiles), `first_use_lowering_waits` (a later lowering the reaper
-  or a `prepare_dispatch` call made) and `first_use_line_waits` (a render content's line-class
-  pipeline).
+- What a state's creation is given it makes there, as Metal compiles a state when it is made:
+  every module (the kernel's, and its partial-threadgroups and emulated-SIMD-group variants), the
+  `VkPipeline` of a tiling kernel's tiles or of an image-only kernel's square workgroups, and,
+  where the descriptor sets `requiredThreadsPerThreadgroup` and the kernel takes no threadgroup
+  memory length from the encoder, an observing kernel's `VkPipeline`s of a whole and of a ragged
+  grid at that size. A kernel's `VkPipeline` at a threadgroup size and threadgroup memory lengths
+  only a dispatch gives is made at the consumer's `prepare_dispatch` call (below) or at the
+  dispatch: one per module, threadgroup size and threadgroup memory lengths, on the encoding
+  thread that first dispatches any of its states with them, which waits for it. Nothing the
+  runtime records depends on when a compile finishes: there is one recorded form, made after the
+  wait. Each such wait is counted in `Metrics::first_use_waits`, with its time in
+  `first_use_wait_nanos` and the longest in `first_use_wait_max_nanos`, and again by where it
+  waited, each with its count, time and longest: `first_use_variant_waits` (a kernel's pipeline
+  for a new workgroup size, threadgroup memory lengths or tiles) and `first_use_line_waits` (a
+  render content's line-class pipeline). No dispatch lowers a function.
 - `ComputePipelineState::prepare_dispatch(Dispatch, threads_per_threadgroup,
   threadgroup_memory_lengths)` has no Metal counterpart: it is a hook for a consumer's pre-pass.
-  Metal compiles a compute state whole when the state is made; here a kernel's `VkPipeline` waits
-  for the dispatch's threadgroup size and threadgroup memory lengths, and an observing kernel's
-  ragged grid, or a threadgroup that is not whole subgroups, for its later lowering. A consumer
-  that reads a command buffer's dispatches before it encodes them may pass each one's own
-  arguments: its grid as its call took it (`Dispatch::Threads` for `dispatchThreads:`,
-  `Dispatch::Threadgroups` for `dispatchThreadgroups:`, `Dispatch::Indirect` for the indirect
-  form), its threadgroup size, and the encoder's `setThreadgroupMemoryLength:atIndex:` settings,
-  in stream order, on threads of its own; rt starts none. The call decides what the dispatch
-  runs as the dispatch decides it (one function serves both), lowers a variant the dispatch would
-  wait for on the calling thread, then makes the variant's `VkPipeline`. It returns at once where
-  that is made, or another thread is lowering or making it. A make runs outside the kernel's
-  lock, its variant marked pending, so makes of different variants run at once; only a dispatch
-  waits, and only for its own variant's make, a first-use wait. The call makes nothing where the
-  dispatch would refuse its threadgroup size or threadgroup memory, or would record nothing (a
-  grid with no threads, a kernel that writes no memory), and reports no error: the dispatch
-  reports its own. What the dispatch checks of the encoder's bindings is not checked. A make
-  that failed is made again by the next call or dispatch that needs it. What a dispatch records
-  is the same whether or not its pipeline was made ahead. `Metrics::made_ahead_variants` and
-  `made_ahead_lowerings` count what the calls made, with their time in `made_ahead_variant_nanos`
-  and `made_ahead_lowering_nanos`.
-- Each lowering on a calling thread is one translation within its own 500 MiB ceiling, so the
-  caller's width multiplies the bound: calls on 4 threads at once hold at most 2 GiB of
-  translation.
-- Measured on an RTX 3090, cold, the machine to itself, three plays of each width in turn: a
-  frame whose command buffers first use 66 compute pipelines, 47 of them in one command buffer,
-  spent 1,729 ms in first-use waits with the player's pre-pass on 1 thread (56 or 57 waits) and
-  613 ms on 4 threads (10 waits, each for a make still in flight), the frame 3,565 ms and
-  2,430 ms long; the process's resident memory rose by at most 410 MiB in that frame at 1 thread
-  and 441 MiB at 4.
+  Metal compiles a compute state whole when the state is made, and so does the state's creation
+  here; but a kernel's `VkPipeline` waits for the dispatch's threadgroup size and threadgroup
+  memory lengths. A consumer that reads a command buffer's dispatches before it encodes them may
+  pass each one's own arguments: its grid as its call took it (`Dispatch::Threads` for
+  `dispatchThreads:`, `Dispatch::Threadgroups` for `dispatchThreadgroups:`, `Dispatch::Indirect`
+  for the indirect form), its threadgroup size, and the encoder's
+  `setThreadgroupMemoryLength:atIndex:` settings, in stream order, on threads of its own; rt
+  starts none. The call decides what the dispatch runs as the dispatch decides it (one function
+  serves both), then makes that module's `VkPipeline`. It returns at once where that is made, or
+  another thread is making it. A make runs outside the kernel's lock, its variant marked
+  pending, so makes of different variants run at once; only a dispatch waits, and only for its
+  own variant's make, a first-use wait. The call makes nothing where the dispatch would refuse
+  its threadgroup size, its variant or its threadgroup memory, or would record nothing (a grid
+  with no threads, a kernel that writes no memory), and reports no error: the dispatch reports
+  its own. What the dispatch checks of the encoder's bindings is not checked. A make that failed
+  is made again by the next call or dispatch that needs it. What a dispatch records is the same
+  whether or not its pipeline was made ahead. `Metrics::made_ahead_variants` counts what the
+  calls made, with their time in `made_ahead_variant_nanos`.
+- Each lowering of a state's creation is one translation within its own 500 MiB ceiling, one
+  after another, so the width of the consumer's creating threads multiplies the bound:
+  creations on 4 threads at once hold at most 2 GiB of translation.
 - `ComputePipelineState::precision_notes` carries the translator's notes of where the kernel's
   answers may differ from Metal's on this device, fixed per operation: those of the modules made
-  with the state, and the emulated-SIMD-group module's once it is lowered. A kernel compiled
+  with the state, its variants among them. A kernel compiled
   with fast math carries `FastMathRewrites`: a driver may fold its arithmetic differently per
   `VkPipeline`, so its answers in a tile and at another size may differ in the last place.
 - `ComputePipelineState::texture_accesses` answers each texture slot the kernel uses, by index,
   with the access a dispatch of the state marks in its hazards for the texture bound there, read
   from the same interface, as a `BindingAccess` (`MTLBindingAccess`): `ReadOnly` where the
   kernel samples, reads or only queries the texture, `WriteOnly` where it writes it and does not
-  read it, `ReadWrite` where it does both, an atomic included. A module the state lowers later,
-  for a dispatch that needs it, takes those slots and accesses or is refused, so no dispatch
-  marks others. The access is what the kernel's operations do, not the argument's `access::`
+  read it, `ReadWrite` where it does both, an atomic included. Each variant the state lowers
+  takes those slots and accesses or is refused, so no dispatch marks others. The access is what the kernel's operations do, not the argument's `access::`
   qualifier, which Metal's reflection answers (`MTLBinding.access`): a `read_write` slot the
   kernel only writes is `WriteOnly`. A texture an argument buffer, a heap or a resource ID
   reaches is in no slot.
@@ -2419,11 +2414,17 @@ or does not check is rebuilt from the generations' names, with young counted ful
   3090 (m3-max-58285), 5.5 against 21.5 ms on
   the Iris Xe and 3.6 against 8.1 ms on the Radeon 780M; with the driver's disk cache off, 5.6
   against 4,280.6 ms on the Iris Xe and 3.7 against 845.8 ms on the Radeon 780M.
-- No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it
-  unless the consumer calls `prepare_dispatch` for that dispatch: a state reads only its
-  lowerings from the cache directory, each variant is lowered at the first dispatch that needs it
-  or at a `prepare_dispatch` call for it, and each `VkPipeline` past the first tile is made at its
-  first dispatch or such a call, through the device's pipeline cache.
+- What a state's creation is given is made there, as Metal compiles a state when it is made:
+  every lowering, a kernel's variants among them, and each `VkPipeline` whose key the descriptor
+  holds (a kernel's, Compute pipeline states above; a render content's triangle class, and its
+  line class where `inputPrimitiveTopology` names that class). What only a dispatch or a draw
+  gives waits for it: a kernel's `VkPipeline` at a threadgroup size and threadgroup memory
+  lengths is made at the consumer's `prepare_dispatch` call or at the dispatch, and a render
+  content's line class, where its descriptor names no class, at its first draw of lines (one
+  `VkPipeline` for both classes needs `dynamicPrimitiveTopologyUnrestricted`, which the floor
+  does not require, and no second form is chosen by it). Each such make at a dispatch or a draw
+  is a first-use wait: on a cold play, `Metrics::first_use_waits` against
+  `Metrics::made_ahead_variants` reads what the consumer's pre-pass left to the encoding threads.
 - A compute kernel with an explicit imageblock has no state (`Gap::KernelInput`). The Metal
   Shading Language specification supports imageblocks on macOS for Apple silicon only (sections
   5.6 and 6.14), so a device that answers `supportsImageBlocks` NO gives a guest no imageblock to
@@ -2439,14 +2440,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   one frame: the frame where the stream's image-only dispatches over such grids start (frame 224
   of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row, so a device
   that holds 64 makes the same 50.
-- A kernel's variants are lowered at the first dispatch that needs each, which waits for the
-  lowering and its pipeline (a first-use wait) unless a `prepare_dispatch` call made them
-  before it: an observing kernel's partial-threadgroups
-  variant at its first `dispatch_threads` grid that is not a whole number of threadgroups, and
-  the emulated-SIMD-group variant at the first threadgroup that is not whole subgroups. For the
-  observing kernel the device tests run, a grid template over threadgroup memory, one lowering
-  took 0.61 to 0.63 ms on an RX 7900 XTX in a release build; a larger kernel's lowering takes
-  longer.
+- A kernel's variants are lowered with its state, whether or not a dispatch needs them: an
+  observing kernel's partial-threadgroups variant, which only a `dispatch_threads` grid that is
+  not a whole number of threadgroups runs, and the emulated-SIMD-group variant of a kernel whose
+  tier runs only whole SIMD groups, which only a threadgroup that is not whole subgroups runs. So
+  a state's creation lowers up to three functions where Metal compiles one, each through the
+  cache directory. For the observing kernel the device tests run, a grid template over
+  threadgroup memory, one lowering took 0.61 to 0.63 ms on an RX 7900 XTX in a release build; a
+  larger kernel's lowering takes longer.
 - On Intel's Windows driver (101.2145) for the UHD 630, the driver's compile of a tiling kernel's
   `VkPipeline`, made with the state, took medians of 6,680 to 6,853 µs for the harness's
   `create_state` kernel, in three processes of 40 compiles each with no driver cache hit. The
@@ -2466,7 +2467,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - A threadgroup that is not whole SIMD groups of a kernel whose SIMD groups run one per subgroup
   of 32 is refused (`Gap::PartialSimdgroups`) where the state has no emulated-SIMD-group module:
   for a kernel the consumer compiled (`StageSource::Compiled`), and where the translator refuses
-  the emulated variant. Any other failure of a later variant's lowering, this one's or the
+  the emulated variant. Any other failure of a variant's lowering, this one's or the
   partial-threadgroups one's, is reported as itself (`Error::Translation`, or `Gap::KernelInput`
   for an input the compute encoder does not supply). The emulated module's scratch counts in the
   dispatch's threadgroup memory (`Limit::ThreadgroupMemory`).
@@ -2480,7 +2481,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   loop need a vote word that does not fit beside its threadgroup memory in
   `maxComputeSharedMemorySize`.
 - A kernel that observes its threadgroup partition makes a `VkPipeline` per threadgroup size it
-  is dispatched at.
+  is dispatched at: with its state at the descriptor's `requiredThreadsPerThreadgroup` where the
+  kernel takes no threadgroup memory length from the encoder, and otherwise at a
+  `prepare_dispatch` call or its first dispatch at that size.
 - A kernel that observes its threadgroup partition runs in workgroups of its own threadgroup
   size, never in tiles. On Intel's Windows driver (101.2145) for the UHD 630, a kernel that
   touches a buffer per thread through its device address runs slower in narrow square workgroups
@@ -2645,7 +2648,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   - the per-patch and per-patch-control-point steps for a vertex function that is not
     post-tessellation (`Tessellation`).
 - The triangle class's `VkPipeline` is made with the state, through the device's pipeline
-  cache; the line class's is made by the content's first draw of lines, which waits for it (`Metrics::first_use_waits`). Of the two replay streams' 537 render contents
+  cache, and so is the line class's where the descriptor's `inputPrimitiveTopology` names
+  `MTLPrimitiveTopologyClassLine`; otherwise the line class's is made by the content's first
+  draw of lines, which waits for it (`Metrics::first_use_waits`). Of the two replay streams' 537 render contents
   drawn, 527 draw only triangles and 2 lines and triangles; a content drawn only as lines (8 of
   them) makes a triangle `VkPipeline` it never uses.
 - A post-tessellation vertex function's state draws its patches through the device's tessellator

@@ -34,9 +34,12 @@
 //! A descriptor names no topology class unless it sets `inputPrimitiveTopology`, and the replay
 //! streams' never do, while nearly every content draws only triangles (527 of the 537 contents
 //! gb and b2 draw). So the triangle class's `VkPipeline` is made with the state, where Metal
-//! compiles; a point or line class's comes with the draws, made by the first draw of that class.
-//! The cost: a content drawn only as lines or points makes a triangle `VkPipeline` it never uses
-//! (8 contents of the 537). The replay streams draw no points: a draw of points is refused.
+//! compiles, and so is the line class's where the descriptor names that class; otherwise the line
+//! class's comes with the draws, made by the first draw of lines, as only a draw gives the class
+//! (one `VkPipeline` for both classes would need a dynamic topology across classes, which Vulkan
+//! 1.3 does not give). The cost: a content drawn only as lines or points makes a triangle
+//! `VkPipeline` it never uses (8 contents of the 537). The replay streams draw no points: a draw
+//! of points is refused.
 //!
 //! A content whose vertex function is post-tessellation draws patches alone, so its one
 //! `VkPipeline` is the patch class's, made with the state: the translator's synthesized vertex and
@@ -65,7 +68,7 @@ use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::cache::{Hash256, VariantKey};
 use metal2vulkan::device::EnabledCaps;
-use metal2vulkan::metal::BindingAccess;
+use metal2vulkan::metal::{BindingAccess, PrimitiveTopologyClass};
 use metal2vulkan::pipeline::{
     BufferKind, CombinedSampler, NumberedSampler, PrecisionNote, PushField, PushLoc,
     RenderPipeline, RenderPipelineDescriptor, RenderPipelineKeys, RuntimeFact, SamplerRef,
@@ -180,7 +183,8 @@ pub(crate) struct RenderCompiled {
     /// The `VkPipeline` made with the content: the triangle class's, or a post-tessellation vertex
     /// function's patch class's, its only one.
     primary: vk::Pipeline,
-    /// The line class's, made by the first draw of lines; null until then.
+    /// The line class's: made with the content where its descriptor names that class, else by the
+    /// first draw of lines; null until then.
     lines: Mutex<vk::Pipeline>,
     /// The translator's notes of where the pipeline's answers may differ from Metal's, and its
     /// functions' constexpr samplers' (`constexpr_notes`).
@@ -255,8 +259,9 @@ impl crate::Device {
     /// it there; a content a device made before is read by its record there, kept under the
     /// translator's key of the descriptor, which names its two lowerings, so its functions are
     /// neither decoded nor specialized
-    /// ([`Metrics::render_records_read`](crate::Metrics::render_records_read)). A point or line
-    /// class's `VkPipeline` comes with the draws. The `completionHandler:` forms are not built (no
+    /// ([`Metrics::render_records_read`](crate::Metrics::render_records_read)). The line class's
+    /// `VkPipeline` is made here too where the descriptor's `inputPrimitiveTopology` names that
+    /// class, and otherwise comes with the draws. The `completionHandler:` forms are not built (no
     /// replay stream calls them).
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
@@ -913,6 +918,14 @@ impl RenderCompiled {
             false => vk::PrimitiveTopology::TRIANGLE_LIST,
         };
         compiled.primary = compiled.make(class)?;
+        // A descriptor that names the line class (`inputPrimitiveTopology`) gives the line
+        // class's key: its `VkPipeline` is made here too, and its draws wait for none.
+        if !compiled.draws.patches
+            && lowered.input_primitive_topology == PrimitiveTopologyClass::Line
+        {
+            let lines = compiled.make(vk::PrimitiveTopology::LINE_LIST)?;
+            *lock(&compiled.lines) = lines;
+        }
         Ok(compiled)
     }
 
@@ -924,8 +937,9 @@ impl RenderCompiled {
 
     /// The `VkPipeline` of the content for draws of `topology`'s class, a line or triangle one, or
     /// for a post-tessellation vertex function's content the patch one, which the encoder draws
-    /// alone with it: the line class's made by its first draw, which waits for it, a first-use
-    /// wait ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)).
+    /// alone with it: the line class's, where the content was not made with it, made by its first
+    /// draw, which waits for it, a first-use wait
+    /// ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)).
     ///
     /// Err: [`Error::Vulkan`] where the pipeline cannot be made.
     pub(crate) fn pipeline(&self, topology: vk::PrimitiveTopology) -> Result<vk::Pipeline, Error> {

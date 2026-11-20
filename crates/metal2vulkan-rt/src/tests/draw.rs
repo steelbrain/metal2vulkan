@@ -17,7 +17,8 @@
 //!     2,000 more each with a vertex buffer and a fragment texture set before it, add no locked
 //!     instruction.
 //!   - a draw of lines makes its content's line `VkPipeline` once, a first-use wait, and draws
-//!     its row.
+//!     its row; a state whose descriptor names the line class makes it with the state, and its
+//!     first draw of lines makes nothing and waits for nothing.
 //!   - lines draw at width 1 alone: at width 2 a draw of lines or a line strip is
 //!     `DrawKind::LineWidth` and a triangle draws; at 1 again, and in a later encoder, lines draw.
 //!   - a stencil state that replaces the stencil marks what a draw covers, and one that tests it
@@ -607,6 +608,67 @@ pub(crate) mod on_device {
                 }
             }
             println!("{name}: one line pipeline, made at the first draw of lines");
+        });
+    }
+
+    /// A state whose descriptor names the line class (`inputPrimitiveTopology`) makes its line
+    /// pipeline with the state, beside the triangle one: its first draw of lines makes nothing and
+    /// waits for nothing, and draws its row.
+    #[test]
+    fn every_device_makes_a_line_class_state_s_line_pipeline_at_its_make() {
+        use metal2vulkan::metal::PrimitiveTopologyClass;
+
+        let Some(library) = examples() else {
+            return;
+        };
+        let mut d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        d.input_primitive_topology = PrimitiveTopologyClass::Line;
+        each_device("draw_line_class", |name, _, device| {
+            let counters = device.counters();
+            let made = counters.metrics();
+            let state = state(name, &device, &d);
+            let created = counters.metrics();
+            assert_eq!(
+                created.pipelines_created - made.pipelines_created,
+                2,
+                "{name}: the triangle and the line pipelines, made with the state"
+            );
+            // A line across row 2's centres, Metal's y up.
+            let y = 1.0 - 2.5 / 4.0;
+            let mut buffers = Buffers::new(&device);
+            let positions = buffers.of(&device, &floats(&[-1.0, y, 1.0, y]));
+            let colors = buffers.of(&device, &floats(&[GREEN, GREEN].concat()));
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.draw_primitives(PrimitiveType::Line, 0, 2, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.pipelines_created - created.pipelines_created,
+                    after.first_use_waits - created.first_use_waits,
+                ),
+                (0, 0),
+                "{name}: the first draw of lines: pipelines made, first-use waits"
+            );
+            let texels = read(&color, 4);
+            for x in 1..SIDE - 1 {
+                let i = ((2 * SIDE + x) * 4) as usize;
+                assert_eq!(texels[i..i + 4], rgba8(GREEN), "{name}: ({x}, 2)");
+            }
+            println!("{name}: the line class's pipeline made with the state; its lines drew");
         });
     }
 

@@ -2248,9 +2248,6 @@ field	metal2vulkan-rt::Metrics.external_releases	pub external_releases: u64
 field	metal2vulkan-rt::Metrics.first_use_line_wait_max_nanos	pub first_use_line_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_line_wait_nanos	pub first_use_line_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_line_waits	pub first_use_line_waits: u64
-field	metal2vulkan-rt::Metrics.first_use_lowering_wait_max_nanos	pub first_use_lowering_wait_max_nanos: u64
-field	metal2vulkan-rt::Metrics.first_use_lowering_wait_nanos	pub first_use_lowering_wait_nanos: u64
-field	metal2vulkan-rt::Metrics.first_use_lowering_waits	pub first_use_lowering_waits: u64
 field	metal2vulkan-rt::Metrics.first_use_variant_wait_max_nanos	pub first_use_variant_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_variant_wait_nanos	pub first_use_variant_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_variant_waits	pub first_use_variant_waits: u64
@@ -2263,8 +2260,6 @@ field	metal2vulkan-rt::Metrics.held_releases	pub held_releases: u64
 field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
 field	metal2vulkan-rt::Metrics.long_take_zero_writes	pub long_take_zero_writes: Timed
-field	metal2vulkan-rt::Metrics.made_ahead_lowering_nanos	pub made_ahead_lowering_nanos: u64
-field	metal2vulkan-rt::Metrics.made_ahead_lowerings	pub made_ahead_lowerings: u64
 field	metal2vulkan-rt::Metrics.made_ahead_variant_nanos	pub made_ahead_variant_nanos: u64
 field	metal2vulkan-rt::Metrics.made_ahead_variants	pub made_ahead_variants: u64
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64

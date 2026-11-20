@@ -2,15 +2,13 @@
 //! what the runtime's other threads give up, one object at a time, looks at the release of a
 //! texture whose image an upload held past it (`crate::submit::Work::release`), runs a teardown
 //! that starts in a handler or a listener, writes the lowerings the pipeline states hand it to
-//! the store, lowers the pipeline states' variants an encoding call waits for
-//! (`pipeline::Later`), and looks at the pipeline cache once creation is quiet, writing its blob
-//! or replacing it past its bound (`crate::cache`). No driver free runs on the completion thread,
+//! the store, and looks at the pipeline cache once creation is quiet, writing its blob or
+//! replacing it past its bound (`crate::cache`). No driver free runs on the completion thread,
 //! so no completion waits behind one, and a submission on another thread waits behind at most one
 //! free.
 
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
-use crate::pipeline::{Compiled, Which};
 use crate::submit::Held;
 use crate::texture::{Backing, Image};
 use crate::times::host_time;
@@ -26,10 +24,7 @@ pub(crate) struct Reaper {
 
 struct State {
     jobs: VecDeque<Job>,
-    /// The contents' variants the reaper lowers, in order, after every job, each for an encoding
-    /// call that waits for it ([`Compiled::later_kernel`]).
-    lowerings: VecDeque<(Weak<Compiled>, Which)>,
-    /// The reaper ends once the queue is empty, lowering nothing more.
+    /// The reaper ends once the queue is empty.
     stop: bool,
 }
 
@@ -92,7 +87,6 @@ impl Reaper {
         Reaper {
             state: Mutex::new(State {
                 jobs: VecDeque::new(),
-                lowerings: VecDeque::new(),
                 stop: false,
             }),
             changed: Condvar::new(),
@@ -105,32 +99,11 @@ impl Reaper {
         self.changed.notify_one();
     }
 
-    /// Queues the lowering of the `which` variant of `compiled`, a compiled content. Once the
-    /// reaper has ended, the variant is not lowered.
-    pub(crate) fn lower(&self, compiled: Weak<Compiled>, which: Which) {
-        let mut queue = lock(&self.state);
-        if queue.stop {
-            drop(queue);
-            if let Some(compiled) = compiled.upgrade() {
-                compiled.quiesce_later(which);
-            }
-            return;
-        }
-        queue.lowerings.push_back((compiled, which));
-        drop(queue);
-        self.changed.notify_one();
-    }
-
     /// Wakes the reaper: to see when to look at the pipeline cache, after the first creation since
     /// its last look, or to write a lowering handed to it (`cache::keep_translation`).
     pub(crate) fn poke(&self) {
         let _state = lock(&self.state);
         self.changed.notify_one();
-    }
-
-    /// Whether the reaper was told to end ([`stop`](Self::stop)): it lowers nothing queued after.
-    pub(crate) fn stopped(&self) -> bool {
-        lock(&self.state).stop
     }
 
     /// Tells the reaper to end once its queue is empty.
@@ -277,14 +250,12 @@ fn free(core: &Core, object: Free) {
 /// What the reaper does next.
 enum Next {
     Job(Job),
-    /// Lower a content's variant.
-    Lower(Weak<Compiled>, Which),
     /// Look at the pipeline cache, creation being quiet.
     Look,
     /// Write a lowering, refusal or record to the store.
     Write(String, Vec<u8>),
-    /// End, after telling the contents whose lowering is left that it will not run.
-    End(VecDeque<(Weak<Compiled>, Which)>),
+    /// End: the reaper was told to, and its queue is empty.
+    End,
 }
 
 /// The reaper thread, until it is stopped and its queue is empty: the pipeline cache first.
@@ -304,10 +275,7 @@ pub(crate) fn run(core: Arc<Core>) {
                     break Next::Write(file, bytes);
                 }
                 if state.stop {
-                    break Next::End(std::mem::take(&mut state.lowerings));
-                }
-                if let Some((lowering, which)) = state.lowerings.pop_front() {
-                    break Next::Lower(lowering, which);
+                    break Next::End;
                 }
                 // A creation that ends after this read sets its mark and then pokes under the
                 // lock, which this thread holds until it waits.
@@ -334,27 +302,7 @@ pub(crate) fn run(core: Arc<Core>) {
             // SAFETY: the caches are the core's device's.
             Next::Look => unsafe { core.caches.look(&core.device, &core.counters) },
             Next::Write(file, bytes) => core.caches.write_kept(&file, &bytes, &core.counters),
-            Next::Lower(lowering, which) => {
-                if let Some(content) = lowering.upgrade() {
-                    content.lower_later(which);
-                    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-                    {
-                        let park = lock(&core.park_lowered).take();
-                        if let Some(park) = park {
-                            park.wait();
-                            park.wait();
-                        }
-                    }
-                }
-            }
-            Next::End(left) => {
-                for (content, which) in left {
-                    if let Some(content) = content.upgrade() {
-                        content.quiesce_later(which);
-                    }
-                }
-                return;
-            }
+            Next::End => return,
         }
     }
 }
