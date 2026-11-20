@@ -12,10 +12,6 @@ fn one_of_each() -> Vec<Error> {
         )),
         Error::Unsupported(Unsupported::not_implemented(Feature::Tessellation)),
         Error::Unsupported(Unsupported::not_representable(Feature::HandleAsPointer)),
-        Error::Unsupported(Unsupported::runtime_driver_defect(
-            Feature::SeparateMultisampledDepthStencil,
-            RuntimeDriverDefect::MultisampledDepthStencilColourCopies,
-        )),
         Error::Unsupported(Unsupported::metal_gpu_family(
             Feature::IndirectRenderState,
             1010,
@@ -64,8 +60,7 @@ fn retry_table() {
                 // form Metal refuses on the measured devices: an unmeasured device is not refused
                 // so. A device capability outside the compile layer's vocabulary: a device with
                 // it runs the input.
-                Needs::RuntimeDriverDefect(_)
-                | Needs::StageBound
+                Needs::StageBound
                 | Needs::DeviceCapability(_)
                 | Needs::MetalGpuFamily(_)
                 | Needs::MetalRefuses(_) => Retry::Never,

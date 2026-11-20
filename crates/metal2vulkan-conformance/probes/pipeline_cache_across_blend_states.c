@@ -56,8 +56,8 @@
 //                 `shared` beating BOTH `per` arms, or not.
 //
 // A warm arrangement reports pass two's calls and the activity counts of BOTH passes, so the load
-// of the seeded cache (`mslLoad`, and the `mslCompile` that MoltenVK's cache load forces:
-// `RuntimeDriverDefect::PipelineCacheDataCompiledAtLoad`) is visible and attributed.
+// of the seeded cache (`mslLoad`, and the `mslCompile` that MoltenVK's cache load forces: it
+// compiles every shader the data holds at the load) is visible and attributed.
 //
 // argv[2] and argv[3], optional: paths to a vertex and a fragment `.spv`. Without them the probe
 // uses the two modules embedded below. Conversion cost scales with the module, and the embedded
@@ -111,8 +111,8 @@
 // makings into one cache is 1522 bytes at 92 fragment words -- byte for byte the size of a single
 // making's record -- and 109902 bytes at 88235 words. The data holds the converted shader
 // libraries and no pipeline state at all, so sharing a record across a family grows it not at
-// all, and `RuntimeDriverDefect::PipelineCacheDataCompiledAtLoad` costs such a record the compile
-// of its FAMILY'S DISTINCT STAGES, not of its pipelines: a seeded load of the shared record was
+// all, and MoltenVK's compile of every shader a saved cache holds at its load costs such a record
+// the compile of its FAMILY'S DISTINCT STAGES, not of its pipelines: a seeded load of the shared record was
 // 2 `mslCompile`s and 50 us, where the 32 per-making records were 64 `mslCompile`s and 2639 us.
 //
 // TIMES READ, which are not a verdict: the machine was loaded (another session's CPU stress loop,
@@ -508,7 +508,7 @@ static VkPipelineCache empty_cache(VkDevice device) {
     return cache;
 }
 
-/// A cache of `bytes`, timed: the load is what `PipelineCacheDataCompiledAtLoad` costs.
+/// A cache of `bytes`, timed: the load is what compiling the data's shaders at load costs.
 static VkPipelineCache seeded_cache(VkDevice device, const void *bytes, size_t size, double *us) {
     VkPipelineCacheCreateInfo info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     info.initialDataSize = size;

@@ -1697,8 +1697,6 @@ match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard
 - `AnyOf`: alternative sets of device capabilities; a device that enables every capability of one
   set compiles it.
 - `NotImplemented`: a gap of this version. `NotRepresentable`: no Vulkan mechanism exists.
-- `DriverDefect`: a defect the device's driver is measured to have. `RuntimeDriverDefect`: one in a
-  command the runtime records.
 - `StageBound`: a stage that the device's plan writes heavier than the translator hands any
   driver (the heaviest measured to compile within host-sized memory); `symbol` names its entry
   weight and the bound. A device whose plan writes it lighter compiles it.

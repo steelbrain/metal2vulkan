@@ -1486,7 +1486,6 @@ enum	metal2vulkan::error::MetalAnswer	#[derive(Clone, Copy, Debug, PartialEq, Eq
 enum	metal2vulkan::error::Needs	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Needs
 enum	metal2vulkan::error::PrivateRenderField	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum PrivateRenderField
 enum	metal2vulkan::error::Retry	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Retry
-enum	metal2vulkan::error::RuntimeDriverDefect	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum RuntimeDriverDefect
 enum	metal2vulkan::error::RuntimeInput	#[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RuntimeInput
 enum	metal2vulkan::error::SparseNeed	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SparseNeed
 enum	metal2vulkan::error::VerifyError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VerifyError
@@ -8137,7 +8136,6 @@ method	metal2vulkan::error::Unsupported::needs	pub fn needs(feature: Feature, ca
 method	metal2vulkan::error::Unsupported::needs_any_of	pub fn needs_any_of(feature: Feature, alternatives: Vec<Vec<Capability>>) -> Unsupported
 method	metal2vulkan::error::Unsupported::not_implemented	pub fn not_implemented(feature: Feature) -> Unsupported
 method	metal2vulkan::error::Unsupported::not_representable	pub fn not_representable(feature: Feature) -> Unsupported
-method	metal2vulkan::error::Unsupported::runtime_driver_defect	pub fn runtime_driver_defect(feature: Feature, defect: RuntimeDriverDefect) -> Unsupported
 method	metal2vulkan::library::CompiledFunction::attribute_fetches	pub fn attribute_fetches(&self) -> BTreeMap<u32, AttributeFetch>
 method	metal2vulkan::library::CompiledFunction::fragment_push_base	pub fn fragment_push_base(&self) -> u32
 method	metal2vulkan::library::CompiledFunction::from_bytes	pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<CompiledFunction, ArtifactError>
@@ -11904,7 +11902,6 @@ variant	metal2vulkan::error::Needs::MetalGpuFamily	MetalGpuFamily(i64)
 variant	metal2vulkan::error::Needs::MetalRefuses	MetalRefuses(&'static [&'static str])
 variant	metal2vulkan::error::Needs::NotImplemented	NotImplemented
 variant	metal2vulkan::error::Needs::NotRepresentable	NotRepresentable
-variant	metal2vulkan::error::Needs::RuntimeDriverDefect	RuntimeDriverDefect(RuntimeDriverDefect)
 variant	metal2vulkan::error::Needs::StageBound	StageBound
 variant	metal2vulkan::error::PrivateRenderField::AlphaTest	AlphaTest
 variant	metal2vulkan::error::PrivateRenderField::ExplicitVisibilityGroup	ExplicitVisibilityGroup
@@ -11916,38 +11913,6 @@ variant	metal2vulkan::error::PrivateRenderField::SampleMask	SampleMask
 variant	metal2vulkan::error::PrivateRenderField::TextureWriteRounding	TextureWriteRounding
 variant	metal2vulkan::error::Retry::Later	Later
 variant	metal2vulkan::error::Retry::Never	Never
-variant	metal2vulkan::error::RuntimeDriverDefect::AliasedImportBlitsUnordered	AliasedImportBlitsUnordered
-variant	metal2vulkan::error::RuntimeDriverDefect::CompressedImageCopiesRewriteTexels	CompressedImageCopiesRewriteTexels
-variant	metal2vulkan::error::RuntimeDriverDefect::DepthStencilResolveFirstSubresource	DepthStencilResolveFirstSubresource
-variant	metal2vulkan::error::RuntimeDriverDefect::DestroyedAddressBufferFailsSubmission	DestroyedAddressBufferFailsSubmission
-variant	metal2vulkan::error::RuntimeDriverDefect::ExplicitPlanePitchMisread	ExplicitPlanePitchMisread
-variant	metal2vulkan::error::RuntimeDriverDefect::ExplicitPlaneRowsPastHeight	ExplicitPlaneRowsPastHeight
-variant	metal2vulkan::error::RuntimeDriverDefect::FastLinkedInterlocksUnordered	FastLinkedInterlocksUnordered
-variant	metal2vulkan::error::RuntimeDriverDefect::FreedAddressMemoryFailsPendingWork	FreedAddressMemoryFailsPendingWork
-variant	metal2vulkan::error::RuntimeDriverDefect::HostTransferImagesCopiedAtBind	HostTransferImagesCopiedAtBind
-variant	metal2vulkan::error::RuntimeDriverDefect::ImageSizeShortOfCompressionData	ImageSizeShortOfCompressionData
-variant	metal2vulkan::error::RuntimeDriverDefect::ImmutableSamplersLostAfterCopies	ImmutableSamplersLostAfterCopies
-variant	metal2vulkan::error::RuntimeDriverDefect::ImplicitPreprocessAfterExecutionSet	ImplicitPreprocessAfterExecutionSet
-variant	metal2vulkan::error::RuntimeDriverDefect::InterlockedBoundBuffersUnordered	InterlockedBoundBuffersUnordered
-variant	metal2vulkan::error::RuntimeDriverDefect::LazilyAllocatedSubresourceViews	LazilyAllocatedSubresourceViews
-variant	metal2vulkan::error::RuntimeDriverDefect::LazilyAllocatedVolumePlaneViews	LazilyAllocatedVolumePlaneViews
-variant	metal2vulkan::error::RuntimeDriverDefect::MultisampledCopiesConvertFloatNans	MultisampledCopiesConvertFloatNans
-variant	metal2vulkan::error::RuntimeDriverDefect::MultisampledDepthStencilColourCopies	MultisampledDepthStencilColourCopies
-variant	metal2vulkan::error::RuntimeDriverDefect::MultisampledStencilColourCopies	MultisampledStencilColourCopies
-variant	metal2vulkan::error::RuntimeDriverDefect::OcclusionCountPerColorOutput	OcclusionCountPerColorOutput
-variant	metal2vulkan::error::RuntimeDriverDefect::PipelineCacheDataCompiledAtLoad	PipelineCacheDataCompiledAtLoad
-variant	metal2vulkan::error::RuntimeDriverDefect::PushedBufferSizesUnset	PushedBufferSizesUnset
-variant	metal2vulkan::error::RuntimeDriverDefect::PushedDescriptorsStaleAfterPipelineBinds	PushedDescriptorsStaleAfterPipelineBinds
-variant	metal2vulkan::error::RuntimeDriverDefect::ReadsCommandBuffersAfterTheirSignal	ReadsCommandBuffersAfterTheirSignal
-variant	metal2vulkan::error::RuntimeDriverDefect::SetLayoutSupportUnderstated	SetLayoutSupportUnderstated
-variant	metal2vulkan::error::RuntimeDriverDefect::TenBitCodesReadAsWords	TenBitCodesReadAsWords
-variant	metal2vulkan::error::RuntimeDriverDefect::TrimmedCommandBufferFailsResubmission	TrimmedCommandBufferFailsResubmission
-variant	metal2vulkan::error::RuntimeDriverDefect::TwoPlaneChromaMisplaced	TwoPlaneChromaMisplaced
-variant	metal2vulkan::error::RuntimeDriverDefect::UnpinnablePagesBreakHostMemory	UnpinnablePagesBreakHostMemory
-variant	metal2vulkan::error::RuntimeDriverDefect::VertexFetchWrapsPast4GiB	VertexFetchWrapsPast4GiB
-variant	metal2vulkan::error::RuntimeDriverDefect::VolumeBlitsUnfiltered	VolumeBlitsUnfiltered
-variant	metal2vulkan::error::RuntimeDriverDefect::VolumeResolveFirstPlane	VolumeResolveFirstPlane
-variant	metal2vulkan::error::RuntimeDriverDefect::WaitForAnyObjectLosesASignal	WaitForAnyObjectLosesASignal
 variant	metal2vulkan::error::RuntimeInput::AlphaTest	AlphaTest
 variant	metal2vulkan::error::RuntimeInput::ColorWrites	ColorWrites
 variant	metal2vulkan::error::RuntimeInput::DepthCompareClamp	DepthCompareClamp

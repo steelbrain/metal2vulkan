@@ -189,7 +189,6 @@ surface! {
         enum Retry N;
         struct Unsupported N;
         enum Needs N;
-        enum RuntimeDriverDefect N;
         enum DriverDeviation N;
         enum Capability N;
         enum Feature N;

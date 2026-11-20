@@ -5,7 +5,7 @@ The refusal surface is read from the construction sites of the typed refusals, o
 
 - the translator's and the AIR front end's `Unsupported` (a `Feature` and its `Needs`): the
   constructors `Unsupported::not_implemented`, `not_representable`, `needs`, `needs_any_of`,
-  `driver_defect`, `runtime_driver_defect`, `metal_gpu_family`, `device_capability`, and
+  `metal_gpu_family`, `device_capability`, and
   `Unsupported { .. }`
   literals, in the `src` of crates/metal2vulkan-air, crates/metal2vulkan and
   crates/metal2vulkan-runtime;
@@ -72,7 +72,6 @@ CONSTRUCTORS = {
     "not_representable": "NotRepresentable",
     "needs": "AnyOf",
     "needs_any_of": "AnyOf",
-    "runtime_driver_defect": "RuntimeDriverDefect",
     "metal_gpu_family": "MetalGpuFamily",
     "device_capability": "DeviceCapability",
 }
@@ -347,7 +346,7 @@ def split_args(s):
     return args
 
 
-CAP_TOKENS = r"(VkFeature|VkExtension|VkProperty|VkLimit|ApiVersion|RuntimeDriverDefect)::([A-Za-z0-9_]+)"
+CAP_TOKENS = r"(VkFeature|VkExtension|VkProperty|VkLimit|ApiVersion)::([A-Za-z0-9_]+)"
 
 
 def conditions(kind, needs_text):
@@ -377,9 +376,6 @@ def conditions(kind, needs_text):
                 return {f"devices without a capability the site computes (`{expr}`)"}
             return {"devices without a capability the site computes"}
         return {"devices without " + c for c in caps}
-    if kind == "RuntimeDriverDefect":
-        ws = sorted({b for a, b in toks if a == "RuntimeDriverDefect"})
-        return {"drivers with defect " + w for w in ws} or {"drivers with a defect"}
     if kind == "MetalGpuFamily":
         return {"devices that do not claim the Metal GPU family"}
     if kind == "StageBound":

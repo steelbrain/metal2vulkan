@@ -126,8 +126,7 @@ pub enum Outcome {
     Failed { failure: FailureKind },
 }
 
-/// Why an `Unsupported` outcome is refused: on every device, or on a device whose driver has a
-/// measured defect.
+/// Why an `Unsupported` outcome is refused on every device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnsupportedReason {
@@ -136,9 +135,6 @@ pub enum UnsupportedReason {
     NotImplemented,
     /// No Vulkan 1.2+ mechanism exists.
     NotRepresentable,
-    /// The device's driver is measured to run wrong a command the runtime itself records
-    /// (`Needs::RuntimeDriverDefect`).
-    DriverDefect,
 }
 
 impl UnsupportedReason {
@@ -146,7 +142,6 @@ impl UnsupportedReason {
         match self {
             UnsupportedReason::NotImplemented => "not_implemented",
             UnsupportedReason::NotRepresentable => "not_representable",
-            UnsupportedReason::DriverDefect => "driver_defect",
         }
     }
 }
@@ -389,7 +384,6 @@ impl Outcome {
                 let reason = [
                     UnsupportedReason::NotImplemented,
                     UnsupportedReason::NotRepresentable,
-                    UnsupportedReason::DriverDefect,
                 ]
                 .into_iter()
                 .find(|known| known.as_str() == reason)?;
@@ -428,10 +422,6 @@ impl From<&Error> for Outcome {
                     },
                     Needs::NotRepresentable => Outcome::Unsupported {
                         reason: UnsupportedReason::NotRepresentable,
-                        feature,
-                    },
-                    Needs::RuntimeDriverDefect(_) => Outcome::Unsupported {
-                        reason: UnsupportedReason::DriverDefect,
                         feature,
                     },
                     _ => Outcome::Failed {
@@ -1256,16 +1246,6 @@ mod tests {
                 Error::Unsupported(Unsupported::not_representable(Feature::HandleAsPointer)),
                 "unsupported",
                 "not_representable HandleAsPointer",
-            ),
-            // A driver's measured defect in a command the runtime records keys by reason and
-            // feature; the defect stays in the detail.
-            (
-                Error::Unsupported(Unsupported::runtime_driver_defect(
-                    Feature::SeparateMultisampledDepthStencil,
-                    metal2vulkan::error::RuntimeDriverDefect::MultisampledDepthStencilColourCopies,
-                )),
-                "unsupported",
-                "driver_defect SeparateMultisampledDepthStencil",
             ),
             // A refusal that names its symbol keys by reason and feature alone; the symbol and the
             // location stay in the detail.

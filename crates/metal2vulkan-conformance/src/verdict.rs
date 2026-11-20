@@ -264,7 +264,7 @@ fn announced_fields(found: &Comparison) -> Vec<String> {
 }
 
 /// Whether a typed `Unsupported` is a device's honest gap rather than ours: it names
-/// capabilities a device could enable, or a measured driver defect. A refusal the translator or the
+/// capabilities a device could enable. A refusal the translator or the
 /// runtime has not built, and one Metal itself gives, is ours to answer for.
 pub fn device_gap_of(unsupported: &Unsupported) -> Option<String> {
     match &unsupported.needs {
@@ -279,10 +279,6 @@ pub fn device_gap_of(unsupported: &Unsupported) -> Option<String> {
         Needs::DeviceCapability(capability) => {
             Some(format!("{:?} needs {capability}", unsupported.feature))
         }
-        Needs::RuntimeDriverDefect(defect) => Some(format!(
-            "{:?} on a driver measured to run it wrong ({defect:?})",
-            unsupported.feature
-        )),
         // Everything else is ours to answer for: a form the translator or the runtime has not
         // built, and one Metal itself refuses, are not the device's gap.
         _ => None,

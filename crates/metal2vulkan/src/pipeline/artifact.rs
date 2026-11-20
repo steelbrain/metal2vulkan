@@ -1792,7 +1792,9 @@ pub enum PrecisionNote {
     ///   the value, which rounds toward zero (`a1_half_tanh_regimes`, case 27353187: 1,204 of its
     ///   16,384 halves one ulp toward zero on the M3 Max);
     /// - or no rounding at all: NVIDIA's 615.71.09 on the RTX 3090 drops the conversion pair, with
-    ///   or without a `NoContraction` barrier; lavapipe drops it in arithmetic on Mesa 26.2.4 with
+    ///   or without a `NoContraction` barrier, and 620.70.06 drops it under the 16-bit
+    ///   `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` too (of all 2^32
+    ///   inputs, every `float` that is no `half` comes back unchanged); lavapipe drops it in arithmetic on Mesa 26.2.4 with
     ///   LLVM 23.1.1 and for a loaded texel on Mesa 26.0.8 with LLVM 21.1.8, barrier or not, whose
     ///   arithmetic measured rounded. The result is then the `float` computation itself: its
     ///   differences from Metal's compound across operations, and a value past the `half`'s range

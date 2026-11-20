@@ -13,8 +13,7 @@
 //!   [`Needs::AnyOf`] lists alternative sets of device [`Capability`]s (a device that enables
 //!   every capability of one set compiles it), [`Needs::NotImplemented`] is a gap of this
 //!   translator version on every device, [`Needs::NotRepresentable`] has no Vulkan 1.2+
-//!   mechanism, [`Needs::RuntimeDriverDefect`] is a command the runtime records for itself that
-//!   the device's driver is measured to run wrong, and
+//!   mechanism, and
 //!   [`Needs::StageBound`] is a stage the device's plan writes heavier than the translator hands
 //!   any driver of a device [`Device::from_queries`](crate::device::Device::from_queries) made.
 //!   The runtime adds
@@ -334,17 +333,6 @@ impl Unsupported {
         }
     }
 
-    /// Run by the runtime on a device whose driver does not have `defect`, which this device's
-    /// does.
-    pub fn runtime_driver_defect(feature: Feature, defect: RuntimeDriverDefect) -> Unsupported {
-        Unsupported {
-            feature,
-            needs: Needs::RuntimeDriverDefect(defect),
-            location: None,
-            symbol: None,
-        }
-    }
-
     /// Refused as Metal refuses it on a device that does not claim the Metal GPU `family`
     /// (`MTLGPUFamily`'s raw value), as this device does not ([`Needs::MetalGpuFamily`]).
     pub fn metal_gpu_family(feature: Feature, family: i64) -> Unsupported {
@@ -472,10 +460,6 @@ pub enum Needs {
     NotImplemented,
     /// No Vulkan 1.2+ mechanism exists for these semantics.
     NotRepresentable,
-    /// The mechanism exists, but the device's driver runs wrong a command the runtime would
-    /// record for itself: the runtime refuses rather than hand back what the driver would
-    /// change. A device without the defect runs the input.
-    RuntimeDriverDefect(RuntimeDriverDefect),
     /// The stage, as this device's plan writes it, is heavier than the translator hands any
     /// driver: its entry weight passes the heaviest stage measured to compile within host-sized memory
     /// ([`Unsupported::symbol`] names the weight and the bound). The weight is the plan's, so a
@@ -845,258 +829,6 @@ pub enum DriverDeviation {
     /// `floor` stays noted where its address mode parts texel -1 from texel 0: Metal's sampler
     /// reads its coordinate unflushed. Unmeasured, each records the note.
     MetalUnaryDenormals,
-}
-
-/// A defect of a device's driver in a command the runtime records for itself, never in a
-/// translation (which [`DriverWorkaround`](crate::device::DriverWorkaround) covers). The runtime keys it on the driver's
-/// identity and release (`driverID`, `driverVersion`; `runtime::driver_defects`), lists the
-/// device's in its properties, and takes another way where an exact one exists, else refuses,
-/// what the driver would run wrong ([`Needs::RuntimeDriverDefect`]), or runs it announced as a
-/// degradation where a refusal would withhold a feature of the families the device claims. No
-/// compile profile, cache key or digest holds it.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RuntimeDriverDefect {
-    /// `vkCmdCopyImage` between a multisampled depth/stencil image and a multisampled colour
-    /// image (maintenance8's depth-stencil/colour copies) does not copy every sample, or loses
-    /// the device. The runtime copies so the separate multisampled depth and stencil textures
-    /// (`Feature::SeparateMultisampledDepthStencil`) and the shadow of a multisampled combined
-    /// depth/stencil attachment's stencil a fragment function writes without stencil export
-    /// (`Feature::StencilExport`).
-    MultisampledDepthStencilColourCopies,
-    /// A compressed image's memory requirements answer a size short of the memory the GPU
-    /// writes its compression data through, so a resource bound right after the image loses what
-    /// a command buffer that also writes the image writes into its first bytes. Nothing is
-    /// refused: the runtime rounds each image's size up past that memory (whole 256-byte chunks
-    /// of the aux map's on ANV's Xe-LP GPUs), so none of its resources lies there.
-    ImageSizeShortOfCompressionData,
-    /// A render pass's depth/stencil resolve (`VkSubpassDescriptionDepthStencilResolve`) reads
-    /// its attachment's image, and writes its resolve attachment's, from their first array layer
-    /// and mip level, whatever layer and level their views begin at. Nothing is refused but a
-    /// memoryless attachment at another layer: the runtime resolves into a scratch image copied
-    /// where the resolve belongs, and from a copy of an attachment at another layer.
-    DepthStencilResolveFirstSubresource,
-    /// A 2D view of a 3D image bound to lazily allocated memory (a memoryless 3D texture's depth
-    /// plane attached to a pass) crashes the process: the driver makes the view by aliasing the
-    /// image's memory through a placement heap, which lazily allocated memory lacks. Nothing is
-    /// refused: the runtime gives such an image device-local memory, where, as in a memoryless
-    /// texture, nothing a pass leaves is observable.
-    LazilyAllocatedVolumePlaneViews,
-    /// A `VkPipelineCache` made from saved data compiles every shader the data holds before
-    /// `vkCreatePipelineCache` returns, used or not, so a device seeded with a large cache waits
-    /// for all of them at its creation. Nothing is refused: the runtime neither seeds nor saves
-    /// the driver's pipeline cache there, and each pipeline compiles its own shaders when it is
-    /// made (the OS's shader cache, keyed by the shader's source, keeps what an earlier process
-    /// compiled).
-    PipelineCacheDataCompiledAtLoad,
-    /// A copy into or out of an image of `B10G11R11_UFLOAT_PACK32` or `E5B9G9R9_UFLOAT_PACK32`
-    /// that the driver keeps losslessly compressed rewrites some texels' bytes, as Metal's GPU
-    /// blits of such a texture do (its NaNs made quiet, its shared exponents renormalized),
-    /// where Metal's CPU copies keep them. Nothing is refused: the runtime makes the image of a
-    /// texture a CPU copy can reach uncompressed there, whose copies keep the bytes as every
-    /// other device's do.
-    CompressedImageCopiesRewriteTexels,
-    /// A copy into a multisampled image of a float format draws the samples through that format,
-    /// so a NaN in a 16-bit float channel lands as the device's own NaN, its sign and payload
-    /// lost, where Vulkan's copies keep every bit. Nothing is refused: the runtime writes a
-    /// multisampled attachment's NaN clear through a view in the unsigned-integer format of its
-    /// texel size (an integer clear converts nothing), which a multisampled color render target
-    /// of such a format the runtime makes takes there where it costs the image nothing, and
-    /// announces `device-nan-encoding` where the image takes no such view.
-    MultisampledCopiesConvertFloatNans,
-    /// The driver signals a queue's timeline semaphore before its own completion work for what
-    /// was submitted ahead of the signal has run, and that work still reads objects the command
-    /// buffers used (the query pools they reset or began): one released at the signal's value
-    /// crashed. Nothing is refused: the runtime ends each command buffer there with a fence as
-    /// well, which the driver signals after that work, and releases what the command buffer used
-    /// only once both are signaled. Elsewhere a command buffer ends at its queue's value alone,
-    /// and its commit makes no fence.
-    ReadsCommandBuffersAfterTheirSignal,
-    /// `vkCmdCopyImage` between the stencil aspect of a multisampled depth/stencil image and a
-    /// multisampled colour image (maintenance8's depth-stencil/colour copies) loses the device,
-    /// where the depth aspect's copies are right. The runtime copies such stencils as it does
-    /// under [`RuntimeDriverDefect::MultisampledDepthStencilColourCopies`] (a kernel and draws, or
-    /// a refusal), and their depths through the colour copies.
-    MultisampledStencilColourCopies,
-    /// A `vkCmdExecuteGeneratedCommandsEXT` the driver preprocesses itself, recorded after an
-    /// execution whose execution set bound pipelines, runs that preprocessing with the shader the
-    /// earlier execution bound last rather than the driver's own, which then reads and writes
-    /// memory by the wrong arguments: the device faults or its queue hangs. Nothing is refused:
-    /// the runtime preprocesses every execution of an indirect command buffer's range apart
-    /// (`vkCmdPreprocessGeneratedCommandsEXT`) before the first of them runs.
-    ImplicitPreprocessAfterExecutionSet,
-    /// A render pass over an image of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` whose one plane
-    /// the caller laid out (`VkImageDrmFormatModifierExplicitCreateInfoEXT`) writes the rows past
-    /// its height up to a multiple of 4, past its subresource and its memory requirements (into
-    /// another resource's bytes, or unmapped memory). Nothing is refused: the runtime makes no
-    /// such image of a height that is no multiple of 4 there, and a texture over a buffer or a
-    /// heap's pages takes its shadow (`shadowed-texture`).
-    ExplicitPlaneRowsPastHeight,
-    /// A shader's reads of an image of `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` whose one plane
-    /// the caller laid out (`VkImageDrmFormatModifierExplicitCreateInfoEXT`) with rows a number of
-    /// bytes apart that is no multiple of 32 take its rows at another pitch, though the driver
-    /// makes the image and reports the caller's pitch (`vkGetImageSubresourceLayout`), and its
-    /// copies take them at the caller's. Nothing is refused: the runtime makes no such image at
-    /// such a pitch there, and a texture over a buffer or a heap's pages takes its shadow
-    /// (`shadowed-texture`).
-    ExplicitPlanePitchMisread,
-    /// A precise occlusion query counts each sample that passes once per color output the
-    /// fragment shader writes, where Vulkan counts it once. Nothing is refused: a draw counted by
-    /// a `Counting` visibility result whose fragment stage writes more than one color attachment
-    /// runs, announced (`visibility-count-per-color`); `Boolean` results are Metal's.
-    OcclusionCountPerColorOutput,
-    /// Freeing memory that a buffer of `SHADER_DEVICE_ADDRESS` usage lay in fails a submission
-    /// still pending whose pipelines read device addresses, though none of its commands refers
-    /// to that memory. Nothing is refused: the runtime destroys such a buffer at once and frees
-    /// its memory once the batches and its own submissions made before it completed, a no-copy
-    /// buffer's deallocator waiting with it, announced (`host-deallocator-delayed`). The
-    /// program's own submissions to the runtime's queues are not waited for.
-    FreedAddressMemoryFailsPendingWork,
-    /// Destroying a buffer of `SHADER_DEVICE_ADDRESS` usage while another thread is inside a
-    /// `vkQueueSubmit` whose pipelines read device addresses fails that submission, though none of
-    /// its commands refers to the buffer. Nothing is refused: the runtime destroys such a buffer
-    /// with no submission of its own inside its `vkQueueSubmit`. The program's own submissions to
-    /// the runtime's queues are not waited for.
-    DestroyedAddressBufferFailsSubmission,
-    /// `vkCmdPushDescriptorSet` writes the descriptors it pushes but not the sizes of their
-    /// buffers that a shader reads back (a storage buffer's runtime array length,
-    /// `OpArrayLength`), which the driver takes from `vkCmdBindDescriptorSets` alone: a pushed
-    /// buffer's length reads 0, so the accesses a shader bounds by it read and write nothing.
-    /// Nothing is refused: the runtime binds set 0 there, as on a device without the push
-    /// command, but for a variant whose stages read no buffer's length and whose set 0 a driver
-    /// with [`RuntimeDriverDefect::InterlockedBoundBuffersUnordered`] orders only pushed.
-    PushedBufferSizesUnset,
-    /// Descriptors of set 0 pushed (`vkCmdPushDescriptorSet`) before a bind of another pipeline
-    /// of the same layout, which Vulkan keeps for it (Pipeline Layout Compatibility), are not
-    /// what that pipeline reads where no push follows the bind: a uniform buffer it reads
-    /// through its descriptor reads zeros there after a pipeline that read the same buffer's
-    /// constants at fixed offsets. Nothing is refused: the first draw after each pipeline bind
-    /// there pushes at least one of set 0's descriptors, those that changed or else the first.
-    PushedDescriptorsStaleAfterPipelineBinds,
-    /// A storage buffer of a bound set 0 (`vkCmdBindDescriptorSets`) that a fragment shader
-    /// writes inside its ordered interlock is not ordered between the overlapping fragments of a
-    /// draw: a fragment reads the buffer as it was before an earlier overlapping fragment's
-    /// write. The driver encodes such a set as one argument buffer of the shading language it
-    /// translates to, which leaves such a buffer out of its raster order group where the function
-    /// also reads another buffer of that argument buffer; a pushed set's buffers are discrete
-    /// arguments, which it orders. Nothing is refused: a render variant whose fragment stage
-    /// writes a storage buffer of set 0 inside its interlock pushes set 0 there, and one that
-    /// cannot (no push command, a set 0 no push descriptor set layout takes, or a stage that reads
-    /// a buffer's length on a driver with [`RuntimeDriverDefect::PushedBufferSizesUnset`]) binds
-    /// it, announced (`interlocked-buffer-order`).
-    InterlockedBoundBuffersUnordered,
-    /// A fragment shader's ordered interlock does not order the overlapping fragments of a draw
-    /// in a pipeline linked from graphics pipeline libraries without link-time optimization: a
-    /// fragment reads a storage image as it was before an earlier overlapping fragment's write,
-    /// where the same stages in a pipeline made whole read it after. Nothing is refused: a render
-    /// variant whose fragment stage declares an interlock execution mode is made whole there.
-    FastLinkedInterlocksUnordered,
-    /// A compute dispatch recorded after a copy in the same `VkCommandBuffer` samples a binding
-    /// its pipeline layout bakes an immutable sampler into (a constexpr sampler's) as Repeat, not
-    /// with the baked sampler's modes. Nothing is refused: an encoder's dispatch of a variant
-    /// that bakes samplers records in a `VkCommandBuffer` of its own there, as one whose pipeline
-    /// is still being made does.
-    ImmutableSamplersLostAfterCopies,
-    /// `vkGetDescriptorSetLayoutSupport` answers `VK_FALSE` for a descriptor set layout the driver
-    /// makes and runs: one of exactly `maxPerSetDescriptors` descriptors, which Vulkan guarantees
-    /// `VK_TRUE`, and every one past it, however far within the update-after-bind limits the
-    /// driver reports. Nothing is refused: the runtime makes such a layout there (a heap's set 1)
-    /// as the driver runs it, announced (`set-past-layout-support`), and Vulkan's validation layer
-    /// reports it (`VUID-vkCreateDescriptorSetLayout-support-09582`).
-    SetLayoutSupportUnderstated,
-    /// A view of some of the levels or layers of an image bound to lazily allocated memory (a
-    /// memoryless texture's level, slice or cube face attached to a pass) has no texture: the
-    /// driver makes such a view as a Metal texture view, and Metal makes no view of a memoryless
-    /// texture, so the pass renders without the attachment (its resolve too). Nothing is
-    /// refused: the runtime gives such an image, one of more than one level or layer,
-    /// device-local memory, where, as in a memoryless texture, nothing a pass leaves is
-    /// observable.
-    LazilyAllocatedSubresourceViews,
-    /// Binding memory to an image with host-transfer usage copies the whole image **out of that
-    /// memory on the CPU** before anything has written it, through a row pitch of the driver's
-    /// own, and the driver's own check of that copy fails for an image whose texel block holds
-    /// more than one texel: it reports the pitch as short of the row it reads. Nothing is
-    /// refused: a block-compressed texture's image takes no host-transfer usage there and so
-    /// stays in memory of its own class, and its CPU copies go through a submission, as on a
-    /// device without `VK_EXT_host_image_copy`.
-    HostTransferImagesCopiedAtBind,
-    /// A host wait for any of several semaphores or fences to be signaled (`vkWaitSemaphores`
-    /// with `VK_SEMAPHORE_WAIT_ANY_BIT`, `vkWaitForFences` with `waitAll` false) loses a signal
-    /// that lands while the call is still registering a later one of them: it sleeps on to its
-    /// timeout although the condition it waited for was met. A wait that names one object loses
-    /// none. Nothing is refused: every host wait of the runtime names one object there — each
-    /// queue's completion waiter its queue's next fence or timeline value — and the scheduler's
-    /// thread sleeps on its condition variable, woken by the completion turns, in place of
-    /// waiting for the signals its held batches wait for to land on the GPU itself.
-    WaitForAnyObjectLosesASignal,
-    /// A sampler Y′CbCr conversion of a two-plane 4:2:0 or 4:2:2 format reconstructs the chroma
-    /// away from where its chroma offsets place it: each chroma sample's weights, of the right
-    /// shape, lie one luma texel up and to the left of the midpoint's (or, cosited, are no
-    /// interpolation at all), and a linear filter filters the chroma twice, which Vulkan's
-    /// reconstruction (`VkChromaLocation`, `VkFilter`) forbids. Nothing is refused: the runtime
-    /// converts such a texture's planes with its own kernel there, as on a device without the
-    /// conversion.
-    TwoPlaneChromaMisplaced,
-    /// A sampler Y′CbCr conversion of a 10-bit multi-planar format (`..._3PACK16`) reads each
-    /// code's 16-bit word, its six unused low bits included, where Vulkan converts the 10-bit
-    /// code as `c / 1023` and the unused bits have no effect: as a 16-bit unsigned normalized
-    /// value (lavapipe, RADV: a code reads up to one code low, 1023 as 0.999039), or the bits as
-    /// the code's fraction (NVIDIA: up to 63/64 of a code high). Nothing is refused: the runtime
-    /// converts such a texture's planes with its own kernel there, as on a device without the
-    /// conversion.
-    TenBitCodesReadAsWords,
-    /// An import of a host pointer (`VK_EXT_external_memory_host`) over pages the kernel cannot
-    /// pin (a mapping of a dma-buf, `VM_PFNMAP`) fails as out of device memory, where Vulkan
-    /// requires `VK_ERROR_INVALID_EXTERNAL_HANDLE` of a pointer a platform restriction keeps from
-    /// being imported, and from then on the process's host-visible allocations fail as out of
-    /// device memory too, imports and plain allocations alike, on every device of the process,
-    /// where an out-of-memory error modifies no existing object. Nothing is refused that the
-    /// driver would import, and the pages are still served: on Linux the runtime asks the kernel
-    /// whether it pins each mapping over them before it hands the driver their pointer, and pages
-    /// it cannot pin are never handed to the driver. A no-copy buffer, heap or rebind over them
-    /// takes the caller's dma-buf source where one is given, and else, or where its import fails,
-    /// a copy of them, as where a pointer import fails (`copied-host-pages`); a guest RAM's chunk
-    /// over them is not imported, its objects taking their own paths. Pages that are not mapped
-    /// readable cannot be copied, and are refused (`Unsupported`, `HostMemory`).
-    UnpinnablePagesBreakHostMemory,
-    /// `vkCmdBlitImage` with `VK_FILTER_LINEAR` from one level of a 3D image into the next does
-    /// not answer Vulkan's linear filter of the source (the eight texels around each destination
-    /// texel's scaled centre). Nothing is refused: `generate_mipmaps` of a 3D texture takes the
-    /// runtime's compute filter there, where it computes the format, and the device's blit chain,
-    /// announced as everywhere (`device-filtered-mipmaps`), elsewhere.
-    VolumeBlitsUnfiltered,
-    /// A pipeline barrier between two blits does not order them where they reach the same host
-    /// pages through two imports (`VK_EXT_external_memory_host`), which Vulkan counts as aliases of
-    /// one memory ("Memory Aliasing": memory bound through external memory import mechanisms):
-    /// in one blit encoder, a copy through a buffer bound in one import of the pages read their
-    /// bytes from before a fill, recorded before the barrier, through a buffer bound in another
-    /// import of them.
-    AliasedImportBlitsUnordered,
-    /// A render pass's color resolve into a 2D view of a 3D image (made
-    /// `VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT`, the view's layers depth planes of it) is
-    /// written where the view begins only at the image's first depth plane: RADV writes the first
-    /// plane whatever plane the view begins at, and NVIDIA's driver writes no plane where the view
-    /// begins at plane 1. Nothing is refused: the runtime resolves into a scratch image of the
-    /// pass's layers, copied into the planes the resolve belongs in after the pass.
-    VolumeResolveFirstPlane,
-    /// A command buffer submitted again as it was recorded, once its earlier submissions
-    /// completed, fails that submission with `VK_ERROR_DEVICE_LOST`, and the device is lost, once
-    /// a command buffer that came next after it in one of those submissions' `pCommandBuffers`
-    /// was freed and its command pool trimmed (`vkTrimCommandPool`). Nothing is refused: the
-    /// runtime frees command buffers without trimming their pools there, and the driver keeps
-    /// what it holds of them for the pools' later command buffers.
-    TrimmedCommandBufferFailsResubmission,
-    /// The fixed-function vertex input takes an element's displacement from the bind offset
-    /// (`element · stride`) modulo `2^32`, where Vulkan places the attribute at that displacement
-    /// whole (Vertex Input Address Calculation) and, under `robustBufferAccess2`, reads zero for an
-    /// attribute outside the bound range: an element past `2^32` bytes of a small buffer's bind
-    /// offset reads the bytes at its displacement's low 32 bits. Nothing is refused: a draw whose
-    /// own values may fetch a fixed-function layout past `2^32` bytes pulls that layout in its
-    /// vertex shader there, whose fetch reads the bytes past them as zero, Metal's answer past a
-    /// buffer that ends before them; a draw whose indices or arguments state its reach (32-bit
-    /// indices, an indirect draw) pulls it under `VertexReachPolicy::Exact` and is announced
-    /// otherwise (`vertex-fetch-may-wrap`).
-    VertexFetchWrapsPast4GiB,
 }
 
 /// One device capability a refusal can name.
@@ -1531,9 +1263,7 @@ pub enum Feature {
     /// the texture both through such a view and through another alias of it.
     ViewFormatReinterpretation,
     /// A render pass whose depth and stencil attachments are separate multisampled textures that
-    /// it loads or may store, on a device without maintenance8, or whose driver copies such
-    /// aspects wrong ([`RuntimeDriverDefect::MultisampledDepthStencilColourCopies`]): Vulkan copies
-    /// a multisampled depth or stencil aspect between images of different formats only through a
+    /// it loads or may store, on a device without maintenance8: Vulkan copies a multisampled depth or stencil aspect between images of different formats only through a
     /// colour image of maintenance8's depth-stencil/colour table.
     SeparateMultisampledDepthStencil,
     /// A stage whose private memory (its `thread` variables and arrays, and the constants it

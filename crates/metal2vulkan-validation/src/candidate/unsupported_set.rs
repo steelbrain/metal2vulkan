@@ -3,8 +3,7 @@
 //!
 //! MoltenVK answers the query `sum of descriptorCount < maxPerSetDescriptors` (1212 on Apple's
 //! GPUs), though it encodes an update-after-bind set in a Metal argument buffer and runs one of
-//! 65536 elements and more as Metal runs the argument buffer
-//! (`RuntimeDriverDefect::SetLayoutSupportUnderstated`). The executor's context makes a heap's
+//! 65536 elements and more as Metal runs the argument buffer. The executor's context makes a heap's
 //! set 1 there past that answer (`platform/device.rs`). The layer asks the query for
 //! every layout past `maxPerSetDescriptors` and reports one it refuses, as Vulkan says it must
 //! (`VUID-vkCreateDescriptorSetLayout-support-09582`, "If the descriptor layout exceeds the limits

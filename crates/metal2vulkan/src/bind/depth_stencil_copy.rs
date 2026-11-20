@@ -1,8 +1,7 @@
 //! The copies of a multisampled depth or stencil aspect without colour copies.
 //!
 //! Vulkan copies a multisampled aspect to or from another image only through maintenance8's
-//! depth-stencil/colour `vkCmdCopyImage`, which some drivers run wrong
-//! (`RuntimeDriverDefect::MultisampledDepthStencilColourCopies`). These crate-owned modules move
+//! depth-stencil/colour `vkCmdCopyImage`. These crate-owned modules move
 //! each sample another way. The source is read one sample per invocation, through a sampled view
 //! of its copied aspect ([`CopySource::Aspect`]: a multisampled 2D image, unsigned for stencil,
 //! float for depth) or as the shader-side stencil's shadow ([`CopySource::Shadow`]: a
