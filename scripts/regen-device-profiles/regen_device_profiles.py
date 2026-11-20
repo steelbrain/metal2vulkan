@@ -106,6 +106,7 @@ RUNTIME_FLOOR = {
         "VK_KHR_swapchain": 1,
         "VK_EXT_robustness2": 1,
         "VK_EXT_calibrated_timestamps": 1,
+        "VK_EXT_line_rasterization": 1,
     },
     "features": {
         "VkPhysicalDeviceFeatures": {member: True for member in (
@@ -134,6 +135,7 @@ RUNTIME_FLOOR = {
             "shaderZeroInitializeWorkgroupMemory", "synchronization2", "dynamicRendering")},
         "VkPhysicalDeviceRobustness2FeaturesEXT": {"nullDescriptor": True,
                                                    "robustImageAccess2": True},
+        "VkPhysicalDeviceLineRasterizationFeaturesEXT": {"bresenhamLines": True},
     },
     "properties": {
         "VkPhysicalDeviceProperties": {"limits": {

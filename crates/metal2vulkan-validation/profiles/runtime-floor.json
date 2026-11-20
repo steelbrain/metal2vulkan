@@ -1121,7 +1121,8 @@
       "extensions": {
         "VK_KHR_swapchain": 1,
         "VK_EXT_robustness2": 1,
-        "VK_EXT_calibrated_timestamps": 1
+        "VK_EXT_calibrated_timestamps": 1,
+        "VK_EXT_line_rasterization": 1
       },
       "features": {
         "VkPhysicalDeviceFeatures": {
@@ -1184,6 +1185,9 @@
         "VkPhysicalDeviceRobustness2FeaturesEXT": {
           "nullDescriptor": true,
           "robustImageAccess2": true
+        },
+        "VkPhysicalDeviceLineRasterizationFeaturesEXT": {
+          "bresenhamLines": true
         }
       },
       "properties": {

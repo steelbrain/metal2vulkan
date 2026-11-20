@@ -257,9 +257,9 @@ fn refused_for_a_fixed_extended_format(
 /// Every public fixture compiled for a Profile F device uses the static-root descriptor machinery
 /// only and passes L3; and the device without device addresses refuses exactly what the formatless
 /// floor accepts only through its formatless storage-image bits (asking for a storage format, or
-/// naming formats' formatless access), or refuses as the formatless
-/// floor does naming those bits too, or refuses a module-fixed extended format that the formatless
-/// floor declares formatless.
+/// naming formats' formatless access), or refuses as the formatless floor does naming those bits
+/// too, or refuses a module-fixed extended format that the formatless floor declares formatless,
+/// or asks for a storage format where the formatless floor refuses the function.
 #[test]
 fn profile_f_functions_reach_every_buffer_through_a_descriptor() {
     let profiles = profile_f();
@@ -294,10 +294,14 @@ fn profile_f_functions_reach_every_buffer_through_a_descriptor() {
                     && !refused_also_for_formatless(&results[0], &results[1])
                     && !refused_for_a_fixed_extended_format(&results[1])
                 {
+                    // The storage format is asked for before a refusal is reached: where the
+                    // formatless floor refuses the function, the device without the formatless
+                    // reads may ask for the format first.
+                    let format_asked = floor.starts_with("NeedsInput{StorageTextureFormat");
                     assert!(
-                        formatless == "ok"
-                            && (floor.starts_with("NeedsInput{StorageTextureFormat")
-                                || refused_for_formatless_access(&results[1])),
+                        (formatless == "ok"
+                            && (format_asked || refused_for_formatless_access(&results[1])))
+                            || (format_asked && formatless.starts_with("Unsupported{")),
                         "{name} {entry}: {FORMATLESS_FLOOR} {formatless}, {PROFILE_F} {floor}"
                     );
                     format_needed += 1;
