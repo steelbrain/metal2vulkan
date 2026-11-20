@@ -2,7 +2,7 @@
 //!
 //! A site holds one [`Observed`]: a [`Value`] in the portable vocabulary, the [`Shape`] that says
 //! how to read and compare it, and an optional [`Digest`], a projection of the value a recording
-//! may carry in its place. One record type serves every fidelity, so a case ported digest-first
+//! may carry in its place. One record type serves every fidelity, so a case recorded digest-first
 //! gains raw values without being rewritten.
 //!
 //! The tree, rather than a list, is what lets a failure descend: a case whose answer is a digest of
@@ -323,8 +323,8 @@ impl Digest {
 
     /// The first sixteen hexadecimal digits of the SHA-256 of `bytes`.
     ///
-    /// This is the projection the probes printed and the runtime lanes keep, so a case ported
-    /// from such a lane records Metal's own value rather than a digest nobody measured.
+    /// This is the projection the probes printed, so a case whose probe printed one records
+    /// Metal's own value rather than a digest nobody measured.
     pub fn sha256_prefix16(bytes: &[u8]) -> Self {
         let mut hex = crate::sha256_hex(bytes);
         hex.truncate(16);
@@ -355,7 +355,7 @@ impl Digest {
 pub enum DigestKind {
     Sha256,
     /// The SHA-256's first sixteen hexadecimal digits: what our probes printed, and so the widest
-    /// projection a case ported from a lane that kept one can honestly record.
+    /// projection a case whose probe kept one can honestly record.
     Sha256Prefix16,
 }
 

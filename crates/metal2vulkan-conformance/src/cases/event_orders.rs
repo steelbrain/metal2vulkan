@@ -64,12 +64,10 @@
 //!
 //! # What is deliberately not here
 //!
-//! The lane's **tracked** resources across queues (`a_tracked_buffer_across_queues_follows_the_
-//! commit_order` and its texture twin) are left out: the answer there is "what the order the
-//! runtime schedules them in gives it", which is a fact about our scheduler with Metal's own
-//! answer attached by a comment naming an M4. It is a real question and it deserves a case; it
-//! needs the hazard-tracking vocabulary first, and a hazard between two queues needs work big
-//! enough to overlap, which a bytes record of a small buffer cannot stand in for.
+//! **Tracked** resources across queues, a buffer's and a texture's, are left out: the answer there
+//! is "what the order the runtime schedules them in gives it", which is a fact about our scheduler.
+//! A case of it needs the hazard-tracking vocabulary, and a hazard between two queues needs work
+//! big enough to overlap, which a bytes record of a small buffer cannot stand in for.
 //!
 //! An event command **with an encoder open** and **after the commit** is left out, and must stay
 //! out: Metal asserts there, which ends Metal's process. It is the shape the suite has no outcome

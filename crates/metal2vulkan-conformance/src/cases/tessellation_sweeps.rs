@@ -17,7 +17,7 @@
 //!
 //! Four of the six cases are built on the two committed domain fixtures,
 //! `k7_tess_quad_domain` and `k7_tess_triangle_domain`, which were written for the validation
-//! lane and are widened here rather than copied. Each is a `vertex void` post-tessellation vertex
+//! crate and are widened here rather than copied. Each is a `vertex void` post-tessellation vertex
 //! function with rasterization disabled, and for every domain point the tessellator calls it with
 //! it stores a mark at that point's cell of a 65-by-65 grid, `marks[j · 65 + i]` for
 //! `i = rint(u · grid.x)` and `j = rint(v · grid.y)`, the two scales coming from the patch's own

@@ -16,10 +16,10 @@
 //! words by construction, and the sweep over the two spellings is an equivalence and not a value
 //! comparison.
 //!
-//! So this case is **reach rather than depth**, and is the one case of this stream that is: it
-//! adds two items to what the suite calls, and neither the choice between the two spellings nor
-//! the heap placement itself is distinguishable by anything it reads back. A value sweep would
-//! compare the same bytes twice. What it does hold is still not nothing:
+//! So this case is **reach rather than depth**: it adds two items to what the suite calls, and
+//! neither the choice between the two spellings nor the heap placement itself is distinguishable by
+//! anything it reads back. A value sweep would compare the same bytes twice. What it does hold is
+//! still not nothing:
 //!
 //! - the words are **Metal's own**, through a binding whose memory is a heap's rather than a
 //!   buffer's, which no compute case did before: an implementation that placed the buffer at the

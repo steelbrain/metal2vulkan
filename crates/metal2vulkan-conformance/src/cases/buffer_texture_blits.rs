@@ -18,13 +18,12 @@
 //!
 //! **Write the destination before the copy.** The ordinary texture a copy reads from or writes to
 //! is always written first, with a set of its own. An unwritten destination's untouched texels
-//! compare against whatever the texture happened to hold, which in practice means zeros, and a
-//! copy that wrote zeros where it should have written nothing passes such a comparison. The lane
-//! this came from left its destination unwritten for exactly that reason and could not have caught
-//! it. The fix costs one `replaceRegion:` per program: write a distinctive set first and the same
-//! comparison becomes a real one, because an untouched texel is then a texel this program put
-//! there. `out-of-buffer-part` is where it shows — columns 2 and 3 still hold set 2 after the
-//! copy, which is only a check because set 2 was put there first.
+//! compare against whatever the texture happened to hold, which in practice means zeros, and a copy
+//! that wrote zeros where it should have written nothing passes such a comparison. The fix costs
+//! one `replaceRegion:` per program: write a distinctive set first and the same comparison becomes
+//! a real one, because an untouched texel is then a texel this program put there.
+//! `out-of-buffer-part` is where it shows — columns 2 and 3 still hold set 2 after the copy, which
+//! is only a check because set 2 was put there first.
 //!
 //! **What Metal does where a copy's source and destination are the same bytes**, measured on an
 //! Apple M3 Max (macOS 27.0.1, build 26A434) rather than modelled: every destination texel holds
@@ -39,12 +38,11 @@
 //! Nothing here faults a GPU, hangs one or trips a watchdog: each program is a handful of blits
 //! over shared memory of a kilobyte, committed once and read back.
 //!
-//! What the lane this came from also covers and these cases do not yet: buffers made by
-//! `newBufferWithBytesNoCopy:` (the vocabulary has no such resource, and whether a device imports
-//! host memory at all is not Metal's answer to give), the whole-texture
-//! `copyFromTexture:toTexture:` selector (a copy that names no region is a different call and
-//! wants a step of its own), linear array slices and views of them, texture buffers, and the
-//! IOSurface planes.
+//! Not cases here: buffers made by `newBufferWithBytesNoCopy:` (the vocabulary has no such
+//! resource, and whether a device imports host memory at all is not Metal's answer to give), the
+//! whole-texture `copyFromTexture:toTexture:` selector (a copy that names no region is a different
+//! call and wants a step of its own), linear array slices and views of them, texture buffers, and
+//! the IOSurface planes.
 
 use crate::case::{call, Abort, Case, Input, MetalSource, Side};
 use crate::transcript::{ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};

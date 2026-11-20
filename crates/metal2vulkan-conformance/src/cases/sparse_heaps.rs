@@ -21,13 +21,12 @@
 //!
 //! The heap's three getters go beside them because `usedSize` is what every mapping case counts in,
 //! and a fresh sparse heap's `usedSize` being 0 — with a texture made over it and nothing mapped —
-//! is the baseline the rest of the lane measures against.
+//! is the baseline the rest of the family measures against.
 //!
-//! **Padded formats are in.** This round found that Metal places textures of the padded 10-bit
-//! extended-range formats in automatic, placement **and sparse** heaps, so `BGR10_XR` and
-//! `BGRA10_XR` are swept here rather than skipped. The two-plane extended-range pair stays out: the
-//! runtime refuses it typed for a sparse heap (`NotImplemented(Format)`), which is its own row to
-//! settle and not this family's.
+//! **Padded formats are in.** Metal places textures of the padded 10-bit extended-range formats in
+//! automatic, placement **and sparse** heaps, so `BGR10_XR` and `BGRA10_XR` are swept here rather
+//! than skipped. The two-plane extended-range pair stays out: the runtime refuses it typed for a
+//! sparse heap (`NotImplemented(Format)`), which is its own row to settle and not this family's.
 //!
 //! # Why every case here is safe
 //!
@@ -53,15 +52,14 @@ pub const TAILS_BY_TYPE: &str = "sparse-tails-by-texture-type";
 pub const TAILS_WIDE: &str = "sparse-tails-wide-and-short";
 pub const TAILS_MULTISAMPLED: &str = "sparse-tails-multisampled";
 
-/// The heap every case of the family makes: 1 MiB in 16-KiB pages, the lane's own.
+/// The heap every case of the family makes: 1 MiB in 16-KiB pages.
 const HEAP: SparseHeapSpec = SparseHeapSpec::new(1 << 20);
 
 /// The padded 10-bit extended-range formats this family sweeps.
 ///
-/// Three places in this tree claimed a padded format has no heap texture at all, and this round
-/// measured that false: Metal places them in automatic, placement and sparse heaps alike. So they
-/// belong in the sweep, and a release where Apple stops making one fails the case rather than
-/// passing under a skip.
+/// Metal places them in automatic, placement and sparse heaps alike, as measured. So they belong in
+/// the sweep, and a release where Apple stops making one fails the case rather than passing under a
+/// skip.
 const PADDED_FORMATS: [PixelFormat; 2] = [PixelFormat::BGR10XR, PixelFormat::BGRA10XR];
 
 /// What this family leaves out, and why. The guard holds the tables to it.

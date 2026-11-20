@@ -58,11 +58,10 @@ pub const MADE: &str = "buffer-textures-made";
 pub const CPU_ACCESS: &str = "buffer-textures-cpu-access";
 pub const STRIDE_BELOW_THE_ROW: &str = "buffer-textures-stride-below-the-row";
 
-/// The usage a texture buffer of this family carries, as the lane's descriptor does: read and
-/// written by shaders.
+/// The usage a texture buffer of this family carries: read and written by shaders.
 const READ_WRITE: TextureUsage = TextureUsage::SHADER_READ.union(TextureUsage::SHADER_WRITE);
 
-/// The buffer every making row is laid over: 4096 bytes, as the lane's is.
+/// The buffer every making row is laid over: 4096 bytes.
 const BUFFER: u64 = 4096;
 
 /// Every case of the family.
@@ -340,8 +339,8 @@ struct Read {
 /// The bytes rows: a texture buffer whose texels are the buffer's bytes, and a 2D texture whose
 /// rows lie `bytesPerRow` apart with the bytes between them untouched.
 const BYTES_ROWS: [Bytes; 2] = [
-    // 16 `RGBA8Uint` texels from byte 512, as the lane reads them: the whole row, then four texels
-    // from the fifth, then four texels written from the third.
+    // 16 `RGBA8Uint` texels from byte 512: the whole row, then four texels from the fifth, then
+    // four texels written from the third.
     Bytes {
         key: "texture-buffer-rgba8uint-16",
         kind: TextureKind::TextureBuffer,

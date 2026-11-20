@@ -186,7 +186,7 @@ impl Row {
     }
 }
 
-/// Every row the lane measured: its steps, region, grid, threadgroup and how the region is set.
+/// Every row measured: its steps, region, grid, threadgroup and how the region is set.
 ///
 /// The family is exhaustive in the directions that matter and small in every other: a step on x
 /// and on y, a step rate of 1, 2 and 3, an origin inside and past the buffer's elements, a size of

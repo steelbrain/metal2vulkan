@@ -37,8 +37,8 @@
 //!   nothing in the tree says Metal's validation takes them. That is the next query to add, and it
 //!   needs its own evidence first.
 //! - the **sample counts** are 1 for a single-sampled type, and 2 and 4 for a multisample type,
-//!   which are the counts the lane measured on this oracle. A count a device does not hold, and a
-//!   count on a single-sampled type, are left out for the same reason.
+//!   which are the counts measured on this oracle. A count a device does not hold, and a count on a
+//!   single-sampled type, are left out for the same reason.
 //! - the **formats** are colour formats and the four depth and stencil formats this chip has.
 //!   `Depth24Unorm_Stencil8`, which Apple silicon does not support, is left out.
 //!
@@ -133,11 +133,10 @@ const DEPTH_FORMATS: [PixelFormat; 4] = [
     PixelFormat::Depth32FloatStencil8,
 ];
 
-/// The format [`BY_TYPE`] asks every texture type about, and the one the lane's own literals name.
-const LANE_FORMAT: PixelFormat = PixelFormat::R32Float;
+/// The format [`BY_TYPE`] asks every texture type about.
+const BY_TYPE_FORMAT: PixelFormat = PixelFormat::R32Float;
 
-/// The formats [`MULTISAMPLE`] sweeps: the lane's own, and three more whose block bytes the sample
-/// count multiplies differently.
+/// The formats [`MULTISAMPLE`] sweeps, whose block bytes the sample count multiplies differently.
 const MULTISAMPLE_FORMATS: [PixelFormat; 4] = [
     PixelFormat::RGBA8Unorm,
     PixelFormat::R8Unorm,
@@ -145,7 +144,7 @@ const MULTISAMPLE_FORMATS: [PixelFormat; 4] = [
     PixelFormat::RGBA32Float,
 ];
 
-/// The sample counts [`MULTISAMPLE`] asks: the two the lane measured on this oracle.
+/// The sample counts [`MULTISAMPLE`] asks: the two measured on this oracle.
 const MULTISAMPLE_COUNTS: [u32; 2] = [2, 4];
 
 /// A case over one table of tile queries, and optionally over the tile's bytes.
@@ -189,7 +188,11 @@ fn by_format() -> SparseTileCase {
 fn by_texture_type() -> SparseTileCase {
     let mut queries = Vec::new();
     for texture_type in SINGLE_SAMPLED_TYPES {
-        for format in [LANE_FORMAT, PixelFormat::R8Unorm, PixelFormat::ASTC4x4LDR] {
+        for format in [
+            BY_TYPE_FORMAT,
+            PixelFormat::R8Unorm,
+            PixelFormat::ASTC4x4LDR,
+        ] {
             for page in PAGES {
                 queries.push(Q::new(texture_type, format, 1, page));
             }
@@ -227,7 +230,7 @@ fn multisample() -> SparseTileCase {
 fn tile_bytes() -> SparseTileCase {
     let mut queries = Vec::new();
     for page in PAGES {
-        queries.push(Q::new(TextureType::Type2D, LANE_FORMAT, 1, page));
+        queries.push(Q::new(TextureType::Type2D, BY_TYPE_FORMAT, 1, page));
     }
     SparseTileCase {
         name: TILE_BYTES,

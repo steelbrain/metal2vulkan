@@ -8,12 +8,10 @@
 //!
 //! That fact is load-bearing for the translator. `DriverDeviation::SimdgroupLockstep` is the
 //! measured driver answer that lets a kernel keep these accesses with no barrier where the device
-//! runs a simdgroup in lockstep itself, and take emulated simdgroups everywhere else. The lane
-//! checks which of the two a profile took and compares the words against an expectation it computes
-//! in Rust — a simulation of lockstep (this crate's own `tests::in_lockstep`, kept here as the
-//! readable model) whose only tie to Metal is a comment saying it was measured on an Apple M3 Max
-//! and an Apple M4. Record mode now runs the kernels on the oracle, so the recording holds Metal's
-//! own words and the simulation is checked against them.
+//! runs a simdgroup in lockstep itself, and take emulated simdgroups everywhere else. A simulation
+//! of lockstep in Rust (`tests::in_lockstep`, the readable model) predicts the words, as measured
+//! on an Apple M3 Max and an Apple M4. Record mode runs the kernels on the oracle, so the recording
+//! holds Metal's own words and the simulation is checked against them.
 //!
 //! The runtime gives the threads of a SIMD-group no order between barriers: the Metal Shading
 //! Language calls these kernels' accesses a data race, and docs/API.md's accepted differences say
@@ -26,16 +24,14 @@
 //! writes nothing there, so the row is the `0xee` the buffer was made with and the case also
 //! records that the dispatch wrote nothing past its words.
 //!
-//! **The rest of `driver_deviations` is not portable, and the two reasons are worth writing down.**
-//! Its float-denormal, fused-pair, half-edge, `dot`, half-arithmetic, minimum-and-maximum and
-//! float-function rows all reach their Metal values through `public_case` and `metal_row`, which
-//! read the **harvested corpus store** and its stored Metal rows; the conformance suite may not
-//! touch any of that, so those values cannot come here however much Metal has an answer for them.
-//! Its remaining rows — which profile took which deviation, and which `VkProperty` a compiled
-//! kernel then requires — are facts about *our* compile decisions on *this* driver release, which
-//! Metal has no counterpart for at all. Both kinds stay lanes. (The cube-gradient rows are a third
-//! case: Metal has an answer, but it too is a corpus case's stored row, and the fragment leg needs
-//! a render pass this stream does not build.)
+//! **The other driver deviations are not cases, for two reasons.** The float-denormal, fused-pair,
+//! half-edge, `dot`, half-arithmetic, minimum-and-maximum and float-function answers have their
+//! Metal values in the **harvested corpus store** and its stored Metal rows; the conformance suite
+//! may not touch any of that, so those values cannot come here however much Metal has an answer
+//! for them. Which profile took which deviation, and which `VkProperty` a compiled kernel then
+//! requires, are facts about *our* compile decisions on *this* driver release, which Metal has no
+//! counterpart for at all. (Cube gradients are a third case: Metal has an answer, but it too is a
+//! corpus case's stored row, and the fragment leg needs a render pass this case does not build.)
 //!
 //! Nothing here can fault a GPU: one compute pass a row, one 64-thread threadgroup, two shared
 //! buffers, no texture, and each loop bounded by a buffer word's count or by 8.
@@ -58,7 +54,7 @@ const THREADS: u32 = 64;
 const WORDS: u32 = 2 * THREADS;
 
 /// The byte the output buffer is made with, so what a kernel leaves alone is a recorded value
-/// rather than whatever the allocator left. The lane's own byte.
+/// rather than whatever the allocator left.
 const FILL: u8 = 0xee;
 
 /// One row: a kernel of the fixture and the words its input buffer holds.
@@ -67,19 +63,19 @@ struct Row {
     case: &'static str,
     /// The kernel, by its name in the library.
     entry: &'static str,
-    /// The input words, as the lane picks them.
+    /// The input words.
     input: fn() -> Vec<u32>,
     /// Whether the kernel writes the second half of the output buffer. Where it does not, the case
     /// records that the dispatch changed nothing there.
     writes_counts: bool,
 }
 
-/// `rtl_lockstep_divergent_loop`'s iteration counts, 1 to 5. The lane's own.
+/// `rtl_lockstep_divergent_loop`'s iteration counts, 1 to 5.
 fn counts() -> Vec<u32> {
     (0..THREADS).map(|t| 1 + (t * 7 + 3) % 5).collect()
 }
 
-/// `rtl_lockstep_until`'s limits. The lane's own.
+/// `rtl_lockstep_until`'s limits.
 fn limits() -> Vec<u32> {
     (0..THREADS).map(|t| 16 + (t * 37) % 97).collect()
 }
@@ -288,8 +284,8 @@ mod tests {
         }
     }
 
-    /// The lane's expectation of `rtl_lockstep_divergent_loop`.
-    fn lanes_divergent_loop() -> Vec<u32> {
+    /// The expectation of `rtl_lockstep_divergent_loop`.
+    fn expected_divergent_loop() -> Vec<u32> {
         let counts = counts();
         let mut words: Vec<u32> = (0..THREADS).collect();
         in_lockstep(&mut words, |t, i, before| {
@@ -305,8 +301,8 @@ mod tests {
         out
     }
 
-    /// The lane's expectation of `rtl_lockstep_until`.
-    fn lanes_until() -> Vec<u32> {
+    /// The expectation of `rtl_lockstep_until`.
+    fn expected_until() -> Vec<u32> {
         let limits = limits();
         let mut words: Vec<u32> = (1..=THREADS).collect();
         let mut steps = vec![0u32; THREADS as usize];
@@ -343,13 +339,13 @@ mod tests {
             .collect()
     }
 
-    /// **The cross-check the port owes the lane.** Metal's own words, as the committed recordings
-    /// hold them, are the words the lane's simulation of simdgroup lockstep predicts, for both
-    /// kernels and every thread. The lane's tie to Metal was a comment; this is the evidence.
+    /// **The cross-check of the recordings.** Metal's own words, as the committed recordings hold
+    /// them, are the words the simulation of simdgroup lockstep predicts, for both kernels and
+    /// every thread.
     #[test]
-    fn metals_words_are_the_lanes_lockstep_model() {
-        assert_eq!(recorded(&divergent_loop()), lanes_divergent_loop());
-        assert_eq!(recorded(&until()), lanes_until());
+    fn metals_words_are_the_lockstep_model() {
+        assert_eq!(recorded(&divergent_loop()), expected_divergent_loop());
+        assert_eq!(recorded(&until()), expected_until());
     }
 
     /// The layout covers the output buffer exactly, and each row names a distinct case and entry
@@ -389,13 +385,13 @@ mod tests {
     fn only_the_divergent_loop_leaves_the_counts_half_alone() {
         assert!(!ROWS[0].writes_counts);
         assert!(ROWS[1].writes_counts);
-        let counts = lanes_until();
+        let counts = expected_until();
         assert!(
             counts[THREADS as usize..].iter().any(|&steps| steps > 0),
             "the `until` kernel's counts are not all zero"
         );
         assert!(
-            lanes_divergent_loop()[THREADS as usize..]
+            expected_divergent_loop()[THREADS as usize..]
                 .iter()
                 .all(|&word| word == u32::from_le_bytes([FILL; 4])),
             "the divergent loop writes nothing past its words"

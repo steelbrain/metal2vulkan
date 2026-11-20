@@ -463,12 +463,12 @@ mod tests {
     /// The rule is checked against Metal's own recorded answer, so a release that changes Metal's
     /// widening shows as the texel that moved.
     #[test]
-    fn metals_recorded_words_are_the_rule_the_lane_measured() {
+    fn metals_recorded_words_are_the_measured_rule() {
         for case in all() {
             let recording = match crate::recording::read(case.name()) {
                 Ok(recording) => recording,
-                // A case recorded in a later commit of this batch: the test says what it checked
-                // rather than failing on a file that is not there yet.
+                // A case with no recording: the test says what it checked rather than failing on
+                // a missing file.
                 Err(_) => continue,
             };
             let answer = recording

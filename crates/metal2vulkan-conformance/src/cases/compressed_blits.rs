@@ -15,7 +15,7 @@
 //! One case per format, so a venue that holds no texture of one answers its typed refusal and
 //! counts as lacking the feature rather than taking the other three down with it.
 //!
-//! Each case is one program of the lane's rows, over the lane's own splitmix64 bytes:
+//! Each case is one program of the family's rows, over seeded splitmix64 bytes:
 //!
 //! - a buffer blitted into a private texture and back out, three ways: compressed, without
 //!   `allowGPUOptimizedContents`, and 8 texels high (the last two keep the bytes);
@@ -27,11 +27,10 @@
 //! - the shared texture copied into a texture over a buffer whose rows are 256 bytes past the
 //!   texels', the bytes between the rows compared.
 //!
-//! **Not ported, and why:** the lane's heap row asks a device for
-//! `heapTextureSizeAndAlignWithDescriptor:`'s answer and compares a shared texture's with a private
-//! one's. That is a CPU-side *query*, not a copy, and the transcript has no record kind for it —
-//! the copy-and-fill vocabulary makes resources and reads bytes. It wants a query record kind of
-//! its own; until there is one, the heap row stays a lane.
+//! **Not a case here:** what `heapTextureSizeAndAlignWithDescriptor:` answers for a shared
+//! compressed texture against a private one. That is a CPU-side *query*, not a copy; the heap-size
+//! queries are [`crate::cases::heap_metal_sizes`]'s, and none of its descriptors is of a
+//! block-compressed format.
 //!
 //! Nothing here can fault a GPU: blit copies and host copies inside the textures the program makes,
 //! no dispatch, no draw and no loop.
@@ -43,8 +42,8 @@ use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Observed, Region, Sit
 use crate::work::{Rect, Resource, Step, TextureSpec, Work};
 use metal2vulkan::metal::PixelFormat;
 
-/// The textures' width, and the height of all but the short one: the lane's, and at least the 16
-/// texels Metal needs on the shorter side to keep a texture compressed.
+/// The textures' width, and the height of all but the short one: at least the 16 texels Metal
+/// needs on the shorter side to keep a texture compressed.
 const SIDE: u64 = 64;
 
 /// The short texture's height: below 16, so Metal keeps it uncompressed and its blits keep the
@@ -125,8 +124,7 @@ pub(crate) fn kept_encoding_notice(format: u32) -> Option<Allowance> {
         .map(|note| crate::replay::notice_allowance(note.code()))
 }
 
-/// A splitmix64 stream of bytes: the lane's own, seeded as the lane seeds it, so a case feeds the
-/// bytes the lane measured.
+/// A splitmix64 stream of bytes, seeded per format.
 struct Rng(u64);
 
 impl Rng {
@@ -211,8 +209,7 @@ impl CompressedBlits {
         }
     }
 
-    /// Every byte the case feeds, in the order the program uses them: one stream, as the lane
-    /// draws one stream per format.
+    /// Every byte the case feeds, in the order the program uses them: one stream per format.
     fn fed(&self) -> Fed {
         let per = self.texel();
         let whole = (SIDE * SIDE * per) as usize;

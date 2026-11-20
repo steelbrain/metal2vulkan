@@ -4,10 +4,9 @@
 //! unorm channel of `b` bits takes `x` clamped to `[0, 1]` (a NaN 0) times `2^b - 1` **exactly**,
 //! rounded to nearest with a tie **up**; a snorm channel the same on `[-1, 1]` with a tie **away
 //! from zero**, stored two's complement. A 2-bit channel is a unorm channel like any other. The
-//! lane's one row for this is an Apple M4 under macOS 27.0.1, and that machine is gone, so the port
-//! re-measures it here: record mode runs the case and the recordings hold Metal's own bytes, with
-//! the rule above as a committed cross-check over them
-//! (`every_recorded_code_is_metals_rule`).
+//! rule was measured on an Apple M4 under macOS 27.0.1, and is measured here again: record mode
+//! runs the case and the recordings hold Metal's own bytes, with the rule above as a committed
+//! cross-check over them (`every_recorded_code_is_metals_rule`).
 //!
 //! The 10:10:10:2 formats also say **where** each channel lands. Metal orders `RGB10A2Unorm`'s
 //! fields red first and `BGR10A2Unorm`'s blue first, which is a fact about the format rather than
@@ -22,10 +21,9 @@
 //! kernel takes the values at buffer 0; the two-dimensional three take the row's width at buffer 1,
 //! and `hsw_held` the argument buffer at buffer 2.
 //!
-//! **The sweep is this port's, not the lane's.** The lane runs every code and every tie of each
-//! format it touches, which for a 16-bit channel is 65,536 codes and 65,535 ties — hundreds of
-//! thousands of values, four routes each. The lane had no recording to keep and this family has a
-//! 512 KiB ceiling a case, so the sweep is stated here and pinned by
+//! **The sweep is a chosen subset.** Every code and every tie of each format, which for a 16-bit
+//! channel is 65,536 codes and 65,535 ties, would be hundreds of thousands of values, four routes
+//! each, and this family has a 512 KiB ceiling a case, so the sweep is stated here and pinned by
 //! `the_sweeps_cover_what_they_claim`:
 //!
 //! - a channel of **at most 10 bits** is swept **whole**: every code's exact value, and every tie

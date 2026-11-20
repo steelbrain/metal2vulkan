@@ -23,11 +23,10 @@
 //! no public call to record it from. Re-recording is forbidden for that reason, as for the
 //! indirect-command seed case.
 //!
-//! **Not ported, and why**: `tblf.m`'s pattern one byte past Metal's longest (32,752) ends Metal's
-//! process in the call. The runtime refuses it (`Problem::LongTextureBufferFillPattern`), and the
-//! lane checks that refusal, but the suite has no outcome kind for "Metal ends the process" — the
-//! plan leaves that unbuilt on purpose — so the row stays the lane's. Nothing here can fault or
-//! hang a GPU: every fill is inside Metal's measured bounds.
+//! **Not a case, and why**: `tblf.m`'s pattern one byte past Metal's longest (32,752) ends Metal's
+//! process in the call, and the Metal side refuses such a fill before it makes the call
+//! (`LongTextureBufferFillPattern`). Nothing here can fault or hang a GPU: every fill is inside
+//! Metal's measured bounds.
 
 use crate::case::{call, Abort, Case, Input, MetalSource, Side};
 use crate::measured::{public_fixture, stripes};

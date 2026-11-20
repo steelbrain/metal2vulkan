@@ -11,9 +11,9 @@
 //! The family is where the owner's rule bites hardest — if Metal allows it, we must allow it — so
 //! every byte compares exactly and the case carries no allowance.
 //!
-//! The pass, as the probe this ports drew it: a 64² `BGRA8Unorm` or `RGBA8Unorm` target holding in
-//! texel `i = y · 64 + x` the memory bytes `i`, `37 i + i / 256`, `101 i + 7 (i / 256)`, `i / 16`,
-//! each mod 256, so that **every byte takes every value**. The pass loads and stores it and draws
+//! The pass, as the probe drew it: a 64² `BGRA8Unorm` or `RGBA8Unorm` target holding in texel `i =
+//! y · 64 + x` the memory bytes `i`, `37 i + i / 256`, `101 i + 7 (i / 256)`, `i / 16`, each mod
+//! 256, so that **every byte takes every value**. The pass loads and stores it and draws
 //! `fetch_ordered` one to three times under a colour write mask of every channel or of red and
 //! alpha alone. Beside it, colour 1 is an `RGBA16Float` attachment the function **never writes**,
 //! cleared and stored: a pipeline whose fragment function returns one attachment while a second is
@@ -31,15 +31,13 @@
 //! of an `RGBA` one. A device that wrote the attachment through a channel-swapped view without
 //! swapping the mask would come out exact on one format and divergent on the other.
 //!
-//! **One departure from the lane**, stated because it is a departure: the lane's target is private
-//! and filled by a buffer-to-texture blit, and the case's is of shared storage and filled by
-//! `replaceRegion:`, because a case has no vocabulary for a blit into a texture and arbitrary raw
-//! codes reach a texture no other way. The recorded answer says whether Metal cares; it does not,
-//! on this oracle.
+//! The target is of shared storage and filled by `replaceRegion:`, which puts arbitrary raw codes
+//! in a texture directly. A private target filled by a buffer-to-texture blit answers the same on
+//! this oracle.
 //!
-//! Multisampled rows are **not** ported. The lane draws the same at four samples, but filling and
-//! reading a multisampled target sample by sample is the validation crate's own kernel machinery,
-//! and lavapipe has no 2x multisampling to replay it on. They stay a lane row.
+//! The same draw at four samples is **not** a case: filling and reading a multisampled target
+//! sample by sample is the validation crate's own kernel machinery, and lavapipe has no 2x
+//! multisampling to replay it on.
 //!
 //! Nothing here can fault a GPU: three render passes of at most three triangles each over a 64²
 //! target, no loop in either fixture, and six blits.
@@ -139,7 +137,7 @@ pub struct FetchOrdered {
 /// The target's usage beside `MTLTextureUsageRenderTarget`.
 #[derive(Clone, Copy)]
 enum Usage {
-    /// `MTLTextureUsageShaderRead`, as the lane's target.
+    /// `MTLTextureUsageShaderRead`.
     Read,
     /// `MTLTextureUsageShaderRead` and `MTLTextureUsageShaderWrite`.
     Written,
@@ -202,9 +200,9 @@ fn fixture(name: &'static str, entry: &'static str) -> Fixture {
 }
 
 impl FetchOrdered {
-    /// The target the case fetches: shared, because its codes go in through `replaceRegion:`, and
-    /// a shader also reads it, as the lane's does; made for shader writes as well, or of an
-    /// unknown usage, where the case says so.
+    /// The target the case fetches: shared, because its codes go in through `replaceRegion:`, and a
+    /// shader also reads it; made for shader writes as well, or of an unknown usage, where the case
+    /// says so.
     fn target_spec(&self) -> TargetSpec {
         let read = TargetSpec::read(self.format, [SIDE, SIDE]).shared();
         match self.usage {
@@ -539,8 +537,8 @@ mod tests {
             .repeat((SIDE * SIDE) as usize)
     }
 
-    /// Metal's halving rule, by the lane's own spelling, over every code: the three draw counts a
-    /// case runs each apply it that many times, and no code leaves the byte range.
+    /// Metal's halving rule, over every code: the three draw counts a case runs each apply it that
+    /// many times, and no code leaves the byte range.
     #[test]
     fn the_rule_covers_every_code() {
         for c in 0..=255u8 {

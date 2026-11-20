@@ -382,7 +382,7 @@ mod tests {
     }
 
     /// Metal's answer for each shape, checked against the recording, never to stand in for it.
-    const LANE_ANSWERS: [(&str, Answer); 13] = [
+    const TABLE_ANSWERS: [(&str, Answer); 13] = [
         ("hoisted_known", Answer::Survivors),
         ("counted_dependent", Answer::DroppedQuads),
         ("hoisted_const", Answer::Survivors),
@@ -459,7 +459,7 @@ mod tests {
     /// agree. It reads the recording,
     /// so it runs where there is no GPU.
     #[test]
-    fn metal_s_recorded_targets_answer_as_the_lane_s_table() {
+    fn metal_s_recorded_targets_answer_as_the_table() {
         let case = DiscardHoist;
         let Ok(recording) = crate::recording::read(case.name()) else {
             println!("{}: no recording in the tree yet", case.name());
@@ -469,7 +469,7 @@ mod tests {
         let mut differ = Vec::new();
         for recorded in &recording.answers {
             for outcome in &recorded.outcomes {
-                for (shape, expected) in LANE_ANSWERS {
+                for (shape, expected) in TABLE_ANSWERS {
                     let Some(Value::Bytes(bytes)) = outcome
                         .transcript
                         .root

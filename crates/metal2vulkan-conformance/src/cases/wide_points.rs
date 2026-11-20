@@ -510,7 +510,7 @@ mod tests {
     /// The probe's table is the fitted rule's, row for row: the two expectations agree before
     /// either is compared with Metal's bytes.
     #[test]
-    fn the_lane_s_table_is_its_own_fitted_rule_s() {
+    fn the_probes_table_is_the_fitted_rules() {
         let mut checked = 0usize;
         for (at, viewport) in VIEWPORTS.iter().enumerate() {
             for (axis, codes) in PROBE_9[at].iter().enumerate() {

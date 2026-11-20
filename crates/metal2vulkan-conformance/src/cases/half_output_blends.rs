@@ -690,7 +690,7 @@ mod tests {
     fn metals_recorded_codes_hold_the_three_blends_the_rule_pins() {
         for case in all() {
             let Ok(recording) = crate::recording::read(case.name()) else {
-                // Recorded in a later commit of this batch.
+                // No recording to check.
                 continue;
             };
             let answer = recording

@@ -651,7 +651,7 @@ mod tests {
     const INPUTS_SHA: &str = "2e8d095059bdcbb66f74ac0c5f3c98d2dfa6f72c065c5fdfd56debbab9a397dd";
 
     #[test]
-    fn the_inputs_are_the_lanes() {
+    fn the_inputs_hash_to_inputs_sha() {
         use sha2::Digest as _;
         let mut sha = sha2::Sha256::new();
         for size in SIZES {

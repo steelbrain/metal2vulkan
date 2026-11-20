@@ -211,7 +211,7 @@ pub struct ExtendedRangeTwoPlanes {
     format: PixelFormat,
 }
 
-/// Both formats, as the lane sweeps them.
+/// Both formats, in a fixed order.
 pub fn all() -> Vec<ExtendedRangeTwoPlanes> {
     vec![
         ExtendedRangeTwoPlanes {

@@ -1,7 +1,7 @@
 //! The case API: a case is written once and run by either side.
 //!
 //! A case names itself, sets its resources up, runs, and emits the sites it observes
-//! ([`Case::run`]). It is written against [`Side`], the vocabulary both sides answer in, so porting
+//! ([`Case::run`]). It is written against [`Side`], the vocabulary both sides answer in, so writing
 //! a case is a matter of saying which calls it makes and which sites it emits, and nothing about
 //! which implementation is running it.
 //!
@@ -912,7 +912,7 @@ pub trait Side {
     ///
     /// `stage` is one stage, not a union. Metal states this per stage — the reflection holds a
     /// binding list a stage — so one bit has a Metal answer and a union has only a composition
-    /// rule of ours, which belongs in a lane rather than in a transcript. A side answers
+    /// rule of ours, which belongs in a runtime test rather than in a transcript. A side answers
     /// [`Failure::unavailable`] for anything but a single stage.
     fn texture_accesses(
         &mut self,
@@ -1958,10 +1958,10 @@ pub trait Side {
     /// Whether `newTextureWithDescriptor:` of the descriptor `query` names answers a texture.
     ///
     /// The answer is a **fact about the descriptor**, not about the object: Metal answers nil for a
-    /// descriptor it describes no texture of, and the runtime answers a typed `Nil` error for the
-    /// same descriptor, which is the same fact in the two APIs' spellings. So both sides answer
-    /// `false` there, and a side that refuses the call for any other reason answers its typed
-    /// error, which compares as a refusal.
+    /// descriptor it describes no texture of, and the Metal side answers `false` there. The
+    /// runtime side answers its typed error for a descriptor it makes no texture of, recorded as
+    /// the failure it is, and a side that refuses the call for any other reason answers its typed
+    /// error too, which compares as a refusal.
     ///
     /// A case asks this only of descriptors Metal makes no texture of, so nothing is allocated.
     /// `newTextureWithDescriptor:` of the descriptor `query` names, and every `MTLTexture` getter
@@ -2720,10 +2720,10 @@ impl TileStep {
 /// One layer of a rasterization-rate map's descriptor
 /// (`MTLRasterizationRateLayerDescriptor`), as its quality samples along each axis.
 ///
-/// Both axes hold at least one sample, because Metal's
-/// `initWithSampleCount:horizontal:vertical:` answers nil for an axis of none (verified while
-/// porting this family). A descriptor of **no layers** is the shape whose `layerCount` is 0, and a
-/// case says that by holding no layer at all rather than by a layer with an empty axis.
+/// Both axes hold at least one sample, because Metal's `initWithSampleCount:horizontal:vertical:`
+/// answers nil for an axis of none (measured). A descriptor of **no layers** is the shape whose
+/// `layerCount` is 0, and a case says that by holding no layer at all rather than by a layer with
+/// an empty axis.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RateMapLayer {
     pub horizontal: Vec<f32>,
@@ -3370,12 +3370,11 @@ impl MetalSource {
         }
     }
 
-    /// The same carried answer, measured on `chip` rather than on the oracle this round records
-    /// on.
+    /// The same carried answer, measured on `chip` rather than on the oracle.
     ///
-    /// A case says this where its table predates the oracle — the two families carrying an Apple
-    /// M4's values — so the recording holds the chip in a field a reader and the report can see,
-    /// instead of in the `from` prose where nothing could.
+    /// A case says this where its table was taken on another chip — the two families carrying an
+    /// Apple M4's values — so the recording holds the chip in a field a reader and the report can
+    /// see, instead of in the `from` prose where nothing could.
     pub const fn measured_on(self, chip: &'static str) -> Self {
         match self {
             Self::Carried {

@@ -12,14 +12,11 @@
 //! What a row observes is typed, not printed: the attachment's whole 8x8 as bytes under a layout
 //! that reads them as 32-bit words, the texels drawn as a count, the control buffer's four words
 //! after the pass as bytes of their own, every call of the pass by the Metal selector it makes,
-//! and the command buffer's status and error. The lane folded all of that into one list of
-//! formatted strings.
+//! and the command buffer's status and error.
 //!
 //! The row whose reader is an indirect draw of an object function is a case of its own, so that a
 //! refusal at its draw — a refused call stops a run — cannot cost the other six rows their sites.
-//! **It is not refused on any device we have:** the claim that an emulating device refuses it
-//! (`NotImplemented(MeshShading)`) was true until `bind::mesh_object_arguments_module` landed, and
-//! the lane that still said so has been corrected. On MoltenVK 1.4.2 it draws Metal's words.
+//! **It is not refused on any device we have:** on MoltenVK 1.4.2 it draws Metal's words.
 //!
 //! Nothing here can fault a GPU: every grid is one or two threadgroups.
 
@@ -107,7 +104,7 @@ struct Row {
     reader: Reader,
 }
 
-/// The rows both sides run to completion (the lane's `CASES` but for its last).
+/// The rows both sides run to completion.
 const ROWS: &[Row] = &[
     Row {
         name: "mesh-to-object",
@@ -147,8 +144,7 @@ const ROWS: &[Row] = &[
     },
 ];
 
-/// The row the runtime refuses where a device emulates mesh draws: an indirect draw of an object
-/// function (the lane's `fragment-to-indirect-object`).
+/// The row whose reader is an indirect draw of an object function, a case of its own.
 const INDIRECT_OBJECT_ROW: &[Row] = &[Row {
     name: "fragment-to-indirect-object",
     writer: Writer::Fragment,

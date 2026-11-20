@@ -1,11 +1,10 @@
 //! The runtime's side: the case vocabulary on `metal2vulkan-runtime`'s public API.
 //!
-//! The vocabulary is ported one family at a time. A call this side does not answer yet answers
-//! [`Failure::unavailable`] with its name, so a case that needs it ends refused, its row naming
-//! the call: nothing is skipped, and nothing is answered for it. The rows it refuses are held to
-//! the ledger, `known-gaps-rt.tsv` ([`crate::known_gaps::ledger`]). A translator refusal that
-//! names capabilities the device offers is the
-//! runtime's refusal and not the venue's lack: the runtime's floor leaves them off
+//! A call this side has no answer for returns [`Failure::unavailable`] with its name, so a case
+//! that needs it ends refused, its row naming the call: nothing is skipped, and nothing is answered
+//! for it. The rows it refuses are held to the ledger, `known-gaps-rt.tsv`
+//! ([`crate::known_gaps::ledger`]). A translator refusal that names capabilities the device offers
+//! is the runtime's refusal and not the venue's lack: the runtime's floor leaves them off
 //! (`RtDevice::failure`).
 //!
 //! The runtime places a buffer where its consumer says, in a block the consumer took; this side

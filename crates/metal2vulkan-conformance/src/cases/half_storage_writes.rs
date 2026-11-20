@@ -8,13 +8,13 @@
 //! payload — both are differences a comparison in floats would call almost right, so every site
 //! here records unsigned words.
 //!
-//! **The sweep is exhaustive over a complete space**, which is why it records whole rather than as a
-//! digest: all 65,536 `half` bit patterns, each widened to its exact `f32` and written back, so
+//! **The sweep is exhaustive over a complete space**, which is why it records whole rather than as
+//! a digest: all 65,536 `half` bit patterns, each widened to its exact `f32` and written back, so
 //! every NaN payload, every denormal, both zeros, both infinities and every normal is a row. Ahead
-//! of them sit the lane's own specials, which are the inputs no half code can be: the `f32`
-//! denormals that have to flush, 65519 and 65520 either side of the half's last rounding boundary,
-//! 1e10 past the format's range, and four `f32` NaN payloads. The tail of the last row holds one
-//! signalling `f32` NaN, stated so every texel of the level is a value the case named.
+//! of them sit specials, the inputs no half code can be: the `f32` denormals that have to flush,
+//! 65519 and 65520 either side of the half's last rounding boundary, 1e10 past the format's range,
+//! and four `f32` NaN payloads. The tail of the last row holds one signalling `f32` NaN, stated so
+//! every texel of the level is a value the case named.
 //!
 //! One case per format and per form, so a form or a format a venue honestly lacks is that venue's
 //! gap ([`crate::verdict::Verdict::LacksFeature`]) at its own row.
@@ -52,8 +52,7 @@ use metal2vulkan::metal::PixelFormat;
 /// The fixture the three kernels live in.
 const FIXTURE: &str = "hsw_storage_writes";
 
-/// The texture's row of texels, which is the lane's own width and the `width` the kernels read
-/// from buffer 1.
+/// The texture's row of texels, the `width` the kernels read from buffer 1.
 const WIDTH: u32 = 1024;
 
 /// The rows the sweep takes: 65,536 codes and the specials fit in sixty-five.
@@ -506,19 +505,17 @@ mod tests {
         }
     }
 
-    /// Metal's recorded codes are the rule the lane measured, code for code, for every format,
-    /// every form and every channel.
+    /// Metal's recorded codes are the measured rule, code for code, for every format, every form
+    /// and every channel.
     ///
-    /// This is the cross-check the port exists for: the lane holds the rule in a function and
-    /// asserts a live device against it, which says nothing on a host with no Metal. Here the rule
-    /// is held against Metal's own recorded answer, so a release that changes Metal's conversion
-    /// shows as the input that moved rather than as a lane that stops passing on one Mac.
+    /// The rule is held against Metal's own recorded answer, so a release that changes Metal's
+    /// conversion shows as the input that moved.
     #[test]
-    fn metals_recorded_codes_are_the_rule_the_lane_measured() {
+    fn metals_recorded_codes_are_the_measured_rule() {
         let inputs = values();
         for case in all() {
             let Ok(recording) = crate::recording::read(case.name()) else {
-                // A case recorded in a later commit of this batch.
+                // A case with no recording.
                 continue;
             };
             let answer = recording
@@ -544,7 +541,7 @@ mod tests {
                     assert_eq!(
                         got, want,
                         "{} input {index} ({word:#010x}) channel {channel}: Metal stored \
-                         {got:#06x}, the lane's rule is {want:#06x}",
+                         {got:#06x}, the rule is {want:#06x}",
                         case.name
                     );
                 }

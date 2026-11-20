@@ -24,17 +24,15 @@
 //! answer because two of its twenty-two blits fill first, and `two-plane-pad-fills` because every
 //! case of it is a fill.
 //!
-//! **Not ported, and why.** The lane's other three families stay the lane's:
+//! **Not cases, and why:**
 //!
-//! - its `METAL` table of 66 digests (`get`, `t2b`, `rep`, `b2t`, `t2t`) was measured on **an Apple
-//!   M4** under macOS 27.0.1. A recording is keyed by chip, and this round records this M3 Max
-//!   alone, so carrying an M4's digests into an `apple-m3-max` answer would key a measurement to a
-//!   chip it was not taken on. The right fix is a carried answer that names the chip it was
-//!   measured on, which the recording format does not hold today.
-//! - its byte model (`bind::plane_copy`) is a check against our own model, not against Metal, so
-//!   there is nothing for a Metal side to answer.
-//! - its chained-blit case asserts a notice fired on the second copy and not the first, which is a
-//!   per-device once rule rather than a Metal observation.
+//! - the copies `get`, `t2b`, `rep`, `b2t` and `t2t`, whose 66 digests were measured on **an Apple
+//!   M4** under macOS 27.0.1. No case carries them; one that did would name that chip
+//!   ([`MetalSource::measured_on`](crate::case::MetalSource::measured_on)).
+//! - a byte model of the plane copy is a check against our own model, not against Metal, so there
+//!   is nothing for a Metal side to answer.
+//! - whether a notice fires on a chained blit's second copy and not its first is a per-device once
+//!   rule rather than a Metal observation.
 
 use crate::case::{answered, call, Abort, Case, Input, MetalSource, Side};
 use crate::measured::hex_bytes;
@@ -621,7 +619,7 @@ pub struct PadFills {
     name: &'static str,
 }
 
-/// The ported case.
+/// The case.
 pub fn pad_fills() -> PadFills {
     PadFills {
         name: "two-plane-pad-fills",

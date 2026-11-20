@@ -487,8 +487,8 @@ mod tests {
     /// walk. The guards then read the walk rather than an array written out beside the enum, which
     /// is the thing a new variant can be added without touching.
     ///
-    /// It is [`crate::render`]'s mechanism, ported: the hand-written list that used to stand here
-    /// fed three guards, and a variant added to [`ComputeStep`] escaped all three in silence.
+    /// It is [`crate::render`]'s mechanism: a hand-written list feeding three guards would let a
+    /// variant added to [`ComputeStep`] escape all three in silence.
     ///
     /// The walk is checked to be a list and not a cycle, so an arm naming a kind already walked
     /// fails here, by name, instead of running forever.
@@ -638,9 +638,9 @@ mod tests {
 
     /// Two steps that make the same call hold two sites, not one name twice.
     ///
-    /// This is the guard the round learned the hard way: siblings sharing a name made a comparison
-    /// report six cases divergent having compared no bytes of either side. A pass of four
-    /// identical dispatches is exactly that shape, so it is the case stated here.
+    /// Siblings sharing a name make a comparison report cases divergent having compared no bytes
+    /// of either side. A pass of four identical dispatches is exactly that shape, so it is the case
+    /// stated here.
     #[test]
     fn repeated_steps_hold_sites_of_their_own() {
         let steps = vec![

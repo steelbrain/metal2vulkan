@@ -1141,8 +1141,7 @@ const OBJECT_LENGTH_FUNCTIONS: MeshFunctions<'static> = MeshFunctions {
 ///
 /// The first keeps `a` off `b` and the second does not, so the two commands answer differently
 /// with everything else about them equal: a side that set one command's lengths for both, or none
-/// at all, cannot answer both rows. Taken from the lane's own measurement on this M3 Max under
-/// macOS 27.0.1.
+/// at all, cannot answer both rows. Measured on an Apple M3 Max under macOS 27.0.1.
 const OBJECT_LENGTHS: [[u32; 2]; 2] = [[256, 16], [16, 16]];
 
 /// Words one command's slice of the object buffer holds: the function writes words 0 and 1 of its
@@ -1168,9 +1167,8 @@ const OBJECT_LENGTH_SIDE: u32 = 4;
 ///
 /// One object thread because the function's barriers lie where its thread 0 alone reaches them,
 /// which both Metal's and Vulkan's rules allow only where every thread of the threadgroup reaches
-/// them. The lane measured this M3 Max answering alike with 1 thread and with 32, and an NVIDIA
-/// GPU waiting at them for good with 32, so the row states the one count that is defined
-/// everywhere.
+/// them. Measured: an Apple M3 Max answers alike with 1 thread and with 32, and an NVIDIA GPU waits
+/// at them for good with 32, so the row states the one count that is defined everywhere.
 const OBJECT_LENGTH_DRAW: RenderCommandStep = RenderCommandStep::DrawMeshThreadgroups {
     groups: [1, 1, 1],
     object: [1, 1, 1],

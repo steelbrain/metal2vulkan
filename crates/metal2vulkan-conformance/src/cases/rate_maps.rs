@@ -37,7 +37,7 @@
 //! `mapScreenToPhysicalCoordinates:forLayer:` over a map of a zero screen extent (verified: a
 //! SIGSEGV at the first such call on 0 by 64, 64 by 0 and 0 by 0 alike, where the
 //! physical-to-screen map of the same map answers) — which is why the runtime refuses all three.
-//! A pass over a mutable map is out of this round by the user's rule.
+//! A pass over a mutable map is not a case either.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{made, Abort, Case, Input, MetalSource, RateMapLayer, RateMapRequest, Side};
@@ -96,7 +96,7 @@ pub fn all() -> Vec<RateMapCase> {
     vec![
         // A descriptor holding no layer: Metal's `layerCount` is 0, its validation refuses the
         // descriptor, and plain Metal compiles a map of no layers. The screen size is the one the
-        // runtime lane's own table of this chip was taken at.
+        // measured table of this chip was taken at.
         RateMapCase {
             name: NO_LAYERS,
             screen: [256, 256],

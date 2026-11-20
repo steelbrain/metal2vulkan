@@ -37,7 +37,7 @@ const FIXTURE: &str = "xr_two_planes";
 /// The kernel: `half4` from buffer 0 at the thread's texel, the row's width in buffer 1.
 const WRITE: &str = "xr2p_write_half";
 
-/// The halves written, in the lane's order: quiet NaNs, signalling NaNs, negative NaNs, then the
+/// The halves written, in a fixed order: quiet NaNs, signalling NaNs, negative NaNs, then the
 /// infinities, the zeros, the denormals and two normals.
 ///
 /// A signalling NaN is in here on purpose: it is the one input that tells a 16-bit float store
@@ -90,8 +90,8 @@ pub struct HalfWriteNans {
     shape: Shape,
 }
 
-/// Every format the lane writes: the three 16-bit float widths, the three 32-bit float widths, and
-/// the packed one whose NaN is the format's own.
+/// Every format the family writes: the three 16-bit float widths, the three 32-bit float widths,
+/// and the packed one whose NaN is the format's own.
 pub fn all() -> Vec<HalfWriteNans> {
     // One word is one channel for every float format, and the whole texel for the packed one.
     let channels = |name, format, word, words| HalfWriteNans {

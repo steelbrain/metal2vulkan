@@ -18,8 +18,8 @@
 //!
 //! A single-plane target's codes are blitted out. A two-plane target's plane 0 is blitted as its
 //! words, and its alpha plane is recorded as the `float4` Metal's own `xr_two_planes`'s
-//! `xr2p_read_float` reads back — the whole read rather than the lane's rounded alpha byte, since
-//! the read is Metal's answer and the rounding is the lane's way of meeting a probe digest.
+//! `xr2p_read_float` reads back — the whole read rather than a rounded alpha byte, since the read
+//! is Metal's answer.
 //!
 //! The target generator is the probe's own, rebuilt here, and `the_targets_are_the_probes` checks it
 //! against all eight digests the probe printed. Note that it is a **different** xorshift from the
@@ -134,8 +134,8 @@ fn alpha_values(alpha: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// One blend the lane sweeps: its name and the destination factor, under source factor one, added,
-/// for color and alpha alike.
+/// One blend the family sweeps: its name and the destination factor, under source factor one,
+/// added, for color and alpha alike.
 const BLENDS: [(&str, BlendFactor); 3] = [
     ("one-zero", BlendFactor::Zero),
     ("add", BlendFactor::One),
@@ -151,7 +151,7 @@ pub struct ExtendedRangeBlend {
     blend_name: &'static str,
 }
 
-/// Every pairing of a format with a blend, as the lane sweeps them.
+/// Every pairing of a format with a blend, in a fixed order.
 pub fn all() -> Vec<ExtendedRangeBlend> {
     // The names are written out rather than built, so a case's recording file is named by something
     // a reader can grep for.

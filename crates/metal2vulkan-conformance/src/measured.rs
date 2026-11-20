@@ -1,11 +1,10 @@
-//! The Metal measurements this tree already holds, as a ported case reads them.
+//! The Metal measurements this tree already holds, as a case reads them.
 //!
-//! A probe's values live in two places: a runtime lane's literal table, which a ported case
-//! restates, and, where a table was too large to write out, a committed text beside the lane's
-//! fixtures (`fixtures/public/<lane>/`). Those texts are our own measurements over our own
-//! fixtures, written by our own probes, and reaching them is what the boundary allows: the
-//! harvested corpus, the stored observations and the censuses are a different thing and no case
-//! touches them.
+//! A probe's values live in two places: a literal table, which a case restates, and, where a table
+//! was too large to write out, a committed text beside the family's fixtures
+//! (`fixtures/public/<family>/`). Those texts are our own measurements over our own fixtures,
+//! written by our own probes, and reaching them is what the boundary allows: the harvested corpus,
+//! the stored observations and the censuses are a different thing and no case touches them.
 //!
 //! A case reads such a file through [`public_fixture`], which resolves from
 //! `metal2vulkan_devtools`, and pins its SHA-256 in its own input fingerprint. So the case says

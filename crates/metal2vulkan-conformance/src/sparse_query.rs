@@ -132,8 +132,7 @@ pub struct SparseHeapSpec {
 }
 
 impl SparseHeapSpec {
-    /// A heap of `size` bytes in 16-KiB pages, which is the descriptor's default and the one the
-    /// lane uses.
+    /// A heap of `size` bytes in 16-KiB pages, which is the descriptor's default.
     pub const fn new(size: u64) -> Self {
         Self {
             size,

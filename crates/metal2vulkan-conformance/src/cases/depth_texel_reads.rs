@@ -268,7 +268,7 @@ impl Case for DepthTexelReads {
             side.compute_pipeline(library, SAMPLE),
         )?;
         // `MTLSamplerDescriptor`'s defaults, which are the nearest, clamp-to-edge, normalized
-        // state the lane's probe sampled through.
+        // state the probe sampled through.
         let sampler = made(sites, "sampler", side.sampler(&SamplerSpec::new()))?;
 
         let mut output = Node::branch("output", Vec::new());
@@ -320,11 +320,11 @@ mod tests {
         }
     }
 
-    /// The rule the lane holds in place of Metal's values — every code as `c / 65535` correctly
-    /// rounded — hashes to the lane's own constant. The case is recorded from Metal rather than
-    /// from this, and this test is what lets the report say whether the two agree.
+    /// The rule — every code as `c / 65535` correctly rounded — hashes to the pinned constant.
+    /// The case is recorded from Metal rather than from this, and this test is what lets the
+    /// report say whether the two agree.
     #[test]
-    fn the_lanes_rule_hashes_to_the_lanes_constant() {
+    fn the_rule_hashes_to_the_pinned_constant() {
         let bytes: Vec<u8> = (0..CODES)
             .flat_map(|code| (code as f32 / 65535.0).to_le_bytes())
             .collect();

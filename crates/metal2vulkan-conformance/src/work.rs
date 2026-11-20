@@ -1,10 +1,10 @@
 //! The copy-and-fill vocabulary: a case's resources and the steps it encodes, as data.
 //!
-//! The five lanes this batch ports all say the same kind of thing — make a texture, write known
-//! bytes into it, run one blit, read every byte back — so the vocabulary they need is one
-//! declarative program rather than sixteen trait methods. A case states its [`Work`]; a side runs
-//! it and answers what it read ([`Done`]). The case body stays a description of the probe, which
-//! is what makes a port readable beside the lane it came from.
+//! The copy and fill families all say the same kind of thing — make a texture, write known bytes
+//! into it, run one blit, read every byte back — so the vocabulary they need is one declarative
+//! program rather than sixteen trait methods. A case states its [`Work`]; a side runs it and
+//! answers what it read ([`Done`]). The case body stays a description of the probe, which is what
+//! makes a case readable beside the probe it came from.
 //!
 //! A side with no public call for a step answers [`crate::case::Failure::unavailable`] for that
 //! step. On the Metal side that is the **fill** and the fill alone: `fillTexture:` and

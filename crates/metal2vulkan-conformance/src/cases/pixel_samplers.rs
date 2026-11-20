@@ -1015,7 +1015,7 @@ mod tests {
     const GRID_SHA: &str = "10064f01ccb480a13ee9b0853ba41bbc5e2dfa3d490ffaef9cbcc987f75249b9";
 
     #[test]
-    fn the_coordinates_are_the_lanes() {
+    fn the_coordinates_hash_to_grid_sha() {
         let grid = grid();
         assert_eq!(grid.len(), SAMPLES);
         let bytes: Vec<u8> = grid

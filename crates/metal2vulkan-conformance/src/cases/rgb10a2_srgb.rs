@@ -946,7 +946,7 @@ mod tests {
 
     /// `half_bits`, pinned by fixed values, so the `half` store case's inputs cannot drift.
     #[test]
-    fn the_half_bits_are_the_lane_s() {
+    fn the_half_bits_are_pinned() {
         assert_eq!(half_bits(1.0), 0x3c00);
         assert_eq!(half_bits(-2.0), 0xc000);
         assert_eq!(half_bits(65504.0), 0x7bff);

@@ -4,12 +4,12 @@
 //! question at the three shapes that tell a mask that is read from one that is ignored: **no**
 //! channel, **some** of them, and **all** of them.
 //!
-//! The family exists because a mask of no channel was not honoured and nothing caught it: the
-//! tile-store family (`snorm_tile_store`) asked for one, our side drew every channel, and the
-//! divergence read as our implementation refusing a legal Metal state. It was the suite's own
-//! runtime side dropping the field (`runtime_side::color_descriptor`), which the Metal side set.
-//! One case of a mask of no channel is therefore not enough: a mask of *some* channels goes
-//! through the same field, and a fix for one that left the other broken would be half a fix.
+//! The family exists because a side that drops the mask draws every channel, and the tile-store
+//! family (`snorm_tile_store`), which asks for a mask of no channel, then reads as our
+//! implementation refusing a legal Metal state. The runtime side forwards the field in
+//! `rt_side::fields::color_descriptor`, as the Metal side sets it. One case of a mask of no channel
+//! is therefore not enough: a mask of *some* channels goes through the same field, and a fix for
+//! one that left the other broken would be half a fix.
 //!
 //! So each case loads a target whose every texel holds four **different** bytes, draws the
 //! fixture's fullscreen triangle of white over all of it under one mask, and reads the texels

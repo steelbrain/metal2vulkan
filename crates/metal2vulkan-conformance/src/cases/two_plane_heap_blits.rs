@@ -5,8 +5,7 @@
 //! `RGB10A8_2P_XR10` or its sRGB twin placed where the probe placed them; one blit of the case's
 //! region from one into the other; the heap's bytes read back through the buffer.
 //!
-//! **The split between the run shape and the bytes is deliberate, and it is the lane's.** Each
-//! case holds two sites:
+//! **The split between the run shape and the bytes is deliberate.** Each case holds two sites:
 //!
 //! - `runs`, a **typed** list of the runs the blit changed — each an offset and a length — which is
 //!   what a blit-geometry bug moves: a copy that reads or writes the wrong rows, lands on the
@@ -365,7 +364,7 @@ pub struct HeapBlits {
     name: &'static str,
 }
 
-/// The ported case.
+/// The case.
 pub fn heap_blits() -> HeapBlits {
     HeapBlits { name: HEAP_BLITS }
 }

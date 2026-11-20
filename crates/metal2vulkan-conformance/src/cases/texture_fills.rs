@@ -496,14 +496,14 @@ fn digest(lines: &[String]) -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Family {
     /// A private texture of the device's memory, or a two-plane format in a heap of `heap` bytes.
-    Lane { heap: u64 },
+    Table { heap: u64 },
     /// A two-plane texture of its own memory, 8 texels wide (`tfl4.swift`).
     Own,
 }
 
-/// Each lane-table case's name, in [`FORMATS`] order: a case names itself with a static string, so
+/// Each table case's name, in [`FORMATS`] order: a case names itself with a static string, so
 /// nothing is allocated to answer [`Case::name`].
-const LANE_NAMES: [&str; 50] = [
+const TABLE_NAMES: [&str; 50] = [
     "texture-fills-10",
     "texture-fills-12",
     "texture-fills-13",
@@ -574,11 +574,11 @@ pub struct TextureFills {
 pub fn all() -> Vec<TextureFills> {
     let mut cases: Vec<TextureFills> = FORMATS
         .iter()
-        .zip(LANE_NAMES)
+        .zip(TABLE_NAMES)
         .map(|(&(raw, heap, metal), name)| TextureFills {
             name,
             raw,
-            family: Family::Lane { heap },
+            family: Family::Table { heap },
             metal,
         })
         .collect();
@@ -600,7 +600,7 @@ impl TextureFills {
     /// The cases the family runs.
     fn cases(&self) -> &'static [&'static str] {
         match self.family {
-            Family::Lane { .. } => &CASES,
+            Family::Table { .. } => &CASES,
             Family::Own => &OWN_CASES,
         }
     }
@@ -617,7 +617,7 @@ impl TextureFills {
             let p =
                 probe(self.raw, name, self.wide()).map_err(|why| Failure::named("BadCase", why))?;
             match self.family {
-                Family::Lane { heap } if heap > 0 => {
+                Family::Table { heap } if heap > 0 => {
                     let done = side.work(&heap_work(self.raw, &p, heap, zeros))?;
                     // A texture of more levels or slices: its fill writes the heap's bytes at
                     // level 0's rows, which `two_plane_heap_fills.rs` checks byte for byte.
@@ -627,7 +627,7 @@ impl TextureFills {
                     let read = done.reads.first().cloned().unwrap_or_default();
                     Ok(Some(digest(&[heap_changed(&read)])))
                 }
-                Family::Lane { .. } | Family::Own => {
+                Family::Table { .. } | Family::Own => {
                     // Metal makes no 4:2:2 texture of more than one level or slice.
                     if matches!(self.raw, 240 | 241) && (p.levels > 1 || p.slices > 1) {
                         return Ok(None);

@@ -164,7 +164,7 @@ pub struct ExtendedRangePlanes {
     joined: PixelFormat,
 }
 
-/// Every pairing of the two formats, as the lane sweeps them.
+/// Every pairing of the two formats, in a fixed order.
 pub fn all() -> Vec<ExtendedRangePlanes> {
     vec![
         ExtendedRangePlanes {

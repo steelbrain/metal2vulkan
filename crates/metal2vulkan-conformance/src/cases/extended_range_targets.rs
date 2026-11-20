@@ -278,8 +278,8 @@ pub(super) fn shape(width: u32, samples: u32) -> Vec<u8> {
 }
 
 /// The clear colors: Metal's specials, every sixteenth code's value, and code and alpha-byte
-/// boundaries with their `f64` and `f32` neighbours — the subset of the probe's the lane kept, in
-/// the probe's order.
+/// boundaries with their `f64` and `f32` neighbours — a subset of the probe's, in the probe's
+/// order.
 fn clear_values() -> Vec<f64> {
     let mut values = vec![
         0.0,
@@ -357,7 +357,7 @@ pub(super) struct Format {
     pub(super) copies: bool,
 }
 
-/// Every extended-range render-target format, as the lane sweeps them.
+/// Every extended-range render-target format, in a fixed order.
 pub(super) const FORMATS: [Format; 6] = [
     Format {
         slug: "bgra10xr",
@@ -535,7 +535,7 @@ pub struct TargetDraw {
     half: bool,
 }
 
-/// Every draw the lane runs: each format from `half` and from `float`.
+/// Every draw the family runs: each format from `half` and from `float`.
 pub fn draws() -> Vec<TargetDraw> {
     let names: [[&str; 2]; 6] = [
         ["xr-draw-bgra10xr-half", "xr-draw-bgra10xr-float"],
@@ -909,8 +909,8 @@ const ROUTE_COLORS: [[f64; 4]; 4] = [
     ],
 ];
 
-/// One shape whose clear route the lane measured: the target's side, whether it is of
-/// `ShaderWrite` usage, and whether the pass draws into the other attachment.
+/// One shape whose clear route was measured: the target's side, whether it is of `ShaderWrite`
+/// usage, and whether the pass draws into the other attachment.
 #[derive(Clone, Copy, Debug)]
 struct Route {
     name: &'static str,

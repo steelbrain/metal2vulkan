@@ -9,13 +9,13 @@
 //! round trip -- decode `c / 255`, halve, encode, round -- in **15 of its 256 codes, each by
 //! exactly one** (`tests::the_table_is_not_the_textbook_round_trip` pins which codes, so a later
 //! tidying of the table into the formula fails). Metal's own decode and encode are what the
-//! recording holds; the table is the lane's measurement of them, kept here as the cross-check.
+//! recording holds; the table is a measurement of them, kept here as the cross-check.
 //!
-//! The pass, as the probe this ports drew it: a 64² `BGRA8Unorm_sRGB` or `RGBA8Unorm_sRGB` target
-//! holding in texel `i` the memory bytes `i`, `37 i + i / 256`, `101 i + 7 (i / 256)`, `i / 16`,
-//! each mod 256, so every byte takes every value. The pass loads and stores it and draws
-//! `fetch_ordered` one, two or three times, every channel written, no blending. Each draw reads
-//! what the last one stored, so `N` draws apply the one-draw map `N` times.
+//! The pass, as the probe drew it: a 64² `BGRA8Unorm_sRGB` or `RGBA8Unorm_sRGB` target holding in
+//! texel `i` the memory bytes `i`, `37 i + i / 256`, `101 i + 7 (i / 256)`, `i / 16`, each mod 256,
+//! so every byte takes every value. The pass loads and stores it and draws `fetch_ordered` one, two
+//! or three times, every channel written, no blending. Each draw reads what the last one stored, so
+//! `N` draws apply the one-draw map `N` times.
 //!
 //! A fourth row attaches a `Depth32Float_Stencil8` texture as its depth and its stencil
 //! attachment, cleared to 1.0 and 0 by a pass before it and loaded, under a depth state of `Always`
@@ -27,9 +27,9 @@
 //! renderPipelineState pixelFormat must be MTLPixelFormatInvalid, as no texture is set"), so the
 //! texture is the stencil attachment too.
 //!
-//! Not ported: the multisampled rows, and the two depth-`Less` rows whose earlier pass writes 0.25
+//! Not cases: the multisampled rows, and the two depth-`Less` rows whose earlier pass writes 0.25
 //! into the target's left half under a colour mask of no channel. Those need a half-extent draw and
-//! a per-half expectation; they are the next commit in this family, not this one.
+//! a per-half expectation.
 //!
 //! Nothing here can fault a GPU: at most four render passes of at most three triangles each over a
 //! 64² target, no loop in the fixture, and one blit a row.
@@ -181,7 +181,7 @@ fn fixture(name: &'static str, entry: &'static str) -> Fixture {
 
 impl SrgbFetch {
     /// The target: shared, because its codes go in through `replaceRegion:`, and a shader also
-    /// reads it, as the lane's does.
+    /// reads it.
     fn target_spec(&self) -> TargetSpec {
         TargetSpec::read(self.format, [SIDE, SIDE]).shared()
     }

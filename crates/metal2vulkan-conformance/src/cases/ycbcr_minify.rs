@@ -25,13 +25,11 @@
 //!
 //! # The kernel is not the probe's, and the digests say it does not matter
 //!
-//! The lane samples through an AIR kernel it generates at run time; a case samples through the
-//! committed fixture `fpv_swizzled_reads`' `fpv_swz_sample`. Both do one plain `sample(s, uv)` of
-//! the same texture through the same sampler state and write one `float4` a job in job order, so
-//! the output bytes are the same program's observable output and the probe's digest is a digest of
-//! them. That is an argument, and the cases check it: both bands hash to exactly the probe's
-//! numbers, so the substitution is sound rather than assumed. A reader who changes the kernel's
-//! output shape breaks both digests at once, which is the right failure.
+//! A case samples through the committed fixture `fpv_swizzled_reads`' `fpv_swz_sample`: one plain
+//! `sample(s, uv)` of the texture through the sampler state, one `float4` a job in job order, so
+//! the output bytes are the program's observable output and the probe's digest is a digest of them.
+//! The cases check it: both bands hash to exactly the probe's numbers. A reader who changes the
+//! kernel's output shape breaks both digests at once, which is the right failure.
 //!
 //! # Why the band is a digest and a window, not 34,816 values
 //!
@@ -395,7 +393,7 @@ mod tests {
     /// Two cases, one an axis. The M4's two hashes differ, which is what says the two cases ask
     /// different questions.
     #[test]
-    fn the_two_bands_are_the_lanes_two_bands() {
+    fn the_two_bands_are_the_m4s_two_bands() {
         let cases = all();
         assert_eq!(cases.len(), 2);
         assert_eq!(cases[0].axis, 0);
@@ -481,8 +479,8 @@ mod tests {
         );
     }
 
-    /// The surface is the one the probe measured: the lane pins its SHA-256 under CoreVideo's own
-    /// layout, so a generator that drifts compares our samples against another surface's answer.
+    /// The surface is the one the probe measured: its SHA-256 under CoreVideo's own layout is
+    /// pinned, so a generator that drifts compares our samples against another surface's answer.
     #[test]
     fn the_surface_is_the_one_metal_sampled() {
         let bytes = surface_bytes();

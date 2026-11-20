@@ -2075,7 +2075,7 @@ mod tests {
     /// The geometry of a shape: a level's extent halves and stops at one, and a
     /// block-compressed level's rows are whole blocks.
     #[test]
-    fn a_levels_geometry_is_the_lanes() {
+    fn a_levels_geometry_halves_and_stops_at_one() {
         let ([w, h], row, image) = RGBA8_MIPMAPPED.level(2);
         assert_eq!([w, h], [16, 16]);
         assert_eq!((row, image), (64, 1024));

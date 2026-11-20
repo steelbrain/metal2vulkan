@@ -616,10 +616,10 @@ mod tests {
     /// so the accesses are compared here where the rule names a word and the disagreement is
     /// counted where it does not, rather than asserted away in either direction.
     #[test]
-    fn metals_recorded_halves_are_the_rule_the_lane_measured() {
+    fn metals_recorded_halves_are_the_measured_rule() {
         for case in all() {
             let Ok(recording) = crate::recording::read(case.name()) else {
-                // A case recorded in a later commit of this batch.
+                // A case with no recording.
                 continue;
             };
             let answer = recording

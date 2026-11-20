@@ -9,11 +9,11 @@
 //! holds.
 //!
 //! Sixteen formats, two functions and two step functions: 64 pipelines, each with a vertex
-//! descriptor whose attribute 0 is the format at byte `16 i` of buffer 1. Metal's conversion is
-//! the subject — each component reads as its integer value, zero- or sign-extended, as a float, the
+//! descriptor whose attribute 0 is the format at byte `16 i` of buffer 1. Metal's conversion is the
+//! subject — each component reads as its integer value, zero- or sign-extended, as a float, the
 //! components the format does not hold as `(0, 0, 0, 1)`, and a `half` attribute rounds to nearest
 //! even with 65520 and above going to infinity — and the case takes it from a run rather than from
-//! the lane's table.
+//! a table.
 //!
 //! A `vertex void` function has no position to rasterize, so each pipeline disables rasterization
 //! and carries no fragment stage, and each pass has no attachment of any kind and states its own
@@ -399,7 +399,7 @@ mod tests {
 
     /// Metal's `float4` for row `row` of format `at`, read into a `float4` or a `half4` attribute:
     /// each component its integer value as a float, the ones the format does not hold `(0, 0, 0,
-    /// 1)`. The lane's rule, which the recording is checked against.
+    /// 1)`. The rule the recording is checked against.
     fn metal_row(at: usize, row: usize, half: bool) -> [f32; 4] {
         let (_, bytes, count, signed) = FORMATS[at];
         let mut out = [0.0f32, 0.0, 0.0, 1.0];
@@ -434,14 +434,13 @@ mod tests {
         }
     }
 
-    /// Every answer Metal recorded holds exactly the values the lane's rule says Metal converts
-    /// to, format for format, row for row, and under both step functions.
+    /// Every answer Metal recorded holds exactly the values the rule says Metal converts to,
+    /// format for format, row for row, and under both step functions.
     ///
-    /// This is the cross-check the port owes the lane: the lane carried the rule, the case carries
-    /// Metal's own floats, and this says whether they agree. It reads the recording, so it runs
-    /// where there is no GPU.
+    /// The rule is fitted, the case carries Metal's own floats, and this says whether they agree.
+    /// It reads the recording, so it runs where there is no GPU.
     #[test]
-    fn metal_s_recorded_conversions_are_the_lane_s_values() {
+    fn metal_s_recorded_conversions_are_the_rule_s_values() {
         let case = IntAttributes;
         let Ok(recording) = crate::recording::read(case.name()) else {
             println!("{}: no recording in the tree yet", case.name());
@@ -476,7 +475,7 @@ mod tests {
                         let want = metal_row(format, row, CONVERSIONS[conversion].1);
                         if got.map(f32::to_bits) != want.map(f32::to_bits) {
                             differ.push(format!(
-                                "{name} row {row}: Metal {got:?}, the lane's rule {want:?}"
+                                "{name} row {row}: Metal {got:?}, the rule {want:?}"
                             ));
                         }
                     }
@@ -489,7 +488,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{} value(s) of {checked} recorded answers differ from the lane's rule",
+            "{} value(s) of {checked} recorded answers differ from the rule",
             differ.len()
         );
     }

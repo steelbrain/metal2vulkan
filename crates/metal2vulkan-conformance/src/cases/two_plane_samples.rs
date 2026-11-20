@@ -251,7 +251,7 @@ pub struct TwoPlaneSamples {
     constexpr_too: bool,
 }
 
-/// Every pairing of format, sampler state and result type, as the lane sweeps them.
+/// Every pairing of format, sampler state and result type, in a fixed order.
 pub fn all() -> Vec<TwoPlaneSamples> {
     let mut cases = Vec::new();
     let mut names = NAMES.iter();
@@ -358,7 +358,7 @@ impl TwoPlaneSamples {
     }
 
     /// The node one set of results emits: every sample raw, with the digest beside it as a
-    /// projection of the value, which is the form the lane's constant is.
+    /// projection of the value.
     fn results_node(&self, name: &str, bytes: Vec<u8>) -> Node {
         let digest = Digest::sha256(&bytes);
         Node::leaf(
@@ -577,7 +577,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     /// The generator is the probe's: the FNV-1a words the probe printed of seed 4's planes and
-    /// seed 5's coordinates, and their SHA-256, which the lane pins beside them.
+    /// seed 5's coordinates, and their SHA-256 beside them.
     #[test]
     fn the_generators_are_the_probes() {
         let fnv = |bytes: &[u8]| {

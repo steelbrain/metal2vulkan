@@ -20,10 +20,8 @@
 //! so it allocates nothing either.
 //!
 //! The one real hazard is the descriptors Metal's own validation stops, which **end Metal's
-//! process** — the runtime spells that distinction out: `Error::Nil` is "plain Metal answers nil,
-//! the process going on", while `Error::Invalid` is "Metal's validation stops it, ending the
-//! process". Every such descriptor is left out of this family by construction, and the exclusions
-//! are named where they are made:
+//! process**, where plain Metal answering nil lets the process go on. Every such descriptor is left
+//! out of this family by construction, and the exclusions are named where they are made:
 //!
 //! - `ShaderAtomic` usage of any format but `R32Uint` (a failed assertion without the debug layer
 //!   too), so no case here sets that bit;
@@ -107,10 +105,9 @@ fn four_two_two() -> HeapSizeCase {
     }
 }
 
-/// `X32_Stencil8` beside `Stencil8` over one set of shapes: both answers are recorded, so the
-/// relation the runtime lane asserts — that the two descriptors answer alike — is a fact a reader
-/// of the recording can check, and a release where Apple parts them fails the case rather than
-/// passing under a rule nobody re-measured.
+/// `X32_Stencil8` beside `Stencil8` over one set of shapes: both answers are recorded, so that the
+/// two descriptors answer alike is a fact a reader of the recording can check, and a release where
+/// Apple parts them fails the case rather than passing under a rule nobody re-measured.
 fn x32_stencil8() -> HeapSizeCase {
     let mut queries = Vec::new();
     for format in [PixelFormat::X32Stencil8, PixelFormat::Stencil8] {
@@ -293,8 +290,8 @@ fn formats_without_textures() -> HeapSizeCase {
 }
 
 /// Apple's private `BlockWritesOnly` usage bit (0x10000) beside the same descriptor without it:
-/// both answers are recorded, so the relation the runtime lane asserts — that the bit changes no
-/// heap answer — is a fact a reader can check rather than a rule.
+/// both answers are recorded, so that the bit changes no heap answer is a fact a reader can check
+/// rather than a rule.
 fn block_writes_only() -> HeapSizeCase {
     let mut queries = Vec::new();
     for (format, texture_type, size, levels, slices) in [
