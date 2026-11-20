@@ -144,11 +144,16 @@ pub(crate) enum WaitOutcome {
     Completed,
     /// The bound elapsed first; the work may still be running.
     TimedOut,
+    // The fence and Metal waits' own endings: absent on Windows, which has the runtime's wait
+    // (`new_runtime`) alone, as its crate is the player alone.
     /// The wait itself failed and the work may still be running.
+    #[cfg(not(windows))]
     Unresolved(String),
     /// The work ended with a status that indicates a device fault.
+    #[cfg(not(windows))]
     SuspectedFault(String),
     /// The work ended with an ordinary error.
+    #[cfg(not(windows))]
     Failed(String),
 }
 
@@ -162,7 +167,9 @@ pub(crate) trait CompletionSource {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Verdict {
     Completed,
+    #[cfg(not(windows))]
     Failed(String),
+    #[cfg(not(windows))]
     Fault(HangRecord),
     Hang(HangRecord),
 }
@@ -189,7 +196,9 @@ pub(crate) fn judge(
     };
     match source.wait(timeout) {
         WaitOutcome::Completed => Verdict::Completed,
+        #[cfg(not(windows))]
         WaitOutcome::Failed(detail) => Verdict::Failed(format!("{operation} failed: {detail}")),
+        #[cfg(not(windows))]
         WaitOutcome::SuspectedFault(detail) => {
             Verdict::Fault(record(HangKind::SuspectedFault, detail))
         }
@@ -197,12 +206,14 @@ pub(crate) fn judge(
             HangKind::Timeout,
             format!("no completion within {timeout:?}"),
         )),
+        #[cfg(not(windows))]
         WaitOutcome::Unresolved(detail) => Verdict::Hang(record(HangKind::Unresolved, detail)),
     }
 }
 
 /// Wait on `source` with this process's bound and apply the hang protocol. Returns only when
-/// the work is no longer in flight.
+/// the work is no longer in flight. The fence and Metal waits' (absent on Windows).
+#[cfg(not(windows))]
 pub(crate) fn settle(
     source: &mut dyn CompletionSource,
     backend: SubmissionBackend,
