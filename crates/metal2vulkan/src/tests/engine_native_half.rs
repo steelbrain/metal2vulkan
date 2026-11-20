@@ -198,8 +198,10 @@ fn half_rounding_is_the_devices_on_every_profile() {
 /// On lavapipe and MoltenVK (`shaderFloat16`, no `DenormPreserve` for 16 bits) each kernel rounds
 /// its `half` through the conversion, records `NativeHalfConversion` and requires no
 /// `VkProperty::MetalHalfConversion`; on a profile without `shaderFloat16` it quantizes and
-/// records `NativeHalfQuantize`; RADV takes the controlled conversion, whose narrowing is the
-/// device's too and records `NativeHalfConversion`. Each passes L3. On the interpreter,
+/// records `NativeHalfQuantize`; RADV takes the controlled conversion and holds `half` at 16 bits
+/// under those controls: its sum, between exact conversions, records nothing, and its narrowing
+/// widened back, a conversion pair a driver's compiler may fold, records `NativeHalfConversion`.
+/// Each passes L3. On the interpreter,
 /// whose conversion and quantize round to nearest even, the native modules answer Metal's
 /// `half(float)`, but for the quantize's zero below the smallest normal half.
 #[test]
@@ -211,16 +213,16 @@ fn native_half_rounding_records_its_kind_and_requires_no_fact() {
         PrecisionNote::NativeHalfConversion,
         PrecisionNote::NativeHalfQuantize,
     ];
-    // Each profile and its note.
-    let cases: [(&str, Option<PrecisionNote>); 4] = [
-        ("lavapipe", Some(natives[0])),
-        ("swiftshader", Some(natives[1])),
-        ("moltenvk-m3", Some(natives[0])),
-        ("amd-780m-radv", Some(natives[0])),
+    // Each profile and its note for each of the kernels, in their order.
+    let cases: [(&str, [Option<PrecisionNote>; 2]); 4] = [
+        ("lavapipe", [Some(natives[0]); 2]),
+        ("swiftshader", [Some(natives[1]); 2]),
+        ("moltenvk-m3", [Some(natives[0]); 2]),
+        ("amd-780m-radv", [None, Some(natives[0])]),
     ];
-    for (stem, note) in cases {
+    for (stem, notes) in cases {
         let p = profile(stem, DevicePolicy::default()).expect("profile");
-        for (name, _) in &KERNELS {
+        for ((name, _), note) in KERNELS.iter().zip(notes) {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));

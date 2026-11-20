@@ -479,12 +479,13 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
 
 /// The notes a stage that samples through a runtime sampler slot or an argument buffer's sampler,
 /// or a runtime cubic sampler's variant, records on the M3 Max under MoltenVK where its state is
-/// normalized: the unconditional ones are these, as before a nearest pixel sample took its texel's
-/// centre, and that centre's `DeviceDenormals` is held only where the slot's `NearestPixelSampler`
-/// specialization is 1, which no normalized state's is (`Resources::nearest_pixel_sampler`), or,
-/// for an integer texture's centre, where the slot's word states pixel coordinates. An argument
-/// buffer's sampler records no `DeviceDenormals`: `ArgumentPixelSamplerScaling`, which the runtime
-/// announces only while a pixel state lives, records its centre's reading. The depth comparison
+/// normalized: the unconditional ones are these, the device's own sampling, texel conversion,
+/// denormals and NaN bits among them, and a held `DeviceDenormals` is held only where the slot's
+/// `NearestPixelSampler` specialization is 1, which no normalized state's is
+/// (`Resources::nearest_pixel_sampler`), or, for an integer texture's centre, where the slot's word
+/// states pixel coordinates. An argument buffer's pixel sampler records no `DeviceDenormals`:
+/// `ArgumentPixelSamplerScaling`, which the runtime announces only while a pixel state lives,
+/// records its centre's reading. The depth comparison
 /// records `RestrictedDepthRange`, as MoltenVK exposes no `VK_EXT_depth_range_unrestricted`. An
 /// argument buffer's raw texture sampled through the runtime slot holds its filter's
 /// `BicubicFilterArithmetic` only under the bound sampler's word (`SpecKey::BoundSamplerWord`)
@@ -506,48 +507,73 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
     };
     let s = slot(Stage::Kernel, SlotClass::Sampler, 0);
     // Each stage, the cubic variant's bound word where it is one, and its unconditional notes.
-    let cubic_half = [N::BicubicFilterArithmetic, N::NativeHalfConversion];
+    // The notes of the device's own sampling, texel conversion and denormals, which every stage
+    // records, and of the device's NaN bits, which a stage that moves a `half` or a `float` it did
+    // not compute records too.
+    let device = [N::DeviceSampling, N::DeviceTexelConversion];
+    let held = [N::DeviceDenormals, N::NativeNanEncoding];
+    let base: Vec<N> = device.iter().chain(&held).copied().collect();
+    let with = |more: &[N]| -> Vec<N> { base.iter().chain(more).copied().collect() };
+    let half = [
+        N::DeviceDenormals,
+        N::DeviceSampling,
+        N::HalfTexelConversion,
+        N::NativeHalfConversion,
+        N::NativeNanEncoding,
+    ];
+    let cubic_half = [
+        N::BicubicFilterArithmetic,
+        N::NativeHalfConversion,
+        N::NativeNanEncoding,
+    ];
+    let cubic_half_plain = [
+        N::BicubicFilterArithmetic,
+        N::DeviceSampling,
+        N::HalfTexelConversion,
+        N::NativeHalfConversion,
+        N::NativeNanEncoding,
+    ];
+    let cubic_plain = [
+        N::BicubicFilterArithmetic,
+        N::DeviceSampling,
+        N::DeviceTexelConversion,
+    ];
+    let px_argument = [
+        N::ArgumentPixelSamplerScaling,
+        N::DeviceSampling,
+        N::DeviceTexelConversion,
+        N::SrgbTexelDecode,
+    ];
+    let fragment = with(&[N::FastMathRewrites, N::CubeGradientFootprint]);
+    let depth = with(&[N::RestrictedDepthRange]);
+    let grad = with(&[N::GradFromBias]);
+    let argument = with(&[N::SrgbTexelDecode]);
     let stages: [(&str, &str, Option<u32>, &[PrecisionNote]); 14] = [
-        ("sampling", "sample_level", None, &[]),
-        ("sampling", "sample_base", None, &[]),
-        ("sampling", "sample_grad", None, &[]),
-        (
-            "sampling",
-            "sample_fragment",
-            None,
-            &[N::FastMathRewrites, N::CubeGradientFootprint],
-        ),
-        (
-            "sampling",
-            "sample_compare_depth",
-            None,
-            &[N::RestrictedDepthRange],
-        ),
-        ("handles", "sampler_select", None, &[]),
+        ("sampling", "sample_level", None, &base),
+        ("sampling", "sample_base", None, &base),
+        ("sampling", "sample_grad", None, &half),
+        ("sampling", "sample_fragment", None, &fragment),
+        ("sampling", "sample_compare_depth", None, &depth),
+        ("handles", "sampler_select", None, &base),
+        ("handles", "fragment_select_sample", None, &grad),
         (
             "handles",
-            "fragment_select_sample",
+            "argument_buffer_runtime_sampler",
             None,
-            &[N::GradFromBias],
+            &argument,
         ),
-        ("handles", "argument_buffer_runtime_sampler", None, &[]),
-        (
-            "px_samplers",
-            "px_sample_argument",
-            None,
-            &[N::ArgumentPixelSamplerScaling],
-        ),
+        ("px_samplers", "px_sample_argument", None, &px_argument),
         (
             "gsm2_cubic_samplers",
             "gsm2_cubic_samples",
             None,
-            &[N::BicubicFilterArithmetic],
+            &cubic_plain,
         ),
         (
             "gsm2_cubic_samplers",
             "gsm2_cubic_half_samples",
             None,
-            &cubic_half,
+            &cubic_half_plain,
         ),
         (
             "gsm2_cubic_samplers",

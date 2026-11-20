@@ -347,8 +347,9 @@ fn the_dropped_variant_needs_no_output_layer() {
 }
 
 /// A vertex function that writes `[[render_target_array_index]]` writes the index as written to a
-/// flat varying (`IoRole::RenderTargetArrayIndex`) in both variants, and in the one that writes
-/// `Layer` reads the pass's length from its push data. In its pipeline a fragment function that
+/// flat varying (`IoRole::RenderTargetArrayIndex`) in both variants, and in the one whose pipeline
+/// declares `Layer` (on RADV through the synthesized geometry stage, as the slice differs among a
+/// primitive's vertices) reads the pass's length from its push data. In its pipeline a fragment function that
 /// reads the slice compiles under `render_target_array_index_varying` and reads that varying, as
 /// `render_pipeline_key` names, behind either variant; a fragment function that does not read it
 /// keeps the key it has without the field. A reading fragment compiled for the other kind of vertex
@@ -386,11 +387,9 @@ fn a_fragment_reads_the_slice_index_its_vertex_function_wrote() {
             VaryingKey::render_target_array_index(),
             "{what}"
         );
-        assert_eq!(
-            io.builtins.contains(&StageBuiltin::Layer),
-            !key.dropped_vertex_layer,
-            "{what}"
-        );
+        // Its slice differs among a primitive's vertices, so the synthesized geometry stage
+        // stores it: the vertex function declares no `Layer` in either variant.
+        assert!(!io.builtins.contains(&StageBuiltin::Layer), "{what}");
 
         let keys = dev
             .render_variant_key(&d, &key, &budget, &crate::pipeline::StageEntries::new())
@@ -403,6 +402,10 @@ fn a_fragment_reads_the_slice_index_its_vertex_function_wrote() {
             .compile_render_variant(&d, &key, &budget)
             .unwrap_or_else(|e| panic!("{what}: {e}"));
         assert_eq!(pipe.key, keys.pipeline, "{what}");
+        assert_eq!(
+            pipe.graphics.declares_layer, !key.dropped_vertex_layer,
+            "{what}"
+        );
         valid(&pipe, &dev, &what);
         let fragment = dev
             .compile_function(&reader, &inputs, &budget)

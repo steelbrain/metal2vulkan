@@ -818,10 +818,10 @@ fn the_binder_writes_the_storage_and_refuses_layered_passes() {
 /// layers `sample * words + w`; the pipeline links, and the graphics state records the storage. A
 /// function whose only effects are its outputs and its write declares early tests as at one
 /// sample, on MoltenVK on the M3 Max and on RADV alike; a function that states
-/// `TestedStorageWrites` asks, for a draw whose depth test acts, for the variant that tests depth
-/// in the shader, before the write, whose compile is refused as not implemented: no profile states
-/// which depth a sample-rate `FragCoord` holds (`VkProperty::SampleFragCoordDepth`,
-/// `CenterFragCoordDepth`).
+/// `TestedStorageWrites` needs, for a draw whose depth test acts, the variant that tests depth in
+/// the shader, before the write, whose plan is refused as not implemented at the depth attachment:
+/// no profile states which depth a sample-rate `FragCoord` holds
+/// (`VkProperty::SampleFragCoordDepth`, `CenterFragCoordDepth`).
 #[test]
 fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
     use crate::bind::FragmentTests;
@@ -870,17 +870,13 @@ fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
                     ..Default::default()
                 }
                 .shape();
-                let plan = p
-                    .plan(&dev, &shape)
-                    .unwrap_or_else(|err| panic!("{what}: {err}"));
-                assert!(plan.variant.shader_tests, "{what}");
-                match dev.compile_render_variant(&d, &plan.variant, &budget) {
-                    Err(Error::Unsupported(u)) => assert_eq!(
+                match p.plan(&dev, &shape) {
+                    Err(BindError::Unsupported(u)) => assert_eq!(
                         (u.feature, u.needs),
                         (Feature::FramebufferFetch, Needs::NotImplemented),
                         "{what}"
                     ),
-                    other => panic!("{what}: the variant: {:?}", other.map(|_| ())),
+                    other => panic!("{what}: the plan: {:?}", other.map(|_| ())),
                 }
             }
         }
