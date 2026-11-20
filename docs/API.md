@@ -60,7 +60,7 @@ driver's identity. Three ways to get one:
   Vulkan 1.2 device to desktop GPUs and MoltenVK.
 - `unsafe DeviceDescription::query(&instance, physical_device, instance_api_version)` (feature
   `ash`) reads a physical device. That is what it supports: enable at least
-  `description.recommended_enables(&policy)` at `vkCreateDevice`, then pass
+  `description.recommended_enables()` at `vkCreateDevice`, then pass
   `with_enabled(&enabled)` so the description states what is enabled. `with_enabled` refuses a set
   that breaks one of Vulkan's co-enable rules, naming its VUID. `VkFeature::exposure()` and
   `VkExtension::requires(version)` say where each feature lives at the device's version, to chain
