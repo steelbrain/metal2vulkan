@@ -670,8 +670,8 @@ pub enum VkProperty {
     /// requirement, the operands' remains the device's choice. A module that leaves such an
     /// operation's denormals to the device, recording no `PrecisionNote::DeviceDenormals` for it,
     /// requires it; without it, they are the device's own, and the module records that note. So
-    /// does a module whose entry declares the 16-bit float controls on a driver measured to keep
-    /// `f32` denormals there (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`), which
+    /// does a module whose entry declares the 16-bit float controls, on every device, as a driver
+    /// may keep `f32` denormals there (NVIDIA's on the RTX 3090 and the RTX 5080 Laptop GPU); it
     /// requires no such property.
     MetalFloatDenormals,
     /// The device reads a center-sampled varying of a multisampled pipeline at the pixel center

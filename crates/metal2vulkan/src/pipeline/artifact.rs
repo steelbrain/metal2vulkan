@@ -605,9 +605,9 @@ pub enum PrecisionNote {
     /// comparisons, `fma`, `dot`, `sqrt`, `rsqrt`, `trunc`, `rint` and `ldexp` on `float` (by the
     /// device's products) but on a device that takes
     /// the measured `DriverDeviation::MetalFloatDenormals`, and those on such a device too in an
-    /// entry that declares the 16-bit float controls where its driver is measured to keep them
-    /// there (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`: NVIDIA's on the RTX 3090 and
-    /// the RTX 5080 Laptop GPU); `fneg`, `fabs`, `floor` and `ceil` on
+    /// entry that declares the 16-bit float controls, where a driver may keep them (NVIDIA's on
+    /// the RTX 3090 and the RTX 5080 Laptop GPU) and no query tells which; `fneg`, `fabs`, `floor`
+    /// and `ceil` on
     /// `float` but on a device that takes the measured `DriverDeviation::MetalUnaryDenormals`; and
     /// on every device the divisions and the remainder, the device's maths functions
     /// (`fast::fmod`'s fused multiply-add, `sign` and `fract` among them), `mix` by `FMix`, `fast::sqrt`

@@ -113,6 +113,73 @@ entry:
 !5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}
 "#;
 
+/// The owned synthetic kernel of `from_queries_records_the_device_denormals_of_a_float_product`:
+/// a `float` product and a `half` product, each stored back.
+const MIXED_PRODUCTS: &str = r#"; Owned synthetic kernel.
+source_filename = "mixed_products.metal"
+
+define void @mixed_products(ptr addrspace(1) %f, ptr addrspace(1) %h, i32 %gid) {
+entry:
+  %w = zext i32 %gid to i64
+  %fp = getelementptr inbounds float, ptr addrspace(1) %f, i64 %w
+  %x = load float, ptr addrspace(1) %fp, align 4
+  %y = fmul float %x, %x
+  store float %y, ptr addrspace(1) %fp, align 4
+  %hp = getelementptr inbounds half, ptr addrspace(1) %h, i64 %w
+  %a = load half, ptr addrspace(1) %hp, align 2
+  %b = fmul half %a, %a
+  store half %b, ptr addrspace(1) %hp, align 2
+  ret void
+}
+
+!air.kernel = !{!0}
+!0 = !{ptr @mixed_products, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"f"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 2, !"air.arg_type_align_size", i32 2, !"air.arg_type_name", !"half", !"air.arg_name", !"h"}
+!5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}
+"#;
+
+/// On every committed profile `Device::from_queries` derives, a kernel's `float` product beside a
+/// `half` one ([`MIXED_PRODUCTS`]) records `PrecisionNote::DeviceDenormals` and requires no
+/// `VkProperty::MetalFloatDenormals`, whether its entry declares the 16-bit float controls (where
+/// the device computes the `half` product in 16 bits) or not: no Vulkan query states that a
+/// device reads an `f32` denormal as Metal does, and a driver may keep one under the 16-bit
+/// controls, so the note is static.
+#[test]
+fn from_queries_records_the_device_denormals_of_a_float_product() {
+    use crate::device::requirements::VkProperty;
+    use crate::pipeline::artifact::PrecisionNote;
+    use crate::pipeline::testing::{compile, llvm_assemble_text, AssembleError};
+    let bc = match llvm_assemble_text(MIXED_PRODUCTS) {
+        Ok(bc) => bc,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(error) => panic!("mixed_products: {error:?}"),
+    };
+    let mut compiled = 0;
+    for (stem, _) in committed_profiles() {
+        let Ok(device) = Device::from_queries(profile(&stem), DevicePolicy::default()) else {
+            continue;
+        };
+        let a = compile(&bc, "mixed_products", device.profile())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(
+            a.precision.contains(&PrecisionNote::DeviceDenormals),
+            "{stem}"
+        );
+        assert!(
+            !(a.requirements.properties).contains(&VkProperty::MetalFloatDenormals),
+            "{stem}"
+        );
+        compiled += 1;
+    }
+    assert!(compiled >= 10, "{compiled} profiles compiled the kernel");
+}
+
 /// A narrow mask over a signed clamp, to exactly 16 bits' range, of a sum of two values
 /// sign-extended from 16 bits ([`NARROW_CLAMP`]), on an NVIDIA Ampere GA10x description (the RTX
 /// 50's capture under the RTX 3090's identity): `Device::from_queries` clears its high bits with

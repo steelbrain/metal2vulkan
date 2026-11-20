@@ -3549,15 +3549,11 @@ fn lower_bounded<K>(
             .insert(crate::device::requirements::VkProperty::MetalFullQuads);
     }
     // `float` denormals left to the device because it reads them as Metal does: measured in
-    // entries that declare no float-controls mode, so in one that declares the 16-bit controls,
-    // on a driver measured to keep them there
-    // (`DriverWorkaround::FloatDenormalsKeptUnderHalfControls`), they are the device's own, noted.
+    // entries that declare no float-controls mode. In one that declares the 16-bit controls a
+    // driver may keep them (NVIDIA's on the RTX 3090 and the RTX 5080 Laptop GPU), and no query
+    // tells which: there they are the device's own on every device, noted.
     if plan.families.arith.device_denormals {
-        let kept_by_device = declares_controls
-            && p.workarounds().contains(
-                &crate::device::profile::DriverWorkaround::FloatDenormalsKeptUnderHalfControls,
-            );
-        if !kept_by_device {
+        if !declares_controls {
             requirements
                 .properties
                 .insert(crate::device::requirements::VkProperty::MetalFloatDenormals);
