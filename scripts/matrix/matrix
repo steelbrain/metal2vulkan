@@ -741,7 +741,9 @@ class Run:
         their harnesses in turn, in ONE job that holds the node alone, so the node drains once for
         all its timings; each leg still times its one GPU with nothing else running. The legs whose
         old runtime spread past results.BASE_SPREAD are timed once more, together, in one more such
-        job. READY gives the carry."""
+        job. The node's last planned job tidies its tree and its carry's mirror; a once-more timing,
+        decided only after it, lays the tree out again (the dispatch pushes the carry's mirror
+        again) and tidies too. READY gives the carry."""
         made, why = ready()
         if not made:
             return self.fail(legs, why)

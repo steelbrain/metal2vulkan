@@ -192,11 +192,12 @@ class TimedAgainTests(unittest.TestCase):
 
         with mock.patch.object(run, "job", job, create=True), mock.patch.object(matrix, "log"):
             run.gpu_node("n", legs, lambda: (("carry", "mirror", "rev"), None))
-        # Both legs' harnesses are timed in ONE job holding the node alone, sized for two legs. The
-        # XTX's old runtime spread 15% in its first timing: it alone is timed once more, in one more
-        # such job, the node's last, which tidies; once more only.
+        # Both legs' harnesses are timed in ONE job holding the node alone, sized for two legs; it is
+        # the node's last planned job, so it tidies. The XTX's old runtime spread 15% in its first
+        # timing: it alone is timed once more, in one more such job, which lays the tree out again
+        # and tidies too; once more only.
         self.assertEqual(asked, [("rt-n", ["1002:744c", "10de:1e87"], False, 1, False),
-                                 ("harness-n", ["1002:744c", "10de:1e87"], True, 2, False),
+                                 ("harness-n", ["1002:744c", "10de:1e87"], True, 2, True),
                                  ("harness-n-again", ["1002:744c"], True, 1, True)])
         self.assertEqual([(round(spread, 2), row) for spread, row in legs[0].timings], [(0.15, "alu"), (0.04, "alu")])
         self.assertEqual([(round(spread, 2), row) for spread, row in legs[1].timings], [(0.01, "alu")])
