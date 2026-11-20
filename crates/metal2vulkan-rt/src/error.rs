@@ -906,8 +906,8 @@ pub enum Gap {
     /// Basis: ours (indirect command buffers are not built).
     IndirectCommandBuffers,
     /// A kernel that reads something the compute encoder does not supply yet: a function table,
-    /// a `[[stage_in]]` fetch, a parameter the runtime does not fill, or a specialization the
-    /// runtime does not set. Buffers, `setBytes` data, textures and sampler states by their
+    /// a `[[stage_in]]` fetch, an explicit imageblock, a parameter the runtime does not fill, or a
+    /// specialization the runtime does not set. Buffers, `setBytes` data, textures and sampler states by their
     /// resource IDs, constexpr samplers by their indices, an integer write's channel widths,
     /// threadgroup memory lengths, the dispatch's grid, the stage-in region and a pinned subgroup
     /// size are supplied.

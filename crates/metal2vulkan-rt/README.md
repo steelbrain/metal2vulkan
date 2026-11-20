@@ -2269,10 +2269,17 @@ or does not check is rebuilt from the generations' names, with young counted ful
   -51726, -51757, -51772, -51839 and -51840. No tool translates every pipeline state of the
   recorded streams under the identity domains without a GPU, so the count is of these streams
   to these frames.
-- No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it: a
-  state reads only its lowerings from the cache directory, each variant is lowered at the first
-  dispatch that needs it, and each `VkPipeline` past the first tile is made at its first dispatch,
-  through the device's pipeline cache.
+- No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it
+  unless the consumer calls `prepare_dispatch` for that dispatch: a state reads only its
+  lowerings from the cache directory, each variant is lowered at the first dispatch that needs it
+  or at a `prepare_dispatch` call for it, and each `VkPipeline` past the first tile is made at its
+  first dispatch or such a call, through the device's pipeline cache.
+- A compute kernel with an explicit imageblock has no state (`Gap::KernelInput`). The Metal
+  Shading Language specification supports imageblocks on macOS for Apple silicon only (sections
+  5.6 and 6.14), so a device that answers `supportsImageBlocks` NO gives a guest no imageblock to
+  use. Over 34 recorded guest streams, one of them an arm64 macOS 27 boot, two such kernels are
+  made (in ten states), no dispatch binds one, and no stream calls
+  `setImageblockWidth:height:`; the compute encoder has no counterpart for that call.
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
   content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
   (`Metrics::first_use_waits`), through the device's pipeline cache. In each of the two recorded
@@ -2281,7 +2288,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row, so a device
   that holds 64 makes the same 50.
 - A kernel's variants are lowered at the first dispatch that needs each, which waits for the
-  lowering and its pipeline (a first-use wait): an observing kernel's partial-threadgroups
+  lowering and its pipeline (a first-use wait) unless a `prepare_dispatch` call made them
+  before it: an observing kernel's partial-threadgroups
   variant at its first `dispatch_threads` grid that is not a whole number of threadgroups, and
   the emulated-SIMD-group variant at the first threadgroup that is not whole subgroups. For the
   observing kernel the device tests run, a grid template over threadgroup memory, one lowering
