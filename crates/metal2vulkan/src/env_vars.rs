@@ -17,190 +17,17 @@ pub struct EnvVar {
 pub const REGISTRY: &[EnvVar] = &[
     EnvVar {
         name: "METAL2VULKAN_REPRO_DIR",
-        default: "$TMPDIR/metal2vulkan-repros (the binary's); unset is off (the runtime's)",
+        default: "$TMPDIR/metal2vulkan-repros",
         effect: "base directory for FALLBACK repro bundles: the input, the device file, the \
                  request's options and descriptor files, repro.sh and failure.txt, in a directory \
                  named by its content, which replays the failure with this binary; the binary \
-                 writes one for each failure after it read its inputs; metal2vulkan-runtime's \
-                 diagnostics, where set and neither empty nor 0: one for each distinct library \
-                 or compute, tile or render pipeline state creation it refuses (the library's \
-                 bytes, device.json for --device, the request; not a mesh state or a later \
-                 variant), at most 32 bundles and 256 MiB per process, each named in one line \
-                 through the device's message sink or on stderr (id name metal2vulkan-repro); the \
-                 refusal returned is unchanged",
+                 writes one for each failure after it read its inputs",
     },
     EnvVar {
         name: "METAL2VULKAN_<TOOL>",
         default: "PATH search",
         effect: "absolute per-tool override (for example METAL2VULKAN_LLVM_AS or \
                  METAL2VULKAN_SPIRV_VAL)",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_LANE_VALIDATION",
-        default: "unset (the validation layer's own checks)",
-        effect: "validation's runtime lane only, diagnostics: the validation layer's extra \
-                 checks every lane device enables, comma-separated (`sync`: synchronization \
-                 validation with shader accesses; `load-store`: load operations after earlier \
-                 stores)",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_LOG_PIPELINES",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: one line per compute VkPipeline a device \
-                 makes (its kernel, its SPIR-V, its specialization constants, the subgroup size \
-                 it requires, whether its simdgroups are emulated for the widest mode's pin or by \
-                 the dispatch's variant, its precision notes, the creation's time and the \
-                 descriptor it was made from: the function's name, the SHA-256 of its bitcode and \
-                 the constant values it was made with), after one as its making starts (its \
-                 kernel, its SPIR-V, its specialization, the subgroup size and the simdgroups' \
-                 emulation), and one per \
-                 render VkPipeline, through the device's \
-                 message sink or on stderr: its state, its key, the \
-                 key's fields that differ from the state's closest earlier pipeline (a state's \
-                 first line also names the descriptor the state was made from: each function's \
-                 name, the SHA-256 of its bitcode and the constant values it was made with, each \
-                 color attachment's format, blend and write mask, the depth and stencil formats \
-                 and the raster samples), and the creation's time, split by the making's parts (the digests, each library made \
-                 with its record loaded, missed or its cache shared with an earlier making, and \
-                 what its driver reported, found in that cache or compiled, or another caller's, \
-                 the link) and by \
-                 MoltenVK's activities where its performance tracking is on \
-                 (MVK_CONFIG_PERFORMANCE_TRACKING=1); and once per reason, why a draw \
-                 that reads its own pass's color attachment after a barrier took the split rather \
-                 than a snapshot, and how many such draws the snapshot's area rule weighed at each \
-                 share of their colors' pixels and texel bytes; set to anything but empty or 0",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_DUMP_PIPELINES",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: a directory (made where missing) each device \
-                 writes the SPIR-V modules of every render and compute VkPipeline it makes into \
-                 (a compute pipeline's as its making starts), one file per \
-                 module, `<hash>.spv`, the hash METAL2VULKAN_LOG_PIPELINES's lines name the \
-                 module by, each written once; setting it turns that log on too; empty or 0 is \
-                 off",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_LOG_MEMORY",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: one line per VkDeviceMemory a device \
-                 allocates, imports or frees, through the device's message sink or on stderr: \
-                 its kind, handle, memory type, bytes, host address (an import's) and device \
-                 address range (a block of buffers that take device addresses), to place a GPU \
-                 fault's address; and one line per placement of \
-                 4 MiB or more in a pooled block as it is placed and returned: image or buffer, \
-                 its memory class (placed), bytes, offset and block, to show what makes and \
-                 frees blocks; one line per placement that takes a kept empty dedicated \
-                 block: its memory class, bytes, block and memory type; and one line per copy of \
-                 a no-copy object's host pages as it is made and as it goes: the caller's \
-                 pointer and length, and the copy's host address; on Linux with glibc each line \
-                 ends with glibc's heap (bytes in use, free, held by its arenas, mapped apart) \
-                 and the heap trims the process made; set to anything but empty or 0",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_PENDING_AUDIT",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: each device checks, at each \
-                 vkBeginCommandBuffer, vkResetCommandPool and command pool given back to its \
-                 spares, and at each submission of a command buffer submitted before, that the \
-                 GPU completed every submission carrying the command buffers concerned (a \
-                 secondary through each primary that executes it), reading those submissions' \
-                 timelines with vkGetSemaphoreCounterValue; it logs each one found pending, \
-                 through the device's message sink or on stderr, with the thread's backtrace for \
-                 the first 8, and changes no work. Costs when set: a lock of the device's ledger \
-                 at each of those calls and at each vkCmdExecuteCommands, an entry per command \
-                 buffer per submission until a check finds it completed, one \
-                 vkGetSemaphoreCounterValue per carrying timeline at each check of a command \
-                 buffer still in the ledger; set to anything but empty or 0",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_LOG_SHADOWS",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: one line per shadow a device makes of a \
-                 texture (over a buffer's bytes, an IOSurface plane's among them; a usage \
-                 shadow; a rotated, two-plane, tiled depth or YCbCr texture's), through the \
-                 device's message sink or on stderr: the call, the texture's format, size, \
-                 levels and usage, its truth (the buffer's storage mode, length and object ID, \
-                 the texels' offset and row pitch, or its own image), and what made it a \
-                 shadow; once per shadowed texture, at the first draw or dispatch that binds \
-                 it, whether its function fetches, samples or writes it and its samplers' \
-                 filters; once per texture over a buffer of private option bit 24 whose read \
-                 twin is not in place, why; and one line per reader's snapshot a draw takes \
-                 (its texture, the snapshot's format and extent, the recycler's image or one \
-                 placed for it); set to anything but empty or 0",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_LOG_PASSES",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: the textures and pipeline states to watch, \
-                 a comma-separated list of FORMAT:WIDTHxHEIGHT (FORMAT as the notices print it \
-                 or as Metal names it; `*` for any format or any size), for example \
-                 RGBA16Float:128x128, and of state:HASH (a render pipeline state's label hash, \
-                 the 16 hex digits METAL2VULKAN_ENCODER_TIMES names its rows by); at the end of \
-                 each render pass that renders into a watched texture, binds one to its \
-                 fragment stage, makes one resident or draws with a watched state, one line \
-                 through the device's message sink or on stderr: the pass's attachments \
-                 (format, size, level, slice, object ID and label, load and store actions, \
-                 stand-in, storage form), its Vulkan render pass instances and draws, its draws' \
-                 pipeline states (with their label hashes) and the textures bound to their \
-                 fragment stage, and what it watched; a pass the same as one \
-                 printed before but for its counts prints no line again, and at most 256 lines \
-                 are printed; empty or 0 is off",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_QUEUE_TIMES",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: each command buffer also notes the host \
-                 time its first batch became the first of its queue's batches the scheduler \
-                 had not taken, and the host time the vkQueueSubmit that carried its last batch \
-                 returned, which the consumer reads beside its kernel times \
-                 (CommandBuffer::queue_head_time, CommandBuffer::submit_returned_time), and each \
-                 batch whose submission held its thread 5 ms or longer before its vkQueueSubmit \
-                 call, or before its hold in a group of batches for one vkQueueSubmit in the \
-                 call's place, is named in one line (id name metal2vulkan-slow-submissions), its \
-                 time split by phase, and the submitting thread's CPU time across each \
-                 vkQueueSubmit is counted (WorkCounts::batch_submit_cpu_nanos and \
-                 submit_long_call_cpu_nanos, 0 when unset; two reads of the thread's clock a \
-                 call, a system call on Linux); it changes no work; set to anything but empty or \
-                 0",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_ENCODER_TRAIL",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: each device submits each encoder (or each \
-                 part of one a host step splits off) in a vkQueueSubmit of its own that signals \
-                 its queue's timeline, grouping no batches, and notes what the encoder was: its \
-                 kind, its command buffer's object ID, its place among the command buffer's \
-                 encoders, a render pass's area and attachments' formats and sizes, its \
-                 indirect command executions, and the label hashes of the pipeline states it \
-                 bound (a SHA-256 of each state's label and functions' names: no name and no \
-                 shader text), and those its indirect commands named at a host step; once no \
-                 work of the device advanced for 2 s while some was pending, one line through \
-                 the device's message sink or on stderr for each queue whose oldest batch is \
-                 pending names that encoder and the last one the queue completed, and a line \
-                 names a host step's own waited submission (a rate-map fan-out probe, a loop's \
-                 check) that ran for 2 s; costs when set: a submission per encoder and a line \
-                 formatted at each encoder's end; set to anything but empty or 0",
-    },
-    EnvVar {
-        name: "METAL2VULKAN_ENCODER_TIMES",
-        default: "unset (off)",
-        effect: "metal2vulkan-runtime's diagnostics: each device that writes timestamps and \
-                 resets query pools on the host writes a timestamp at each render, compute and \
-                 blit encoder's start and end in the encoder's own recording (a compute encoder \
-                 that records on in the one before it included), changing no batch and no \
-                 submission, and at each command buffer's completion gives each encoder's GPU \
-                 time to its kind and the label hashes of the pipeline states it bound (a SHA-256 \
-                 of each state's label and functions' names: no name and no shader text); every \
-                 5 s of activity and as the device goes, the top 20 of those by GPU time (their \
-                 encoders, dispatches and draws, total, and p50, p90 and most per encoder) in \
-                 lines through the device's message sink or on stderr (id name \
-                 metal2vulkan-encoder-times); a value of the form <N>ms (for example 20ms) also \
-                 prints one line per command buffer whose GPU time is N ms or more, each \
-                 encoder's time and offset in it, 1024 lines at most; costs when set: two \
-                 timestamp queries per encoder, a VkCommandBuffer more per render pass, a \
-                 SHA-256 at each pipeline state bound, a query read per encoder and a lock of \
-                 the device's tally at each completion; set to anything but empty or 0",
     },
 ];
 
@@ -216,93 +43,11 @@ pub fn help_text() -> String {
     out
 }
 
-/// The base directory for FALLBACK repro bundles (`REGISTRY`), as set: the binary's (it writes
-/// under `$TMPDIR/metal2vulkan-repros` where unset), and metal2vulkan-runtime's where neither empty
-/// nor `0` (unset, it writes none). A default-off diagnostic in the runtime: it writes files, and
-/// changes no translation and no answer.
+/// The base directory for the binary's FALLBACK repro bundles (`REGISTRY`), as set; the binary
+/// writes under `$TMPDIR/metal2vulkan-repros` where unset. It writes files, and changes no
+/// translation and no answer.
 pub fn repro_dir() -> Option<OsString> {
     std::env::var_os("METAL2VULKAN_REPRO_DIR")
-}
-
-/// The validation layer's extra checks validation's runtime lane enables on every device it makes,
-/// as set: a comma-separated list the lane parses and refuses when it names an unknown check (or
-/// is not Unicode). A default-off diagnostic of the lane's test devices; no product path reads it.
-pub fn lane_validation() -> Option<OsString> {
-    std::env::var_os("METAL2VULKAN_LANE_VALIDATION")
-}
-
-/// Whether metal2vulkan-runtime logs each render `VkPipeline` it makes (`REGISTRY`): set, and
-/// neither empty nor `0`. A default-off diagnostic: it changes no pipeline, only what is printed.
-pub fn log_pipelines() -> bool {
-    std::env::var_os("METAL2VULKAN_LOG_PIPELINES")
-        .is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// Whether metal2vulkan-runtime logs each `VkDeviceMemory` a device allocates, imports or frees,
-/// and each placement of 4 MiB or more in a pooled block (`REGISTRY`): set, and neither empty nor
-/// `0`. A default-off diagnostic: it changes no
-/// allocation, only what is printed.
-pub fn log_memory() -> bool {
-    std::env::var_os("METAL2VULKAN_LOG_MEMORY")
-        .is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// Whether metal2vulkan-runtime logs each shadow a device makes of a texture (`REGISTRY`): set,
-/// and neither empty nor `0`. A default-off diagnostic: it changes no
-/// texture, only what is printed.
-pub fn log_shadows() -> bool {
-    std::env::var_os("METAL2VULKAN_LOG_SHADOWS")
-        .is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// The directory metal2vulkan-runtime writes its pipelines' SPIR-V modules into
-/// (`REGISTRY`), as set; `None` where unset, empty or `0`. A default-off diagnostic: it writes
-/// files, and changes no pipeline.
-pub fn dump_pipelines() -> Option<OsString> {
-    std::env::var_os("METAL2VULKAN_DUMP_PIPELINES")
-        .filter(|value| !value.is_empty() && value != "0")
-}
-
-/// The textures metal2vulkan-runtime's pass log watches, as set (`REGISTRY`): a comma-separated
-/// list of `FORMAT:WIDTHxHEIGHT` the runtime parses, empty or `0` for none. A default-off
-/// diagnostic: it changes no pass, only what is printed.
-pub fn log_passes() -> Option<OsString> {
-    std::env::var_os("METAL2VULKAN_LOG_PASSES")
-}
-
-/// Whether each metal2vulkan-runtime device runs its pending audit (`REGISTRY`): set, and neither
-/// empty nor `0`. A default-off diagnostic: it reads timelines and prints, and changes no work.
-pub fn pending_audit() -> bool {
-    std::env::var_os("METAL2VULKAN_PENDING_AUDIT")
-        .is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// Whether each metal2vulkan-runtime command buffer notes when its first batch became its queue's
-/// head in the scheduler's order and when the submission of its last batch returned, and each
-/// batch whose submission held its thread 5 ms or longer before the driver's call is named phase
-/// by phase, and each submission's thread CPU time is counted (`REGISTRY`): set, and neither empty
-/// nor `0`. A default-off diagnostic: it reads the host's clock twice more a command buffer and at
-/// each phase of a submission, the thread's clock twice a submission, prints, and changes no
-/// work.
-pub fn queue_times() -> bool {
-    std::env::var_os("METAL2VULKAN_QUEUE_TIMES")
-        .is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// Whether each metal2vulkan-runtime device submits each encoder alone and names the encoder its
-/// GPU stopped in (`REGISTRY`): set, and neither empty nor `0`. A default-off diagnostic: it
-/// changes how the work is split into submissions, never what it computes, and prints.
-pub fn encoder_trail() -> bool {
-    std::env::var_os("METAL2VULKAN_ENCODER_TRAIL")
-        .is_some_and(|value| !value.is_empty() && value != "0")
-}
-
-/// Whether each metal2vulkan-runtime device times its encoders on the GPU, and the threshold of its
-/// lines per command buffer (`REGISTRY`), as set: `None` where unset, empty or `0`; the runtime
-/// reads a value of the form `<N>ms` as that threshold. A default-off diagnostic: it adds
-/// timestamps to the encoders' recordings, prints, and changes no work's answers.
-pub fn encoder_times() -> Option<OsString> {
-    std::env::var_os("METAL2VULKAN_ENCODER_TIMES").filter(|value| !value.is_empty() && value != "0")
 }
 
 /// Optional path override for an external tool `cmd` (`llvm-as`, `spirv-val`, …), read from
