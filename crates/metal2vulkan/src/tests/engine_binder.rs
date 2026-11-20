@@ -781,7 +781,7 @@ fn threadgroup_lengths_specialize_the_arena_and_are_checked() {
     let Some(bc) = assemble_text("tg_region", &tg_region()) else {
         return;
     };
-    for stem in PROFILES {
+    for stem in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
         let dev = device(stem, |_| {});
         let pipe = pipeline(&dev, &bc, "tg_region").expect(stem);
         assert_eq!(

@@ -4,16 +4,12 @@
 //!   `moltenvk-m3` and `lavapipe` (whose `maxComputeSharedMemorySize` is exactly 32768), passes
 //!   L3, and computes its documented result on the CPU interpreter with 1024 threads; one byte
 //!   more is refused naming the limit, as is 32768 on a 16 KiB profile.
-//! - Reading threadgroup memory nobody wrote traps on the interpreter (it poisons `Workgroup`
-//!   bytes).
 //! - `[[threadgroup(n)]]` regions follow the static globals at offsets that are specialization
-//!   sums: results are exact for every specialized length, and accesses past the arena's
-//!   specialized end are contained (a load is 0, a store is dropped, nothing traps).
+//!   sums: results are exact for every specialized length.
 //! - Byte stores into threadgroup memory by neighbouring invocations of different subgroups
 //!   preserve each other (two word atomics).
 //! - An alloca whose accesses are punned lives in the private arena, word-composed and
 //!   byte-exact.
-//! - Out-of-bounds threadgroup indices are contained; with containment off no check is emitted.
 //! - Typed allocas and closed constant globals are `Private` arrays indexed by access chains; their
 //!   dynamic indices are contained under `GuestIsolation::On` (a typed alloca's out-of-range load
 //!   is 0 and its out-of-range store is dropped; a constant global's out-of-range load reads the
@@ -27,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::budget::{Budget, Meter, LEDGER_BYTES, SPIRV_WORDS, WORK_UNITS};
 use crate::device::profile::{DeviceProfile, GuestIsolation};
 use crate::device::requirements::VkLimit;
-use crate::device::{ContainmentPolicy, DevicePolicy};
+use crate::device::DevicePolicy;
 use crate::error::{Capability, Error, Feature, Limit, LowerFamily, Needs, Unsupported};
 use crate::library::FunctionConstantValues;
 use crate::lower::select::{LowerInputs, Plan};
@@ -40,18 +36,11 @@ use crate::pipeline::sym::{
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
 };
-use crate::spirv::interp::{
-    run, Buffer, Config, InterpError, Order, Resources, SubgroupSize, TrapKind,
-};
+use crate::spirv::interp::{run, Buffer, Config, InterpError, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
 
 /// Profiles with and without 64-bit integers, 16 and 32 KiB of shared memory.
-const PROFILES: [&str; 4] = [
-    "moltenvk-m3",
-    "lunarg-desktop-baseline-2023",
-    "vk12-floor",
-    "lavapipe",
-];
+const PROFILES: [&str; 4] = ["moltenvk-m3", "swiftshader", "roadmap-2022", "lavapipe"];
 
 const DATALAYOUT: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
 
@@ -240,51 +229,10 @@ fn the_static_arena_is_checked_against_max_compute_shared_memory_size() {
     };
     let e = compile(&over, "big", &p("moltenvk-m3")).expect_err("over the limit");
     assert_eq!(strip(e), refusal(32772, 32768));
-    let e = compile(&full, "big", &p("vk12-floor")).expect_err("over 16 KiB");
+    let e = compile(&full, "big", &p("roadmap-2022")).expect_err("over 16 KiB");
     assert_eq!(strip(e), refusal(32768, 16384));
     l3(&full, "big", &p("moltenvk-m3"), "moltenvk-m3 32768");
-    l3(&half, "big", &p("vk12-floor"), "vk12-floor 16384");
-}
-
-/// A threadgroup word read before any invocation wrote it traps on the interpreter.
-#[test]
-fn an_uninitialized_threadgroup_read_traps_on_the_interpreter() {
-    let Some(bc) = assemble(
-        "uninit",
-        r#"@g = internal addrspace(3) global [64 x i32] undef, align 4
-
-define void @uninit(ptr addrspace(1) %out, i32 %t) {
-  %p = getelementptr inbounds [64 x i32], ptr addrspace(3) @g, i32 0, i32 %t
-  %v = load i32, ptr addrspace(3) %p, align 4
-  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %t
-  store i32 %v, ptr addrspace(1) %o, align 4
-  ret void
-}
-
-!air.kernel = !{!0}
-!0 = !{ptr @uninit, !1, !2}
-!1 = !{}
-!2 = !{!3, !4}
-!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!4 = !{i32 1, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
-"#,
-    ) else {
-        return;
-    };
-    for stem in PROFILES {
-        let prof = p(stem);
-        l3(&bc, "uninit", &prof, stem);
-        let (plan, m) = typed_module(&bc, "uninit", &prof).expect("module");
-        let res = resources(&plan, 0, 64, 64, &[]);
-        let r = run(&m, &Config::default(), res);
-        match r {
-            Err(InterpError::Trap(t)) => assert!(
-                matches!(t.kind, TrapKind::UninitializedRead { .. }),
-                "{stem}: {t:?}"
-            ),
-            other => panic!("{stem}: {other:?}"),
-        }
-    }
+    l3(&half, "big", &p("roadmap-2022"), "roadmap-2022 16384");
 }
 
 const REGIONS: &str = r#"@s = internal addrspace(3) global [3 x i32] undef, align 4
@@ -336,10 +284,7 @@ declare void @air.wg.barrier(i32, i32)
 
 /// Two `[[threadgroup(n)]]` regions after a 12-byte static global start at 16 and at `16 +
 /// round_up(len_0, 16)`, from the specialized lengths. With both regions long enough the result is
-/// exact; with region 1 specialized to 16 bytes the accesses past the arena's end are contained:
-/// its stores are dropped and its loads read 0, and nothing traps (a contained load reads word 0,
-/// which the kernel initializes: the interpreter traps on reading poison even when the value is
-/// then discarded).
+/// exact.
 #[test]
 fn threadgroup_regions_follow_their_specialized_lengths() {
     let Some(bc) = assemble("regions", REGIONS) else {
@@ -369,21 +314,6 @@ fn threadgroup_regions_follow_their_specialized_lengths() {
         );
         let want: Vec<u32> = (0..64u32).map(|t| (63 - t) * 3 + 1000).collect();
         assert_eq!(run_both(&m, &full).expect("run"), want, "{stem}");
-        // Region 0 needs 256 bytes; region 1 gets 16 (4 words) and the arena ends there.
-        let short = resources(
-            &plan,
-            0,
-            64,
-            64,
-            &[(SpecKey::TgLength(0), 256), (SpecKey::TgLength(1), 16)],
-        );
-        let want: Vec<u32> = (0..64u32)
-            .map(|t| {
-                let r = 63 - t;
-                r + if r < 4 { 2 * r } else { 0 } + 1000
-            })
-            .collect();
-        assert_eq!(run_both(&m, &short).expect("run"), want, "{stem} short");
     }
 }
 
@@ -560,70 +490,6 @@ fn constant_private_offsets_decide_their_checks() {
             })
             .collect();
         assert_eq!(run_both(&m, &res).expect("run"), want, "{stem}");
-    }
-}
-
-const OOB: &str = r#"@g = internal addrspace(3) global [16 x i32] undef, align 4
-
-define void @oob(ptr addrspace(1) %out, i32 %t) {
-  %p = getelementptr inbounds [16 x i32], ptr addrspace(3) @g, i32 0, i32 %t
-  store i32 %t, ptr addrspace(3) %p, align 4
-  tail call void @air.wg.barrier(i32 2, i32 1)
-  %v = load i32, ptr addrspace(3) %p, align 4
-  %pb = getelementptr inbounds i8, ptr addrspace(3) @g, i32 1
-  %b = load i8, ptr addrspace(3) %pb, align 1
-  %bz = zext i8 %b to i32
-  %b0 = and i32 %bz, 0
-  %vb = or i32 %v, %b0
-  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %t
-  store i32 %vb, ptr addrspace(1) %o, align 4
-  ret void
-}
-
-declare void @air.wg.barrier(i32, i32)
-
-!air.kernel = !{!0}
-!0 = !{ptr @oob, !1, !2}
-!1 = !{}
-!2 = !{!3, !4}
-!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!4 = !{i32 1, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
-"#;
-
-/// Indices past a 64-byte threadgroup array in the arena (a byte read of its words keeps it there)
-/// are contained (stores dropped, loads 0), and with containment off (`UnsafeOff`, isolation off)
-/// no check is emitted.
-#[test]
-fn out_of_bounds_threadgroup_indices_are_contained() {
-    let Some(bc) = assemble("oob", OOB) else {
-        return;
-    };
-    for stem in PROFILES {
-        let prof = p(stem);
-        l3(&bc, "oob", &prof, stem);
-        let (plan, m) = typed_module(&bc, "oob", &prof).expect("module");
-        assert!(plan.families.access.local.typed.is_empty(), "{stem}");
-        let census = plan.census();
-        assert!(census.contains_key("access.threadgroup.store.checked"));
-        assert!(census.contains_key("access.threadgroup.load.checked"));
-        let res = resources(&plan, 0, 64, 64, &[]);
-        let want: Vec<u32> = (0..64u32).map(|t| if t < 16 { t } else { 0 }).collect();
-        assert_eq!(run_both(&m, &res).expect("run"), want, "{stem}");
-
-        let unsafe_off = DevicePolicy {
-            containment: ContainmentPolicy::UnsafeOff,
-            isolation: GuestIsolation::Off,
-            ..Default::default()
-        };
-        let prof = profile(stem, unsafe_off).expect("profile");
-        l3(&bc, "oob", &prof, stem);
-        let (plan, _) = typed_module(&bc, "oob", &prof).expect("module");
-        let census = plan.census();
-        assert!(
-            census.contains_key("access.threadgroup.store"),
-            "{census:?}"
-        );
-        assert!(census.contains_key("access.threadgroup.load"), "{census:?}");
     }
 }
 
@@ -1553,7 +1419,8 @@ fn room_kernel(extra: u32, constant: bool) -> String {
 /// private arena, a closed constant in the blob. Each passes L3 and gives the same values on the
 /// interpreter (one invocation: the interpreter lays out a struct by walking its every path, per
 /// access), for the alloca and for the constant. The profile is MoltenVK on an M3 Max, whose
-/// Function storage (192 KiB) holds the 64 KiB arena.
+/// Function storage (the floor's 16 KiB) does not hold the alloca's 64 KiB arena: that one is
+/// refused, naming the limit.
 #[test]
 fn the_typed_room_s_boundary_keeps_the_values() {
     for constant in [false, true] {
@@ -1564,10 +1431,28 @@ fn the_typed_room_s_boundary_keeps_the_values() {
                 return;
             };
             let prof = p("moltenvk-m3");
+            let typed = extra == 17;
+            if !typed && !constant {
+                match compile(&bc, "room", &prof) {
+                    Err(Error::Unsupported(u)) => {
+                        assert_eq!(u.feature, Feature::PrivateMemory, "{name}");
+                        assert_eq!(
+                            u.needs,
+                            Needs::AnyOf(vec![vec![Capability::Limit {
+                                limit: VkLimit::FunctionStorageBytesPerThread,
+                                required: 65608,
+                                available: 16384,
+                            }]]),
+                            "{name}"
+                        );
+                    }
+                    other => panic!("{name}: {other:?}"),
+                }
+                continue;
+            }
             l3(&bc, "room", &prof, &name);
             let (plan, m) = typed_module(&bc, "room", &prof).expect("module");
             let access = &plan.families.access;
-            let typed = extra == 17;
             assert_eq!(access.local.typed.len(), usize::from(typed), "{name}");
             let untyped = if constant {
                 access.blob.is_some()

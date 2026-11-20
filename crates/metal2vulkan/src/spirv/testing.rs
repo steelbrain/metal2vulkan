@@ -226,9 +226,35 @@ pub fn assert_valid(m: TypedModule, profile: &DeviceProfile) -> Vec<u32> {
 }
 
 /// Every committed device profile (`validation/profiles/*.json`, read-only), derived through
-/// `Device::new` with the default policy, sorted by file stem.
+/// `Device::from_queries` with the default policy, sorted by file stem.
 pub fn committed_profiles() -> Result<Vec<(String, DeviceProfile)>, String> {
     committed_profiles_under(DevicePolicy::default())
+}
+
+/// [`committed_profiles`] that take threadgroup memory: those with
+/// `shaderZeroInitializeWorkgroupMemory`, since a function's threadgroup memory starts at zero and
+/// a profile without it refuses every function that uses threadgroup memory
+/// (`Unsupported{ZeroedThreadgroupMemory}`, `tests::engine_zeroed_threadgroup`).
+#[cfg(test)]
+pub fn threadgroup_profiles() -> Result<Vec<(String, DeviceProfile)>, String> {
+    let mut out = committed_profiles()?;
+    out.retain(|(_, p)| zeroes_threadgroup_memory(p));
+    Ok(out)
+}
+
+/// Whether `p` takes threadgroup memory ([`threadgroup_profiles`]).
+#[cfg(test)]
+pub fn zeroes_threadgroup_memory(p: &DeviceProfile) -> bool {
+    (p.fields().enabled.features).contains(&VkFeature::ShaderZeroInitializeWorkgroupMemory)
+}
+
+/// Whether `e` is `p`'s refusal of threadgroup memory: `Unsupported{ZeroedThreadgroupMemory}` on a
+/// profile that does not take it ([`zeroes_threadgroup_memory`]).
+#[cfg(test)]
+pub fn refuses_threadgroup_memory(e: &crate::error::Error, p: &DeviceProfile) -> bool {
+    let zeroed = crate::error::Feature::ZeroedThreadgroupMemory;
+    matches!(e, crate::error::Error::Unsupported(u) if u.feature == zeroed)
+        && !zeroes_threadgroup_memory(p)
 }
 
 /// [`committed_profiles`] under `policy`.
@@ -238,7 +264,8 @@ pub fn committed_profiles_with(
     committed_profiles_under(policy)
 }
 
-/// Every committed device profile, derived through `Device::new` with `policy`, sorted by stem:
+/// Every committed device profile, derived through `Device::from_queries` with `policy`, sorted by
+/// stem:
 /// derived once per policy per test process, since deriving a device computes its fingerprint
 /// and a test may ask for the profiles once per case it checks (a sixth of such a test's time).
 fn committed_profiles_under(policy: DevicePolicy) -> Result<Vec<(String, DeviceProfile)>, String> {

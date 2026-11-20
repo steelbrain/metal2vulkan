@@ -39,6 +39,7 @@ use crate::pipeline::testing::{
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::testing::committed_profiles;
+use crate::spirv::testing::refuses_threadgroup_memory;
 
 const CALLER: &str = "fpc_chosen_pointers";
 const FUNCTIONS: &str = "fpc_pointer_functions";
@@ -265,8 +266,11 @@ fn chosen_pointer_kernels_validate_on_every_profile() {
     };
     for (stem, p) in committed_profiles().expect("profiles") {
         for kernel in SHAPES.iter().map(|&(k, _)| k).chain(OTHERS) {
-            let a = compile(&fx, kernel, linked_names(kernel), 1, &p)
-                .unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
+            let a = match compile(&fx, kernel, linked_names(kernel), 1, &p) {
+                // A profile without zeroed workgroup memory takes no threadgroup memory.
+                Err(e) if refuses_threadgroup_memory(&e, &p) => continue,
+                a => a.unwrap_or_else(|e| panic!("{stem} {kernel}: {e}")),
+            };
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: L3: {e}"));
         }
     }

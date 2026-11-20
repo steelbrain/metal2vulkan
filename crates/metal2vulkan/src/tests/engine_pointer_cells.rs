@@ -36,6 +36,7 @@ use crate::pipeline::testing::{
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
+use crate::spirv::testing::refuses_threadgroup_memory;
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
@@ -195,9 +196,9 @@ fn count(plan: &Plan, name: &str) -> u32 {
     plan.census().get(name).map_or(0, |(n, _)| *n)
 }
 
-/// Compile `name` on every profile, check it passes L3, reads no root table, and moves its
-/// pointers through `cells` cell stores and loads; run it over `bufs` and return each profile's
-/// buffers.
+/// Compile `name` on every profile that takes it (a function with threadgroup memory on those
+/// with zeroed workgroup memory), check it passes L3, reads no root table, and moves its pointers
+/// through `cells` cell stores and loads; run it over `bufs` and return each profile's buffers.
 fn run_everywhere(
     bc: &[u8],
     name: &str,
@@ -207,7 +208,11 @@ fn run_everywhere(
     let mut out = Vec::new();
     for stem in PROFILES {
         let prof = p(stem);
-        let a = compile(bc, name, &prof).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let a = match compile(bc, name, &prof) {
+            // A profile without zeroed workgroup memory takes no threadgroup memory.
+            Err(e) if refuses_threadgroup_memory(&e, &prof) => continue,
+            a => a.unwrap_or_else(|e| panic!("{stem}: {e}")),
+        };
         link_and_validate(&a, &prof).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         let (plan, m) = typed_module(bc, name, &prof).expect("module");
         assert!(

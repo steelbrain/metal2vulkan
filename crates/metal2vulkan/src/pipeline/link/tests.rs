@@ -588,7 +588,8 @@ fn bindings_and_spec_ids_are_dense_and_exact() {
     );
 }
 
-/// Push constant ranges are each stage's window, trimmed to its fields.
+/// Push constant ranges are each stage's placed fields: the vertex function's from 0, the fragment
+/// function's from the vertex function's end, where it was placed.
 #[test]
 fn push_ranges_are_the_stage_windows() {
     let p = profile("moltenvk-m3");
@@ -601,12 +602,15 @@ fn push_ranges_are_the_stage_windows() {
     };
     let mut vs = iface(Stage::Vertex, Vec::new(), Vec::new());
     vs.push = crate::lower::push::place(Stage::Vertex, 0, &BTreeSet::from([sb(Stage::Vertex)]));
+    assert_eq!(vs.push.push_range, Some((0, 4)));
     let mut fs = iface(Stage::Fragment, Vec::new(), Vec::new());
     fs.push = crate::lower::push::place(
         Stage::Fragment,
-        0,
+        4,
         &BTreeSet::from([PushField::RootTableAddress, sb(Stage::Fragment)]),
     );
+    let (start, size) = fs.push.push_range.expect("fragment fields");
+    assert!(start >= 4, "{start}");
     let (va, fa) = (artifact(vs, None), artifact(fs, None));
     let l = link(&[&va, &fa], &render(), &p).expect("link");
     let ranges: Vec<(vk::ShaderStageFlags, u32, u32)> = l
@@ -619,7 +623,7 @@ fn push_ranges_are_the_stage_windows() {
         ranges,
         vec![
             (vk::ShaderStageFlags::VERTEX, 0, 4),
-            (vk::ShaderStageFlags::FRAGMENT, 64, 12),
+            (vk::ShaderStageFlags::FRAGMENT, start, size),
         ]
     );
     assert_eq!(l.interface.push.len(), 2);

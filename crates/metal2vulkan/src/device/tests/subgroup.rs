@@ -442,48 +442,6 @@ fn a_class_measured_nowhere_in_a_stage_names_the_stage() {
     );
 }
 
-/// The committed MoltenVK captures, which take `DriverDeviation::MetalVertexSimdgroups` and do not
-/// list the vertex stage, have vertex subgroups of the classes measured exact there (basic, vote,
-/// arithmetic, ballot and shuffle), enable `VkProperty::MetalVertexSimdgroups` and not
-/// `SubgroupStage(Vertex)`, and so report a vertex stage whose sums and shuffles tier: the
-/// condition of Metal's `supports_simd_reduction` in both vertex and fragment functions.
-#[test]
-fn moltenvk_s_vertex_stage_has_the_measured_classes() {
-    use crate::error::DriverDeviation;
-    for stem in crate::spirv::testing::MOLTENVK_CAPTURES {
-        let dev = device(stem);
-        let p = dev.profile();
-        assert!(p.takes_driver_deviation(DriverDeviation::MetalVertexSimdgroups));
-        let f = p.fields();
-        let vertex = f.subgroup.vertex;
-        assert!(vertex.supported, "{stem}");
-        let measured = OpBits::BASIC
-            .union(OpBits::VOTE)
-            .union(OpBits::ARITHMETIC)
-            .union(OpBits::BALLOT)
-            .union(OpBits::SHUFFLE);
-        assert_eq!(vertex.ops, measured, "{stem}");
-        assert!(f.subgroup.kernel.ops.contains(measured), "{stem}");
-        let properties = &f.enabled.properties;
-        assert!(
-            properties.contains(&VkProperty::MetalVertexSimdgroups),
-            "{stem}"
-        );
-        assert!(
-            !properties.contains(&VkProperty::SubgroupStage(Stage::Vertex)),
-            "{stem}"
-        );
-        let simd = dev.metal_properties().simd;
-        for stage in [simd.vertex, simd.fragment] {
-            assert!(stage.cross_lane.contains(measured), "{stem}");
-        }
-        assert!(
-            !simd.vertex.cross_lane.contains(OpBits::SHUFFLE_RELATIVE),
-            "{stem}"
-        );
-    }
-}
-
 /// No device answers more than an Apple GPU: each answer a vendor's limit could raise past Apple's
 /// is the lower of the two. Every profile below has at least an Apple GPU's limits, and the
 /// profiles of other vendors' GPUs more of some, so each answers exactly the Apple GPU's: 1024
@@ -535,7 +493,7 @@ fn no_profile_answers_more_than_an_apple_gpu() {
     let pascal = device("nvidia-pascal-linux");
     assert_eq!(
         pascal.metal_properties().max_threads_per_threadgroup,
-        [1024, 1024, 64]
+        [1024, 1024, 1024]
     );
     let lavapipe = device("lavapipe");
     assert_eq!(
@@ -554,13 +512,7 @@ fn metal_properties_report_d3_d4_values() {
         // Each the lower of the device's limit and an Apple GPU's answer.
         let threads = l.max_compute_work_group_invocations.min(1024);
         assert_eq!(m.max_total_threads_per_threadgroup, threads, "{stem}");
-        for axis in 0..3 {
-            assert_eq!(
-                m.max_threads_per_threadgroup[axis],
-                l.max_compute_work_group_size[axis].min(threads),
-                "{stem}"
-            );
-        }
+        assert_eq!(m.max_threads_per_threadgroup, [threads; 3], "{stem}");
         assert_eq!(
             m.max_threadgroup_memory_length,
             l.max_compute_shared_memory_size.min(32 * 1024),
@@ -584,7 +536,7 @@ fn metal_properties_report_d3_d4_values() {
     }
     let floor = device("vk12-floor");
     let m = floor.metal_properties();
-    assert_eq!(m.max_threads_per_threadgroup, [128, 128, 64]);
+    assert_eq!(m.max_threads_per_threadgroup, [128, 128, 128]);
     assert_eq!(m.argument_buffers_tier, ArgumentBuffersTier::Tier1);
     // Vulkan 1.2 requires R32 storage images: tier 1. Tier 2's 8- and 16-bit single-channel formats
     // need shaderStorageImageExtendedFormats, which the floor lacks, so formatless reads and

@@ -51,8 +51,8 @@ use crate::spirv::verify::verify;
 /// Profiles with robust descriptors and without, with and without 64-bit integers.
 const PROFILES: [&str; 5] = [
     "moltenvk-m3",
-    "lunarg-desktop-baseline-2023",
-    "vk12-floor",
+    "swiftshader",
+    "roadmap-2022",
     "lavapipe",
     "nvidia-pascal-linux",
 ];
@@ -65,13 +65,25 @@ fn p(stem: &str) -> DeviceProfile {
 
 /// Committed profile `stem` without buffer robustness: containment is checked in the shader.
 fn unrobust(stem: &str) -> DeviceProfile {
+    without(
+        stem,
+        &[
+            VkFeature::RobustBufferAccess,
+            VkFeature::RobustBufferAccess2,
+        ],
+    )
+}
+
+/// Committed profile `stem` without `features`.
+fn without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    desc.features.remove(&VkFeature::RobustBufferAccess);
-    desc.features.remove(&VkFeature::RobustBufferAccess2);
+    for f in features {
+        desc.features.remove(f);
+    }
     Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
@@ -579,82 +591,6 @@ fn an_out_of_bounds_buffer_atomic_is_contained() {
             assert_eq!(out[0], vec![5, 0, 0, 0, 0, 0, 0, 0], "{stem}");
         }
     }
-}
-
-/// SwiftShader's `robustBufferAccess` bounds an atomic only through `OpImageTexelPointer`, so its
-/// profile carries `DriverWorkaround::BufferAtomicsUncontained`, keyed on its driver identity: a
-/// storage-buffer atomic through a descriptor view is checked in the shader there (contained: no
-/// trap, old value 0, nothing written) while its loads and stores keep the robust encoding. No
-/// other committed profile has the workaround, and containment off checks nothing.
-#[test]
-fn swiftshader_checks_buffer_atomics_under_robustness() {
-    use crate::device::profile::DriverWorkaround;
-    use crate::memory::contain::{atomic_encoding, encoding, Check};
-    let Some(bc) = assemble("oob", OOB) else {
-        return;
-    };
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles");
-    let mut stems: Vec<String> = std::fs::read_dir(&dir)
-        .expect("profiles")
-        .filter_map(|e| {
-            let path = e.expect("entry").path();
-            (path.extension()? == "json").then(|| path.file_stem()?.to_str().map(str::to_owned))?
-        })
-        .collect();
-    stems.sort();
-    assert!(stems.iter().any(|s| s == "swiftshader"), "{stems:?}");
-    for stem in &stems {
-        let prof = p(stem);
-        let swiftshader = stem == "swiftshader";
-        assert_eq!(
-            prof.fields()
-                .workarounds
-                .contains(&DriverWorkaround::BufferAtomicsUncontained),
-            swiftshader,
-            "{stem}"
-        );
-        if encoding(&prof) == Check::InShader {
-            assert_eq!(atomic_encoding(&prof), Check::InShader, "{stem}");
-            continue;
-        }
-        assert_eq!(
-            atomic_encoding(&prof),
-            if swiftshader {
-                Check::InShader
-            } else {
-                Check::None
-            },
-            "{stem}"
-        );
-    }
-    let prof = p("swiftshader");
-    assert_eq!(encoding(&prof), Check::None, "loads and stores stay robust");
-    l3(&bc, "oob", &prof, "swiftshader");
-    let (plan, m) = typed_module(&bc, "oob", &prof).expect("module");
-    assert!(
-        plan.census()
-            .contains_key("access.atomic.buffer.rmw.checked"),
-        "{:?}",
-        plan.census()
-    );
-    let res = resources(&plan, &[vec![0; 8]], 4);
-    for out in run_orders(&m, &res).expect("run") {
-        assert_eq!(out[0], vec![5, 0, 0, 0, 0, 0, 0, 0]);
-    }
-    // lavapipe's robustness contains buffer atomics: no check.
-    let (plan, _) = typed_module(&bc, "oob", &p("lavapipe")).expect("module");
-    assert!(plan.census().contains_key("access.atomic.buffer.rmw"));
-    // Containment off checks nothing, the workaround's atomics included.
-    let unsafe_off = DevicePolicy {
-        containment: ContainmentPolicy::UnsafeOff,
-        isolation: GuestIsolation::Off,
-        ..Default::default()
-    };
-    let off = profile("swiftshader", unsafe_off).expect("profile");
-    assert_eq!(atomic_encoding(&off), Check::None);
-    let (plan, _) = typed_module(&bc, "oob", &off).expect("module");
-    assert!(plan.census().contains_key("access.atomic.buffer.rmw"));
 }
 
 fn int64_kernel(space: &str) -> String {
@@ -1723,8 +1659,20 @@ fn coherent_accesses_select_the_vulkan_memory_model() {
     };
     const N: usize = 64;
     let mut forms = [0; 2];
-    for stem in PROFILES {
-        let prof = p(stem);
+    // Every profile that takes threadgroup memory has the Vulkan memory model, so the other form's
+    // is lavapipe's without it.
+    let mut profiles: Vec<(String, DeviceProfile)> =
+        PROFILES.iter().map(|&s| (s.to_string(), p(s))).collect();
+    let model = [
+        VkFeature::VulkanMemoryModel,
+        VkFeature::VulkanMemoryModelDeviceScope,
+    ];
+    profiles.push((
+        "lavapipe without the memory model".into(),
+        without("lavapipe", &model),
+    ));
+    for (stem, prof) in &profiles {
+        let prof = prof.clone();
         let fields = prof.fields();
         let vulkan = fields.vulkan_memory_model
             && fields

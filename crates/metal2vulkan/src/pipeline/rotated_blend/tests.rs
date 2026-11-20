@@ -419,13 +419,11 @@ fn a_second_output_needs_dual_source_blending() {
 }
 
 /// Every measured blend state is admitted on MoltenVK and on lavapipe and stores Metal's blend
-/// rotated; it takes the premultiplied form exactly where it lists one and the device's blend is
-/// Apple's (MoltenVK), and the search's form elsewhere, alike on both devices, unannounced.
+/// rotated; it takes the search's form, alike on both devices, unannounced.
 #[test]
 fn measured_blends_take_their_measured_forms() {
     let mvk = moltenvk();
     let lvp = profile("lavapipe", DevicePolicy::default()).expect("profile");
-    let mut premultiplied = 0;
     for m in &MEASURED {
         let ([sr, dr, sa, da], op) = m.metal;
         let a = attachment((sr, dr, op), (sa, da, op));
@@ -434,28 +432,9 @@ fn measured_blends_take_their_measured_forms() {
         check(&a, &on_mvk, &mvk);
         check(&a, &on_lvp, &lvp);
         assert_eq!(rotated_form(&a, &lvp), None, "{a:?}");
-        match m.premultiplied {
-            Some((_, lanes)) => {
-                premultiplied += 1;
-                assert_eq!(
-                    rotated_form(&a, &mvk),
-                    Some(RotatedBlendForm::Premultiplied),
-                    "{a:?}"
-                );
-                let RotatedBlend::Synthesized(_, chosen) = on_mvk else {
-                    panic!("{a:?}: {on_mvk:?}");
-                };
-                assert_eq!(chosen, lanes, "{a:?}");
-                assert_eq!(lanes[3], FactorLane::Output(3), "{a:?}");
-                assert_ne!(on_mvk, on_lvp, "{a:?}");
-            }
-            None => {
-                assert_eq!(rotated_form(&a, &mvk), None, "{a:?}");
-                assert_eq!(on_mvk, on_lvp, "{a:?}");
-            }
-        }
+        assert_eq!(rotated_form(&a, &mvk), None, "{a:?}");
+        assert_eq!(on_mvk, on_lvp, "{a:?}");
     }
-    assert_eq!(premultiplied, 2);
 }
 
 /// A blend admitted in none of the measured forms is announced on every device; a minimum or

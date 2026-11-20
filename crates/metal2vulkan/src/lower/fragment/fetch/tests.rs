@@ -906,12 +906,10 @@ fn a_write_mask_names_the_channels_the_write_keeps() {
 /// where it does not (ANV, MoltenVK); a pipeline of one sample takes one sample's image. The
 /// `SampleId` read needs `sampleRateShading`, named where the device lacks it. Its returned sample
 /// mask is modelled (the write is gated on the invocation's own sample's bit), one sample's is not.
-/// Beside a depth attachment the module declares early tests, whose image writes a driver with
-/// `DriverWorkaround::EarlyTestsDropMultisampledImageWrites` (MoltenVK on Apple's GPU) drops at
-/// more than one sample: the writes are refused there, naming the defect, and taken elsewhere.
+/// Beside a depth attachment the module declares early tests, and its image writes take the same
+/// form.
 #[test]
 fn a_multisampled_state_takes_the_per_sample_form_or_names_what_it_needs() {
-    use crate::device::profile::DriverWorkaround;
     use crate::error::Needs;
     let r32 = state(PixelFormat::R32Float, |_| {});
     // Without a depth or stencil attachment the module declares no early tests.
@@ -952,18 +950,11 @@ fn a_multisampled_state_takes_the_per_sample_form_or_names_what_it_needs() {
             Ok(StorageSamples::One),
             "{stem}"
         );
-        let early = form(&depth, true, WRITES, &p).map(|v| v.samples);
-        if stem == "moltenvk-m3" {
-            assert_eq!(
-                early,
-                Err(Unsupported::driver_defect(
-                    Feature::FramebufferFetch,
-                    DriverWorkaround::EarlyTestsDropMultisampledImageWrites
-                ))
-            );
-        } else {
-            assert_eq!(early, Ok(samples), "{stem}");
-        }
+        assert_eq!(
+            form(&depth, true, WRITES, &p).map(|v| v.samples),
+            Ok(samples),
+            "{stem}"
+        );
         assert_eq!(
             form(&depth, true, READS, &p).map(|v| v.samples),
             Ok(samples),

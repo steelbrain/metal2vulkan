@@ -2153,26 +2153,16 @@ fn srgb_packs_read_no_table() {
 }
 
 /// A `half` `fadd`, `fsub` or `fmul` takes the device's 16-bit arithmetic, on one to four lanes,
-/// exactly where the profile has `shaderFloat16` and takes `DriverDeviation::MetalHalfArithmetic`
-/// (the MoltenVK captures alone, measured) or computes under the 16-bit float controls (by the
-/// Vulkan spec, with no fact; NVIDIA's profiles too, whose driver folds only the conversion's round
-/// trip); `fdiv`, `frem`, other formats, and a chunk wider than four lanes never do.
+/// exactly where the profile computes under the 16-bit float controls (by the Vulkan spec, with no
+/// fact; NVIDIA's profiles too, whose driver folds only the conversion's round trip); `fdiv`,
+/// `frem`, other formats, and a chunk wider than four lanes never do.
 #[test]
 fn half_arithmetic_on_the_device_follows_the_profile() {
     use super::super::F16Basis;
-    use crate::error::DriverDeviation;
-    use crate::spirv::testing::is_moltenvk_capture;
-    let (mut measured, mut controlled) = (0, 0);
+    let mut controlled = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
-        let float16 = p.fields().leaf.float16;
-        let fact = p.takes_driver_deviation(DriverDeviation::MetalHalfArithmetic) && float16;
-        assert_eq!(fact, is_moltenvk_capture(&stem), "{stem}");
         let controls = super::super::narrow::half_controls(&p);
-        let basis = match (fact, controls) {
-            (true, _) => Some(F16Basis::Measured),
-            (false, true) => Some(F16Basis::Controlled),
-            (false, false) => None,
-        };
+        let basis = controls.then_some(F16Basis::Controlled);
         for op in [AirBin::FAdd, AirBin::FSub, AirBin::FMul] {
             for lanes in 1..=4 {
                 assert_eq!(
@@ -2196,10 +2186,8 @@ fn half_arithmetic_on_the_device_follows_the_profile() {
                 "{stem}: {op:?}"
             );
         }
-        measured += usize::from(basis == Some(F16Basis::Measured));
         controlled += usize::from(basis == Some(F16Basis::Controlled));
     }
-    assert!(measured >= 1, "the MoltenVK capture takes it, measured");
     assert!(
         controlled >= 2,
         "the float-controls profiles take it, by the spec"

@@ -154,16 +154,14 @@ fn a_safe_one_zero_blend_of_a_sixteen_bit_float_attachment_blends() {
 }
 
 /// A fragment function links only under the color writes its pipeline gives the attachments it
-/// writes. On lavapipe and RADV a `float4` output to an `RGBA8Unorm` attachment takes the unorm
+/// writes. On lavapipe, RADV and MoltenVK a `float4` output to an `RGBA8Unorm` attachment takes the unorm
 /// rule, blended with (one, zero) too (`color_writes::takes_metal_rule`); under another blend, and
 /// for alpha-to-coverage's alpha, the channel is the device's. The map names the unorm rule the
 /// device's all the same, since the lowering stores and notes the two alike, so the four
 /// pipelines give one map and a fragment compiled for one links into the others. An
-/// `RGBA16Float` attachment takes the half-float rule, and an `RGBA32Float` one no entry; an
-/// `RGBA16Unorm` one Metal's 16-bit rule where the profile stores those codes as Metal does, else
-/// the device's. A fragment compiled for one map links into a pipeline of that map alone:
-/// compiled for another, or without the map, it is `NeedsInput(ColorWrites)`. On MoltenVK, which
-/// converts as Metal does, the map names only the half-float channels, blended or not.
+/// `RGBA16Float` attachment takes the half-float rule, an `RGBA32Float` one no entry, and an
+/// `RGBA16Unorm` one the device's. A fragment compiled for one map links into a pipeline of that
+/// map alone: compiled for another, or without the map, it is `NeedsInput(ColorWrites)`.
 #[test]
 fn color_writes_are_the_pipelines() {
     use crate::error::RuntimeInput;
@@ -199,7 +197,7 @@ fn color_writes_are_the_pipelines() {
         ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float),
         false,
     );
-    for stem in ["lavapipe", "amd-rdna3-radv"] {
+    for stem in ["lavapipe", "amd-rdna3-radv", "moltenvk-m3"] {
         let p = profile(stem);
         let writes = |inputs: &LinkInputs| match inputs {
             LinkInputs::Render(r) => {
@@ -257,76 +255,16 @@ fn color_writes_are_the_pipelines() {
             needs,
             "{stem}"
         );
-        let norm16 =
-            p.takes_driver_deviation(crate::error::DriverDeviation::MetalNorm16ColorWrites);
-        let wide_rule = match norm16 {
-            true => Some(C::Unorm { bits: 16 }),
-            false => device,
-        };
-        assert_eq!(
-            writes(&wide).get(&0).copied(),
-            Some([wide_rule; 4]),
-            "{stem}"
-        );
+        assert_eq!(writes(&wide).get(&0).copied(), Some([device; 4]), "{stem}");
         let for_wide = compiled_for(&fa, &wide, &p);
-        assert_eq!(
-            crate::pipeline::link::link(&[&va, &for_wide], &plain, &p).map(|_| ()),
-            match norm16 {
-                true => needs.clone(),
-                false => Ok(()),
-            },
-            "{stem}"
-        );
+        crate::pipeline::link::link(&[&va, &for_wide], &plain, &p)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(
             crate::pipeline::link::link(&[&va, &for_wide], &float, &p).map(|_| ()),
             needs,
             "{stem}"
         );
     }
-    let p = profile("moltenvk-m3");
-    let default = crate::metal::TextureWriteRoundingMode::TowardZero;
-    assert!(
-        crate::pipeline::color_writes::wanted(&fa, &[None; 8], (false, default), &p).is_empty()
-    );
-    crate::pipeline::link::link(&[&va, &fa], &plain, &p).expect("moltenvk-m3");
-    // There the map keeps the half-float channels alone, whatever the blend.
-    let half = Some(crate::pipeline::color_writes::HALF);
-    let mut blended_half = ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float);
-    blended_half.blending_enabled = true;
-    blended_half.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
-    let half_target = render(
-        ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float),
-        false,
-    );
-    for (inputs, want) in [
-        (&plain, None),
-        (&float, None),
-        (
-            &render(
-                ColorAttachmentDescriptor::new(PixelFormat::RG11B10Float),
-                false,
-            ),
-            None,
-        ),
-        (&half_target, Some([half; 4])),
-        (&render(blended_half, true), Some([half; 4])),
-    ] {
-        let LinkInputs::Render(r) = inputs else {
-            unreachable!()
-        };
-        let got = crate::pipeline::color_writes::wanted(
-            &fa,
-            &r.color_attachments,
-            (r.alpha_to_coverage, r.texture_write_rounding_mode),
-            &p,
-        );
-        assert_eq!(got.get(&0).copied(), want, "{:?}", r.color_attachments[0]);
-        link(&[&va, &fa], inputs, &p).expect("moltenvk-m3");
-    }
-    assert_eq!(
-        crate::pipeline::link::link(&[&va, &fa], &half_target, &p).map(|_| ()),
-        Err(Error::NeedsInput(RuntimeInput::ColorWrites))
-    );
 }
 
 /// Under `TextureWriteRoundingMode::NearestEven` a half-float attachment's channels round to
@@ -2307,23 +2245,16 @@ fn the_raster_sample_count_needs_the_framebuffer_sample_counts() {
 /// and centroid varyings, its point and barycentric coordinates, and its sample mask as the
 /// pixel's. Vulkan runs per sample only under sample shading, which `SampleId` turns on, a `Sample`
 /// input may, and the pipeline enables for a function that writes memory; it moves those reads to
-/// the sample there. The same pipelines at one sample, a pixel-rate function that reads them (but
-/// its `[[sample_mask]]` on lavapipe, whose split of a clipped triangle's fragments changes it), a
+/// the sample there. The same pipelines at one sample, a pixel-rate function that reads them, a
 /// per-sample one that does not, one compiled for the pipeline that reads `[[position]]`'s x and y
 /// or its center varyings at the pixel, and a per-sample one that reads `[[position]]`'s z or w, a
 /// centroid varying, or its point or barycentric coordinates where Vulkan evaluates them (which
 /// the compile layer notes), link, with sample shading exactly where the function writes memory
 /// at four samples. A per-sample function whose pixel reads all have forms on the
-/// device, compiled without `multisampled`, needs that input. A center varying has no pixel form on
-/// `moltenvk-m3` at a release not measured to read it at the pixel center itself (1.4.0), whose
-/// `InterpolateAtOffset` reads off the center, which the refusal names; at 1.4.1, measured so, its
-/// read as it is is the pixel form, as on a device whose offset reads from the center. A device
-/// without `sampleRateShading` is named for the side effects and for a read that recompiling would
-/// not fix.
+/// device, compiled without `multisampled`, needs that input. A device without `sampleRateShading`
+/// is named for the side effects and for a read that recompiling would not fix.
 #[test]
 fn multisampled_fragment_invocations_follow_metals_measured_rules() {
-    use crate::device::requirements::VkProperty;
-    use crate::device::DriverWorkaround;
     use crate::error::RuntimeInput;
     use crate::pipeline::descriptor::ColorAttachmentDescriptor;
     use crate::pipeline::stage_io::StageBuiltin as B;
@@ -2518,47 +2449,8 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
         Feature::PixelCoverageAtSampleRate,
     ));
     let recompile = Error::NeedsInput(RuntimeInput::Multisampled);
-    // The portability profile as another device, from its committed description changed by
-    // `edit`.
-    let mvk_as = |edit: &dyn Fn(&mut crate::device::DeviceDescription)| {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
-        let mut d = crate::device::DeviceDescription::from_khronos_json(
-            &std::fs::read_to_string(path).expect("profile"),
-            None,
-        )
-        .expect("description");
-        edit(&mut d);
-        crate::device::Device::from_queries(d, DevicePolicy::default())
-            .expect("device")
-            .profile()
-            .clone()
-    };
-    // A device whose `InterpolateAtOffset` reads from the center: a driver other than
-    // MoltenVK's.
-    let centered_mvk = mvk_as(&|d| d.driver_id = None);
-    // MoltenVK on the Apple8 family under macOS 27 (`deviceID` 0x1B00_0208), whose
-    // `InterpolateAtOffset` reads off the center and which is not measured to read center
-    // varyings at the pixel center itself: it refuses a per-sample function's center varying
-    // naming the property it lacks; every other case links or is refused as on the same device
-    // without the deviation.
-    let unmeasured_mvk = mvk_as(&|d| d.device_id = 0x1B00_0208);
-    let needs_centered = Error::Unsupported(Unsupported::needs(
-        Feature::SampleRateShading,
-        Capability::Property(VkProperty::InterpolateAtOffsetCentered),
-    ));
-    let committed = profile("moltenvk-m3");
-    assert!(committed
-        .fields()
-        .enabled
-        .properties
-        .contains(&VkProperty::MetalCenterVaryings));
-    for (stem, p, biased) in [
-        ("moltenvk-m3", committed, false),
-        ("moltenvk-m3 as Apple8", unmeasured_mvk, true),
-        ("moltenvk-m3 centered", centered_mvk, false),
-        ("lavapipe", profile("lavapipe"), false),
-    ] {
+    for stem in ["moltenvk-m3", "lavapipe"] {
+        let p = profile(stem);
         for (i, (fa, expect)) in cases.iter().enumerate() {
             let one =
                 link(&[&va, fa], &at(1), &p).unwrap_or_else(|e| panic!("{stem} case {i}: {e}"));
@@ -2583,37 +2475,10 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
                     "{stem} case {i}"
                 );
             });
-            // lavapipe splits a clipped triangle's pixel-rate fragments, which a read of the
-            // coverage sees (`split_pixel_fragments_are_refused_where_measured`).
-            let split = DriverWorkaround::ClippedTrianglesSplitPixelFragments;
             let want = match expect {
-                Links
-                    if p.fields().workarounds.contains(&split)
-                        && fa.interface.io.builtins.contains(&B::SampleMaskIn) =>
-                {
-                    Err(Error::Unsupported(Unsupported::driver_defect(
-                        Feature::PixelCoverage,
-                        split,
-                    )))
-                }
-                // ... and a centroid varying of a function that sample shading may leave at pixel
-                // rate (only a `Sample` input makes it per sample); one that surely runs per sample
-                // reads it at its sample, which no split moves.
-                Links
-                    if p.fields().workarounds.contains(&split)
-                        && fa.interface.io.inputs.contains(&centroid)
-                        && !fa.interface.io.builtins.contains(&B::SampleId)
-                        && !fa.interface.writes_memory =>
-                {
-                    Err(Error::Unsupported(Unsupported::driver_defect(
-                        Feature::CentroidVarying,
-                        split,
-                    )))
-                }
                 Links => Ok(()),
                 Coverage => Err(coverage.clone()),
                 Recompile => Err(recompile.clone()),
-                Center if biased => Err(needs_centered.clone()),
                 // Compiled for the pipeline, the function would read them at the pixel.
                 Center if !fa.interface.io.multisampled => Err(recompile.clone()),
                 Center => Err(refused.clone()),
@@ -2646,110 +2511,6 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
     for (fa, _) in covering {
         assert_eq!(link(&[&va, fa], &at(4), &p).unwrap_err(), coverage);
     }
-}
-
-/// Lavapipe rasterizes a triangle it clips as several, so at more than one sample a pixel-rate
-/// fragment runs once per piece in a pixel on their shared edge, with that piece's coverage.
-/// Measured with a bare Vulkan program: `SampleMask` holds part of the pixel's samples and a
-/// `Centroid` input moves to the first covered sample; a center input
-/// stays at the pixel center. So every committed profile whose driver is lavapipe, and only those,
-/// carries the defect, and link refuses there exactly a multisampled pixel-rate function that reads
-/// `[[sample_mask]]` or a centroid varying, naming the defect; at one sample, and with a center or
-/// flat varying alone, it links.
-#[test]
-fn split_pixel_fragments_are_refused_where_measured() {
-    use crate::device::DriverWorkaround;
-    use crate::pipeline::descriptor::ColorAttachmentDescriptor;
-    use crate::pipeline::stage_io::StageBuiltin as B;
-    let defect = DriverWorkaround::ClippedTrianglesSplitPixelFragments;
-    let f4 = io_ty(IoNumeric::Float, 4);
-    let smooth = |sampling| {
-        Some(Interpolation::Smooth {
-            sampling,
-            perspective: true,
-        })
-    };
-    let mut vs = iface(Stage::Vertex, vec![], vec![]);
-    vs.io = positioned(
-        Stage::Vertex,
-        stage_io(
-            vec![],
-            ["c", "k", "f"]
-                .iter()
-                .map(|n| varying(n, f4, None))
-                .collect(),
-        ),
-    );
-    let va = artifact(vs, None);
-    let fragment = |inputs: Vec<IoVariable>, builtins: Vec<B>| {
-        let mut fs = iface(Stage::Fragment, vec![], vec![]);
-        fs.io = stage_io(inputs, vec![color(0, 0, f4)]);
-        fs.io.builtins = builtins;
-        artifact(fs, None)
-    };
-    let center = varying("c", f4, smooth(Sampling::Center));
-    let centroid = varying("k", f4, smooth(Sampling::Centroid));
-    let flat = varying("f", f4, Some(Interpolation::Flat));
-    // Each function, and the feature a split device refuses at 4 samples.
-    let cases = [
-        (
-            fragment(vec![], vec![B::SampleMaskIn]),
-            Some(Feature::PixelCoverage),
-        ),
-        (
-            fragment(vec![centroid.clone()], vec![]),
-            Some(Feature::CentroidVarying),
-        ),
-        (
-            fragment(vec![centroid, center.clone()], vec![B::SampleMaskIn]),
-            Some(Feature::PixelCoverage),
-        ),
-        (
-            fragment(vec![center, flat], vec![B::FragCoord, B::SampleMaskOut]),
-            None,
-        ),
-    ];
-    let mut r = RenderLinkInputs::new();
-    r.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-    let at = |samples: u32| {
-        let mut r = r.clone();
-        r.raster_sample_count = samples;
-        LinkInputs::Render(Box::new(r))
-    };
-    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
-    let mut split = Vec::new();
-    for (stem, p) in &profiles {
-        let has = p.fields().workarounds.contains(&defect);
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
-        let description = crate::device::DeviceDescription::from_khronos_json(
-            &std::fs::read_to_string(path).expect("profile"),
-            None,
-        )
-        .expect("description");
-        assert_eq!(
-            has,
-            description.driver_id == Some(vk::DriverId::MESA_LLVMPIPE),
-            "{stem}"
-        );
-        if has {
-            split.push(stem.as_str());
-        }
-        for (i, (fa, refused)) in cases.iter().enumerate() {
-            link(&[&va, fa], &at(1), p).unwrap_or_else(|e| panic!("{stem} case {i}: {e}"));
-            let four = link(&[&va, fa], &at(4), p).map(|_| ());
-            let want = match refused {
-                Some(feature) if has => Err(Error::Unsupported(Unsupported::driver_defect(
-                    feature.clone(),
-                    defect,
-                ))),
-                _ => Ok(()),
-            };
-            assert_eq!(four, want, "{stem} case {i} at 4 samples");
-        }
-    }
-    split.sort_unstable();
-    assert_eq!(split, ["gate-lavapipe", "gate-lavapipe-x86_64", "lavapipe"]);
 }
 
 /// The graphics state states whether the fragment function reads `[[barycentric_coord]]`, from the

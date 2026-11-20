@@ -51,6 +51,7 @@ use crate::pipeline::{
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::committed_profiles;
+use crate::spirv::testing::threadgroup_profiles;
 
 // ---- Harness ----
 
@@ -493,7 +494,7 @@ fn a_slice_lands_on_its_level() {
         return;
     };
     let mut ran = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
+    for (stem, p) in threadgroup_profiles().expect("profiles") {
         let Some((plan, m)) = module(&bc, "txt_level_slice", &stem, &p) else {
             continue;
         };

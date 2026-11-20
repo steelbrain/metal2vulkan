@@ -61,7 +61,7 @@ use crate::pipeline::{
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
-use crate::spirv::testing::committed_profiles;
+use crate::spirv::testing::{committed_profiles, refuses_threadgroup_memory};
 use crate::vk;
 
 fn assemble(stem: &str) -> Option<Vec<u8>> {
@@ -89,7 +89,7 @@ fn tile_inputs(formats: &[PixelFormat]) -> LowerInputs {
 }
 
 /// The module of `entry` under `inputs` on `p`, or `None` when `p` lacks a capability its
-/// attachments' storage images need (`Feature::Format`).
+/// attachments' storage images need (`Feature::Format`) or takes no threadgroup memory.
 fn module(
     bc: &[u8],
     entry: &str,
@@ -100,6 +100,7 @@ fn module(
     match typed_module_with(bc, entry, p, inputs) {
         Ok(m) => Some(m),
         Err(Error::Unsupported(u)) if u.feature == Feature::Format => None,
+        Err(e) if refuses_threadgroup_memory(&e, p) => None,
         Err(e) => panic!("{stem}: {entry}: {e}"),
     }
 }
@@ -805,7 +806,7 @@ fn a_tile_pipeline_places_its_threadgroup_arguments() {
         s.tile_threadgroup = memory;
         s
     };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
         let dev = device(stem);
         let pipe = dev
             .compile_tile_pipeline(&d, &Budget::standard())
@@ -969,7 +970,7 @@ fn a_tile_pipeline_binds_its_attachments() {
         Some(PixelFormat::R32Uint),
         Some(PixelFormat::R32Uint),
     ];
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
         let dev = device(stem);
         let d = descriptor(&bc, "k10ts_tile_grid", &formats);
         let pipe = dev

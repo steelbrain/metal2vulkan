@@ -58,6 +58,7 @@ use crate::bind::{
 use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::profile::BufferAccess;
+use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy, GeneratedCommandsProperties};
 use crate::error::{BindError, Error, Feature, Needs};
 use crate::indirect_commands::{
@@ -74,6 +75,7 @@ use crate::pipeline::{
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::ir::TypedModule;
+use crate::spirv::testing::refuses_threadgroup_memory;
 
 const ENTRY: &str = "icb_replay_template";
 
@@ -132,6 +134,24 @@ fn assemble(name: &str, text: &str) -> Option<Vec<u8>> {
 /// Every committed profile as a device, by stem.
 fn devices() -> Vec<(String, Device)> {
     devices_with(|_| {})
+}
+
+/// Every committed profile as a device, and lavapipe without `bufferDeviceAddress`: the committed
+/// profiles without device addresses take no threadgroup memory, which the replayed kernels use.
+fn devices_and_unaddressed() -> Vec<(String, Device)> {
+    let mut out = devices();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles/lavapipe.json");
+    let text = std::fs::read_to_string(path).expect("profile");
+    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    desc.features.remove(&VkFeature::BufferDeviceAddress);
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    assert_ne!(
+        dev.profile().fields().buffer_access,
+        BufferAccess::Addressed
+    );
+    out.push(("lavapipe without device addresses".into(), dev));
+    out
 }
 
 /// Every committed profile as a device, by stem, with its description changed by `tweak`.
@@ -755,11 +775,14 @@ fn what_cannot_replay_is_refused_by_name() {
     let Some(bc) = fixture() else {
         return;
     };
-    for (stem, dev) in devices() {
+    let mut unaddressed = 0;
+    for (stem, dev) in devices_and_unaddressed() {
         if dev.profile().fields().buffer_access != BufferAccess::Addressed {
             match pipeline(&dev, &bc, ENTRY, &replay_inputs()) {
+                Err(e) if refuses_threadgroup_memory(&e, dev.profile()) => {}
                 Err(Error::Unsupported(u)) => {
-                    assert_eq!(u.feature, Feature::GpuEncodedIndirectCommands, "{stem}")
+                    assert_eq!(u.feature, Feature::GpuEncodedIndirectCommands, "{stem}");
+                    unaddressed += 1;
                 }
                 other => panic!("{stem}: {:?}", other.map(|_| ())),
             }
@@ -801,6 +824,7 @@ fn what_cannot_replay_is_refused_by_name() {
             "{stem}"
         );
     }
+    assert!(unaddressed > 0, "no device without device addresses");
 }
 
 /// The template that observes its regions: each thread adds a weighted sum of its grid builtins and
@@ -2470,8 +2494,9 @@ fn a_folded_variant_states_its_key_and_runs_only_indirect_threadgroups() {
     let mut replayed = replay_inputs();
     replayed.folded_groups = true;
     let mut ran = 0;
-    for (stem, dev) in devices() {
+    for (stem, dev) in devices_and_unaddressed() {
         let refused = |r: Result<ComputePipeline, Error>| match r {
+            Err(e) if refuses_threadgroup_memory(&e, dev.profile()) => {}
             Err(Error::Unsupported(u)) => {
                 assert_eq!(u.feature, Feature::GpuEncodedIndirectCommands, "{stem}")
             }

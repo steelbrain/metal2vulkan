@@ -7,8 +7,6 @@
 //!   scheduling orders and in each of two threadgroups, and the module passes `spirv-val`.
 //! - The emulated-SIMD-group variant of the same kernel lowers under the zero form: its arena is
 //!   null-initialized and its exchange scratch, which the emulation writes before it reads, is not.
-//! - Through `Device::new` no `Workgroup` variable has an initializer, and the same read is an
-//!   uninitialized read on the interpreter.
 //! - A profile without `shaderZeroInitializeWorkgroupMemory` refuses such a function through
 //!   `Device::from_queries` (`Unsupported{ZeroedThreadgroupMemory}`).
 //!
@@ -29,7 +27,7 @@ use crate::pipeline::testing::{
     compile, compile_with, description, link_and_validate, llvm_assemble, typed_module,
     typed_module_with, AssembleError,
 };
-use crate::spirv::interp::{run, Buffer, Config, InterpError, Order, Resources, TrapKind};
+use crate::spirv::interp::{run, Buffer, Config, InterpError, Order, Resources};
 use crate::spirv::ir::{ConstKind, Constant, GlobalKind, StorageClass, TypedModule};
 
 /// Profiles of four drivers, each with `shaderZeroInitializeWorkgroupMemory`.
@@ -162,15 +160,6 @@ fn queried(stem: &str) -> DeviceProfile {
         .clone()
 }
 
-/// `stem` through `Device::new`.
-fn through_new(stem: &str) -> DeviceProfile {
-    let desc = description(stem).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
-        .expect("device")
-        .profile()
-        .clone()
-}
-
 /// Each `Workgroup` variable the module declares: whether it has an initializer, and whether that
 /// initializer is a null.
 fn workgroup_inits(m: &TypedModule) -> Vec<(bool, bool)> {
@@ -249,8 +238,7 @@ const REGION: [(SpecKey, u64); 1] = [(SpecKey::TgLength(0), 4 * THREADS as u64)]
 
 /// Through `from_queries` the arena of a declared array beside a region, and a typed threadgroup
 /// object, are null-initialized, and every word read before the program writes it reads zero, in
-/// both scheduling orders; the modules pass `spirv-val`. Through `Device::new` neither has an
-/// initializer and the same reads are uninitialized.
+/// both scheduling orders; the modules pass `spirv-val`.
 #[test]
 fn threadgroup_memory_reads_zero_until_the_program_writes_it_through_from_queries() {
     let Some(arena) = assemble("tg_unwritten", &unwritten(false)) else {
@@ -297,23 +285,6 @@ fn threadgroup_memory_reads_zero_until_the_program_writes_it_through_from_querie
                 assert_eq!(out, vec![0; words], "{what}, {order:?}");
             }
         }
-        let new = through_new(stem);
-        for (bc, entry, words, spec) in [
-            (&arena, "tg_unwritten", 192, &REGION[..]),
-            (&typed, "tg_typed", 64, &[][..]),
-        ] {
-            let what = format!("{entry} on {stem} through Device::new");
-            let (plan, m) = typed_module(bc, entry, &new).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(!plan.families.access.local.zeroed, "{what}");
-            assert_eq!(workgroup_inits(&m), vec![(false, false)], "{what}");
-            match run_in(&m, &resources(&plan, words, spec), Order::Forward) {
-                Err(InterpError::Trap(t)) => assert!(
-                    matches!(t.kind, TrapKind::UninitializedRead { .. }),
-                    "{what}: {t:?}"
-                ),
-                other => panic!("{what}: {other:?}"),
-            }
-        }
     }
 }
 
@@ -349,7 +320,7 @@ fn the_emulated_variant_zeroes_its_arena_and_not_its_scratch() {
 }
 
 /// A profile without `shaderZeroInitializeWorkgroupMemory` refuses a function that uses
-/// threadgroup memory through `from_queries`, typed, and compiles it through `Device::new`.
+/// threadgroup memory through `from_queries`, typed.
 #[test]
 fn a_profile_without_zeroed_workgroup_memory_refuses_threadgroup_memory_through_from_queries() {
     let Some(bc) = assemble("tg_unwritten", &unwritten(false)) else {
@@ -366,5 +337,4 @@ fn a_profile_without_zeroed_workgroup_memory_refuses_threadgroup_memory_through_
         Err(Error::Unsupported(u)) => assert_eq!(u.feature, Feature::ZeroedThreadgroupMemory),
         other => panic!("{other:?}"),
     }
-    compile(&bc, "tg_unwritten", &through_new(FLOOR)).expect("through Device::new");
 }

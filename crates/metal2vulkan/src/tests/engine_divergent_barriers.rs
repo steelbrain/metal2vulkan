@@ -34,14 +34,14 @@ use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::barriers::workgroup_barriers;
 
 /// Profiles whose kernels run on subgroups (`moltenvk-m3`, Intel, AMD, NVIDIA) and whose
-/// simdgroups are emulated (`lavapipe`, `vk12-floor`).
+/// simdgroups are emulated (`lavapipe`, `roadmap-2022`).
 const PROFILES: [&str; 6] = [
     "moltenvk-m3",
     "intel-irisxe-rplp-anv",
     "amd-rdna3-radv",
     "nvidia-rtx50-linux",
     "lavapipe",
-    "vk12-floor",
+    "roadmap-2022",
 ];
 
 /// The poison every output word starts as.

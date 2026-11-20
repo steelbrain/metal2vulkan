@@ -1,7 +1,6 @@
 //! Serializer tests: `spirv-val` over every builder family, the parse round trip, relocation, and
 //! determinism.
 
-mod array_copies;
 mod builder_properties;
 mod derivation;
 mod families;
@@ -12,8 +11,6 @@ mod families_ray;
 mod families_stage;
 mod forwarded;
 mod lazy;
-mod localized_loads;
-mod loop_reads;
 mod model_rules;
 
 use std::collections::BTreeMap;

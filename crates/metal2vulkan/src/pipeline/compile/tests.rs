@@ -3128,8 +3128,7 @@ fn a_selection_on_the_texel_keeps_the_slot_where_a_helper_may_take_either_arm() 
 /// fragment window; still states the slot, as read at the own pixel and through a snapshot; and
 /// writes no memory of the function's. A profile without the interlock refuses it, naming the
 /// feature. A variant asked for `tob_sample`'s slot, which the fact does not list, would sample the
-/// texture beside the copy: refused, never compiled so. All of it holds under the exact answers
-/// too.
+/// texture beside the copy: refused, never compiled so.
 #[test]
 fn a_snapshot_variant_reads_its_texture_in_the_copy_alone() {
     use crate::device::requirements::VkFeature;
@@ -3150,20 +3149,15 @@ fn a_snapshot_variant_reads_its_texture_in_the_copy_alone() {
         inputs
     };
     let mut interlocked = 0;
-    let policies = [("default", DevicePolicy::default())];
-    for (stem, name, policy) in [
+    for stem in [
         "intel-irisxe-anv",
         "nvidia-rtx5080-laptop",
         "amd-780m-radv",
         "lavapipe",
         "moltenvk-m3",
         "vk12-floor",
-    ]
-    .into_iter()
-    .flat_map(|stem| policies.map(|(name, policy)| (stem, name, policy)))
-    {
-        let p = crate::pipeline::testing::profile(stem, policy).expect("profile");
-        let stem = format!("{stem} {name}");
+    ] {
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile");
         let base = crate::pipeline::testing::compile(&bc, "tob_read", &p)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(base.interface.snapshot_textures, [0u32], "{stem}");
@@ -3239,10 +3233,7 @@ fn a_snapshot_variant_reads_its_texture_in_the_copy_alone() {
             other => panic!("{stem} tob_sample: {other:?}"),
         }
     }
-    assert!(
-        interlocked >= 8,
-        "the interlocked profiles, under both policies"
-    );
+    assert!(interlocked >= 4, "the interlocked profiles");
 }
 
 /// The interface states whether the function writes memory another invocation or a later command
@@ -3706,9 +3697,10 @@ fn a_fragment_reading_through_a_loaded_pointer_runs_at_pixel_rate() {
 /// which its push window holds and each draw writes from `BindState::viewport_count`, and writes
 /// the index as written to a flat varying (`IoRole::ViewportIndex`). In its pipeline a fragment
 /// function that reads the index compiles under `viewport_index_varying` and reads that varying, as
-/// `render_pipeline_key` names; one that does not read it keeps the key it has without the field. A
-/// reading fragment compiled for the other kind of vertex function is `NeedsInput(ViewportIndex)`
-/// either way. Every module passes L3.
+/// `render_pipeline_key` names; compiled on its own under those inputs and the vertex function's
+/// push end (`CompiledFunction::fragment_push_base`), it is the pipeline's. One that does not read
+/// it keeps the key it has without the field. A reading fragment compiled for the other kind of
+/// vertex function is `NeedsInput(ViewportIndex)` either way. Every module passes L3.
 #[test]
 fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
     use crate::bind::plan::FieldLocation;
@@ -3775,7 +3767,6 @@ fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
     let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
     assert!(inputs.viewport_index_varying);
     let pipe = dev.compile_render_pipeline(&d, &budget).expect("pipeline");
-    assert_eq!(pipe.key, keys.pipeline);
     for s in &pipe.stages {
         l3(&s.spirv, &pipe.requirements, &dev);
     }
@@ -3783,10 +3774,28 @@ fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
         .dependencies
         .iter()
         .any(|d| d.fact == RuntimeFact::ViewportCount));
+    assert_eq!(
+        Some(dev.function_compile_key(&reader, &inputs)),
+        keys.fragment
+    );
+    let vertex_inputs = keys.vertex_inputs.as_ref().expect("vertex inputs");
+    let staged_vertex = dev
+        .compile_function(&function(&lib, "rt6_select"), vertex_inputs, &budget)
+        .expect("vertex");
+    assert_eq!(*staged_vertex.key(), keys.vertex);
+    let mut inputs = inputs;
+    inputs.push_base = staged_vertex.fragment_push_base();
     let fragment = dev
         .compile_function(&reader, &inputs, &budget)
         .expect("fragment");
-    assert_eq!(Some(*fragment.key()), keys.fragment);
+    let staged = pipeline(
+        StageSource::Compiled(staged_vertex),
+        StageSource::Compiled(fragment.clone()),
+    );
+    let staged = dev
+        .compile_render_pipeline(&staged, &budget)
+        .expect("staged");
+    assert_eq!(staged.key, pipe.key);
     let io = &fragment.artifact().interface.io;
     assert!(io.inputs.iter().any(|v| v.role == IoRole::ViewportIndex));
     assert!(!io.builtins.contains(&StageBuiltin::ViewportIndex));

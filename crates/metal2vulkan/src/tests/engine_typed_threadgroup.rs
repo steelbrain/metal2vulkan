@@ -30,7 +30,7 @@ use crate::pipeline::testing::{
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::{StorageClass, TypedModule};
 
-const PROFILES: [&str; 3] = ["moltenvk-m3", "vk12-floor", "lavapipe"];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "roadmap-2022", "lavapipe"];
 
 const DATALAYOUT: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
 
@@ -232,8 +232,8 @@ fn a_half_threadgroup_array_is_a_typed_workgroup_object() {
         assert_eq!(local.typed.len(), 1, "{stem}");
         let census = plan.census();
         for name in [
-            "access.threadgroup.typed_store.clamped",
-            "access.threadgroup.typed_load.clamped",
+            "access.threadgroup.typed_store",
+            "access.threadgroup.typed_load",
         ] {
             assert!(census.contains_key(name), "{stem}: {name} in {census:?}");
         }
@@ -326,7 +326,7 @@ fn the_array_stays_in_the_arena_where_the_structure_does_not_allow_a_typed_objec
             assert!(local.typed.is_empty(), "{what}");
             let census = plan.census();
             assert!(
-                census.contains_key("access.threadgroup.store.checked"),
+                census.contains_key("access.threadgroup.store"),
                 "{what}: {census:?}"
             );
             let want: Vec<u32> = (0..64u32).map(|t| pattern(63 - t)).collect();

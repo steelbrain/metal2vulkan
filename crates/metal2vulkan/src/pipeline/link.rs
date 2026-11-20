@@ -342,9 +342,9 @@ impl SymbolTable for Linked {
 }
 
 /// A render pipeline's fragment function pushes after its vertex function: its push fields
-/// start at or past the vertex function's end, which the fixed windows always give and the
-/// floor's one range gives where the fragment compiled under its vertex function's
-/// `CompiledFunction::fragment_push_base`. `InvalidDescriptor(PushBase)` where it does not.
+/// start at or past the vertex function's end, which the floor's one range gives where the
+/// fragment compiled under its vertex function's `CompiledFunction::fragment_push_base`.
+/// `InvalidDescriptor(PushBase)` where it does not.
 fn check_push_base(ifaces: &[&StageInterface]) -> Result<(), Error> {
     let [vertex, fragment, ..] = ifaces else {
         return Ok(());

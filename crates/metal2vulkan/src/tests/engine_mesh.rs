@@ -25,7 +25,7 @@ use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::stage_io::{IoNumeric, IoRole, StageBuiltin};
 use crate::pipeline::sym::{PushField, SpecKey, Stage};
 use crate::pipeline::testing::{engine_dir, llvm_assemble, meter, AssembleError};
-use crate::spirv::testing::{check_words_valid, committed_profiles};
+use crate::spirv::testing::{check_words_valid, committed_profiles, threadgroup_profiles};
 use std::sync::Arc;
 
 pub(super) fn fixture(stem: &str) -> Option<Vec<u8>> {
@@ -177,9 +177,10 @@ fn a_mesh_function_is_a_mesh_entry() {
 }
 
 /// The committed profiles whose device does not list `VK_EXT_mesh_shader`: those that emulate a
-/// mesh function.
+/// mesh function. Only those that take threadgroup memory, which the object and mesh functions
+/// here use (`spirv::testing::threadgroup_profiles`).
 pub(super) fn emulating_profiles() -> Vec<(String, DeviceProfile)> {
-    let out: Vec<(String, DeviceProfile)> = committed_profiles()
+    let out: Vec<(String, DeviceProfile)> = threadgroup_profiles()
         .expect("committed profiles")
         .into_iter()
         .filter(|(stem, _)| !lists_mesh_shader(stem))

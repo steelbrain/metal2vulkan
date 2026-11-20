@@ -55,7 +55,8 @@ use crate::pipeline::{
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
-use crate::spirv::testing::committed_profiles;
+use crate::spirv::testing::threadgroup_profiles;
+use crate::spirv::testing::{committed_profiles, refuses_threadgroup_memory};
 use crate::vk;
 
 fn assemble(path: std::path::PathBuf) -> Option<Vec<u8>> {
@@ -77,11 +78,13 @@ fn authored(stem: &str) -> Option<Vec<u8>> {
     assemble(fixtures_dir().join(format!("{stem}.ll")))
 }
 
-/// The module of `entry` on `p`, or `None` when `p` needs a runtime input for it.
+/// The module of `entry` on `p`, or `None` when `p` needs a runtime input for it or takes no
+/// threadgroup memory.
 fn module(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) -> Option<(Plan, TypedModule)> {
     match typed_module(bc, entry, p) {
         Ok(m) => Some(m),
         Err(Error::NeedsInput(_)) => None,
+        Err(e) if refuses_threadgroup_memory(&e, p) => None,
         Err(e) => panic!("{stem}: {entry}: {e}"),
     }
 }
@@ -605,7 +608,7 @@ fn an_integer_slice_takes_its_class_from_the_format() {
     let entry = "imageblock_runtime_region";
     let mut ran_formatless = 0;
     let mut ran_keyed = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
+    for (stem, p) in threadgroup_profiles().expect("profiles") {
         for (bc, entry) in [
             (&bc, entry),
             (&authored, "kernel_imageblock_runtime_slice_region"),
@@ -731,7 +734,7 @@ fn specialized(pipe: &ComputePipeline, plan: &BindingPlan, key: SpecKey) -> Opti
 #[test]
 fn the_binder_specializes_and_charges_the_imageblock() {
     let Some(bc) = owned() else { return };
-    for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
+    for stem in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
         let dev = device(stem);
         let pipe = pipeline(&dev, &bc, "imageblock_after_threadgroup");
         assert!(pipe

@@ -18,9 +18,9 @@ pub struct MetalDeviceProperties {
     /// Always 32: the consumer answers 32 on both reply paths (info-encoder `0x1c2` and
     /// `CmdGetComputeInfo` key 3).
     pub thread_execution_width: u32,
-    /// Per axis: `maxComputeWorkGroupSize[i]` capped by `maxComputeWorkGroupInvocations`, and by an
-    /// Apple GPU's 1024; on `Device::from_queries`' profile, which runs a deep threadgroup as one
-    /// row (`SpecKey::DeepThreadgroup`), the capped invocations on every axis.
+    /// `maxComputeWorkGroupInvocations` capped by an Apple GPU's 1024, on every axis: a threadgroup
+    /// deeper than `maxComputeWorkGroupSize` allows on an axis runs as one row
+    /// (`SpecKey::DeepThreadgroup`).
     pub max_threads_per_threadgroup: [u32; 3],
     /// `maxComputeWorkGroupInvocations` (pipelines report a flattened-tier cap of their own),
     /// capped by an Apple GPU's 1024.

@@ -16,7 +16,7 @@ use crate::vk;
 pub struct PipelineLayout {
     /// Set 0 (always) and set 1 (only for the handle heap), in set order.
     pub sets: Vec<DescriptorSetLayout>,
-    /// One range per stage that has push fields: the fixed windows.
+    /// One range per stage that has push fields, over the bytes its fields take.
     pub push_constants: Vec<PushConstantRange>,
     /// Set 0 fits `maxPushDescriptors`. When false, the same layout is used as a pooled set; the
     /// layout is never split.

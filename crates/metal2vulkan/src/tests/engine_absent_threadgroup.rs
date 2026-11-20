@@ -41,6 +41,7 @@ use crate::pipeline::sym::Stage;
 use crate::pipeline::testing::{
     llvm_assemble, meter, status_reach, status_reach_on, AssembleError, Scratch, StatusReach,
 };
+use crate::spirv::testing::threadgroup_profiles;
 use crate::spirv::testing::{check_words_valid, committed_profiles};
 
 /// The kernels (module docs). Argument 0 is the removed threadgroup memory `tg`, gated by
@@ -251,7 +252,7 @@ fn absent_threadgroup_memory_compared_is_refused() {
 #[test]
 fn present_threadgroup_memory_is_read() {
     let Some(bc) = module() else { return };
-    for (stem, p) in committed_profiles().expect("profiles") {
+    for (stem, p) in threadgroup_profiles().expect("profiles") {
         for entry in ["at_accesses", "at_stores", "at_compared"] {
             match compile(&bc, entry, true, &p) {
                 Ok(a) => {

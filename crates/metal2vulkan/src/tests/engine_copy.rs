@@ -41,6 +41,7 @@ use crate::pipeline::testing::{
 };
 use crate::spirv::interp::{run, Buffer, Config, InterpError, Order, Resources, TrapKind};
 use crate::spirv::ir::{GlobalKind, TypedModule};
+use crate::spirv::testing::zeroes_threadgroup_memory;
 
 const PROFILES: [&str; 5] = [
     "moltenvk-m3",
@@ -345,7 +346,10 @@ fn threadgroup_record_copy_is_exact() {
         return;
     };
     let entry = "kernel_threadgroup_flat_leaf";
-    for (what, prof) in profiles() {
+    let profiles = profiles()
+        .into_iter()
+        .filter(|(_, p)| zeroes_threadgroup_memory(p));
+    for (what, prof) in profiles {
         l3(&bc, entry, &prof, &what);
         let (plan, m) = typed_module(&bc, entry, &prof).expect("module");
         assert_eq!(

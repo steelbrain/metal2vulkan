@@ -27,6 +27,7 @@ use crate::pipeline::testing::{
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::{Inst, StorageClass, Type, TypedModule};
+use crate::spirv::testing::refuses_threadgroup_memory;
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
@@ -250,7 +251,8 @@ fn twin(text: &str) -> String {
         .replace(", i1 true)", ", i1 false)")
 }
 
-/// Compile the volatile kernel `text` and its non-volatile twin on every profile: both pass L3
+/// Compile the volatile kernel `text` and its non-volatile twin on every profile that takes it (a
+/// kernel with threadgroup memory on those with zeroed workgroup memory): both pass L3
 /// and emit the same loads and stores, the twin none volatile and the kernel exactly `want` of
 /// the profile, in
 /// the `GLSL450` model; run the kernel over `bufs`. Returns each profile's buffers and plan.
@@ -269,7 +271,11 @@ fn run_everywhere(
     let mut out = Vec::new();
     for stem in PROFILES {
         let prof = p(stem);
-        let a = compile(&bc, name, &prof).unwrap_or_else(|e| panic!("{stem} {name}: {e}"));
+        let a = match compile(&bc, name, &prof) {
+            // A profile without zeroed workgroup memory takes no threadgroup memory.
+            Err(e) if refuses_threadgroup_memory(&e, &prof) => continue,
+            a => a.unwrap_or_else(|e| panic!("{stem} {name}: {e}")),
+        };
         link_and_validate(&a, &prof).unwrap_or_else(|e| panic!("{stem} {name}: L3: {e}"));
         let (plan, m) = typed_module(&bc, name, &prof).expect("module");
         let (_, twin) = typed_module(&plain, name, &prof).expect("twin");

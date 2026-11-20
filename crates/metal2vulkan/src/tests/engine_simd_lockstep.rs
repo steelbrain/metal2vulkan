@@ -20,9 +20,7 @@
 //!   loop's header takes a simdgroup barrier there;
 //! - a conflict no barrier position orders on a subgroup (an arm then a divergent loop) takes a
 //!   simdgroup barrier that only emulated simdgroups make exact, and the kernel takes the
-//!   `Emulated` tier (`barrier.lockstep.emulated.simdgroup`), except on a device that runs a
-//!   simdgroup's 32 threads in lockstep itself (moltenvk-m3), where the kernel keeps its tier
-//!   and requires that fact (`barrier.lockstep.device`).
+//!   `Emulated` tier (`barrier.lockstep.emulated.simdgroup`).
 //!
 //! Accesses the IR proves disjoint between the threads of a simdgroup (each thread's own word,
 //! two objects, two constant words, words further apart than a simdgroup spans, words a loop
@@ -1520,7 +1518,7 @@ const CHUNKED: [SubgroupSize; 3] = [SubgroupSize::W8, SubgroupSize::W16, Subgrou
 
 #[test]
 fn a_uniform_conflict_takes_a_threadgroup_barrier() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "vk12-floor"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
         let Some(plan) = check("neighbor", NEIGHBOR, profile_name, 32, &CHUNKED, |t| t ^ 8) else {
             return;
         };
@@ -1551,7 +1549,7 @@ fn a_conflict_in_one_simdgroup_takes_a_simdgroup_barrier() {
         ("carry", CARRY, &carry, 2),
     ] {
         // Emulated simdgroups: a predicated workgroup barrier, exact at every width.
-        for profile_name in ["lavapipe", "vk12-floor"] {
+        for profile_name in ["lavapipe", "roadmap-2022"] {
             let Some(plan) = check(name, body, profile_name, 64, &CHUNKED, expect) else {
                 return;
             };
@@ -1575,12 +1573,10 @@ fn a_conflict_in_one_simdgroup_takes_a_simdgroup_barrier() {
 }
 
 /// The arm's read, then the loop's writes: no subgroup barrier may stand between them. Emulated
-/// simdgroups order the pair on lavapipe and vk12-floor; moltenvk-m3's device runs a simdgroup's
-/// 32 threads in lockstep itself (`VkProperty::SimdgroupLockstep`), so there the kernel keeps its
-/// own tier, no barrier stands, and the module requires the property. The CPU interpreter's 32-lane
-/// subgroups run in lockstep as that device does.
+/// simdgroups order the pair, on lavapipe, roadmap-2022 and moltenvk-m3 alike, and no module
+/// requires `VkProperty::SimdgroupLockstep`.
 #[test]
-fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups_or_the_devices_lockstep() {
+fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups() {
     let expect = |t: u32| {
         if t < 32 && t.is_multiple_of(2) {
             (t + 2) & 31
@@ -1597,7 +1593,7 @@ fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups_or_the_device
             .properties
             .contains(&VkProperty::SimdgroupLockstep)
     };
-    for profile_name in ["lavapipe", "vk12-floor"] {
+    for profile_name in ["lavapipe", "roadmap-2022", "moltenvk-m3"] {
         let Some(plan) = check(
             "arm_then_loop",
             ARM_THEN_LOOP,
@@ -1623,24 +1619,6 @@ fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups_or_the_device
         assert_eq!(plan.simd.1, Tier::Emulated, "{profile_name}");
         assert!(!requires(profile_name), "{profile_name}");
     }
-    let Some(plan) = check(
-        "arm_then_loop",
-        ARM_THEN_LOOP,
-        "moltenvk-m3",
-        64,
-        &[SubgroupSize::W32],
-        expect,
-    ) else {
-        return;
-    };
-    assert_eq!(uses(&plan, "barrier.lockstep.device"), 1);
-    assert!(!plan
-        .census()
-        .keys()
-        .any(|k| k.starts_with("barrier.lockstep.") && k != "barrier.lockstep.device"));
-    // The kernel's own tier: it holds no simdgroup operation.
-    assert_eq!(plan.simd.1, Tier::NoSubgroup);
-    assert!(requires("moltenvk-m3"));
 }
 
 /// The `Emulated` tier a lockstep barrier forces (item 4's last kind) walks the kernel
@@ -1649,8 +1627,7 @@ fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups_or_the_device
 /// splits at a synchronization (`forward_cross`) and across the synchronization within its block
 /// (`forward_sync`), and the members a member-wise phi's copy reads across it (`member_sync`).
 /// Each failed to emit (`Invariant: ValueId(n) has no value in this block`) while
-/// the walk reloaded and demoted an instruction's literal operands. On moltenvk-m3 the device's
-/// lockstep orders the pair, so the kernels keep their tier and no walk is predicated.
+/// the walk reloaded and demoted an instruction's literal operands.
 #[test]
 fn a_forced_predicated_walk_carries_what_each_instruction_reads() {
     let arm = |t: u32| {
@@ -1682,7 +1659,7 @@ fn a_forced_predicated_walk_carries_what_each_instruction_reads() {
             "arith.aggregate.member",
         ),
     ] {
-        for profile_name in ["lavapipe", "vk12-floor"] {
+        for profile_name in ["lavapipe", "roadmap-2022", "moltenvk-m3"] {
             let Some(plan) = check(name, body, profile_name, 64, &CHUNKED, expect) else {
                 return;
             };
@@ -1697,11 +1674,6 @@ fn a_forced_predicated_walk_carries_what_each_instruction_reads() {
             // The struct's pointer is read through the extract, not folded away.
             assert_eq!(uses(&plan, extracts), 1, "{at}");
         }
-        let Some(plan) = check(name, body, "moltenvk-m3", 64, &[SubgroupSize::W32], expect) else {
-            return;
-        };
-        assert_eq!(uses(&plan, "barrier.lockstep.device"), 1, "{name}");
-        assert!(plan.families.simd.predication.is_none(), "{name}");
     }
 }
 
@@ -1863,10 +1835,10 @@ fn indices_apart_from_a_shared_place_only_clear_their_pairs() {
     let row_base = |l: u32| l + 1;
     let row_stride = |_: u32| 0;
     let temporal = |l: u32| 33 - l;
-    // The one lockstep barrier each kernel takes on lavapipe and vk12-floor, then on moltenvk-m3.
+    // The one lockstep barrier each kernel takes on lavapipe and roadmap-2022, then on moltenvk-m3.
     // At 32 threads the interpreter's 32-lane schedule is lockstep and gives the answer either
     // way, so on moltenvk-m3 the barrier is what shows the pair is kept: `group_base`'s place
-    // is ordered only within its simdgroup, which that device does itself.
+    // is ordered only within its simdgroup, by a subgroup barrier there.
     let tg = "barrier.lockstep.threadgroup";
     for (name, body, expect, elsewhere, on_m3) in [
         (
@@ -1874,7 +1846,7 @@ fn indices_apart_from_a_shared_place_only_clear_their_pairs() {
             GROUP_BASE,
             &group_base as &dyn Fn(u32) -> u32,
             "barrier.lockstep.emulated.simdgroup",
-            "barrier.lockstep.device",
+            "barrier.lockstep.simdgroup",
         ),
         ("row_base", ROW_BASE, &row_base, tg, tg),
         ("row_stride", ROW_STRIDE, &row_stride, tg, tg),
@@ -1883,7 +1855,7 @@ fn indices_apart_from_a_shared_place_only_clear_their_pairs() {
         for (profile_name, lanes, want) in [
             ("moltenvk-m3", &[SubgroupSize::W32][..], on_m3),
             ("lavapipe", &CHUNKED[..], elsewhere),
-            ("vk12-floor", &CHUNKED[..], elsewhere),
+            ("roadmap-2022", &CHUNKED[..], elsewhere),
         ] {
             let Some(plan) = check(name, body, profile_name, 32, lanes, expect) else {
                 return;
@@ -2004,14 +1976,14 @@ fn in_lockstep(words: &mut [u32], mut step: impl FnMut(usize, u32, &[u32]) -> Op
 /// The owned fixture `rtl_lockstep`, the runtime lane `driver_deviations`' lockstep gate: Apple's
 /// compiler keeps each kernel's read of another thread's word and its write of its own in one loop
 /// each thread leaves after its own count, so no barrier position is uniform in the simdgroup.
-/// moltenvk-m3 relies on its device's lockstep there (a `barrier.lockstep.device` place,
-/// `VkProperty::SimdgroupLockstep` required, its tier kept); lavapipe and vk12-floor take emulated
-/// simdgroups. Each reads what lockstep reads, which the lane checks on the device
+/// moltenvk-m3, lavapipe and roadmap-2022 take emulated simdgroups, and no module requires
+/// `VkProperty::SimdgroupLockstep`. Each reads what lockstep reads, which the lane checks on the
+/// device
 /// (`rtl_lockstep_divergent_loop`'s 64 threads run 1 to 5 iterations of `words[t] = words[t ^ 16] *
 /// 3 + i + 1`; `rtl_lockstep_until`'s add the word 8 lanes on to their own while it is below a
 /// limit, at most 8 times).
 #[test]
-fn the_lockstep_gate_fixture_needs_the_devices_lockstep_or_emulated_simdgroups() {
+fn the_lockstep_gate_fixture_takes_emulated_simdgroups() {
     let path = crate::pipeline::testing::engine_dir().join("rtl_lockstep.ll");
     let bc = match llvm_assemble(&path) {
         Ok(b) => b,
@@ -2048,31 +2020,24 @@ fn the_lockstep_gate_fixture_needs_the_devices_lockstep_or_emulated_simdgroups()
         ("rtl_lockstep_divergent_loop", &counts, divergent),
         ("rtl_lockstep_until", &limits, until),
     ] {
-        for (profile_name, lanes) in [
-            ("moltenvk-m3", &[SubgroupSize::W32][..]),
-            ("lavapipe", &CHUNKED[..]),
-            ("vk12-floor", &CHUNKED[..]),
-        ] {
-            let device = profile_name == "moltenvk-m3";
+        for profile_name in ["moltenvk-m3", "lavapipe", "roadmap-2022"] {
+            let lanes = &CHUNKED[..];
             let p = profile(profile_name, DevicePolicy::default()).expect("profile");
             let (plan, m) = typed_module(&bc, kernel, &p)
                 .unwrap_or_else(|e| panic!("{kernel} on {profile_name}: {e}"));
             let at = format!("{kernel} on {profile_name}");
-            assert_eq!(uses(&plan, "barrier.lockstep.device") > 0, device, "{at}");
-            assert_eq!(
+            assert_eq!(uses(&plan, "barrier.lockstep.device"), 0, "{at}");
+            assert!(
                 uses(&plan, "barrier.lockstep.emulated.simdgroup") > 0,
-                !device,
                 "{at}"
             );
-            if !device {
-                assert_eq!(plan.simd.1, Tier::Emulated, "{at}");
-            }
+            assert_eq!(plan.simd.1, Tier::Emulated, "{at}");
             let requires = compile(&bc, kernel, &p)
                 .unwrap_or_else(|e| panic!("{at}: {e}"))
                 .requirements
                 .properties
                 .contains(&VkProperty::SimdgroupLockstep);
-            assert_eq!(requires, device, "{at}");
+            assert!(!requires, "{at}");
             for &w in lanes {
                 assert_eq!(run_over(&plan, &m, input, w), want, "{at} at {w:?}");
             }
@@ -2086,7 +2051,7 @@ fn the_lockstep_gate_fixture_needs_the_devices_lockstep_or_emulated_simdgroups()
 /// Without it the chunked schedule reads a word another chunk already overwrote.
 #[test]
 fn a_device_memory_conflict_takes_the_barrier_lockstep_stood_for() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "vk12-floor"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
         let Some(plan) = check(
             "device_neighbor",
             DEVICE_NEIGHBOR,
@@ -2105,7 +2070,7 @@ fn a_device_memory_conflict_takes_the_barrier_lockstep_stood_for() {
         assert_eq!(plan.simd.1, Tier::NoSubgroup, "{profile_name}");
     }
     let rotate = |t: u32| if t < 32 { 2 * ((t + 1) & 31) } else { t };
-    for profile_name in ["lavapipe", "vk12-floor"] {
+    for profile_name in ["lavapipe", "roadmap-2022"] {
         let Some(plan) = check(
             "device_rotate",
             DEVICE_ROTATE,
@@ -2143,7 +2108,7 @@ fn a_device_memory_conflict_takes_the_barrier_lockstep_stood_for() {
 /// word another chunk already overwrote.
 #[test]
 fn a_buffer_through_two_thread_slots_is_one_object() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "vk12-floor"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
         let Some(plan) = check(
             "device_slots",
             DEVICE_SLOTS,
@@ -2165,7 +2130,7 @@ fn a_buffer_through_two_thread_slots_is_one_object() {
 /// Each thread's own device word takes no barrier.
 #[test]
 fn a_threads_own_device_word_takes_no_barrier() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "vk12-floor"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
         let Some(plan) = check("device_own", DEVICE_OWN, profile_name, 32, &CHUNKED, |t| {
             t + 1
         }) else {
@@ -2186,7 +2151,7 @@ fn a_threads_own_device_word_takes_no_barrier() {
 /// Metal's own answer is the arm order its GPU chose, not lockstep's program order.
 #[test]
 fn a_branchs_two_arms_take_no_device_barrier() {
-    for profile_name in ["lavapipe", "moltenvk-m3", "vk12-floor"] {
+    for profile_name in ["lavapipe", "moltenvk-m3", "roadmap-2022"] {
         let Some(bc) = assemble("device_arms", DEVICE_ARMS) else {
             return;
         };
@@ -2217,7 +2182,7 @@ const LOCKSTEP_NAMES: [&str; 5] = [
 /// kernel keeps the `Direct` tier, where the entry reconverges maximally on 32-lane subgroups
 /// (the RTX 5080's profile): the barrier orders the threads that run it together, those
 /// Apple's simdgroup runs it for. On lavapipe's 8-lane subgroups it stays on emulated simdgroups,
-/// and on MoltenVK the device's lockstep orders it.
+/// and on MoltenVK's 32-lane subgroups, whose entry does not reconverge maximally, too.
 #[test]
 fn a_divergent_device_pair_takes_a_tangle_barrier_where_the_entry_reconverges_maximally() {
     let half = |t: u32| if t & 31 < 16 { t ^ 1 } else { t };
@@ -2234,22 +2199,17 @@ fn a_divergent_device_pair_takes_a_tangle_barrier_where_the_entry_reconverges_ma
     assert_eq!(uses(&plan, "barrier.lockstep.simdgroup"), 1);
     assert_eq!(uses(&plan, "barrier.lockstep.emulated.simdgroup"), 0);
     assert_eq!(plan.simd.1, Tier::Direct);
-    let Some(plan) = check("device_half", DEVICE_HALF, "lavapipe", 64, &CHUNKED, half) else {
-        return;
-    };
-    assert_eq!(uses(&plan, "barrier.lockstep.emulated.simdgroup"), 1);
-    assert_eq!(plan.simd.1, Tier::Emulated);
-    let Some(plan) = check(
-        "device_half",
-        DEVICE_HALF,
-        "moltenvk-m3",
-        64,
-        &[SubgroupSize::W32],
-        half,
-    ) else {
-        return;
-    };
-    assert_eq!(uses(&plan, "barrier.lockstep.device"), 1);
+    for profile_name in ["lavapipe", "moltenvk-m3"] {
+        let Some(plan) = check("device_half", DEVICE_HALF, profile_name, 64, &CHUNKED, half) else {
+            return;
+        };
+        assert_eq!(
+            uses(&plan, "barrier.lockstep.emulated.simdgroup"),
+            1,
+            "{profile_name}"
+        );
+        assert_eq!(plan.simd.1, Tier::Emulated, "{profile_name}");
+    }
 }
 
 /// How [`device_half_padded`] computes `DEVICE_HALF`'s first stored value, `t`.
@@ -2648,17 +2608,17 @@ fn texture_calls_take_no_device_barrier() {
 }
 
 /// The profiles the one-thread guard is checked on: emulated simdgroups (lavapipe's 8-lane
-/// subgroups, the floor), the tangle barrier (the RTX 5080's maximal reconvergence), and the
-/// device's lockstep (MoltenVK).
+/// subgroups, the floor), the tangle barrier (the RTX 5080's maximal reconvergence), and MoltenVK's
+/// 32-lane subgroups.
 const LONE_PROFILES: [&str; 4] = [
     "lavapipe",
-    "vk12-floor",
+    "roadmap-2022",
     "nvidia-rtx5080-laptop",
     "moltenvk-m3",
 ];
 
-/// The lanes `profile_name`'s kernels run on here: 32 where its subgroups are pinned 32 wide
-/// or it runs a simdgroup in lockstep itself, else the chunked widths.
+/// The lanes `profile_name`'s kernels run on here: 32 where its subgroups are 32 wide, else the
+/// chunked widths.
 fn lanes_of(profile_name: &str) -> &'static [SubgroupSize] {
     match profile_name {
         "nvidia-rtx5080-laptop" | "moltenvk-m3" => &[SubgroupSize::W32],

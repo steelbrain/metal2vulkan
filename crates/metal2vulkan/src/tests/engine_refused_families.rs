@@ -8,12 +8,13 @@
 //! parameter or the entry's interface at its ABI metadata. A refused call names its callee.
 
 use crate::air::error::{CanonError, InputErrorKind};
+use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
 use crate::error::{DiagName, Error, Feature, Location, LowerFamily, Needs, Unsupported};
 use crate::pipeline::testing::{
     compile, link_and_validate, llvm_assemble, profile, AssembleError, Scratch,
 };
-use crate::spirv::testing::committed_profiles;
+use crate::spirv::testing::{committed_profiles, threadgroup_profiles};
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
@@ -58,8 +59,17 @@ fn kernel(body: &str, decls: &str) -> String {
 /// The refusal of `entry` of `bitcode`: the same on every committed profile, since none of these
 /// refusals depends on the device.
 fn refusal(bitcode: &[u8], entry: &str) -> Unsupported {
+    refusal_on(
+        bitcode,
+        entry,
+        committed_profiles().expect("committed profiles"),
+    )
+}
+
+/// [`refusal`] on `profiles`.
+fn refusal_on(bitcode: &[u8], entry: &str, profiles: Vec<(String, DeviceProfile)>) -> Unsupported {
     let mut first: Option<Unsupported> = None;
-    for (stem, p) in committed_profiles().expect("committed profiles") {
+    for (stem, p) in profiles {
         let u = match compile(bitcode, entry, &p) {
             Err(Error::Unsupported(u)) => u,
             Err(other) => panic!("{entry} on {stem}: {other}"),
@@ -362,7 +372,8 @@ fn a_threadgroup_address_made_from_an_integer_is_not_representable() {
         let Some(bc) = assemble(tag, &text) else {
             return;
         };
-        let u = refusal(&bc, "k");
+        // On every profile that takes threadgroup memory.
+        let u = refusal_on(&bc, "k", threadgroup_profiles().expect("profiles"));
         assert_eq!(u.feature, Feature::DereferenceLoadedPointer, "{tag}: {u}");
         assert_eq!(u.needs, Needs::NotRepresentable, "{tag}: {u}");
         assert_at_instruction(&u, "k");

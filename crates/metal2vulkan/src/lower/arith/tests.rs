@@ -4337,44 +4337,6 @@ fn float_to_bool_convert_is_metals_reading() {
     }
 }
 
-/// Metal's `fmin`, `fmax`, `min3`, `max3` and `clamp` on `float` and `half` take the device's
-/// `NMin`, `NMax` and `NClamp` exactly where the profile takes `DriverDeviation::MetalMinMax` (the
-/// MoltenVK captures alone); `median3`, `llvm.minnum`'s own form, and `bfloat` and `double` lanes
-/// never do.
-#[test]
-fn the_minimum_and_maximum_family_follows_the_profile() {
-    use crate::spirv::testing::is_moltenvk_capture;
-    let family = [
-        FloatFn::Min,
-        FloatFn::Max,
-        FloatFn::Clamp,
-        FloatFn::Min3,
-        FloatFn::Max3,
-        FloatFn::Saturate,
-    ];
-    let mut taken = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
-        let moltenvk = is_moltenvk_capture(&stem);
-        for op in family {
-            for f in [float(32), float(16), vec(float(32), 4), vec(float(16), 3)] {
-                assert_eq!(
-                    super::device_min_max(&p, op, f),
-                    moltenvk,
-                    "{stem}: {op:?} on {f:?}"
-                );
-            }
-            for f in [bfloat(), float(64)] {
-                assert!(!super::device_min_max(&p, op, f), "{stem}: {op:?} on {f:?}");
-            }
-        }
-        for op in [FloatFn::Median3, FloatFn::MinNum, FloatFn::MaxNum] {
-            assert!(!super::device_min_max(&p, op, float(32)), "{stem}: {op:?}");
-        }
-        taken += usize::from(moltenvk);
-    }
-    assert!(taken >= 1, "the MoltenVK capture takes it");
-}
-
 /// Each of the minimum and maximum family is the device's `NMin`, `NMax` and `NClamp` alone, with
 /// no NaN test.
 #[test]

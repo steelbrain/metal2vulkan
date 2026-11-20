@@ -58,6 +58,7 @@ use crate::pipeline::{
     StageSource,
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Resources};
+use crate::spirv::testing::threadgroup_profiles;
 use crate::spirv::testing::{committed_descriptions, committed_profiles};
 use crate::vk;
 
@@ -2655,7 +2656,7 @@ fn an_imageblock_slice_writes_an_argument_buffer_texture() {
         let Some(bc) = heap_slice_module(name, "f16", ty, lanes, "half") else {
             return;
         };
-        for (stem, p) in committed_profiles().expect("profiles") {
+        for (stem, p) in threadgroup_profiles().expect("profiles") {
             let a = match compile(&bc, "heap_slice", &p) {
                 Ok(a) => a,
                 Err(e) => {

@@ -1,7 +1,8 @@
 //! Simdgroups emulated through workgroup memory.
 //!
 //! A kernel whose device cannot run a 32-lane simdgroup on subgroups (`lavapipe` cannot pin 32
-//! lanes; `vk12-floor` has no subgroup operations) is planned in the `Emulated` tier: simdgroup
+//! lanes, nor `roadmap-2022`, whose subgroups are 4 lanes; `vk12-floor` has no subgroup
+//! operations) is planned in the `Emulated` tier: simdgroup
 //! `k` is the linear threads `[32k, 32k + 32)`, and every operation that reads other lanes
 //! publishes through a workgroup scratch between workgroup barriers. The owned fixtures
 //! `engine/simd_uniform` and the workgroup-uniform kernels of `engine/simd_ops` go
@@ -57,7 +58,7 @@ use crate::spirv::testing::spirv_dis;
 use crate::vk;
 
 /// The committed profiles whose kernels' simdgroups are emulated.
-const PROFILES: [&str; 2] = ["lavapipe", "vk12-floor"];
+const PROFILES: [&str; 2] = ["lavapipe", "roadmap-2022"];
 
 const WIDTHS: [SubgroupSize; 4] = [
     SubgroupSize::W8,
@@ -823,8 +824,9 @@ fn simd_uniform_runs_emulated_at_every_width() {
 /// instead of exchanging a flag in every round (1,275 words on `lavapipe`, 2.59x, with the flag;
 /// 1,163, 2.36x, seeded; held at 2.5x). Each push field loads once at entry, which took one reload
 /// out of both forms (1,145 against 462 words, 2.48x, to 1,136 against 453, 2.51x): the emulation's
-/// 683 words over the subgroup form did not change, so the hold moved to 2.55x, still below the
-/// flag form's 112 extra words (about 2.75x against 453). The subgroup form is `moltenvk-m3`'s
+/// 683 words over the subgroup form did not change, so the hold moved to 2.55x. Through
+/// `Device::from_queries` the kernel is 1,164 words on `lavapipe` against 453 (2.57x), held at
+/// 2.6x, still below the flag form's 112 extra words (about 2.75x against 453). The subgroup form is `moltenvk-m3`'s
 /// without its driver's measured deviation (`MetalCanonicalNans`), which neither emulated profile
 /// has, so both forms carry the same NaN selects (the input's `fadd` before the reduction: 14
 /// words, 1,150 against 467 on `lavapipe`, 2.46x) and the ratio stays the emulation's. A profile
@@ -852,7 +854,7 @@ fn emulated_reductions_scans_and_votes_stay_compact() {
     let direct = whole_subgroups_without_the_nan_fact();
     // The divergent float min, the only kernel held below 3x, and the `half` scan the integer
     // rounding put above it.
-    let tight = (&float_min, "simd_float_prefix_k", 2.55);
+    let tight = (&float_min, "simd_float_prefix_k", 2.6);
     let rounded = (&uniform, "float_prefix_k", 3.2);
     let kernels = [
         (&float_min, "simd_minmax_k"),
@@ -1331,8 +1333,8 @@ fn simd_divergent_runs_predicated_on_lavapipe() {
 }
 
 #[test]
-fn simd_divergent_runs_predicated_on_vk12_floor() {
-    simd_divergent_runs_predicated("vk12-floor");
+fn simd_divergent_runs_predicated_on_roadmap_2022() {
+    simd_divergent_runs_predicated("roadmap-2022");
 }
 
 /// The `OpControlBarrier`s of `kernel` of `bc` compiled on profile `stem` under `policy`.
@@ -1524,11 +1526,11 @@ fn the_static_length_is_rounded_up_to_16_bytes_as_metal_reports_it() {
 /// threadgroup as `ThreadgroupMemorySize`.
 #[test]
 fn the_scratch_must_fit_beside_the_threadgroup_memory() {
-    // vk12-floor: 16 KiB. An arena of exactly 16 KiB leaves nothing for the scratch.
+    // roadmap-2022: 16 KiB. An arena of exactly 16 KiB leaves nothing for the scratch.
     let Some(full) = arena_kernel(4096) else {
         return;
     };
-    let floor = profile("vk12-floor", DevicePolicy::default()).expect("profile");
+    let floor = profile("roadmap-2022", DevicePolicy::default()).expect("profile");
     match compile(&full, "barrier_k", &floor) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::ThreadgroupMemorySize);
@@ -1597,7 +1599,7 @@ fn an_empty_region_declares_the_arena_beside_the_scratch() {
 
 /// An emulated operation exchanges through workgroup memory between workgroup barriers in
 /// workgroup-uniform control flow, so its result does not depend on how subgroups reconverge; a
-/// threadgroup barrier keeps the profile's reconvergence (`vk12-floor` has no maximal
+/// threadgroup barrier keeps the profile's reconvergence (`roadmap-2022` has no maximal
 /// reconvergence).
 #[test]
 fn emulated_operations_do_not_depend_on_reconvergence() {
@@ -1615,7 +1617,7 @@ fn emulated_operations_do_not_depend_on_reconvergence() {
             );
         }
     }
-    let floor = profile("vk12-floor", DevicePolicy::default()).expect("profile");
+    let floor = profile("roadmap-2022", DevicePolicy::default()).expect("profile");
     assert!(!floor.fields().subgroup.maximal_reconvergence);
     let a = compile(&bc, "region_k", &floor).expect("region_k");
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
@@ -2085,9 +2087,10 @@ fn the_emulated_tiers_limits_stay_refused_for_partial_simdgroups() {
 
 /// A `dispatchThreads` grid whose edge is a partial simdgroup runs whole on the variant, so its
 /// interior is checked against the variant's limits, not the flattened tier's. On
-/// nvidia-rtx50-linux (`Direct`, z at most 64), an interior of `[1, 1, 96]`, which the flattened
-/// pipeline runs alone, is a `LocalSize` refusal up front, as the variant's plan refuses it; an
-/// interior of `[1, 1, 64]` asks for the variant, whose plan runs both regions.
+/// nvidia-rtx50-linux (`Direct`, z at most 64), an interior of `[1, 1, 96]`, past the device's z,
+/// plans and runs on both pipelines, a deep threadgroup running as one row
+/// (`SpecKey::DeepThreadgroup`); an interior of `[1, 1, 64]` asks for the variant, whose plan runs
+/// both regions.
 #[test]
 fn a_mixed_dispatch_is_checked_against_the_variants_limits() {
     let Some(bc) = assemble("simd_ops") else {
@@ -2136,15 +2139,7 @@ fn a_mixed_dispatch_is_checked_against_the_variants_limits() {
         plan.instantiate_dispatch(&state, &mixed(96)).map(drop),
         vplan.instantiate_dispatch(&state, &mixed(96)).map(drop),
     ] {
-        match r {
-            Err(BindError::Unsupported(u)) => assert_eq!(
-                u.feature,
-                Feature::LocalSize {
-                    axis: Some(Axis::Z)
-                }
-            ),
-            other => panic!("{other:?}"),
-        }
+        assert_eq!(r, Ok(()));
     }
     assert_eq!(plan.dispatch_variant(&mixed(64)), Ok(emulated_key()));
     let c = vplan
