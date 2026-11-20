@@ -69,7 +69,7 @@ pub use counters::{Counters, Gauges, Metrics, SiteAllocations, Timed};
 pub use d3d11::D3d11Plane;
 pub use depth_stencil::DepthStencilState;
 pub use device::{Device, DeviceOptions, RawDevice};
-pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};
+pub use encoder::{ComputeCommandEncoder, Dispatch, DispatchType, Resource, ResourceUsage};
 pub use error::{
     DrawKind, Error, Gap, Limit, LinearPlanePassKind, Refusal, RenderPassKind, RenderPipelineKind,
     TextureViewKind,

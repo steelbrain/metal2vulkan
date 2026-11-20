@@ -42,8 +42,9 @@
 
 use crate::arrays::BINDINGS;
 use crate::cache;
-use crate::counters::{Gauge, Metric};
+use crate::counters::{FirstUse, Gauge, Metric};
 use crate::device::{lock, Core};
+use crate::encoder::{decide, size_checked, threadgroup_memory, Dispatch, Module};
 use crate::error::{Error, Gap, Refusal};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
@@ -64,7 +65,8 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering::AcqRel};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// The push window: the parameters a kernel reads from push constants, `[0, 256)` on every device,
 /// the floor's `maxPushConstantsSize` and the translator's window on `Device::from_queries`'
@@ -285,6 +287,10 @@ pub(crate) struct Later {
     function: FunctionDescriptor,
     inputs: LoweringInputs,
     pub(crate) lowered: OnceLock<Lowered>,
+    /// Set by the first thread to begin its lowering, the reaper's or a
+    /// [`prepare_dispatch`](ComputePipelineState::prepare_dispatch) call's: another call then
+    /// returns at once, and the reaper leaves it to that thread, which `lowered` waits for.
+    claimed: AtomicBool,
 }
 
 /// Which of a content's [`Later`] variants.
@@ -350,11 +356,31 @@ const VARIANT_CELLS: usize = 8;
 
 /// A kernel's `VkPipeline`s made so far, by their specialization. The first [`VARIANT_CELLS`]
 /// made each fill a cell of their own, which a dispatch reads with no lock; any made past them go
-/// in a list under the lock that every making takes, so that one variant is made once.
+/// in a list under the lock. A making holds the lock only to enter its variant as pending and to
+/// keep what it made, so makes of different variants run at once and one variant is made once at
+/// a time.
 #[derive(Default)]
 struct Variants {
     cells: [OnceLock<(Variant, vk::Pipeline)>; VARIANT_CELLS],
-    more: Mutex<Vec<(Variant, vk::Pipeline)>>,
+    more: Mutex<More>,
+    /// Signalled when a make ends, made or failed: a dispatch waiting for its pending variant
+    /// looks again.
+    ended: Condvar,
+}
+
+/// What [`Variants`] keeps under its lock.
+#[derive(Default)]
+struct More {
+    /// The variants made past the cells.
+    made: Vec<(Variant, vk::Pipeline)>,
+    /// The variants a thread is making now.
+    pending: Vec<([u32; 3], Vec<u32>, bool)>,
+}
+
+impl More {
+    fn pending(&self, (size, lengths, tiles): Key<'_>) -> Option<usize> {
+        (self.pending.iter()).position(|(s, l, t)| *s == size && l == lengths && *t == tiles)
+    }
 }
 
 impl Variants {
@@ -374,32 +400,59 @@ impl Variants {
         Err(true)
     }
 
-    /// Keeps `pipeline`, of `variant`, made under the lock `more` is: in the first empty cell,
-    /// else in `more`.
-    fn keep(
-        &self,
-        more: &mut Vec<(Variant, vk::Pipeline)>,
-        variant: Variant,
-        pipeline: vk::Pipeline,
-    ) {
+    /// The pipeline of the variant `key` where it is made, read under the lock `more` is.
+    fn made(&self, more: &More, key: Key<'_>) -> Option<vk::Pipeline> {
+        let (size, lengths, tiles) = key;
+        match self.in_cells(key) {
+            Ok(pipeline) => Some(pipeline),
+            Err(false) => None,
+            Err(true) => (more.made.iter())
+                .find(|(variant, _)| variant.is(size, lengths, tiles))
+                .map(|&(_, pipeline)| pipeline),
+        }
+    }
+
+    /// Keeps `pipeline`, of `variant`, under the lock `more` is: in the first empty cell, else in
+    /// `more`.
+    fn keep(&self, more: &mut More, variant: Variant, pipeline: vk::Pipeline) {
         match self.cells.iter().find(|cell| cell.get().is_none()) {
             // Only a making fills a cell, under the lock: the empty one stays empty until this.
             Some(cell) => {
                 let _ = cell.set((variant, pipeline));
             }
-            None => more.push((variant, pipeline)),
+            None => more.made.push((variant, pipeline)),
         }
     }
 
     /// Every pipeline, taken out to give back.
     fn drain(&mut self) -> impl Iterator<Item = vk::Pipeline> + '_ {
-        let more = self
-            .more
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let more = self.more.get_mut().unwrap_or_else(PoisonError::into_inner);
         (self.cells.iter_mut())
             .filter_map(|cell| cell.take().map(|(_, pipeline)| pipeline))
-            .chain(more.drain(..).map(|(_, pipeline)| pipeline))
+            .chain(more.made.drain(..).map(|(_, pipeline)| pipeline))
+    }
+}
+
+/// A variant entered as pending under [`Variants`]'s lock, for the thread that makes it: the
+/// entry leaves when this ends, made or not, panicking included, and wakes the waiting
+/// dispatches.
+struct Pending<'a> {
+    variants: &'a Variants,
+    key: Key<'a>,
+    made: Option<(Variant, vk::Pipeline)>,
+}
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        let mut more = lock(&self.variants.more);
+        if let Some(at) = more.pending(self.key) {
+            more.pending.swap_remove(at);
+        }
+        if let Some((variant, pipeline)) = self.made.take() {
+            self.variants.keep(&mut more, variant, pipeline);
+        }
+        drop(more);
+        self.variants.ended.notify_all();
     }
 }
 
@@ -783,6 +836,7 @@ impl Compiled {
                             function: function.clone(),
                             inputs,
                             lowered: OnceLock::new(),
+                            claimed: AtomicBool::new(false),
                         });
                         (plain, Some(Some(partial)), false, Some(source), answers)
                     }
@@ -821,6 +875,7 @@ impl Compiled {
                 function,
                 inputs,
                 lowered: OnceLock::new(),
+                claimed: AtomicBool::new(false),
             });
         // `partial` is `Some` for a kernel that runs at its own size: with its variant to lower
         // where it has one.
@@ -1256,6 +1311,73 @@ pub(crate) fn access(used: AccessSet) -> Access {
 }
 
 impl ComputePipelineState {
+    /// Makes ahead, on the calling thread, what a dispatch of this state makes at its first use,
+    /// so that the dispatch finds it made. Metal has no counterpart: this is a hook for a
+    /// consumer's pre-pass. Metal compiles a compute state whole when the state is made; here a
+    /// kernel's `VkPipeline` depends on the threadgroup size and the threadgroup memory lengths,
+    /// which arrive with the dispatch, and an observing kernel's ragged grid runs a variant
+    /// lowered at the first such grid. A consumer that reads a command buffer's dispatches before
+    /// it encodes them may call this for each, in their order, on threads of its own; the runtime
+    /// starts none.
+    ///
+    /// `dispatch` and `threads_per_threadgroup` are the dispatch's own arguments, as the program
+    /// passed them to [`dispatch_threads`](crate::ComputeCommandEncoder::dispatch_threads),
+    /// [`dispatch_threadgroups`](crate::ComputeCommandEncoder::dispatch_threadgroups) or
+    /// [`dispatch_threadgroups_with_indirect_buffer`](crate::ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer);
+    /// `threadgroup_memory_lengths` is what
+    /// [`set_threadgroup_memory_length`](crate::ComputeCommandEncoder::set_threadgroup_memory_length)
+    /// set on the encoder before it, as (index, length) pairs, each index once, an index not
+    /// listed at 0.
+    ///
+    /// It decides what the dispatch runs as the dispatch decides it. Where that is a variant not
+    /// lowered yet (the partial-threadgroups or the emulated one), it lowers it on this thread;
+    /// then it makes the `VkPipeline` of the dispatch's workgroup size, threadgroup memory
+    /// lengths and grid tiles. It returns at once where that is made, or another thread is
+    /// lowering or making it: a dispatch that needs it then waits for that thread alone. It makes
+    /// nothing where the dispatch would refuse its threadgroup size or threadgroup memory, or
+    /// records nothing (a grid with no threads, a kernel that writes no memory), and it reports
+    /// nothing: every error is the dispatch's own. What the dispatch checks of the encoder's
+    /// bindings is not checked here. A make that failed is made again by the next call or
+    /// dispatch that needs it. Each lowering is one translation within its own ceiling, so calls
+    /// on several threads at once may run as many translations at once.
+    ///
+    /// Counted as [`Metrics::made_ahead_variants`](crate::Metrics::made_ahead_variants) and
+    /// [`Metrics::made_ahead_lowerings`](crate::Metrics::made_ahead_lowerings).
+    pub fn prepare_dispatch(
+        &self,
+        dispatch: Dispatch,
+        threads_per_threadgroup: [u32; 3],
+        threadgroup_memory_lengths: &[(u32, u32)],
+    ) {
+        let compiled = &self.inner.compiled;
+        let size = threads_per_threadgroup;
+        let interface = &compiled.whole.interface;
+        if size_checked(interface, size).is_err() || !interface.has_effects {
+            return;
+        }
+        let ahead = |which, refused: &dyn Fn() -> Error| match compiled.lower_ahead(which) {
+            Some(lowered) => lowered.kernel(refused),
+            None => Err(refused()),
+        };
+        let Ok((choice, module, kernel)) = decide(compiled, dispatch.direct(size), size, ahead)
+        else {
+            return;
+        };
+        if (choice.direct).is_some_and(|(_, groups, _)| groups.contains(&0)) {
+            return;
+        }
+        let core = &compiled.core;
+        let (set, max) = (threadgroup_memory_lengths, core.limits.max_shared_memory);
+        let mut lengths = Vec::new();
+        if threadgroup_memory(kernel, set, choice.local, max, &mut lengths).is_err() {
+            return;
+        }
+        let key = (choice.local, &lengths[..], module == Module::Tiles);
+        if let Some(nanos) = kernel.make_ahead(core, key) {
+            core.counters.made_ahead(FirstUse::Variant, nanos);
+        }
+    }
+
     /// `maxTotalThreadsPerThreadgroup`: the translator's answer for the device, which is Metal's
     /// limit or less where the device holds fewer threads in a workgroup; for a descriptor with
     /// `requiredThreadsPerThreadgroup`, that size's threads, as Metal answers. A dispatch of
@@ -1402,11 +1524,32 @@ impl Compiled {
         }
     }
 
-    /// On the reaper: lowers the content's `which` variant, where it has one not lowered yet.
+    /// On the reaper: lowers the content's `which` variant, where it has one no thread has begun
+    /// to lower.
     pub(crate) fn lower_later(&self, which: Which) {
         if let Some(later) = self.later(which) {
-            (later.lowered).get_or_init(|| later.lower(&self.core, &self.whole.interface));
+            later.lower_once(&self.core, &self.whole.interface);
         }
+    }
+
+    /// [`ComputePipelineState::prepare_dispatch`]'s: the content's `which` variant, lowered on the
+    /// calling thread where no thread has begun to lower it. None where the content has no such
+    /// variant, another thread is lowering it, or the reaper was told to end (a dispatch's
+    /// lowering is then [`Lowered::Quiesced`], and stays so).
+    pub(crate) fn lower_ahead(&self, which: Which) -> Option<&Lowered> {
+        let later = self.later(which)?;
+        if let Some(lowered) = later.lowered.get() {
+            return Some(lowered);
+        }
+        if self.core.reaper.stopped() {
+            return None;
+        }
+        let began = host_time();
+        let Some(lowered) = later.lower_once(&self.core, &self.whole.interface) else {
+            return later.lowered.get();
+        };
+        (self.core.counters).made_ahead(FirstUse::Lowering, host_time().saturating_sub(began));
+        Some(lowered)
     }
 
     /// Where the reaper ended before lowering it: the content's `which` variant is not lowered.
@@ -1437,10 +1580,9 @@ impl Compiled {
                 let began = host_time();
                 self.core.reaper.lower(Arc::downgrade(self), which);
                 let lowered = later.lowered.wait();
-                self.core.counters.first_use_wait(
-                    crate::counters::FirstUse::Lowering,
-                    host_time().saturating_sub(began),
-                );
+                self.core
+                    .counters
+                    .first_use_wait(FirstUse::Lowering, host_time().saturating_sub(began));
                 lowered
             }
         };
@@ -1467,6 +1609,15 @@ impl Lowered {
 }
 
 impl Later {
+    /// Lowers the variant where no thread has begun to: what it lowered to, or none where another
+    /// thread claimed it first (`lowered` then waits for that thread) or it was lowered before.
+    fn lower_once(&self, core: &Core, whole: &Interface) -> Option<&Lowered> {
+        if self.lowered.get().is_some() || self.claimed.swap(true, AcqRel) {
+            return None;
+        }
+        Some(self.lowered.get_or_init(|| self.lower(core, whole)))
+    }
+
     /// The variant lowered, on the reaper: the lowering a device kept in the cache directory, or
     /// one made now and kept; the translator's refusal is kept too. `whole` is the content's
     /// module, which a state numbers its samplers from.
@@ -1546,38 +1697,79 @@ impl Kernel {
 
     /// The `VkPipeline` of the variant `key`, made now where it is not yet: the calling thread
     /// waits for it, a first-use wait, so what is recorded never depends on when a compile
-    /// finishes. One of the kernel's first [`VARIANT_CELLS`] variants is found with no lock.
+    /// finishes. Where another thread is making it, the call waits for that make, also a
+    /// first-use wait, and makes it itself where that one failed. One of the kernel's first
+    /// [`VARIANT_CELLS`] variants is found with no lock.
     pub(crate) fn pipeline(&self, core: &Core, key: Key<'_>) -> Result<vk::Pipeline, Error> {
         let variants = &self.variants;
-        let full = match variants.in_cells(key) {
-            Ok(pipeline) => return Ok(pipeline),
-            Err(full) => full,
-        };
-        let mut more = lock(&variants.more);
-        let (size, lengths, tiles) = key;
-        let found = match full {
-            true => (more.iter()).find(|(variant, _)| variant.is(size, lengths, tiles)),
-            false => None,
-        };
-        if let Some(&(_, pipeline)) = found {
-            return Ok(pipeline);
-        }
-        // Another thread may have made it since the cells were read.
         if let Ok(pipeline) = variants.in_cells(key) {
             return Ok(pipeline);
         }
+        let began = host_time();
+        let waited = |core: &Core| {
+            core.counters
+                .first_use_wait(FirstUse::Variant, host_time().saturating_sub(began))
+        };
+        let mut more = lock(&variants.more);
+        let mut waits = false;
+        loop {
+            if let Some(pipeline) = variants.made(&more, key) {
+                if waits {
+                    waited(core);
+                }
+                return Ok(pipeline);
+            }
+            if more.pending(key).is_none() {
+                break;
+            }
+            waits = true;
+            more = (variants.ended.wait(more)).unwrap_or_else(PoisonError::into_inner);
+        }
+        let pipeline = self.make_pending(core, more, key)?;
+        waited(core);
+        Ok(pipeline)
+    }
+
+    /// [`ComputePipelineState::prepare_dispatch`]'s make of the variant `key`: none where it is
+    /// made or a thread is making it; else made on the calling thread, and its nanoseconds where
+    /// it was made.
+    pub(crate) fn make_ahead(&self, core: &Core, key: Key<'_>) -> Option<u64> {
+        let variants = &self.variants;
+        if variants.in_cells(key).is_ok() {
+            return None;
+        }
+        let more = lock(&variants.more);
+        if variants.made(&more, key).is_some() || more.pending(key).is_some() {
+            return None;
+        }
+        let began = host_time();
+        let made = self.make_pending(core, more, key).ok();
+        made.map(|_| host_time().saturating_sub(began))
+    }
+
+    /// Makes the variant `key`, which `more`, the lock held, shows neither made nor pending:
+    /// entered as pending, made with the lock released, and kept.
+    fn make_pending(
+        &self,
+        core: &Core,
+        mut more: MutexGuard<'_, More>,
+        key: Key<'_>,
+    ) -> Result<vk::Pipeline, Error> {
+        let (size, lengths, tiles) = key;
+        more.pending.push((size, lengths.to_vec(), tiles));
+        drop(more);
+        let mut pending = Pending {
+            variants: &self.variants,
+            key,
+            made: None,
+        };
         let variant = Variant {
             size,
             threadgroup_lengths: lengths.to_vec(),
             tiles,
         };
-        let began = host_time();
         let pipeline = self.make(core, &variant)?;
-        core.counters.first_use_wait(
-            crate::counters::FirstUse::Variant,
-            host_time().saturating_sub(began),
-        );
-        variants.keep(&mut more, variant, pipeline);
+        pending.made = Some((variant, pipeline));
         Ok(pipeline)
     }
 

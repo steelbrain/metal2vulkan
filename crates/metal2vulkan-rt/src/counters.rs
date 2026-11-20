@@ -368,6 +368,9 @@ struct Atomics {
     first_use_wait_max_nanos: AtomicU64,
     /// Each [`FirstUse`] site's waits, at its index: their count, total and longest nanoseconds.
     first_use_sites: [[AtomicU64; 3]; 3],
+    /// The makes ahead of a dispatch at [`FirstUse::Variant`] and [`FirstUse::Lowering`], at
+    /// their index: their count and total nanoseconds.
+    made_ahead: [[AtomicU64; 2]; 2],
     blocks_made: AtomicU64,
     block_bytes_made: AtomicU64,
     consumer_allocations: AtomicU64,
@@ -573,6 +576,15 @@ impl Counters {
         count.fetch_add(1, Relaxed);
         total.fetch_add(nanos, Relaxed);
         longest.fetch_max(nanos, Relaxed);
+    }
+
+    /// One more make at `site`, the variant or the lowering, on a
+    /// [`prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch) call's thread, for
+    /// `nanos` nanoseconds ([`Metrics::made_ahead_variants`], [`Metrics::made_ahead_lowerings`]).
+    pub(crate) fn made_ahead(&self, site: FirstUse, nanos: u64) {
+        let [count, total] = &self.atomics.made_ahead[site as usize];
+        count.fetch_add(1, Relaxed);
+        total.fetch_add(nanos, Relaxed);
     }
 
     /// One more surface wait ([`Metrics::surface_waits`]): `nanos` nanoseconds, for `submissions`
@@ -1006,6 +1018,8 @@ impl Counters {
             first_use(FirstUse::Lowering),
             first_use(FirstUse::Lines),
         );
+        let made_ahead =
+            (a.made_ahead.each_ref()).map(|site| site.each_ref().map(|n| n.load(Relaxed)));
         let part = |part: Part| {
             let [count, bytes, total, _, over_1, over_5, over_20] = &a.parts[part as usize];
             let longest =
@@ -1048,6 +1062,10 @@ impl Counters {
             first_use_line_waits: lines[0],
             first_use_line_wait_nanos: lines[1],
             first_use_line_wait_max_nanos: lines[2],
+            made_ahead_variants: made_ahead[0][0],
+            made_ahead_variant_nanos: made_ahead[0][1],
+            made_ahead_lowerings: made_ahead[1][0],
+            made_ahead_lowering_nanos: made_ahead[1][1],
             blocks_made: a.blocks_made.load(Relaxed),
             block_bytes_made: a.block_bytes_made.load(Relaxed),
             consumer_allocations: a.consumer_allocations.load(Relaxed),
@@ -1286,7 +1304,8 @@ pub struct Metrics {
     /// nanoseconds; a maximum since the device was made.
     pub first_use_variant_wait_max_nanos: u64,
     /// Of the [`first_use_waits`](Self::first_use_waits), those for a kernel's later lowering
-    /// (the partial-threadgroups or the emulated form), made by the reaper thread while the
+    /// (the partial-threadgroups or the emulated form), made by the reaper thread, or a
+    /// [`prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch) call's, while the
     /// encoding call waited.
     pub first_use_lowering_waits: u64,
     /// The nanoseconds of the [`first_use_lowering_waits`](Self::first_use_lowering_waits), in
@@ -1303,6 +1322,18 @@ pub struct Metrics {
     /// The longest of the [`first_use_line_waits`](Self::first_use_line_waits), in nanoseconds;
     /// a maximum since the device was made.
     pub first_use_line_wait_max_nanos: u64,
+    /// The compute kernels' pipelines that
+    /// [`prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch) made on its caller's
+    /// thread, ahead of the dispatches that run them (`vkCreateComputePipelines`).
+    pub made_ahead_variants: u64,
+    /// The nanoseconds of the [`made_ahead_variants`](Self::made_ahead_variants), in total.
+    pub made_ahead_variant_nanos: u64,
+    /// The kernels' later lowerings (the partial-threadgroups or the emulated form) that
+    /// [`prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch) made on its caller's
+    /// thread.
+    pub made_ahead_lowerings: u64,
+    /// The nanoseconds of the [`made_ahead_lowerings`](Self::made_ahead_lowerings), in total.
+    pub made_ahead_lowering_nanos: u64,
     /// `VkDeviceMemory` allocations made: the allocations blocks are ranges of (the texture
     /// blocks among them), the zero source and the parameter ring's blocks.
     pub blocks_made: u64,

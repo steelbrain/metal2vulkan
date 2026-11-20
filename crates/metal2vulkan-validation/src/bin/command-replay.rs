@@ -55,6 +55,11 @@
 //! device that keeps a device copy of each Managed buffer, the report's `managed digests` line
 //! after its `device` line says which.
 //!
+//! The new runtime's play stands in for a consumer's pre-pass: `--prepass-width N` threads of the
+//! player's own (4 where the command line names none, 0 for none) prepare each compute dispatch
+//! ahead of its encoding (`ComputePipelineState::prepare_dispatch`) once its command buffer and its
+//! state are made, while the play goes on. The report's `prepass width` line says how many ran.
+//!
 //! `command-replay compare-dumps --a DIR --b DIR` compares two plays' dumps word by word, leaving
 //! out the words either play held covered, and prints a line per buffer that differs outside every
 //! cover, per dump only one play has, per dump a play could not read and per buffer the two plays
@@ -90,7 +95,7 @@ const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
                      [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd] \
-                     [--check-presents F,...] [--read-device-copies yes|no] \
+                     [--check-presents F,...] [--read-device-copies yes|no] [--prepass-width N] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
                      command-replay compare-plays --a REPORT --b REPORT [--frame F]\n       \
@@ -459,6 +464,19 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    // The consumer's pre-pass the new runtime's play stands in for: its threads, 4 where the
+    // command line names none, 0 for none.
+    let prepass = match options
+        .get("prepass-width")
+        .map(|width| width.parse::<usize>())
+    {
+        None => None,
+        Some(Ok(width)) => Some(width),
+        Some(Err(_)) => {
+            report.line("error prepass-width: not a count of threads");
+            return 2;
+        }
+    };
     let managed = match options.get("managed").map(String::as_str) {
         None => None,
         Some("one-copy") => Some(ManagedCopies::One),
@@ -545,6 +563,10 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             report.line("error read-device-copies: the new runtime's play only (--runtime rt)");
             2
         }
+        None | Some("old") if prepass.is_some() => {
+            report.line("error prepass-width: the new runtime's play only (--runtime rt)");
+            2
+        }
         None | Some("old") => {
             let mut device_options = DeviceOptions::default();
             device_options.shader_cache =
@@ -587,6 +609,8 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                         None => backend,
                     };
                     let backend = backend.with_video_handle(video);
+                    let backend = backend.with_prepass(prepass.unwrap_or(4));
+                    report.line(&format!("prepass width {}", backend.prepass_width()));
                     match display {
                         Some(metallib) => backend.with_display_library(metallib),
                         None => backend,

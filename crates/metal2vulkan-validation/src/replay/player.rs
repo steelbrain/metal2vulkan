@@ -13,6 +13,7 @@ use super::heaps::{
     relay, HeapSplit, Layout, Overlaps, Placements,
 };
 use super::pixels::Shape;
+use super::prepass::{Ahead, Prepass};
 use super::stale::Stale;
 use super::stream::{Call, StreamError, StreamReader};
 use super::texwrites::TexWrites;
@@ -151,6 +152,11 @@ pub trait Backend {
     /// The frame (counted from 0) and the stream position of the call the player plays next, for
     /// a backend that says where it skipped something.
     fn locate(&mut self, _frame: u64, _call: u64) {}
+
+    /// Prepare `dispatches`, read ahead (`prepass.rs`), ahead of their encoding, as a consumer's
+    /// pre-pass does: once the call that made the last of their command buffer and their state
+    /// has played, in stream order. A backend with no such hook ignores them.
+    fn prepare(&mut self, _dispatches: Vec<Ahead>) {}
 
     /// The committed command buffers that cannot complete with what the player has played, by
     /// stream id: each one's event waits that no played signal or CPU value meets, or a held one
@@ -1111,6 +1117,8 @@ pub struct Player<'b, B: Backend> {
     recorded_ids: HashMap<(u64, u64), u64>,
     /// The next call's position: the calls stepped so far.
     position: u64,
+    /// The compute dispatches to prepare, read ahead, by the position they are due at.
+    prepass: Prepass,
     /// The compute encoders open while a record names a later dispatch.
     encoders: HashMap<u64, Encoder>,
     /// The snapshots whose command buffers completed, not yet compared.
@@ -1355,6 +1363,7 @@ impl<'b, B: Backend> Player<'b, B> {
             guest_device: None,
             recorded_ids: HashMap::new(),
             position: 0,
+            prepass: Prepass::default(),
             encoders: HashMap::new(),
             done: VecDeque::new(),
             own_made: 0,
@@ -1495,6 +1504,9 @@ impl<'b, B: Backend> Player<'b, B> {
             if self.report.first_skip.is_none() && self.backend.skips() > skips {
                 self.report.first_skip = Some((frame, self.position));
             }
+            if let Some(due) = self.prepass.due(self.position) {
+                self.backend.prepare(due);
+            }
             self.position += 1;
             for key in [Some(CALLS), issued].into_iter().flatten() {
                 *self.fixed.entry(key).or_default() += 1;
@@ -1537,6 +1549,7 @@ impl<'b, B: Backend> Player<'b, B> {
         let (mut with_buffer, mut with_texture) = (HashSet::new(), HashSet::new());
         let mut overlaps = Overlaps::default();
         while let Ok(Some(call)) = ahead.next_call() {
+            self.prepass.see(position, &call);
             if &*call.selector == "MTLCreateSystemDefaultDevice" {
                 made_on.entry(call.result).or_default();
             } else if call.result != 0 {

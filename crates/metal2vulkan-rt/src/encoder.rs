@@ -12,8 +12,8 @@ use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
 use crate::over::{self, Reached};
 use crate::pipeline::{
-    address_word, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Which,
-    PUSH_BYTES, PUSH_STAGES, SQUARE,
+    address_word, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
+    Which, PUSH_BYTES, PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
 use crate::ring::CHUNK;
@@ -126,16 +126,61 @@ pub(crate) fn check_alignment(
 
 /// The grid of a dispatch.
 enum Grid<'a> {
-    /// Threadgroups per grid at the call's threadgroup size, the grid in threads, and whether the
-    /// last threadgroup along some axis is partial (a `dispatchThreads` grid that is not a whole
-    /// number of threadgroups).
-    Direct {
-        groups: [u32; 3],
-        threads: [u32; 3],
-        ragged: bool,
-    },
+    /// A direct dispatch's grid ([`Direct`]).
+    Direct(Direct),
     /// The arguments' buffer and offset.
     Indirect(&'a Buffer, u64),
+}
+
+/// The grid of a compute dispatch as Metal's dispatch call takes it, for
+/// [`ComputePipelineState::prepare_dispatch`], which decides what the dispatch runs as the
+/// dispatch itself does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dispatch {
+    /// `dispatchThreads:threadsPerThreadgroup:`'s threads per grid
+    /// ([`ComputeCommandEncoder::dispatch_threads`]).
+    Threads([u32; 3]),
+    /// `dispatchThreadgroups:threadsPerThreadgroup:`'s threadgroups per grid
+    /// ([`ComputeCommandEncoder::dispatch_threadgroups`]).
+    Threadgroups([u32; 3]),
+    /// `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:`,
+    /// whose grid the GPU reads
+    /// ([`ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer`]).
+    Indirect,
+}
+
+impl Dispatch {
+    /// The direct grid of this dispatch at threadgroup size `size`, as its encoder call forms it;
+    /// none for an indirect one.
+    pub(crate) fn direct(self, size: [u32; 3]) -> Option<Direct> {
+        match self {
+            Dispatch::Threadgroups(groups) => Some(Direct::of_threadgroups(groups, size)),
+            Dispatch::Threads(threads) => Some(Direct::of_threads(threads, size)),
+            Dispatch::Indirect => None,
+        }
+    }
+}
+
+impl Direct {
+    /// `dispatchThreadgroups:`'s grid of `groups` at threadgroup size `size`: its threads, each
+    /// axis's product saturating, and no partial threadgroup.
+    fn of_threadgroups(groups: [u32; 3], size: [u32; 3]) -> Direct {
+        Direct {
+            groups,
+            threads: std::array::from_fn(|axis| groups[axis].saturating_mul(size[axis])),
+            ragged: false,
+        }
+    }
+
+    /// `dispatchThreads:`'s grid of `threads` at threadgroup size `size`: the threadgroups they
+    /// fill, and whether the last along some axis is partial.
+    fn of_threads(threads: [u32; 3], size: [u32; 3]) -> Direct {
+        Direct {
+            groups: std::array::from_fn(|axis| threads[axis].div_ceil(size[axis].max(1))),
+            threads,
+            ragged: (0..3).any(|axis| size[axis] != 0 && !threads[axis].is_multiple_of(size[axis])),
+        }
+    }
 }
 
 /// What one `vkCmdDispatch*` launches.
@@ -811,17 +856,8 @@ impl ComputeCommandEncoder {
         threadgroups_per_grid: [u32; 3],
         threads_per_threadgroup: [u32; 3],
     ) -> Result<(), Error> {
-        let threads = std::array::from_fn(|axis| {
-            threadgroups_per_grid[axis].saturating_mul(threads_per_threadgroup[axis])
-        });
-        self.dispatch(
-            Grid::Direct {
-                groups: threadgroups_per_grid,
-                threads,
-                ragged: false,
-            },
-            threads_per_threadgroup,
-        )
+        let grid = Direct::of_threadgroups(threadgroups_per_grid, threads_per_threadgroup);
+        self.dispatch(Grid::Direct(grid), threads_per_threadgroup)
     }
 
     /// `dispatchThreads:threadsPerThreadgroup:`: the threadgroups the grid's threads fill, the
@@ -838,21 +874,8 @@ impl ComputeCommandEncoder {
         threads_per_grid: [u32; 3],
         threads_per_threadgroup: [u32; 3],
     ) -> Result<(), Error> {
-        let groups = std::array::from_fn(|axis| {
-            threads_per_grid[axis].div_ceil(threads_per_threadgroup[axis].max(1))
-        });
-        let ragged = (0..3).any(|axis| {
-            threads_per_threadgroup[axis] != 0
-                && !threads_per_grid[axis].is_multiple_of(threads_per_threadgroup[axis])
-        });
-        self.dispatch(
-            Grid::Direct {
-                groups,
-                threads: threads_per_grid,
-                ragged,
-            },
-            threads_per_threadgroup,
-        )
+        let grid = Direct::of_threads(threads_per_grid, threads_per_threadgroup);
+        self.dispatch(Grid::Direct(grid), threads_per_threadgroup)
     }
 
     /// `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:`:
@@ -923,13 +946,7 @@ impl ComputeCommandEncoder {
         let state = &pipeline.inner;
         let inner = &state.compiled;
         let max = inner.whole.interface.max_total_threads;
-        let total = size.iter().map(|&axis| u64::from(axis)).product::<u64>();
-        if total == 0 || total > u64::from(inner.whole.interface.metal_max_total_threads) {
-            return Err(Error::Refused(Refusal::ThreadgroupSize { size, max }));
-        }
-        if total > u64::from(max) {
-            return Err(Error::Limit(Limit::ThreadgroupThreads { size, max }));
-        }
+        size_checked(&inner.whole.interface, size)?;
         // Every module of a state is the same function, with the same arguments and alignments,
         // so the whole module answers this check and the next, once after each change.
         if !self.facts.aligned {
@@ -984,64 +1001,20 @@ impl ComputeCommandEncoder {
         if let Grid::Indirect(buffer, _) = &grid {
             recording(&mut self.building).keep(buffer);
         }
-        // What runs: the module, which of the state's it is, its workgroup size, the threadgroup
-        // size its regions carry, and for a direct dispatch Metal's grid, the workgroups, and
-        // whether the last along some axis is partial.
-        let partial_threadgroups = |threads| {
-            Error::Unsupported(Gap::PartialThreadgroups {
-                threads_per_grid: threads,
-                threads_per_threadgroup: size,
-            })
-        };
         let direct = match &grid {
-            &Grid::Direct {
-                groups,
-                threads,
-                ragged,
-            } => Some(Direct {
-                groups,
-                threads,
-                ragged,
-            }),
+            &Grid::Direct(direct) => Some(direct),
             Grid::Indirect(..) => None,
         };
+        // The calling thread waits for a lowering the reaper makes.
+        let (choice, module, kernel) = decide(inner, direct, size, |which, refused| {
+            inner.later_kernel(which, refused)
+        })?;
         let Choice {
-            module,
             local,
             nominal,
             direct,
-        } = choose(&inner.form, direct, size);
-        let kernel = match module {
-            Module::Partial => inner.later_kernel(Which::Partial, || {
-                partial_threadgroups(direct.map_or([0; 3], |(threads, ..)| threads))
-            })?,
-            _ => &inner.whole,
-        };
-        // A threadgroup that is not whole groups of a module that runs only whole ones runs the
-        // emulated module; the partial-threadgroups variant has none.
-        let threads = local.iter().map(|&axis| u64::from(axis)).product::<u64>();
-        let (kernel, module) = match kernel
-            .interface
-            .multiples
-            .iter()
-            .find(|&&multiple| !threads.is_multiple_of(u64::from(multiple.max(1))))
-        {
-            None => (kernel, module),
-            Some(_) if module == Module::Partial => {
-                return Err(partial_threadgroups(
-                    direct.map_or([0; 3], |(threads, ..)| threads),
-                ))
-            }
-            Some(&width) => (
-                inner.later_kernel(Which::Emulated, || {
-                    Error::Unsupported(Gap::PartialSimdgroups {
-                        threads_per_threadgroup: size,
-                        width,
-                    })
-                })?,
-                Module::Emulated,
-            ),
-        };
+            ..
+        } = choice;
         // No thread runs: nothing is recorded, so a zero grid stays the kernel's mark of an
         // indirect dispatch.
         if direct.is_some_and(|(_, groups, _)| groups.contains(&0)) {
@@ -1051,18 +1024,8 @@ impl ComputeCommandEncoder {
             Some(last) if last.module == module && last.local == local => last.pipeline,
             _ => {
                 let lengths = &mut self.lengths;
-                lengths.clear();
-                lengths.extend(
-                    (kernel.interface.threadgroups.iter())
-                        .map(|&index| threadgroup_length(&self.threadgroup_lengths, index)),
-                );
-                let length = kernel.interface.memory.bytes(lengths, threads);
-                if length > u64::from(limits.max_shared_memory) {
-                    return Err(Error::Limit(Limit::ThreadgroupMemory {
-                        length,
-                        max: limits.max_shared_memory,
-                    }));
-                }
+                let (set, max) = (&self.threadgroup_lengths, limits.max_shared_memory);
+                threadgroup_memory(kernel, set, local, max, lengths)?;
                 kernel.pipeline(core, (local, lengths, module == Module::Tiles))?
             }
         };
@@ -1084,7 +1047,7 @@ impl ComputeCommandEncoder {
                 declared: &self.declared,
                 indirect: match grid {
                     Grid::Indirect(buffer, _) => Some([buffer.id(), buffer.tracked_id()]),
-                    Grid::Direct { .. } => None,
+                    Grid::Direct(_) => None,
                 },
             };
             let building = recording(&mut self.building);
@@ -1183,7 +1146,7 @@ impl ComputeCommandEncoder {
                     &Launch::Indirect(buffer, offset),
                 )
             }
-            (None, Grid::Direct { .. }) => Ok(()),
+            (None, Grid::Direct(_)) => Ok(()),
         }
     }
 
@@ -1229,6 +1192,89 @@ impl ComputeCommandEncoder {
 }
 
 /// The length `set` gives threadgroup memory index `index`, 0 where it gives none.
+/// Metal's check of a dispatch's threadgroup `size` against a state's whole module `interface`,
+/// then the device's.
+pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), Error> {
+    let max = interface.max_total_threads;
+    let total = size.iter().map(|&axis| u64::from(axis)).product::<u64>();
+    if total == 0 || total > u64::from(interface.metal_max_total_threads) {
+        return Err(Error::Refused(Refusal::ThreadgroupSize { size, max }));
+    }
+    if total > u64::from(max) {
+        return Err(Error::Limit(Limit::ThreadgroupThreads { size, max }));
+    }
+    Ok(())
+}
+
+/// What a dispatch at threadgroup size `size`, direct over `direct` or indirect, of the content
+/// `compiled` runs, decided once for the dispatch and for
+/// [`ComputePipelineState::prepare_dispatch`]: [`choose`]'s choice, then its module, an
+/// observer's partial-threadgroups variant for a ragged grid, and the emulated variant for a
+/// threadgroup that is not whole groups of a module that runs only whole ones (the
+/// partial-threadgroups variant has none). `later` gives a variant's module, or the error its
+/// second argument makes where there is none.
+pub(crate) fn decide<'a>(
+    compiled: &'a Compiled,
+    direct: Option<Direct>,
+    size: [u32; 3],
+    later: impl Fn(Which, &dyn Fn() -> Error) -> Result<&'a Kernel, Error>,
+) -> Result<(Choice, Module, &'a Kernel), Error> {
+    let choice = choose(&compiled.form, direct, size);
+    let partial_threadgroups = || {
+        Error::Unsupported(Gap::PartialThreadgroups {
+            threads_per_grid: choice.direct.map_or([0; 3], |(threads, ..)| threads),
+            threads_per_threadgroup: size,
+        })
+    };
+    let kernel = match choice.module {
+        Module::Partial => later(Which::Partial, &partial_threadgroups)?,
+        _ => &compiled.whole,
+    };
+    let threads = choice
+        .local
+        .iter()
+        .map(|&axis| u64::from(axis))
+        .product::<u64>();
+    match (kernel.interface.multiples.iter())
+        .find(|&&multiple| !threads.is_multiple_of(u64::from(multiple.max(1))))
+    {
+        None => Ok((choice, choice.module, kernel)),
+        Some(_) if choice.module == Module::Partial => Err(partial_threadgroups()),
+        Some(&width) => {
+            let partial_simdgroups = || {
+                Error::Unsupported(Gap::PartialSimdgroups {
+                    threads_per_threadgroup: size,
+                    width,
+                })
+            };
+            let emulated = later(Which::Emulated, &partial_simdgroups)?;
+            Ok((choice, Module::Emulated, emulated))
+        }
+    }
+}
+
+/// The threadgroup memory lengths of `kernel`'s threadgroups, from the encoder's `set` (0 for an
+/// index it set none at), into `lengths`, checked at workgroup `local` against the device's
+/// `max` bytes.
+pub(crate) fn threadgroup_memory(
+    kernel: &Kernel,
+    set: &[(u32, u32)],
+    local: [u32; 3],
+    max: u32,
+    lengths: &mut Vec<u32>,
+) -> Result<(), Error> {
+    lengths.clear();
+    lengths.extend(
+        (kernel.interface.threadgroups.iter()).map(|&index| threadgroup_length(set, index)),
+    );
+    let threads = local.iter().map(|&axis| u64::from(axis)).product::<u64>();
+    let length = kernel.interface.memory.bytes(lengths, threads);
+    if length > u64::from(max) {
+        return Err(Error::Limit(Limit::ThreadgroupMemory { length, max }));
+    }
+    Ok(())
+}
+
 fn threadgroup_length(set: &[(u32, u32)], index: u32) -> u32 {
     (set.iter())
         .find(|(at, _)| *at == index)

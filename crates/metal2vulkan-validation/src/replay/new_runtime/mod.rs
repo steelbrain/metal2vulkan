@@ -16,6 +16,7 @@ mod imports;
 pub(super) mod indices;
 mod judged;
 pub(super) mod places;
+mod prepass;
 mod render;
 pub(super) mod second;
 mod surfaces;
@@ -31,6 +32,7 @@ use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
 use super::covers::SlotStage;
 use super::pixels::Shape;
 use super::player::{Backend, Counters, Made, PlayError, ReadCopy};
+use super::prepass::{Ahead, AheadGrid};
 use super::stream::Call;
 use super::translator;
 use super::value::Value;
@@ -333,6 +335,9 @@ impl InFlight {
 
 /// The new runtime on one device.
 pub struct NewRuntime {
+    /// The consumer's pre-pass the player stands in for, where it runs (`with_prepass`): its
+    /// threads end before the device does.
+    prepass: Option<prepass::Pool>,
     device: rt::Device,
     objects: HashMap<u64, Object>,
     places: Places,
@@ -762,6 +767,7 @@ impl Drop for NewRuntime {
     /// runtime thread runs on into the process's `exit()`, where the driver tears itself down
     /// beside it. After [`NewRuntime::end`]'s quiesce, this one answers at once.
     fn drop(&mut self) {
+        self.prepass = None;
         self.device.quiesce(QUIESCE);
     }
 }
@@ -775,6 +781,7 @@ impl NewRuntime {
             device.grant_indices(class, range.start, range.end - range.start)?;
         }
         Ok(NewRuntime {
+            prepass: None,
             places: Places::new(device.clone()),
             host_alignment: imports::host_alignment(&device),
             no_copies: imports::NoCopies::default(),
@@ -859,6 +866,19 @@ impl NewRuntime {
         })
     }
 
+    /// The backend that prepares each compute dispatch the read-ahead finds
+    /// (`Backend::prepare`) on `width` threads of its own, as a consumer's pre-pass does; none at
+    /// 0.
+    pub fn with_prepass(mut self, width: usize) -> Self {
+        self.prepass = (width > 0).then(|| prepass::Pool::new(width));
+        self
+    }
+
+    /// The pre-pass's width: its threads, 0 where none runs.
+    pub fn prepass_width(&self) -> usize {
+        self.prepass.as_ref().map_or(0, prepass::Pool::width)
+    }
+
     /// The backend told the consumer's decoder route, the handle its video surfaces are made
     /// with (`videos`); a dma-buf where it is not told.
     pub fn with_video_handle(mut self, handle: VideoHandle) -> Self {
@@ -879,7 +899,8 @@ impl NewRuntime {
     /// consumer (`rt::Device`): quiesces it within 30 seconds (a committed command buffer waiting
     /// on an event no played record signals ends unrun), drops every handle the backend holds, the
     /// device's last among them, and reads the gauges once it is torn down ([`Ended`]).
-    pub fn end(self) -> Ended {
+    pub fn end(mut self) -> Ended {
+        self.prepass = None;
         let counters = self.device.counters();
         let idle = self.device.quiesce(QUIESCE);
         drop(self);
@@ -2243,6 +2264,22 @@ impl Backend for NewRuntime {
         self.held = held.iter().copied().collect();
     }
 
+    fn prepare(&mut self, dispatches: Vec<Ahead>) {
+        let Some(pool) = &self.prepass else {
+            return;
+        };
+        for ahead in dispatches {
+            let Some(Object::ComputePipeline(state)) = self.objects.get(&ahead.state) else {
+                continue;
+            };
+            let grid = match ahead.grid {
+                AheadGrid::Threads(threads) => rt::Dispatch::Threads(threads),
+                AheadGrid::Threadgroups(groups) => rt::Dispatch::Threadgroups(groups),
+            };
+            pool.give((state.clone(), grid, ahead.size, ahead.lengths));
+        }
+    }
+
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         self.named = self.named_index(call)?;
         if &*call.selector == "release" {
@@ -2723,6 +2760,23 @@ impl Backend for NewRuntime {
             ("pipelines_created", metrics.pipelines_created),
             ("first_use_waits", metrics.first_use_waits),
             ("first_use_wait_nanos", metrics.first_use_wait_nanos),
+            ("first_use_variant_waits", metrics.first_use_variant_waits),
+            (
+                "first_use_variant_wait_nanos",
+                metrics.first_use_variant_wait_nanos,
+            ),
+            ("first_use_lowering_waits", metrics.first_use_lowering_waits),
+            (
+                "first_use_lowering_wait_nanos",
+                metrics.first_use_lowering_wait_nanos,
+            ),
+            ("made_ahead_variants", metrics.made_ahead_variants),
+            ("made_ahead_variant_nanos", metrics.made_ahead_variant_nanos),
+            ("made_ahead_lowerings", metrics.made_ahead_lowerings),
+            (
+                "made_ahead_lowering_nanos",
+                metrics.made_ahead_lowering_nanos,
+            ),
             ("blocks_made", metrics.blocks_made),
             ("block_bytes_made", metrics.block_bytes_made),
             ("shared_long_reuses", metrics.shared_long_reuses),

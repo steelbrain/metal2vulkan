@@ -11,6 +11,7 @@ mod new_runtime;
 mod old_runtime;
 mod pixels;
 mod player;
+mod prepass;
 mod range;
 mod stale;
 mod stream;
@@ -30,6 +31,7 @@ pub use player::{
     Backend, Check, Counters, Counts, End, IdDiffers, Made, ManagedReads, PlayError, Player,
     PrivateBytes, ReadClass, ReadCopy, Relaid, Report, Shown, TextureWrites,
 };
+pub use prepass::{Ahead, AheadGrid};
 pub use range::{
     display_library, recording_range, sidecar, RangeRow, RangeSource, RecordingRange,
     RECORDED_RANGES,

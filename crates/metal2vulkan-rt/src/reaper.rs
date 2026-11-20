@@ -121,6 +121,11 @@ impl Reaper {
         self.changed.notify_one();
     }
 
+    /// Whether the reaper was told to end ([`stop`](Self::stop)): it lowers nothing queued after.
+    pub(crate) fn stopped(&self) -> bool {
+        lock(&self.state).stop
+    }
+
     /// Tells the reaper to end once its queue is empty.
     pub(crate) fn stop(&self) {
         lock(&self.state).stop = true;
