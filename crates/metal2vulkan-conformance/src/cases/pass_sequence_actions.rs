@@ -389,7 +389,36 @@ impl ColorCell {
     fn b_reach(&self) -> [u32; 2] {
         reach(self.b_area.unwrap_or([SIDE; 2]))
     }
+
+    /// The texels of the plane that hold what pass A's `DontCare` store left, by their byte
+    /// offsets in the plane: none where pass A stores; otherwise every texel pass B's draw does not
+    /// cover, under pass B's `Load`, and those past its clear's reach, under its `Clear`.
+    fn dont_care_texels(&self) -> Vec<u32> {
+        if self.a_store != StoreAction::DontCare {
+            return Vec::new();
+        }
+        let reach = self.b_reach();
+        let drawn = |x: u64, y: u64| {
+            x >= B_RECT.x
+                && x < B_RECT.x + B_RECT.width
+                && y >= B_RECT.y
+                && y < B_RECT.y + B_RECT.height
+        };
+        (0..SIDE)
+            .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let cleared = self.b_load == LoadAction::Clear && x < reach[0] && y < reach[1];
+                !drawn(u64::from(x), u64::from(y)) && !cleared
+            })
+            .map(|(x, y)| (y * SIDE + x) * COLOR_TEXEL)
+            .collect()
+    }
 }
+
+/// The slug of `docs/API.md`'s accepted difference that says what a `DontCare` store leaves on
+/// `metal2vulkan-rt`: what the pass rendered, where Apple's page lets the GPU replace the
+/// attachment's contents with arbitrary data.
+const DONT_CARE_TEXELS: &str = "the-new-runtime-s-dontcare-store-writes-what-the-pass-rendered";
 
 /// The two load actions either pass states: the two whose answer is defined on both sides.
 const LOADS: [LoadAction; 2] = [LoadAction::Load, LoadAction::Clear];
@@ -831,8 +860,14 @@ impl Case for SequenceActions {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // **No value is loosened**: every texel Metal leaves is one we must leave, in every cell
-        // of both cases. Two notices are declared and neither is a difference.
+        // One set of values is loosened, on one runtime: in a colour cell whose pass A stores
+        // `DontCare`, the texels that hold what that store left (`ColorCell::dont_care_texels`),
+        // unchecked on `metal2vulkan-rt`'s run alone (`DONT_CARE_TEXELS`). Apple's page for
+        // `MTLStoreAction.dontCare` lets the GPU replace the attachment's contents with arbitrary
+        // data: Metal's answer on the M3 Max (the texels it held before pass A) is one outcome of
+        // that, the new runtime's (what pass A rendered) another. Every other texel, and every
+        // texel on the old runtime's run, compares exactly. Two notices are declared and neither is
+        // a difference.
         //
         // `DontCareStore`: every cell of both cases stores an attachment `DontCare` somewhere. Under
         // the suite's exact policy (`DontCareColorPolicy::Kept`) a colour stored `DontCare` keeps
@@ -865,6 +900,18 @@ impl Case for SequenceActions {
                 crate::replay::notice_allowance(Degradation::SeparateDepthStencil.code()),
                 crate::replay::notice_allowance(Degradation::ShaderSideStencil.code()),
             ]);
+        }
+        if self.cross == Cross::Color {
+            for cell in color_cells() {
+                let site = cell.site();
+                allowances.extend(cell.dont_care_texels().into_iter().map(|at| {
+                    Allowance::new(
+                        format!("case/planes/{site}/{at}"),
+                        crate::allowance::Loosening::Unchecked,
+                        crate::allowance::Justification::new_runtime_accepted(DONT_CARE_TEXELS),
+                    )
+                }));
+            }
         }
         allowances
     }
@@ -1426,6 +1473,50 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// **A `DontCare` store moves only the texels the rt-only declaration leaves unchecked**:
+    /// Metal's recorded plane of each cell whose pass A stores `DontCare` equals its `Store`
+    /// twin's at every texel outside `ColorCell::dont_care_texels`, so the declaration loosens no
+    /// texel pass A's store action does not decide, and some cell's store does move a texel.
+    #[test]
+    fn a_dont_care_store_moves_only_the_texels_it_leaves() {
+        let case = "pass-sequence-color-actions";
+        let mut moved = 0;
+        for cell in color_cells() {
+            if cell.a_store != StoreAction::DontCare {
+                continue;
+            }
+            let twin = ColorCell {
+                a_store: StoreAction::Store,
+                ..cell
+            };
+            let (Some(left), Some(stored)) = (
+                recorded(case, &cell.site(), None),
+                recorded(case, &twin.site(), None),
+            ) else {
+                println!("{case}: no recording of {} in the tree yet", cell.site());
+                return;
+            };
+            let leaves = cell.dont_care_texels();
+            for at in 0..TEXELS {
+                if word(&left, at).to_bits() != word(&stored, at).to_bits() {
+                    assert!(
+                        leaves.contains(&(at * COLOR_TEXEL)),
+                        "{}: texel ({}, {}) moved with the store action outside the texels a \
+                         DontCare store leaves",
+                        cell.site(),
+                        at % SIDE,
+                        at / SIDE
+                    );
+                    moved += 1;
+                }
+            }
+        }
+        assert!(
+            moved > 0,
+            "no cell's store action moved a texel: the check is vacuous"
+        );
     }
 
     /// **Metal's recorded aspect case holds each aspect's own actions in its own plane**, which is
