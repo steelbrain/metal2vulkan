@@ -287,6 +287,12 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             // Offsets inside the buffers, one off every argument's alignment, one past their end.
             const OFFSETS: [u64; 5] = [0, 16, 48, 2, 4096];
+            // A vertex buffer's offset is a multiple of 4, as Metal takes it for the vertex
+            // descriptor's fetch: the one off every alignment moves to 4 there.
+            let vertex_aligned = |table: usize, offset: u64| match (table, offset) {
+                (0, 2) => 4,
+                _ => offset,
+            };
             let mut sequence = Sequence(0x9e37_79b9_7f4a_7c15);
             let (mut drawn, mut refused) = (0, 0);
             let call = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -298,7 +304,7 @@ mod on_device {
                     1..=3 => {
                         let slot = sequence.below(31) as u32;
                         let buffer = (sequence.below(8) != 0).then(|| &bound[sequence.below(4)]);
-                        let offset = OFFSETS[sequence.below(5)];
+                        let offset = vertex_aligned(table, OFFSETS[sequence.below(5)]);
                         call(match table {
                             0 => encoder.set_vertex_buffer(buffer, offset, slot % 3),
                             _ => encoder.set_fragment_buffer(buffer, offset, slot),
@@ -308,6 +314,7 @@ mod on_device {
                         // Refused where the slot holds no buffer, as Metal's.
                         let (slot, offset) =
                             (sequence.below(31) as u32, OFFSETS[sequence.below(5)]);
+                        let offset = vertex_aligned(table, offset);
                         let _ = match table {
                             0 => encoder.set_vertex_buffer_offset(offset, slot % 3),
                             _ => encoder.set_fragment_buffer_offset(offset, slot),
