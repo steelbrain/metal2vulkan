@@ -11,10 +11,6 @@
 //! attempt at a time.
 //! When no binary installed the allocator the counters never move and [`measure`] reports `None`.
 //!
-//! [`thread_allocations`] counts the allocations (and reallocations) the calling thread made, for a
-//! measurement of what one call allocates; no other thread's moves it. [`process_allocations`]
-//! counts every thread's.
-//!
 //! [`peak_bytes`] is the high-water mark of live bytes above the budget's baseline (the live bytes
 //! at [`enable_budget`], the fixed runtime state the budget does not charge), which no measurement
 //! resets: a worker reports it beside the parent's sampled RSS in every result
@@ -23,8 +19,7 @@
 //! refused, uncounted, and aborts the worker.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -38,15 +33,6 @@ static BUDGET_BASELINE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static LIMIT_BYTES: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// One [`measure`] at a time: each resets the shared peak.
 static MEASURING: Mutex<()> = Mutex::new(());
-
-/// The allocations and reallocations every thread of the process made ([`process_allocations`]).
-static PROCESS_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-
-thread_local! {
-    /// The allocations and reallocations this thread made ([`thread_allocations`]). Constant
-    /// and without a destructor, so reading it neither allocates nor fails while a thread ends.
-    static THREAD_ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-}
 
 /// A [`System`]-backed allocator that counts live bytes, tracks their peak, and enforces the
 /// limit set by [`enable_budget`].
@@ -102,11 +88,8 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 }
 
-/// Count `bytes` as live unless that would pass the limit; raise the peak; count the calling
-/// thread's allocation.
+/// Count `bytes` as live unless that would pass the limit; raise the peak.
 fn reserve(bytes: usize) -> bool {
-    THREAD_ALLOCATIONS.with(|count| count.set(count.get() + 1));
-    PROCESS_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
     match LIVE_BYTES.try_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
         live.checked_add(bytes)
             .filter(|next| *next <= LIMIT_BYTES.load(Ordering::Relaxed))
@@ -123,20 +106,6 @@ fn reserve(bytes: usize) -> bool {
 /// Live heap bytes counted so far (0 when the allocator is not installed).
 pub fn live_bytes() -> usize {
     LIVE_BYTES.load(Ordering::Relaxed)
-}
-
-/// The allocations and reallocations the calling thread has made, or `None` when the allocator
-/// is not installed: what a call allocates is the difference across it.
-pub fn thread_allocations() -> Option<u64> {
-    installed().then(|| THREAD_ALLOCATIONS.with(Cell::get))
-}
-
-/// The allocations and reallocations every thread of the process has made, or `None` when the
-/// allocator is not installed: with [`thread_allocations`] of one thread, what the others
-/// allocated meanwhile (the runtime's own threads, where only the test's thread and the runtime's
-/// run).
-pub fn process_allocations() -> Option<u64> {
-    installed().then(|| PROCESS_ALLOCATIONS.load(Ordering::Relaxed))
 }
 
 /// Whether this process counts its allocations (some binary installed [`CountingAllocator`]).
