@@ -178,7 +178,7 @@ const STORE_SPECIALS: [f32; 20] = [
 /// from 65520 up to an infinity, which is what a `float` the fragment function returns into a
 /// `half4` output goes through.
 ///
-/// `the_half_bits_are_the_lane_s` pins it against fixed values, so the `half` case's inputs cannot
+/// `the_half_bits_are_pinned` pins it against fixed values, so the `half` case's inputs cannot
 /// drift.
 fn half_bits(value: f32) -> u16 {
     if value.is_nan() {

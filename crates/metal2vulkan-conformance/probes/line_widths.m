@@ -7,7 +7,7 @@
 // (or 1/255, added, where a map counts fragments). A map prints the rows a draw touched, one
 // character a pixel: `.` none, `#` a full pixel, digits the fragments or the samples covered.
 //
-//   lane       the lane test's draws on 16 x 16: a list of two lines and a three-vertex strip at
+//   widths     draws on 16 x 16: a list of two lines and a three-vertex strip at
 //              widths 0, 0.5, 1, 2, 3.5 and 8, side by side;
 //   quantize   which width Metal draws: the rows a horizontal line at y = 32 (64 x 64) covers in
 //              column 32, and whether a vertical line at x = 16.5 is the diamond rule's (rows 3 to
@@ -68,7 +68,7 @@
 // Run it WITHOUT MTL_DEBUG_LAYER, each case with the Mac's GPU to itself:
 //
 //   clang -fobjc-arc -framework Metal -framework Foundation -o line_widths line_widths.m
-//   /usr/bin/env -u MTL_DEBUG_LAYER ./line_widths lane
+//   /usr/bin/env -u MTL_DEBUG_LAYER ./line_widths widths
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -245,8 +245,7 @@ static uint8_t *one(int side, NSUInteger samples, Shade shade, MTLPrimitiveType 
 }
 
 // The scatter: `count` points of an S x S target, each coordinate in [1, S - 1) on a grid of 1/4096
-// pixel, drawn in order (x, then y) from a 64-bit linear congruential generator seeded with `seed`
-// (the lane test draws the same).
+// pixel, drawn in order (x, then y) from a 64-bit linear congruential generator seeded with `seed`.
 static void scatter(float *points, int count, int side, uint64_t seed) {
   for (int i = 0; i < 2 * count; i++) {
     seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -293,8 +292,8 @@ static void rows(int side, const uint8_t *r, int x, int *first, int *last) {
 
 static const float kWidths[] = {0, 0.5f, 1, 2, 3.5f, 8};
 
-static void lane(void) {
-  // The lane test's geometry, 16 x 16: two lines, and a strip of three vertices.
+static void widths(void) {
+  // The geometry, 16 x 16: two lines, and a strip of three vertices.
   static const float lines[] = {1, 3, 15, 3, 1, 8, 15, 15};
   static const float strip[] = {3.5f, 1, 3.5f, 9.5f, 13.5f, 14.5f};
   struct {
@@ -309,8 +308,8 @@ static void lane(void) {
   for (int d = 0; d < 2; d++) {
     for (size_t w = 0; w < sizeof kWidths / sizeof kWidths[0]; w++) {
       uint8_t *r = one(16, 1, kWhite, draws[d].type, draws[d].points, draws[d].count, kWidths[w]);
-      // Every row, so the lane test reads the whole target.
-      printf("LANE %s %g\n", draws[d].name, kWidths[w]);
+      // Every row, so the whole target is printed.
+      printf("WIDTHS %s %g\n", draws[d].name, kWidths[w]);
       for (int y = 0; y < 16; y++) {
         printf("  \"");
         for (int x = 0; x < 16; x++) putchar(cell(r[y * 16 + x], kWhite, 1));
@@ -852,7 +851,7 @@ int main(int argc, char **argv) {
     struct {
       const char *name;
       void (*run)(void);
-    } cases[] = {{"lane", lane},       {"quantize", quantize}, {"state", state},
+    } cases[] = {{"widths", widths},   {"quantize", quantize}, {"state", state},
                  {"ties", ties},       {"zero", zero},         {"strips", strips},
                  {"fill", fill},       {"msaa", msaa},         {"edges", edges}};
     size_t n = sizeof cases / sizeof cases[0];

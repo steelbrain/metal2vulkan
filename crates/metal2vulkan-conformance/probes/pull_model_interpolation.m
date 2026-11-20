@@ -6,9 +6,9 @@
 //
 // One case a process, named on the command line:
 //
-//   lane      the lane's draws: one triangle whose vertices have w 1, 2 and 4 over a 6 x 6 target, at 1
-//             and 4 samples, through each function of the fixture and the samples and offsets
-//             listed in `kLaneSamples` and `kLaneOffsets`;
+//   forms     one triangle whose vertices have w 1, 2 and 4 over a 6 x 6 target, at 1 and 4
+//             samples, through each function of the fixture and the samples and offsets listed in
+//             `kFormsSamples` and `kFormsOffsets`;
 //   origin    where each form reads in the pixel: a no-perspective varying equal to the pixel
 //             coordinates (x right, y down from the target's upper-left corner) across a triangle
 //             covering an 8 x 8 target, read at the center, the centroid, each sample, and a list
@@ -20,8 +20,8 @@
 //   centroid  the centroid each partly covered pixel of a triangle's edge reads at 4 samples,
 //             with the samples the triangle covers there.
 //
-// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (the lane test's module docs and the translator's
-// `lower::fragment::interpolate` docs state them too):
+// WHAT IT MEASURED, Apple M3 Max, macOS 27.0.1 (the translator's `lower::fragment::interpolate`
+// docs state them too):
 //   - `interpolate_at_offset` reads at the offset from the pixel's upper-left corner, (0.5, 0.5)
 //     its center, as given: no range (1e9 extrapolates), no grid (every 1/512 step is a step;
 //     0.999 reads at 0.999), a NaN or infinite offset NaN;
@@ -37,7 +37,7 @@
 //
 //   clang -fobjc-arc -framework Metal -framework Foundation -o pull_model_interpolation \
 //     pull_model_interpolation.m
-//   /usr/bin/env -u MTL_DEBUG_LAYER ./pull_model_interpolation lane \
+//   /usr/bin/env -u MTL_DEBUG_LAYER ./pull_model_interpolation forms \
 //     ../../metal2vulkan-validation/fixtures/public/engine/pull_model_interpolants.metal
 
 #import <Foundation/Foundation.h>
@@ -198,11 +198,11 @@ static const float *at(const float *v, int a, int side, NSUInteger samples, int 
 
 static int covered(const float *p) { return p[0] != kClear; }
 
-// ---- lane ---------------------------------------------------------------------------------
+// ---- forms --------------------------------------------------------------------------------
 
-#define LANE_SIDE 6
+#define FORMS_SIDE 6
 
-static const Triangle kLaneTriangle = {
+static const Triangle kFormsTriangle = {
     .at = {{{-0.9f, -0.85f, 0.0f, 1.0f}},
            {{0.95f * 2.0f, -0.6f * 2.0f, 0.0f, 2.0f}},
            {{-0.3f * 4.0f, 0.9f * 4.0f, 0.0f, 4.0f}}},
@@ -210,9 +210,9 @@ static const Triangle kLaneTriangle = {
 };
 
 // The samples `pm_sample` reads at 4 samples (at 1, sample 0 alone).
-static const uint32_t kLaneSamples[] = {0, 1, 2, 3};
+static const uint32_t kFormsSamples[] = {0, 1, 2, 3};
 // The offsets `pm_offset` reads.
-static const float kLaneOffsets[][2] = {
+static const float kFormsOffsets[][2] = {
     {0.0f, 0.0f}, {0.5f, 0.5f}, {0.25f, 0.8125f}, {0.9375f, 0.0625f}, {0.40625f, 0.59375f},
 };
 // The sample and offset `pm_narrow` and `pm_half` read.
@@ -222,14 +222,14 @@ static const float kNarrowOffset[2] = {0.25f, 0.75f};
 // Prints a draw's covered pixels: `x y mask` and the attachments' words, the first covered
 // sample's; and where a pixel's covered samples differ, each covered sample on its own line
 // `x y s` and its words.
-static void print_lane(const char *what, const float *v, int targets, NSUInteger samples) {
+static void print_draw(const char *what, const float *v, int targets, NSUInteger samples) {
   printf("DRAW %s samples %lu\n", what, (unsigned long)samples);
-  for (int y = 0; y < LANE_SIDE; y++) {
-    for (int x = 0; x < LANE_SIDE; x++) {
+  for (int y = 0; y < FORMS_SIDE; y++) {
+    for (int x = 0; x < FORMS_SIDE; x++) {
       unsigned mask = 0;
       int first = -1, same = 1;
       for (NSUInteger s = 0; s < samples; s++) {
-        const float *p = at(v, 0, LANE_SIDE, samples, x, y, (int)s);
+        const float *p = at(v, 0, FORMS_SIDE, samples, x, y, (int)s);
         if (!covered(p)) continue;
         mask |= 1u << s;
         if (first < 0) {
@@ -237,8 +237,8 @@ static void print_lane(const char *what, const float *v, int targets, NSUInteger
           continue;
         }
         for (int a = 0; a < targets; a++) {
-          const float *q = at(v, a, LANE_SIDE, samples, x, y, first);
-          const float *r = at(v, a, LANE_SIDE, samples, x, y, (int)s);
+          const float *q = at(v, a, FORMS_SIDE, samples, x, y, first);
+          const float *r = at(v, a, FORMS_SIDE, samples, x, y, (int)s);
           if (memcmp(q, r, 16)) same = 0;
         }
       }
@@ -246,7 +246,7 @@ static void print_lane(const char *what, const float *v, int targets, NSUInteger
       if (same) {
         printf("%d %d m%x", x, y, mask);
         for (int a = 0; a < targets; a++) {
-          const float *p = at(v, a, LANE_SIDE, samples, x, y, first);
+          const float *p = at(v, a, FORMS_SIDE, samples, x, y, first);
           for (int k = 0; k < 4; k++) printf(" %08x", bits(p[k]));
         }
         printf("\n");
@@ -256,7 +256,7 @@ static void print_lane(const char *what, const float *v, int targets, NSUInteger
         if (!(mask >> s & 1)) continue;
         printf("%d %d s%lu", x, y, (unsigned long)s);
         for (int a = 0; a < targets; a++) {
-          const float *p = at(v, a, LANE_SIDE, samples, x, y, (int)s);
+          const float *p = at(v, a, FORMS_SIDE, samples, x, y, (int)s);
           for (int k = 0; k < 4; k++) printf(" %08x", bits(p[k]));
         }
         printf("\n");
@@ -265,53 +265,53 @@ static void print_lane(const char *what, const float *v, int targets, NSUInteger
   }
 }
 
-static void lane(void) {
+static void forms(void) {
   printf("# What plain Metal returned for crates/metal2vulkan-conformance/probes/"
          "pull_model_interpolation.m\n"
-         "# (case lane) on %s. Generated by the "
+         "# (case forms) on %s. Generated by the "
          "probe;\n# do not edit. Each covered pixel: `x y m<covered samples>` and its "
          "attachments' words,\n# or one line `x y s<sample>` per covered sample where they "
          "differ.\n",
          gDevice.name.UTF8String);
-  const Triangle *t = &kLaneTriangle;
+  const Triangle *t = &kFormsTriangle;
   const NSUInteger counts[2] = {1, 4};
   for (int c = 0; c < 2; c++) {
     NSUInteger n = counts[c];
     MTLPixelFormat f32 = MTLPixelFormatRGBA32Float;
     Args none = {0};
-    float *v = draw(@"pm_center", f32, 2, LANE_SIDE, n, t, none);
-    print_lane("center", v, 2, n);
+    float *v = draw(@"pm_center", f32, 2, FORMS_SIDE, n, t, none);
+    print_draw("center", v, 2, n);
     free(v);
-    v = draw(@"pm_centroid", f32, 2, LANE_SIDE, n, t, none);
-    print_lane("centroid", v, 2, n);
+    v = draw(@"pm_centroid", f32, 2, FORMS_SIDE, n, t, none);
+    print_draw("centroid", v, 2, n);
     free(v);
     for (NSUInteger i = 0; i < n; i++) {
-      uint32_t s = kLaneSamples[i];
+      uint32_t s = kFormsSamples[i];
       Args a = {&s, 4, 0, 0};
-      v = draw(@"pm_sample", f32, 2, LANE_SIDE, n, t, a);
+      v = draw(@"pm_sample", f32, 2, FORMS_SIDE, n, t, a);
       char what[64];
       snprintf(what, sizeof what, "sample %u", s);
-      print_lane(what, v, 2, n);
+      print_draw(what, v, 2, n);
       free(v);
     }
-    v = draw(@"pm_sample_id", f32, 2, LANE_SIDE, n, t, none);
-    print_lane("sample_id", v, 2, n);
+    v = draw(@"pm_sample_id", f32, 2, FORMS_SIDE, n, t, none);
+    print_draw("sample_id", v, 2, n);
     free(v);
-    for (size_t i = 0; i < sizeof kLaneOffsets / sizeof kLaneOffsets[0]; i++) {
-      Args a = {kLaneOffsets[i], 8, 0, 0};
-      v = draw(@"pm_offset", f32, 2, LANE_SIDE, n, t, a);
+    for (size_t i = 0; i < sizeof kFormsOffsets / sizeof kFormsOffsets[0]; i++) {
+      Args a = {kFormsOffsets[i], 8, 0, 0};
+      v = draw(@"pm_offset", f32, 2, FORMS_SIDE, n, t, a);
       char what[64];
-      snprintf(what, sizeof what, "offset %08x %08x", bits(kLaneOffsets[i][0]),
-               bits(kLaneOffsets[i][1]));
-      print_lane(what, v, 2, n);
+      snprintf(what, sizeof what, "offset %08x %08x", bits(kFormsOffsets[i][0]),
+               bits(kFormsOffsets[i][1]));
+      print_draw(what, v, 2, n);
       free(v);
     }
     Args narrow = {&kNarrowSample, 4, kNarrowOffset, 8};
-    v = draw(@"pm_narrow", f32, 4, LANE_SIDE, n, t, narrow);
-    print_lane("narrow", v, 4, n);
+    v = draw(@"pm_narrow", f32, 4, FORMS_SIDE, n, t, narrow);
+    print_draw("narrow", v, 4, n);
     free(v);
-    v = draw(@"pm_half", MTLPixelFormatRGBA16Float, 4, LANE_SIDE, n, t, narrow);
-    print_lane("half", v, 4, n);
+    v = draw(@"pm_half", MTLPixelFormatRGBA16Float, 4, FORMS_SIDE, n, t, narrow);
+    print_draw("half", v, 4, n);
     free(v);
   }
 }
@@ -503,7 +503,7 @@ static void centroid(void) {
 int main(int argc, const char **argv) {
   @autoreleasepool {
     if (argc != 3) {
-      fprintf(stderr, "usage: %s lane|origin|grid|samples|centroid <fixture.metal>\n", argv[0]);
+      fprintf(stderr, "usage: %s forms|origin|grid|samples|centroid <fixture.metal>\n", argv[0]);
       return 2;
     }
     gDevice = MTLCreateSystemDefaultDevice();
@@ -526,7 +526,7 @@ int main(int argc, const char **argv) {
       return 1;
     }
     const char *c = argv[1];
-    if (!strcmp(c, "lane")) lane();
+    if (!strcmp(c, "forms")) forms();
     else if (!strcmp(c, "origin")) origin();
     else if (!strcmp(c, "grid")) grid();
     else if (!strcmp(c, "samples")) samples_case();
