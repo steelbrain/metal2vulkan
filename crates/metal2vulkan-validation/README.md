@@ -27,9 +27,7 @@ as tightly packed selected regions, not backend-specific row-pitched storage.
 | `corpus-metal` | Qualify cases on Metal (`--device-type gpu`) |
 | `corpus-vulkan` | Run cases on a Vulkan device against their Metal observations (`--device-type cpu\|gpu`) |
 | `corpus-moltenvk` | The same through MoltenVK (macOS) |
-| `corpus-draw-ab` | Draw logged fragment functions through the runtime and compare two builds |
-| `command-replay` | Play a replay stream on a Vulkan device through the old runtime, or print its calls |
-| `format-scout` | Drive every Metal pixel format through the runtime, one use at a time |
+| `command-replay` | Play a replay stream on a Vulkan device through the new runtime, or print its calls |
 
 Each command's `--help` lists its options.
 

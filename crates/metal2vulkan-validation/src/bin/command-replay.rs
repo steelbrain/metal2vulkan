@@ -1,19 +1,19 @@
-//! Replay streams (`docs/REPLAY-STREAM.md`): play one on a Vulkan device through the old runtime
-//! or the new one, or print its records.
+//! Replay streams (`docs/REPLAY-STREAM.md`): play one on a Vulkan device through the new runtime,
+//! or print its records.
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-//! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
+//! [--blobs DIR] [--snapshots yes|no] [--managed one-copy|two-copy]
 //! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
 //! [--video-handle dma-buf|opaque-fd] [--check-presents F,...]` plays the stream whose
-//! first segment is `FILE` through the old runtime (the default) or the new one (`rt`), with
-//! `--video-handle dma-buf|opaque-fd` telling the new runtime the consumer's decoder route, the
+//! first segment is `FILE` through the new runtime, with
+//! `--video-handle dma-buf|opaque-fd` telling the runtime the consumer's decoder route, the
 //! handle its video surfaces are made with (a dma-buf unless it says otherwise), and
 //! `--gpu-wait-timeout` bounding each device wait (10 s unless it says otherwise; a CPU device's
 //! work can take longer than a GPU's), with `--snapshots no` taking no
-//! `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), `--managed`
-//! telling either runtime how the recording device kept Managed buffers where the stream has no
+//! `m2v.privateBytes` snapshot (so a timed play does no snapshot work), `--managed`
+//! telling the runtime how the recording device kept Managed buffers where the stream has no
 //! `m2v.deviceIdentity` record (one copy: unified memory; two copies: a GPU copy; with neither, a
-//! Managed buffer stops the new runtime's play and plays as the old runtime's own), `--until-frame` stopping the play after frame `F`'s present
+//! Managed buffer stops the play), `--until-frame` stopping the play after frame `F`'s present
 //! (frames counted from 0), and `--check-presents` checking the texture each listed frame's
 //! present shows, at that present, as a recorded check of it would (a `check` line of the
 //! frame, compared by `compare-plays`, and the bytes read kept as `DIR/presents/frame-F.bytes`,
@@ -24,7 +24,7 @@
 //! header lacks `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's
 //! completion fix: the stream may differ from what the program did` by itself, then `range ...`
 //! (the recording range, where it came from, and whether the play ends there), then `device NAME
-//! runtime old|rt snapshots yes|no`, each frame's `frame` and `end` lines as the frame ends
+//! runtime rt snapshots yes|no`, each frame's `frame` and `end` lines as the frame ends
 //! (flushed, so a play that never ends leaves the frames it finished), `addresses ...` (the
 //! written words that look like addresses, which play as recorded, the address arguments and those
 //! moved, and the objects whose ID differs from the recording's), the player's other report lines,
@@ -51,7 +51,7 @@
 //!
 //! A check or dump of a buffer the play keeps two copies of (a Managed buffer of a stream recorded
 //! without unified memory) names the copy it read: its CPU copy, as Metal's `contents` answers, or
-//! with `--read-device-copies yes` (the new runtime's play only) its device copy, read back. On a
+//! with `--read-device-copies yes` its device copy, read back. On a
 //! device that keeps a device copy of each Managed buffer, the report's `managed digests` line
 //! after its `device` line says which.
 //!
@@ -76,15 +76,13 @@
 //! GUEST DATA: a stream recorded from a guest, its blobs and the reports are the consumer's: they
 //! stay on the hosts the guest data rule allows and are never committed.
 
-use metal2vulkan_runtime::{DeviceOptions, ShaderCacheOptions};
-use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout, WAIT_TIMEOUT_FLAG};
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
     compare_dumps, compare_plays, display_library, judged_records, recording_range, segments,
-    shown_differences, Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player,
-    RangeSource, RecordingRange, StreamError, StreamReader, Value, VideoHandle,
-    FLAG_COMPLETION_BYTES_RECORDED, RECORDED_RANGES,
+    shown_differences, Backend, ManagedCopies, NewRuntime, PlayError, Player, RangeSource,
+    RecordingRange, StreamError, StreamReader, Value, VideoHandle, FLAG_COMPLETION_BYTES_RECORDED,
+    RECORDED_RANGES,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -92,7 +90,7 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
-                     --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
+                     --shader-cache DIR [--blobs DIR] [--snapshots yes|no] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
                      [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd] \
                      [--check-presents F,...] [--read-device-copies yes|no] [--prepass-width N] \
@@ -558,101 +556,59 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         false => "snapshots no",
     };
     let cache = PathBuf::from(&options["shader-cache"]);
-    match options.get("runtime").map(String::as_str) {
-        None | Some("old") if device_copies => {
-            report.line("error read-device-copies: the new runtime's play only (--runtime rt)");
-            2
-        }
-        None | Some("old") if prepass.is_some() => {
-            report.line("error prepass-width: the new runtime's play only (--runtime rt)");
-            2
-        }
-        None | Some("old") => {
-            let mut device_options = DeviceOptions::default();
-            device_options.shader_cache =
-                ShaderCacheOptions::in_directory(&options["shader-cache"]);
-            let device = match open_device(device_type, device_options) {
-                Ok(device) => device,
-                Err(error) => {
-                    report.line(&format!("error device: {error}"));
-                    return 2;
-                }
+    let mut backend = match open_rt(device_type, cache) {
+        Ok((backend, name)) => {
+            report.line(&format!("device {name} runtime rt {mode}"));
+            let backend = match device_copies {
+                true => backend.reading_device_copies(),
+                false => backend,
             };
-            report.line(&format!("device {} runtime old {mode}", device.name()));
-            let mut backend = OldRuntime::new(device, device_type);
-            if let Some(copies) = managed {
-                backend = backend.with_managed(copies);
-            }
-            if let Some(metallib) = display {
-                backend = backend.with_display_library(metallib);
-            }
-            run(
-                &mut backend,
-                &mut reader,
-                &mut report,
-                (snapshots, until, dump, presents, None),
-            )
-        }
-        Some("rt") => {
-            let mut backend = match open_rt(device_type, cache) {
-                Ok((backend, name)) => {
-                    report.line(&format!("device {name} runtime rt {mode}"));
-                    let backend = match device_copies {
-                        true => backend.reading_device_copies(),
-                        false => backend,
-                    };
-                    if let Some(line) = backend.managed_digests() {
-                        report.line(&line);
-                    }
-                    let backend = match managed {
-                        Some(copies) => backend.with_managed(copies),
-                        None => backend,
-                    };
-                    let backend = backend.with_video_handle(video);
-                    let backend = backend.with_prepass(prepass.unwrap_or(4));
-                    report.line(&format!("prepass width {}", backend.prepass_width()));
-                    match display {
-                        Some(metallib) => backend.with_display_library(metallib),
-                        None => backend,
-                    }
-                }
-                Err(error) => {
-                    report.line(&format!("error device: {error}"));
-                    return 2;
-                }
-            };
-            let first = PathBuf::from(&options["stream"]);
-            let code = run(
-                &mut backend,
-                &mut reader,
-                &mut report,
-                (snapshots, until, dump, presents, Some(&first)),
-            );
-            // The device ends here, not in `exit()`, where the driver's own exit teardown would
-            // run beside the runtime's threads. Its gauges read after it dropped go out as the
-            // matrix's lines, which the matrix's zero-at-drop rule reads.
-            let ended = backend.end();
-            for line in ended.lines() {
+            if let Some(line) = backend.managed_digests() {
                 report.line(&line);
             }
-            match ended.result() {
-                Ok(()) => code,
-                Err(error) => {
-                    report.line(&format!("error teardown: {error}"));
-                    code.max(1)
-                }
+            let backend = match managed {
+                Some(copies) => backend.with_managed(copies),
+                None => backend,
+            };
+            let backend = backend.with_video_handle(video);
+            let backend = backend.with_prepass(prepass.unwrap_or(4));
+            report.line(&format!("prepass width {}", backend.prepass_width()));
+            match display {
+                Some(metallib) => backend.with_display_library(metallib),
+                None => backend,
             }
         }
-        Some(other) => {
-            report.line(&format!("error runtime: {other} is neither old nor rt"));
-            2
+        Err(error) => {
+            report.line(&format!("error device: {error}"));
+            return 2;
+        }
+    };
+    let first = PathBuf::from(&options["stream"]);
+    let code = run(
+        &mut backend,
+        &mut reader,
+        &mut report,
+        (snapshots, until, dump, presents, Some(&first)),
+    );
+    // The device ends here, not in `exit()`, where the driver's own exit teardown would
+    // run beside the runtime's threads. Its gauges read after it dropped go out as the
+    // matrix's lines, which the matrix's zero-at-drop rule reads.
+    let ended = backend.end();
+    for line in ended.lines() {
+        report.line(&line);
+    }
+    match ended.result() {
+        Ok(()) => code,
+        Err(error) => {
+            report.line(&format!("error teardown: {error}"));
+            code.max(1)
         }
     }
 }
 
 /// The new runtime's backend on the first physical device of `device_type` that opens (a GPU:
 /// discrete, then integrated, then virtual), its compiled kernels kept in `cache`, and its name.
-/// A GPU opens only while the hang tripwire is absent, as the old runtime's device does.
+/// A GPU opens only while the hang tripwire is absent.
 fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, String), String> {
     use ash::vk::PhysicalDeviceType as Kind;
     if device_type == DeviceType::Gpu {

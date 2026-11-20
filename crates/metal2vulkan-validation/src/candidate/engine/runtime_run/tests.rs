@@ -9,6 +9,22 @@ use crate::store::CorpusStore;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+/// The output of `case`'s current Metal observation in the oracle's environment, from `store`.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+fn metal_output(store: &CorpusStore, case: &crate::case::AuthoredCase) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    let name = &case.name;
+    let metal = crate::observation::MetalObservation::current(
+        store.read_metal_of_case(case)?,
+        case,
+        "apple-m3-max-macos27.0.1",
+        crate::metal::ORACLE_ABI,
+    )
+    .map_err(|error| format!("{name}: {error:?}"))?;
+    let output = (metal.observed_output()).ok_or_else(|| format!("{name}: no output"))?;
+    (base64::engine::general_purpose::STANDARD.decode(output)).map_err(|error| error.to_string())
+}
+
 /// The route of each committed public case `names` names, prepared for the CPU device.
 fn routes(names: &[&str]) -> BTreeMap<String, Route> {
     prepared(names)
@@ -587,7 +603,7 @@ fn the_executor_draws_gpu_written_render_commands_where_the_runtime_does() {
             .find(|case| case.name == name)
             .expect("the committed public case")
             .clone();
-        let metal = crate::runtime_lane::metal_output(&store, &case).unwrap();
+        let metal = metal_output(&store, &case).unwrap();
         let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device }).unwrap();
         let prepared = super::super::prepare_case(device, admitted).unwrap();
         let on_context = super::super::run_on_context(&prepared, BACKEND, compile_worker())
@@ -633,7 +649,7 @@ fn compute_command_ranges_run_on_both_paths_as_metal_ran_them() {
             .expect("the committed public case")
             .clone();
         assert!(case.out_of_bounds.is_none(), "{name}");
-        let metal = crate::runtime_lane::metal_output(&store, &case).unwrap();
+        let metal = metal_output(&store, &case).unwrap();
         let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device }).unwrap();
         let prepared = super::super::prepare_case(device, admitted).unwrap();
         assert_eq!(route(&prepared), Route::Runtime, "{name}");
@@ -693,7 +709,7 @@ fn runs_as_the_executor_compiles_it(name: &str) {
         .into_iter()
         .find(|case| case.name == name)
         .expect("the committed public case");
-    let metal = crate::runtime_lane::metal_output(&store, &case).unwrap();
+    let metal = metal_output(&store, &case).unwrap();
     let authored = case.clone();
     let executor = match case.stage {
         crate::case::Stage::Kernel => "engine-runtime-compute",

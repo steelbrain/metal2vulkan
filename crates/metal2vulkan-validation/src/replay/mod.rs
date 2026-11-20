@@ -1,5 +1,5 @@
 //! Replay streams (`docs/REPLAY-STREAM.md`): their reader and writer, the address map the player
-//! moves address arguments by, the player, and its backends over the old runtime and the new one.
+//! moves address arguments by, the player, and its backend over the new runtime.
 
 mod addresses;
 mod args;
@@ -8,7 +8,6 @@ mod covers;
 mod dumps;
 mod heaps;
 mod new_runtime;
-mod old_runtime;
 mod pixels;
 mod player;
 mod prepass;
@@ -24,7 +23,6 @@ pub use covers::SlotStage;
 pub use dumps::{compare_dumps, Comparison, Difference};
 pub use heaps::HeapSplit;
 pub use new_runtime::{judged_records, Ended, ManagedCopies, NewRuntime, VideoHandle};
-pub use old_runtime::OldRuntime;
 pub use pixels::Shape;
 pub use player::WAIT_COMPLETED;
 pub use player::{
@@ -42,5 +40,7 @@ pub use stream::{
 };
 pub use value::{hex, Hash, Name, Value};
 
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod rt_replay;
 #[cfg(test)]
 mod tests;

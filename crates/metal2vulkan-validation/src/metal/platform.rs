@@ -1218,9 +1218,6 @@ mod primitive_topology_tests;
 #[cfg(test)]
 mod indirect_command_allocation_tests;
 
-#[cfg(all(test, m2v_gpu))]
-mod predication_tests;
-
 /// Metal drops a dispatch whose threadgroup is larger than the pipeline permits without
 /// reporting an error: the command buffer still reaches `Completed`, so every output reads
 /// back untouched and the case looks like a kernel that chose to write nothing. Refuse the

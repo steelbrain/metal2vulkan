@@ -103,52 +103,12 @@ doc comment says which hazard it is. Run one only to test that feature, by name,
 
 ```sh
 CARGO_TARGET_DIR=target/gpuhazards RUSTFLAGS='--cfg m2v_gpu --cfg m2v_gpu_hazards' \
-  cargo nextest run -p metal2vulkan-validation --all-features \
-  -E 'test(=runtime_lane::host_memory::a_gpu_fault_fails_its_command_buffer_and_the_queue_runs_on)'
+  cargo nextest run -p metal2vulkan-validation --all-features -E 'test(=<the test>)'
 ```
-
-**Work past a CPU device's reach** compiles only under `m2v_gpu`: a device test whose command
-buffer a CPU device cannot run within Metal's bound on one. The runtime's watchdog fails a queue's
-front batch that goes 20.2 s without its timeline advancing as Metal's timed-out command buffer
-(`GpuHang`, the runtime's `command_buffer/stall.rs`), on every device. The two dispatches past
-2^32 threads in `runtime_lane::indirect_dispatches` are such tests: each took 24 s on lavapipe
-with 16 CPU threads to itself, and 0.1 to 0.3 s on an RX 7900 XTX and a Radeon 780M.
 
 - **Device selection is an argument.** Every device-opening binary takes `--device-type cpu|gpu`,
   with no default. `cpu` matches only a CPU device and never falls back to a GPU; `gpu` takes the
   loader's first GPU. `corpus-metal` takes only `gpu`.
-- **A GPU of few channels.** NVIDIA's driver gives each `VkQueue` a channel, and a runtime device
-  of the queue plan takes 18: an RTX 2080 holds 10 or 11 such devices at once across processes,
-  where a 16-thread host's 16 test processes ask it for up to 288 `VkQueue`s. Past that, the driver
-  refuses a device the plan's queues and the runtime makes it with its least plan's three,
-  announcing `metal2vulkan-degrade-least-queue-plan`, or refuses those too
-  (`Error::DeviceRefused`). A runtime lane device so made or so refused is made again, the one
-  made dropped first, after a pause that doubles from 0.25 s to 2 s, for at most 120 s in all
-  (`runtime_lane/device_room.rs`), each pause a `LANE-DEVICE-ROOM` line on stderr. The runtime
-  crate's own device tests make theirs the same way (`src/tests/plan_room.rs`, `PLAN-DEVICE-ROOM`
-  lines), and one still of its least plan past the bound fails its test; the tests of the least
-  plan itself stand the driver's refusal in (`refuse_next_devices`). The new runtime's device tests
-  wait for no room: a refused device fails its test. So in every profile the stream device tests
-  that open a device of the plan, which the GPU legs run beside the new runtime's
-  (`runtime_lane::replay_streams` and three of `runtime_lane::rt_replay`), run at most four at a
-  time (nextest's `queue-plan` test group). `cargo nextest run --profile few-channels` runs three
-  device tests at a time (`.config/nextest.toml` has the measurement), leaving room for other
-  programs' devices on the same GPU: a whole lane run on such a GPU takes it.
-- **A busy window the host outlasted is asked again.** The `did_modify_range` oracle's steps
-  (`runtime_lane/device_copies.rs`) and the host copies of new `Shared` and `Managed` textures
-  (`runtime_lane/first_use.rs`) need the GPU busy past their calls, about 2 s of busy work
-  against calls of 5 to 47 ms on an RX 7900 XTX and of 20 to 670 us on a Radeon 780M. A try whose busy work ended before its calls
-  returned still checks its bytes, writes a `LANE-BUSY-MISS` line on stderr (each call's time and
-  the busy work's GPU time), and runs again, at most 3 tries a step
-  (`runtime_lane/busy_premise.rs`); a step that misses every try fails, as a call that waits for
-  the GPU's earlier work would.
-- **The runtime's own device tests take four `VkQueue`s, not the plan's 18.** Its test build's
-  `DeviceOptions::default()` holds queue limits of a round robin of two and none for presenting
-  (`TEST_QUEUE_LIMITS`, `device/create.rs`), as the runtime lane's devices hold theirs
-  (`LANE_QUEUE_LIMITS`): NVIDIA's driver makes and destroys one device at a time across processes,
-  each queue adding to both. A test whose work needs more (a command queue made while the test
-  holds two others, a presenting, reserved or extra queue) panics where it asks for it, on every
-  device, and makes its device with `queue_limits: None`.
 - **Waits are bounded.** Every host wait on device work goes through `src/gpu/wait.rs` (10 seconds
   by default; `--gpu-wait-timeout SECONDS` raises it for one command). A test fails if an
   unbounded wait appears elsewhere.
@@ -172,7 +132,7 @@ to the lane. Its builds set `RUSTFLAGS` to `--cfg m2v_gpu` alone, so the lane ho
 scripts/device-lane/device-lane --profile debug                      # the whole lane
 scripts/device-lane/device-lane --profile release --list-only        # derive and prove, no device
 scripts/device-lane/device-lane --profile release \
-  --filter 'test(/^runtime_lane::degrade_notices::/)'                # a slice of it
+  --filter 'test(/^replay::rt_replay::/)'                            # a slice of it
 ```
 
 - **`--profile debug|release` is required**, and the report records it. Debug keeps the product's
@@ -203,80 +163,14 @@ The report (`$OUT/report.txt`, beside each shard's log, the two listings and `sh
 | `COVERAGE HOLDS` | every shard ran exactly the runnable tests it holds, by nextest's own count and not the script's. nextest's `skipped` figure says nothing here: it counts every test of the shard's binary the filterset left out as well as the `#[ignore]`d ones |
 | `VERDICT` | the line to read: every shard passed and the run covered the selection, or which of the two did not hold |
 
-The lane's `#[ignore]`d tests are no part of a run of it: the cost and timing measurements, the
-recorders (`parity::lane::metal_recording`) and the child halves of the tests that fork. The lane
+The lane's `#[ignore]`d tests are no part of a run of it: the cost and timing measurements and
+the child halves of the tests that fork. The lane
 lists them and runs none, so what each shard had to run is its tests but those; one of them runs
 when a person asks for it by name.
 
 The run exits 0 only when the proof holds, the coverage adds up and every shard passed. It is no
 part of a gate: it opens a device, and takes the host's GPU a shard at a time for the length of the
 lane. The lint above is what a pre-landing check can see of the cfg; an assertion needs this run.
-
-**The runtime lane** (`runtime_lane::` tests) runs the runtime on a device under
-`VK_LAYER_KHRONOS_validation`. `METAL2VULKAN_LANE_VALIDATION=sync` (or `load-store`) adds the
-layer's synchronization checks to every lane device and prints each failing message as a
-`LANE-VALIDATION <test>: ...` line:
-
-```sh
-METAL2VULKAN_LANE_VALIDATION=sync RUSTFLAGS='--cfg m2v_cpu_icd' cargo nextest run \
-  -p metal2vulkan-validation --all-features --no-fail-fast -E 'test(/^runtime_lane::/)'
-```
-
-A lane device opens whether or not the loader can provide the layer it asks for: the runtime drops
-a layer the loader answers `VK_ERROR_LAYER_NOT_PRESENT` for and says so as the device is made. A
-claim of what the layer reported therefore states what it holds, against the layers the instance
-enabled and nothing else: where the layer was dropped the claim is not exercised, and the test
-prints `LANE-LAYER-ABSENT <test>: ...` and a count per message list instead of passing on an empty
-list. Five forms state it, and no lane test reads a message list for emptiness any other way:
-
-| Form | The claim |
-|---|---|
-| `layer_reported_nothing_at_all(&messages)` | The widest claim, and the one the lane states oftenest: whatever the layer checked of the work so far, it reported nothing of it |
-| `layer_reported_nothing(&messages, claim)` | The same, of the narrower `claim` the test names, which leads the failure and the `LANE-LAYER-ABSENT` line |
-| `layer_reported_nothing_but_apart_writes(&messages, claim, &writes)` (`runtime_lane::apart_writes`) | The same, but a write after write the layer reports on a buffer whose every write the test noted as it placed it (`NotedWrites`: a dispatch's, a draw's, a fill's, a bounded draw's or a patch draw's) passes in three cases. **Apart** (a `LAYER-APART-WRITES` line): two noted writes or more, each one Vulkan command's, no two sharing a byte. The layer takes a shader's storage buffer as written over its descriptor's whole range, which the runtime binds wider than the bytes the shader provably writes (from the offset alignment down, in 16-byte granules) and orders by (`sync_coverage::disjoint_words_of_one_block_are_a_hazard_to_the_layer_alone`); no order of writes that share no byte changes one. **Idle draw** (`LAYER-IDLE-DRAW`): the two `vkCmdDrawIndexedIndirect` of one draw the index bounds pass bounds, reported as recorded, one such draw noted per command buffer, on a device that announced `indirect-index-bounds-pass`: at most one of the two draws. **Idle chunk** (`LAYER-IDLE-CHUNK`): two `vkCmdDrawIndirect` chunk draws of emulated patch draws, reported as recorded, the patch draws of each command buffer noted apart, on a device that announced `emulated-tessellation-draws`: a test keeps each patch draw below `2^30` triangles and the scan writes a `vertexCount` of 0 past them, so at most one chunk of a draw draws. A read after a write, a write after a read, a copy's access, two noted writes of one byte, and either split form reported otherwise fail as above |
-| `layer_reported_nothing_but_announced_stage_races(&messages, claim, &buffers)` (`runtime_lane::stage_races`) | The same, but a hazard between a later draw's vertex stage and an earlier draw's fragment stage of one pass, reported as recorded, on a buffer the test names, passes with a `LAYER-STAGE-RACE` line where the device announced the difference it is: a read after a write under `in-place-vertex-reads`, a write after a read or a write under `fragments-before-geometry`. Metal runs a pass's vertex functions before its fragments; Vulkan orders the draws only through the pass's barriers |
-| `nothing_reported_without_the_layer(&messages, claim)` | A device the test made without the validation layer, to time something: the claim is the driver's own messages and the runtime's, so the layer's absence takes nothing from it. It fails where such a device did ask for the layer after all |
-
-A host whose layer manifest names its library by a bare
-filename (which the loader looks for on the system library search path) provides no layer at all,
-and a lane run there is evidence for everything but the layer's checks. The executor's own Vulkan
-context refuses to open without the layer instead (`candidate::platform::device`).
-
-Whether the layer's synchronization checks see a kernel's write of a buffer it binds is asked of
-the layer, never of its version: the positive control
-(`runtime_lane::sync_coverage::layer_sees_kernel_writes`, one dispatch writing an untracked
-buffer through the runtime's recording, then a copy of it with nothing between) runs first.
-Where the control finds the layer blind, each `sync_coverage` test whose hazard needs a kernel's
-write, and `parity::sequences::lane`'s hazard control, prints
-`LAYER-BLIND-KERNEL-WRITES <test>: ...` naming what it did not check, and requires the layer to
-have reported nothing of the rest of its run.
-
-**Seeded differential sequences** (`parity::sequences`): 64 seeded, race-free Metal programs of
-render passes, blits, dispatches, indirect commands, fences and events over buffers, heaps and
-textures, run on the runtime and compared with committed Metal results
-(`corpus/observations/parity/sequences.jsonl`) and with a CPU model. A failing seed is shrunk and
-printed. Metal's results are recorded on a Mac by the ignored test
-`parity::sequences::lane::metal_recording::record_metal`, each seed in a child process of its
-own. A seed whose child Metal's driver crashes is recorded as a Metal-side gap, with the crash's
-signature (the call, the faulting frame and the command); the lane then has nothing of Metal's to
-compare that seed with, runs it on the runtime all the same (it must complete with no refusal and
-no validation message), and names it in its output. Under `METAL2VULKAN_LANE_VALIDATION=sync` the
-lane reads each hazard the layer reports against the sequence: the layer takes a shader's buffer
-as accessed over its whole descriptor (the bytes the shader reaches widened to 16-byte granules,
-or from the bound offset to the end where it indexes the buffer), so a hazard between two
-commands that share no byte of its memory changes no answer, and prints as a `SEQUENCE-SYNC` line
-naming what Metal orders between them (nothing, for untracked memory between encoders or a
-concurrent encoder's dispatches). The lane matches the commands by the Vulkan command the layer
-names and by the command buffers it may have checked since the lane last took its messages
-(after each commit). A hazard between commands that share a byte (the generator orders those, so
-the runtime must), on a buffer no command of the sequence bound, or of another shape fails the
-seed. So does one the layer's words fit both to such a pair and to pairs whose bytes are apart;
-the minimized sequence then tells them apart: when it still needs a command of an apart pair,
-the pair sharing bytes alone raised no hazard. Two seeds fail so today (7 and 50, on lavapipe,
-the RTX 3090 and RADV), each settled that way: the hazard is between untracked commands in two
-encoders, which Metal leaves unordered and whose bytes are apart, and the layer's ranges meet
-because a texel kernel's or a draw's buffer binds from its offset to the buffer's end, as Metal's
-does.
 
 **Generated-program fuzzers** (`metal2vulkan_devtools::fuzz`: structured, irreducible, inline,
 access, workgroup, pointer select) run device-free in the translator's tests
@@ -323,7 +217,7 @@ holds them, then times each GPU in a job of its own.
 
 | Leg | Runs | Built |
 |---|---|---|
-| Each GPU of a Linux node | `metal2vulkan-rt`'s tests and the replay player's stream device tests (`metal2vulkan-validation`'s `runtime_lane::replay_streams` and `runtime_lane::rt_replay`) under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`crates/metal2vulkan-harness`), both runtimes in one process (`harness --runtime new,old`), the leg's suite `harness` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
+| Each GPU of a Linux node | `metal2vulkan-rt`'s tests and the replay player's stream device tests (`metal2vulkan-validation`'s `replay::rt_replay`) under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`crates/metal2vulkan-harness`), both runtimes in one process (`harness --runtime new,old`), the leg's suite `harness` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
 | The Windows host's GPU | The same tests (under the validation layer) and harness, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
 | `lavapipe` | The gate's suites and the device tests (`metal2vulkan-rt`'s under the validation layer) in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
 | `lint` | The gate's `cargo fmt --all --check`, clippy with `-D warnings` plain, under `--cfg m2v_gpu` and under `--cfg m2v_cpu_icd`, and Rustdoc with `-D warnings`, each its own suite | In place, on the builder, beside its other jobs |
@@ -699,20 +593,14 @@ moves a venue's profile fingerprint without changing any artifact is handled by 
 records (`corpus-status --venue-keys`, then `--rekey-venues`); a change that moves artifacts needs a
 re-record on that venue.
 
-### Draw A/B and command replay
+### Command replay
 
-- `corpus-draw-ab` draws a logged render pipeline's fragment function through the runtime on seeded
-  inputs and records what it writes and how long it takes; `corpus-draw-ab compare --base DIR
-  --change DIR --draws FILE --runs N` compares two builds. A draw skipped in both legs is not
-  compared, and fails the comparison unless named in `--expected-skips`.
 - `command-replay play` plays a replay stream ([REPLAY-STREAM.md](REPLAY-STREAM.md)) on a Vulkan
-  device through the old runtime and writes its report: the runtime's counters for each group of
+  device through the new runtime and writes its report: the runtime's counters for each group of
   command buffers it waited for, each frame and the whole play, the census of written words that
   look like addresses (they play as recorded) and the address arguments it moved,
   and a SHA-256 of each checked buffer or texture against the recorded one. `command-replay dump`
   prints a stream's calls.
-- `format-scout` drives every Metal pixel format through the runtime's public API, one use at a
-  time, and records what each use did.
 
 ## The product bug loop
 

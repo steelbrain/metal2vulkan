@@ -328,11 +328,11 @@ class DeviceTestTests(unittest.TestCase):
         script = matrix.build_script("abc", "", False)
         self.assertIn("cargo nextest archive -p metal2vulkan-rt -p metal2vulkan-validation --all-features", script)
 
-    def test_a_leg_runs_the_runtime_s_tests_and_the_two_stream_modules(self):
+    def test_a_leg_runs_the_runtime_s_tests_and_the_stream_module(self):
         leg = matrix.Leg("1002:15bf", "n", "0000:c7:00.0", "radeon")
         script = matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40, "rt", False)
         self.assertIn(f"-E '{matrix.DEVICE_TEST_FILTER}'", script)
-        self.assertIn("test(/^runtime_lane::(replay_streams|rt_replay)::/)", matrix.DEVICE_TEST_FILTER)
+        self.assertIn("test(/^replay::rt_replay::/)", matrix.DEVICE_TEST_FILTER)
 
     def test_the_tree_carries_metal_s_observations_and_no_other_backend_s(self):
         head = matrix.linux_head("abc", "")

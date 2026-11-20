@@ -33,8 +33,7 @@
 //!   device copy, the backend's header line says which copy the play reads.
 //! - A two-copy stream's Managed buffers start their GPU copies from the bytes they were made with:
 //!   a no-copy descriptor buffer and a copied one, each made with 7s and written 7s before its
-//!   first use with no `didModifyRange:`, read as 7s through a blit (on the old runtime too,
-//!   `replay_streams`).
+//!   first use with no `didModifyRange:`, read as 7s through a blit.
 //! - A Private buffer, which has no CPU mapping, reads back through a copy into a Shared buffer of
 //!   the play's own: a blit's fill of it reads as the fill's bytes.
 //! - In a stream whose header marks its announced bytes recorded, an announcement after a
@@ -80,27 +79,42 @@
 //!   64 KiB granules take places that span their lengths rounded up to those granules, the slack
 //!   the places hold the sum of both.
 //! - A word that looks like an address (its value lies in a live recorded range, as two 32-bit
-//!   indices can) plays as written, and the census of such words is the same on both runtimes.
+//!   indices can) plays as written, and is counted.
 //! - A tiled texture over a buffer of two levels (the SPI
 //!   `newTiledTextureWithDescriptor:offset:bytesPerRow:`) takes the buffer's bytes into its first
-//!   level and makes its second from them at its first use, as the old runtime plays the call:
-//!   blits of both levels read the same texels on both runtimes, and the take is counted once.
+//!   level and makes its second from them at its first use: blits of both levels read the
+//!   expected texels, and the take is counted once.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
 
-use super::host_memory::on_device_with;
-use super::{at_plan, ScratchCache};
 use crate::gpu::{self, DeviceType};
 use crate::replay::{
-    Backend, NewRuntime, OldRuntime, PlayError, Player, ReadCopy, Report, StreamReader,
-    StreamWriter, Value, WAIT_COMPLETED,
+    Backend, NewRuntime, PlayError, Player, ReadCopy, Report, StreamReader, StreamWriter, Value,
+    WAIT_COMPLETED,
 };
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+
+/// A pipeline cache directory one test owns: a new, empty directory in the project's scratch
+/// root, removed when dropped, and by the next run of any suite where a killed test left it
+/// ([`metal2vulkan_devtools::scratch`]).
+struct ScratchCache(metal2vulkan_devtools::scratch::Owned);
+
+impl ScratchCache {
+    /// A new directory, not yet made (the device makes it).
+    fn new() -> std::io::Result<ScratchCache> {
+        metal2vulkan_devtools::scratch::Owned::reserved("rt-replay-cache").map(ScratchCache)
+    }
+
+    /// The directory.
+    fn path(&self) -> &Path {
+        self.0.path()
+    }
+}
 
 /// The new runtime's first device of the cfg's kind (a GPU: discrete, then integrated, then
 /// virtual; else the CPU), its kernels kept in `cache`.
@@ -1195,9 +1209,8 @@ fn a_private_buffer_reads_back_through_a_copy() {
 
 /// A Private texture the program cleared to red in a render pass and shows at present 0: the play
 /// listing present 0 (`Player::checking_presents`) reads it back through a copy, which the CPU's
-/// read of a Private texture is not, and checks its 16 red texels. The old runtime's play of the
-/// stream gives the same digest: both read the shown region as the same tight rows of texels, so
-/// a pitch or a row's padding cannot read as a picture that differs.
+/// read of a Private texture is not, and checks its 16 red texels: the shown region read as tight
+/// rows of texels, so a pitch or a row's padding cannot read as a picture that differs.
 #[test]
 fn a_private_shown_texture_is_checked_through_a_copy() {
     let dir = ScratchDir::new("rt-replay-private-shown").unwrap();
@@ -1248,17 +1261,6 @@ fn a_private_shown_texture_is_checked_through_a_copy() {
     let (rt, ended) = player.play(&mut reader);
     let lines = rt.lines();
     ended.unwrap_or_else(|error| panic!("the play ended: {error}: {lines:?}"));
-    let mut old = None;
-    on_device_with(at_plan, |device| {
-        let mut backend = OldRuntime::new(device.clone(), gpu::TEST_DEVICE);
-        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
-        let player = Player::new(&mut backend).checking_presents([0]);
-        let (report, ended) = player.play(&mut reader);
-        let lines = report.lines();
-        ended.unwrap_or_else(|error| panic!("the old play ended: {error}: {lines:?}"));
-        old = Some(report);
-    });
-    let old = old.expect("an old runtime's device");
     let checked = |report: &Report| -> Vec<(u64, u64, [u8; 32])> {
         (report.checks.iter())
             .map(|check| (check.object, check.frame, check.sha256))
@@ -1266,11 +1268,6 @@ fn a_private_shown_texture_is_checked_through_a_copy() {
     };
     let red: [u8; 32] = Sha256::digest([255u8, 0, 0, 255].repeat(16)).into();
     assert_eq!(checked(&rt), [(3, 0, red)], "{lines:?}");
-    assert_eq!(
-        checked(&old),
-        checked(&rt),
-        "both runtimes' digest of one picture"
-    );
 }
 
 /// A tiled texture over Shared buffer #3 (`newTiledTextureWithDescriptor:offset:bytesPerRow:`) of
@@ -1278,8 +1275,7 @@ fn a_private_shown_texture_is_checked_through_a_copy() {
 /// squares of one colour each, so the second level made from the first by a filter of each square
 /// is that square's colour exactly. A blit encoder copies the first level into #5 and the second
 /// into #6, each shown at a present. On the new runtime the use takes the buffer's bytes into the
-/// first level and makes the second from it, once; the old runtime's play of the stream shows the
-/// same texels.
+/// first level and makes the second from it, once.
 #[test]
 fn a_tiled_texture_takes_its_buffer_s_bytes_and_levels_at_first_use() {
     let dir = ScratchDir::new("rt-replay-tiled").unwrap();
@@ -1350,17 +1346,6 @@ fn a_tiled_texture_takes_its_buffer_s_bytes_and_levels_at_first_use() {
     let (rt, ended) = player.play(&mut reader);
     let lines = rt.lines();
     ended.unwrap_or_else(|error| panic!("the play ended: {error}: {lines:?}"));
-    let mut old = None;
-    on_device_with(at_plan, |device| {
-        let mut backend = OldRuntime::new(device.clone(), gpu::TEST_DEVICE);
-        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
-        let player = Player::new(&mut backend).checking_presents([0, 1]);
-        let (report, ended) = player.play(&mut reader);
-        let lines = report.lines();
-        ended.unwrap_or_else(|error| panic!("the old play ended: {error}: {lines:?}"));
-        old = Some(report);
-    });
-    let old = old.expect("an old runtime's device");
     let checked = |report: &Report| -> Vec<(u64, u64, [u8; 32])> {
         (report.checks.iter())
             .map(|check| (check.object, check.frame, check.sha256))
@@ -1369,7 +1354,6 @@ fn a_tiled_texture_takes_its_buffer_s_bytes_and_levels_at_first_use() {
     let digest = |bytes: &[u8]| -> [u8; 32] { Sha256::digest(bytes).into() };
     let shown = [(5, 0, digest(&first)), (6, 1, digest(&second))];
     assert_eq!(checked(&rt), shown, "{lines:?}");
-    assert_eq!(checked(&old), shown, "the old runtime's play");
     let executed = &rt.total.executed;
     let counted = |key: &str| executed.get(key).copied().unwrap_or(0);
     let counts = [
@@ -2478,34 +2462,6 @@ fn a_data_word_in_a_live_range_plays_as_written_on_the_new_runtime() {
     let (report, _) = play("data-word", &census_stream(&dir));
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     assert_eq!(census(&report), [1, 1, 0]);
-}
-
-/// The same stream on the old runtime, which makes the block at its recorded address, and on the
-/// new runtime, which does not: the census counts the same words on both, and both play them as
-/// written.
-#[test]
-fn the_address_census_is_the_same_on_both_runtimes() {
-    let dir = ScratchDir::new("rt-replay-census").unwrap();
-    let path = census_stream(&dir);
-    let (rt, _) = play("census", &path);
-    let mut old = None;
-    on_device_with(at_plan, |device| {
-        let mut backend = OldRuntime::new(device.clone(), gpu::TEST_DEVICE);
-        let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
-        let (report, ended) = Player::new(&mut backend).play(&mut reader);
-        for line in report.lines() {
-            eprintln!("REPLAY census-old {line}");
-        }
-        ended.unwrap();
-        old = Some(report);
-    });
-    let old = old.expect("an old runtime's device");
-    for report in [&rt, &old] {
-        assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
-    }
-    assert_eq!(census(&rt), census(&old));
-    assert_eq!(census(&old), [1, 1, 0]);
-    assert_eq!(old.pinned, Some(2), "the block and its buffer");
 }
 
 /// A copy back to the guest's RAM plays in the host's one-copy form: one buffer copy of the whole

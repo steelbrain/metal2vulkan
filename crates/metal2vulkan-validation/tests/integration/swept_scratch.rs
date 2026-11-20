@@ -11,7 +11,7 @@
 //! removes it, and removes no live run's
 //! ([`metal2vulkan_devtools::scratch`], whose own tests hold the sweep itself).
 
-use metal2vulkan_validation::runtime_lane::ScratchCache;
+use metal2vulkan_validation::candidate::runtime_case::ScratchCache;
 
 /// **A lane's shader cache is a path the next run can recognise**: in the scratch root, with a
 /// lock beside it. Put it back under the OS temp directory on its own and this test fails naming

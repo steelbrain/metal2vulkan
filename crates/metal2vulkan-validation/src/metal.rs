@@ -620,13 +620,9 @@ mod binding;
 pub mod command_guard;
 #[cfg(target_os = "macos")]
 mod platform;
-/// The system Metal device, behind the hang tripwire check: the parity harness's Metal side
-/// (`parity::metal`) and the crate's binaries open it here.
+/// The system Metal device, behind the hang tripwire check.
 #[cfg(target_os = "macos")]
 pub use platform::system_device;
-/// The libraries the parity harness's Metal side uses (`parity::metal`).
-#[cfg(all(test, m2v_gpu, target_os = "macos"))]
-pub(crate) use platform::{load_library, shader_air};
 
 #[cfg(test)]
 mod tests;

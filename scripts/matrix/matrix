@@ -91,13 +91,13 @@ KEEP = r"""f == 0 { print; if ($0 ~ /^ *Summary \[/) f = 1; next }
 k || /M2V-MATRIX / { print }"""
 NEXTEST_OUT = "--no-fail-fast --success-output final --failure-output final"
 #: The packages of the GPU legs' device-test archive, and the tests of it a leg runs:
-#: `metal2vulkan-rt`'s, and the replay player's stream device tests on both runtimes
-#: (`metal2vulkan-validation`'s `runtime_lane::replay_streams` and `runtime_lane::rt_replay`), each
-#: of which writes and plays its own small stream. A break in the player or in a runtime's stream
-#: path that only a GPU shows would otherwise wait for a lane's play of a recorded stream to find it.
+#: `metal2vulkan-rt`'s, and the replay player's stream device tests (`metal2vulkan-validation`'s
+#: `replay::rt_replay`), each of which writes and plays its own small stream. A break in the player
+#: or in the runtime's stream path that only a GPU shows would otherwise wait for a lane's play of a
+#: recorded stream to find it.
 DEVICE_TEST_PACKAGES = ("metal2vulkan-rt", "metal2vulkan-validation")
 DEVICE_TEST_FILTER = ("package(metal2vulkan-rt) | (package(metal2vulkan-validation)"
-                      " & test(/^runtime_lane::(replay_streams|rt_replay)::/))")
+                      " & test(/^replay::rt_replay::/))")
 #: The observations a Linux job's tree carries: Metal's alone (37 MiB of the 1.5 GiB), from which
 #: the stream device tests take their public cases' Metal outputs.
 METAL_OBSERVATIONS = "crates/metal2vulkan-validation/corpus/observations/metal"

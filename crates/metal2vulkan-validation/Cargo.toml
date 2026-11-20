@@ -73,10 +73,6 @@ proc-macro2 = "1"
 # validation saved per binary on every test build). The integration test `bins.rs` fails when such a
 # binary's sources hold a `#[test]`; a binary that gains unit tests drops the line.
 [[bin]]
-name = "corpus-draw-ab"
-path = "src/bin/corpus-draw-ab.rs"
-
-[[bin]]
 name = "command-replay"
 path = "src/bin/command-replay.rs"
 test = false
@@ -122,9 +118,4 @@ path = "src/bin/corpus-pipeline.rs"
 [[bin]]
 name = "corpus-triage"
 path = "src/bin/corpus-triage.rs"
-
-[[bin]]
-name = "format-scout"
-path = "src/bin/format-scout.rs"
-test = false
 

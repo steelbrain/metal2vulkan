@@ -37,13 +37,10 @@ pub mod no_effect;
 pub mod observation;
 pub mod observation_contract;
 pub mod oracle_fuel;
-#[cfg(test)]
-mod parity;
 pub mod pool;
 pub mod refusal;
 pub mod replay;
 pub mod requirement;
-pub mod runtime_lane;
 pub mod source;
 pub mod specialization;
 pub mod spirv_tools;

@@ -47,8 +47,7 @@ mod tests {
 
     /// Every device open goes through one of the functions that check the hang tripwire first:
     /// validation's Vulkan context, the Metal platform, the device validation makes through the
-    /// runtime (`candidate::runtime_case::open_device`, which the runtime lane and the executor's
-    /// runtime path share), the present tests' own device, which the runtime adopts, and the new
+    /// runtime (`candidate::runtime_case::open_device`, the executor's runtime path's), and the new
     /// runtime's device in the player and in the replay tests, each after the tripwire check in its
     /// own file. A new raw open anywhere else in the crate fails here, before it can run, and so
     /// does a new-runtime open ahead of its check.
@@ -78,13 +77,9 @@ mod tests {
             ("src/metal/platform.rs", opens[0], 1),
             ("src/candidate/runtime_case.rs", opens[5], 1),
             ("src/candidate/runtime_case.rs", opens[6], 1),
-            // The present tests' own device, which the runtime adopts.
-            ("src/runtime_lane/presenting.rs", opens[2], 1),
-            ("src/runtime_lane/presenting.rs", opens[3], 1),
-            ("src/runtime_lane/presenting.rs", opens[4], 1),
             // The new runtime's device: the player's and the replay tests'.
             ("src/bin/command-replay.rs", opens[7], 1),
-            ("src/runtime_lane/rt_replay.rs", opens[7], 1),
+            ("src/replay/rt_replay.rs", opens[7], 1),
         ];
         let checked = concat!("refuse_if", "_tripped(");
         for (file, open, _) in allowed.iter().filter(|(_, open, _)| *open == opens[7]) {

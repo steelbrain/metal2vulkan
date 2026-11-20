@@ -506,11 +506,11 @@ and the (name id, value) answer pairs.
 ## 10. The player
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-[--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
+[--blobs DIR] [--snapshots yes|no] [--managed one-copy|two-copy]
 [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
 [--video-handle dma-buf|opaque-fd] [--check-presents F,...] [--read-device-copies yes|no]` plays a stream (its first segment) on one device through the
-old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `--video-handle`
-names the consumer's decoder route on the new runtime, the handle its video surfaces are made
+new runtime, and writes `DIR/report.txt`. `--video-handle`
+names the consumer's decoder route, the handle its video surfaces are made
 with (a dma-buf where it is not given; below). Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
 by default; docs/VALIDATION.md, the hang tripwire), which a play on a CPU device raises. It
 writes each frame's `frame` and `end` lines as the frame ends, flushed, so a play that never ends
