@@ -1276,9 +1276,12 @@ mod on_device {
 
     /// The in-place make split by step ([`crate::surface::steps`]), with no validation layer, on a
     /// fresh device for each row the device exports and each 4K picture (P010: R16 at 3840x2160
-    /// and RG16 at 1920x1080; NV12: R8 and RG8 alike): the first make, then the median and the
-    /// longest of the next ten, each make followed by its ready wait. It writes no zero: the
-    /// memory's bytes are undefined. Printed only.
+    /// and RG16 at 1920x1080; NV12: R8 and RG8 alike), on an idle queue and behind a busy one
+    /// (fills of a 256 MiB Private buffer committed before each make until about 100 ms of the
+    /// GPU's work is ahead, as the busy-queue timing commits them): the first make, then the median
+    /// and the longest of the next ten, each make followed by its ready wait, and behind a busy
+    /// queue by the last fill's completion. It writes no zero: the memory's bytes are undefined.
+    /// Printed only.
     #[test]
     fn every_device_splits_a_4k_surface_make_by_step() {
         let instance = crate::tests::validation::bare(&[]);
@@ -1293,8 +1296,15 @@ mod on_device {
         let ms = |nanos: u64| nanos as f64 / 1e6;
         for (name, physical) in &devices_of_the_cfgs_kind(&instance) {
             for (handle, pitch_multiple, start_multiple) in BUSY_ROWS {
-                for (picture, planes) in [("P010 4K", p010), ("NV12 4K", nv12)] {
-                    let label = format!("{name}: {handle:?} x{pitch_multiple} {picture}");
+                for (busy, (picture, planes)) in [false, true]
+                    .into_iter()
+                    .flat_map(|busy| [(busy, ("P010 4K", p010)), (busy, ("NV12 4K", nv12))])
+                {
+                    let queue = match busy {
+                        true => "busy",
+                        false => "idle",
+                    };
+                    let label = format!("{name}: {handle:?} x{pitch_multiple} {picture} {queue}");
                     let device = Device::new(physical, Default::default())
                         .unwrap_or_else(|error| panic!("{label}: {error}"));
                     if !device.core().exports.offers(handle) {
@@ -1317,10 +1327,43 @@ mod on_device {
                         start_multiple,
                         planes: &specs,
                     };
+                    // Behind a busy queue: the fills, and how many make 100 ms of the GPU's work.
+                    let len = 256 << 20;
+                    let filled = busy.then(|| {
+                        let block =
+                            (device.take_block(MemoryClass::Private, len)).expect("a block");
+                        let buffer = (device.new_buffer(block.id, 0, len, None)).expect("a buffer");
+                        let queue = device.new_command_queue(64).expect("a queue");
+                        (block, buffer, queue)
+                    });
+                    let fill = |value: u8| {
+                        let (_, buffer, queue) = filled.as_ref()?;
+                        let command_buffer = queue.command_buffer().expect("a command buffer");
+                        let mut encoder =
+                            command_buffer.blit_command_encoder().expect("an encoder");
+                        (encoder.fill_buffer(buffer, 0..len, value)).expect("a fill");
+                        encoder.end_encoding();
+                        command_buffer.commit().expect("a commit");
+                        Some(command_buffer)
+                    };
+                    let count = match fill(0) {
+                        Some(one) => {
+                            let began = Instant::now();
+                            let two = fill(1).expect("a fill");
+                            finished(&label, &one);
+                            finished(&label, &two);
+                            let each = began.elapsed().max(Duration::from_micros(100));
+                            let count =
+                                Duration::from_millis(100).as_secs_f64() / each.as_secs_f64();
+                            (count.ceil() as usize).clamp(1, 60)
+                        }
+                        None => 0,
+                    };
                     let mut makes: Vec<Vec<(&str, u64)>> = Vec::new();
                     let mut kept = Vec::new();
                     let mut form = None;
                     for _ in 0..11 {
+                        let fills: Vec<_> = (0..count).filter_map(|at| fill(at as u8)).collect();
                         let began = crate::host_time();
                         let (surface, export) = (device.new_exported_surface(&spec))
                             .unwrap_or_else(|error| panic!("{label}: {error}"));
@@ -1331,6 +1374,10 @@ mod on_device {
                         (surface.wait_until_ready())
                             .unwrap_or_else(|error| panic!("{label}: the ready wait: {error}"));
                         steps.push(("ready wait", crate::host_time() - began));
+                        for command_buffer in &fills {
+                            finished(&label, command_buffer);
+                            assert_eq!(command_buffer.error(), None, "{label}");
+                        }
                         form = Some(export.form);
                         makes.push(steps);
                         kept.push((surface, export));
@@ -1360,11 +1407,12 @@ mod on_device {
                         })
                         .collect();
                     println!(
-                        "surface-steps: {label}: form {form:?}; ms first/median/max of the next \
-                         ten: {}",
+                        "surface-steps: {label}: form {form:?}, {count} fills ahead; ms \
+                         first/median/max of the next ten: {}",
                         columns.join(", ")
                     );
                     drop(kept);
+                    drop(filled);
                 }
             }
         }

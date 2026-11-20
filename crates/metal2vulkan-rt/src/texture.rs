@@ -4602,9 +4602,15 @@ impl Device {
             inner: Arc::new(inner),
             device: self.clone(),
         };
+        // For the device tests: the plane's texture apart from its move home, which takes the work
+        // lock ([`crate::surface::steps`]).
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        crate::surface::steps::mark("plane texture");
         if !general {
             core.work.home(core, &texture.inner.image)?;
         }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        crate::surface::steps::mark("plane home");
         Ok(texture)
     }
 }
