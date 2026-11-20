@@ -163,7 +163,7 @@ done
 
 
 class TimedAgainTests(unittest.TestCase):
-    def test_a_harness_past_the_old_runtime_s_spread_is_timed_once_more_after_the_node_s_other_jobs(self):
+    def test_a_node_s_harnesses_are_timed_in_one_job_and_a_spread_past_the_line_once_more_after_it(self):
         run = run_of({})
         run.harness, run.layer, run.cfg = True, None, {}
         legs = [matrix.Leg("1002:744c", "n", "0000:06:00.0", "radeon"),
@@ -173,24 +173,31 @@ class TimedAgainTests(unittest.TestCase):
         asked = []
 
         def job(kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None,
-                hold_line=False):
-            asked.append((name, 'rm -rf "$S"' in script))
+                legs=1):
+            these = [leg for leg in legs_of if leg.gpu in gpus]
+            asked.append((name, [leg.id for leg in these], exclusive, legs, 'rm -rf "$S"' in script))
             if name.startswith("rt-"):
-                return 0, "".join(f"M2V-LEG {leg.id} begin\nM2V-SUITE {leg.id} rt exit 0\n" for leg in legs), {"id": name}
-            leg_id = name.split("-", 1)[1].removesuffix("-again")
-            lines = [f"M2V-LEG {leg_id} begin", "M2V-MATRIX time harness-old/alu 100.0",
-                     "M2V-MATRIX time harness-new/alu 110.0"]
-            for pair, old in enumerate(olds[leg_id].pop(0), 1):
-                lines += [f"M2V-MATRIX time harness-retime/alu/{pair}/old {old}",
-                          f"M2V-MATRIX time harness-retime/alu/{pair}/new {old * 1.1:.1f}"]
-            return 0, "\n".join(lines + [f"M2V-SUITE {leg_id} harness exit 0"]) + "\n", {"id": name}
+                return 0, "".join(f"M2V-LEG {leg.id} begin\nM2V-SUITE {leg.id} rt exit 0\n" for leg in these), {"id": name}
+            lines = []
+            for leg in these:
+                lines += [f"M2V-LEG {leg.id} begin", "M2V-MATRIX time harness-old/alu 100.0",
+                          "M2V-MATRIX time harness-new/alu 110.0"]
+                for pair, old in enumerate(olds[leg.id].pop(0), 1):
+                    lines += [f"M2V-MATRIX time harness-retime/alu/{pair}/old {old}",
+                              f"M2V-MATRIX time harness-retime/alu/{pair}/new {old * 1.1:.1f}"]
+                lines.append(f"M2V-SUITE {leg.id} harness exit 0")
+            return 0, "\n".join(lines) + "\n", {"id": name}
+
+        legs_of = legs
 
         with mock.patch.object(run, "job", job, create=True), mock.patch.object(matrix, "log"):
             run.gpu_node("n", legs, lambda: (("carry", "mirror", "rev"), None))
-        # The XTX's old runtime spread 15% in its first timing: it is timed once more, after the
-        # 2080's, and that last job is the node's last, which tidies; once more only.
-        self.assertEqual(asked, [("rt-n", False), ("harness-1002:744c", False), ("harness-10de:1e87", False),
-                                 ("harness-1002:744c-again", True)])
+        # Both legs' harnesses are timed in ONE job holding the node alone, sized for two legs. The
+        # XTX's old runtime spread 15% in its first timing: it alone is timed once more, in one more
+        # such job, the node's last, which tidies; once more only.
+        self.assertEqual(asked, [("rt-n", ["1002:744c", "10de:1e87"], False, 1, False),
+                                 ("harness-n", ["1002:744c", "10de:1e87"], True, 2, False),
+                                 ("harness-n-again", ["1002:744c"], True, 1, True)])
         self.assertEqual([(round(spread, 2), row) for spread, row in legs[0].timings], [(0.15, "alu"), (0.04, "alu")])
         self.assertEqual([(round(spread, 2), row) for spread, row in legs[1].timings], [(0.01, "alu")])
         self.assertEqual(run.carried, {"n": ("carry", "mirror", "rev")})
@@ -210,23 +217,23 @@ class OutlierRetimeTests(unittest.TestCase):
             leg.parsed["suites"][matrix.HARNESS_SUITE] = {"records": {"time": {"harness-new/alu": 200.0}}}
         asked = []
 
-        def job(kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None):
-            asked.append((kind, node, name, list(gpus), list(carries), space, exclusive, 'rm -rf "$S"' in script))
-            leg_id = name.split("-", 1)[1].removesuffix("-outlier")
-            return 0, (f"M2V-LEG {leg_id} begin\nM2V-MATRIX time harness-old/alu 100.0\n"
-                       f"M2V-MATRIX time harness-new/alu 101.0\nM2V-SUITE {leg_id} harness exit 0\n"), {"id": name}
+        def job(kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None, legs=1):
+            asked.append((kind, node, name, list(gpus), list(carries), space, exclusive, legs,
+                          'rm -rf "$S"' in script))
+            return 0, "".join(f"M2V-LEG {leg.id} begin\nM2V-MATRIX time harness-old/alu 100.0\n"
+                              f"M2V-MATRIX time harness-new/alu 101.0\nM2V-SUITE {leg.id} harness exit 0\n"
+                              for leg in legs_of if leg.gpu in gpus), {"id": name}
+
+        legs_of = legs
 
         with mock.patch.object(run, "job", job, create=True), mock.patch.object(matrix, "log"):
             run.retime(legs)
-        # A Linux node's legs in turn with its carry, its last job tidying; the Windows leg in its
-        # workspace; each holding its node alone. A node whose legs never started has no carry.
+        # A Linux node's legs in turn in ONE job with its carry, holding the node alone and
+        # tidying; the Windows leg in its workspace. A node whose legs never started has no carry.
         self.assertEqual(sorted(asked), [
-            ("time", "n", "harness-1002:744c-outlier", ["0000:06:00.0"], ["carry"], "gpu", True, False),
-            ("time", "n", "harness-10de:1e87-outlier", ["0000:09:00.0"], ["carry"], "gpu", True, True),
-            ("wintime", "w", "winharness-8086:3e9b-outlier", ["8086:3e9b"], [], "win", True, False)])
-        self.assertEqual([name for _, node, name, *_ in asked if node == "n"],
-                         ["harness-1002:744c-outlier", "harness-10de:1e87-outlier"])
-        for leg, name in zip(legs, ("harness-1002:744c-outlier", "harness-10de:1e87-outlier",
+            ("time", "n", "harness-n-outlier", ["0000:06:00.0", "0000:09:00.0"], ["carry"], "gpu", True, 2, True),
+            ("wintime", "w", "winharness-8086:3e9b-outlier", ["8086:3e9b"], [], "win", True, 1, False)])
+        for leg, name in zip(legs, ("harness-n-outlier", "harness-n-outlier",
                                     "winharness-8086:3e9b-outlier")):
             self.assertEqual(leg.parsed["suites"][matrix.HARNESS_SUITE]["records"]["time"],
                              {"harness-old/alu": 100.0, "harness-new/alu": 101.0})

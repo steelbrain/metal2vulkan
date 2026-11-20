@@ -592,8 +592,9 @@ class Run:
     def setup(self, node):
         return self.cfg.get("setup", {}).get(node, "")
 
-    def size(self, kind, node):
-        """RAM and timeout from this kind's last measured runs on NODE. RAM: 1.3x the largest
+    def size(self, kind, node, legs=1):
+        """RAM and timeout from this kind's last measured runs on NODE, for a job of LEGS legs run in
+        turn: a run's minutes are kept per leg, and the timeout is LEGS times one leg's. RAM: 1.3x the largest
         peak of the last three that started in a fresh workspace (a run that peaked at its
         reservation keeps it; one that ended for want of RAM gets 2x), else the kind's default. For
         a kind that keeps a workspace that is a whole build: an incremental build's peak says
@@ -609,9 +610,9 @@ class Run:
                       for r in whole)
         if runs:
             minutes = max(minutes, math.ceil(1.5 * max(r["minutes"] for r in runs[-3:])))
-        return max(ram, 2), minutes
+        return max(ram, 2), minutes * legs
 
-    def job(self, kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None):
+    def job(self, kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None, legs=1):
         """Dispatch SCRIPT on NODE, wait for it, and return (exit code, output, job record).
         SPACE names a workspace kept for this kind on this node across runs (incremental builds,
         and no fresh checkout of the tree). A job that times anything is EXCLUSIVE. It is sized as
@@ -623,7 +624,7 @@ class Run:
         key = f"{space}@{node}" if space else None
         with self.lock:
             ws = self.spaces.get(key) if key else None
-        ram, minutes = self.size(kind, node)
+        ram, minutes = self.size(kind, node, legs)
         if room:
             ram = room
         args = ["dispatch", "--json", "--priority", "5", "--kill-on-stall", "--label", "agent=matrix",
@@ -671,7 +672,7 @@ class Run:
             killed = peak >= 0.95 * ram and (code == 137 or (code != 0 and bool(STARVED.search(out))))
             with self.lock:
                 self.stats.setdefault(f"{kind}@{node}", []).append(
-                    dict(ram=ram, peak=round(peak, 2), minutes=round(took, 2), killed=killed,
+                    dict(ram=ram, peak=round(peak, 2), minutes=round(took / legs, 2), killed=killed,
                          full=ws is None))
                 self.stats[f"{kind}@{node}"] = self.stats[f"{kind}@{node}"][-6:]
                 if key and rec.get("workspace"):
@@ -681,7 +682,7 @@ class Run:
         if killed and ram < cap:
             log(f"{name}: wanted more than its {ram} GiB; again with {min(2 * ram, cap)} GiB")
             return self.job(kind, node, script, name, gpus, carries, space, exclusive,
-                            room=min(2 * ram, cap))
+                            room=min(2 * ram, cap), legs=legs)
         return w.returncode, out, rec
 
     def record(self, jid):
@@ -737,8 +738,10 @@ class Run:
 
     def gpu_node(self, node, legs, ready):
         """One node's GPU legs: their device tests in turn, in one job holding their GPUs, then
-        each leg's harness in a job of its own that holds the node alone and times that one GPU.
-        READY gives the carry."""
+        their harnesses in turn, in ONE job that holds the node alone, so the node drains once for
+        all its timings; each leg still times its one GPU with nothing else running. The legs whose
+        old runtime spread past results.BASE_SPREAD are timed once more, together, in one more such
+        job. READY gives the carry."""
         made, why = ready()
         if not made:
             return self.fail(legs, why)
@@ -747,8 +750,7 @@ class Run:
             self.carried[node] = made
         for leg in legs:
             leg.started = time.time()
-        jobs = [("rt", legs, f"rt-{node}")] + ([("harness", [leg], f"harness-{leg.id}") for leg in legs]
-                                               if self.harness else [])
+        jobs = [("rt", legs, f"rt-{node}")] + ([("harness", legs, f"harness-{node}")] if self.harness else [])
         while jobs:
             suite, these, name = jobs.pop(0)
             layer = self.layer if suite == "rt" else None
@@ -757,10 +759,12 @@ class Run:
             code, out, rec = self.job("gpu" if suite == "rt" else "time", node, script, name,
                                       gpus=[leg.gpu for leg in these],
                                       carries=[carry] + ([layer[0]] if layer else []), space="gpu",
-                                      exclusive=suite == "harness")
+                                      exclusive=suite == "harness", legs=len(these) if suite == "harness" else 1)
             self.finish(these, code, out, rec, suite)
-            if suite == "harness" and self.timed_again(these[0]):
-                jobs.append((suite, these, f"{name}-again"))
+            if suite == "harness":
+                again = [leg for leg in these if leg.id not in self.failures and self.timed_again(leg)]
+                if again:
+                    jobs.append((suite, again, f"{name}-again"))
 
     def timed_again(self, leg):
         """Whether LEG's harness, just timed, is timed once more, after the node's other jobs: the
@@ -779,33 +783,36 @@ class Run:
         """Each of LEGS's harness timed once more, after every leg is in: a leg whose one pass has
         a harness row's cross-GPU outlier (results.outliers_to_retime), which then fails it only
         where both passes agree (results.time_outliers). The second pass's records take the
-        first's, as a timing's do in timed_again. A node's legs in turn, the nodes at once, each
-        job holding its node alone as a timing does; a Linux node's job lays the tree out again
-        and its last one tidies, as the node's last job had."""
+        first's, as a timing's do in timed_again. A Linux node's legs in turn in ONE job holding the
+        node alone, as a timing does, which lays the tree out again and tidies, as the node's last
+        job had; a Windows node's leg in its own; the nodes at once."""
         by_node = {}
         for leg in legs:
             by_node.setdefault(leg.node, []).append(leg)
 
         def chain(node, these):
-            for leg in these:
+            batches = ([[leg] for leg in these] if self.nodes[node]["os"] == "windows" else [these])
+            for batch in batches:
                 try:
                     if self.nodes[node]["os"] == "windows":
+                        leg = batch[0]
                         code, out, rec = self.job("wintime", node, winrun_script(leg, "harness"),
                                                   f"winharness-{leg.id}-outlier", gpus=[leg.gpu], space="win",
                                                   exclusive=True)
                     elif node in self.carried:
                         carry, mirror, rev = self.carried[node]
-                        script = gpu_script(self.short, self.setup(node), [leg], mirror, rev, "harness",
-                                            leg is these[-1], None, self.nodes.get(node, {}).get("cpu_model"))
-                        code, out, rec = self.job("time", node, script, f"harness-{leg.id}-outlier",
-                                                  gpus=[leg.gpu], carries=[carry], space="gpu", exclusive=True)
+                        script = gpu_script(self.short, self.setup(node), batch, mirror, rev, "harness",
+                                            True, None, self.nodes.get(node, {}).get("cpu_model"))
+                        code, out, rec = self.job("time", node, script, f"harness-{node}-outlier",
+                                                  gpus=[leg.gpu for leg in batch], carries=[carry], space="gpu",
+                                                  exclusive=True, legs=len(batch))
                     else:
-                        self.fail([leg], f"its cross-GPU outlier's re-time found no carry on {node}")
+                        self.fail(batch, f"its cross-GPU outlier's re-time found no carry on {node}")
                         continue
-                    self.finish([leg], code, out, rec, "harness")
-                except Exception as error:  # a re-time's own failure fails its leg, not the run
-                    log(f"retime {leg.id}: {error!r}")
-                    self.fail([leg], f"its cross-GPU outlier's re-time failed: {error!r}")
+                    self.finish(batch, code, out, rec, "harness")
+                except Exception as error:  # a re-time's own failure fails its legs, not the run
+                    log(f"retime {node}: {error!r}")
+                    self.fail(batch, f"its cross-GPU outlier's re-time failed: {error!r}")
 
         threads = [threading.Thread(target=chain, args=(node, these)) for node, these in sorted(by_node.items())]
         for t in threads:
