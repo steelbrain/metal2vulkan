@@ -583,10 +583,6 @@ impl Transcript {
     /// Every degrade notice the transcript records, by code, with how many times it was
     /// announced: the `counts` child of each site [`Sites::notices`] emitted, wherever it sits in
     /// the tree.
-    ///
-    /// The closed-vocabulary notice census (`runtime_lane::degrade_notices`) stays a lane and
-    /// reads the suite's runs through this, rather than becoming a case: its subject is the
-    /// vocabulary across every lane, which has no Metal counterpart to compare against.
     pub fn announced_notices(&self) -> BTreeMap<String, u64> {
         let mut found = BTreeMap::new();
         for announced in self.announced_at() {

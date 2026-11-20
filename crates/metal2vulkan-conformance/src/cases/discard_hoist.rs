@@ -380,8 +380,7 @@ mod tests {
         DroppedQuads,
     }
 
-    /// Metal's answer for each shape, copied from `runtime_lane::discard_hoist::SHAPES` to be
-    /// checked against the recording, never to stand in for it.
+    /// Metal's answer for each shape, checked against the recording, never to stand in for it.
     const LANE_ANSWERS: [(&str, Answer); 13] = [
         ("hoisted_known", Answer::Survivors),
         ("counted_dependent", Answer::DroppedQuads),

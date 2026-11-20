@@ -1,4 +1,4 @@
-//! How BC1 to BC5 texels decode, ported from `runtime_lane::compressed_decode`.
+//! How BC1 to BC5 texels decode.
 //!
 //! The consumer's x86 guests hold BC textures, so what one texel of a block decodes to is a value a
 //! guest shader reads. The lane's expectation is not a table but a **rule** fitted bit for bit on an
@@ -419,7 +419,7 @@ impl Case for CompressedDecode {
     }
 }
 
-/// Metal's decode of BC1 to BC5, as `runtime_lane::compressed_decode` fitted it on an Apple M4.
+/// Metal's decode of BC1 to BC5, as a rule fitted to an Apple M4's texels.
 ///
 /// It is **not** what any case here expects: the recordings hold Metal's own texels, measured on
 /// this M3 Max. The rule is kept so a test can hold the two against each other, which is the one

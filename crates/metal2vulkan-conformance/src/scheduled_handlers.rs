@@ -1,11 +1,11 @@
 //! Where a command buffer's scheduling sits relative to its scheduled handlers: the vocabulary for
-//! the one Metal order `runtime_lane::submission_handlers` carries in prose.
+//! one Metal order.
 //!
-//! Metal runs a command buffer's scheduled handlers on a thread of its own, and the order the lane
-//! states is that `waitUntilScheduled` returns **only once every scheduled handler returned**,
-//! while the status already reads `Scheduled` from the moment the first of them starts. That is a
-//! relation between three things — a handler, a status and a wait on another thread — so the whole
-//! experiment is one [`Side`](crate::case::Side) call.
+//! Metal runs a command buffer's scheduled handlers on a thread of its own, and the order is that
+//! `waitUntilScheduled` returns **only once every scheduled handler returned**, while the status
+//! already reads `Scheduled` from the moment the first of them starts. That is a relation between
+//! three things — a handler, a status and a wait on another thread — so the whole experiment is one
+//! [`Side`](crate::case::Side) call.
 //!
 //! # Why the shape is safe and bounded
 //!

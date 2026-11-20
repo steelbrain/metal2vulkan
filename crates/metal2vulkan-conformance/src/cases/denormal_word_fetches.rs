@@ -1,14 +1,13 @@
 //! Whether a gather and a nearest sample of 32-bit float texels keep a **denormal's exact word**.
 //!
 //! This is the one family where the interesting answer is a driver's habit rather than a format's
-//! rule: `runtime_lane::denormal_word_fetches` measured that Metal keeps a denormal texel through
-//! its samplers, while RADV's gathers and nearest samples, NVIDIA's gathers and ANV's nearest
-//! samples hand back **the zero of the texel's sign** — and every one of those devices' plain
-//! fetches keeps it. A denormal flushed to zero is a value a comparison in floats would call
-//! almost right, so every site here records unsigned words and compares them exactly. This case's
-//! replay on RADV (Mesa 26.2.6, the RX 7900 XTX and the Radeon 780M, 2026-11-07) differed at the
-//! four nearest-sample sites alone: its gathers kept the word there. The device's flush is its
-//! native answer, `device-texel-conversion`.
+//! rule: Metal keeps a denormal texel through its samplers, while RADV's gathers and nearest
+//! samples, NVIDIA's gathers and ANV's nearest samples hand back **the zero of the texel's sign** —
+//! and every one of those devices' plain fetches keeps it. A denormal flushed to zero is a value a
+//! comparison in floats would call almost right, so every site here records unsigned words and
+//! compares them exactly. This case's replay on RADV (Mesa 26.2.6, the RX 7900 XTX and the Radeon
+//! 780M, 2026-11-07) differed at the four nearest-sample sites alone: its gathers kept the word
+//! there. The device's flush is its native answer, `device-texel-conversion`.
 //!
 //! The owned fixture `denormal_texels` is the one written for this question. Lane `i` reads the
 //! coordinate `in[i].xy` and writes eight `float4`s, each a site of its own because each is its own
@@ -32,12 +31,9 @@
 //! corner are recorded too rather than being left out as uninteresting — they are the rows that
 //! would catch a tie broken the other way.
 //!
-//! The lane also read the texture through a **runtime** sampler slot, through an argument buffer's
-//! sampler, and as a heap texture, on its own generated AIR; `denormal_texels` holds constexpr
-//! samplers only and no committed fixture reads a denormal texture through the other three with
-//! one texture bound. They are not ported here, and the module docs of
-//! `runtime_lane::denormal_word_fetches` record that Metal's runtime and argument-buffer samplers
-//! filtered exactly as its constexpr samplers of the same state.
+//! `denormal_texels` holds constexpr samplers only, and no committed fixture reads a denormal
+//! texture through a runtime sampler slot, an argument buffer's sampler or a heap texture with one
+//! texture bound, so those three are not cases here.
 //!
 //! Every output word holds [`BLANK`] before the dispatch, so a word the kernel did not reach is a
 //! recorded value rather than whatever the allocator left.

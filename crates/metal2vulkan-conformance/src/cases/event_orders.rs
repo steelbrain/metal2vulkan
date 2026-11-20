@@ -1,5 +1,4 @@
-//! What an event orders, measured on Metal: the four ordering facts `runtime_lane::events` holds
-//! as assertions of the runtime against itself.
+//! What an event orders, measured on Metal: four ordering facts.
 //!
 //! An event's value only rises ([`super::shared_events`]) — these cases are about what it
 //! **orders**. A command buffer's `encodeWaitForEvent:value:` holds that command buffer, and the
@@ -43,12 +42,8 @@
 //!
 //! # What this pulls forward
 //!
-//! Every one of these numbers was ours before. `runtime_lane::events` runs the shapes on the
-//! runtime and asserts the answers the module's prose says Metal gave — "as measured on Metal",
-//! "measured on the M3 and the M4" — with no Metal leg in the test and, for the statuses, no
-//! measurement written down at all beyond the word in the comment. Here both sides run and the
-//! answers are compared field by field, so the statuses, the handler order and the bytes are
-//! Metal's.
+//! Both sides run and the answers are compared field by field, so the statuses, the handler order
+//! and the bytes are Metal's.
 //!
 //! The commit order of [`CROSS_QUEUE_WAIT`] is the one that can deadlock. Two logical queues share
 //! the device's `VkQueue`s — one on most devices — so a wait committed ahead of its signal
@@ -76,11 +71,9 @@
 //! needs the hazard-tracking vocabulary first, and a hazard between two queues needs work big
 //! enough to overlap, which a bytes record of a small buffer cannot stand in for.
 //!
-//! The lane's refusals of an event command **with an encoder open** and **after the commit** are
-//! left out, and must stay out: the lane's own prose says Metal asserts there, which ends Metal's
-//! process. They are the shape the suite has no outcome kind for, and the round's rule is that
-//! such a design is written down and left unbuilt. The runtime's typed refusals of both stay
-//! `runtime_lane` assertions.
+//! An event command **with an encoder open** and **after the commit** is left out, and must stay
+//! out: Metal asserts there, which ends Metal's process. It is the shape the suite has no outcome
+//! kind for.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Input, MetalSource, Side};

@@ -1,4 +1,4 @@
-//! How ASTC texels decode, ported from `runtime_lane::astc_textures`'s first lane.
+//! How ASTC texels decode.
 //!
 //! An ASTC texture is a texture no desktop GPU and no lavapipe holds in its own format, so the
 //! runtime keeps its blocks in a carrier image and its reads go through a **decoded twin** it fills

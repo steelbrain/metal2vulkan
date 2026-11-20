@@ -13,17 +13,14 @@
 //!   32 by 32 — a 64 by 32 grid whose rows 4 to 31 are outside the texture — written with
 //!   `0x3000 + n + 2048 c` and read back both ways.
 //!
-//! **What the port settles, and where it stops.** `runtime_lane::extended_range_two_planes` states
-//! Metal's answer for these six outputs as six SHA-256 constants and nothing else, from a probe
-//! whose numbers are gone. Two different things were in the way of recovering them, and only one of
-//! them turned out to be real:
+//! **What is recorded, and where it stops.** Two things decide how Metal's answer for these six
+//! outputs is recorded:
 //!
 //! - *Not* the format. The two-plane extended-range formats are not in Apple's public
-//!   `MTLPixelFormat` list, and an earlier batch took that to mean the Metal side has no public
-//!   call for them. It does: `MTLTextureDescriptor`'s pixel format is a raw value, and native Metal
-//!   makes, writes and reads back a texture of 550 and 551 through entirely public calls. Record
-//!   mode runs all six outputs on Metal, so every digest here is the oracle chip's own, taken by
-//!   running the case.
+//!   `MTLPixelFormat` list, but the Metal side has public calls for them: `MTLTextureDescriptor`'s
+//!   pixel format is a raw value, and native Metal makes, writes and reads back a texture of 550
+//!   and 551 through entirely public calls. Record mode runs all six outputs on Metal, so every
+//!   digest here is the oracle chip's own, taken by running the case.
 //! - The size. The four 256 by 256 outputs are 65,536 threads of a `half4` or a `float4`, which is
 //!   6 MiB of Metal's bytes across the two formats — more than belongs in a committed recording.
 //!   Those four keep the digest, with a **window** of the first and the last 256 threads recorded
@@ -31,9 +28,8 @@
 //!   of only saying that the digest differs. The consumer's shape is 2,048 threads, so it is
 //!   recorded whole.
 //!
-//! So the honest accounting is: four outputs are a digest plus a window and remain less informative
-//! than raw values would be, and two are raw. All six are now Metal's measured answer on the chip
-//! the suite names, rather than a digest from a probe on another machine.
+//! So four outputs are a digest plus a window and remain less informative than raw values would
+//! be, and two are raw. All six are Metal's measured answer on the chip the suite names.
 //!
 //! Every output compares exactly, or by its digest where the digest is all that is recorded, and
 //! the case carries **no allowance**: on both venues this round covers, MoltenVK and lavapipe, the

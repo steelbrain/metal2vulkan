@@ -14,10 +14,7 @@
 //! `px_sample_argument`). Metal answered the two alike at every size, which is the claim the
 //! control exists to make.
 //!
-//! **What the port changes.** `runtime_lane::pixel_downscales` holds each size's three answers as
-//! SHA-256 constants taken on an Apple M4 and compares a digest, and its AIR is an inline `&str`
-//! in the opaque-pointer dialect, which `xcrun metal-as` does not read, so it could have no Metal
-//! leg. Record mode now runs every set at every size on native Metal.
+//! Record mode runs every set at every size on native Metal.
 //!
 //! **Why these sites are not whole values.** A set is 24,300 `float4`s at the largest size, so a
 //! case's six sets would be 2.3 MiB and its recording far past the 512-KiB whole-value rule. Each
@@ -537,10 +534,10 @@ mod tests {
     use crate::transcript::Node as TranscriptNode;
     use std::collections::BTreeSet;
 
-    /// What an Apple M4 answered for each size's three sets through the pixel sampler, as
-    /// `runtime_lane::pixel_downscales`' own probe measured it (macOS 27.0.1, two processes,
-    /// identical): the case, the set, and the SHA-256 of its results. Our own measurement over our
-    /// own inputs, carried here so the recorded M3 answers can be held against it.
+    /// What an Apple M4 answered for each size's three sets through the pixel sampler (macOS
+    /// 27.0.1, two processes, identical): the case, the set, and the SHA-256 of its results. Our
+    /// own measurement over our own inputs, carried here so the recorded M3 answers can be held
+    /// against it.
     ///
     /// The lane's fourth configuration at each size — the draw — is not here: the case vocabulary
     /// has no vertex-and-fragment pipeline, so those seven digests stay in the lane.

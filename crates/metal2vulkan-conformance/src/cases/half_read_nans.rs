@@ -6,8 +6,8 @@
 //! in words, so every site here records unsigned words and compares them exactly — a NaN's payload,
 //! a denormal's exact code and a signed zero are all lost the moment a site reads as a float.
 //!
-//! What `runtime_lane::half_read_nans` measured on plain Metal, and what these recordings hold the
-//! implementation to: with a `float` result, **every** NaN of a 16-bit float texel — whatever its
+//! What plain Metal answers, and what these recordings hold the implementation to: with a `float`
+//! result, **every** NaN of a 16-bit float texel — whatever its
 //! sign, its payload and its signalling bit — is `0x7fc00000`, and every other half its exact
 //! widening with denormals kept; a **32-bit** float texel's word is handed back as stored, a
 //! signalling NaN's and a negative NaN's included. So `0x7c01` in an `R16Float` texel reads
@@ -27,12 +27,9 @@
 //! `SampleSlot` access rather than a constexpr sampler folded into the shader. The texture is 16 by
 //! 16, which the kernels' `16 g.y + g.x` and their division by 16 both fix.
 //!
-//! The lane's four other accesses — a `texture2d<float, access::read_write>`, a
-//! `texture_buffer<float, read>`, the texture an argument buffer holds, and a gather — ran on the
-//! lane's own generated AIR, and no committed fixture reads an arbitrary format through one of them
-//! with a single texture bound. They are not ported here; the module docs of
-//! `runtime_lane::half_read_nans` record that plain Metal answered the same words through all
-//! seven.
+//! No committed fixture reads an arbitrary format through a `texture2d<float, access::read_write>`,
+//! a `texture_buffer<float, read>`, the texture an argument buffer holds, or a gather with a single
+//! texture bound, so those four accesses are not cases here.
 //!
 //! Every word of both output buffers holds [`BLANK`] before its dispatch, so a word the kernel did
 //! not reach is a recorded value rather than whatever the allocator left.
@@ -367,8 +364,8 @@ mod tests {
         }
     }
 
-    /// Metal's `float` lane for channel `channel` of texel `index`, as
-    /// `runtime_lane::half_read_nans` measured it: a 16-bit float texel's NaN is the canonical
+    /// Metal's `float` lane for channel `channel` of texel `index`: a 16-bit float texel's NaN is
+    /// the canonical
     /// `0x7fc00000` and every other half its exact widening; a 32-bit float texel's word is as
     /// stored; a missing green or blue reads 0 and a missing alpha 1.
     fn metal(case: &HalfReadNans, index: usize, channel: usize) -> u32 {

@@ -13,13 +13,9 @@
 //! state, which is a claim of its own: Metal filters through a sampler state the host made as it
 //! filters through one the shader declares.
 //!
-//! **What the port changes.** `runtime_lane::two_plane_samples` holds these sixteen answers as
-//! sixteen SHA-256 constants taken on an Apple M4, and compares a digest. On a difference it prints
-//! the first sixteen results as hex and nothing more, so the lane cannot say which of the 4,096
-//! coordinates moved. The values are recoverable and small — a `float` case is 4,096 `float4`s, 64
-//! KiB — so record mode runs every case on native Metal and the recordings hold all 4,096 results
-//! of each. The comparison then names the sample, the lane and both values, and the digest stays
-//! beside the value as a projection of it.
+//! The values are small — a `float` case is 4,096 `float4`s, 64 KiB — so record mode runs every
+//! case on native Metal and the recordings hold all 4,096 results of each. The comparison names the
+//! sample, the lane and both values, and the digest stays beside the value as a projection of it.
 //!
 //! Every result compares exactly. The linear cases declare one notice of the runtime's: an
 //! extended-range texture's linear filter blends its decoded taps in the device's arithmetic

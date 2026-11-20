@@ -4406,8 +4406,7 @@ fn float_min_max_are_the_device_s_on_every_profile() {
                 assert!(!a.precision.contains(&note), "{what}: {:?}", a.precision);
             }
             // The interpreter reads a denormal operand of `NMin` by its value; Metal's reading, a
-            // zero, is the device's, measured by the driver facts and the gate lane
-            // (`runtime_lane::driver_deviations`).
+            // zero, is the device's, measured by the driver facts.
             if kk.name.contains("denormal") {
                 continue;
             }

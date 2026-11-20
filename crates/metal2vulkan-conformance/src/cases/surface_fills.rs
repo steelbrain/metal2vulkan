@@ -1,8 +1,8 @@
 //! Metal's private texture fills over a surface's plane or a buffer: which bytes one fill changed.
 //!
-//! Ported from the runtime lane `runtime_lane/surface_fills.rs`'s first test, whose expectation is
-//! a transcript of what our probes `surface.m` and `cases.sh` printed on this M3 Max under macOS
-//! 27.0.1: for each case, the runs of bytes that are no longer `0xEE`, as ` [<at>+<n>: <bytes>]`.
+//! The expectation is a transcript of what our probes `surface.m` and `cases.sh` printed on this M3
+//! Max under macOS 27.0.1: for each case, the runs of bytes that are no longer `0xEE`, as `
+//! [<at>+<n>: <bytes>]`.
 //!
 //! Metal's answer is **carried**, and re-recording it is **forbidden**: `fillTexture:` and
 //! `fillTextureColor:` are Apple SPI, so there is no public call a Metal side could make. What the

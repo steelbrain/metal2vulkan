@@ -1,5 +1,4 @@
-//! A render state's texture slots and how its functions access them, ported from
-//! `runtime_lane::texture_accesses`.
+//! A render state's texture slots and how its functions access them.
 //!
 //! The question is Metal's reflection: what
 //! `newRenderPipelineStateWithDescriptor:options:reflection:error:` states about the texture

@@ -13,9 +13,7 @@
 //! - a host wait for 3 and one for 5 answer, and one for 6 runs out;
 //! - a command buffer signals `u64::MAX`, and a host wait for it answers.
 //!
-//! `runtime_lane::events` holds this as `a_shared_events_value_only_rises`, which asserts the
-//! runtime agrees with itself. Here both sides answer and the answers are compared field by field,
-//! so the numbers are Metal's rather than ours.
+//! Both sides answer and the answers are compared field by field, so the numbers are Metal's.
 //!
 //! # Why it is safe and quick
 //!

@@ -1118,9 +1118,8 @@ impl Case for RenderCommands {
 /// lengths.
 pub const MESH_OBJECT_LENGTHS: &str = "indirect-mesh-commands-object-threadgroup-lengths";
 
-/// The owned fixture the row runs, which `runtime_lane/mesh_commands.rs` measured this shape on
-/// first: an object function with threadgroup memory at arguments 0 and 1 and no size of its own
-/// for either.
+/// The owned fixture the row runs: an object function with threadgroup memory at arguments 0 and
+/// 1 and no size of its own for either.
 ///
 /// Its thread 0 writes `0xb` into `b[0]`, then `0xa` into `a[0..63]`, then `b[0]` into word 0 of
 /// object buffer 0 and `a[63]` into word 1. So the **length** is what the words read back: where

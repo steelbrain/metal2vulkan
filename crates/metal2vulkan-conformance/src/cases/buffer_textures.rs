@@ -1,11 +1,9 @@
 //! Textures laid over a buffer's bytes: which shapes Metal makes one of, what the made texture
 //! answers of itself, and where its texels are in the buffer.
 //!
-//! Ported from `runtime_lane::buffer_textures`. Metal's whole path here is **public** —
-//! `newTextureWithDescriptor:offset:bytesPerRow:` on an `MTLBuffer`, then `getBytes:`,
-//! `replaceRegion:` and the buffer's own `contents` — so record mode runs every case of this
-//! family on the oracle rather than carrying a table, and the lane's numbers become Metal's own
-//! answers, re-takeable whenever anybody asks.
+//! Metal's whole path here is **public** — `newTextureWithDescriptor:offset:bytesPerRow:` on an
+//! `MTLBuffer`, then `getBytes:`, `replaceRegion:` and the buffer's own `contents` — so record mode
+//! runs every case of this family on the oracle rather than carrying a table.
 //!
 //! Three cases, because the family asks three different kinds of question:
 //!
@@ -31,23 +29,13 @@
 //! our typed refusal (`BufferTextureProblem::RowPitch`) at the same site, so a release where we
 //! stop refusing it reads as a divergence rather than as a pass.
 //!
-//! # What is deliberately not ported, and why
+//! # What is deliberately not a case, and why
 //!
-//! The lane also checks four other refusals, each of which the runtime answers
-//! `Error::Invalid`: a block-compressed format, a 3D descriptor, a 2D descriptor at an offset off
-//! the format's alignment, and a 2D array through this call. (A 2D texture whose texels run past
-//! the buffer's length Metal makes, and so does the runtime: [`super::buffer_tails`].) `Error::Invalid` is, by the runtime's own documented model, "Metal
-//! stops this call" — as against `Error::Nil`, "plain Metal answers nil and the process goes on" —
-//! so handing any of them to Metal risks exactly what the stride row does. Unlike the stride row,
-//! no probe of this tree has recorded *how* Metal stops them, so there is nothing to state and the
-//! suite would be guessing. They stay `runtime_lane` assertions until somebody measures them
-//! safely, and the honest place for that is the refusal surface rather than a case here.
-//!
-//! The lane's remaining three tests are elsewhere by subject: the shareable texture buffer and its
-//! handle, the unbound texture-buffer slots reading the device's neutrals (what Metal reads there
-//! is undefined, so there is nothing to compare), and the texture buffer at an offset off 16 bytes
-//! whose *functions* read from the offset rounded down, which is a dispatch case rather than a
-//! texture-making one.
+//! Four other shapes the runtime refuses typed are not cases: a block-compressed format, a 3D
+//! descriptor and a 2D array through this call (`Gap::TextureOverBuffer`), and a 2D descriptor at
+//! an offset that is not a whole number of texels (`Refusal::BufferTextureLayout`). No probe of
+//! this tree has recorded what Metal does with them, and handing one to Metal risks exactly what
+//! the stride row does, so there is nothing to state and the suite would be guessing.
 //!
 //! Nothing here faults a GPU, hangs one or trips a watchdog: the making call allocates no texels of
 //! its own, and the bytes case runs one blit-free program of host calls over shared memory.

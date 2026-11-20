@@ -1,4 +1,4 @@
-//! Border texels through a swizzled texture, ported from `runtime_lane::border_swizzles`.
+//! Border texels through a swizzled texture.
 //!
 //! Metal's answer, as the lane fitted it over 1,056 border values on an **Apple M4**: a border texel
 //! is the border colour in the format's channels — a missing red, green or blue read as 0 and a

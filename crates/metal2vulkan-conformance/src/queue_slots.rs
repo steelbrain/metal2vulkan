@@ -5,9 +5,8 @@
 //! answers nil. That is a behaviour nothing in the suite could state before: the fact under test is
 //! that a call *did not return*, and then that it did once a slot came back.
 //!
-//! `runtime_lane::command_queues` holds the number — `METAL_DEFAULT: usize = 64` — as a constant
-//! with the word "measured" beside it. A case over this probe measures it instead, on the oracle,
-//! and records it keyed to the oracle.
+//! A case over this probe measures the default count on the oracle, and records it keyed to the
+//! oracle.
 //!
 //! # Why no wait here can hang
 //!
@@ -19,9 +18,8 @@
 //!
 //! # What is deliberately not here
 //!
-//! `maxCommandBufferCount:` of **0**. Metal's own validation ends the process on it (the runtime
-//! answers `Invalid`, which is its word for exactly that), so no case may ask Metal for it. The
-//! runtime's typed refusal of a count of 0 stays a `runtime_lane` assertion.
+//! `maxCommandBufferCount:` of **0**. Metal's own validation ends the process on it, so no case
+//! may ask Metal for it; the runtime refuses it typed (`Refusal::NoCommandBuffers`).
 
 use crate::transcript::{Negative, Node, Observed, Value};
 use std::time::Duration;

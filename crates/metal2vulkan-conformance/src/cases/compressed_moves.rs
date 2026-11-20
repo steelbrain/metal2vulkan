@@ -1,5 +1,4 @@
-//! How block-compressed textures move their blocks, ported from
-//! `runtime_lane::compressed_moves`'s first lane.
+//! How block-compressed textures move their blocks.
 //!
 //! The consumer's x86 guests hold BC textures, and corrupt texels on NVIDIA were what made this a
 //! lane. Its subject is every BC format's blocks moving through shapes whose levels end in partial

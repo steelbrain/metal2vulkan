@@ -365,8 +365,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     /// Metal's `half` of the integer `value`: rounded to nearest even at 11 significant bits, and
-    /// 65520 and above to infinity. Copied from `runtime_lane::int_attributes::metal_half` to be
-    /// checked against the recording, never to stand in for it.
+    /// 65520 and above to infinity. Checked against the recording, never to stand in for it.
     fn metal_half(value: i64) -> f32 {
         let size = value.unsigned_abs();
         let magnitude = if size >= 65520 {

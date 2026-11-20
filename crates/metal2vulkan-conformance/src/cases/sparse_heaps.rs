@@ -5,24 +5,19 @@
 //! `size` and `usedSize`, `newTextureWithDescriptor:` on that heap, and the texture's `isSparse`,
 //! `firstMipmapInTail` and `tailSizeInBytes`.
 //!
-//! # What the port adds to the lane
+//! # What the sweep checks
 //!
-//! `runtime_lane::sparse_textures` reads these getters of exactly one texture — a 256 by 256
-//! `R32Float` of 9 levels — and asserts `firstMipmapInTail == 3` and `tailSizeInBytes == 16384`
-//! inside a much larger test. The runtime answers both from models (`sparse::first_mipmap_in_tail`,
-//! `sparse::tail_size_in_bytes`) whose comments say "measured" four times over, including the two
-//! claims that decide every other answer:
+//! Two claims decide every other answer:
 //!
 //! - **the chain is the full mip chain**, `floor(log2(largest axis)) + 1` levels, *whatever the
 //!   texture's own level count* — so `firstMipmapInTail` may be past the texture's own levels;
 //! - **a 3D texture's tail is summed per depth slice**, each rounded up to whole pages separately.
 //!
-//! Nothing in the tree tied either to a Metal run. One texture cannot: the first claim only shows
-//! where a texture's levels are fewer than its chain, and the second only on a 3D texture. The
+//! One texture cannot check either: the first claim shows only where a texture's levels are fewer
+//! than its chain, and the second only on a 3D texture. The
 //! sweep here records Metal's two numbers for 123 textures — level counts from 1 to the full chain
 //! and past it, non-square and odd extents, every sparse texture type, four tile widths, and the
-//! multisample pair — so the models are checked against Metal rather than against their own
-//! comments.
+//! multisample pair.
 //!
 //! The heap's three getters go beside them because `usedSize` is what every mapping case counts in,
 //! and a fresh sparse heap's `usedSize` being 0 — with a texture made over it and nothing mapped —

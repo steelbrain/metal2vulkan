@@ -1,5 +1,4 @@
-//! `RGB9E5Float` written and read through a storage slot, ported from
-//! `runtime_lane::shared_exponent_storage`.
+//! `RGB9E5Float` written and read through a storage slot.
 //!
 //! This is a format whose storage is nothing like its read type: one 32-bit word holds three
 //! nine-bit mantissas and the five-bit exponent they share, and what a kernel writes as three

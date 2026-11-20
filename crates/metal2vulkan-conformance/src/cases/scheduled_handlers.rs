@@ -1,14 +1,9 @@
 //! Where a command buffer's scheduling sits relative to its scheduled handlers, measured on Metal.
 //!
-//! `runtime_lane::submission_handlers` states this order in its module prose — "its status reads
-//! `Scheduled` just before its first scheduled handler starts, and Metal's wait for the scheduling
-//! returns only once every scheduled handler returned" — attributed to **an M4 on macOS 27.0.1**,
-//! a machine this project no longer has. Its test
-//! (`wait_until_scheduled_returns_once_the_scheduled_handlers_returned`) then holds the runtime to
-//! that sentence with no Metal leg in it. So the number behind the rule is a measurement nobody can
-//! re-take there, on a chip that is gone.
-//!
-//! This case re-takes it on the oracle, with both sides running, and compares six fields:
+//! The order under test: a command buffer's status reads `Scheduled` just before its first
+//! scheduled handler starts, and Metal's wait for the scheduling returns only once every scheduled
+//! handler returned. This case takes it on the oracle, with both sides running, and compares six
+//! fields:
 //!
 //! - the status the scheduled handler read of its own command buffer, from inside itself;
 //! - the status the probe's thread read while that handler was held inside itself;
@@ -34,14 +29,6 @@
 //! thread and not the suite — the shape [`crate::queue_slots::probe`] already takes for the same
 //! reason. The GPU work is one fill of [`crate::event_orders::SCRATCH`] bytes and is independent of
 //! every handler thread: no pass, no dispatch, no loop.
-//!
-//! # What is deliberately not here
-//!
-//! The lane's **submission handlers** (`CommandBuffer::add_submission_handler`) are a runtime
-//! extension: Metal has no counterpart, so there is nothing for a conformance case to compare, and
-//! which thread of ours runs them is exactly the kind of internal fact the suite keeps out of a
-//! transcript. The whole of `runtime_lane::submission_checks` is the same story one layer up
-//! (`set_submission_check` is ours alone). Both stay lanes.
 
 use crate::case::{Abort, Case, Input, MetalSource, Side};
 use crate::event_orders::{COMPLETED, SCHEDULED, SCRATCH};

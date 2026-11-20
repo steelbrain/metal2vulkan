@@ -10,9 +10,8 @@
 //! reads the next texel.
 //!
 //! The case records what Metal wrote, not a rule: record mode runs the fixture on native Metal, so
-//! the recording holds Metal's whole output buffer, and the runtime lane's fitted rule
-//! (`runtime_lane::nearest_positions::metal_texel`) is a cross-check this module's tests apply to
-//! the recorded bytes rather than a second expectation to keep in step.
+//! the recording holds Metal's whole output buffer, and a fitted rule is a cross-check this
+//! module's tests apply to the recorded bytes rather than a second expectation to keep in step.
 //!
 //! One site a row holds the whole output buffer, and its layout's row is one thread's results with
 //! the column the case is about: the four words of the runtime sampler's sample. A diff therefore

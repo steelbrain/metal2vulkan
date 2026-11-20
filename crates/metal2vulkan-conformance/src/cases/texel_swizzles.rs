@@ -1,4 +1,4 @@
-//! A texture **buffer** made or viewed with a swizzle, ported from `runtime_lane::texel_swizzles`.
+//! A texture **buffer** made or viewed with a swizzle.
 //!
 //! Metal applies a texture buffer's swizzle to every read, out of bounds included (the lane: an M3
 //! Max on macOS 26.7 and an Apple M4 on 27.0.1, plain and under Metal's API validation alike). Each

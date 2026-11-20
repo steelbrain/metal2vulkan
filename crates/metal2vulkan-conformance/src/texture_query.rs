@@ -5,10 +5,7 @@
 //! exactly the shape a conformance case wants — the whole descriptor space is reachable from the
 //! CPU, every answer is two numbers, and the whole family can be re-measured on the oracle as often
 //! as anybody asks.
-//!
-//! It is also the family whose numbers were, until now, held by a comment: `runtime_lane`'s
-//! `heap_metal_sizes` carries tables of what an Apple M4 answered, with nothing mechanical tying
-//! them to a Metal run. A case over this type takes the answer from Metal.
+
 //!
 //! The vocabulary is Metal's own enumerations as the translator's public API names them, so a value
 //! a case writes reaches `MTLTextureType`, `MTLPixelFormat` and `MTLTextureUsage` by its raw

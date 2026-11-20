@@ -1,5 +1,5 @@
 //! Blit copies between a depth or stencil format and a colour format of its unit, and through a
-//! combined texture's stencil view, ported from `runtime_lane::format_copies`.
+//! combined texture's stencil view.
 //!
 //! Metal copies the **bytes** between a depth-only or stencil-only format and a colour format whose
 //! texel is its copy unit — 2 bytes for `Depth16Unorm`, 4 for `Depth32Float`, 1 for stencil — and

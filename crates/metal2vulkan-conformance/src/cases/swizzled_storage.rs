@@ -1,5 +1,4 @@
-//! A swizzled texture read and written through a **storage** slot, ported from
-//! `runtime_lane::swizzled_storage`.
+//! A swizzled texture read and written through a **storage** slot.
 //!
 //! What plain Metal does (the lane: an Apple M4 on macOS 27.0.1, plain twice alike) with a 2 by 2
 //! texture whose every texel is `(10, 20, 30, 40)` in bytes — `RG8Unorm` `(10, 20)`, `R32Float`

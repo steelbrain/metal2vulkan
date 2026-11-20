@@ -100,10 +100,10 @@ const HEAP: SparseHeapSpec = SparseHeapSpec::new(4 << 20);
 
 /// The texture extent every row uses, and the levels it declares.
 ///
-/// 256 by 256 `R32Float` is the shape `runtime_lane::sparse_textures` measured on this oracle:
-/// a 16-KiB page makes its tile 64 by 64 texels, so level 0 holds 4 by 4 tiles, level 1 holds
-/// 2 by 2, level 2 holds exactly one, and `firstMipmapInTail` is 3. Nine levels is the full mip
-/// chain, so the rows can name a level past the tail as well as inside it.
+/// On this oracle, a 256 by 256 `R32Float` texture's 16-KiB page makes its tile 64 by 64 texels, so
+/// level 0 holds 4 by 4 tiles, level 1 holds 2 by 2, level 2 holds exactly one, and
+/// `firstMipmapInTail` is 3. Nine levels is the full mip chain, so the rows can name a level past
+/// the tail as well as inside it.
 const WIDTH: u32 = 256;
 const LEVELS: u32 = 9;
 const FORMAT: PixelFormat = PixelFormat::R32Float;

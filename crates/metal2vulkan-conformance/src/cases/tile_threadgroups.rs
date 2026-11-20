@@ -1,13 +1,8 @@
 //! Tile threadgroups: which thread of a tile dispatch is which, and what a tile state answers.
 //!
-//! Ported from the runtime lane `runtime_lane/tile_threadgroups.rs`. That lane is the clearest case
-//! in the survey for porting: its expectations are **formulas** rather than a table —
-//! `position(simdgroup, lane)`, `thread_index(x, y)` and `quad_order(qw, qh)`, each a model of how
-//! Metal places the threads of a tile threadgroup — and the only thing tying those formulas to
-//! Metal is a comment saying a probe measured them on an M4 and on an M3 Max under macOS 26.7.
-//! Both of those measurements are gone, and the second is of an older release.
-//!
-//! So Metal's answer here is **run**, not copied. Record mode runs each case on native Metal on the
+//! The tests hold **formulas** — `position(simdgroup, lane)`, `thread_index(x, y)` and
+//! `quad_order(qw, qh)`, each a model of how Metal places the threads of a tile threadgroup — and
+//! Metal's answer here is **run**, not copied. Record mode runs each case on native Metal on the
 //! chip and build the recording is keyed to, and the case records the words Metal's own threads
 //! wrote. The lane's formulas stay exactly where they are, as the readable model, and this module's
 //! own tests check the recorded words against them: that is the cross-check the port
@@ -801,14 +796,11 @@ impl Case for TileThreadgroups {
 
 #[cfg(test)]
 mod tests {
-    //! The cross-check the port owes the lane: the words Metal's own threads wrote, as the
-    //! recordings hold them, against the lane's formulas for where Metal places a tile
-    //! threadgroup's threads.
+    //! The cross-check: the words Metal's own threads wrote, as the recordings hold them, against
+    //! the formulas for where Metal places a tile threadgroup's threads.
     //!
-    //! The formulas are the lane's (`runtime_lane/tile_threadgroups.rs`), restated here because a
-    //! conformance case may not depend on the validation crate. They are the claim under test, not
-    //! a helper: if a recorded word disagrees with one, either Apple moved or the lane's model was
-    //! never Metal's, and the test says which thread.
+    //! The formulas are the claim under test, not a helper: if a recorded word disagrees with one,
+    //! either Apple moved or the model was never Metal's, and the test says which thread.
 
     use super::*;
     use crate::recording::Recording;

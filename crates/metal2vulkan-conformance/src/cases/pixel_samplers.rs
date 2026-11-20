@@ -15,12 +15,7 @@
 //! - `const`: the texture at slot 0 through the fixture's constexpr `coord::pixel` sampler of that
 //!   filter and mode, where MSL can state it (not mirror clamp to edge, which it cannot).
 //!
-//! **What the port changes.** `runtime_lane::pixel_samplers` holds these sixty answers as sixty
-//! SHA-256 constants taken on an Apple M4, and compares a digest; on a difference it prints the
-//! cells that differ from the device's own `norm` control, which is a device-against-device check,
-//! not a check against Metal. Worse, the lane's AIR is an inline `&str` in the opaque-pointer
-//! dialect, which `xcrun metal-as` does not read, so the lane could have no Metal leg at all. The
-//! owned fixture `px_samplers` is the two shapes it needed, and record mode now runs all sixty
+//! The owned fixture `px_samplers` holds the two shapes, and record mode runs all sixty
 //! configurations on native Metal and keeps every one of the 800 results of each, so a comparison
 //! names the coordinate and the lane rather than saying a hash moved.
 //!
@@ -708,8 +703,8 @@ mod tests {
     /// The coordinates each subnormal case samples at ([`subnormal_grid`]).
     const SUBNORMAL_SAMPLES: usize = 16;
 
-    /// What an Apple M4 answered for each configuration, as `runtime_lane::pixel_samplers`' own
-    /// probe measured it (macOS 27.0.1, two processes, identical): the case, the source, and the
+    /// What an Apple M4 answered for each configuration (macOS 27.0.1, two processes, identical):
+    /// the case, the source, and the
     /// SHA-256 of its 800 `float4` results. Our own measurement over our own inputs, carried here
     /// so the recorded M3 answers can be held against it.
     const M4: [(&str, &str, &str); 60] = [

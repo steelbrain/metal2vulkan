@@ -7,20 +7,10 @@
 //! over 256 pages, each page a texture of its own holding its 256 codes, and both accesses run
 //! over every page.
 //!
-//! **Why this case exists, and what it adds to the lane it comes from.**
-//! `runtime_lane::depth_texel_reads` holds one 64-digit constant: the SHA-256 of 65,536 `float`s.
-//! Nothing in the tree holds the values. The lane's own test
-//! (`the_rule_is_metals_answer`) recomputes `c / 65535` for every code and asserts the digest, so
-//! the digest pins a **rule**, and the probe that tied the rule to Metal is gone. Two things
-//! follow, and both are why the port was worth doing rather than transcribing the digest:
-//!
-//! - The values **are** recoverable, and this case recovers them: record mode runs the two
-//!   accesses on native Metal and the recording holds all 131,072 `float`s. Where the lane could
-//!   only say "the digest differs", the case names the code — `element [row 0, 44731]` is code
-//!   44,731 — and says which access moved and by how many units in the last place.
-//! - A rule a digest pins is only as good as the digest. The recording replaces the rule with the
-//!   measurement, so a release that changes Metal's conversion shows as the codes that moved
-//!   rather than as one hex string that no longer matches anything.
+//! **Why this case records the values.** Record mode runs the two accesses on native Metal and the
+//! recording holds all 131,072 `float`s, so a difference names the code — `element [row 0, 44731]`
+//! is code 44,731 — and says which access moved and by how many units in the last place, and a
+//! release that changes Metal's conversion shows as the codes that moved.
 //!
 //! Every code compares exactly, and the two accesses are separate sites because they are separate
 //! questions: a device may fetch a depth texel one way and filter it another.

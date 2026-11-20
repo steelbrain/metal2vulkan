@@ -1,5 +1,4 @@
-//! What a kernel stores when it writes a `float` to a **normalized** storage texture, ported from
-//! `runtime_lane::norm_storage_writes`.
+//! What a kernel stores when it writes a `float` to a **normalized** storage texture.
 //!
 //! Metal stores such a write as a fragment function's write to a color attachment of the format: a
 //! unorm channel of `b` bits takes `x` clamped to `[0, 1]` (a NaN 0) times `2^b - 1` **exactly**,

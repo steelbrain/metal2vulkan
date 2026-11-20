@@ -13,12 +13,9 @@
 //!
 //! The kernel is the owned fixture `xr_two_planes`'s `xr2p_write_half`, a
 //! `texture2d<half, access::write>` that writes buffer 0's `half4` at the thread's texel, with the
-//! row's width in buffer 1 — the same call shape as the lane's own `write` kernel, and a committed
-//! fixture, so Metal's assembler and a host without Metal read the same shader. The lane's two
-//! other accesses (a `texture2d<half, access::read_write>`, and a texture an argument buffer holds)
-//! have no committed fixture that writes a `half4` from a buffer, so they are not ported; the
-//! module docs of `runtime_lane::half_write_nans` record that plain Metal stored the same bits
-//! through all three.
+//! row's width in buffer 1 — a committed fixture, so Metal's assembler and a host without Metal
+//! read the same shader. A `texture2d<half, access::read_write>` and a texture an argument buffer
+//! holds have no committed fixture that writes a `half4` from a buffer, so they are not cases here.
 //!
 //! Every texel of the texture holds one fill byte before the dispatch, so a texel the kernel did not
 //! reach is a recorded value rather than whatever the allocator left.

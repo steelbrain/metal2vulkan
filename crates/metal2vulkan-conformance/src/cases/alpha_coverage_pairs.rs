@@ -51,8 +51,7 @@
 //!    0.5 at one sample covers **no** sample and the destination survives untouched, where
 //!    rounding half up would have stored the fragment. Between those points Metal's count depends
 //!    on the pixel (a 2x2 ordered dither at two and four samples), which this family's one pixel
-//!    cannot see: the validation lane `runtime_lane::alpha_coverage` reads it over 639 alphas a
-//!    count, and the model below is that rule at this family's pixel, `(0, 0)`.
+//!    cannot see; the model below is that rule at this family's pixel, `(0, 0)`.
 //! 2. **The alpha is read before the attachment's write mask.** A write mask that drops alpha
 //!    leaves the coverage exactly as the same alpha gives with the mask absent, and only the stored
 //!    alpha moves. A mask sweep cannot ask this and an alpha sweep cannot either.
@@ -681,8 +680,7 @@ impl Case for AlphaCoverageCase {
 mod tests {
     //! The model each row's answer is held against, and the guards that keep the crosses honest.
     //!
-    //! The coverage model is Metal's, measured (`runtime_lane::alpha_coverage`, over 639 alphas a
-    //! sample count on this M3 Max) at this family's one pixel, `(0, 0)`, ANDed with a sample mask
+    //! The coverage model is Metal's at this family's one pixel, `(0, 0)`, ANDed with a sample mask
     //! the fragment writes. The tests derive each row's expected coverage from that one rule rather
     //! than listing answers, so a row that agrees for the wrong reason fails.
 

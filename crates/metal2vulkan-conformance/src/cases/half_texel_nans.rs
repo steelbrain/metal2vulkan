@@ -6,8 +6,8 @@
 //! texel hands back its own bits — sign, payload and signalling bit kept, so `0x7c01` stays
 //! `0x7c01` — while a 32-bit float texel's NaN, a small float's (`RG11B10Float`) and every filtered
 //! sample's come back as `0x7e00`. `RGB9E5Float` decodes every code to a finite value, so no lane of
-//! it is a NaN at all. That is what `runtime_lane::half_texel_nans` measured on plain Metal, and
-//! these recordings are what hold the implementation to it.
+//! it is a NaN at all. That is what plain Metal answers, and these recordings are what hold the
+//! implementation to it.
 //!
 //! One case per format, so a format a venue honestly lacks a readable or filterable texture of is
 //! that venue's gap ([`crate::verdict::Verdict::LacksFeature`]) at its own row.
@@ -70,11 +70,9 @@
 //! validation derives no tolerance from it, so a tolerance here would be the suite overruling the
 //! contract under test. `known-gaps-rt.tsv` carries the nine rows.
 //!
-//! The lane's four filtered accesses — a linear sample at the centre, a linear sample a quarter
-//! texel right of it, a gather, and the same through the runtime sampler at slot 0 — ran on the
-//! lane's own generated AIR, and no committed fixture stores a `half` result's raw bits through one
-//! of them. They are not ported; the module docs of `runtime_lane::half_texel_nans` record that
-//! plain Metal answered `0x7e00` for every one of their NaN lanes.
+//! No committed fixture stores a `half` result's raw bits through a filtered access (a linear
+//! sample at the centre, a linear sample a quarter texel right of it, a gather, or the same through
+//! the runtime sampler at slot 0), so those four are not cases here.
 //!
 //! Every word of the output holds [`BLANK`] before the dispatch, so a word the kernel did not reach
 //! is a recorded value rather than whatever the allocator left, and the five columns together cover
@@ -456,8 +454,7 @@ mod tests {
     /// What channel `channel` of texel `index` holds, as far as a NaN goes: the NaN's bits in the
     /// format's own encoding, or `None` where the channel is not a NaN.
     ///
-    /// This is `runtime_lane::half_texel_nans`'s own `class`, restated so the cross-check below has
-    /// the lane's rule to hold Metal's recording to.
+    /// The cross-check below holds Metal's recording to this rule.
     fn nan_bits(case: &HalfTexelNans, index: usize, channel: usize) -> Option<u32> {
         if channel >= case.channels {
             return None;

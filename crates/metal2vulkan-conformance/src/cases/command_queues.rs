@@ -7,13 +7,11 @@
 //! next one did not, that it answered once a slot came back, and that another queue's make went on
 //! meanwhile.
 //!
-//! # What it pulls forward
+//! # What it measures
 //!
-//! `runtime_lane::command_queues` holds Metal's default count as `METAL_DEFAULT: usize = 64`, a
-//! constant with the word "measured" beside it and no run behind it. The first row here measures it
-//! on the oracle: the default queue's probe makes command buffers until one blocks, up to a cap
-//! above 64, so the number in the recording is the number Metal answered rather than the number
-//! somebody wrote down. A release where Apple changes it fails the case.
+//! The first row measures Metal's default count on the oracle: the default queue's probe makes
+//! command buffers until one blocks, up to a cap above 64, so the number in the recording is the
+//! number Metal answered. A release where Apple changes it fails the case.
 //!
 //! # Why it is safe
 //!
@@ -22,9 +20,8 @@
 //! probe, so no wait here can hang ([`crate::queue_slots::probe`]).
 //!
 //! **A count of 0 is deliberately not a row.** Metal's own validation ends the process on
-//! `maxCommandBufferCount:0` — the runtime says so by answering `Invalid` rather than `Nil` — so no
-//! case may ask Metal for it. The runtime's typed refusal of a count of 0 stays a `runtime_lane`
-//! assertion, where no Metal run is involved.
+//! `maxCommandBufferCount:0`, so no case may ask Metal for it; the runtime refuses it typed
+//! (`Refusal::NoCommandBuffers`).
 
 use crate::case::{Abort, Case, Input, MetalSource, Side};
 use crate::transcript::{Node, Observed, Sites};

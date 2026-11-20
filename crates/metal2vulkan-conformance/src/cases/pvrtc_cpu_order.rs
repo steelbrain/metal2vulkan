@@ -1,5 +1,4 @@
-//! The order a PVRTC texture's blocks take under Metal's **host** copies, ported from
-//! `runtime_lane::pvrtc_textures`' CPU-order lane.
+//! The order a PVRTC texture's blocks take under Metal's **host** copies.
 //!
 //! A PVRTC texture does not hold its blocks row by row. A blit under
 //! `MTLBlitOptionRowLinearPVRTC` moves them row by row ([`crate::cases::pvrtc_rows`]); Metal's host

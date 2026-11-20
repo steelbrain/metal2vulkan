@@ -1,5 +1,5 @@
-//! What an event orders: the vocabulary for the four ordering facts of `runtime_lane::events`,
-//! and for what Metal does with a wait whose signal is already submitted and running.
+//! What an event orders: the vocabulary for four ordering facts, and for what Metal does with a
+//! wait whose signal is already submitted and running.
 //!
 //! An `MTLEvent` and an `MTLSharedEvent` hold a value that only rises, and a command buffer's
 //! `encodeWaitForEvent:value:` holds that command buffer — and the ones committed behind it on its
@@ -28,8 +28,7 @@
 //!
 //! # The buffers are small on purpose
 //!
-//! `runtime_lane::events` fills 8 MiB a command buffer, which is the size a *hazard* between two
-//! queues needs to be seen at. The fact these cases pin is the event's, and the fills here are
+//! The fact these cases pin is the event's, not a hazard between two queues, and the fills here are
 //! [`SCRATCH`] bytes and write **disjoint** halves, so there is no hazard either way and a bytes
 //! record stays far inside the recording budget.
 

@@ -8,10 +8,8 @@
 //! both zeros, normals, denormals, the largest finite value, both infinities, and quiet and
 //! signalling NaNs with payloads.
 //!
-//! Why these two: `runtime_lane::math_routines` states Metal's answer as a **rule** it computes on
-//! the host, not as a table Metal wrote. The rule was fitted to a probe whose numbers are gone, so
-//! the lane holds no Metal value at all and nothing checks the fit. These cases record what Metal
-//! actually writes for every input, word by word, so the measurement stops being a reconstruction.
+//! These cases record what Metal writes for every input, word by word, so the answer is Metal's
+//! measurement rather than a rule fitted to it.
 //!
 //! Each word is a column of its own, because the eight words are different answers: a diff names
 //! `frexp-mantissa` or `ilogb` of one input rather than a row of eight numbers. Every column

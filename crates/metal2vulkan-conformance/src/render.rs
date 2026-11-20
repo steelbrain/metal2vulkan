@@ -978,8 +978,7 @@ pub struct RenderPipelineSpec<'a> {
     /// above an alpha of 1/2). Metal reads the alpha **before** the attachment's write mask, and
     /// ANDs the result with a sample mask the fragment writes; a first output with no alpha
     /// component leaves the coverage as rasterized. [`super::cases::alpha_coverage_pairs`] is
-    /// where each of those is measured, and the validation lane `runtime_lane::alpha_coverage`
-    /// the dither.
+    /// where each of those is measured.
     pub alpha_to_coverage: bool,
     /// `alphaToOneEnabled`: the fragment's alpha becomes 1 before the blend reads it and before it
     /// is stored, which the attachment's write mask can still stop from being stored.

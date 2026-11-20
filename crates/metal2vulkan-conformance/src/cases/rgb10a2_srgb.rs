@@ -1,9 +1,8 @@
 //! What a kernel reads from, writes to and samples of, and what a draw stores into, an
 //! `RGB10A2Unorm_sRGB` (586) texture.
 //!
-//! Eight cases over Apple's padded 10-bit sRGB format: the three of
-//! `runtime_lane::rgb10a2_srgb`'s nine questions a compute pass can ask, and the one a render pass
-//! asks whose answer was truncated:
+//! Eight cases over Apple's padded 10-bit sRGB format, for three questions a compute pass asks and
+//! one a render pass asks:
 //!
 //! - `rgb10a2-srgb-reads`: a 1024 by 1 texture of the words
 //!   `c | (1023 - c) << 10 | (7 c mod 1024) << 20 | (c mod 4) << 30`, every texel read by the owned
@@ -196,10 +195,8 @@ const STORE_SPECIALS: [f32; 20] = [
 /// from 65520 up to an infinity, which is what a `float` the fragment function returns into a
 /// `half4` output goes through.
 ///
-/// This is `runtime_lane::rgb10a2_srgb`'s own function, and `the_half_bits_are_the_lane_s` pins it
-/// against the values that lane's test states, because the suite may not depend on the validation
-/// crate and a second spelling that drifted would make the `half` case's inputs quietly another
-/// case's.
+/// `the_half_bits_are_the_lane_s` pins it against fixed values, so the `half` case's inputs cannot
+/// drift.
 fn half_bits(value: f32) -> u16 {
     if value.is_nan() {
         return 0x7e00;
@@ -964,8 +961,7 @@ mod tests {
         assert_eq!(WRITE_SPECIALS.iter().filter(|v| v.is_nan()).count(), 2);
     }
 
-    /// `half_bits` is the lane's, pinned by the values `runtime_lane::rgb10a2_srgb`'s own test
-    /// states: the `half` store case's inputs are that lane's inputs and not merely similar ones.
+    /// `half_bits`, pinned by fixed values, so the `half` store case's inputs cannot drift.
     #[test]
     fn the_half_bits_are_the_lane_s() {
         assert_eq!(half_bits(1.0), 0x3c00);

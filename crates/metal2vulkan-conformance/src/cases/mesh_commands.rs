@@ -1,9 +1,6 @@
 //! Mesh draws in an indirect command buffer: what commands with pipeline states of their own draw.
 //!
-//! Ported from `runtime_lane/mesh_commands.rs`'s `cpu_own` row, whose expectation is a transcript
-//! of a Metal probe's printed lines. That lane's own documentation says its table is an **M4**'s
-//! (macOS 27.0.1), while the suite's oracle is this M3 Max, so running it through record mode is
-//! also the first measurement of this probe on the chip its recording is keyed to.
+//! Record mode measures the row on the chip its recording is keyed to.
 //!
 //! The row is an indirect command buffer of two commands the host encodes, over a pass of two
 //! `RGBA32Uint` attachments, 8x8, cleared to zero and stored: command 0 sets `mesh_draws`' object

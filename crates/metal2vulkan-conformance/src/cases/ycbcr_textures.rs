@@ -1,15 +1,12 @@
 //! Two-plane YCbCr textures: what Metal says about the formats' descriptors, and what a kernel's
 //! `read()` of a `420v` surface's texels answers.
 //!
-//! Ported from `runtime_lane/ycbcr_textures.rs`. The lane is 4,500 lines over a `YCBCR8_420_2P`
-//! texture laid over a CoreVideo surface's two planes, and the two halves of it port very
-//! differently, because of one fact about Metal's API:
+//! The two cases here are shaped by one fact about Metal's API:
 //!
-//! **A texture of a two-plane YCbCr format exists only over an IOSurface.** The lane's own
-//! `ycbcr_textures_are_made_only_over_their_surfaces` is that fact: `newTextureWithDescriptor:`
-//! answers nil for the format, and so does a buffer's texture of it. The runtime takes a *buffer*
-//! standing for the surface, which is what makes the lane run on a host with no CoreVideo, but
-//! Metal takes an IOSurface and nothing else. So:
+//! **A texture of a two-plane YCbCr format exists only over an IOSurface.**
+//! `newTextureWithDescriptor:` answers nil for the format, and so does a buffer's texture of it.
+//! The runtime takes a *buffer* standing for the surface, which is what makes the cases run on a
+//! host with no CoreVideo, but Metal takes an IOSurface and nothing else. So:
 //!
 //! - [`FormatDescriptors`] is **recorded on Metal**, because it asks only about descriptors:
 //!   `heapTextureSizeAndAlignWithDescriptor:` and whether `newTextureWithDescriptor:` answers a

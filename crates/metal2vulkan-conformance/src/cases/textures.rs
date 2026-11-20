@@ -1,5 +1,4 @@
-//! Every uncompressed colour format's texture, ported from
-//! `runtime_lane::textures`'s `every_format_makes_a_texture_or_is_refused_typed`.
+//! Every uncompressed colour format's texture.
 //!
 //! One case a format. Each one makes an 8 by 8 `Shared` 2D texture of its format, read by shaders,
 //! at a row pitch one texel wider than its rows, then asks three things of it:

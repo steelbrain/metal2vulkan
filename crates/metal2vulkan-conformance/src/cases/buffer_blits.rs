@@ -1,10 +1,5 @@
 //! What a blit encoder's buffer copies and fills leave behind, measured on Metal.
 //!
-//! Ported from the runtime lane `runtime_lane/blits.rs`, whose doc comment says "the expected bytes
-//! are Metal's: copies and fills of any range, overlapping copies within one buffer as `memmove`,
-//! and every refusal, as measured on Metal". Three of those claims are now run on Metal rather than
-//! restated: the lane computes each expectation in Rust — a `Vec` filled and `copy_within`'d — and
-//! compares it against our own runtime, so nothing in it was ever tied to a Metal measurement.
 //! Record mode runs each case below on the oracle, and the recording holds the bytes Metal's own
 //! blit encoder produced.
 //!

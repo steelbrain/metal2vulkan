@@ -1,19 +1,12 @@
 //! Metal's 4:2:2 chroma-pair textures (`GBGR422`, `BGRG422`): what a copy moves, and what a
 //! kernel's `read()` and nearest sample of one answer.
 //!
-//! Ported from `runtime_lane/chroma_pairs.rs`. Both of these formats are **public** Metal pixel
-//! formats, and every call the lane makes of them — `newTextureWithDescriptor:`,
-//! `replaceRegion:`, `getBytes:`, the four blit copies and a kernel's `read()` — is a public
-//! call. So nothing here is carried: record mode runs both families on Metal and the recordings
-//! hold Metal's own answers, taken on this M3 Max.
+//! Both of these formats are **public** Metal pixel formats, and every call the cases make of them
+//! — `newTextureWithDescriptor:`, `replaceRegion:`, `getBytes:`, the four blit copies and a
+//! kernel's `read()` — is a public call. So nothing here is carried: record mode runs both families
+//! on Metal and the recordings hold Metal's own answers, taken on this M3 Max.
 //!
-//! **What the port changes.** The lane's copy table was measured on an Apple M4 and written into
-//! assertions. Its *texel* table is not a Metal run at all: `four_two_two_texels_read_as_metal_s`
-//! compares our reads with `metal2vulkan::bind::ChromaDecode`'s model, so both sides of its
-//! comparison are ours and nothing in the lane can tell a wrong model from a wrong
-//! implementation.
-//!
-//! The model itself **was** measured, and this port must not imply otherwise: `bind/chroma_decode`
+//! The model itself **was** measured: `bind/chroma_decode`
 //! records a probe on an Apple M3 Max under macOS 27.0.1 that found every `float` and `half`
 //! `read()`, nearest, linear and bicubic sample, and gather of both formats bit for bit the one of
 //! an `RGBA8Unorm` texture holding the decoded codes, over 16 x 4 texels of random bytes. So

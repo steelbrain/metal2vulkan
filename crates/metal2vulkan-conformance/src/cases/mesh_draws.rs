@@ -1,12 +1,8 @@
 //! Mesh draws: the words each mesh threadgroup's primitive drew, and the grids Metal draws
 //! nothing for.
 //!
-//! Ported from the runtime lane `runtime_lane/mesh_draws.rs`, whose expectation is a transcript of
-//! a Metal probe's printed lines (`PX <case> <x> <y> a=<words> b=<words>`, then `RESULT <case>
-//! drawn=<n>`). The lane holds those lines as text and compares its own printed lines with them.
-//! Here the same measurement is **run on Metal** instead: the case is one body, record mode drives
-//! it through `objc2-metal` on this Mac, and replay drives it through the runtime on any Vulkan
-//! device.
+//! The measurement is **run on Metal**: the case is one body, record mode drives it through
+//! `objc2-metal` on this Mac, and replay drives it through the runtime on any Vulkan device.
 //!
 //! What a row observes is typed, not printed:
 //!

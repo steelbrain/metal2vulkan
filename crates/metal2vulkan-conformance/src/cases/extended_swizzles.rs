@@ -1,5 +1,5 @@
 //! A swizzled **extended-range, bfloat or packed-normalized** texture read, sampled and gathered at
-//! a sampled slot, ported from `runtime_lane::extended_swizzles`.
+//! a sampled slot.
 //!
 //! These are the formats whose image holds raw codes the function decodes, so a swizzle in the
 //! view's component mapping hands a channel's codes to another channel's lane. Metal applies the

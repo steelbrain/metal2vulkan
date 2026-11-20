@@ -2,11 +2,11 @@
 //! of every `half` bit pattern.
 //!
 //! Metal's conversion here is **not** IEEE's round-to-nearest, which is the whole reason the family
-//! exists: `runtime_lane::half_storage_writes` measured that Metal rounds each channel **toward
-//! zero**, stores a finite value at or past 65504 as 65504, keeps an infinity, and stores every NaN
-//! as `0x7e00`. A device that rounds to nearest is wrong by one code on half the inputs, and a
-//! device that quiets a NaN its own way is wrong in the payload — both are differences a comparison
-//! in floats would call almost right, so every site here records unsigned words.
+//! exists: Metal rounds each channel **toward zero**, stores a finite value at or past 65504 as
+//! 65504, keeps an infinity, and stores every NaN as `0x7e00`. A device that rounds to nearest is
+//! wrong by one code on half the inputs, and a device that quiets a NaN its own way is wrong in the
+//! payload — both are differences a comparison in floats would call almost right, so every site
+//! here records unsigned words.
 //!
 //! **The sweep is exhaustive over a complete space**, which is why it records whole rather than as a
 //! digest: all 65,536 `half` bit patterns, each widened to its exact `f32` and written back, so
@@ -28,10 +28,9 @@
 //! | `read-write` | `hsw_read_write`, a `texture2d<float, access::read_write>` at slot 0 |
 //! | `held` | `hsw_held`, the `texture2d<float, access::write>` an argument buffer at buffer 2 holds |
 //!
-//! The lane's fourth form, `hsw_buffer`'s `texture_buffer<float, access::write>`, is not ported: a
-//! texture over a buffer's bytes has no call in the vocabulary a case is written against, so there
-//! is nowhere to say it. The module docs of `runtime_lane::half_storage_writes` record that plain
-//! Metal stored the same codes through all four.
+//! A fourth form, `hsw_buffer`'s `texture_buffer<float, access::write>`, is not a case: a texture
+//! over a buffer's bytes has no call in the vocabulary a case is written against, so there is
+//! nowhere to say it.
 //!
 //! Every texel holds [`FILL`] before the dispatch, so a texel the kernel did not reach is a
 //! recorded value rather than whatever the allocator left.
@@ -70,12 +69,12 @@ pub const FILL: u8 = 0xab;
 /// texel of the level is a value the case stated and the NaN rule is asked once more.
 const TAIL: u32 = 0x7f80_0001;
 
-/// The lane's specials, as `f32` bits: the inputs no `half` code can be.
+/// The specials, as `f32` bits: the inputs no `half` code can be.
 ///
 /// Zeros and ones of both signs, the two `f32` denormals that must flush, a tiny normal, both
 /// infinities, 65504 and the two values either side of the half's last rounding boundary, a value
-/// far past the range, and four `f32` NaN payloads. These are `runtime_lane::color_writes`'
-/// `specials`, by their bits so a transcription cannot move one by a step.
+/// far past the range, and four `f32` NaN payloads, by their bits so a transcription cannot move
+/// one by a step.
 const SPECIALS: [u32; 27] = [
     0x0000_0000, // 0.0
     0x8000_0000, // -0.0
@@ -391,9 +390,8 @@ impl Case for HalfStorageWrites {
     }
 }
 
-/// The code Metal's conversion stores for `x`, as `runtime_lane::half_storage_writes` measured it:
-/// a NaN is `0x7e00`, an infinity is kept, a finite value at or past 65504 is the largest half, and
-/// everything else is rounded **toward zero**.
+/// The code Metal's conversion stores for `x`: a NaN is `0x7e00`, an infinity is kept, a finite
+/// value at or past 65504 is the largest half, and everything else is rounded **toward zero**.
 ///
 /// Public so the cross-check can name it and so a reader of the family can find the rule in one
 /// place rather than in prose.

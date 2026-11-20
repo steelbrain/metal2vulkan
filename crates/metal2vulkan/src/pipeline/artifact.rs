@@ -1109,7 +1109,7 @@ pub enum PrecisionNote {
     /// step's `float`, announced by the runtime at a draw or dispatch that binds such a texture
     /// there. Measured on MoltenVK 1.4.2 over the Apple M3 Max (macOS 27.0.1): toward zero, within
     /// one `half` ulp of Metal's (8,409 channels of the `_sRGB` twins over six surfaces and three
-    /// matrices, `runtime_lane::ycbcr_textures`); unmeasured on other Apple GPUs.
+    /// matrices); unmeasured on other Apple GPUs.
     HalfTexelConversion,
     /// The module samples a texture with a `half` result through a filter (linear minification
     /// or magnification, a linear mip filter, anisotropy, or a runtime sampler) that Metal's own
@@ -1155,8 +1155,8 @@ pub enum PrecisionNote {
     /// and at the pipeline for a `float` input attachment whose color attachment is an sRGB format
     /// (`StageIo::decoded_fetches`). On a device that samples through Metal's own texture unit
     /// (`VkProperty::MetalSampler`: MoltenVK on Apple's GPU) the device's decode is Metal's, and
-    /// the module requires the property instead. Measured over every code of `RGBA8Unorm_sRGB`
-    /// (`runtime_lane::srgb_decode`): MoltenVK on an Apple M3 Max decodes each as Metal does, bit
+    /// the module requires the property instead. Measured over every code of `RGBA8Unorm_sRGB`:
+    /// MoltenVK on an Apple M3 Max decodes each as Metal does, bit
     /// for bit; lavapipe (LLVM 21.1.8, arm64) each color code within 5.25 table steps (0.00128, a
     /// third of a code's `1/255`) of Metal's value, alpha within one `f32` ulp; other devices are
     /// not measured.
@@ -1165,17 +1165,16 @@ pub enum PrecisionNote {
     /// UNORM twin (`metal::texel_format::srgb_twin_on`: `R8Unorm_sRGB` and `RG8Unorm_sRGB` on
     /// lavapipe, `RG8Unorm_sRGB` on ANV and NVIDIA among the committed profiles), the slot's
     /// `SrgbTexture` variant decodes what the twin's view reads by the MSL transfer through the
-    /// device's division and `Pow` (`pack::srgb_decode_texel`): a read, a sample, a fetch, a
-    /// gather and a bicubic tap one texel's codes, a filtered sample (a linear filter, a linear
-    /// mip filter, anisotropy, or a runtime sampler) the device's filter of the codes, the decode
-    /// of the codes' blend where Metal blends the decoded texels. So does a read of an 8-bit sRGB
-    /// storage texture held through its UNORM alias (`StorageImageClass::SrgbEncode`, Vulkan
-    /// having no sRGB storage view), at a slot or held by an argument buffer
-    /// (`lower::texture::heap_storage_conversions`). Both are recorded outright, on every device: Metal's table
-    /// rounds the transfer to a twelve-bit step, up to half a step (`1 / 8190`) from it, where
-    /// MoltenVK's `Pow` read within `1.83e-7` of the transfer through the alias
-    /// (`runtime_lane::srgb_storage`). Validation derives no tolerance from it: the class is
-    /// unbounded.
+    /// device's division and `Pow` (`pack::srgb_decode_texel`): a read, a sample, a fetch, a gather
+    /// and a bicubic tap one texel's codes, a filtered sample (a linear filter, a linear mip
+    /// filter, anisotropy, or a runtime sampler) the device's filter of the codes, the decode of
+    /// the codes' blend where Metal blends the decoded texels. So does a read of an 8-bit sRGB
+    /// storage texture held through its UNORM alias (`StorageImageClass::SrgbEncode`, Vulkan having
+    /// no sRGB storage view), at a slot or held by an argument buffer
+    /// (`lower::texture::heap_storage_conversions`). Both are recorded outright, on every device:
+    /// Metal's table rounds the transfer to a twelve-bit step, up to half a step (`1 / 8190`) from
+    /// it, where MoltenVK's `Pow` read within `1.83e-7` of the transfer through the alias.
+    /// Validation derives no tolerance from it: the class is unbounded.
     SrgbTexelDecode,
     /// The module samples a texture with a `float` result through a filter that Metal's own
     /// sampler (`VkProperty::MetalSampler`, MoltenVK) answers otherwise than Metal filters the
@@ -1198,13 +1197,11 @@ pub enum PrecisionNote {
     /// whose Function storage was not measured, up to the 192 KiB a thread Metal was measured to
     /// hold (`device::function_storage`). A driver backs that storage with scratch memory, and
     /// Vulkan states no amount it holds: past what it holds a driver can answer wrongly or hang the
-    /// GPU with no error. Probed, the RTX 5080 Laptop GPU hung at 48 KiB and the RTX 3090 at
-    /// 192 KiB (Xid 109), and the Iris Xe answered wrongly at 48 KiB and the Radeon 780M at
-    /// 128 KiB. The module runs on this device all the same, resting on no measurement; a kernel,
-    /// an object or a mesh function past the floor there is refused instead. Measuring the device
-    /// (`runtime_lane::private_memory`) and adding its row removes the note up to its value.
-    /// Validation keeps a difference as a mismatch: the class is derived as if the note were
-    /// absent.
+    /// GPU with no error. Probed, the RTX 5080 Laptop GPU hung at 48 KiB and the RTX 3090 at 192
+    /// KiB (Xid 109), and the Iris Xe answered wrongly at 48 KiB and the Radeon 780M at 128 KiB.
+    /// The module runs on this device all the same, resting on no measurement; a kernel, an object
+    /// or a mesh function past the floor there is refused instead. Validation keeps a difference as
+    /// a mismatch: the class is derived as if the note were absent.
     FunctionStorageAssumed,
     /// A fragment function runs a non-quad simdgroup operation (a reduction, scan, ballot,
     /// broadcast, shuffle, vote, or simdgroup matrix) before a discard on a path to it, in a
@@ -1412,8 +1409,8 @@ pub enum PrecisionNote {
     /// one quad's pixels alone, so a reduction ahead of a `discard_fragment` counts no quad the
     /// discard drops, where an Apple GPU's 32-lane simdgroup counts the dropped quads of its 8x4
     /// pixel block. Measured on arm64 lavapipe, whose fragment stage states one subgroup size,
-    /// 4 (`[minSubgroupSize, maxSubgroupSize]` is `[4, 4]`): the thirteen shapes of
-    /// `runtime_lane::discard_hoist` all answer the survivors, where Metal's answer counts the
+    /// 4 (`[minSubgroupSize, maxSubgroupSize]` is `[4, 4]`): thirteen discard shapes all answer the
+    /// survivors, where Metal's answer counts the
     /// dropped quads in four of them. No required subgroup size reaches 32 lanes there, and
     /// nothing in Vulkan relates the invocations of two fragment subgroups, so no exact form
     /// exists on such a device.
@@ -1524,7 +1521,7 @@ pub enum PrecisionNote {
     /// codes of an 8-bit or extended-range format. MoltenVK 1.4.2 on the M3 Max (macOS 27.0.1),
     /// which receives the 16-bit `half`, stores the value of Metal's measured rule in every channel
     /// of every measured blend draw of the sweep into `R16Float`, `RG16Float` and `RGBA16Float`
-    /// (28 of 28 each, `runtime_lane::half_output_blends`), and into `R32Float`, `RG32Float` and
+    /// (28 of 28 each), and into `R32Float`, `RG32Float` and
     /// `RGBA32Float` 28, 28 and 26 of 28, the two off at one channel by a zero's sign.
     ///
     /// Also: a `float` color output (a scalar or vector of AIR's `float`) of a module compiled
@@ -1644,7 +1641,7 @@ pub enum PrecisionNote {
     ///   direction moved and projected onto the face again by the device, and a tap past the
     ///   face's edge reads the next face as the device projects it, where Metal's is not measured.
     ///
-    /// Measured by `runtime_lane::anisotropic_filter` against the M4's answers on `rgba8Unorm`
+    /// Measured against the M4's answers on `rgba8Unorm`
     /// at `maxAnisotropy` 2 to 16, with Metal's logarithm and blend (the device's are not yet
     /// measured there). With a linear filter, every channel is within a code: at most
     /// 0.53 (mean up to 0.071) on lavapipe, 0.41 (0.027) on ANV (Iris Xe), 0.91 (0.043) on RADV
@@ -1982,7 +1979,7 @@ pub enum PrecisionNote {
     ///   same driver rounds a computed sum (8192 of 8192 sums Metal's) but drops the pair of a
     ///   `half` color output converted from `float` that it stores unblended into a 32-bit float
     ///   attachment: the `float` itself, whose `half` is what it stores into a 16-bit float one
-    ///   (`runtime_lane::half_output_blends`, `R32Float`, `RG32Float` and `RGBA32Float`);
+    ///   (`R32Float`, `RG32Float` and `RGBA32Float`);
     /// - on a device that rounds toward zero, a finite value from 65520 up is 65504 where
     ///   Metal's is infinity;
     /// - a result below the smallest normal `half` (`2^-14`) may be the zero of its sign on a
@@ -2259,7 +2256,7 @@ pub enum PrecisionNote {
     /// which only MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27 identity takes: there
     /// Metal covers). The device converts the
     /// alpha to its coverage mask by its own algorithm. Metal's, measured over 639 alphas a sample
-    /// count on an Apple M3 Max under macOS 27.0.1 (`runtime_lane::alpha_coverage`), covers a pixel
+    /// count on an Apple M3 Max under macOS 27.0.1, covers a pixel
     /// at one sample where its alpha is above 1/2, and at two and four samples
     /// `ceil(alpha * n - t)` of its `n` samples, `t` a 2x2 ordered dither of the pixel's window
     /// coordinates (1/8 and 5/8 at even and odd `x` of an even row, 7/8 and 3/8 of an odd one),

@@ -387,10 +387,9 @@ mod tests {
     /// No pixel drawn, in the lane's table.
     const NONE: u8 = u8::MAX;
 
-    /// The pixel the lane's own Metal probe stored, `8 x + y`, through each viewport at each
-    /// offset along `x`, then along `y`; [`NONE`] where it drew none. Copied from
-    /// `runtime_lane::wide_points::PROBE_9` to be checked against the recording, never to stand in
-    /// for it.
+    /// The pixel a Metal probe stored, `8 x + y`, through each viewport at each offset along `x`,
+    /// then along `y`; [`NONE`] where it drew none. Checked against the recording, never to stand
+    /// in for it.
     const PROBE_9: [[[u8; 17]; 2]; 7] = [
         [
             [

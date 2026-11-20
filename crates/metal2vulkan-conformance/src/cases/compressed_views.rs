@@ -1,5 +1,4 @@
-//! How block-compressed blocks move through a format view and into interior regions, ported from
-//! `runtime_lane::compressed_moves`'s second lane.
+//! How block-compressed blocks move through a format view and into interior regions.
 //!
 //! The first lane moves whole levels; this one asks the three questions that lane adds, in the same
 //! five shapes ([`crate::cases::compressed_moves::SHAPES`]) and over the same fourteen formats:

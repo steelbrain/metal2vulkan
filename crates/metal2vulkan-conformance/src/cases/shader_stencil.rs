@@ -438,10 +438,8 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// Metal's stencil after the three draws, by pixel, as
-    /// `runtime_lane::shader_stencil::METAL` carries it. The lane measured it on an **M4** with
-    /// macOS 27.0.1, a machine this project no longer has, so it is a cross-check of the rule
-    /// below and never a stand-in for the recording.
+    /// Metal's stencil after the three draws, by pixel, as measured on an **M4** with macOS
+    /// 27.0.1: a cross-check of the rule below and never a stand-in for the recording.
     const LANE: [u8; 4] = [0x01, 0xa1, 0x00, 0x01];
 
     /// Metal's stencil rule for one pixel under one face: the reference and the stored value are

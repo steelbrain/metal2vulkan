@@ -1,9 +1,8 @@
 //! Threadgroup words that only a simdgroup's lockstep orders.
 //!
-//! Ported from the two lockstep rows of the runtime lane `runtime_lane/driver_deviations.rs`. The
-//! owned fixture `rtl_lockstep` holds two kernels over one 64-thread threadgroup — two simdgroups —
-//! whose loops each thread leaves after its own count, with no barrier inside: thread `t` reads
-//! another thread's word of its own simdgroup and writes its own from it. Nothing but the
+//! The owned fixture `rtl_lockstep` holds two kernels over one 64-thread threadgroup — two
+//! simdgroups — whose loops each thread leaves after its own count, with no barrier inside: thread
+//! `t` reads another thread's word of its own simdgroup and writes its own from it. Nothing but the
 //! simdgroup running its lanes in lockstep decides what those words come to, so the recorded words
 //! **are** Metal's lockstep, in the one shape where it is observable.
 //!
@@ -266,11 +265,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
 mod tests {
     use super::*;
 
-    /// The lane's own model of lockstep, kept exactly as
-    /// `runtime_lane::driver_deviations::in_lockstep` states it: each simdgroup's threads run each
-    /// iteration together, so the threads still in the loop all read, then all write. `step` gives
-    /// a thread's iteration from the words as the iteration found them: `None` where the thread
-    /// leaves the loop, else its new word.
+    /// A model of lockstep: each simdgroup's threads run each iteration together, so the threads
+    /// still in the loop all read, then all write. `step` gives a thread's iteration from the words
+    /// as the iteration found them: `None` where the thread leaves the loop, else its new word.
     pub(super) fn in_lockstep(
         words: &mut [u32],
         mut step: impl FnMut(usize, u32, &[u32]) -> Option<u32>,

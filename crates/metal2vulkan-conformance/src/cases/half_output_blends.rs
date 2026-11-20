@@ -1,14 +1,11 @@
 //! What a device's blend stores for a fragment function's `half` output, into a 16- and a 32-bit
 //! float attachment.
 //!
-//! `runtime_lane::half_output_blends` is a **measurement** lane rather than a check: it prints
-//! `HALF-BLEND` lines, fits a rule to them, and asserts only that each draw completes and that a
-//! pipeline announcing nothing stores the fitted rule's value. The rule it fitted is worth having —
-//! into a 16-bit float format Metal blends the `half` the function returns with each factor (`1 - x`
-//! included), each product and the sum rounded to `half`, nearest even, and `Min` and `Max` read no
-//! factor; into a 32-bit float format it is a multiply-add in `float` — but the numbers behind it
-//! were printed to a terminal and are gone, and the blend colour's `1 - x` is the part of it this
-//! family has since measured and found not to hold on this OS (below).
+//! A rule fitted to Metal's blends reads: into a 16-bit float format Metal blends the `half` the
+//! function returns with each factor (`1 - x` included), each product and the sum rounded to
+//! `half`, nearest even, and `Min` and `Max` read no factor; into a 32-bit float format it is a
+//! multiply-add in `float`. The blend colour's `1 - x` is the part of it this family has measured
+//! and found not to hold on this OS (below).
 //!
 //! **So the recorded answer here is the blended attachment's stored codes, compared exactly**, and
 //! the fitted rule becomes a cross-check over Metal's own measurement instead of the thing the
@@ -197,13 +194,11 @@ impl Rng {
     }
 }
 
-/// The blend colour every pass sets, which is the lane's own
-/// (`runtime_lane::half_output_blends::BLEND_COLOR`): `(0.3, 0.6, 0.9, 0.45)`.
+/// The blend colour every pass sets: `(0.3, 0.6, 0.9, 0.45)`.
 ///
-/// Restated from the lane rather than chosen here, because the finding these rows carry is the
-/// lane's and a different colour would be a different measurement. **Not one of the four channels
-/// is exact in `half`**, which is the whole point: a blend colour the attachment holds exactly
-/// could not tell a factor that rounds the colour before its one minus from one that does not.
+/// **Not one of the four channels is exact in `half`**, which is the whole point: a blend colour
+/// the attachment holds exactly could not tell a factor that rounds the colour before its one minus
+/// from one that does not.
 ///
 /// Every pass sets it, not only the four rows whose factors read it, as the lane's every draw did.
 /// Once a pass and never twice: Metal's own API validation layer stops a pass that sets the blend

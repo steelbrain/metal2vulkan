@@ -15,19 +15,12 @@
 //! Metal answers from its own. So the whole family compares on a venue that has no sparse binding
 //! at all, and a lavapipe leg here reports real answers rather than a hole.
 //!
-//! # What the port adds to the lane
+//! # What the sweep checks
 //!
-//! `runtime_lane::sparse_textures` asks the runtime for exactly three of these answers, inside
-//! three much larger tests, and asserts each against a literal: `(Type2D, R32Float, 1)` and
-//! `(Cube, R32Float, 1)` are 64 by 64, and `(Type2DMultisample, RGBA8Unorm, 2)` and `4` are 64 by
-//! 32 and 32 by 32. Nothing in the tree ties any of them to a Metal run, and the model's own
-//! comment says it was measured on an Apple M4 — a machine that is gone.
+//! The rule has two claims a sweep can check:
 //!
-//! The rule the model states has two claims a sweep can check and three literals cannot:
-//!
-//! - **the answer does not depend on the texture type** (`sparse_tile_size_for_page` takes the
-//!   type and ignores it, `_texture_type`), which [`BY_TYPE`] asks of every texture type a sparse
-//!   heap makes a texture of;
+//! - **the answer does not depend on the texture type**, which [`BY_TYPE`] asks of every texture
+//!   type a sparse heap makes a texture of;
 //! - **the tile halves a side as the block's bytes double**, keeping the tile's bytes at the
 //!   page's, which [`BY_FORMAT`] asks of formats from 1 to 16 bytes a block and of the
 //!   block-compressed families, in all three pages.

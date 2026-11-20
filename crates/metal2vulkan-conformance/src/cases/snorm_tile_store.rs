@@ -1,10 +1,9 @@
 //! What Metal's tile store leaves in the texels a draw did not write: a signed normalized
 //! attachment's minimum codes, and an `RGB9E5Float` attachment's unnormalized words.
 //!
-//! Ported from the runtime lane `runtime_lane/snorm_tile_store.rs`. The lane's claim is Metal's
-//! behaviour, measured on this same chip: once a pass **draws**, Metal writes each 32x32 tile back
-//! through its channels' *values*, so a channel's minimum code (-128, or -32768), which reads as
-//! -1.0 exactly as the code above it does, is stored as that code above (-127, -32767) in every
+//! Metal's behaviour, measured on this chip: once a pass **draws**, Metal writes each 32x32 tile
+//! back through its channels' *values*, so a channel's minimum code (-128, or -32768), which reads
+//! as -1.0 exactly as the code above it does, is stored as that code above (-127, -32767) in every
 //! texel of the tile — including the texels no fragment wrote. An `RGB9E5Float` attachment's tiles
 //! go back the same way, so a word whose largest mantissa is below 256 under an exponent above 0 is
 //! stored normalized. A pass that **draws nothing** keeps every code.
@@ -398,13 +397,11 @@ impl Case for SnormTileStore {
 
 #[cfg(test)]
 mod tests {
-    //! The cross-check the port owes the lane: the codes Metal's own store left, as the recordings
-    //! hold them, against the lane's table.
+    //! The cross-check: the codes Metal's own store left, as the recordings hold them, against a
+    //! table.
     //!
-    //! The table is the lane's (`runtime_lane/snorm_tile_store.rs`), restated here because a
-    //! conformance case may not depend on the validation crate. It is the claim under test, not a
-    //! helper: if a recorded texel disagrees, either Apple's store moved or the lane's table was
-    //! never Metal's, and the test says which format.
+    //! The table is the claim under test, not a helper: if a recorded texel disagrees, either
+    //! Apple's store moved or the table was never Metal's, and the test says which format.
 
     use super::*;
     use crate::recording::Recording;

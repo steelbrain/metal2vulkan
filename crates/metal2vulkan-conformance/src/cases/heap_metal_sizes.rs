@@ -5,14 +5,13 @@
 //! answers; some also record whether `newTextureWithDescriptor:` answers a texture at all, which is
 //! the fact that makes a 0-byte answer mean something.
 //!
-//! # Why this family came first
+//! # What the numbers are
 //!
-//! `runtime_lane`'s `heap_metal_sizes` carries the numbers these cases measure — 44 bytes for a
-//! 6 x 3 4:2:2 texture, 20480 for a 64 x 64 two-plane extended-range one, and some 240 more — and
-//! until now nothing tied them to a Metal run: they were taken on an Apple M4 by hand, written into
-//! assertions, and the probe was thrown away. The runtime answers them from a **model** of Metal's
-//! arithmetic (`texture/heap_tiled.rs`) that is the same on every device, so the numbers are a
-//! contract with Metal and with nothing else, and the only thing that can check them is Metal. Record mode now does, on the oracle, as often as anybody asks.
+//! The numbers these cases record — 44 bytes for a 6 x 3 4:2:2 texture, 20480 for a 64 x 64
+//! two-plane extended-range one, and some 240 more — are Metal's, taken on the oracle by record
+//! mode. The runtime answers its device image's own memory requirements
+//! (`Device::heap_texture_size_and_align`), which differ by device, so its answers are held by
+//! their property rather than by Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
 //!
 //! # Why every case here is safe
 //!

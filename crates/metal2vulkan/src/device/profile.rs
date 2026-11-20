@@ -1283,8 +1283,8 @@ pub enum DriverWorkaround {
     /// GFX11): ACO compiled the product's `OpFMul` and the narrowing as one `v_fma_mixlo_f16` (a
     /// sum's narrowing too), and the product of 2.6822087e-7 and 1.0000001 answered `0x0005` where
     /// Metal's `half` of the `float` product is `0x0004`; the Radeon RX 7900 XTX (RADV NAVI31,
-    /// GFX11) answered as the 780M did, 4,542 of the 253,958 product lanes off Metal's on each
-    /// (`runtime_lane::half_conversions`). On the Radeon RX 550 (RADV POLARIS12, GFX8) the
+    /// GFX11) answered as the 780M did, 4,542 of the 253,958 product lanes off Metal's on each.
+    /// On the Radeon RX 550 (RADV POLARIS12, GFX8) the
     /// narrowing alone answers its own way (8,185 of the 253,958 lanes of a loaded `float`), every
     /// narrowing there records `PrecisionNote::NativeHalfConversion` already, and no fusion is told
     /// apart. A fact of RADV's compiler, keyed on RADV (`VK_DRIVER_ID_MESA_RADV`) on every GPU;
@@ -1318,21 +1318,20 @@ pub enum DriverWorkaround {
     /// then masks the coverage with `1 << gl_SampleID`.
     MemoryWritingFragmentsRunPerSample,
     /// The driver's `InterpolateAtSample` and `InterpolateAtOffset` of a perspective input are its
-    /// value at the pixel center extrapolated along the quad's coarse derivatives,
-    /// `f(center) + (f(tr) - f(tl)) * dx + (f(bl) - f(tl)) * dy` (`tl`, `tr`, `bl` the centers of
-    /// the quad's top-left, top-right and bottom-left pixels, `(dx, dy)` the read's distance from
-    /// the pixel center), not the perspective interpolation at that location: a first-order
-    /// answer, off by the input's curvature across the distance. A no-perspective input is linear
-    /// in the framebuffer, so its extrapolation is exact. Measured on RADV
-    /// (`VK_DRIVER_ID_MESA_RADV`), Mesa 26.2.6, on the Radeon 780M: of
-    /// `runtime_lane::pull_model_interpolation`'s values (a triangle of clip `w` 1, 2 and 4 over a
-    /// 6x6 target), the 52 offset reads and 1061 sample reads off Metal's were that form's, within
-    /// 0.005, and up to about 1.0 from Metal's in a lane whose vertices hand 3, -2 and 0.5;
-    /// the same reads of the no-perspective inputs were Metal's within the device's interpolation.
+    /// value at the pixel center extrapolated along the quad's coarse derivatives, `f(center) +
+    /// (f(tr) - f(tl)) * dx + (f(bl) - f(tl)) * dy` (`tl`, `tr`, `bl` the centers of the quad's
+    /// top-left, top-right and bottom-left pixels, `(dx, dy)` the read's distance from the pixel
+    /// center), not the perspective interpolation at that location: a first-order answer, off by
+    /// the input's curvature across the distance. A no-perspective input is linear in the
+    /// framebuffer, so its extrapolation is exact. Measured on RADV (`VK_DRIVER_ID_MESA_RADV`),
+    /// Mesa 26.2.6, on the Radeon 780M: of the values of a triangle of clip `w` 1, 2 and 4 over a
+    /// 6x6 target, the 52 offset reads and 1061 sample reads off Metal's were that form's, within
+    /// 0.005, and up to about 1.0 from Metal's in a lane whose vertices hand 3, -2 and 0.5; the
+    /// same reads of the no-perspective inputs were Metal's within the device's interpolation.
     /// Vulkan states no precision for interpolation, so the answer is the device's own (no form
     /// interpolates otherwise): a fragment function that reads a perspective input at a sample or
-    /// an offset there records `PrecisionNote::ExtrapolatedInterpolation` (`lower::stage_io::plan`).
-    /// It is keyed on the driver's release (`device::driver_facts`).
+    /// an offset there records `PrecisionNote::ExtrapolatedInterpolation`
+    /// (`lower::stage_io::plan`). It is keyed on the driver's release (`device::driver_facts`).
     PerspectiveReadsExtrapolated,
     /// The driver reads a mesh shader's store into one component of a vector output (an
     /// `OpAccessChain` to a component of `PrimitiveLineIndicesEXT` or
@@ -1413,10 +1412,9 @@ pub enum DriverWorkaround {
     /// it reads them as Metal does in an entry that declares no float-controls mode, the scope
     /// `DriverDeviation::MetalFloatDenormals` was measured in (its probes compute no `half`).
     /// Vulkan leaves the 32-bit denormals of such an entry to the implementation, so this is the
-    /// device's answer, not a defect. Measured by the gate lane
-    /// `runtime_lane::driver_deviations::fused_pairs_answer_metals_nans_and_denormals` (the owned
-    /// fixtures `fmx_fma_precise` and `fmx_fma_fast`, which compute `half` in 16 bits beside
-    /// `float` `fma(a, b, c)`, `a * b + c` and `a * w`) on NVIDIA's
+    /// device's answer, not a defect. Measured with the owned fixtures `fmx_fma_precise` and
+    /// `fmx_fma_fast` (which compute `half` in 16 bits beside `float` `fma(a, b, c)`, `a * b + c`
+    /// and `a * w`) on NVIDIA's
     /// (`VK_DRIVER_ID_NVIDIA_PROPRIETARY`) 615.71.09 on the RTX 5080 Laptop GPU and 620.70.06 on
     /// the RTX 3090 (2026-11-14, at 400efe7932): in each fixture 33 of 4,096 words keep a
     /// denormal where Metal answers zero, the lone product's alike (`1e-20 * 1e-20` answers

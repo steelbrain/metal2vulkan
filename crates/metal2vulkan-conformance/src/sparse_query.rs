@@ -7,13 +7,8 @@
 //! is safe on every venue and comparable on every venue — including one with no sparse binding at
 //! all, which is what makes this the first sparse family the suite can carry end to end.
 //!
-//! The runtime answers them from a model of Metal's rule (`sparse::tile_texels`), the same on every
-//! device, whose comment says it was measured on an Apple M4 and whose only possible oracle is
-//! Metal. `runtime_lane::sparse_textures` asserts exactly three of its answers —
-//! `(Type2D, R32Float, 1)`, `(Cube, R32Float, 1)` and `(Type2DMultisample, RGBA8Unorm, 2 and 4)` —
-//! so the rule's two interesting claims, that the answer does not depend on the texture type and
-//! that it halves the tile's sides as the block's bytes double, have never been checked against
-//! Metal over a sweep. A case over this type checks them.
+//! Metal's rule makes two claims a case over this type checks over a sweep: that the answer does
+//! not depend on the texture type, and that it halves the tile's sides as the block's bytes double.
 //!
 //! The vocabulary is Metal's own enumerations as the translator's public API names them, so a value
 //! a case writes reaches `MTLTextureType`, `MTLPixelFormat` and `MTLSparsePageSize` by its raw

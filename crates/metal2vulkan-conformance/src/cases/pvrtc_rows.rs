@@ -1,5 +1,4 @@
-//! How a PVRTC texture's blocks move under `MTLBlitOptionRowLinearPVRTC`, ported from
-//! `runtime_lane::pvrtc_textures`' two row-linear lanes.
+//! How a PVRTC texture's blocks move under `MTLBlitOptionRowLinearPVRTC`.
 //!
 //! PVRTC is the one compressed family whose blocks do **not** lie row by row in a texture by
 //! default: Metal places them in a block order of its own, and

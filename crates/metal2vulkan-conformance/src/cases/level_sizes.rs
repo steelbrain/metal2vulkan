@@ -1,4 +1,4 @@
-//! A texture's extent at a level read from a buffer, ported from `runtime_lane::level_sizes`.
+//! A texture's extent at a level read from a buffer.
 //!
 //! A shader may ask for `get_width(lod)` at a level the texture does not have, and Metal answers
 //! something rather than refusing: `max(1, e >> (lod & 255))` of the first level's extent, a shift

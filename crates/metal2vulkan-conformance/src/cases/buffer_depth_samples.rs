@@ -1,5 +1,5 @@
 //! A buffer copied into every sample of a multisample depth or stencil texture, and copied back
-//! out: ported from `runtime_lane::buffer_depth_samples`.
+//! out.
 //!
 //! The lane's Metal answer was a **rule**, not a table — "each copy unit of the buffer lands in its
 //! sample by the layout measured for colour, texel `(x, y)` sample `s` at

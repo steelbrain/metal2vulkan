@@ -12,8 +12,7 @@
 //
 // At exit it appends its totals, the objects' origins and sizes, and the execbuffers per thread to
 // M2V_I915_SHIM_OUT (stderr without it); "execbuffers" counts amdgpu's command submissions too. A
-// program reads the totals so far through the exported m2v_i915_shim_counts (the validation lanes
-// runtime_lane::submit_costs and runtime_lane::commit_latency do).
+// program reads the totals so far through the exported m2v_i915_shim_counts.
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdarg.h>

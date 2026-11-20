@@ -1,4 +1,4 @@
-//! How ETC2 and EAC texels decode, ported from `runtime_lane::etc_textures`.
+//! How ETC2 and EAC texels decode.
 //!
 //! An ETC2 or EAC texture is a texture no desktop GPU and no lavapipe holds in its own format, so
 //! the runtime keeps its blocks in a carrier image and its reads go through a **decoded twin** it

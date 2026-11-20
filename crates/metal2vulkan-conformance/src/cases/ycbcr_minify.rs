@@ -1,9 +1,9 @@
 //! A minified 10-bit two-plane YCbCr texture's samples: where a linear footprint's rounding puts
 //! the switch.
 //!
-//! Ported from `runtime_lane/ycbcr_minify.rs`, which exists because of a consumer bug: a pass that
-//! samples a 3840 x 2160 `YCBCR10_420_2P` surface minified into a 1440 x 1080 target wrote rare
-//! ±1s in its red, green and blue. The lane sweeps, along each axis, 2,048 places where a
+//! This family exists because of a consumer bug: a pass that samples a 3840 x 2160
+//! `YCBCR10_420_2P` surface minified into a 1440 x 1080 target wrote rare ±1s in its red, green and
+//! blue. It sweeps, along each axis, 2,048 places where a
 //! footprint's rounding decides which side of a `1 / 256` step a sample reads — 64 places times 32
 //! steps, 17 consecutive `f32` coordinates each — and compares the whole band's results with
 //! plain Metal's.

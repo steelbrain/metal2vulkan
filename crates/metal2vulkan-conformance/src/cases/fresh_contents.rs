@@ -1,8 +1,7 @@
 //! What a new buffer or texture holds before anything writes it, and what memory that was written
 //! and released reads as once it comes back.
 //!
-//! Ported from the runtime lane `runtime_lane/fresh_contents.rs`. Metal's answer, which that lane's
-//! header states from our own probe and which record mode now takes row by row:
+//! Metal's answer, which record mode takes row by row:
 //!
 //! - **Zero, every read:** buffers of every storage mode; `Shared` and `Managed` textures of every
 //!   type and format tried; the `Private` textures Metal keeps uncompressed (shader-write usage,

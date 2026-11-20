@@ -1,5 +1,4 @@
-//! Blits between Apple's two-plane extended-range textures placed in a heap, ported from
-//! `runtime_lane::two_plane_heap_blits`.
+//! Blits between Apple's two-plane extended-range textures placed in a heap.
 //!
 //! The probe (`tph`): a placement heap of Metal's size, shared or private, every byte of it a byte
 //! of the case's seed written through a buffer over the whole heap; two one-level 2D textures of

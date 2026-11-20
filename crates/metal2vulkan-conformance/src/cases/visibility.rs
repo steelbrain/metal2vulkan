@@ -1,12 +1,11 @@
 //! What Metal writes into a pass's visibility-result buffer: the words a `Boolean` mode stores,
 //! the samples a `Counting` mode counts, and what an offset nobody set keeps.
 //!
-//! Ported from the runtime lane `runtime_lane/visibility.rs`. Every pass here is one the lane
-//! drives, drawn with the owned fixture `rt6_render_state`: the fullscreen triangle covers every
-//! pixel of a 4 by 4 target, and the same draw **from vertex 3** covers none. Each visibility
-//! buffer starts as `0xaa` bytes, so a word Metal never wrote is visible as the bytes that were
-//! there rather than as a zero nobody can tell from a result; an `Accumulate` shape's starts as
-//! the words it adds to.
+//! Every pass here is drawn with the owned fixture `rt6_render_state`: the fullscreen triangle
+//! covers every pixel of a 4 by 4 target, and the same draw **from vertex 3** covers none. Each
+//! visibility buffer starts as `0xaa` bytes, so a word Metal never wrote is visible as the bytes
+//! that were there rather than as a zero nobody can tell from a result; an `Accumulate` shape's
+//! starts as the words it adds to.
 //!
 //! The lane's own table was measured on an M4, and its comment says so. Metal's answer here is
 //! **run**, not copied: record mode takes it on this M3 Max, and this module's tests cross-check
@@ -1067,13 +1066,9 @@ impl Visibility {
 
 #[cfg(test)]
 mod tests {
-    //! The cross-check the port owes the lane: the words Metal wrote, as the recordings hold them,
-    //! against the lane's table.
-    //!
-    //! The table is the lane's (`runtime_lane/visibility.rs`), restated here because a conformance
-    //! case may not depend on the validation crate. Its comment says it was measured on an **M4**;
-    //! this recording is of an M3 Max. A disagreement is therefore a fact about one of the two
-    //! chips, and the test names the case and the word.
+    //! The cross-check: the words Metal wrote, as the recordings hold them, against a table
+    //! measured on an **M4**; this recording is of an M3 Max. A disagreement is therefore a fact
+    //! about one of the two chips, and the test names the case and the word.
 
     use super::*;
     use crate::recording::Recording;

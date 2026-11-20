@@ -9,9 +9,6 @@
 //   clang -fobjc-arc -O1 -fmodules -o overlapping_slots overlapping_slots.m \
 //     -framework Foundation -framework Metal
 // Run: ./overlapping_slots, MTL_DEBUG_LAYER unset.
-//
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1): the module docs of
-// `runtime_lane::overlapping_slots` in metal2vulkan-validation before 8871d40bdf.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <stdio.h>

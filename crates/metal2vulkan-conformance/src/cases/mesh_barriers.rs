@@ -1,10 +1,7 @@
 //! Mesh draws behind a memory barrier: whether a reader draw sees the writer draw's words.
 //!
-//! Ported from the runtime lane `runtime_lane/mesh_barriers.rs`, whose expectation is a transcript
-//! of a Metal probe's printed lines (`PX`, `RESULT`, `CTL`). Metal's answer here is **run**, not
-//! copied: the lane's own documentation says its table is what an **M4** on macOS 27.0.1 printed,
-//! while the suite's oracle is this M3 Max, so porting the lane and recording it is also the first
-//! measurement of this probe on the chip the recording is keyed to.
+//! Metal's answer here is **run**, not copied: record mode measures it on the chip the recording is
+//! keyed to.
 //!
 //! Each row is one pass of one `RGBA32Uint` attachment, 8x8, cleared to zero and stored, and a
 //! control buffer of four words, `(1, 1, 1, 0)` from the host. A writer draw covers texel (7, 7)
