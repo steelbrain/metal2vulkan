@@ -123,6 +123,11 @@ impl Peaks {
 /// peak ([`alloc::peak_bytes`]) and its own resident high water
 /// ([`process::own_peak_resident_bytes`]), for [`run_json`] to decode: one line of JSON, the last
 /// of its stdout. Every worker child reports through this, as its last act.
+///
+/// A library the worker loaded may write to stdout too: the validation layer names its log file
+/// there, through C's buffered stdout, which flushes at exit. So the report is a line of its own,
+/// and once it is written the process's stdout is its stderr: what anything writes after the
+/// report, the C buffer flushed at exit included, reaches the worker's stderr, not its report.
 pub fn report<R: Serialize>(result: &R) -> Result<(), String> {
     report_with_peaks(result, Peaks::now())
 }
@@ -131,6 +136,9 @@ pub fn report<R: Serialize>(result: &R) -> Result<(), String> {
 /// translation's and its own ([`l3::serve`]).
 fn report_with_peaks<R: Serialize>(result: &R, peaks: Peaks) -> Result<(), String> {
     let mut stdout = std::io::stdout().lock();
+    stdout
+        .write_all(b"\n")
+        .map_err(|error| format!("write the worker's report: {error}"))?;
     serde_json::to_writer(
         &mut stdout,
         &Report {
@@ -141,8 +149,21 @@ fn report_with_peaks<R: Serialize>(result: &R, peaks: Peaks) -> Result<(), Strin
     )
     .map_err(|error| format!("encode the worker's report: {error}"))?;
     stdout
-        .flush()
-        .map_err(|error| format!("flush the worker's report: {error}"))
+        .write_all(b"\n")
+        .and_then(|()| stdout.flush())
+        .map_err(|error| format!("flush the worker's report: {error}"))?;
+    #[cfg(unix)]
+    {
+        // SAFETY: duplicates the process's own stderr descriptor onto its stdout descriptor; both
+        // stay open for the process's life, and the report written above is already flushed.
+        if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
+            return Err(format!(
+                "point stdout at stderr after the worker's report: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A worker child's process once its arguments selected it (each worker's `serve_if_requested`):
@@ -449,6 +470,43 @@ mod tests {
             matches!(&failure, WorkerFailure::Output(message, _) if message.contains("decode")),
             "{failure:?}"
         );
+    }
+
+    /// The bug class: what a library in a worker writes through C's buffered stdout, which
+    /// flushes at exit, after the report on the report's own stream, is not the report's: the
+    /// worker's report decodes. The fixture, in a fresh process, writes a line before its
+    /// [`report`] and one after it, both through C's stdout, and exits as a worker does.
+    #[cfg(unix)]
+    mod a_library_s_stdout {
+        use super::*;
+        use std::process::Command;
+
+        const FIXTURE: &str = "worker::tests::a_library_s_stdout::reporting_fixture";
+        const MODE: &str = "M2V_TEST_LIBRARY_STDOUT";
+
+        /// The fixture: no-op unless [`MODE`] is set.
+        #[test]
+        fn reporting_fixture() {
+            if std::env::var_os(MODE).is_none() {
+                return;
+            }
+            // SAFETY: `puts` writes a NUL-terminated string to C's stdout.
+            unsafe { libc::puts(c"a library's line before the report".as_ptr()) };
+            report(&7u32).unwrap();
+            // SAFETY: as above.
+            unsafe { libc::puts(c"a library's line after the report".as_ptr()) };
+            std::process::exit(0);
+        }
+
+        #[test]
+        fn is_not_the_worker_s_report() {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", FIXTURE, "--nocapture"])
+                .env(MODE, "1");
+            let run: WorkerRun<u32> = run_json(command, "worker-test", |_| Ok(())).unwrap();
+            assert_eq!(run.result, 7);
+        }
     }
 
     /// A worker's report states its counting allocator's process peak and its resident high

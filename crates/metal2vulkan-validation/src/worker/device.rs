@@ -345,10 +345,11 @@ fn start(
     MonitoredChild::spawn(command).map_err(|error| format!("spawn the device worker: {error}"))
 }
 
-/// The outcome a worker that exited 0 reported in `stdout_path`, refused unless the worker is this
-/// build and ran under `input`'s generated-commands setting, restriction, and leg. A device it names
-/// beside a refusal must have run under the same restriction and leg, and only a typed refusal
-/// names one.
+/// The outcome a worker that exited 0 reported in the last line of `stdout_path`, as every
+/// worker's report is ([`super::report`]: a library in the worker may write a line before it),
+/// refused unless the worker is this build and ran under `input`'s generated-commands setting,
+/// restriction, and leg. A device it names beside a refusal must have run under the same
+/// restriction and leg, and only a typed refusal names one.
 fn reported(stdout_path: &Path, input: &DeviceInput) -> DeviceOutcome {
     let mut refused_on = None;
     let result = reported_run(stdout_path, input, &mut refused_on);
@@ -365,8 +366,9 @@ fn reported_run(
 ) -> Result<DeviceRun, ExecutorError> {
     let bytes = fs::read(stdout_path)
         .map_err(|error| format!("read the device worker's report: {error}"))?;
-    let Reported { result, .. }: Reported<DeviceOutput> = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("decode the device worker's report: {error}"))?;
+    let Reported { result, .. }: Reported<DeviceOutput> =
+        serde_json::from_slice(super::last_line(&bytes))
+            .map_err(|error| format!("decode the device worker's report: {error}"))?;
     if result.product_fingerprint != TRANSLATOR_FINGERPRINT
         || result.validation_fingerprint != VALIDATION_FINGERPRINT
     {

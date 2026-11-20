@@ -162,6 +162,24 @@ fn reporting(scratch: &ScratchDir, output: &DeviceOutput) -> Command {
     ))
 }
 
+/// The bug class: a device worker's report is the last line of its stdout, as every worker's is,
+/// and a line a library in the worker wrote to stdout before it (the validation layer names its
+/// log file there) is not the report.
+#[cfg(unix)]
+#[test]
+fn a_worker_s_report_is_the_last_line_of_its_stdout() {
+    let scratch = ScratchDir::new("device-worker-test").unwrap();
+    let report = scratch.path().join("report.json");
+    let envelope = serde_json::json!({"allocator_peak_bytes": null, "result": output(Ok(run()))});
+    fs::write(&report, serde_json::to_vec(&envelope).unwrap()).unwrap();
+    let worker = shell(&format!(
+        "cat >/dev/null; echo 'Validation Layer Info - Logging validation error to x.log'; \
+         echo; cat '{}'; echo",
+        report.display()
+    ));
+    assert_eq!(ran(worker, &input(DeviceType::Cpu), no_tripwire), Ok(run()));
+}
+
 fn no_tripwire(record: &HangRecord) -> Result<(), String> {
     panic!("a CPU worker wrote the host tripwire: {record:?}")
 }
