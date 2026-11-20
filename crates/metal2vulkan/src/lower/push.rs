@@ -7,13 +7,15 @@
 //! compute window is `[0, 256)` (a dispatch region and 28 buffer addresses), and a render
 //! pipeline's two stages share one range `[0, 256)`, dense by link: the vertex function's fields
 //! from 0, the fragment function's from its `LoweringInputs::push_base`, the vertex function's push
-//! end rounded up to 8, so only the fields the pair places take space. The vertex function's
-//! window there is `[0, 248)`, 8 bytes short of the range's end ([`VERTEX_FLOOR_END`]): a vertex
-//! function is lowered without knowing its fragment function, and a fragment function whose
-//! fields spill must push its parameter block's address (8 bytes, 8-aligned) from the vertex
-//! function's end, so the vertex function leaves that room. The reserved 8 bytes cost only a vertex
-//! function whose own fields pass 248, which spills where it would have filled them.
-//! `select` places the function's own [`PushField`]s in the fixed kind order (the derived `Ord` of [`PushField`]; within a kind, by slot). Fields fill the
+//! end, so only the fields the pair places take space (a four-byte field the fragment function
+//! places before its eight-byte ones takes the four bytes the vertex function's end may leave).
+//! The vertex function's window there is `[0, 248)`, 8 bytes short of the range's end
+//! ([`VERTEX_FLOOR_END`]): a vertex function is lowered without knowing its fragment function, and
+//! a fragment function whose fields spill must push its parameter block's address (8 bytes,
+//! 8-aligned) from the vertex function's end, so the vertex function leaves that room. The
+//! reserved 8 bytes cost only a vertex function whose own fields pass 248, which spills where it
+//! would have filled them. `select` places the function's own [`PushField`]s in the fixed kind
+//! order (the derived `Ord` of [`PushField`]; within a kind, by slot). Fields fill the
 //! stage window in that order, each at the next offset aligned to the field; from the first field
 //! that does not fit, every field goes to the stage's `ArgumentTable` uniform buffer
 //! (`ResourceSlot{stage, Synthetic(ArgumentTable)}`), at offsets fixed by the same order. The
@@ -60,8 +62,9 @@ pub const fn window(stage: Stage, w: PushWindow, base: u32) -> (u32, u32) {
 pub const FLOOR_BYTES: u32 = 256;
 
 /// The end of a vertex function's window on the floor: the floor's end less one address, so the
-/// fragment function's window, from the vertex function's end rounded up to 8, always holds its
-/// parameter block's address (`PushField::ArgumentTableAddress`, which the order places first).
+/// fragment function's window, from the vertex function's end, always holds its parameter block's
+/// address (`PushField::ArgumentTableAddress`, which the order places first, at the next multiple
+/// of 8).
 pub const VERTEX_FLOOR_END: u32 = FLOOR_BYTES - 8;
 
 /// The SPIR-V shape of a push field's value.
@@ -495,7 +498,7 @@ mod tests {
     }
 
     /// On the floor a render pipeline's fields are dense by link: a fragment function placed from
-    /// the vertex function's push end rounded up to 8 starts there, its fields fill the rest of
+    /// the vertex function's push end starts there, its fields fill the rest of
     /// the 256 bytes, and from the first that does not fit it spills. A vertex function's window
     /// ends at 248, so a fragment function from its end can always push its block's address.
     #[test]

@@ -11,7 +11,7 @@
 //!   (not implemented), as before: its push window is not the floor's.
 //! - On `Device::from_queries`' profile the two stages push one range, dense by link: with
 //!   `sampled_fragment`, which pushes its constexpr sampler's index, the fragment function's
-//!   fields start at the vertex function's end rounded up to 8 (32), where the fixed windows put
+//!   fields start at the vertex function's end (32), where the fixed windows put
 //!   them at 64. A fragment compiled on its own at base 0 and linked after that vertex function is
 //!   `InvalidDescriptor(PushBase)`; compiled under the vertex function's
 //!   `CompiledFunction::fragment_push_base` it links.

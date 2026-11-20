@@ -1096,6 +1096,19 @@ pub enum PushField {
     /// Residual bind offset of a descriptor-form slot: the bind offset minus the descriptor base,
     /// modulo 2^32.
     SlotBindOffset(SlotRef),
+    /// Under the identity domains, on a device that orders framebuffer fetch in neither form
+    /// (`lower::fragment::fetch::fetch_unordered`), the element of the set-1 sampled-texture array
+    /// through which a fragment function reads color attachment `color` (`[[color(n)]]`): one
+    /// `u32`, the index of an element holding a 2D view of the attachment's level and slice
+    /// (multisampled in a multisampled pipeline), which the function fetches as `texels` at the
+    /// integer part of its `FragCoord` (and its `SampleId`). No descriptor holds the attachment.
+    /// The function states `RuntimeFact::FramebufferFetch` for the color, and its fetches are
+    /// ordered after earlier draws only by the consumer's barriers, not after an overlapping
+    /// earlier fragment of the same draw (`PrecisionNote::UnorderedFetchWithinDraw`). Ordered
+    /// before the slot addresses, so on the floor (`PushWindow::Floor`) a fragment function that
+    /// pushes no parameter block's address places it in the four bytes a vertex function's push
+    /// end may leave below the fragment function's first eight-byte field.
+    FetchedColor { color: u32, texels: SampledType },
     /// Guest base address of a static-root slot. Under the identity domains, a `u64`: a buffer
     /// slot's device address (its `gpuAddress` plus the bind offset) less 2^31, modulo 2^64
     /// (`docs/API.md`, section 5), and a texture or sampler slot's `gpuResourceID`
@@ -1261,16 +1274,6 @@ pub enum PushField {
     /// a device sampler of its own. The use's coordinates are normalized: the function scales a
     /// pixel sampler's coordinates itself.
     ConstexprSampler(CombinedSampler),
-    /// Under the identity domains, on a device that orders framebuffer fetch in neither form
-    /// (`lower::fragment::fetch::fetch_unordered`), the element of the set-1 sampled-texture array
-    /// through which a fragment function reads color attachment `color` (`[[color(n)]]`): one
-    /// `u32`, the index of an element holding a 2D view of the attachment's level and slice
-    /// (multisampled in a multisampled pipeline), which the function fetches as `texels` at the
-    /// integer part of its `FragCoord` (and its `SampleId`). No descriptor holds the attachment.
-    /// The function states `RuntimeFact::FramebufferFetch` for the color, and its fetches are
-    /// ordered after earlier draws only by the consumer's barriers, not after an overlapping
-    /// earlier fragment of the same draw (`PrecisionNote::UnorderedFetchWithinDraw`).
-    FetchedColor { color: u32, texels: SampledType },
     /// The value a draw or dispatch binds for specialization key `key`, carried as data rather
     /// than specialized: one `u32` holding exactly the value the binder computes for the key's
     /// specialization constant from the bound textures and samplers (a boolean key as 1 or 0; a

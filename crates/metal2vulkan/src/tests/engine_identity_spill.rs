@@ -329,10 +329,7 @@ fn a_render_pair_past_the_floor_spills_both_functions() {
         assert_spills(&format!("{stem} vertex"), vertex, 0, true);
         // The vertex function fills its window to 248: the fragment function's block address
         // takes the range's last 8 bytes, and its slots' addresses go to its block too.
-        let base = vertex
-            .push_range
-            .map_or(0, |(o, s)| o + s)
-            .next_multiple_of(8);
+        let base = vertex.push_range.map_or(0, |(o, s)| o + s);
         assert_eq!(base, 248, "{stem}");
         assert_spills(&format!("{stem} fragment"), fragment, base, false);
         let end = fragment.push_range.map_or(0, |(o, s)| o + s);

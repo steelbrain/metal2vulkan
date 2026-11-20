@@ -134,7 +134,7 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   (256 on a device made by `Device::from_queries`, whose runtime's floor requires that much
   `maxPushConstantsSize`: a dispatch region and 28 buffer addresses). On such a device a render
   pipeline's two functions share one 256-byte range: the vertex function's window is `[0, 248)`,
-  and the fragment function's runs from the vertex function's end, rounded up to 8, to 256. A
+  and the fragment function's runs from the vertex function's end to 256. A
   vertex function is lowered without knowing its fragment function, so it leaves the last 8
   bytes, where a fragment function whose fields spill always pushes its block's address; that
   costs only a vertex function whose own fields pass 248 bytes, which spills where it would have

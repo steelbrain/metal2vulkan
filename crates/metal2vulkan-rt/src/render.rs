@@ -734,7 +734,7 @@ impl RenderCompiled {
             lowered.vertex = StageSource::Compiled(function.map_err(Error::Translation)?);
         }
         // The fragment function's push fields follow the vertex function's in the floor's one
-        // range, from the vertex function's end rounded up to 8.
+        // range, from the vertex function's end.
         let base = match &lowered.vertex {
             StageSource::Compiled(vertex) => vertex.fragment_push_base(),
             StageSource::Function(_) => 0,
