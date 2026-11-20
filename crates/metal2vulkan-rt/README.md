@@ -2107,6 +2107,12 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - Each lowering on a calling thread is one translation within its own 500 MiB ceiling, so the
   caller's width multiplies the bound: calls on 4 threads at once hold at most 2 GiB of
   translation.
+- Measured on an RTX 3090, cold, the machine to itself, three plays of each width in turn: a
+  frame whose command buffers first use 66 compute pipelines, 47 of them in one command buffer,
+  spent 1,729 ms in first-use waits with the player's pre-pass on 1 thread (56 or 57 waits) and
+  613 ms on 4 threads (10 waits, each for a make still in flight), the frame 3,565 ms and
+  2,430 ms long; the process's resident memory rose by at most 410 MiB in that frame at 1 thread
+  and 441 MiB at 4.
 - `ComputePipelineState::precision_notes` carries the translator's notes of where the kernel's
   answers may differ from Metal's on this device, fixed per operation: those of the modules made
   with the state, and the emulated-SIMD-group module's once it is lowered. A kernel compiled
