@@ -7,9 +7,9 @@
 //! tests and validation's device tests both run, the extended-range bicubic table both check
 //! ([`xr_bicubic`]), the store-buffering litmus kernel both compile
 //! ([`litmus`]), the inputs and answer of the vector word-phase fixture the product's
-//! interpreter test, the new runtime's device test and the conformance suite all hold
+//! interpreter test, the runtime's device test and the conformance suite all hold
 //! ([`vector_word_phases`]), the dispatches and answer of the threadgroup-memory fixture the
-//! new runtime's device test and the conformance suite both hold ([`threadgroup_start`]), and the
+//! runtime's device test and the conformance suite both hold ([`threadgroup_start`]), and the
 //! counter of a thread's user-space instructions the matrix's
 //! instructions-per-draw records are measured with ([`instructions`]).
 //!

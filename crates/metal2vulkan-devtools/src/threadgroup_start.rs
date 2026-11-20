@@ -5,7 +5,7 @@
 //! threads, [`DISPATCHES`] times each, the region [`REGION_BYTES`] long), and what each dispatch
 //! answers where threadgroup memory reads zero until the program writes it ([`answer`]): the
 //! conformance case `compute-threadgroup-memory-reads-zero` records Metal's answer and holds it
-//! equal to [`answer`], and the new runtime's device test holds its own equal to it.
+//! equal to [`answer`], and the runtime's device test holds its own equal to it.
 
 /// The fixture, and its kernel.
 pub const FIXTURE: &str = "tgz_reads";

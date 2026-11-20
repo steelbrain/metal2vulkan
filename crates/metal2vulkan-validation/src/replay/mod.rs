@@ -1,5 +1,5 @@
 //! Replay streams (`docs/REPLAY-STREAM.md`): their reader and writer, the address map the player
-//! moves address arguments by, the player, and its backend over the new runtime.
+//! moves address arguments by, the player, and its backend over the runtime.
 
 mod addresses;
 mod args;

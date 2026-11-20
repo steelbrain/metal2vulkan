@@ -1,4 +1,4 @@
-//! The player's backend over the new runtime (`metal2vulkan-runtime`), through its public API on one
+//! The player's backend over the runtime (`metal2vulkan-runtime`), through its public API on one
 //! device. The backend is the runtime's consumer: it takes the blocks the stream's own buffers lie
 //! in (`places`) and every texture and sampler index, granted at the start. A block of the stream
 //! is a block of the runtime, and a heap is a block of its own. What the runtime does not build
@@ -333,7 +333,7 @@ impl InFlight {
     }
 }
 
-/// The new runtime on one device.
+/// The runtime on one device.
 pub struct NewRuntime {
     /// The consumer's pre-pass the player stands in for, where it runs (`with_prepass`): its
     /// threads end before the device does.

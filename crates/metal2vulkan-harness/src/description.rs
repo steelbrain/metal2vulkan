@@ -77,8 +77,8 @@
 //! others are written by `replaceRegion:` slice by slice, rows tightly packed, which the CPU does
 //! for a shared or managed texture alone: a private texture takes `undefined` alone. A texture
 //! Metal made over an IOSurface is described as a plain shared or managed one; the harness makes
-//! none over an IOSurface. The new runtime refuses a heap's texture and one over a buffer: it
-//! makes neither yet.
+//! none over an IOSurface. On the runtime the harness refuses a heap's texture and one over a
+//! buffer: it makes neither there.
 
 use crate::plan::{
     seeded_words, Binding, BufferPlan, Comparison, Constant, Dispatch, Filter, Grid, Output, Plan,

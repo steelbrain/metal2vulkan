@@ -1,6 +1,6 @@
 # The refusal surface
 
-Every refusal of something Metal accepts, read from the code: the construction sites of the typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Section 6 is the new runtime's floor: a device below it is refused when the device is made, with every item it lacks named. The sections after it are the new runtime's own typed refusals, one for each enum its `Error` carries, every row with its declared basis. Malformed input of no Metal call at all is misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no counterpart for at all.
+Every refusal of something Metal accepts, read from the code: the construction sites of the typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Section 6 is the runtime's floor: a device below it is refused when the device is made, with every item it lacks named. The sections after it are the runtime's own typed refusals, one for each enum its `Error` carries, every row with its declared basis. Malformed input of no Metal call at all is misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no counterpart for at all.
 
 Columns:
 
@@ -20,7 +20,7 @@ Columns:
   - `rare`: public API, but specialized: few apps reach it;
   - `none`: no public API path: malformed or non-Metal input, Apple-private calls, or a cap no valid program of ordinary size meets;
   - `?`: not assessed yet.
-  The floor (section 6) carries no reach mark, as it turns on the device whatever the program, and nor do the new runtime's refusals after it, each an argument of a public call.
+  The floor (section 6) carries no reach mark, as it turns on the device whatever the program, and nor do the runtime's refusals after it, each an argument of a public call.
 
 ## Totals
 
@@ -31,10 +31,10 @@ Columns:
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
-| Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 75 | 75 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
+| Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 75 | 75 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Gap` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -45,10 +45,10 @@ Columns:
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
-| Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 20 | 20 | 0 | 0 | 35 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 2 | 28 | 0 | 0 | 0 |
+| Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 20 | 20 | 0 | 0 | 35 | 0 | 0 | 0 |
+| The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
+| The runtime's `Gap` | 0 | 0 | 0 | 2 | 28 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -139,7 +139,7 @@ Columns:
 | `RasterizationRateMap` |  | devices without VkFeature::MultiViewport; devices without VkFeature::ShaderDrawParameters; devices without VkFeature::ShaderOutputViewportIndex; devices without VkLimit::MaxGeometryTotalOutputComponents; devices without a capability the site computes; devices without a capability the site computes (`vec![Capability::Feature(lacks)]`); every device (not implemented) | `ours` | 10: `crates/metal2vulkan/src/lower/stage_io/plan.rs (region_copy, 3 sites)`, `crates/metal2vulkan/src/lower/stage_io/plan.rs (region_viewport, 2 sites)` (+3) | `rare`: rasterization rate maps |
 | `GpuEncodedIndirectCommands` |  | devices short of a Vulkan feature the site names; devices without buffer device addresses (`addressed_needs`); every device (no Vulkan mechanism); every device (not implemented) | `ours` | 21: `crates/metal2vulkan/src/bind/replay.rs (preprocess)`, `crates/metal2vulkan/src/bind/replay.rs (replay_preprocess_module)` (+13) | `rare`: indirect command buffers encoded by a kernel |
 | `VulkanVersion` | The device's Vulkan version is below the 1.2 floor | devices without ApiVersion::V1_2 | `device` | 2: `crates/metal2vulkan/src/ash_interop/query.rs (query)`, `crates/metal2vulkan/src/device/derive.rs (from_queries)` | `none`: a device below Vulkan 1.2 |
-| `IdentityDomains` | The identity pointer and handle domains (`PointerDomain::Identity`, `HandleDomain::Identity`) | devices without a capability the site computes (`all`); every device (not implemented) | `ours` | 6: `crates/metal2vulkan/src/device/derive.rs (identity_domains)`, `crates/metal2vulkan/src/lower/sampler/anisotropic.rs (select)` (+4) | `none`: the identity domains, which the new runtime alone takes and which lower only kernels over buffer slots, textures in slots or argument buffers, and runtime samplers, so far |
+| `IdentityDomains` | The identity pointer and handle domains (`PointerDomain::Identity`, `HandleDomain::Identity`) | devices without a capability the site computes (`all`); every device (not implemented) | `ours` | 6: `crates/metal2vulkan/src/device/derive.rs (identity_domains)`, `crates/metal2vulkan/src/lower/sampler/anisotropic.rs (select)` (+4) | `none`: the identity domains, which the runtime alone takes and which lower only kernels over buffer slots, textures in slots or argument buffers, and runtime samplers, so far |
 | `Constant` | A constants-block record LLVM defines that the typed model has no form for (a block address, a `select` and the other constant expressions of... | - | `-` | via a helper: 3: `crates/metal2vulkan-air/src/bitcode/constants.rs (record, 2 sites)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: LLVM constant forms AIR does not emit |
 | `Attribute` | An LLVM attribute kind that changes the calling ABI and that AIR does not use (`inalloca`, `preallocated`, `byref`, `nest`, the `swift*` kinds) | - | `-` | via a helper: 2: `crates/metal2vulkan-air/src/bitcode/attrs.rs (known)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `none`: LLVM ABI attributes AIR does not use |
 | `BitcodeRecord` | A bitcode record LLVM defines in `block` that the typed model does not cover and that has no more specific variant (legacy spellings predating... | - | `-` | via a helper: 8: `crates/metal2vulkan-air/src/bitcode/attrs.rs (decode_lists)`, `crates/metal2vulkan-air/src/bitcode/function.rs (symtab)` (+5) | `none`: bitcode records AIR does not emit |
@@ -242,7 +242,7 @@ Columns:
 |---|---|---|---|---|---|
 | `Time` | The attempt's deadline passed | every device (the attempt's deadline, 20 seconds by default) | `ours` | 1: `crates/metal2vulkan-air/src/budget/mod.rs (counted)` | `none`: a translation past its deadline: a defect of ours to fix on any supported input (AGENTS.md: 20 seconds) |
 
-## 6. Devices below the new runtime's floor (`floor::BelowFloor`: each `floor::Missing`)
+## 6. Devices below the runtime's floor (`floor::BelowFloor`: each `floor::Missing`)
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
@@ -255,7 +255,7 @@ Columns:
 | `TimeDomain` | A time domain of [`TIME_DOMAINS`] the device does not calibrate (`vkGetPhysicalDeviceCalibrateableTimeDomainsEXT`), as Vulkan names it | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-runtime/src/floor.rs (decide)` | `-` |
 | `SetLayout` | The layout of one of the runtime's descriptor sets, `set` 0 (empty) or 1 (the texture and sampler arrays), which `vkGetDescriptorSetLayoutSupport`... | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-runtime/src/arrays.rs (supported)` | `-` |
 
-## 7. The new runtime's `Refusal` (`Error::Refused(Refusal)`)
+## 7. The runtime's `Refusal` (`Error::Refused(Refusal)`)
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
@@ -335,7 +335,7 @@ Columns:
 | `ViewportNotFinite` | A viewport with a field that is NaN or infinite (but its origin's x, which draws nothing) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M4, macOS 27.0.1: Metal's validation stops a NaN or infinite origin; the other fields are taken by the same rule | 1: `crates/metal2vulkan-runtime/src/render_encoder.rs (set_viewport)` | `-` |
 | `StencilAttachment` | A draw under a depth-stencil state that tests the stencil, in a pass without a stencil attachment | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M4, macOS 27.0.1: Metal's validation stops the draw; plain Metal tests it against a hidden stencil of 0 that the runtime does not keep | 1: `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)` | `-` |
 
-## 8. The new runtime's `Limit` (`Error::Limit(Limit)`)
+## 8. The runtime's `Limit` (`Error::Limit(Limit)`)
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
@@ -357,7 +357,7 @@ Columns:
 | `ExportType` | An export of a handle the device gives, but not in the one form an export takes (`Device::new_exported_block`) | at the device's limit | `device`: its extensions and the buffer's memory requirements | 6: `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)`, `crates/metal2vulkan-runtime/src/import.rs (surface_import)` (+4) | `-` |
 | `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-runtime/src/texture.rs (plan)` | `-` |
 
-## 9. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
+## 9. The runtime's `Gap` (`Error::Unsupported(Gap)`)
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|

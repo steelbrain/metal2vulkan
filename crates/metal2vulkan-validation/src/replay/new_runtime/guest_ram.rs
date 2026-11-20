@@ -1,6 +1,6 @@
 //! The host's copies between buffers and the guest's RAM (`m2v.copyToGuestRam`,
 //! `m2v.copyFromGuestRam`, `docs/REPLAY-STREAM.md` sections 7 and 10), played in the host's form
-//! on the new runtime, the one-copy form: one buffer copy a call, in a command buffer of the
+//! on the runtime, the one-copy form: one buffer copy a call, in a command buffer of the
 //! play's own on the queue of the call's command buffer, through a Shared scratch of the play's
 //! own that the CPU fills or empties. A copy back is one copy of the whole words its runs span
 //! into the scratch, committed just after its command buffer; a wait for that command buffer

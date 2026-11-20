@@ -13,9 +13,9 @@ The refusal surface is read from the construction sites of the typed refusals, o
 - the translation caps (`Limit`, `Error::LimitExceeded`);
 - the rasterization-rate maps the compile layer does not compile (`UnpinnedCompile`);
 - the translation deadline (`BudgetExceeded`, `Error::Budget`);
-- the new runtime's floor (`floor::BelowFloor`, in crates/metal2vulkan-runtime): each `floor::Missing`
+- the runtime's floor (`floor::BelowFloor`, in crates/metal2vulkan-runtime): each `floor::Missing`
   item a device below the floor lacks;
-- the new runtime's own refusal enums: each variant of its `Error` whose payload is one enum it
+- the runtime's own refusal enums: each variant of its `Error` whose payload is one enum it
   declares (`Refused(Refusal)`, `Limit(Limit)`, and any added later), found from that payload, one
   section each, every variant with a declared basis.
 
@@ -27,7 +27,7 @@ its sites name), its sites, its basis, and a reach mark, which is the one hand-k
 The basis says where the belief that this input must be refused comes from. It is derived from the
 construction site wherever the site states it, and declared in the refusal's own doc comment, as a
 last line `Basis: <value> (the evidence)`, wherever the claim is about Metal itself, which no site
-can state. `--check` requires one of every variant of the new runtime's refusal enums: a refusal
+can state. `--check` requires one of every variant of the runtime's refusal enums: a refusal
 that asserts Metal stops an input cannot be added with nothing behind it, and one whose basis is
 not settled says `Basis: unknown (why)` rather than nothing.
 
@@ -60,10 +60,10 @@ TREES = [
     ("rt", CRATES / "metal2vulkan-runtime" / "src"),
 ]
 
-# The new runtime's floor: the file that declares `Missing`, the items of `BelowFloor`.
+# The runtime's floor: the file that declares `Missing`, the items of `BelowFloor`.
 FLOOR_RS = CRATES / "metal2vulkan-runtime" / "src" / "floor.rs"
 
-# The new runtime's error: each variant whose payload is one enum the runtime declares is a family
+# The runtime's error: each variant whose payload is one enum the runtime declares is a family
 # of typed refusals (`Refused(Refusal)`, `Limit(Limit)`, `Unsupported(Gap)`, and any added later).
 RT_ERROR_RS = CRATES / "metal2vulkan-runtime" / "src" / "error.rs"
 
@@ -417,7 +417,7 @@ def is_pattern(text, start, end):
 def scan(rt_enums=()):
     """Rows keyed by (section, variant): conditions, sites.
 
-    `rt_enums` are the new runtime's refusal enums ([`rt_refusal_enums`]), each its own section.
+    `rt_enums` are the runtime's refusal enums ([`rt_refusal_enums`]), each its own section.
     """
     rows = defaultdict(lambda: {"conds": set(), "kinds": set(), "sites": [], "indirect": []})
     feature_refs = defaultdict(list)
@@ -565,12 +565,12 @@ def enum_variants(path, enum):
 
 
 def rt_section(enum):
-    """The section key of one of the new runtime's refusal enums."""
+    """The section key of one of the runtime's refusal enums."""
     return f"rt:{enum}"
 
 
 def rt_refusal_enums():
-    """(variant, enum, file) for each variant of the new runtime's `Error` whose whole payload is
+    """(variant, enum, file) for each variant of the runtime's `Error` whose whole payload is
     one enum the runtime declares: `Refused(Refusal)`, `Limit(Limit)`, and any family added later.
 
     Structural: no list of names is kept here.
@@ -688,14 +688,14 @@ def build():
             "Rate maps the compile layer does not compile (`UnpinnedCompile`)",
         ),
         ("budget", tdocs, "The translation deadline (`Error::Budget`)"),
-        ("floor", mdocs, "Devices below the new runtime's floor (`floor::BelowFloor`: each `floor::Missing`)"),
+        ("floor", mdocs, "Devices below the runtime's floor (`floor::BelowFloor`: each `floor::Missing`)"),
     ]
     for variant, enum, file in rt_enums:
         sections.append(
             (
                 rt_section(enum),
                 OrderedDict((n, d) for n, d, _ in enum_arms(file, enum)),
-                f"The new runtime's `{enum}` (`Error::{variant}({enum})`)",
+                f"The runtime's `{enum}` (`Error::{variant}({enum})`)",
             )
         )
     for section, docs, title in sections:
@@ -781,9 +781,9 @@ def render(tables):
         "Every refusal of something Metal accepts, read from the code: the construction sites of the "
         "typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this "
         "file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). "
-        "Section 6 is the new runtime's floor: a "
+        "Section 6 is the runtime's floor: a "
         "device below it is refused when the device is made, with every item it lacks named. "
-        "The sections after it are the new runtime's own typed refusals, one for each enum its "
+        "The sections after it are the runtime's own typed refusals, one for each enum its "
         "`Error` carries, every row with its declared basis. "
         "Malformed input of no Metal call at all is misuse and is not listed. "
         "[`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no "
@@ -822,7 +822,7 @@ def render(tables):
     lines.append("  - `?`: not assessed yet.")
     lines.append(
         "  The floor (section 6) carries no reach mark, as it turns on the device whatever the "
-        "program, and nor do the new runtime's refusals after it, each an argument of a public "
+        "program, and nor do the runtime's refusals after it, each an argument of a public "
         "call."
     )
     lines.append("")
@@ -1023,7 +1023,7 @@ def main():
                 print(f"{s}::{n}: its `Basis:` {why}", file=sys.stderr)
             print(
                 f"{len(faults)} refusals whose basis is absent or malformed (--missing-basis). Every "
-                "variant of the new runtime's refusal enums carries a last doc-comment line `Basis: <value> (the "
+                "variant of the runtime's refusal enums carries a last doc-comment line `Basis: <value> (the "
                 "evidence)`; a refusal whose basis is not settled says `Basis: unknown (why)` rather "
                 "than nothing.",
                 file=sys.stderr,

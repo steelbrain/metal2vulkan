@@ -1,4 +1,4 @@
-//! The indices the new runtime's backend gives textures and sampler states, which the runtime
+//! The indices the runtime's backend gives textures and sampler states, which the runtime
 //! leaves to its consumer: the index the stream names for the object where the runtime takes it
 //! (a descriptor's or a view's resource index, else the ID the program saw of the object), else
 //! the lowest index of the object's class that no object holds and the program did not reserve,

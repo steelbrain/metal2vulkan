@@ -1,4 +1,4 @@
-//! The matrix's judged metrics of a play on the new runtime (`docs/REPLAY-STREAM.md`, section 10):
+//! The matrix's judged metrics of a play on the runtime (`docs/REPLAY-STREAM.md`, section 10):
 //! counts two plays of one stream at one commit on one card give alike, summed over the whole
 //! play as the runtime executed it, each an `M2V-MATRIX metric` record that the matrix holds equal
 //! to its base's (`docs/VALIDATION.md`, "Records and rules"). A play that did not finish its range

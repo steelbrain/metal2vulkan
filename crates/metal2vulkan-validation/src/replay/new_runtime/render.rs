@@ -1,4 +1,4 @@
-//! Render pipeline states, render pass descriptors and render encoders on the new runtime.
+//! Render pipeline states, render pass descriptors and render encoders on the runtime.
 //!
 //! What the runtime does not build yet is skipped and counted: a render pipeline state it answers
 //! with a typed gap or the translator refuses (`render_states`, by the gap, with the first state

@@ -46,9 +46,9 @@ mod tests {
     }
 
     /// Every device open goes through one of the functions that check the hang tripwire first:
-    /// validation's Vulkan context, the Metal platform, and the new runtime's device in the player
+    /// validation's Vulkan context, the Metal platform, and the runtime's device in the player
     /// and in the replay tests, each after the tripwire check in its own file. A new raw open
-    /// anywhere else in the crate fails here, before it can run, and so does a new-runtime open
+    /// anywhere else in the crate fails here, before it can run, and so does a runtime open
     /// ahead of its check.
     #[test]
     fn device_opens_exist_only_behind_the_tripwire_check() {
@@ -63,7 +63,7 @@ mod tests {
             concat!(".create_", "instance("),
             concat!(".enumerate_", "physical_devices("),
             concat!(".create_", "device("),
-            // The new runtime's device creation (`metal2vulkan_runtime`).
+            // The runtime's device creation (`metal2vulkan_runtime`).
             concat!("metal2vulkan_runtime::Device", "::new("),
         ];
         let allowed: &[(&str, &str, usize)] = &[
@@ -71,7 +71,7 @@ mod tests {
             ("src/candidate/platform/device.rs", opens[3], 1),
             ("src/candidate/platform/device.rs", opens[4], 1),
             ("src/metal/platform.rs", opens[0], 1),
-            // The new runtime's device: the player's and the replay tests'.
+            // The runtime's device: the player's and the replay tests'.
             ("src/bin/command-replay.rs", opens[5], 1),
             ("src/replay/rt_replay.rs", opens[5], 1),
         ];
@@ -81,7 +81,7 @@ mod tests {
             let check = text.find(checked);
             assert!(
                 check.is_some_and(|at| text.find(open).is_some_and(|open| at < open)),
-                "{file} opens the new runtime's device without the hang tripwire check before it"
+                "{file} opens the runtime's device without the hang tripwire check before it"
             );
         }
         let mut found = Vec::new();

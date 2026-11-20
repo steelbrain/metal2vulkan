@@ -1,4 +1,4 @@
-//! The new runtime's rows of its own ([`OwnRow`]), each on a device of its own on the session's
+//! The runtime's rows of its own ([`OwnRow`]), each on a device of its own on the session's
 //! GPU, so that nothing an earlier workload left in the session's device runs beside it.
 //!
 //! The idle rows read the runtime's count of each idle free by the allocation's idle time when

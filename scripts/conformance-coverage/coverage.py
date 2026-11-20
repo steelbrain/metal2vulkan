@@ -568,12 +568,12 @@ FIELD_SITE = re.compile(r'Node::leaf\(\s*"([^"]+)",\s*field\(\s*&self\.(\w+)')
 
 def field_facts(families: dict[str, dict]) -> list[dict]:
     """The facts types a side answers field by field: each one's fields, and of them the ones a
-    side may refuse on their own (`crate::case::Field`), with the leaf each records at and the new
+    side may refuse on their own (`crate::case::Field`), with the leaf each records at and the
     runtime's ledger rows that refuse it, of the cases whose module calls a `Side` method
     answering the type.
 
     A facts call answers many getters at once, so its call running says nothing of which of its
-    fields were compared: a field the new runtime's side refuses is a refusal at its own leaf, and
+    fields were compared: a field the runtime's side refuses is a refusal at its own leaf, and
     is counted here as a field, not covered by the call beside it."""
     rows = []
     path = SUITE / "known-gaps-rt.tsv"
@@ -1825,12 +1825,12 @@ def write(data) -> str:
         "its own (`Field` in the suite's `case.rs`): a field it cannot answer is a refusal at its "
         "own leaf, held to the ledger as a call's refusal is, and the fields beside it still "
         "compare. So the call running says nothing of which fields were compared, and these "
-        "types are counted by field: each one's fields, the ones a side may refuse, and the new "
+        "types are counted by field: each one's fields, the ones a side may refuse, and the "
         "runtime's ledger rows (`known-gaps-rt.tsv`) that refuse each at its leaf."
     )
     w("")
     if data["field_facts"]:
-        w("| type | fields | refusable | refusable field: its leaf, the new runtime's refusal rows (every venue), cases |")
+        w("| type | fields | refusable | refusable field: its leaf, the runtime's refusal rows (every venue), cases |")
         w("|---|---|---|---|")
         for facts in data["field_facts"]:
             each = "; ".join(

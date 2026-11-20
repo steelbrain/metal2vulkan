@@ -4,7 +4,7 @@
 //! takes ([`OFFSETS`], [`vec16_offsets`]), and the four buffers' bytes afterwards where every
 //! access lands at its own address ([`answer`]), which is where Metal places it: the
 //! conformance crate's `vector-word-phases-*` cases record Metal's answer on an Apple M3 Max and
-//! hold it equal to [`answer`], the product's CPU-interpreter test and the new runtime's device
+//! hold it equal to [`answer`], the product's CPU-interpreter test and the runtime's device
 //! test hold theirs equal to it too.
 
 /// The fixture.

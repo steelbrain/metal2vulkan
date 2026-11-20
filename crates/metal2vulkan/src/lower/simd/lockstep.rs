@@ -2,7 +2,7 @@
 //! device-memory accesses a kernel leaves to the lockstep of Apple's simdgroups.
 //!
 //! **Where it runs.** Under the resident-table domains, the old runtime's, until the cutover
-//! deletes it. Under the identity domains (`lower::access::identity`, the new runtime's) no kernel
+//! deletes it. Under the identity domains (`lower::access::identity`, the runtime's) no kernel
 //! is ordered ([`OrderKey::of`] is `None`): documented Metal orders the threads of a simdgroup
 //! only through barriers and atomics, and calls their conflicting accesses between barriers a data
 //! race (docs/API.md, accepted differences).

@@ -194,7 +194,7 @@ fn described_workloads_match_their_references() {
         let plan = workload.plan().unwrap();
         let each = (run_each(&plan, &mut sessions, runs, None))
             .unwrap_or_else(|why| panic!("{}: {why}", plan.name));
-        // The runtime makes no heap and no texture over a buffer yet.
+        // The harness makes no heap and no texture over a buffer on the runtime.
         let missing = match plan.name.as_str() {
             "heaped" => Some("makes no heap"),
             "over" => Some("makes no texture over a buffer"),

@@ -1165,7 +1165,7 @@ fn a_row_is_judged_by_host_time_never_its_gpu_time() {
     assert_eq!(matrix_time(&report), None, "no host time, no matrix time");
 }
 
-/// The new runtime's known gaps and the device's limits are typed refusals; its other errors are
+/// The runtime's known gaps and the device's limits are typed refusals; its other errors are
 /// failures.
 #[test]
 fn the_new_runtime_refuses_by_its_gaps_and_limits_alone() {
@@ -1410,7 +1410,7 @@ fn the_copy_moves_every_byte_in_whole_threadgroups() {
 /// one-row variant (`LoweringInputs::one_row`) of `row_cells`, whose `int` cell arithmetic
 /// compiles to `nsw` steps, does not observe it, so a runtime may run its grids in tiles; that of
 /// `row_cells_uint`, the control, whose `uint` steps carry no flags, still does. Under the
-/// identity domains (the new runtime's), whose kernels take no lockstep order, neither observes
+/// identity domains (the runtime's), whose kernels take no lockstep order, neither observes
 /// it, plain or with partial threadgroups.
 #[test]
 fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {

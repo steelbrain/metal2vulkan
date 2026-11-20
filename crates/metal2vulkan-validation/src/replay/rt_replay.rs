@@ -1,4 +1,4 @@
-//! Device tests of the replay player on the new runtime (`replay::NewRuntime`), on the device the
+//! Device tests of the replay player on the runtime (`replay::NewRuntime`), on the device the
 //! cfg selects: streams the tests write (`docs/REPLAY-STREAM.md`), each played and its report
 //! printed as `REPLAY <test> <line>`.
 //!
@@ -85,7 +85,7 @@
 //!   level and makes its second from them at its first use: blits of both levels read the
 //!   expected texels, and the take is counted once.
 //!
-//! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
+//! The runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
 
 use crate::gpu::{self, DeviceType};
@@ -116,7 +116,7 @@ impl ScratchCache {
     }
 }
 
-/// The new runtime's first device of the cfg's kind (a GPU: discrete, then integrated, then
+/// The runtime's first device of the cfg's kind (a GPU: discrete, then integrated, then
 /// virtual; else the CPU), its kernels kept in `cache`.
 fn rt_device(cache: &Path) -> metal2vulkan_runtime::Device {
     use ash::vk::PhysicalDeviceType as Kind;
@@ -165,7 +165,7 @@ fn flagged(
     path
 }
 
-/// `path` played on the new runtime's device, its report and the backend's lines printed; the
+/// `path` played on the runtime's device, its report and the backend's lines printed; the
 /// play's end unwrapped.
 fn play(test: &str, path: &Path) -> (Report, Vec<String>) {
     let (report, lines, ()) = play_then(test, path, |_| ());
@@ -1276,7 +1276,7 @@ fn a_private_shown_texture_is_checked_through_a_copy() {
 /// descriptor object #9, 128 by 2 RGBA8Unorm texels of two levels, 512 bytes a row: the buffer's texels come in 2 by 2
 /// squares of one colour each, so the second level made from the first by a filter of each square
 /// is that square's colour exactly. A blit encoder copies the first level into #5 and the second
-/// into #6, each shown at a present. On the new runtime the use takes the buffer's bytes into the
+/// into #6, each shown at a present. On the runtime the use takes the buffer's bytes into the
 /// first level and makes the second from it, once.
 #[test]
 fn a_tiled_texture_takes_its_buffer_s_bytes_and_levels_at_first_use() {
@@ -2455,7 +2455,7 @@ fn census(report: &Report) -> [u64; 3] {
     .map(|key| stream[key])
 }
 
-/// On the new runtime, which makes the block elsewhere, the word that looks like an address
+/// On the runtime, which makes the block elsewhere, the word that looks like an address
 /// plays as written: the buffer reads back the recorded bytes, the word is counted, and nothing
 /// moved.
 #[test]

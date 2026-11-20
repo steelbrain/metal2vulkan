@@ -23,7 +23,7 @@ path = "src/bin/harness.rs"
 [dependencies]
 # The translator: the function constant values the runtime takes (`plan.rs`).
 metal2vulkan = { path = "../metal2vulkan" }
-# The new runtime, behind the harness's traits in `rt.rs` alone, and the Vulkan types it chooses
+# The runtime, behind the harness's traits in `rt.rs` alone, and the Vulkan types it chooses
 # a physical device by.
 metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
 ash.workspace = true

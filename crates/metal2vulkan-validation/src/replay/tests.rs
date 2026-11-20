@@ -718,7 +718,7 @@ fn judged_counts() -> Counters {
     ])
 }
 
-/// The matrix's judged metrics of a play on the new runtime are the play's executed totals, one
+/// The matrix's judged metrics of a play on the runtime are the play's executed totals, one
 /// record each under the stream's first segment's stem (whitespace made `_`) and its range: the
 /// barriers less the one after each upload's clears, the clears and their bytes, a counter the
 /// backend does not report as 0, and no other
@@ -804,7 +804,7 @@ fn a_short_play_gives_no_judged_metric() {
     assert_eq!(judged_records(first, &report, &ended, None), none);
 }
 
-/// The gauges the new runtime's backend reads once its device dropped go out as the matrix's
+/// The gauges the runtime's backend reads once its device dropped go out as the matrix's
 /// lines, `M2V-MATRIX gauge replay-rt/device/GAUGE@drop N`: three fields after the marker, the
 /// key ending in `@drop`, as `scripts/matrix/results.py` reads a record, whose rule fails a gauge
 /// not at zero there. The end's error names such a gauge.
@@ -1590,7 +1590,7 @@ fn a_texture_marked_outside_whose_id_the_program_saw_stops_the_play() {
     assert_eq!(report.ids, []);
 }
 
-/// The new runtime's backend places a texture marked `outside` at the highest free index of its
+/// The runtime's backend places a texture marked `outside` at the highest free index of its
 /// class and leaves its sequence where it was: the plain texture made after it takes the index
 /// it takes where the stream makes no marked one, and a second marked texture the next free
 /// index down.
@@ -1618,7 +1618,7 @@ fn a_texture_marked_outside_takes_no_index_of_the_sequence() {
     assert_eq!((marked, marked_again), (end - 1, end - 2));
 }
 
-/// The new runtime's backend gives a constexpr sampler, which the stream names no index for, the
+/// The runtime's backend gives a constexpr sampler, which the stream names no index for, the
 /// highest free sampler index, past those the same call took, and leaves the sequence the
 /// program's sampler states take where it was: a sampler state at its index would take it.
 #[test]
@@ -1892,7 +1892,7 @@ fn a_frame_end_reports_the_gauges_as_they_stand() {
     assert!(ends[1].ends_with(" live calls=3"), "{lines:?}");
 }
 
-/// The new runtime's `unwritten` line counts, once, a Shared buffer a committed dispatch read
+/// The runtime's `unwritten` line counts, once, a Shared buffer a committed dispatch read
 /// before anything recorded reached its bytes: not one written through its block, one a blit
 /// names, one written before the commit, one an earlier commit's dispatch bound or one released
 /// before the commit.

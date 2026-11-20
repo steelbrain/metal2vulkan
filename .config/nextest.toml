@@ -13,7 +13,7 @@ slow-timeout = { period = "60s", terminate-after = 20 }
 filter = 'test(/::soak_/)'
 slow-timeout = { period = "300s", terminate-after = 24 }
 
-# The new runtime's device test of accesses up to 2 GiB runs alone. Its buffer is one Shared block
+# The runtime's device test of accesses up to 2 GiB runs alone. Its buffer is one Shared block
 # of `MAX_BUFFER_LENGTH` (2 GiB), host memory where the Shared memory type is the host's (an RTX
 # 2080, NVIDIA 620.70.06). Beside the runtime's compute encoder tests and three other translate
 # tests there, the run's host memory peaked at 4.7 GiB; in a job holding 4 GiB it reached the 4 GiB

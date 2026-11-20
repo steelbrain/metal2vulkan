@@ -1,6 +1,6 @@
-//! The new runtime (`metal2vulkan-runtime`) behind the harness's traits.
+//! The runtime (`metal2vulkan-runtime`) behind the harness's traits.
 //!
-//! The new runtime places a buffer where its consumer says, in a block the consumer took
+//! The runtime places a buffer where its consumer says, in a block the consumer took
 //! (`Device::take_block`, `Device::new_buffer`); the harness is that consumer here. It places each
 //! buffer at the lowest free range of a block of its storage mode that holds it, at a multiple of
 //! 256 bytes, taking a block of `MemoryClass::block_len` (16 MiB) when none does, as a guest's
@@ -27,8 +27,8 @@
 //! state that numbered its state words took, as Metal gives an equal one the same ID; a sampler
 //! state passes over a constexpr sampler's index. A texture read's or write's numbered sampler takes nothing at its index: 0.
 //!
-//! The new runtime makes no heap and no texture over a buffer yet: a plan with such a texture is
-//! refused ([`Refused`]).
+//! The harness makes no heap and no texture over a buffer on the runtime: a plan with such a
+//! texture is refused ([`Refused`]).
 
 mod own;
 
@@ -71,7 +71,7 @@ pub(crate) fn size(size: Size) -> Result<[u32; 3]> {
     }
 }
 
-/// The new runtime's `MTLCreateSystemDefaultDevice`: the first physical device of the most
+/// The runtime's `MTLCreateSystemDefaultDevice`: the first physical device of the most
 /// preferred type (discrete, integrated, virtual, CPU, other) that opens, in the loader's order
 /// within a type, with its cache directory `store` where one is given
 /// (else none).
@@ -126,7 +126,7 @@ pub fn system_default(store: Option<&Path>) -> Result<Device> {
     Err(format!("no physical device opens: {}", refused.join("; ")).into())
 }
 
-/// The new runtime's device, with the harness's placements in its blocks.
+/// The runtime's device, with the harness's placements in its blocks.
 pub struct Device {
     device: rt::Device,
     /// Its physical device, which each row of the runtime's own opens a device of its own on.
@@ -561,12 +561,12 @@ impl crate::ComputeDevice for Device {
     fn new_texture(&self, texture: &plan::TexturePlan) -> Result<rt::Texture> {
         let refused = match texture.source {
             TextureSource::Plain => None,
-            TextureSource::Heap => {
-                Some("newTextureWithDescriptor: of a heap: the new runtime makes no heap yet")
-            }
+            TextureSource::Heap => Some(
+                "newTextureWithDescriptor: of a heap: the harness makes no heap on the runtime",
+            ),
             TextureSource::OverBuffer => Some(
-                "newTextureWithDescriptor:offset:bytesPerRow: of a buffer: the new runtime makes \
-                 no texture over a buffer yet",
+                "newTextureWithDescriptor:offset:bytesPerRow: of a buffer: the harness makes no \
+                 texture over a buffer on the runtime",
             ),
             TextureSource::View { .. } => return Err("a view is made from its parent".into()),
         };

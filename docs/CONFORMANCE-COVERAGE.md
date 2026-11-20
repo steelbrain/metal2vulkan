@@ -2024,9 +2024,9 @@ The Metal leg sends these selectors to a receiver this typed, and `scripts/metal
 
 ## Facts answered field by field
 
-A facts call answers many getters at once, and a side answers or refuses each of them on its own (`Field` in the suite's `case.rs`): a field it cannot answer is a refusal at its own leaf, held to the ledger as a call's refusal is, and the fields beside it still compare. So the call running says nothing of which fields were compared, and these types are counted by field: each one's fields, the ones a side may refuse, and the new runtime's ledger rows (`known-gaps-rt.tsv`) that refuse each at its leaf.
+A facts call answers many getters at once, and a side answers or refuses each of them on its own (`Field` in the suite's `case.rs`): a field it cannot answer is a refusal at its own leaf, held to the ledger as a call's refusal is, and the fields beside it still compare. So the call running says nothing of which fields were compared, and these types are counted by field: each one's fields, the ones a side may refuse, and the runtime's ledger rows (`known-gaps-rt.tsv`) that refuse each at its leaf.
 
-| type | fields | refusable | refusable field: its leaf, the new runtime's refusal rows (every venue), cases |
+| type | fields | refusable | refusable field: its leaf, the runtime's refusal rows (every venue), cases |
 |---|---|---|---|
 | `ComputeDescriptorFacts` | 11 | 2 | `label`: `label`, 3 (3), 3; `binary_archives`: `binary_archives`, 3 (3), 3 |
 | `FunctionFacts` | 9 | 2 | `options`: `options`, 22 (22), 22; `device_is_the_cases`: `device`, 24 (24), 24 |

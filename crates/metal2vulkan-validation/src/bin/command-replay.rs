@@ -1,11 +1,11 @@
-//! Replay streams (`docs/REPLAY-STREAM.md`): play one on a Vulkan device through the new runtime,
+//! Replay streams (`docs/REPLAY-STREAM.md`): play one on a Vulkan device through the runtime,
 //! or print its records.
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--managed one-copy|two-copy]
 //! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
 //! [--video-handle dma-buf|opaque-fd] [--check-presents F,...]` plays the stream whose
-//! first segment is `FILE` through the new runtime, with
+//! first segment is `FILE` through the runtime, with
 //! `--video-handle dma-buf|opaque-fd` telling the runtime the consumer's decoder route, the
 //! handle its video surfaces are made with (a dma-buf unless it says otherwise), and
 //! `--gpu-wait-timeout` bounding each device wait (10 s unless it says otherwise; a CPU device's
@@ -34,7 +34,7 @@
 //! the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
-//! no gate result), `gaps ...` where it met a typed gap, on the new runtime where the play
+//! no gate result), `gaps ...` where it met a typed gap, on the runtime where the play
 //! finished its range and skipped nothing the matrix's judged metrics (`M2V-MATRIX metric
 //! replay-rt/STEM/RANGE/NAME N`, `docs/REPLAY-STREAM.md`, section 10), then `ok`, `ids: ...` or
 //! `error WHAT`, the skipped line and this one ending `; not a verdict past frame F, call C` where
@@ -55,7 +55,7 @@
 //! device that keeps a device copy of each Managed buffer, the report's `managed digests` line
 //! after its `device` line says which.
 //!
-//! The new runtime's play stands in for a consumer's pre-pass: `--prepass-width N` threads of the
+//! The runtime's play stands in for a consumer's pre-pass: `--prepass-width N` threads of the
 //! player's own (4 where the command line names none, 0 for none) prepare each compute dispatch
 //! ahead of its encoding (`ComputePipelineState::prepare_dispatch`) once its command buffer and its
 //! state are made, while the play goes on. The report's `prepass width` line says how many ran.
@@ -454,7 +454,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
-    // The consumer's pre-pass the new runtime's play stands in for: its threads, 4 where the
+    // The consumer's pre-pass the runtime's play stands in for: its threads, 4 where the
     // command line names none, 0 for none.
     let prepass = match options
         .get("prepass-width")
@@ -592,7 +592,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
     }
 }
 
-/// The new runtime's backend on the first physical device of `device_type` that opens (a GPU:
+/// The runtime's backend on the first physical device of `device_type` that opens (a GPU:
 /// discrete, then integrated, then virtual), its compiled kernels kept in `cache`, and its name.
 /// A GPU opens only while the hang tripwire is absent.
 fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, String), String> {
@@ -649,7 +649,8 @@ type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
 type Presents = (Vec<u64>, PathBuf);
 
 /// Play `reader` through `backend` into `report`, to the last frame where one is given, dumping
-/// the command buffers where asked, checking the shown texture at the listed frames' presents and keeping its bytes in the directory given, and on the new runtime,
+/// the command buffers where asked, checking the shown texture at the listed frames' presents and
+/// keeping its bytes in the directory given, and on the runtime,
 /// where `judged`
 /// names the stream's first segment, writing the matrix's judged metrics of a play that finished
 /// its range (`judged_records`): the exit status.

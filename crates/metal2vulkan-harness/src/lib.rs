@@ -225,8 +225,9 @@ pub enum Storage {
     /// `MTLStorageModePrivate`: the GPU's alone.
     Private,
     /// `MTLStorageModeManaged`: the CPU writes it through `contents` and calls
-    /// `didModifyRange:`, which brings the GPU's copy up to date. The new runtime has no such
-    /// mode; its harness keeps the GPU's copy in a `Private` buffer (`rt`).
+    /// `didModifyRange:`, which brings the GPU's copy up to date. On the runtime it is
+    /// `Device::new_managed_buffer`, whose device copy, where it keeps one, the harness places in
+    /// a `Private` block (`rt`).
     Managed,
 }
 

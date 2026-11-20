@@ -1,4 +1,4 @@
-//! The new runtime's buffers through the harness, on the device the cfg names
+//! The runtime's buffers through the harness, on the device the cfg names
 //! (docs/VALIDATION.md): a range given back is the next one taken, buffers alive at once lie
 //! apart, and a buffer longer than a pooled block takes a block of its own.
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
