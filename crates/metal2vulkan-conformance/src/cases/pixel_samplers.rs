@@ -4,14 +4,14 @@
 //! 800 coordinates in and past it (`grid`: per integer from -1 to 6 the texel edge and one ulp
 //! either side, `i + 1/512`, the quarter, the centre and one ulp either side, three quarters and
 //! `255/256`, across ten rows from -0.5 to 3.25). Each case is one format, one filter and one
-//! address mode, and holds a site per **source** — the four ways the lane sweeps:
+//! address mode, and holds a site per **source**, four of them:
 //!
 //! - `slot`: the texture at texture slot 0, through a runtime sampler state of pixel coordinates
 //!   at sampler slot 0 (the owned fixture `xr_samples`' `xr_sample_runtime`);
 //! - `arg`: the texture and that same pixel state inside an argument buffer (the owned fixture
 //!   `px_samplers`' `px_sample_argument`);
 //! - `norm`: the same argument buffer holding a **normalized** state of the same filter and mode,
-//!   sampled at the coordinate divided by the size — the control the lane compares against;
+//!   sampled at the coordinate divided by the size — the control the others compare against;
 //! - `const`: the texture at slot 0 through the fixture's constexpr `coord::pixel` sampler of that
 //!   filter and mode, where MSL can state it (not mirror clamp to edge, which it cannot).
 //!
@@ -20,8 +20,8 @@
 //! names the coordinate and the lane rather than saying a hash moved.
 //!
 //! The digest stays beside each value as a projection of it, which is what lets the module's own
-//! `the_recorded_digests_are_the_lanes_m4_answers` hold the recorded M3 answers against the lane's
-//! M4 constants: same question, two chips.
+//! `the_recorded_digests_are_the_m4_answers` hold the recorded M3 answers against the digests an
+//! Apple M4 answered: same question, two chips.
 //!
 //! **What may differ, and what justifies it.** A `const` site hands the device's unnormalized
 //! sampler the coordinate itself, and a nearest `slot` or `arg` site hands the device's normalized
@@ -73,7 +73,7 @@ const PIXEL_FIXTURE: &str = "px_samplers";
 /// Its argument-buffer kernel.
 const ARGUMENT_ENTRY: &str = "px_sample_argument";
 
-/// The texture's size: neither side a power of two, as the lane's is.
+/// The texture's size: neither side a power of two.
 const WIDTH: u32 = 5;
 const HEIGHT: u32 = 3;
 
@@ -233,7 +233,7 @@ fn layout_of(samples: usize) -> ByteLayout {
     }
 }
 
-/// An address mode the cases sweep: the lane's name for it, the mode, and the constexpr kernel of
+/// An address mode the cases sweep: its name, the mode, and the constexpr kernel of
 /// that mode, where MSL can state one.
 ///
 /// A constexpr sampler states clamp to zero and clamp to the border as one addressing mode under
@@ -244,7 +244,7 @@ struct Address {
     constexpr_entries: Option<[&'static str; 2]>,
 }
 
-/// The four address modes, in the lane's order.
+/// The four address modes, in order.
 const ADDRESSES: [Address; 4] = [
     Address {
         mode: SamplerAddressMode::ClampToEdge,
@@ -310,7 +310,7 @@ pub struct PixelSamplers {
     subnormal: bool,
 }
 
-/// Every pairing of format, filter and address mode, as the lane sweeps them.
+/// Every pairing of format, filter and address mode.
 pub fn all() -> Vec<PixelSamplers> {
     let mut cases = Vec::new();
     let mut names = NAMES.iter();
@@ -1010,8 +1010,8 @@ mod tests {
         ),
     ];
 
-    /// The SHA-256 of the lane's coordinates, `x` then `y` little-endian: the constant
-    /// `pixel_samplers::GRID_SHA` pins, so the case asks Metal the lane's question.
+    /// The SHA-256 of the coordinates, `x` then `y` little-endian, so the case asks Metal the
+    /// question the M4's digests answer.
     const GRID_SHA: &str = "10064f01ccb480a13ee9b0853ba41bbc5e2dfa3d490ffaef9cbcc987f75249b9";
 
     #[test]
@@ -1068,7 +1068,7 @@ mod tests {
         format!("case/output/{source}")
     }
 
-    /// The lane's name for a format and for a filter, as the case names spell them.
+    /// The name of a format and of a filter, as the case names spell them.
     fn format_name(format: PixelFormat) -> &'static str {
         match format {
             PixelFormat::RGBA8Unorm => "rgba8",
@@ -1083,7 +1083,7 @@ mod tests {
         }
     }
 
-    /// The lane's name for an address mode.
+    /// The name of an address mode.
     fn address_name(mode: SamplerAddressMode) -> &'static str {
         match mode {
             SamplerAddressMode::ClampToEdge => "edge",
@@ -1150,8 +1150,8 @@ mod tests {
             }
         }
         assert_eq!(with_constexpr, 12);
-        // Sixty configurations in all, which is the lane's sweep: four sources where a constexpr
-        // sampler exists, three where it does not.
+        // Sixty configurations in all: four sources where a constexpr sampler exists, three where
+        // it does not.
         let configurations: usize = cases
             .iter()
             .map(|case| 3 + usize::from(case.constexpr_entry().is_some()))
@@ -1184,12 +1184,12 @@ mod tests {
         }
     }
 
-    /// The recorded M3 answers are the lane's M4 ones, digest for digest: the same sixty
+    /// The recorded M3 answers are an Apple M4's, digest for digest: the same sixty
     /// configurations, the same 800 coordinates, two chips. A difference here is a finding — the
-    /// chips disagree, or the fixture no longer asks the lane's question — and the comparison that
+    /// chips disagree, or the fixture no longer asks the M4's question — and the comparison that
     /// matters is the suite's own, against the recording, not against this table.
     #[test]
-    fn the_recorded_digests_are_the_lanes_m4_answers() {
+    fn the_recorded_digests_are_the_m4_answers() {
         let mut checked = 0;
         for case in all() {
             let recording = crate::recording::read(case.name())
@@ -1217,7 +1217,7 @@ mod tests {
                 assert_eq!(
                     digest.hex,
                     m4,
-                    "{} {source}: this M3 Max and the lane's M4 disagree",
+                    "{} {source}: this M3 Max and the M4 disagree",
                     case.name()
                 );
                 checked += 1;

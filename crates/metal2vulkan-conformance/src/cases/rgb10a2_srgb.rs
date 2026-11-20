@@ -19,39 +19,22 @@
 //!   probe `r.m`'s twenty render specials, which are not the compute write's sixteen) into a new
 //!   4096 by 5 private target, whose 20,480 words are read back whole through a blit.
 //!
-//! **What the port changes, and the defect it found.** The lane states Metal's answer for each of
-//! these as the SHA-256's **first sixteen hexadecimal digits of a printed string** — `read <c> <r>
-//! <g> <b> <a>` a line, and so on. Two things are wrong with that as a conformance claim, and the
-//! second is a real hole:
-//!
-//! - A 64-bit projection of a formatted string is weaker than the bytes. These cases record the
-//!   words and the results themselves, so the comparison names the code or the sample.
-//! - **The writes question compared 4,079 fewer words than the kernel wrote.** The lane dispatches
-//!   a 4096 by 5 grid, so the kernel writes all 20,480 texels, and the lane formatted only
-//!   `got.iter().take(n)` of them, `n` being 16,401 — the 16,385 ramp values plus the sixteen
-//!   specials. The remaining 4,079 texels are written from the input buffer's zero padding and
-//!   appeared in no digest, inside a passing test. This case records all 20,480 words, so what the
-//!   padding stores is Metal's measured answer rather than a gap; the lane now digests the whole
-//!   grid too, against the digest of these recorded words. (It is the same shape batch 1a found in
-//!   `surface_fills`, whose formatter truncated each run at 24 bytes.)
-//!
-//! **The second hole, and what it cost to close.** The stores question had the same shape as the
-//! writes one and was worse off: the lane digested `got.iter().take(16405)` of the 20,480 words the
-//! draw stores, so **4,075 words of each of the two stores were in no comparison**, and unlike the
-//! writes nobody had ever recorded Metal's words there — the writes recording covers the compute
-//! write, not the render store. Closing it needed the thing this module's docs used to say was
-//! missing, a non-mesh render pass in the case vocabulary ([`crate::case::FragmentFill`]): a
-//! classic vertex-and-fragment pipeline, a private render target, one `drawPrimitives:` of three
-//! vertices, and the target read back through a blit. Both store cases record all 20,480 words, so
-//! the tail is Metal's measured answer and the lane's digest now covers the whole target.
+//! **The words themselves, every one.** These cases record the words and the results, not a
+//! digest of a printed string, so the comparison names the code or the sample. The write case's
+//! 4096 by 5 grid holds 20,480 texels, of which the sweep is 16,401 (the 16,385 ramp values plus
+//! the sixteen specials); the remaining 4,079 are written from the input buffer's zero padding,
+//! and all 20,480 words are recorded, so what the padding stores is Metal's measured answer. The
+//! store cases' target is the same 20,480 texels over a sweep of 16,405, and both record all
+//! 20,480 words, through a classic vertex-and-fragment pipeline ([`crate::case::FragmentFill`]): a
+//! private render target, one `drawPrimitives:` of three vertices, and the target read back
+//! through a blit.
 //!
 //! The target is **private** and read back by a blit, as the probe measured it, not shared and read
 //! by `getBytes`: storage mode is part of what a padded format's answer means, and a case that
 //! quietly moved it would be measuring something else.
 //!
-//! Left to the lane, and why: the clears and the loads, whose answers the lane already digests
-//! whole, and the `isRGB10A2GammaSupported` check, which is a device property rather than an
-//! observation.
+//! Not cases: the clears and the loads, and the `isRGB10A2GammaSupported` check, which is a device
+//! property rather than an observation.
 //!
 //! Every word and every sample compares exactly: the cases' allowances are notice declarations
 //! alone, each loosening the notices site and nothing else. A venue that announces another notice
@@ -863,8 +846,8 @@ mod tests {
         assert_eq!(padding.len(), 4);
     }
 
-    /// The write case's grid is larger than its sweep, which is the defect the port closed: the
-    /// kernel writes 20,480 texels and the lane's formatter looked at 16,401 of them.
+    /// The write case's grid is larger than its sweep: the kernel writes 20,480 texels, 16,401 of
+    /// them the sweep's, and the site records every one.
     #[test]
     fn the_write_grid_covers_more_texels_than_the_sweep() {
         let texels = (WRITE_WIDTH * WRITE_HEIGHT) as usize;
@@ -874,7 +857,7 @@ mod tests {
         assert_eq!(texels - WRITE_VALUES, 4_079);
         // The input buffer covers the whole grid, so every one of those texels is written.
         assert_eq!(write_values().len(), texels * 16);
-        // The site's layout covers all of them, as the lane's digest now does.
+        // The site's layout covers all of them.
         assert_eq!(
             texture_layout(WRITE_WIDTH, WRITE_HEIGHT).extent(),
             texels * WORD_BYTES as usize
@@ -925,8 +908,8 @@ mod tests {
         assert_eq!(names.len(), 8);
     }
 
-    /// The store cases' target is larger than their sweep, which is the second hole the port
-    /// closes: the draw stores 20,480 texels and the lane's formatter looked at 16,405 of them.
+    /// The store cases' target is larger than their sweep: the draw stores 20,480 texels, 16,405 of
+    /// them the sweep's, and the site records every one.
     #[test]
     fn the_store_target_covers_more_texels_than_the_sweep() {
         let texels = (STORE_WIDTH * STORE_HEIGHT) as usize;
@@ -937,7 +920,7 @@ mod tests {
         // The values buffer covers every texel of the target, so every one of them is drawn.
         assert_eq!(store_values(Lanes::Float).len(), texels * 16);
         assert_eq!(store_values(Lanes::Half).len(), texels * 8);
-        // The site's layout covers all of them, where the lane's digest covered 16,405.
+        // The site's layout covers all of them, not the sweep's 16,405 alone.
         assert_eq!(
             texture_layout(STORE_WIDTH, STORE_HEIGHT).extent(),
             texels * WORD_BYTES as usize
