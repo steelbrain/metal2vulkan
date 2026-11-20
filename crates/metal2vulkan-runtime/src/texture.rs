@@ -1503,7 +1503,11 @@ impl Device {
             shadow: false,
             aspects: plan.aspects,
             format: plan.format,
-            usage: plan.usage,
+            // A linear image in place takes no attachment usage for a resolve alone.
+            usage: match laid_over {
+                true => plan.usage,
+                false => plan.image_usage(),
+            },
             view_formats: plan.view_formats.clone(),
             cube: plan.cube,
             linear_attachment: false,
@@ -1627,9 +1631,26 @@ struct Plan {
     /// multisample, which `VUID-VkImageCreateInfo-samples-02257` bars. A cube's own image is
     /// cube-compatible through its shape's flags.
     cube: bool,
+    /// The optimal image takes the colour attachment usage beside `usage`, so that a pass
+    /// resolves into it as Metal resolves into a texture of any usage
+    /// ([`RenderPassKind::ResolveUsage`]): a one-sample colour texture, 2D, a 2D array or a cube,
+    /// made without `RenderTarget` usage, where the format's features hold the attachment and the
+    /// device's image format query makes the image with it at the texture's extent ([`plan`]).
+    /// A linear image in place over a buffer, of `linear_usage`, takes no attachment usage for a
+    /// resolve alone, so it stays in place.
+    resolves: bool,
 }
 
 impl Plan {
+    /// The usage of the plan's optimal image: its uses', and the colour attachment usage where
+    /// it resolves (`resolves`).
+    fn image_usage(&self) -> vk::ImageUsageFlags {
+        match self.resolves {
+            true => self.usage | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            false => self.usage,
+        }
+    }
+
     /// The usage of a linear image of the plan, over a buffer in place: without the feedback
     /// usage, as no pass moves it to the feedback layout, and without the sampled usage where
     /// shaders do not read the texture, as a colour render target takes it for attachment reads
@@ -1681,6 +1702,7 @@ impl Plan {
             sampled: None,
             storage: false,
             attachment_reads: false,
+            resolves: false,
             view_formats: self.view_formats.clone(),
             ..*self
         }
@@ -2206,17 +2228,49 @@ fn plan(
     if looped {
         image_usage |= vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
     }
+    // A one-sample colour texture that Metal does not render into takes the attachment usage
+    // too, where its format's features hold it, so that a pass resolves into it
+    // (`Plan::resolves`). It is no render target: it reads no attachment of its own pass.
+    let mut resolves = plan.samples == vk::SampleCountFlags::TYPE_1
+        && plan.aspects == vk::ImageAspectFlags::COLOR
+        && !image_usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        && plan
+            .supported
+            .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        && matches!(
+            d.texture_type,
+            TextureType::Type2D | TextureType::Type2DArray | TextureType::Cube
+        );
+    let resolve_usage = match resolves {
+        true => vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        false => vk::ImageUsageFlags::empty(),
+    };
     let mut list = plan.format_list();
     let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
         .format(plan.format)
         .ty(shape.image_type)
         .tiling(vk::ImageTiling::OPTIMAL)
-        .usage(image_usage)
+        .usage(image_usage | resolve_usage)
         .flags(plan.flags(shape) | cube_flag(cube));
     if !plan.view_formats.is_empty() {
         info = info.push_next(&mut list);
     }
     let mut properties = core.image_format_properties(&info);
+    // Where the query does not make the image with the attachment usage at the texture's
+    // samples, extent and layers, it is made without it, and a pass does not resolve into it.
+    let fits = |properties: &Option<vk::ImageFormatProperties>| {
+        properties.is_some_and(|p| {
+            let max = [p.max_extent.width, p.max_extent.height, p.max_extent.depth];
+            p.sample_counts.contains(plan.samples)
+                && shape.extent.iter().zip(max).all(|(&e, m)| e <= m)
+                && shape.layers <= p.max_array_layers
+        })
+    };
+    if resolves && !fits(&properties) {
+        resolves = false;
+        info = info.usage(image_usage);
+        properties = core.image_format_properties(&info);
+    }
     // A square 2D array whose format the device does not make cube-compatible is made without
     // the flag, and a cube view of it is `TextureViewKind::CubeOfArray`.
     if properties.is_none() && cube {
@@ -2269,6 +2323,7 @@ fn plan(
     plan.usage = image_usage;
     plan.attachment_reads = attachment_reads;
     plan.cube = cube;
+    plan.resolves = resolves;
     if !plan.read && !attachment_reads {
         plan.sampled = None;
     }
@@ -2465,6 +2520,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         supported,
         view_formats: Vec::new(),
         cube: false,
+        resolves: false,
     })
 }
 
@@ -2703,7 +2759,7 @@ fn image_info<'a, 'b: 'a>(
         .array_layers(shape.layers)
         .samples(plan.samples)
         .tiling(vk::ImageTiling::OPTIMAL)
-        .usage(plan.usage)
+        .usage(plan.image_usage())
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .initial_layout(vk::ImageLayout::UNDEFINED);
     match plan.view_formats.is_empty() {
@@ -4319,6 +4375,40 @@ pub(crate) trait TextureObject {
                 pixel_format: d.pixel_format,
             }));
         }
+        self.attachment_view(level, slice)
+    }
+
+    /// `level` and `slice` of the texture as a pass's resolve attachment, as [`attachment`]
+    /// views them, of any usage, as Metal resolves into a texture of any usage: where its image
+    /// has an attachment usage, which `RenderTarget` usage gives it and a one-sample colour
+    /// texture takes where its format renders (`Plan::resolves`).
+    ///
+    /// Err: [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`] for a texture whose image has
+    /// none: a depth or stencil texture made without `RenderTarget` usage, a colour texture of a
+    /// type but 2D, a 2D array or a cube or whose format the device's optimal image does not
+    /// render, and a texture over a buffer whose linear image lies in place; as [`attachment`]
+    /// for the rest.
+    ///
+    /// [`attachment`]: TextureObject::attachment
+    fn resolve_attachment(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
+        let renders =
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+        if !self.object().image.usage.intersects(renders) {
+            return Err(Error::Unsupported(Gap::RenderPass {
+                kind: RenderPassKind::ResolveUsage,
+            }));
+        }
+        self.attachment_view(level, slice)
+    }
+
+    /// `level` and `slice` of the texture as a render pass attachment, as [`attachment`] views
+    /// them, whatever its usage: the caller checked that its image has the attachment usage.
+    ///
+    /// Err: as [`attachment`] but [`Refusal::AttachmentUsage`].
+    ///
+    /// [`attachment`]: TextureObject::attachment
+    fn attachment_view(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
+        let d = &self.object().descriptor;
         let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
         match d.texture_type {
             TextureType::Type2D
@@ -4366,7 +4456,7 @@ pub(crate) trait TextureObject {
                 };
                 // SAFETY: the image is bound, of the texture's format, holds the level and layer
                 // (the texture's own, which lie in its image), and has the attachment usage its
-                // render target usage gave it.
+                // render target usage or its resolves gave it (the caller's check).
                 let view = unsafe {
                     image_view(
                         &core.device,

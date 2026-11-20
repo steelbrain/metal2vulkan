@@ -48,7 +48,7 @@ use crate::error::{Error, Gap, LinearPlanePassKind, Refusal, RenderPassKind};
 use crate::texture::{Attachment, Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
-use metal2vulkan::metal::{PixelFormat, TextureUsage};
+use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{PrecisionNote, SampledType};
 use std::sync::Arc;
 
@@ -204,8 +204,10 @@ pub struct RenderPassColorAttachmentDescriptor {
     /// default, and read only where the store action resolves, as Metal reads it. It takes the
     /// attachment's pixel format and one sample, and its level the attachment level's width and
     /// height; another is [`Gap::RenderPass`] of [`RenderPassKind::Resolve`]. Metal resolves into
-    /// a texture of any usage; one made without `RenderTarget` usage is [`Gap::RenderPass`] of
-    /// [`RenderPassKind::ResolveUsage`].
+    /// a texture of any usage, and so does the runtime into a colour texture whose format the
+    /// device's optimal image renders; into one made without `RenderTarget` usage whose image has
+    /// no attachment usage, such as a texture over a buffer in place, it is [`Gap::RenderPass`]
+    /// of [`RenderPassKind::ResolveUsage`].
     pub resolve_texture: Option<Texture>,
     /// `resolveLevel`: the resolve texture's mipmap level resolved into.
     pub resolve_level: u32,
@@ -994,10 +996,10 @@ struct ResolveInto<'a> {
 /// Err: [`Refusal::OtherDevice`] for another device's resolve texture; [`Gap::RenderPass`] of
 /// [`RenderPassKind::Resolve`] for an attachment of one sample, and for a resolve texture of
 /// another pixel format, of more than one sample, or whose level is not the attachment level's
-/// width and height; [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`] for a resolve
-/// texture made without `RenderTarget` usage; [`Gap::RenderPass`] of
-/// [`RenderPassKind::TextureType`] for a depth plane but 0; what the resolve texture's
-/// attachment view returns.
+/// width and height; [`Gap::RenderPass`] of [`RenderPassKind::TextureType`] for a depth plane
+/// but 0; what the resolve texture's resolve attachment returns, [`Gap::RenderPass`] of
+/// [`RenderPassKind::ResolveUsage`] for a resolve texture whose image has no attachment usage
+/// among it.
 fn resolve(
     core: &Arc<Core>,
     texture: &Texture,
@@ -1016,13 +1018,10 @@ fn resolve(
     {
         return gap(RenderPassKind::Resolve);
     }
-    if !d.usage.is_empty() && !d.usage.contains(TextureUsage::RENDER_TARGET) {
-        return gap(RenderPassKind::ResolveUsage);
-    }
+    let view = into.texture.resolve_attachment(into.level, into.slice)?;
     if into.depth_plane != 0 {
         return gap(RenderPassKind::TextureType);
     }
-    let view = into.texture.attachment(into.level, into.slice)?;
     if view.extent != attachment.extent || view.format != attachment.format {
         return gap(RenderPassKind::Resolve);
     }

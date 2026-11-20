@@ -8,14 +8,22 @@
 //!   static note `DeviceRoundedResolve` names), and every other level and slice of the resolve
 //!   texture reads zero; a pass that resolves no color attachment carries no note. A resolving
 //!   action with no resolve texture is refused, and so is an integer format's resolve; a resolve
-//!   into another format or out of one sample is a gap, and one into a texture of `ShaderRead`
-//!   or `ShaderRead | ShaderWrite` usage is the gap `ResolveUsage`; an `Unknown` store with a
-//!   resolve texture resolves, and its encoder may then set only an action that resolves
-//!   (`LateStore`). A 4-sample `Depth32Float` attachment resolves by `Sample0` on every device,
-//!   and by `Min` and `Max` where the device's depth resolve modes have them (else
-//!   `ResolveFilter`): a pixel half covered keeps sample 0's depth, the least or the greatest. A
-//!   stencil resolve by `DepthResolvedSample` is `ResolveFilter`. A pass that resolves nothing
-//!   walks no resolve as its encoder begins and ends; one that resolves walks its resolves.
+//!   into another format or out of one sample is a gap; an `Unknown` store with a resolve
+//!   texture resolves, and its encoder may then set only an action that resolves (`LateStore`). A
+//!   4-sample `Depth32Float` attachment resolves by `Sample0` on every device, and by `Min` and
+//!   `Max` where the device's depth resolve modes have them (else `ResolveFilter`): a pixel half
+//!   covered keeps sample 0's depth, the least or the greatest. A stencil resolve by
+//!   `DepthResolvedSample` is `ResolveFilter`. A pass that resolves nothing walks no resolve as
+//!   its encoder begins and ends; one that resolves walks its resolves.
+//! - Under a device cfg, on every device of the cfg's kind, as Metal resolves into a texture of
+//!   any usage (probe `resolve_texture_usage.m`): a 4-sample `BGRA8Unorm_sRGB` attachment
+//!   cleared to (0.25, 0.5, 0.75, 1) resolves into a one-sample Shared texture of `ShaderRead`
+//!   usage, and of `ShaderRead | ShaderWrite`, whose image took the attachment usage, and reads
+//!   the clear colour within one code; so does a 900 x 900 pass of every load `Load`, its colour
+//!   beside a 4-sample `Depth32Float_Stencil8`, of what an earlier pass cleared. A depth resolve
+//!   into a `Depth32Float` texture of `ShaderRead` usage is the gap `ResolveUsage`, and so is a
+//!   resolve into a `ShaderRead` texture over a Shared buffer whose linear image lies in place,
+//!   which stays in place, with no attachment usage.
 //! - Under a device cfg, on every device of the cfg's kind, whether it has
 //!   `shaderStorageImageMultisample` or not: a 4-sample `RGBA8Unorm` texture made for shader
 //!   reads, shader writes and rendering, as Metal makes one, has no storage usage in its image and
@@ -69,10 +77,10 @@ mod on_device {
     };
     use crate::texture::TextureObject;
     use crate::{
-        CullMode, DepthStencilDescriptor, Device, Error, Gap, MultisampleDepthResolveFilter,
-        MultisampleStencilResolveFilter, PixelFormat, PrecisionNote, PrimitiveType, Refusal,
-        Region, RenderPassKind, StorageMode, StoreAction, Texture, TextureDescriptor, TextureType,
-        TextureUsage,
+        ClearColor, CullMode, DepthStencilDescriptor, Device, Error, Gap, IndexClass, LoadAction,
+        MemoryClass, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, PixelFormat,
+        PrecisionNote, PrimitiveType, Refusal, Region, RenderPassKind, StorageMode, StoreAction,
+        Texture, TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
 
@@ -80,7 +88,17 @@ mod on_device {
 
     /// A `Type2DMultisample` texture of 4 samples, `SIDE` a side.
     fn four(name: &str, device: &Device, format: PixelFormat) -> Result<Texture, Error> {
-        let mut td = TextureDescriptor::new(TextureType::Type2DMultisample, format, SIDE, SIDE);
+        four_of(name, device, format, SIDE)
+    }
+
+    /// A `Type2DMultisample` render target of 4 samples, `side` a side.
+    fn four_of(
+        name: &str,
+        device: &Device,
+        format: PixelFormat,
+        side: u32,
+    ) -> Result<Texture, Error> {
+        let mut td = TextureDescriptor::new(TextureType::Type2DMultisample, format, side, side);
         td.sample_count = 4;
         td.usage = TextureUsage::RENDER_TARGET;
         td.storage_mode = StorageMode::Private;
@@ -326,30 +344,6 @@ mod on_device {
                 Some(gap(RenderPassKind::Resolve).to_string()),
                 "{name}: one sample"
             );
-            // Into a texture made without `RenderTarget` usage, which Metal resolves into.
-            for usage in [
-                TextureUsage::SHADER_READ,
-                TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
-            ] {
-                let mut td = TextureDescriptor::new(
-                    TextureType::Type2D,
-                    PixelFormat::RGBA8Unorm,
-                    SIDE,
-                    SIDE,
-                );
-                td.usage = usage;
-                td.storage_mode = StorageMode::Private;
-                let into = (device.new_texture_for_views(&td))
-                    .unwrap_or_else(|error| panic!("{name}: {usage:?}: {error}"));
-                let mut p = pass(&samples, None);
-                p.color_attachments[0].store_action = StoreAction::MultisampleResolve;
-                p.color_attachments[0].resolve_texture = Some(into);
-                assert_eq!(
-                    refused(&device, &p).map(|e| e.to_string()),
-                    Some(gap(RenderPassKind::ResolveUsage).to_string()),
-                    "{name}: a resolve into {usage:?}"
-                );
-            }
             // An integer format's resolve, where the device makes a 4-sample one.
             if let Ok(ints) = four(name, &device, PixelFormat::RGBA8Uint) {
                 let into = target(&device, PixelFormat::RGBA8Uint, TextureUsage::RENDER_TARGET);
@@ -536,6 +530,215 @@ mod on_device {
                     "{name}: DepthResolvedSample"
                 );
             }
+        });
+    }
+
+    /// The clear colour of probe `resolve_texture_usage.m`.
+    const CLEAR: ClearColor = ClearColor {
+        red: 0.25,
+        green: 0.5,
+        blue: 0.75,
+        alpha: 1.0,
+    };
+
+    /// sRGB's encoding of the linear channel `linear`, as a byte.
+    fn srgb(linear: f64) -> u8 {
+        let encoded = match linear <= 0.003_130_8 {
+            true => 12.92 * linear,
+            false => 1.055 * linear.powf(1.0 / 2.4) - 0.055,
+        };
+        (encoded * 255.0).round() as u8
+    }
+
+    /// `got`, `BGRA8Unorm_sRGB` texels, each within one code of [`CLEAR`]'s, the device's
+    /// rounding (`PrecisionNote::DeviceRoundedResolve`).
+    fn cleared(name: &str, got: &[u8]) {
+        let want = [srgb(CLEAR.blue), srgb(CLEAR.green), srgb(CLEAR.red), 255];
+        for (at, texel) in got.chunks(4).enumerate() {
+            assert!(
+                texel.iter().zip(want).all(|(&g, w)| g.abs_diff(w) <= 1),
+                "{name}: texel {at}: {texel:?}, not within a code of {want:?}"
+            );
+        }
+    }
+
+    /// A one-sample 2D texture of `format`, `usage` and `mode`, `side` a side.
+    fn one(
+        name: &str,
+        device: &Device,
+        format: PixelFormat,
+        usage: TextureUsage,
+        mode: StorageMode,
+        side: u32,
+    ) -> Texture {
+        let mut td = TextureDescriptor::new(TextureType::Type2D, format, side, side);
+        td.usage = usage;
+        td.storage_mode = mode;
+        (device.new_texture_for_views(&td)).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    /// Encodes each pass of `passes` in one command buffer, with no draw, and runs it.
+    fn passes(name: &str, device: &Device, passes: &[&crate::RenderPassDescriptor]) {
+        let queue = device.new_command_queue(1).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        for p in passes {
+            let encoder = (command_buffer.render_command_encoder(p))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+        }
+        run(name, &command_buffer);
+    }
+
+    /// Probe `resolve_texture_usage.m`'s case, which Metal resolves: a 4-sample
+    /// `BGRA8Unorm_sRGB` attachment cleared to (0.25, 0.5, 0.75, 1) resolves into a one-sample
+    /// Shared texture of `ShaderRead` usage, and of `ShaderRead | ShaderWrite`, whose image took
+    /// the attachment usage. And the resolves the runtime does not build into a texture of no
+    /// `RenderTarget` usage: a depth one, and one into a texture over a Shared buffer in place,
+    /// whose linear image takes no attachment usage.
+    #[test]
+    fn every_device_resolves_into_a_texture_of_shader_read_usage() {
+        each_device("resolve_usage", |name, _, device| {
+            let samples = four(name, &device, PixelFormat::BGRA8UnormSRGB)
+                .unwrap_or_else(|error| panic!("{name}: Vulkan requires 4 samples: {error}"));
+            for usage in [
+                TextureUsage::SHADER_READ,
+                TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+            ] {
+                let into = one(
+                    name,
+                    &device,
+                    PixelFormat::BGRA8UnormSRGB,
+                    usage,
+                    StorageMode::Shared,
+                    SIDE,
+                );
+                let image = into.object().image_usage();
+                assert!(
+                    image.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT),
+                    "{name}: {usage:?}: the image's usage {:#x}",
+                    image.as_raw()
+                );
+                let mut p = pass(&samples, None);
+                let c = &mut p.color_attachments[0];
+                c.clear_color = CLEAR;
+                c.store_action = StoreAction::MultisampleResolve;
+                c.resolve_texture = Some(into.clone());
+                let before = device.counters().metrics().resolves;
+                passes(name, &device, &[&p]);
+                let resolves = device.counters().metrics().resolves - before;
+                assert_eq!(resolves, 1, "{name}: {usage:?}: the pass's one resolve");
+                cleared(name, &read_at(&into, SIDE, 4, 0, 0));
+                println!("{name}: resolved into a texture of {usage:?}");
+            }
+
+            // A depth resolve into a texture of no `RenderTarget` usage.
+            let color = four(name, &device, PixelFormat::RGBA8Unorm)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let depth = four(name, &device, PixelFormat::Depth32Float)
+                .unwrap_or_else(|error| panic!("{name}: Vulkan requires 4 samples: {error}"));
+            let into = one(
+                name,
+                &device,
+                PixelFormat::Depth32Float,
+                TextureUsage::SHADER_READ,
+                StorageMode::Private,
+                SIDE,
+            );
+            let mut p = pass(&color, None);
+            let z = &mut p.depth_attachment;
+            z.texture = Some(depth.clone());
+            z.store_action = StoreAction::MultisampleResolve;
+            z.resolve_texture = Some(into);
+            assert_eq!(
+                refused(&device, &p).map(|e| e.to_string()),
+                Some(gap(RenderPassKind::ResolveUsage).to_string()),
+                "{name}: a depth resolve into a ShaderRead texture"
+            );
+
+            // A resolve into a texture over a Shared buffer.
+            let format = PixelFormat::RGBA8Unorm;
+            let align = (device.minimum_linear_texture_alignment(format))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let pitch = u64::from(SIDE * 4).next_multiple_of(align);
+            let len = u64::from(SIDE) * pitch;
+            let block = (device.take_block(MemoryClass::Shared, len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let buffer = (device.new_buffer(block.id, 0, len, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut td = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
+            td.usage = TextureUsage::SHADER_READ;
+            let index = Some(IndexClass::Texture.range().start);
+            let over = (buffer.new_texture(&td, index, 0, pitch))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            if over.copied_over().is_some() {
+                println!("{name}: the texture over the buffer is copied, not in place");
+            } else {
+                let image = over.object().image_usage();
+                assert!(
+                    !image.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT),
+                    "{name}: in place over the buffer, the image's usage {:#x}",
+                    image.as_raw()
+                );
+                let mut p = pass(&color, None);
+                p.color_attachments[0].store_action = StoreAction::MultisampleResolve;
+                p.color_attachments[0].resolve_texture = Some(over.clone());
+                assert_eq!(
+                    refused(&device, &p).map(|e| e.to_string()),
+                    Some(gap(RenderPassKind::ResolveUsage).to_string()),
+                    "{name}: a resolve into a ShaderRead texture in place over a buffer"
+                );
+                println!("{name}: in place over a buffer, a resolve into it is ResolveUsage");
+            }
+            drop((samples, color, depth, over, buffer, block));
+        });
+    }
+
+    /// The pass of a guest's walk, which Metal resolves: 900 x 900, a 4-sample
+    /// `BGRA8Unorm_sRGB` colour beside a 4-sample `Depth32Float_Stencil8` depth and stencil,
+    /// every load `Load`, the colour resolved into a one-sample `BGRA8Unorm_sRGB` Shared texture
+    /// of `ShaderRead` usage, which reads what an earlier pass cleared the colour to.
+    #[test]
+    fn every_device_resolves_a_loaded_pass_beside_depth_and_stencil_into_a_shader_read_texture() {
+        const WALK: u32 = 900;
+        each_device("resolve_usage_walk", |name, _, device| {
+            let color = four_of(name, &device, PixelFormat::BGRA8UnormSRGB, WALK)
+                .unwrap_or_else(|error| panic!("{name}: Vulkan requires 4 samples: {error}"));
+            let Ok(depth) = four_of(name, &device, PixelFormat::Depth32FloatStencil8, WALK) else {
+                println!("{name}: no 4-sample Depth32Float_Stencil8");
+                return;
+            };
+            let into = one(
+                name,
+                &device,
+                PixelFormat::BGRA8UnormSRGB,
+                TextureUsage::SHADER_READ,
+                StorageMode::Shared,
+                WALK,
+            );
+            let attached = |load: LoadAction| {
+                let mut p = pass(&color, None);
+                p.color_attachments[0].load_action = load;
+                p.depth_attachment.texture = Some(depth.clone());
+                p.depth_attachment.load_action = load;
+                p.depth_attachment.store_action = StoreAction::Store;
+                p.stencil_attachment.texture = Some(depth.clone());
+                p.stencil_attachment.load_action = load;
+                p.stencil_attachment.store_action = StoreAction::Store;
+                p
+            };
+            let mut first = attached(LoadAction::Clear);
+            first.color_attachments[0].clear_color = CLEAR;
+            first.color_attachments[0].store_action = StoreAction::Store;
+            let mut walk = attached(LoadAction::Load);
+            walk.color_attachments[0].store_action = StoreAction::MultisampleResolve;
+            walk.color_attachments[0].resolve_texture = Some(into.clone());
+            let before = device.counters().metrics().resolves;
+            passes(name, &device, &[&first, &walk]);
+            let resolves = device.counters().metrics().resolves - before;
+            assert_eq!(resolves, 1, "{name}: the walk's one resolve");
+            cleared(name, &read_at(&into, WALK, 4, 0, 0));
+            drop((color, depth, into));
+            println!("{name}: the 900 x 900 loaded pass resolved into a ShaderRead texture");
         });
     }
 }
