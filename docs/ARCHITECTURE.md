@@ -92,8 +92,8 @@ rest is `crates/metal2vulkan/src/`.
 
 The translator core (`lower`, `memory`, `spirv`, `spv`, `structurize`) and every submodule of a
 public module are crate-private; no feature or cfg exposes them. The runtime
-(`crates/metal2vulkan-runtime`), validation and devtools use the public API only. A test that
-needs an internal item is one of the crate's own tests (`src/tests/`).
+(`crates/metal2vulkan-rt`), conformance, validation and devtools use the public API only. A test
+that needs an internal item is one of the crate's own tests (`src/tests/`).
 
 ## Decisions come from structure and the device
 

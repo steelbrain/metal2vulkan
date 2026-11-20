@@ -227,7 +227,7 @@ jobs:
       - name: Doc tests
         run: cargo test --workspace --all-features --doc
 
-      # Device-executing validation tests, and the new runtime's floor check, on lavapipe.
+      # Device-executing validation tests, and the runtime's floor check, on lavapipe.
       # `DeviceType::Cpu` matches only a CPU physical device, and the runtime's device tests under
       # `m2v_cpu_icd` check only CPU devices, so this never reaches a GPU even on a runner that has
       # one. macOS CI runs no device tests.

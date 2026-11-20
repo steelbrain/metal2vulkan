@@ -32,13 +32,14 @@ they bind people too.
 │   │   ├── tests/                #   integration tests through the public API, golden tables
 │   │   └── examples/             #   api_preview.rs, which docs/API.md quotes
 │   ├── metal2vulkan-air/         # the AIR front end
-│   ├── metal2vulkan-runtime/     # the Metal API on Vulkan (README, examples)
+│   ├── metal2vulkan-rt/          # unpublished: the runtime, the Metal API on Vulkan (README)
 │   ├── metal2vulkan-validation/  # unpublished: cases, executors, corpus tools
 │   │   ├── fixtures/public/      #   our own synthetic fixtures (.ll, .air.ll, .metal, .spvasm)
 │   │   ├── profiles/             #   committed Khronos device profiles
 │   │   └── corpus/               #   authored cases and observations (local/ is private, ignored)
+│   ├── metal2vulkan-conformance/ # unpublished: the Metal conformance suite
 │   ├── metal2vulkan-devtools/    # unpublished: tool runner, fixture assemblers
-│   └── metal2vulkan-harness/     # unpublished: the runtimes' compute harness (crate docs)
+│   └── metal2vulkan-harness/     # unpublished: the runtime's compute harness (crate docs)
 ├── docs/                         # guides and generated references
 ├── scripts/                      # developer utilities and generators
 ├── Cargo.toml                    # the virtual workspace
@@ -53,8 +54,9 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
 scripts/api-docs   # the translator's API reference; fails on a link to a hidden item
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
+cargo nextest run -p metal2vulkan-conformance --all-features
 cargo test --workspace --all-features --doc
 ```
 
@@ -170,7 +172,7 @@ Edit the source, then regenerate:
 | `crates/metal2vulkan-validation/profiles/*.json` | `scripts/regen-device-profiles/` | gpuinfo reports and local captures |
 
 `crates/metal2vulkan/tests/api_signatures.tsv` is written the same way: the signature-level public
-surface of the three published crates and of `metal2vulkan-rt`, by
+surface of the two published crates and of `metal2vulkan-rt`, by
 `python3 scripts/api-signatures/signatures.py --bless` (`--check` to verify, `--selftest` for the
 derivation's own tests), from those crates' sources alone.
 `crates/metal2vulkan/tests/api_signatures.rs` says what it pins, what it cannot see, and what
@@ -178,7 +180,7 @@ blessing it asserts; a removed or changed line is a breaking change of a publish
 API `metal2vulkan-rt` is published with at the cutover.
 
 Four docs are checked by tests. `docs/REFUSALS.md` must be the surface the sources state, and
-every variant of the runtime's `Problem` must end its doc comment with a `Basis:` line that says
+every variant of the runtime's refusal enums must end its doc comment with a `Basis:` line that says
 where the belief that Metal refuses that input comes from and cites its evidence
 (`crates/metal2vulkan/tests/refusal_surface.rs`, which says what it cannot see; a basis that is
 not settled is `Basis: unknown (why)`, never nothing). `docs/FAST-PATHS.md` must name every
@@ -204,6 +206,7 @@ metal2vulkan is dual-licensed, `GPL-2.0-or-later OR LGPL-3.0-or-later`, at the r
 can be redistributed and modified under either.
 
 The license files sit at the root and, because cargo packages each crate from its own directory,
-as copies in every published crate (`crates/metal2vulkan`, `crates/metal2vulkan-air` and
-`crates/metal2vulkan-runtime`). Change them at the root and copy them over; a validation test (`published_crates`) holds every copy equal to the root's file
+as copies in every published crate (`crates/metal2vulkan` and `crates/metal2vulkan-air`). Change
+them at the root and copy them over; a validation test (`published_crates`) holds every copy equal
+to the root's file
 and the notice's SPDX line equal to the manifests' `license`.
