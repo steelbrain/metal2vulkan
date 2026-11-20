@@ -927,8 +927,11 @@ the Direct3D 11 texture's payload until it is freed.
   fd's query offers, and only where that type is host-visible and host-coherent (on NVIDIA's
   driver one failed import into a later type broke every later allocation of that type, Imported
   blocks), and the first type those devices offer is not. Their pages take the host-memory import
-  above. Each of these is a known gap, reopened only by a measured copied share above 5% of a
-  frame on that card.
+  above. On the Iris Xe the consumer's own no-copy pages stay the counted copy at each submission
+  for a second reason too: one dma-buf holds only what udmabuf's stock limit of 1,024 runs
+  allows (about 4 MiB of a guest buffer), and the runtime binds several dma-bufs behind one buffer
+  only where the device has a granule, which the Iris Xe has not (Imported blocks). Each of these
+  is a known gap, reopened only by a measured copied share above 5% of a frame on that card.
 - A texture over a buffer in an import over several dma-bufs (`Device::import_dma_bufs`) is the
   counted copy too: the block's buffer is sparse, bound to one import per dma-buf.
 - A texture over a buffer in an exported block is the counted copy of a texture over a buffer on
