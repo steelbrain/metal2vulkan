@@ -441,7 +441,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 ToolingRequirement::TextureBufferMember,
-                ToolingRequirement::MeshRenderPipeline
+                ToolingRequirement::MeshRenderPipeline,
+                ToolingRequirement::SeqCstFence
             ]
         );
     }
@@ -459,6 +460,19 @@ mod tests {
         assert!("texture_buffer_literal"
             .parse::<ToolingRequirement>()
             .is_err());
+    }
+
+    /// A sequentially consistent fence: the Metal oracle runs it, so its cases stay
+    /// Metal-qualified; the runtime refuses it, so the engine's candidate runs none, a tooling gap
+    /// that keeps the census open.
+    #[test]
+    fn a_seq_cst_fence_stops_only_the_candidate() {
+        let requirement = ToolingRequirement::SeqCstFence;
+        assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
+        assert_eq!(requirement.limit(), Limit::Tooling, "{requirement}");
+        assert!(requirement.blocks_closure(), "{requirement}");
+        assert!(requirement.qualifies_on_metal(), "{requirement}");
+        assert_eq!("seq_cst_fence".parse(), Ok(requirement));
     }
 
     /// Every requirement stops some executor, and an executor's name is as stable as a
