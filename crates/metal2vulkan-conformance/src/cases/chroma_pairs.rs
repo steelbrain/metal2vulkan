@@ -13,14 +13,13 @@
 //! Metal's `read()` of these formats is a defined operation, not a guess, and the model's rule
 //! stands on a real measurement.
 //!
-//! What that probe does not leave behind is a re-runnable artifact: it was thrown away, it covered
-//! 64 texels rather than the lane's own 256, and nothing mechanical ties the lane's expectation to
-//! it. These cases take Metal's answer over the lane's own pattern and commit it, so a new macOS
-//! is one `conformance record` from saying whether Apple changed it.
+//! That probe covered 64 texels and is not re-runnable. These cases take Metal's answer over 256
+//! texels of a fixed pattern and commit it, so a new macOS is one `conformance record` from saying
+//! whether Apple changed it.
 //!
 //! # The three families
 //!
-//! [`ChromaCopies`] is the lane's copy sweep as one declarative program ([`crate::work`]): a whole blit
+//! [`ChromaCopies`] is a copy sweep as one declarative program ([`crate::work`]): a whole blit
 //! in and out, the host's whole `replaceRegion:`/`getBytes:`, seven blits in of regions whose x
 //! and width fall off the 2-texel pairs at buffer offsets and pitches of 34 and 30 bytes, six
 //! blits out of such regions, four host copies in and four host reads out, three copies between
@@ -29,8 +28,8 @@
 //! that names the row and the texel, so a diff says which texel of which sub-case moved. Every
 //! byte compares exactly; the case's allowances are on the notices site alone.
 //!
-//! [`ChromaTexels`] is the lane's texel table, over a 16 x 16 texture of the format holding the
-//! lane's pattern, reached two ways through the owned fixture `fpv_swizzled_reads`:
+//! [`ChromaTexels`] is a texel table, over a 16 x 16 texture of the format holding the case's
+//! pattern, reached two ways through the owned fixture `fpv_swizzled_reads`:
 //! `read()` at the 256 integer texel positions, and `sample()` at the 256 texel centres through a
 //! nearest clamp-to-edge sampler. Both answer 256 `float4`s, recorded whole. The two are separate
 //! cases because Metal defines them differently: a chroma-pair format is **filterable**, so
@@ -42,11 +41,11 @@
 //! # Why nothing here can fault a GPU
 //!
 //! Every program is a handful of 16 x 16 textures, blits of regions inside them, and one compute
-//! dispatch of 256 threads, with at most one sampler state. The two descriptors the lane finds
-//! Metal's **validation** aborts plain too — a mipmapped 4:2:2 texture, and a view of one in another format — are left out by
-//! construction: the runtime spells that outcome `Error::Invalid`, "Metal's validation stops it,
-//! ending the process", and the suite's standing rule is that no case may end Metal's process. So
-//! is the render-target half of the lane, whose pipeline Metal's validation aborts plain too.
+//! dispatch of 256 threads, with at most one sampler state. Two descriptors whose call Metal's
+//! **validation** aborts plain too, a mipmapped 4:2:2 texture and a view of one in another format,
+//! are left out by construction, as the suite's standing rule is that no case may end Metal's
+//! process. So is a render target of these formats, whose pipeline Metal's validation aborts plain
+//! too.
 
 use crate::case::{
     made, Abort, Bindings, Case, Failure, Input, MetalSource, SamplerSpec, Side, TextureRole,
@@ -58,7 +57,7 @@ use crate::transcript::{ByteLayout, Digest, Element, Gaps, Node, Observed, Regio
 use crate::work::{Plane, Rect, Resource, Step, TextureSpec as WorkTexture, Work};
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, SamplerMinMagFilter};
 
-/// The textures' side, as the lane makes them.
+/// The textures' side.
 const SIDE: u64 = 16;
 
 /// Bytes a row of a [`SIDE`]-wide 4:2:2 texture takes: two a texel.
@@ -82,12 +81,12 @@ const GROUP: u32 = 64;
 /// The byte the read-back buffer holds before the dispatch.
 const BLANK: u8 = 0xab;
 
-/// `n` bytes from `base`, byte `i` of them `base + i` (wrapping): the lane's `seq`.
+/// `n` bytes from `base`, byte `i` of them `base + i` (wrapping).
 fn seq(n: u64, base: u8) -> Vec<u8> {
     (0..n).map(|i| base.wrapping_add(i as u8)).collect()
 }
 
-/// The 512 bytes the lane fills a whole texture with.
+/// The 512 bytes the case fills a whole texture with.
 fn pattern() -> Vec<u8> {
     seq(WHOLE, 0)
 }
@@ -145,8 +144,8 @@ pub fn all() -> Vec<Box<dyn Case>> {
 ///
 /// Both exist because Metal defines them differently. A chroma-pair texture is a **filterable**
 /// format: `sample` is the operation Metal's own feature tables grant it, and a nearest sample at
-/// a texel's centre is defined to be that texel. `read()` is what the runtime lane uses and what a
-/// decoder does, and whether Metal defines it for these formats is exactly the question a
+/// a texel's centre is defined to be that texel. `read()` is what a decoder does, and whether
+/// Metal defines it for these formats is exactly the question a
 /// recording answers rather than assumes — so the two are separate cases, and the sampling one is
 /// the control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,7 +208,7 @@ impl Access {
     }
 }
 
-/// One blit of a region of a buffer into a texture, as the lane sweeps them: the texel the region
+/// One blit of a region of a buffer into a texture, as the case sweeps them: the texel the region
 /// starts at, its texels and rows, the buffer offset the bytes come from, and the row pitch.
 const BLITS_IN: [(u64, u64, u64, u64, u64); 7] = [
     (1, 2, 1, 0, ROW),
@@ -271,7 +270,7 @@ impl ChromaCopies {
     /// The program the case runs, and the name of each read it asks for, in order.
     ///
     /// The two are built together because a read's meaning is its place in the program: naming
-    /// them apart is how a port drifts into comparing the wrong row.
+    /// them apart is how a case drifts into comparing the wrong row.
     fn program(&self) -> (Work, Vec<ReadSite>) {
         let mut work = Work::new();
         let mut reads = Vec::new();
@@ -305,7 +304,7 @@ impl ChromaCopies {
         reads.push(self.get_bytes(&mut work, "host-whole", shared, whole, ROW, WHOLE as usize));
 
         // Blits in of regions off the texel pairs, at buffer offsets and row pitches of their
-        // own. Each gets a texture of its own, as the lane makes one, so the bytes outside the
+        // own. Each gets a texture of its own, so the bytes outside the
         // region are the ones the fill left.
         for (x, texels, rows, offset, pitch) in BLITS_IN {
             let target = work.add(self.texture(true));
@@ -470,7 +469,7 @@ impl ChromaCopies {
             slice: 0,
             region,
             bytes_per_row: pitch,
-            // Metal's host calls take 0 for a 2D texture's image pitch, which is what the lane
+            // Metal's host calls take 0 for a 2D texture's image pitch, which is what the case
             // passes; a 2D region has one image, so there is nothing for it to say.
             bytes_per_image: 0,
             length,
@@ -510,7 +509,7 @@ fn replace(texture: usize, region: Rect, bytes: Vec<u8>, pitch: u64) -> Step {
         // An uncompressed format's rows are its texel rows.
         rows: region.size[1],
         bytes_per_row: pitch,
-        // 0, as Metal's host call takes for a 2D texture and as the lane passes.
+        // 0, as Metal's host call takes for a 2D texture.
         bytes_per_image: 0,
     }
 }
@@ -746,7 +745,7 @@ impl Case for ChromaTexels {
                     self.format,
                     [SIDE as u32, SIDE as u32],
                     ROW as u32,
-                    // Shader-read usage alone, as the lane's read test makes it: these formats are
+                    // Shader-read usage alone: these formats are
                     // sampled and read, and asking for write usage as well would be asking a
                     // different question of Metal.
                     TextureRole::Read,
@@ -819,7 +818,7 @@ mod tests {
         }
     }
 
-    /// The copy program asks for one read a sub-case of the lane's tables, and every read the
+    /// The copy program asks for one read a sub-case of the tables, and every read the
     /// program asks for has a site: a read with no name would compare against the wrong row.
     #[test]
     fn every_read_of_the_copy_program_has_a_site() {
@@ -831,7 +830,7 @@ mod tests {
             };
             let (work, reads) = case.program();
             assert_eq!(work.reads(), reads.len(), "{word}");
-            // The lane's rows: two whole copies, seven blits in, six out, four host puts, four
+            // The rows: two whole copies, seven blits in, six out, four host puts, four
             // host gets, three texture copies and four copies into another format.
             assert_eq!(reads.len(), 2 + 7 + 6 + 4 + 4 + 3 + 4);
             let names: BTreeSet<&str> = reads.iter().map(|read| read.name.as_str()).collect();

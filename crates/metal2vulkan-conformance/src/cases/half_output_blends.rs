@@ -27,20 +27,19 @@
 //! The `one-zero` site is also the **source** read back: a source factor of one and a destination
 //! factor of zero writes the `half4` the function returned through the attachment's own conversion
 //! and nothing else, so the case does not need a separate unblended draw to know what the device
-//! computed for the source — which is the property the lane's own extra draw was there for.
+//! computed for the source.
 //!
-//! **The lane's twenty-two blends, less its `off` row, are all here.** The one it has and this
-//! family does not is blending disabled, and the `one-zero` site stands for it for the reason
-//! above. The four whose factors read the **blend colour** (`BlendColor`, `OneMinusBlendColor`,
-//! `BlendAlpha`, `OneMinusBlendAlpha`) are `bc-1mbc`, `1mbc-zero`, `ba-1mba` and `bc-1msa`, and
-//! every pass sets the lane's own blend colour, `(0.3, 0.6, 0.9, 0.45)`, not one channel of which
-//! is exact in `half`.
+//! **Twenty-one blends.** Blending disabled is not one of them: the `one-zero` site stands for it
+//! for the reason above. The four whose factors read the **blend colour** (`BlendColor`,
+//! `OneMinusBlendColor`, `BlendAlpha`, `OneMinusBlendAlpha`) are `bc-1mbc`, `1mbc-zero`, `ba-1mba`
+//! and `bc-1msa`, and every pass sets the blend colour `(0.3, 0.6, 0.9, 0.45)`, not one channel of
+//! which is exact in `half`.
 //!
-//! # The finding those four rows were ported for, now measured
+//! # Whether Metal rounds the blend colour before its one minus
 //!
-//! They are the rows behind the lane's claim that Metal reads the blend colour's `half`
-//! **before** its one minus (`h(1 - h(c))`), a rule the lane fitted from one lane of one format
-//! and whose numbers went to a terminal. **On this chip and this OS it is the other way round.**
+//! Those four rows ask whether Metal reads the blend colour's `half` **before** its one minus
+//! (`h(1 - h(c))`) or takes the complement first (`h(1 - c)`). **On this chip and this OS it takes
+//! the complement first.**
 //!
 //! Measured over all 1,792 words of `1mbc-zero` in the three 16-bit float formats, on an Apple M3
 //! Max under macOS 27.0.1 (26A434): **252 words can tell the two rules apart, and every one of
@@ -53,14 +52,13 @@
 //!
 //! **All 252 of them are `RGBA16Float`'s blue channel**, whose blend colour is 0.9. At 0.3, 0.6 and
 //! 0.45 the two rules give the same factor at every source value of the sweep, so the one- and
-//! two-channel formats cannot reach the question — which is why the lane's fit rested on the blue
-//! lane, and why these rows need the four-channel format rather than asking one question six
-//! times. A float target cannot reach it either: at `f32` the complement of the colour is the same
-//! number both ways round, which is the structural reason the lane's finding never showed in
-//! `blend_sweeps`.
+//! two-channel formats cannot reach the question, and these rows need the four-channel format
+//! rather than asking one question six times. A float target cannot reach it either: at `f32` the
+//! complement of the colour is the same number both ways round, which is why `blend_sweeps` cannot
+//! show it.
 //!
-//! The lane's header dates its fit to macOS 26.7. The live M3 is the oracle, so the 27.0.1 answer
-//! recorded here is what this family states, and nothing in it asserts the older rule.
+//! The live M3 is the oracle, so the 27.0.1 answer recorded here is what this family states, and
+//! nothing in it asserts the other rule.
 //!
 //! **What Metal does, measured over every word.** Into each format Metal rounds the **source**
 //! product to the attachment's precision and carries the **destination** product into the sum
@@ -114,8 +112,8 @@ const PIXELS: usize = (WIDTH * HEIGHT) as usize;
 /// The source halves, as exact codes: `k / 16 - 2` for `k` in 0 to 63, which is every sixteenth
 /// between -2 and 2 and is exact in `half` at every one of them.
 ///
-/// It holds both of the lane's sweeps between them: its -0.25 to 1.25 and its -2 to 2, with 0, both
-/// unit values and the values past one that a `1 - x` factor turns negative.
+/// It holds two sweeps between them: -0.25 to 1.25 and -2 to 2, with 0, both unit values and the
+/// values past one that a `1 - x` factor turns negative.
 const SOURCES: usize = 64;
 
 /// How far apart two channels of one pixel are in the sweep, so each source value lands at every
@@ -200,7 +198,7 @@ impl Rng {
 /// the attachment holds exactly could not tell a factor that rounds the colour before its one minus
 /// from one that does not.
 ///
-/// Every pass sets it, not only the four rows whose factors read it, as the lane's every draw did.
+/// Every pass sets it, not only the four rows whose factors read it.
 /// Once a pass and never twice: Metal's own API validation layer stops a pass that sets the blend
 /// colour and then sets it again ([`super::blend_sweeps`] records that), and a second call here
 /// would cost all six cases their validated leg.
@@ -212,10 +210,10 @@ struct Sweep {
     blend: Blend,
 }
 
-/// The twenty-one blends of the lane's twenty-two that a pipeline of this family states.
+/// The twenty-one blends a pipeline of this family states.
 ///
-/// The one the lane has and this family does not is its `off` row, blending disabled, and
-/// [`Sweep::name`]'s `one-zero` is what stands for it: a source factor of one and a destination
+/// Blending disabled is not one of them, and [`Sweep::name`]'s `one-zero` is what stands for it: a
+/// source factor of one and a destination
 /// factor of zero stores the `half` the function returned through the attachment's own conversion
 /// and nothing else, which is what an unblended draw would say.
 fn blends() -> Vec<Sweep> {
@@ -253,8 +251,8 @@ fn blends() -> Vec<Sweep> {
             O::ReverseSubtract,
         ),
         under("one-one-sub", F::One, F::One, O::Subtract),
-        // The four whose factors read the blend colour. They are the rows that reach the lane's
-        // finding about `1 - c`: `1mbc-zero` isolates the factor (its destination term is zero, so
+        // The four whose factors read the blend colour. They are the rows that reach the question
+        // of `1 - c`: `1mbc-zero` isolates the factor (its destination term is zero, so
         // the stored code is one rounding of the factor times the source) and the other three put
         // the same colour through a sum, an alpha channel and a mixed pair.
         added("bc-1mbc", F::BlendColor, F::OneMinusBlendColor),
@@ -270,12 +268,12 @@ pub struct HalfOutputBlends {
     format: PixelFormat,
     /// The channels the format's texel holds, which is how many of the `half4` reach it.
     channels: u32,
-    /// Whether a channel is a 32-bit float, where the lane fitted a multiply-add in `float`
-    /// rather than a blend in `half`.
+    /// Whether a channel is a 32-bit float, where Metal blends as a multiply-add in `float` rather
+    /// than a blend in `half`.
     wide: bool,
 }
 
-/// Every format the lane blends into.
+/// Every format the family blends into.
 pub fn all() -> Vec<HalfOutputBlends> {
     let case = |name, format, channels, wide| HalfOutputBlends {
         name,
@@ -317,8 +315,8 @@ impl HalfOutputBlends {
     /// The destination value of channel `channel` of pixel `pixel`, as the format stores it: a
     /// value in `[0, 1]` off the generator, exact in the format's own channel.
     ///
-    /// The lane's destinations were random halves and random `float`s in `[0, 1]`; these are the
-    /// same shape from a generator the case states, so a host with no Metal builds the same bytes.
+    /// The destinations are random halves and random `float`s in `[0, 1]`, from a generator the
+    /// case states, so a host with no Metal builds the same bytes.
     fn destination_bytes(&self) -> Vec<u8> {
         let mut generator = Rng::new(u64::from(self.format.as_raw()));
         let mut bytes = Vec::with_capacity(self.level_bytes());
@@ -342,7 +340,7 @@ impl HalfOutputBlends {
     }
 
     /// The target each pass blends into: shared, so the destination codes go in through
-    /// `replaceRegion:`, and shader-read beside its render-target usage, as the lane's were.
+    /// `replaceRegion:`, and shader-read beside its render-target usage.
     fn target(&self) -> TargetSpec {
         TargetSpec::read(self.format, [WIDTH, HEIGHT]).shared()
     }
@@ -475,7 +473,7 @@ impl Case for HalfOutputBlends {
                 &format!("target/{}", sweep.name),
                 side.target(&self.target()),
             )?;
-            // The destination codes go in before the pass, as the lane's probe put them there: a
+            // The destination codes go in before the pass: a
             // blend's answer depends on them, and no clear or kernel write can set an arbitrary
             // code.
             call(
@@ -552,7 +550,7 @@ mod tests {
         }
     }
 
-    /// Every source value is exact in `half` and the sweep spans both of the lane's ranges, so the
+    /// Every source value is exact in `half` and the sweep spans both ranges, so the
     /// function's `half4` carries the case's own numbers and the blend's rounding is the only
     /// rounding in the answer.
     #[test]
@@ -604,7 +602,7 @@ mod tests {
     /// blend, or one name for two, would record two answers to one question.
     ///
     /// And each of `MTLBlendFactor`'s four blend-colour factors is in some row, so a row that lost
-    /// its factor fails here rather than leaving the lane's finding unreachable again.
+    /// its factor fails here rather than leaving the blend colour's question unreachable.
     #[test]
     fn the_blends_are_distinct_by_name_and_by_state() {
         let sweeps = blends();
@@ -678,7 +676,7 @@ mod tests {
         assert_eq!(formats.len(), all().len());
     }
 
-    /// The three blends whose answer the lane's rule pins with no rounding to argue about, held
+    /// The three blends whose answer a rule pins with no rounding to argue about, held
     /// against Metal's own recorded codes for every pixel and every channel of every format:
     ///
     /// - `one-zero` stores the source through the attachment's conversion and nothing else;
@@ -686,9 +684,8 @@ mod tests {
     ///   the source's and the destination's own values.
     ///
     /// The other fourteen blends involve a product and a sum whose rounding is the subject, so
-    /// their answer is Metal's recording and not a model. This is the part of the fit that can be
-    /// checked rather than believed, and it is the strongest thing the port can say without
-    /// restating the lane's whole model.
+    /// their answer is Metal's recording and not a model. This is the part of the rule that can be
+    /// checked rather than believed without a whole model of the blend's rounding.
     #[test]
     fn metals_recorded_codes_hold_the_three_blends_the_rule_pins() {
         for case in all() {
@@ -849,19 +846,16 @@ mod tests {
     /// `1 - c`. On this chip and this OS it does not**, held against Metal's own recorded codes at
     /// every word where the two candidate rules disagree.
     ///
-    /// This is what the four blend-colour rows were ported for. The lane fitted `h(1 - h(c))` from
-    /// one lane of one format and printed the numbers to a terminal, and this is the first
-    /// committed measurement of it: over all 1,792 words of `1mbc-zero` in the three 16-bit float
-    /// formats, on an Apple M3 Max under macOS 27.0.1 (26A434), **252 words can tell the two rules
-    /// apart and every one of them stores the complement-first value** -- `h(1 - c)`, the
-    /// complement taken in the `float` the colour arrived as and rounded once. None stores
-    /// `h(1 - h(c))`, and no word fits neither rule.
+    /// This is the question the four blend-colour rows ask. Over all 1,792 words of `1mbc-zero` in
+    /// the three 16-bit float formats, on an Apple M3 Max under macOS 27.0.1 (26A434), **252 words
+    /// can tell the two rules apart and every one of them stores the complement-first value** --
+    /// `h(1 - c)`, the complement taken in the `float` the colour arrived as and rounded once. None
+    /// stores `h(1 - h(c))`, and no word fits neither rule.
     ///
-    /// So the lane's rule is not this OS's. The lane's own header dates its fit to macOS 26.7, and
-    /// the live M3 is the oracle, so what stands is the 27.0.1 answer recorded here; nothing in
-    /// this family asserts the older one.
+    /// The live M3 is the oracle, so what stands is the 27.0.1 answer recorded here; nothing in
+    /// this family asserts the other rule.
     ///
-    /// **`1mbc-zero` is the site that can answer it and the reason it was ported.** Its
+    /// **`1mbc-zero` is the site that can answer it.** Its
     /// destination factor is `Zero`, so the destination term is exactly zero whatever the sum's
     /// rounding does, and the stored code is one rounding of the factor times the source: the
     /// factor is the only thing in the answer. Every other blend-colour row puts the colour
@@ -869,9 +863,8 @@ mod tests {
     ///
     /// **All 252 separating words are `RGBA16Float`'s blue channel**, whose blend colour is 0.9.
     /// At 0.3, 0.6 and 0.45 the two rules give the same factor at every source value of the sweep,
-    /// so the one-channel and two-channel formats cannot answer the question at all. That is why
-    /// the lane's fit rested on the blue lane, and it is why the ported rows need the
-    /// four-channel format rather than being the same question six times.
+    /// so the one-channel and two-channel formats cannot answer the question at all, and the rows
+    /// need the four-channel format rather than being the same question six times.
     ///
     #[test]
     fn metals_recorded_codes_round_the_blend_colour_before_its_one_minus() {
@@ -914,8 +907,7 @@ mod tests {
                 for channel in 0..case.channels {
                     let colour = exact(BLEND_COLOR[channel as usize]);
                     let value = exact(source((pixel + STRIDE * channel as usize) % SOURCES));
-                    // The colour rounded to the attachment first, then its complement rounded:
-                    // the lane's fitted rule.
+                    // The colour rounded to the attachment first, then its complement rounded.
                     let before = round(one - round(colour));
                     // The complement taken in the `float` the colour arrived as, rounded once.
                     let after = round(one - colour);
@@ -964,8 +956,7 @@ mod tests {
         );
         // And all of them are one channel of one format: `RGBA16Float`'s blue, whose blend colour
         // is 0.9. The other three channels never separate the rules at this source sweep, which is
-        // why the lane's own fit rested on that one lane and why this family needs the four-channel
-        // format to ask the question at all.
+        // why this family needs the four-channel format to ask the question at all.
         assert_eq!(
             breakdown,
             std::collections::BTreeMap::from([(("half-output-blends-rgba16f", 2), 252)]),

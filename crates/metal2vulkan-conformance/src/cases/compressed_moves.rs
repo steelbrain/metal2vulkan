@@ -18,30 +18,24 @@
 //! - `t2t`: the first texture copied whole into a third, then a block-aligned region of the second
 //!   copied over part of it, then the third blitted out tight.
 //!
-//! **What the port changes, and why it is the point.** The lane compares our bytes with a byte
-//! model written in Rust ([`Model`]), and ties that model to Metal by a **single SHA-256 of a line
-//! transcript** — 350 lines of `"<format> <shape> <step>: <n> bytes, sha <six bytes>"`, measured by
-//! our own probe on an Apple **M4**. So the lane could say that our bytes and the model disagree,
-//! never which of the two had moved, and its one Metal fact was a six-byte digest per step from a
-//! machine we no longer have. Here record mode runs the same steps on **this M3 Max** and each
-//! recording holds Metal's own bytes, padding included, per level and per slice. The model stays as
-//! a cross-check (the test `every_recorded_move_is_the_lanes_byte_model`), which is the one direction in
-//! which a difference says something: either Apple's copies moved between the chips or the releases,
-//! or the model was never Metal's.
+//! **Metal's own bytes.** Record mode runs the steps on an Apple **M3 Max** and each recording
+//! holds Metal's bytes, padding included, per level and per slice. A byte model written in Rust
+//! ([`Model`]) stays as a cross-check (the test `every_recorded_move_is_the_byte_model`); its other
+//! tie to Metal is a **single SHA-256 of a line transcript**, 350 lines of
+//! `"<format> <shape> <step>: <n> bytes, sha <six bytes>"` an Apple **M4** printed. A difference
+//! says one of two things: Apple's copies moved between the chips or the releases, or the model was
+//! never Metal's.
 //!
 //! **One case per format**, so a venue that holds no texture of one answers its typed refusal there
 //! and the suite counts that format as [`LacksFeature`](crate::verdict::Verdict::LacksFeature). The
-//! lane walks fourteen formats in one test, where a device missing one would take the whole lane
-//! down. The port also covers BC6H and BC7, which no other case in the suite reaches.
+//! family covers BC6H and BC7, which no other case in the suite reaches.
 //!
 //! Every byte of every read-back is compared, the padding between the rows included
-//! ([`Gaps::Compared`]): the lane asserts the bytes past each row's blocks stay `0xcd`, and here
-//! that is the recorded value rather than an assertion beside it.
+//! ([`Gaps::Compared`]): the bytes past each row's blocks staying `0xcd` is a recorded value.
 //!
-//! **Not ported, and why.** The lane's second test adds a 2D texture of 1030 x 520 and all eleven
-//! levels, whose level 0 alone is over 500 KiB of blocks — past the recording's whole-value ceiling,
-//! so it wants the digest-plus-window form no case has exercised yet. Its other three shapes'
-//! worth is covered by [`crate::cases::compressed_views`]. Stated here rather than left implicit.
+//! **Not a case, and why.** A 2D texture of 1030 x 520 and all eleven levels: its level 0 alone is
+//! over 500 KiB of blocks, past the recording's whole-value ceiling, so it wants the
+//! digest-plus-window form no case has exercised yet.
 //!
 //! Nothing here can fault a GPU: host copies and blit copies between textures the program makes, no
 //! dispatch, no draw, no loop, and every region block-aligned and inside its level.
@@ -69,8 +63,8 @@ struct Format {
     block: u64,
 }
 
-/// Every BC format, in the lane's order, because a shape's seed is its place in that order and the
-/// bytes must stay the bytes the lane measured.
+/// Every BC format, in a fixed order, because a shape's seed is its place in that order and the
+/// bytes must stay the bytes the recordings hold.
 const FORMATS: [Format; 14] = [
     Format {
         name: "compressed-moves-bc1-rgba",
@@ -145,8 +139,8 @@ const FORMATS: [Format; 14] = [
 ];
 
 /// A texture's shape: its kind, its size in texels (the third axis a 3D texture's depth), its array
-/// length and its levels. The lane's five, unchanged, because a shape's bytes come from a seeded
-/// stream keyed to its place.
+/// length and its levels. Five, fixed, because a shape's bytes come from a seeded stream keyed to
+/// its place.
 #[derive(Clone, Copy, Debug)]
 pub struct Shape {
     pub name: &'static str,
@@ -157,7 +151,7 @@ pub struct Shape {
     pub levels: u64,
 }
 
-/// The lane's five shapes, in its order.
+/// The five shapes, in order.
 pub const SHAPES: [Shape; 5] = [
     Shape {
         name: "2d-13x7",
@@ -222,7 +216,7 @@ impl Shape {
         [w.div_ceil(4), h.div_ceil(4), d]
     }
 
-    /// Every (level, slice), levels outermost, as the lane walks them.
+    /// Every (level, slice), levels outermost.
     pub fn each(&self) -> Vec<(u64, u64)> {
         (0..self.levels)
             .flat_map(|l| (0..self.slices()).map(move |s| (l, s)))
@@ -258,7 +252,7 @@ impl Shape {
     }
 }
 
-/// A splitmix64 stream of bytes: the lane's own, so a shape's blocks are the lane's blocks.
+/// A splitmix64 stream of bytes, so a shape's blocks are the same on every run.
 pub struct Rng(pub u64);
 
 impl Rng {
@@ -278,8 +272,7 @@ impl Rng {
 
 /// A texture's blocks as Metal's copies leave them: `(level, slice, z, y, x)` to the block's bytes.
 ///
-/// It is the lane's model, kept whole, because the whole point of the port is to hold Metal's own
-/// recorded bytes against it.
+/// It is kept whole, because the cross-check holds Metal's own recorded bytes against it.
 #[derive(Clone, Default)]
 pub struct Model(std::collections::BTreeMap<(u64, u64, u64, u64, u64), Vec<u8>>);
 
@@ -347,7 +340,7 @@ impl Model {
     }
 }
 
-/// The steps, in the lane's order, each naming the site its read-backs sit under.
+/// The steps, in order, each naming the site its read-backs sit under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
     Put,
@@ -425,7 +418,7 @@ fn texture_layout(
     }
 }
 
-/// The plan for `format` in `shape`, seeded as the lane seeds it: the whole five-step program and
+/// The plan for `format` in `shape`, seeded by its place: the whole five-step program and
 /// the model's bytes for each read.
 ///
 /// The one function builds both, so the program's offsets and the model's offsets cannot drift
@@ -523,7 +516,7 @@ fn plan(format: u32, block: u64, shape: &Shape, seed: u64) -> Plan {
             bytes_per_row: row,
             bytes_per_image: image,
             length: total as usize,
-            // The lane reads into bytes of 0xcd, so the bytes past each row's blocks are recorded
+            // The case reads into bytes of 0xcd, so the bytes past each row's blocks are recorded
             // as a value Metal would never write: that is what makes "the padding stayed as it
             // was" a question with an answer.
             before: BEFORE,
@@ -568,7 +561,7 @@ fn plan(format: u32, block: u64, shape: &Shape, seed: u64) -> Plan {
             bytes_per_row: row,
             bytes_per_image: image,
             length: total as usize,
-            // The lane reads into bytes of 0xcd, so the bytes past each row's blocks are recorded
+            // The case reads into bytes of 0xcd, so the bytes past each row's blocks are recorded
             // as a value Metal would never write: that is what makes "the padding stayed as it
             // was" a question with an answer.
             before: BEFORE,
@@ -751,7 +744,7 @@ struct Moved {
     to_at: (u64, u64),
 }
 
-/// The lane's region for `shape`, each chosen so the copy is block-aligned and reaches a level's
+/// The region for `shape`, each chosen so the copy is block-aligned and reaches a level's
 /// edge in at least one axis.
 fn region(shape: &Shape) -> Moved {
     let (from, to, size, from_at, to_at) = match shape.name {
@@ -778,7 +771,7 @@ fn region(shape: &Shape) -> Moved {
 /// Every level and slice of `texture` blitted out tight, one after another from byte 0, into a
 /// buffer of [`BEFORE`], with the model's bytes recorded for it under `step`.
 ///
-/// It is the lane's `out_tight`, which both compressed families use as their one way of reading a
+/// It is `out_tight`, which both compressed families use as their one way of reading a
 /// private texture's blocks back.
 pub fn out_tight(
     work: &mut Work,
@@ -857,7 +850,7 @@ pub struct CompressedMoves {
     at: usize,
 }
 
-/// Every format's case, in the lane's order.
+/// Every format's case, in [`FORMATS`] order.
 pub fn all() -> Vec<CompressedMoves> {
     (0..FORMATS.len())
         .map(|at| CompressedMoves { at })
@@ -870,8 +863,8 @@ impl CompressedMoves {
         &FORMATS[self.at]
     }
 
-    /// The plans of every shape, in the lane's order, each seeded as the lane seeds it: the block
-    /// size and the shape's place, so the bytes are the bytes the lane measured.
+    /// The plans of every shape, in order, each seeded by the block size and the shape's place, so
+    /// the bytes are the bytes the recordings hold.
     pub fn plans(&self) -> Vec<(&'static Shape, Plan)> {
         let format = self.format();
         SHAPES
@@ -1287,19 +1280,19 @@ mod tests {
         assert!(specs >= 150, "only {specs} texture specs reached the guard");
     }
 
-    /// Every one of Metal's recorded read-backs is the lane's byte model's, byte for byte, padding
+    /// Every one of Metal's recorded read-backs is the byte model's, byte for byte, padding
     /// included.
     ///
-    /// This is the cross-check the port exists for. The recordings hold what Metal answered on this
-    /// M3 Max; the model was tied to Metal only by a six-byte digest per step, measured by our own
-    /// probe on an Apple M4. A difference means one of two things, and either is a finding rather
+    /// The recordings hold what Metal answered on an Apple M3 Max; the model's other tie to Metal
+    /// is a six-byte digest per step an Apple M4 printed. A difference means one of two things, and
+    /// either is a finding rather
     /// than something to edit away: Apple's copies moved between the chips or the releases, or the
     /// model was never Metal's.
     ///
     /// A case with no recording yet is named, so a missing recording is record mode's work and not
     /// a silent pass.
     #[test]
-    fn every_recorded_move_is_the_lanes_byte_model() {
+    fn every_recorded_move_is_the_byte_model() {
         let mut unrecorded = Vec::new();
         let mut differ = Vec::new();
         let mut checked = 0usize;
@@ -1352,8 +1345,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{checked} bytes checked; Metal's recorded copies differ from the lane's byte \
-             model:\n{}",
+            "{checked} bytes checked; Metal's recorded copies differ from the byte model:\n{}",
             differ.join("\n")
         );
         assert!(

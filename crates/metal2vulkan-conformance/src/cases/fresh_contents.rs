@@ -26,39 +26,35 @@
 //!   a row that reads zero has also proved its copy ran: zero is otherwise indistinguishable from a
 //!   read-back that never happened.
 //!
-//! The `fresh-pattern-*` rows are the one group with no release in them, because the lane's own
-//! per-format probe made each texture first: what they pin is Metal's compressed-texture pattern
-//! per format, and their prefilled destination is what makes the read honest.
+//! The `fresh-pattern-*` rows are the one group with no release in them: each makes its texture
+//! once, what they pin is Metal's compressed-texture pattern per format, and their prefilled
+//! destination is what makes the read honest.
 //!
-//! # What the rows are held to, and the one branch of the lane that is not exercised
+//! # What the rows are held to
 //!
-//! **One site of one kind of row is loosened, and only on one kind of venue.** Every row's bytes
-//! are Metal's own on MoltenVK and on lavapipe, which present the recordings' Apple silicon Mac's
-//! lossless compression, so there the only field that may differ is the set of degrade notices
-//! our side announced. The depth row's on lavapipe, which cannot hold Metal's denormal depths
-//! (`depth-denormals`), is the device's own answer, which the suite declares for every case
-//! ([`crate::replay::NATIVE_NOTES`]). On a device that presents a Mac keeping no texture
-//! compressed (`DeviceProperties::lossless_compression` false, as an RTX 5080 Laptop presents
-//! today), a new `Private` texture holds what its memory held and nothing writes it, so the
-//! `fresh` site of every `Private` texture row and every pattern row reads zero, the released
-//! texture's [`OLD`] bytes or whatever else the memory held; that site alone is declared, by
-//! [`crate::replay::without_compression`], which justifies nothing on a venue that presents the
-//! compression. The `written` site, the statuses and every `Shared` and `Managed` row still compare
-//! exactly there.
+//! **One site of one kind of row is loosened, and only on one kind of venue.** The runtime
+//! presents a Mac keeping no texture compressed ([`crate::case::Venue::lossless_compression`]
+//! false), and a texture it places reads zero until written (its README, Textures), so the `fresh`
+//! site of every `Private` texture row and every pattern row reads zero where Metal reads its
+//! pattern; that site alone is declared, by [`crate::replay::without_compression`], which
+//! justifies nothing on a venue that presents the compression. The `written` site, the statuses
+//! and every `Shared` and `Managed` row still compare exactly. The depth row's bytes on a device
+//! that cannot hold Metal's denormal depths (`depth-denormals`, lavapipe's) are the device's own
+//! answer, which the suite declares for every case ([`crate::replay::NATIVE_NOTES`]).
 //!
 
-//! # Why one process is the right place for this, and more than the lane had
+//! # Why one process is the right place for this
 //!
-//! The lane's header describes a probe across *three fresh processes* and one after 768 MiB of
-//! written and released memory. That probe's job was to show the answer does **not** vary with how
-//! much a process has allocated, and it has done it. Nothing in these cases depends on being first:
-//! each row makes, fills, releases and remakes inside its own program.
+//! Metal's answer does **not** vary with how much a process has allocated: a probe across three
+//! fresh processes and one after 768 MiB of written and released memory read the same. Nothing in
+//! these cases depends on being first: each row makes, fills, releases and remakes inside its own
+//! program.
 //!
-//! `conformance replay` runs every case in **one** process, where nextest gives each lane test its
-//! own, so these rows run in a **dirtier** process than the lane's — hundreds of cases' allocations
-//! have come and gone before them. That cuts one way only: a warm process can hand back more
-//! soiled memory, never less, so it cannot manufacture a green row, only expose a dirty one. Do not
-//! "fix" this family by giving its cases a process each; the shared process is the stronger test.
+//! `conformance replay` runs every case in **one** process, so these rows run in a **dirty**
+//! process — hundreds of cases' allocations have come and gone before them. That cuts one way
+//! only: a warm process can hand back more soiled memory, never less, so it cannot manufacture a
+//! green row, only expose a dirty one. Do not "fix" this family by giving its cases a process each;
+//! the shared process is the stronger test.
 //!
 //! # The record shape
 //!
@@ -74,15 +70,15 @@
 //! is not one byte repeated — `RGBA8Unorm` reads `ff00ffff` — so runs of equal bytes made 8,193
 //! runs of one 16 KiB level and a 3.5 MB recording for a row whose answer is one sentence.
 //!
-//! # What is not ported, and why
+//! # What is not a case, and why
 //!
-//! - **The 3D and cube rows.** [`crate::work::TextureKind`] describes no 3D and no cube texture and
-//!   [`crate::work::TextureSpec`] carries no depth, so porting them means growing the shared
-//!   vocabulary for two rows. They stay in the lane.
-//! - **The multisampled rows** (the 4x colour targets, the NaN pattern copied from a scratch, and
-//!   the depth target loaded, cleared and read by a shader). The Metal side of a copy-and-fill
-//!   program builds no clearing render pass and no per-sample read-back, so those rows have no
-//!   Metal leg to record; they stay in the lane.
+//! - **3D and cube textures.** [`crate::work::TextureKind`] describes no 3D and no cube texture and
+//!   [`crate::work::TextureSpec`] carries no depth, so such a row means growing the shared
+//!   vocabulary for two rows.
+//! - **Multisampled textures** (4x colour targets, the NaN pattern copied from a scratch, and a
+//!   depth target loaded, cleared and read by a shader). The Metal side of a copy-and-fill program
+//!   builds no clearing render pass and no per-sample read-back, so such rows have no Metal leg to
+//!   record.
 //! - **The two-plane `RGB10A8_2P_XR10` row**, whose planes are read by a fixture's kernels rather
 //!   than by a copy.
 //! - **The host's own read of a `Shared` buffer's `contents`.** Every read here is a copy into a
@@ -98,7 +94,7 @@ use crate::transcript::{Node, Observed, Sites, Value};
 use crate::work::{Done, Plane, Resource, Step, Storage, TextureKind, TextureSpec, Work};
 
 /// The byte a resource is filled with before it is released, so the memory the row's second
-/// allocation may be handed held something nothing else would produce. The lane's own byte.
+/// allocation may be handed held something nothing else would produce.
 pub const OLD: u8 = 0xa5;
 
 /// The byte every read-back buffer holds before its copy. Neither zero nor [`OLD`], so a site that
@@ -169,8 +165,7 @@ fn statuses_site(done: &[String]) -> Node {
 // Buffers
 // ---------------------------------------------------------------------------------------------
 
-/// The buffer lengths each storage mode is swept at: the lane's own, from one 16-byte buffer to
-/// 16 MiB.
+/// The buffer lengths each storage mode is swept at, from one 16-byte buffer to 16 MiB.
 const LENGTHS: [u64; 5] = [16, 4096, 65536, 1 << 20, 16 << 20];
 
 /// The program one buffer row runs at one length: fill a buffer of this shape with [`OLD`], read it
@@ -632,7 +627,7 @@ const BUFFERS: [(&str, Storage); 3] = [
 // Textures of their own memory
 // ---------------------------------------------------------------------------------------------
 
-/// A texture shape the lane sweeps: the descriptor's facts, the bytes its blocks take, what the
+/// A texture shape the case sweeps: the descriptor's facts, the bytes its blocks take, what the
 /// [`OLD`] write puts in each block, and what Metal reads in a `Private` one of this shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Shape {
@@ -646,8 +641,8 @@ struct Shape {
     /// The raw `MTLTextureUsage` bits, stated because Metal refuses some pairings and because the
     /// usage decides the layout.
     usage: u32,
-    /// Whether `allowGPUOptimizedContents` is **off**, which is how the lane picks out a `Private`
-    /// texture Metal keeps uncompressed.
+    /// Whether `allowGPUOptimizedContents` is **off**, which picks out a `Private` texture Metal
+    /// keeps uncompressed.
     plain: bool,
     /// The bytes the [`OLD`] write puts in each block: one block's worth.
     old: &'static [u8],
@@ -693,11 +688,11 @@ impl Shape {
         spec
     }
 
-    /// What the lane expects a fresh texture of this shape in `storage` to read, level by level and
+    /// What a fresh texture of this shape in `storage` reads by Metal's rule, level by level and
     /// slice by slice: Metal's pattern in a `Private` one's patterned levels, zero everywhere else.
     ///
-    /// Nothing in the suite compares against this: it is what the port's cross-check holds the
-    /// recorded Metal answer to, which is why it is the tests' alone.
+    /// Nothing in the suite compares against this: it is what the cross-check holds the recorded
+    /// Metal answer to, which is why it is the tests' alone.
     #[cfg(test)]
     fn expected_fresh(&self, storage: Storage) -> Vec<u8> {
         let mut all = Vec::new();
@@ -804,7 +799,7 @@ const RGBA8_PLAIN: Shape = Shape {
 /// A 64-square `Depth32Float` render target. Metal's pattern for it is all ones, a NaN depth.
 ///
 /// The [`OLD`] write puts a depth of 0.5 in it rather than [`OLD`] bytes: a value every depth image
-/// holds as it is, which is the lane's own reason.
+/// holds as it is.
 const DEPTH32FLOAT: Shape = Shape {
     old: &[0x00, 0x00, 0x00, 0x3f],
     pattern: Some((&[0xff; 4], 1)),
@@ -1095,18 +1090,17 @@ impl Case for FreshTexture {
 // Metal's pattern, format by format
 // ---------------------------------------------------------------------------------------------
 
-/// The side of every [`PATTERNS`] texture, in texels: the lane's own, and wide enough that Metal
-/// compresses it.
+/// The side of every [`PATTERNS`] texture, in texels: wide enough that Metal compresses it.
 const PATTERN_SIDE: u64 = 64;
 
-/// One format whose `Private` pattern the lane's probe read.
+/// One format whose `Private` pattern the case reads.
 struct Pattern {
     case: &'static str,
     format: u32,
     /// Metal's pattern: the bytes of one texel, which every texel of a new `Private` texture of
     /// this format holds.
     texel: &'static [u8],
-    /// The raw `MTLTextureUsage` bits the lane makes the texture with.
+    /// The raw `MTLTextureUsage` bits the case makes the texture with.
     usage: u32,
 }
 
@@ -1123,9 +1117,8 @@ const fn pattern(case: &'static str, format: u32, texel: &'static [u8], usage: u
 /// Metal's pattern of each format its probes read: a new `Private` 64-square texture of the format
 /// reads these bytes in every texel.
 ///
-/// The table is the lane's, transcribed with each format's raw `MTLPixelFormat` so a case can name
-/// one with no public name as readily as a public one. Each row records Metal's own answer, so what
-/// the lane kept as a literal is now measured.
+/// The table names each format by its raw `MTLPixelFormat`, so a case can name one with no public
+/// name as readily as a public one. Each row records Metal's own answer.
 const PATTERNS: &[Pattern] = &[
     pattern("fresh-pattern-1", 1, &[0xff], READ), // MTLPixelFormatA8Unorm
     pattern("fresh-pattern-10", 10, &[0xff], READ), // MTLPixelFormatR8Unorm
@@ -1274,8 +1267,8 @@ impl Pattern {
         }
     }
 
-    /// The bytes a read of the whole texture answers. The cross-check against the lane's table is
-    /// what reads it, so it is the tests' alone.
+    /// The bytes a read of the whole texture answers. The cross-check against [`PATTERNS`] is what
+    /// reads it, so it is the tests' alone.
     #[cfg(test)]
     fn total(&self) -> u64 {
         self.shape().total()
@@ -1283,7 +1276,7 @@ impl Pattern {
 
     /// The program the row runs: make the texture and read every texel of it, writing nothing.
     ///
-    /// Nothing is released here, because the lane's own per-format probe made each texture first.
+    /// Nothing is released here: the case makes each texture once.
     /// What makes the read honest is the destination: it holds [`BEFORE`] before the copy, so the
     /// recorded answer is the texture's own bytes and not a copy that never ran.
     fn program(&self) -> Work {
@@ -1354,7 +1347,7 @@ impl Case for FreshPattern {
 // Textures over a new buffer
 // ---------------------------------------------------------------------------------------------
 
-/// The extent and the row pitch of a texture over a buffer: the lane's own.
+/// The extent and the row pitch of a texture over a buffer.
 const OVER_BUFFER: (u64, u64) = (64, 256);
 
 /// A row of a texture over a new buffer, in one storage mode.
@@ -1363,7 +1356,7 @@ pub struct FreshOverBuffer {
     storage: Storage,
 }
 
-/// The two rows of a texture over a new buffer: the storage modes the lane sweeps there.
+/// The two rows of a texture over a new buffer: the storage modes swept there.
 const OVER_BUFFERS: [(&str, Storage); 2] = [
     ("fresh-texture-over-buffer-shared", Storage::Shared),
     ("fresh-texture-over-buffer-private", Storage::Private),
@@ -2079,7 +2072,7 @@ mod tests {
         }
     }
 
-    /// The geometry of a shape is the lane's: a level's extent halves and stops at one, and a
+    /// The geometry of a shape: a level's extent halves and stops at one, and a
     /// block-compressed level's rows are whole blocks.
     #[test]
     fn a_levels_geometry_is_the_lanes() {
@@ -2097,7 +2090,7 @@ mod tests {
         assert_eq!(chain([100, 40], 7, 2).level(2).0, [25, 10]);
     }
 
-    /// The lane's expectation, as this family states it: zero in every `Shared` and `Managed`
+    /// The expectation, as this family states it: zero in every `Shared` and `Managed`
     /// texture, Metal's pattern in a `Private` one's patterned levels and zero in the rest.
     #[test]
     fn the_expectation_is_the_lanes_rule() {
@@ -2121,14 +2114,14 @@ mod tests {
         }
     }
 
-    /// **The cross-check the port owes the lane.** Metal's own bytes, as the committed recordings
-    /// hold them, are the bytes the lane expects: the old bytes come back out of the written
-    /// resource, and the fresh one reads zero or Metal's pattern by the lane's rule.
+    /// **The cross-check of the recordings.** Metal's own bytes, as the committed recordings hold
+    /// them, are the bytes the rule expects: the old bytes come back out of the written resource,
+    /// and the fresh one reads zero or Metal's pattern ([`Shape::expected_fresh`]).
     ///
-    /// Without this the port would be a set of recordings nobody had compared with the lane that
-    /// justified writing them.
+    /// Without this the recordings would be bytes nobody had compared with the rule that justified
+    /// writing them.
     #[test]
-    fn metals_texels_are_the_lanes_expectation() {
+    fn metals_texels_are_the_rules_expectation() {
         // A buffer of every storage mode and every length: the old bytes come back out of the
         // written one, and the one made after it was released reads zero.
         for (case, _) in BUFFERS {
@@ -2146,8 +2139,8 @@ mod tests {
                 );
             }
         }
-        // A texture of every shape: the old bytes come back, and the fresh one reads the lane's
-        // rule — zero, or Metal's pattern in a `Private` one's patterned levels.
+        // A texture of every shape: the old bytes come back, and the fresh one reads the rule —
+        // zero, or Metal's pattern in a `Private` one's patterned levels.
         for row in TEXTURES {
             assert_eq!(
                 recorded_bytes(row.case, "written"),
@@ -2162,7 +2155,7 @@ mod tests {
                 row.case
             );
         }
-        // Each format's pattern: every texel of a new `Private` texture holds the lane's bytes.
+        // Each format's pattern: every texel of a new `Private` texture holds the table's bytes.
         for row in PATTERNS {
             let texels = row.total() as usize / row.texel.len();
             assert_eq!(

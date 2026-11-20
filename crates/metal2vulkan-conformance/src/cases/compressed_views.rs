@@ -13,26 +13,23 @@
 //! - `putsub`: `replaceRegion:` of an interior region of level 0, slice 0, from texel (4, 4) to its
 //!   edges, then the texture out tight.
 //!
-//! **What the port changes.** As with the first lane, the lane's own expectation is a byte model in
-//! Rust tied to Metal by one SHA-256 over 336 lines of six-byte digests, measured by our own probe
-//! on an Apple **M4**. Here record mode runs the same steps on this M3 Max and each recording holds
-//! Metal's own bytes; the model becomes a cross-check (the test
-//! `every_recorded_view_move_is_the_lanes_byte_model`), which is the only direction in which a
-//! difference says something.
+//! **Metal's own bytes.** Record mode runs the steps on an Apple M3 Max and each recording holds
+//! Metal's own bytes. A byte model in Rust stays as a cross-check (the test
+//! `every_recorded_view_move_is_the_byte_model`); its other tie to Metal is one SHA-256 over 336
+//! lines of six-byte digests an Apple **M4** printed.
 //!
 //! **A view is a resource, not a step**, so the suite's interpreters make it before the first step
-//! runs — which is exactly the lane's "made before the texture held anything" and needs no special
-//! vocabulary. A signed or float pair's view needs `MTLTextureUsagePixelFormatView`, which the sRGB
+//! runs, so the view is made before the texture holds anything, with no special vocabulary. A
+//! signed or float pair's view needs `MTLTextureUsagePixelFormatView`, which the sRGB
 //! twins do not ([`sibling`]), and the case states the usage bits rather than letting either side
 //! infer them.
 //!
 //! **One case per format**, as the rest of the compressed families: a venue with no texture of one
 //! answers its typed refusal there and counts as lacking that format.
 //!
-//! **Not ported:** the lane's 1030 x 520 texture of all eleven levels, whose level 0 alone is over
-//! 500 KiB of blocks, so a whole-value recording of its four steps would be several MiB. It wants
-//! the recording's digest-plus-window form, which no case has exercised yet, and it is its own
-//! packet.
+//! **Not a case:** a 1030 x 520 texture of all eleven levels, whose level 0 alone is over 500 KiB
+//! of blocks, so a whole-value recording of its four steps would be several MiB. It wants the
+//! recording's digest-plus-window form, which no case has exercised yet.
 //!
 //! Nothing here can fault a GPU: host copies and blit copies between textures the program makes, no
 //! dispatch, no draw, no loop, and every region block-aligned and inside its level.
@@ -56,9 +53,9 @@ struct Format {
     sibling: (u32, bool),
 }
 
-/// Every BC format, in the lane's order, because a shape's seed is its place in that order.
+/// Every BC format, in a fixed order, because a shape's seed is its place in that order.
 ///
-/// The siblings are the lane's: an sRGB twin either way (no `PixelFormatView` usage, since Metal
+/// The siblings: an sRGB twin either way (no `PixelFormatView` usage, since Metal
 /// counts the twins as one layout), and the other member of a signed or a float pair (which needs
 /// it).
 const FORMATS: [Format; 14] = [
@@ -149,7 +146,7 @@ const FORMATS: [Format; 14] = [
 ];
 
 /// The sibling format of the raw `MTLPixelFormat` `raw`, and whether viewing it needs
-/// `MTLTextureUsagePixelFormatView`, as the lane names them.
+/// `MTLTextureUsagePixelFormatView`.
 pub fn sibling(raw: u32) -> Option<(u32, bool)> {
     FORMATS
         .iter()
@@ -175,7 +172,7 @@ pub struct Plan {
     pub expected: Vec<Expected>,
 }
 
-/// The plan for `format` in `shape`, seeded as the lane seeds it.
+/// The plan for `format` in `shape`, seeded by its place.
 ///
 /// The one function builds the program and the expectation together, so their offsets cannot drift
 /// apart.
@@ -186,7 +183,7 @@ fn plan(format: &Format, shape: &Shape, seed: u64) -> Plan {
     let mut expected = Vec::new();
     let three_d = shape.three_d();
     let (view_format, needs_usage) = format.sibling;
-    // A signed or float pair's view needs `PixelFormatView`; the sRGB twins do not, and the lane
+    // A signed or float pair's view needs `PixelFormatView`; the sRGB twins do not, and the case
     // separates the two because a texture that may be viewed in another format is laid out
     // differently from one that may not.
     let usage = if needs_usage {
@@ -197,7 +194,7 @@ fn plan(format: &Format, shape: &Shape, seed: u64) -> Plan {
     let first = work.add(Resource::Texture {
         spec: shape.spec(format.format, false).used(usage),
     });
-    // Made before any step runs, which is the lane's "before the texture held anything": the
+    // Made before any step runs, before the texture holds anything: the
     // interpreters make every resource first, so the view cannot have taken a copy of what was
     // there.
     let view = work.add(Resource::View {
@@ -369,7 +366,7 @@ pub struct CompressedViews {
     at: usize,
 }
 
-/// Every format's case, in the lane's order.
+/// Every format's case, in [`FORMATS`] order.
 pub fn all() -> Vec<CompressedViews> {
     (0..FORMATS.len())
         .map(|at| CompressedViews { at })
@@ -382,8 +379,8 @@ impl CompressedViews {
         &FORMATS[self.at]
     }
 
-    /// The plans of every shape, seeded as the lane seeds them: the lane's second seed base, the
-    /// block size and the shape's place.
+    /// The plans of every shape, seeded by the second seed base, the block size and the shape's
+    /// place.
     pub fn plans(&self) -> Vec<(&'static Shape, Plan)> {
         let format = self.format();
         SHAPES
@@ -479,7 +476,7 @@ mod tests {
     }
 
     /// Every format's sibling is another format of the same block size, and the relation is its own
-    /// inverse: the lane's pairs, held to shape rather than taken on trust.
+    /// inverse: the pairs, held to shape rather than taken on trust.
     #[test]
     fn every_sibling_is_a_pair_of_one_block_size() {
         for format in &FORMATS {
@@ -551,14 +548,13 @@ mod tests {
         }
     }
 
-    /// Every one of Metal's recorded read-backs is the lane's byte model's, byte for byte.
+    /// Every one of Metal's recorded read-backs is the byte model's, byte for byte.
     ///
-    /// This is the cross-check the port exists for: the recordings hold what Metal answered on this
-    /// M3 Max, where the lane tied its model to Metal by one digest per step measured on an Apple
-    /// M4. A difference is a finding either way — Apple's copies moved, or the model was never
-    /// Metal's — and never something to edit away.
+    /// The recordings hold what Metal answered on an Apple M3 Max; the model's other tie to Metal
+    /// is one digest per step an Apple M4 printed. A difference is a finding either way — Apple's
+    /// copies moved, or the model was never Metal's — and never something to edit away.
     #[test]
-    fn every_recorded_view_move_is_the_lanes_byte_model() {
+    fn every_recorded_view_move_is_the_byte_model() {
         let mut unrecorded = Vec::new();
         let mut differ = Vec::new();
         let mut checked = 0usize;
@@ -611,8 +607,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{checked} bytes checked; Metal's recorded view copies differ from the lane's byte \
-             model:\n{}",
+            "{checked} bytes checked; Metal's recorded view copies differ from the byte model:\n{}",
             differ.join("\n")
         );
         assert!(

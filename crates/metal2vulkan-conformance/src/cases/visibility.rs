@@ -7,10 +7,10 @@
 //! that were there rather than as a zero nobody can tell from a result; an `Accumulate` shape's
 //! starts as the words it adds to.
 //!
-//! The lane's own table was measured on an M4, and its comment says so. Metal's answer here is
-//! **run**, not copied: record mode takes it on this M3 Max, and this module's tests cross-check
-//! the recordings against the lane's words, which is the evidence the port owes the lane. A fresh
-//! answer that disagrees with the lane is a finding about one of the two chips, not a nuisance.
+//! The table of words this module's tests hold was measured on an Apple M4. Metal's answer here is
+//! **run**, not copied: record mode takes it on an M3 Max, and the tests cross-check the
+//! recordings against the table. A fresh answer that disagrees with the table is a finding about
+//! one of the two chips, not a nuisance.
 //!
 //! Every word compares exactly, a `Boolean` result's included: the M3 Max writes 1 where a sample
 //! passed.
@@ -73,13 +73,13 @@ use crate::values::{StoreAction, VisibilityResultMode, VisibilityResultType};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{CompareFunction, PixelFormat, PrimitiveType};
 
-/// The owned fixture the lane draws with: `rt6_full` takes a depth and a slope as one `float2` at
+/// The owned fixture the case draws with: `rt6_full` takes a depth and a slope as one `float2` at
 /// vertex buffer 0, and `rt6_white` returns white.
 const FIXTURE: &str = "rt6_render_state";
 const VERTEX: &str = "rt6_full";
 const FRAGMENT: &str = "rt6_white";
 
-/// The lane's target: a 4 by 4 `RGBA8Unorm` render target, whose 16 pixels are the 16 samples a
+/// The target: a 4 by 4 `RGBA8Unorm` render target, whose 16 pixels are the 16 samples a
 /// covering draw passes at 1x.
 const SIDE: u32 = 4;
 const COLOR: PixelFormat = PixelFormat::RGBA8Unorm;
@@ -87,10 +87,10 @@ const COLOR: PixelFormat = PixelFormat::RGBA8Unorm;
 /// The byte every visibility buffer starts as, so a word Metal never wrote is readable as itself.
 const UNWRITTEN: u8 = 0xaa;
 
-/// The depth the lane's draws take unless the shape says otherwise.
+/// The depth the draws take unless the shape says otherwise.
 const DEPTH: f32 = 0.5;
 
-/// One command a case encodes into a pass, in the lane's own vocabulary.
+/// One command a case encodes into a pass.
 #[derive(Clone, Copy, Debug)]
 enum Act {
     /// `setVisibilityResultMode:offset:`.
@@ -103,12 +103,12 @@ enum Act {
         instances: u32,
     },
     /// `drawPrimitives:indirectBuffer:indirectBufferOffset:` of three vertices and **no**
-    /// instances, which the lane's arguments buffer holds.
+    /// instances, which the arguments buffer holds.
     DrawIndirect,
 }
 
 impl Act {
-    /// The fullscreen triangle at the lane's depth, covering every pixel.
+    /// The fullscreen triangle at [`DEPTH`], covering every pixel.
     const fn draw() -> Self {
         Act::Draw {
             z: DEPTH,
@@ -143,10 +143,10 @@ struct Shape {
     /// 64-bit words the case's visibility buffer holds.
     words: usize,
     /// The passes, in order, each over its own fresh color target and all over **one** visibility
-    /// buffer, as the lane runs them.
+    /// buffer.
     passes: &'static [&'static [Act]],
     depth: Option<Depth>,
-    /// `rasterSampleCount` and the attachment's samples: 1, or 4 for the lane's 4x pass.
+    /// `rasterSampleCount` and the attachment's samples: 1, or 4 for the 4x pass.
     samples: u32,
     /// Every pass's `visibilityResultType`.
     kind: VisibilityResultType,
@@ -157,7 +157,7 @@ struct Shape {
     joined: bool,
 }
 
-/// `Boolean`, `Counting` and `Disabled`, as short as the lane writes them.
+/// `Boolean`, `Counting` and `Disabled`, short.
 const BOOL: VisibilityResultMode = VisibilityResultMode::Boolean;
 const COUNT: VisibilityResultMode = VisibilityResultMode::Counting;
 const OFF: VisibilityResultMode = VisibilityResultMode::Disabled;
@@ -967,7 +967,7 @@ struct Held<'a> {
 }
 
 impl Visibility {
-    /// Pass `index` of the shape: a fresh target, as the lane makes one a pass, so no pass reads
+    /// Pass `index` of the shape: a fresh target, so no pass reads
     /// what another left in the color attachment, its acts as steps, and its depth attachment
     /// where the shape has one.
     fn pass(
@@ -1077,7 +1077,8 @@ mod tests {
     /// A word Metal never wrote, as a 64-bit value.
     const U: u64 = u64::from_le_bytes([UNWRITTEN; 8]);
 
-    /// The lane's words, by case: what Metal wrote after each command buffer, in order.
+    /// The table, measured on an Apple M4, by case: what Metal wrote after each command buffer, in
+    /// order.
     const TABLE: &[(&str, &[&[u64]])] = &[
         (
             "visibility-boolean-offsets",
@@ -1095,7 +1096,7 @@ mod tests {
         ("visibility-counting-revisit", &[&[32, 16]]),
         ("visibility-counting-revisit-after-disabled", &[&[32, U]]),
         ("visibility-counting-four-samples", &[&[64]]),
-        // The `Accumulate` rows, the lane's too: a count is added to the word's low 32 bits,
+        // The `Accumulate` rows: a count is added to the word's low 32 bits,
         // which wrap, and its high 32 bits stay.
         (
             "visibility-counting-accumulate",
@@ -1113,7 +1114,7 @@ mod tests {
             "visibility-boolean-accumulate",
             &[&[1, 3, 3, 0, 2, 3, 9], &[1, 3, 3, 1, 2, 3, 9]],
         ),
-        // Not the lane's: no mode writes nothing, under either type (an M3 Max, macOS 27.0.1).
+        // Taken on an M3 Max, macOS 27.0.1, not the M4: no mode writes nothing, under either type.
         ("visibility-disabled-reset", &[&[U, U], &[U, U]]),
         ("visibility-disabled-accumulate", &[&[100, 7], &[100, 7]]),
     ];
@@ -1149,13 +1150,13 @@ mod tests {
             .collect()
     }
 
-    /// Metal's own visibility results on this M3 Max are the lane's words, pass by pass.
+    /// Metal's own visibility results on the M3 Max are the table's words, pass by pass.
     ///
     /// Every case the table names must have a recording, so a case that was never recorded fails
     /// here rather than being skipped: the table is the claim, and a claim with no run behind it
     /// is the thing this suite exists to stop.
     #[test]
-    fn the_recorded_results_are_the_lanes_words() {
+    fn the_recorded_results_are_the_tables_words() {
         for (name, passes) in TABLE {
             let shape = SHAPES
                 .iter()
@@ -1189,7 +1190,7 @@ mod tests {
         for case in all() {
             assert!(
                 TABLE.iter().any(|(name, _)| *name == case.name()),
-                "{}: no row in the lane's table",
+                "{}: no row in the table",
                 case.name()
             );
             let inputs = case.inputs().unwrap();
