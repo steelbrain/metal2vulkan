@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::air;
 use crate::budget::SPIRV_WORDS;
-use crate::device::profile::{BufferAccess, DeviceProfile, DriverWorkaround};
+use crate::device::profile::{BufferAccess, DeviceProfile};
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, LowerFamily, Needs, Unsupported};
@@ -435,11 +435,6 @@ fn a_storage_view_reads_its_residual() {
         for robust in [true, false] {
             let what = format!("{stem} robust={robust}");
             let p = profile_with(stem, robust, true);
-            assert!(
-                !p.workarounds()
-                    .contains(&DriverWorkaround::PushReadsLengthenThreadPayload),
-                "{what}"
-            );
             let a =
                 compile(&bc, "buffer_end_byte_load", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             assert!(!a.interface.read_keys().contains(&key), "{what}");

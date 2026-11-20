@@ -57,8 +57,7 @@ impl WordMem for ViewMem {
         let view = self.vec(lanes)?;
         // A uniform view's read-only vectors are read plainly, as its words are.
         let access = match view.class {
-            crate::spirv::ir::StorageClass::Uniform
-            | crate::spirv::ir::StorageClass::UniformConstant => MemAccess::default(),
+            crate::spirv::ir::StorageClass::Uniform => MemAccess::default(),
             _ => self.1.access(fb, MemAccess::default(), false)?,
         };
         views::read_vec(fb, view, index, access)
@@ -370,12 +369,7 @@ pub(super) fn prepare(
             Some(size) => Some(contain::in_bounds(fb, off, size, u64::from(n))?),
             None => return Err(cx.fail("a storage view without a size")),
         },
-        (
-            Check::InShader,
-            ViewKind::UniformWords { .. }
-            | ViewKind::UniformVec4 { .. }
-            | ViewKind::UniformTexel { .. },
-        ) => {
+        (Check::InShader, ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. }) => {
             // Selection gives a uniform view only to an encoding without checks: the range bound
             // behind it may be shorter than its declared size.
             return Err(cx.fail("an in-shader check of a uniform view"));

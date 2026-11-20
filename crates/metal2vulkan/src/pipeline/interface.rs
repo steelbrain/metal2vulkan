@@ -265,30 +265,21 @@ pub enum BufferForm {
 }
 
 impl BufferForm {
-    /// Whether the form reads through a uniform view, a uniform buffer's or a uniform texel
-    /// buffer's: the views whose range a plan starts at the bind offset where the device's view
-    /// base alignment divides it (`SpecKey::RangeAtBindOffset`, `BindState::view_base_alignment`).
+    /// Whether the form reads through a uniform view, a uniform buffer: the views whose range a
+    /// plan starts at the bind offset where the device's view base alignment divides it
+    /// (`SpecKey::RangeAtBindOffset`, `BindState::view_base_alignment`).
     pub fn uniform_view(self) -> bool {
         matches!(
             self,
-            BufferForm::Descriptor(
-                DescriptorView::UniformWords
-                    | DescriptorView::UniformVec4
-                    | DescriptorView::UniformTexel
-            )
+            BufferForm::Descriptor(DescriptorView::UniformWords | DescriptorView::UniformVec4)
         )
     }
 
     /// The minimum offset alignment and the maximum range, in bytes, of the form's view on a
-    /// device of `limits`: `minTexelBufferOffsetAlignment` and `maxTexelBufferElements` 16-byte
-    /// texels for a uniform texel buffer, the uniform-buffer limits for another uniform view, the
-    /// storage-buffer limits otherwise.
+    /// device of `limits`: the uniform-buffer limits for a uniform view, the storage-buffer limits
+    /// otherwise.
     pub(crate) fn view_limits(self, limits: &crate::device::Limits) -> (u64, u64) {
         match self {
-            BufferForm::Descriptor(DescriptorView::UniformTexel) => (
-                limits.min_texel_buffer_offset_alignment,
-                u64::from(limits.max_texel_buffer_elements) * 16,
-            ),
             form if form.uniform_view() => (
                 limits.min_uniform_buffer_offset_alignment,
                 u64::from(limits.max_uniform_buffer_range),
@@ -312,10 +303,6 @@ pub enum DescriptorView {
     UniformWords,
     /// A uniform buffer viewed as a `uvec4` array (std140-valid everywhere).
     UniformVec4,
-    /// A uniform texel buffer the binder views as `R32G32B32A32_UINT` over the slot's range, read
-    /// with `OpImageFetch`: a uniform view's form on a device with
-    /// `DriverWorkaround::ExternalUniformReadsSkipACache` for a window of at most 4 KiB.
-    UniformTexel,
 }
 
 /// How a compiled function fetches one attribute it reads

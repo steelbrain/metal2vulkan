@@ -1206,7 +1206,7 @@ codec_enum! {
     Window { Bounded { start, len }, Whole }
     BufferForm { Descriptor(f0), Psb }
     BufferKind { Buffer, VisibleFunctionTable, IntersectionFunctionTable }
-    DescriptorView { Storage, UniformWords, UniformVec4, UniformTexel }
+    DescriptorView { Storage, UniformWords, UniformVec4 }
     PushLoc { Push { offset }, ArgumentTable { offset } }
     IoRole {
         Attribute { index }, Varying { user, interpolation },

@@ -11,23 +11,15 @@
 //!   needs `uniformBufferStandardLayout`).
 //! - [`ViewKind::UniformVec4`]: a `Uniform` block `{ uvec4 vecs[N]; }` (std140, valid everywhere);
 //!   a word is one lane of a 4-vector.
-//! - [`ViewKind::UniformTexel`]: a uniform texel buffer (`UniformConstant`, an image of `Dim`
-//!   `Buffer`, `Sampled` 1, `u32` texels) that the binder views as `R32G32B32A32_UINT`, read with
-//!   `OpImageFetch`; a word is one lane of a fetched texel. A slot takes it in place of a uniform
-//!   buffer only where its profile has `DriverWorkaround::ExternalUniformReadsSkipACache`, the
-//!   slot has an indexed read (`SlotPlan::indexed_read`) and its window is at most
-//!   [`TEXEL_WINDOW_BYTES`] long (`lower::access::view_kind`).
 //!
 //! Uniform views exist only for read-only slots with a `Bounded` window whose descriptor range
-//! fits `maxUniformBufferRange` ([`uniform_range`]), a texel one's also `maxTexelBufferElements`
-//! texels, and only on profiles whose containment encoding emits no check: their size is that
-//! range, a translation-time constant, because a `Uniform` block cannot end in a runtime array,
-//! while the range actually bound may be shorter (the binder clamps it to the allocation) and no
-//! in-shader check can read it. On a profile taking
-//! `DriverWorkaround::UniformBufferPerLaneReadsSerialize`, a slot with a read whose address may
-//! differ between the lanes that run it together (`SlotPlan::lane_read`) keeps its storage view,
-//! and its reads at uniform addresses with it (`lower::access::view_kind` gives their measured
-//! cost).
+//! fits `maxUniformBufferRange` ([`uniform_range`]), and only on profiles whose containment
+//! encoding emits no check: their size is that range, a translation-time constant, because a
+//! `Uniform` block cannot end in a runtime array, while the range actually bound may be shorter
+//! (the binder clamps it to the allocation) and no in-shader check can read it. On every device a
+//! slot with a read whose address may differ between the lanes that run it together
+//! (`SlotPlan::lane_read`) keeps its storage view, and its reads at uniform addresses with it
+//! (`lower::access::view_kind` gives their measured cost).
 //!
 //! A storage slot may also have **narrow views** ([`NarrowView`]): `StorageBuffer { u16[] }` and `{
 //! u8[] }` blocks at the slot's binding (`ModuleBuilder::resource_view`), declared only where the
@@ -56,8 +48,7 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    natural_layout, BinOp, ConstBits, Constant, ConvOp, Dim, ImageOperands, ImageType, ImageUsage,
-    LayoutRule, MemAccess, StorageClass, Type,
+    natural_layout, BinOp, ConstBits, Constant, ConvOp, LayoutRule, MemAccess, StorageClass, Type,
 };
 
 /// The view kind of a descriptor-form slot (the plan's `DescriptorView` with its size).
@@ -69,19 +60,7 @@ pub enum ViewKind {
     UniformWords { words: u32 },
     /// `Uniform { uvec4[vecs] }` (std140).
     UniformVec4 { vecs: u32 },
-    /// A uniform texel buffer of `vecs` `R32G32B32A32_UINT` texels.
-    UniformTexel { vecs: u32 },
 }
-
-/// The longest window a uniform view reads through a uniform texel buffer on a profile with
-/// `DriverWorkaround::ExternalUniformReadsSkipACache`: 4 KiB. ANV, Mesa 26.2.6, on the Iris Xe of
-/// RPL-P (jobs m3-max-37753 and m3-max-37780) read windows of 1 and 4 KiB through a uniform texel
-/// buffer no slower than through a uniform buffer on its own memory, in every pattern measured:
-/// every invocation reading the same word, each its own word, a walk per workgroup and one per
-/// invocation (0.14 to 0.997 of the uniform buffer's time). At 16 KiB one pattern, every
-/// invocation reading the same word over 1024 steps, took 3.1% longer, and from 32 KiB the
-/// per-invocation patterns took 2.8 to 4.2 times as long.
-pub const TEXEL_WINDOW_BYTES: u64 = 4096;
 
 /// A declared view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,15 +169,6 @@ pub fn declare_at(mb: &mut ModuleBuilder, sym: ResourceSlot, kind: ViewKind) -> 
                 })?,
             )
         }
-        ViewKind::UniformTexel { .. } => {
-            let image = texel_image_type(mb, u32_ty)?;
-            let global = mb.resource(sym, StorageClass::UniformConstant, image)?;
-            return Ok(View {
-                global,
-                kind,
-                u32_ty,
-            });
-        }
     };
     let layout = natural_layout(mb.types(), rule, true, &[member])?;
     let block = mb.ty(Type::Struct {
@@ -211,27 +181,6 @@ pub fn declare_at(mb: &mut ModuleBuilder, sym: ResourceSlot, kind: ViewKind) -> 
         kind,
         u32_ty,
     })
-}
-
-/// The image type of a [`ViewKind::UniformTexel`] view: `Dim` `Buffer`, `Sampled` 1, `u32` texels,
-/// its format `Unknown` (the binder's `R32G32B32A32_UINT` view gives four lanes).
-fn texel_image_type(mb: &mut ModuleBuilder, u32_ty: TypeId) -> BResult<TypeId> {
-    mb.ty(Type::Image(ImageType {
-        sampled_type: u32_ty,
-        dim: Dim::Buffer,
-        depth: false,
-        arrayed: false,
-        multisampled: false,
-        usage: ImageUsage::Sampled,
-        format: crate::spv::ImageFormat::Unknown,
-    }))
-}
-
-/// Texel `index` (a `u32` texel index) of the uniform texel buffer variable `global`: a `uvec4`.
-fn fetch_texel(fb: &mut FunctionBuilder<'_>, global: GlobalId, index: Value) -> BResult<Value> {
-    let ptr = fb.module().global_value(global)?;
-    let image = fb.load(ptr, MemAccess::default())?;
-    fb.fetch(image, index, &ImageOperands::default())
 }
 
 fn k(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
@@ -247,22 +196,12 @@ pub fn word_ptr(fb: &mut FunctionBuilder<'_>, view: View, word: Value) -> BResul
             let zero = k(fb, 0)?;
             Ok(Some(fb.access_chain(base, &[zero, word])?))
         }
-        ViewKind::UniformWords { .. }
-        | ViewKind::UniformVec4 { .. }
-        | ViewKind::UniformTexel { .. } => Ok(None),
+        ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => Ok(None),
     }
 }
 
 /// Load word `word` (a `u32` index) of `view`.
 pub fn read_word(fb: &mut FunctionBuilder<'_>, view: View, word: Value) -> BResult<Value> {
-    if let ViewKind::UniformTexel { .. } = view.kind {
-        let two = k(fb, 2)?;
-        let three = k(fb, 3)?;
-        let vi = fb.binary(BinOp::ShiftRightLogical, word, two)?;
-        let lane = fb.binary(BinOp::BitwiseAnd, word, three)?;
-        let v = fetch_texel(fb, view.global, vi)?;
-        return fb.vector_extract_dynamic(v, lane);
-    }
     let base = fb.module().global_value(view.global)?;
     let zero = k(fb, 0)?;
     match view.kind {
@@ -279,9 +218,6 @@ pub fn read_word(fb: &mut FunctionBuilder<'_>, view: View, word: Value) -> BResu
             let v = fb.load(p, MemAccess::default())?;
             fb.vector_extract_dynamic(v, lane)
         }
-        ViewKind::UniformTexel { .. } => Err(crate::spirv::error::BuildError::Global(
-            crate::spirv::error::GlobalRule::ResourceType,
-        )),
     }
 }
 
@@ -300,13 +236,11 @@ pub struct NarrowView {
 
 /// A `uvec4` or `uvec2` view of a descriptor slot: `StorageBuffer { uvec4[] }`, `StorageBuffer {
 /// uvec2[] }` or `Uniform { uvec4[N] }` at the slot's binding beside its word view, or a
-/// `UniformVec4` or `UniformTexel` word view itself. A unit is vector element `index` of member 0,
-/// or a uniform texel buffer's texel `index` (class `UniformConstant`).
+/// `UniformVec4` word view itself. A unit is vector element `index` of member 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VecView {
     pub global: GlobalId,
-    /// The view's storage class: a uniform view's vectors are read-only, read plainly
-    /// (`UniformConstant`: fetched from a uniform texel buffer).
+    /// The view's storage class: a uniform view's vectors are read-only, read plainly.
     pub class: StorageClass,
 }
 
@@ -359,7 +293,7 @@ impl UnitViews {
 
     /// Declare the unit views of `units` for `slot`, whose word view [`declare`] declared as
     /// `view`: a storage view's narrow, `uvec2` and `uvec4` views, a `UniformWords` view's `uvec4`
-    /// view; a `UniformVec4` or `UniformTexel` view is its own `uvec4` view, declared or not. A
+    /// view; a `UniformVec4` view is its own `uvec4` view, declared or not. A
     /// uniform slot has no narrow or `uvec2` view.
     pub fn declare(
         mb: &mut ModuleBuilder,
@@ -388,10 +322,6 @@ impl UnitViews {
                 ViewKind::UniformVec4 { .. } => Some(VecView {
                     global: view.global,
                     class: StorageClass::Uniform,
-                }),
-                ViewKind::UniformTexel { .. } => Some(VecView {
-                    global: view.global,
-                    class: StorageClass::UniformConstant,
                 }),
                 _ if units.vec4 => Some(declare_vec(mb, slot, view, 4)?),
                 _ => None,
@@ -452,15 +382,7 @@ pub fn declare_vec(
                 class: StorageClass::Uniform,
             })
         }
-        ViewKind::UniformTexel { .. } if lanes == 4 => {
-            return Ok(VecView {
-                global: view.global,
-                class: StorageClass::UniformConstant,
-            })
-        }
-        ViewKind::UniformWords { .. }
-        | ViewKind::UniformVec4 { .. }
-        | ViewKind::UniformTexel { .. } => {
+        ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => {
             return Err(crate::spirv::error::BuildError::Global(
                 crate::spirv::error::GlobalRule::ResourceType,
             ))
@@ -475,16 +397,13 @@ pub fn declare_vec(
     Ok(VecView { global, class })
 }
 
-/// Load vector unit `index` of `view` with memory operands `ops` (a texel fetch takes none).
+/// Load vector unit `index` of `view` with memory operands `ops`.
 pub fn read_vec(
     fb: &mut FunctionBuilder<'_>,
     view: VecView,
     index: Value,
     ops: MemAccess,
 ) -> BResult<Value> {
-    if view.class == StorageClass::UniformConstant {
-        return fetch_texel(fb, view.global, index);
-    }
     let base = fb.module().global_value(view.global)?;
     let zero = k(fb, 0)?;
     let p = fb.access_chain(base, &[zero, index])?;
@@ -590,9 +509,7 @@ pub fn storage_bytes(fb: &mut FunctionBuilder<'_>, view: View) -> BResult<Option
             let four = k(fb, 4)?;
             Ok(Some(fb.binary(BinOp::IMul, len, four)?))
         }
-        ViewKind::UniformWords { .. }
-        | ViewKind::UniformVec4 { .. }
-        | ViewKind::UniformTexel { .. } => Ok(None),
+        ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => Ok(None),
     }
 }
 

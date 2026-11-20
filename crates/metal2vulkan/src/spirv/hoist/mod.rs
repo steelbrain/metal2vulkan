@@ -16,11 +16,7 @@
 //! - **A uniform view.** The load reads, through a chain of access indices, a module-scope
 //!   `Uniform` variable that is a descriptor resource whose type is a `Block` structure:
 //!   `memory::views` declares one only for a read-only buffer slot, and no shader writes a
-//!   `Uniform` block. The load is neither volatile nor `MakePointerVisible`. A uniform view's
-//!   texel form (`ViewKind::UniformTexel`) is a module-scope `UniformConstant` resource of a
-//!   buffer slot whose type is an image of `Dim` `Buffer` and `Sampled` 1, a uniform texel buffer,
-//!   which no shader writes: the load of its image moves, and so does an `OpImageFetch` of that
-//!   image with no image operands, which reads it as the uniform block's load reads its block.
+//!   `Uniform` block. The load is neither volatile nor `MakePointerVisible`.
 //! - **The same address on every trip.** Every operand of its address is defined outside the loop,
 //!   or by an instruction inside it that computes its value from its operands alone (arithmetic,
 //!   conversions, selects, composites; [`pure`]), or by another such load, whose operands are in
@@ -50,11 +46,9 @@ mod tests;
 use crate::budget::Meter;
 use crate::device::profile::{Containment, Robustness};
 use crate::error::Error;
-use crate::pipeline::sym::ResourceKind;
 use crate::spirv::ids::{BlockId, Value};
 use crate::spirv::ir::{
-    Dim, GlobalKind, ImageOperands, ImageType, ImageUsage, Inst, InstNode, LoopMeta, StorageClass,
-    Terminator, Type, TypedModule, ValueOrigin,
+    GlobalKind, Inst, InstNode, LoopMeta, StorageClass, Terminator, Type, TypedModule, ValueOrigin,
 };
 
 /// How deep an address's chain of moved instructions may go: a deeper one stays (a bound on the
@@ -549,14 +543,6 @@ fn movable(m: &TypedModule, v: Value, s: &mut Scratch, depth: u32) -> bool {
             non_uniform: false,
             ..
         } if uniform_view(m, s, *base) => operands_invariant(m, &node.inst, s, depth),
-        Inst::ImageFetch {
-            image,
-            ops,
-            sparse: false,
-            ..
-        } if *ops == ImageOperands::default() && texel_view_image(m, s, *image) => {
-            operands_invariant(m, &node.inst, s, depth)
-        }
         inst if pure(inst) => operands_invariant(m, inst, s, depth),
         _ => false,
     };
@@ -594,19 +580,8 @@ fn pure(inst: &Inst) -> bool {
     )
 }
 
-/// Whether the image `v` is a uniform view's texel form, loaded from its variable
-/// ([`uniform_view`]).
-fn texel_view_image(m: &TypedModule, s: &Scratch, v: Value) -> bool {
-    matches!(
-        s.node_of(m, v).map(|n| &n.inst),
-        Some(Inst::Load { ptr, .. }) if uniform_view(m, s, *ptr)
-    )
-}
-
 /// Whether the pointer `v` points into a uniform view: a chain of access indices from a
-/// module-scope `Uniform` descriptor resource whose type is a `Block` structure, or a uniform
-/// view's texel form itself, a `UniformConstant` resource of a buffer slot whose type is an image
-/// of `Dim` `Buffer` and `Sampled` 1.
+/// module-scope `Uniform` descriptor resource whose type is a `Block` structure.
 fn uniform_view(m: &TypedModule, s: &Scratch, v: Value) -> bool {
     let mut v = v;
     for _ in 0..MAX_DEPTH {
@@ -619,21 +594,10 @@ fn uniform_view(m: &TypedModule, s: &Scratch, v: Value) -> bool {
                     m.types.get(g.pointee),
                     Ok(Type::Struct { layout: Some(l), .. }) if l.block
                 );
-                let texels = matches!(
-                    m.types.get(g.pointee),
-                    Ok(Type::Image(ImageType {
-                        dim: Dim::Buffer,
-                        usage: ImageUsage::Sampled,
-                        ..
-                    }))
-                );
-                return match (g.class, &g.kind) {
-                    (StorageClass::Uniform, GlobalKind::Resource(_)) => block,
-                    (StorageClass::UniformConstant, GlobalKind::Resource(slot)) => {
-                        texels && matches!(slot.kind, ResourceKind::Buffer)
-                    }
-                    _ => false,
-                };
+                return matches!(
+                    (g.class, &g.kind),
+                    (StorageClass::Uniform, GlobalKind::Resource(_))
+                ) && block;
             }
             Some(ValueOrigin::Inst(_)) => match s.node_of(m, v).map(|n| &n.inst) {
                 Some(Inst::AccessChain {

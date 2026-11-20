@@ -1018,8 +1018,7 @@ pub(crate) fn range_variant(slot: SlotRef, bound: BoundKind, profile: &DevicePro
         && matches!(bound, BoundKind::Buffer { length_class, .. } if !class_fits(length_class, storage))
 }
 
-/// The `uses` entry of a bound buffer slot: its proven access, `Sampled` for a uniform texel
-/// buffer view (a sampled read of the buffer's bytes), `Uniform` for another uniform view and
+/// The `uses` entry of a bound buffer slot: its proven access, `Uniform` for a uniform view and
 /// `Storage` otherwise, `stages`, and the window as a range when it starts at or after the bind
 /// offset.
 pub(crate) fn buffer_use(b: &PlannedBuffer, stages: vk::PipelineStageFlags2) -> ResourceUse {
@@ -1027,7 +1026,6 @@ pub(crate) fn buffer_use(b: &PlannedBuffer, stages: vk::PipelineStageFlags2) -> 
         resource: UseTarget::Slot(b.slot),
         access: b.access,
         class: match b.form {
-            BufferForm::Descriptor(DescriptorView::UniformTexel) => AccessClass::Sampled,
             form if form.uniform_view() => AccessClass::Uniform,
             _ => AccessClass::Storage,
         },

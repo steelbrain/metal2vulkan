@@ -124,7 +124,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{AbiInt, ParamBinding, ParamRole};
 use crate::air::ir::{AddrSpace, CastOp, Const, Inst, InstId, InstKind, Type, Value, ValueId};
 use crate::budget::Meter;
-use crate::device::profile::{BufferAccess, Containment, DriverWorkaround, Limits};
+use crate::device::profile::{BufferAccess, Containment, Limits};
 use crate::device::requirements::VkLimit;
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
@@ -705,11 +705,6 @@ pub struct AccessPlan {
     /// ([`note_variable`]): each reads its `PushField::SlotBounds`, and each of those accesses
     /// whose emitted offset is not a constant is checked against its buffer (`emit::prepare`).
     pub variable: BTreeSet<SlotRef>,
-    /// A storage view's slot declares its `RangeAtBindOffset` specialization, as a uniform view's
-    /// does: the profile takes `DriverWorkaround::PushReadsLengthenThreadPayload`, so a read of
-    /// the slot at its bind offset alone, which reads no push word, is worth the key
-    /// ([`Declared::at_bind`]).
-    pub storage_at_bind: bool,
     /// The arenas the function uses.
     pub local: local::LocalPlan,
     /// The function's index extensions ([`index`]): planned before any instruction is selected
@@ -908,10 +903,9 @@ pub struct Declared {
     /// The stage's view of the command buffer's `ExecutionStatus` buffer, where it binds the
     /// buffer ([`absent::declare`]).
     pub status: Option<View>,
-    /// The `RangeAtBindOffset` specialization of each slot read through a uniform view, and of
-    /// each read through a storage view where the plan says so (`AccessPlan::storage_at_bind`),
-    /// by memory-plan slot index: where it holds, an access reads the view at the Metal offset
-    /// alone ([`range_at_bind_offset`]).
+    /// The `RangeAtBindOffset` specialization of each slot read through a uniform view, by
+    /// memory-plan slot index: where it holds, an access reads the view at the Metal offset alone
+    /// ([`range_at_bind_offset`]).
     pub at_bind: Vec<Option<SValue>>,
 }
 
@@ -1021,32 +1015,24 @@ pub fn param_value(
 /// The view kind of a slot on profile `p`: a uniform view for a read-only `constant` slot with a
 /// `Bounded` window whose descriptor range fits `maxUniformBufferRange`, when the profile's
 /// containment encoding emits no check and the slot has no lane read; a storage view otherwise.
-/// The uniform view is a uniform texel buffer ([`texel_view`]) where the profile has
-/// `DriverWorkaround::ExternalUniformReadsSkipACache`, the slot has an indexed read
-/// ([`SlotPlan::indexed_read`]) and the window is at most [`views::TEXEL_WINDOW_BYTES`] long, a
-/// uniform buffer otherwise: a slot read at constant offsets alone keeps its uniform buffer, whose
-/// words a driver may load ahead into registers (ANV pushes such ranges: Mesa's
-/// `brw_nir_analyze_ubo_ranges`; read, not measured), as no texel fetch can be.
-///
-/// Both view facts compose: a lane read keeps its storage view whatever the texel fact, so on a
-/// profile taking both, a slot with a per-lane read is a storage view, one whose indexed reads
-/// are all uniform among the active lanes a uniform texel buffer (within the bound), and one read
-/// at constant offsets alone a uniform buffer.
 ///
 /// Under the in-shader encoding a uniform view could not be contained: the bound range may be
 /// shorter than the view's declared size (the binder clamps it to the padded allocation), a uniform
 /// block has no `OpArrayLength`, and the proven window bounds Metal-defined accesses only. A
 /// storage view's check reads the size actually bound.
 ///
-/// A lane read ([`SlotPlan::lane_read`], marked only on a profile taking
-/// `DriverWorkaround::UniformBufferPerLaneReadsSerialize`) is a read whose address may differ
-/// between the lanes that run it together; there a uniform buffer serves one address at a time,
-/// so the slot keeps its storage view, which reads the same bytes. The choice is the slot's, so
-/// its reads at a uniform address take the storage view too: measured at 0.96 to 1.68 times the
-/// uniform buffer's time (every lane reading one word of a 1 to 32 KiB window), and a storage
-/// view's loads are not moved out of their loops as a uniform view's are (`spirv::hoist`). Every
-/// stage takes the rule; compute was measured, the graphics stages are expected to read alike,
-/// not measured.
+/// A lane read ([`SlotPlan::lane_read`]) is a read whose address may differ between the lanes
+/// that run it together. A uniform buffer may serve one address at a time, so on every device the
+/// slot keeps its storage view, which reads the same bytes. Measured with a bare Vulkan program
+/// (256 workgroups of 64 invocations, each adding 64 or 1024 `uvec4` reads of a window of 1 to
+/// 32 KiB, each invocation reading its own word or walking the window): the storage buffer took
+/// 0.011 to 0.18 of the uniform buffer's time on NVIDIA's driver (RTX 3090, RTX 2080, RTX 5080
+/// Laptop GPU) and 0.96 to 1.00 of it on RADV (Radeon 780M, RX 7900 XTX). The choice is the
+/// slot's, so its reads at a uniform address take the storage view too: measured at 0.96 to 1.68
+/// times the uniform buffer's time (every lane reading one word of a 1 to 32 KiB window), and a
+/// storage view's loads are not moved out of their loops as a uniform view's are
+/// (`spirv::hoist`). Every stage takes the rule; compute was measured, the graphics stages are
+/// expected to read alike, not measured.
 pub fn view_kind(p: &DeviceProfile, s: &SlotPlan) -> ViewKind {
     let limits = &p.fields().limits;
     let uniform = match s.window {
@@ -1061,32 +1047,10 @@ pub fn view_kind(p: &DeviceProfile, s: &SlotPlan) -> ViewKind {
         }
         _ => None,
     };
-    match (uniform, s.window) {
-        (Some(bytes), Some(window)) => (s.indexed_read.then(|| texel_view(p, window)))
-            .flatten()
-            .unwrap_or_else(|| uniform_view(p, bytes)),
-        _ => ViewKind::Storage,
+    match uniform {
+        Some(bytes) => uniform_view(p, bytes),
+        None => ViewKind::Storage,
     }
-}
-
-/// The uniform texel buffer view of a uniform slot with `window` on `p`, where the profile has
-/// `DriverWorkaround::ExternalUniformReadsSkipACache` and the window is `Bounded`, at most
-/// [`views::TEXEL_WINDOW_BYTES`] long, and its descriptor range provably holds at most
-/// `maxTexelBufferElements` 16-byte texels: `uniform_range(len, A)` bytes, with `A` the texel
-/// view's base alignment `max(minTexelBufferOffsetAlignment, 16)`. Otherwise `None`: the slot keeps
-/// its uniform buffer.
-pub(crate) fn texel_view(p: &DeviceProfile, window: Window) -> Option<ViewKind> {
-    let Window::Bounded { len, .. } = window else {
-        return None;
-    };
-    let fact = DriverWorkaround::ExternalUniformReadsSkipACache;
-    if len > views::TEXEL_WINDOW_BYTES || !p.workarounds().contains(&fact) {
-        return None;
-    }
-    let limits = &p.fields().limits;
-    let align = views::base_alignment(limits.min_texel_buffer_offset_alignment);
-    let vecs = u32::try_from(views::uniform_range(len, align)? / 16).ok()?;
-    (vecs <= limits.max_texel_buffer_elements).then_some(ViewKind::UniformTexel { vecs })
 }
 
 /// The uniform view of `bytes` bytes (a multiple of 16) on `p`: `u32[]` with
@@ -1161,7 +1125,6 @@ fn descriptor_view(kind: ViewKind) -> DescriptorView {
         ViewKind::Storage => DescriptorView::Storage,
         ViewKind::UniformWords { .. } => DescriptorView::UniformWords,
         ViewKind::UniformVec4 { .. } => DescriptorView::UniformVec4,
-        ViewKind::UniformTexel { .. } => DescriptorView::UniformTexel,
     }
 }
 
@@ -1212,12 +1175,11 @@ const SLOT_WORK_BYTES: usize = std::mem::size_of::<Option<SlotLowering>>()
     + std::mem::size_of::<(u32, Moved)>();
 
 /// The descriptors and push fields of the slots' forms while [`finish_slots`] moves them: the
-/// storage, uniform buffer and uniform texel buffer views, and the push fields with each
+/// storage and uniform buffer views, and the push fields with each
 /// device-address slot's `SlotBindOffset` replaced by the root table. A move updates it in place.
 struct Census {
     storage: u32,
     uniform: u32,
-    texel: u32,
     fields: BTreeSet<PushField>,
     /// Under the identity domains a device-address slot reads its own address
     /// ([`address_field`]), not the root table.
@@ -1238,7 +1200,6 @@ impl Census {
         let mut c = Census {
             storage: 0,
             uniform: 0,
-            texel: 0,
             fields: push.clone(),
             identity,
             push_base,
@@ -1248,9 +1209,6 @@ impl Census {
             m.tick(1)?;
             match l {
                 SlotLowering::View(ViewKind::Storage) => c.storage = c.storage.saturating_add(1),
-                SlotLowering::View(ViewKind::UniformTexel { .. }) => {
-                    c.texel = c.texel.saturating_add(1)
-                }
                 SlotLowering::View(_) => c.uniform = c.uniform.saturating_add(1),
                 SlotLowering::Psb { .. } => {
                     c.fields.remove(&PushField::SlotBindOffset(slot));
@@ -1269,9 +1227,8 @@ impl Census {
         Ok(c)
     }
 
-    /// The slots' descriptors in `stage`: their views (a uniform texel buffer counts among the
-    /// sampled images, `maxPerStageDescriptorSampledImages`), and the `ArgumentTable` when the
-    /// push fields spill.
+    /// The slots' descriptors in `stage`: their views, and the `ArgumentTable` when the push fields
+    /// spill.
     fn counts(&self, stage: crate::pipeline::sym::Stage) -> DescriptorCounts {
         DescriptorCounts {
             // Under the identity domains the spilled fields are a parameter block at a pushed
@@ -1281,7 +1238,6 @@ impl Census {
             )
             .saturating_add(self.uniform),
             storage_buffers: self.storage,
-            sampled_images: self.texel,
             ..DescriptorCounts::default()
         }
     }
@@ -1294,7 +1250,6 @@ impl Census {
             ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => {
                 self.uniform = self.uniform.saturating_add(1)
             }
-            ViewKind::UniformTexel { .. } => self.texel = self.texel.saturating_add(1),
         }
     }
 
@@ -1749,9 +1704,6 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         p.fields().containment != Containment::UnsafeOff && !identity(p);
     cx.families.access.psb_units = psb::narrow_units(p);
     cx.families.access.identity = identity(p);
-    cx.families.access.storage_at_bind = p
-        .workarounds()
-        .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
     Ok(slots)
 }
 
@@ -2100,15 +2052,7 @@ pub fn declare(
         }
         d.views.push(view);
         d.at_bind.push(match (s, view.map(|v| v.kind)) {
-            (
-                Some(c),
-                Some(
-                    ViewKind::UniformWords { .. }
-                    | ViewKind::UniformVec4 { .. }
-                    | ViewKind::UniformTexel { .. },
-                ),
-            ) => Some(range_at_bind_offset(mb, c.slot)?),
-            (Some(c), Some(ViewKind::Storage)) if plan.families.access.storage_at_bind => {
+            (Some(c), Some(ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. })) => {
                 Some(range_at_bind_offset(mb, c.slot)?)
             }
             _ => None,
@@ -2411,9 +2355,7 @@ fn note_units(
         let units = match view_kind(cx.profile, plan) {
             ViewKind::Storage => units,
             // A uniform view has no narrow or `uvec2` view.
-            ViewKind::UniformWords { .. }
-            | ViewKind::UniformVec4 { .. }
-            | ViewKind::UniformTexel { .. } => Units {
+            ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => Units {
                 vec4: units.vec4,
                 ..Units::NONE
             },
