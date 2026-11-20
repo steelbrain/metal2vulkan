@@ -402,14 +402,39 @@ mod on_device {
             let grant = device
                 .grant_indices(IndexClass::Texture, 4096, 2)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            // 16 MiB and 16 KiB of texels: its block, of its length rounded up to the pool's
-            // granule, has free bytes past it.
-            let d =
-                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4096, 1025);
-            let long = (device.new_texture(&d, Some(4096)))
-                .unwrap_or_else(|error| panic!("{name}: a long texture: {error}"));
-            let held = counters.gauges().texture_block_held_bytes;
-            assert!(held > unit, "{name}: a long texture block of {held} bytes");
+            // A texture longer than a block whose block, of its length rounded up to the pool's
+            // granule, has room for a small texture past it: the first of a few shapes that
+            // leaves 16 KiB. A device whose images leave none never meets the case.
+            let mut found = None;
+            for (width, height) in [(4000, 1100), (4000, 1101), (3000, 1500), (4100, 1025)] {
+                let d = TextureDescriptor::new(
+                    TextureType::Type2D,
+                    PixelFormat::RGBA8Unorm,
+                    width,
+                    height,
+                );
+                let long = (device.new_texture(&d, Some(4096)))
+                    .unwrap_or_else(|error| panic!("{name}: a long texture: {error}"));
+                let held = counters.gauges().texture_block_held_bytes;
+                assert!(held > unit, "{name}: a long texture block of {held} bytes");
+                if held - long.image_size() >= 16 << 10 {
+                    found = Some((long, held));
+                    break;
+                }
+                drop(long);
+                wait_until("the shape's texture freed", || {
+                    counters.gauges().textures == 0
+                });
+            }
+            let Some((long, held)) = found else {
+                println!("places: {name}: no long texture leaves room past it in its block");
+                continue;
+            };
+            // The shapes' long blocks freed at their idle age.
+            wait_until("the shapes' blocks freed", || {
+                let gauges = counters.gauges();
+                gauges.private_idle_bytes == gauges.private_reserve_bytes
+            });
             let free = held - long.image_size();
             let tiny = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 32, 32);
             let small = (device.new_texture(&tiny, Some(4097)))
