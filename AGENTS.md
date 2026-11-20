@@ -31,7 +31,7 @@ The translator's core lives in `crates/metal2vulkan-air/src/` and, in
 | Doc | Role |
 |---|---|
 | `README.md` | What it is, install, command line, quick library use |
-| `docs/API.md` | The translator's API guide; the degrade-notice catalogue; accepted differences |
+| `docs/API.md` | The translator's API guide; the precision-note catalogue; accepted differences |
 | `crates/metal2vulkan-rt/README.md` | The runtime's guide: its floor, its contract with the consumer (memory, events, addresses, surfaces) and its known gaps |
 | `docs/HOWTO.md` | Integration: tools, caching, failures, isolation |
 | `docs/ARCHITECTURE.md` | The translator's stages and module map |
@@ -326,7 +326,7 @@ When chasing a hang, read the whole nextest output; do not pipe it through `head
 - **The honest trade-offs stay current.** `docs/FAST-PATHS.md` (speed-for-accuracy choices, device
   gaps and known gaps), `docs/REFUSALS.md` (generated), `docs/METAL-COVERAGE.md` (generated),
   `docs/CONFORMANCE-COVERAGE.md` (generated) and
-  `docs/API.md`'s degrade-notice catalogue and accepted differences change in the same commit as
+  `docs/API.md`'s precision-note catalogue and accepted differences change in the same commit as
   the behavior they describe. An open gap is recorded where a user reads it: a typed refusal, a
   static precision note, or the known gaps in the runtime's README.
 - Consumer-visible API or command-line changes update `README.md` and `docs/`.
