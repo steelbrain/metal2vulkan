@@ -28,9 +28,6 @@ pub struct TierProfile {
     pub class: Option<ExecutionClass>,
     /// `subgroupSize`: the width of a module that asks for full subgroups without pinning one.
     pub subgroup_size: u32,
-    /// The leg enables `robustBufferAccess` or `robustBufferAccess2`, so its buffers take the
-    /// robust encoding and are left to the device.
-    pub robust_buffers: bool,
 }
 
 impl TierProfile {
@@ -41,18 +38,6 @@ impl TierProfile {
             leg,
             class: ExecutionClass::of_description(description),
             subgroup_size: description.subgroup.size,
-            robust_buffers: description.has(VkFeature::RobustBufferAccess)
-                || description.has(VkFeature::RobustBufferAccess2),
-        }
-    }
-
-    /// The forms this entry leaves to a device that does not contain them: its class's
-    /// ([`ExecutionClass::robust_buffers_uncontained`]) where the leg enables buffer robustness,
-    /// else none (the in-shader encoding contains them).
-    pub fn robust_buffers_uncontained(&self) -> &'static [RobustBufferForm] {
-        match self.class {
-            Some(class) if self.robust_buffers => class.robust_buffers_uncontained(),
-            _ => &[],
         }
     }
 
