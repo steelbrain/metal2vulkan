@@ -1,18 +1,16 @@
 //! A texture **buffer** made or viewed with a swizzle.
 //!
-//! Metal applies a texture buffer's swizzle to every read, out of bounds included (the lane: an M3
-//! Max on macOS 26.7 and an Apple M4 on 27.0.1, plain and under Metal's API validation alike). Each
+//! Metal applies a texture buffer's swizzle to every read, out of bounds included (an M3 Max on
+//! macOS 26.7 and an Apple M4 on 27.0.1, plain and under Metal's API validation alike). Each
 //! channel reads the texel's channel its swizzle names, `Zero` 0 and `One` 1 — `1.0` for a float
 //! format, `1` for an integer one — and a format's missing green and blue read 0 while its missing
 //! alpha reads 1. A read past the texture buffer reads the texel `(0, 0, 0, 0)`, with alpha 1 where
 //! the format has no alpha, swizzled alike. A **view** made with a swizzle reads its own, replacing
 //! the texture's.
 //!
-//! **The port re-measures all of it on this M3 Max under 27.0.1**, which is a release the lane's M3
-//! Max row predates: its 26.7 numbers were taken before the oracle moved, so the one thing the lane
-//! cannot tell us is whether this chip on this build still agrees. Record mode runs the case, the
-//! recording holds Metal's own words, and the rule is a committed cross-check
-//! (`every_recorded_word_is_the_lanes_rule`).
+//! **Measured again on an M3 Max under macOS 27.0.1**: record mode runs the case, the recording
+//! holds Metal's own words, and the rule is a committed cross-check
+//! (`every_recorded_word_is_the_swizzle_rule`).
 //!
 //! The kernels are two owned fixtures':
 //!
@@ -64,7 +62,7 @@ const FLOAT_FIXTURE: Fixture = Fixture {
 /// The fixture whose kernel reads a `uint` texel at an index a buffer gives it.
 const UINT_FIXTURE: Fixture = Fixture::new("ob1_texel_buffer");
 
-/// The four swizzles the lane read, and the identity: `bgr1`, `01ar`, `gggg` and `abgr`.
+/// The four swizzles the case reads, and the identity: `bgr1`, `01ar`, `gggg` and `abgr`.
 pub fn swizzles() -> [(&'static str, TextureSwizzleChannels); 5] {
     use TextureSwizzle::{Alpha, Blue, Green, One, Red, Zero};
     let s = |red, green, blue, alpha| TextureSwizzleChannels {
@@ -108,7 +106,7 @@ fn red_swizzle(source: TextureSwizzle) -> TextureSwizzleChannels {
 /// reads them unswizzled (a float format's as the bits of its `float`).
 ///
 /// The table is public because it is the family's description: what reads `texels`, `alpha` and
-/// `one` is the cross-check that holds the recordings to the lane's rule.
+/// `one` is the cross-check that holds the recordings to the rule.
 pub struct Source {
     pub name: &'static str,
     pub format: PixelFormat,
@@ -304,7 +302,7 @@ pub struct TexelSwizzles {
     sweep: Sweep,
 }
 
-/// A view of a texture buffer reading its own swizzle, over the lane's two parents and two views.
+/// A view of a texture buffer reading its own swizzle, over two parents and two views.
 pub struct ViewedTexelSwizzles;
 
 /// Every source format's case, and the views.
@@ -601,7 +599,7 @@ fn named(name: &str) -> TextureSwizzleChannels {
 }
 
 impl ViewedTexelSwizzles {
-    /// The source the views are of: the lane's, the 8-bit normalized one.
+    /// The source the views are of: the 8-bit normalized one.
     fn source() -> Source {
         float_sources().swap_remove(0)
     }
@@ -726,16 +724,15 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    /// Every word of every committed recording is the lane's rule's, bit for bit — an 8-bit
+    /// Every word of every committed recording is the rule's, bit for bit — an 8-bit
     /// normalized code's `code / 255` correctly rounded included, so no channel may sit an ulp
     /// from it.
     ///
-    /// This is the cross-check the port exists for. The lane's M3 Max row was taken on macOS 26.7,
-    /// before this round's oracle, and its 27.0.1 row was an Apple M4 that is gone; the recordings
-    /// hold what this M3 Max on 27.0.1 answered. A difference means the release or the chip moved
-    /// the rule, which is a finding rather than something to edit away.
+    /// The rule was measured on an M3 Max under macOS 26.7 and an Apple M4 under 27.0.1; the
+    /// recordings hold what an M3 Max on 27.0.1 answered. A difference means the release or the
+    /// chip moved the rule, which is a finding rather than something to edit away.
     #[test]
-    fn every_recorded_word_is_the_lanes_rule() {
+    fn every_recorded_word_is_the_swizzle_rule() {
         let mut unrecorded = Vec::new();
         let mut differ = Vec::new();
         let mut checked = 0usize;
@@ -831,7 +828,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{checked} words checked; Metal's recorded words differ from the lane's rule:\n{}",
+            "{checked} words checked; Metal's recorded words differ from the rule:\n{}",
             differ.join("\n")
         );
         assert!(

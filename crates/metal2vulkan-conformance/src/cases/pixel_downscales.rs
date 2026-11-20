@@ -8,7 +8,7 @@
 //! fraction of the eight-texel cell past each.
 //!
 //! Each set runs twice. `slot` is the texture at texture slot 0 through the pixel state at sampler
-//! slot 0 (the owned fixture `xr_samples`' `xr_sample_runtime`); `norm` is the lane's control — an
+//! slot 0 (the owned fixture `xr_samples`' `xr_sample_runtime`); `norm` is the control — an
 //! argument buffer's **normalized** state of the same filters and modes, sampled at the coordinate
 //! snapped to its `1/256` cell, half up, over the size (the owned fixture `px_samplers`'
 //! `px_sample_argument`). Metal answered the two alike at every size, which is the claim the
@@ -23,13 +23,10 @@
 //! downscale's edge clamping shows. The digest is the whole claim and the windows name a sample
 //! when one moves.
 //!
-//! **What is not ported.** The lane's fourth configuration at each size draws the rectangle into a
-//! 256x256 target through a fragment function and hashes the target. The case vocabulary has no
-//! vertex-and-fragment render pipeline and no draw — only the mesh pipelines the mesh cases needed
-//! — so those seven digests stay in the lane. They need `Side` calls for a render pipeline of a
-//! vertex and a fragment function, a vertex buffer, `drawPrimitives:`, and a target read-back;
-//! nothing about them is blocked by a fixture any more, since `px_samplers` could carry the two
-//! functions as readily as the kernels it holds.
+//! **What is not a case.** A fourth configuration at each size draws the rectangle into a 256x256
+//! target through a fragment function and hashes the target (seven digests an Apple M4 answered).
+//! No case here draws it; `px_samplers` could carry the two functions as readily as the kernels it
+//! holds.
 //!
 //! Nothing here can fault a GPU: one texture a case, six compute passes, no loop.
 
@@ -90,7 +87,7 @@ impl Size {
     }
 }
 
-/// The sizes, in the lane's order: the consumer's 1536x1152 and 1440x1080 passes, 1080 rows under
+/// The sizes, in order: the consumer's 1536x1152 and 1440x1080 passes, 1080 rows under
 /// three other widths that are not powers of two, and each of 1440 and 1080 alone.
 const SIZES: [Size; 7] = [
     Size::new(1536, 1152, [180, 135]),
@@ -114,7 +111,7 @@ const NAMES: [&str; 7] = [
     "pixel-downscales-1536x1080",
 ];
 
-/// The three coordinate sets, in the lane's order.
+/// The three coordinate sets, in order.
 const SETS: [&str; 3] = ["grid", "ulp", "frac"];
 
 /// One xorshift32 step.
@@ -539,8 +536,7 @@ mod tests {
     /// own measurement over our own inputs, carried here so the recorded M3 answers can be held
     /// against it.
     ///
-    /// The lane's fourth configuration at each size — the draw — is not here: the case vocabulary
-    /// has no vertex-and-fragment pipeline, so those seven digests stay in the lane.
+    /// The fourth configuration at each size, the draw, is not here: no case draws it.
     const M4: [(&str, &str, &str); 21] = [
         (
             "pixel-downscales-1536x1152",
@@ -650,8 +646,8 @@ mod tests {
     ];
 
     /// The SHA-256 of every size's texels and of its three coordinate sets' bytes, the sizes in
-    /// [`SIZES`] order and each size's sets in `grid`, `ulp`, `frac` order: the constant
-    /// `pixel_downscales::INPUTS_SHA` pins, so the cases ask Metal the lane's question.
+    /// [`SIZES`] order and each size's sets in `grid`, `ulp`, `frac` order, so the cases ask Metal
+    /// the question the M4's digests answer.
     const INPUTS_SHA: &str = "2e8d095059bdcbb66f74ac0c5f3c98d2dfa6f72c065c5fdfd56debbab9a397dd";
 
     #[test]
@@ -714,11 +710,11 @@ mod tests {
         }
     }
 
-    /// The recorded M3 answers are the lane's M4 ones, digest for digest, at every size and every
-    /// set. A difference here is a finding: the chips disagree, or the fixture no longer asks the
-    /// lane's question.
+    /// The recorded M3 answers are an Apple M4's, digest for digest, at every size and every set.
+    /// A difference here is a finding: the chips disagree, or the fixture no longer asks the M4's
+    /// question.
     #[test]
-    fn the_recorded_digests_are_the_lanes_m4_answers() {
+    fn the_recorded_digests_are_the_m4_answers() {
         let mut checked = 0;
         for case in all() {
             let recording = crate::recording::read(case.name())
@@ -741,7 +737,7 @@ mod tests {
                 assert_eq!(
                     digest.hex,
                     m4,
-                    "{} {set}: this M3 Max and the lane's M4 disagree",
+                    "{} {set}: this M3 Max and the M4 disagree",
                     case.name()
                 );
                 checked += 1;

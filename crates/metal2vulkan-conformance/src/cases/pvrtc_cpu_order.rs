@@ -6,10 +6,10 @@
 //! bit lowest** ([`cpu_order`]), and `getBytes:` gives them back in that same order — so a block at
 //! (x, y) of a level's rows lands at a position neither row-major nor column-major.
 //!
-//! The lane measured that on an Apple **M4** with our own probe, as a rule fitted in Rust over
-//! bytes it generates. Record mode runs the same calls on this M3 Max, so each recording holds
-//! Metal's own bytes and the rule becomes a cross-check (the test
-//! `every_recorded_host_copy_is_the_lanes_z_order`). If Apple's placement moved between the chips
+//! A probe measured that on an Apple **M4**, as a rule fitted in Rust over bytes it generates.
+//! Record mode runs the same calls on an Apple M3 Max, so each recording holds Metal's own bytes
+//! and the rule is a cross-check (the test `every_recorded_host_copy_is_the_z_order`). If Apple's
+//! placement moved between the chips
 //! or the releases, the recording moves with it and the test says which level.
 //!
 //! Per format, every level of a 16-texel chain (down to one block a level) and a 32-texel level,
@@ -34,12 +34,9 @@
 //!
 //! **One case per format**, as the rest of the compressed families.
 //!
-//! **Not ported, and why.** The lane's `replaceRegion:`/`getBytes:` of a region **other than** a
-//! whole level, and of a whole level at a *padded* pitch, which our runtime refuses typed
-//! (`NotImplemented(PvrtcBlockOrder)`) because plain Metal places those blocks by no rule the
-//! runtime has found. Metal runs them, so each is a refusal of ours wider than Metal's — a product
-//! gap rather than a case, and it belongs in the known-refusals ledger with a todo behind it, not
-//! in a tolerance here. Said plainly rather than quietly skipped.
+//! **Not a case, and why.** `replaceRegion:`/`getBytes:` of a region **other than** a whole level,
+//! and of a whole level at a *padded* pitch: plain Metal places those blocks by no rule found, so
+//! there is no rule to state.
 //!
 //! Nothing here can fault a GPU: host copies and blit copies over textures the program makes, no
 //! dispatch, no draw, no loop, every region a whole level.
@@ -50,7 +47,7 @@ use crate::transcript::{ByteLayout, Element, Observed, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, TextureSpec, Work};
 use metal2vulkan::metal::PixelFormat;
 
-/// One PVRTC format the lane walks in this test: the case's name, the raw `MTLPixelFormat`
+/// One PVRTC format the case walks: its name, the raw `MTLPixelFormat`
 /// (stated as `PixelFormat::<name>.as_raw()`, so the value is named in the case's own text and
 /// not only in a comment beside it), and how
 /// wide its block is in texels.
@@ -60,7 +57,7 @@ struct Format {
     block_width: u64,
 }
 
-/// The formats the lane's CPU-order test walks: two 4-bit ones and all four 2-bit ones.
+/// The formats the case walks: two 4-bit ones and all four 2-bit ones.
 const FORMATS: [Format; 6] = [
     Format {
         name: "pvrtc-cpu-order-rgba-4bpp",
@@ -256,7 +253,7 @@ pub struct PvrtcCpuOrder {
     at: usize,
 }
 
-/// Every format's case, in the lane's order.
+/// Every format's case, in [`FORMATS`] order.
 pub fn all() -> Vec<PvrtcCpuOrder> {
     (0..FORMATS.len()).map(|at| PvrtcCpuOrder { at }).collect()
 }
@@ -360,7 +357,7 @@ mod tests {
     /// past that buffer would be a panic rather than a comparison. It holds here because every
     /// level these cases read is a whole number of blocks across and down in powers of two.
     ///
-    /// It is **not** true in general, and the lane says so: a 3-block axis needs two bits, so its
+    /// It is **not** true in general: a 3-block axis needs two bits, so its
     /// order leaves positions no block takes. No case here reads such a level, and a case that did
     /// would have to record those positions rather than index by them.
     #[test]
@@ -418,14 +415,13 @@ mod tests {
         }
     }
 
-    /// Every recorded host copy is the lane's Z order's, byte for byte.
+    /// Every recorded host copy is the Z order's, byte for byte.
     ///
-    /// This is the cross-check the port exists for: the recordings hold what Metal answered on this
-    /// M3 Max, where the lane's rule was fitted on an Apple M4. A difference is a finding either
-    /// way — Apple's placement moved, or the rule was never Metal's — and never something to edit
-    /// away.
+    /// The recordings hold what Metal answered on an Apple M3 Max; the rule was fitted on an Apple
+    /// M4. A difference is a finding either way — Apple's placement moved, or the rule was never
+    /// Metal's — and never something to edit away.
     #[test]
-    fn every_recorded_host_copy_is_the_lanes_z_order() {
+    fn every_recorded_host_copy_is_the_z_order() {
         let mut unrecorded = Vec::new();
         let mut differ = Vec::new();
         let mut checked = 0usize;
@@ -467,8 +463,7 @@ mod tests {
         }
         assert!(
             differ.is_empty(),
-            "{checked} bytes checked; Metal's recorded host copies differ from the lane's Z \
-             order:\n{}",
+            "{checked} bytes checked; Metal's recorded host copies differ from the Z order:\n{}",
             differ.join("\n")
         );
         assert!(

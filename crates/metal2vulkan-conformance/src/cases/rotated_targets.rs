@@ -1,28 +1,24 @@
 //! `ARGB8Unorm` render targets against `RGBA8Unorm` ones: the bytes Metal stores, masked and
 //! blended.
 //!
-//! # What the lane this ports was actually checking
+//! # What the cases ask
 //!
-//! The runtime lane `rotated_targets` says Metal stores, masks and blends `ARGB8Unorm` as
-//! `RGBA8Unorm` with the bytes rotated, alpha first. It then checks that claim by drawing into an
-//! `ARGB8Unorm` target **of ours** and comparing it with an `RGBA8Unorm` target **of ours**, rotated
-//! — so its expectation is our own arithmetic on both sides of the equals sign. A blend of ours that
-//! stored the wrong code in *both* formats passes it. The rotation rule came from a Metal probe, but
-//! the stored codes never did.
-//!
-//! So this port does not carry the rule. It asks Metal the question directly: the same destination
-//! texels and the same drawn values into a target of each format, and **both formats' bytes
-//! recorded from Metal**. The recording then holds Metal's own `ARGB8Unorm` codes, our side is
-//! compared against those rather than against itself, and the rotation claim is a relation between
-//! two recorded Metal facts instead of an assertion in a doc comment.
+//! Metal stores, masks and blends `ARGB8Unorm` as `RGBA8Unorm` with the bytes rotated, alpha first.
+//! A check that compared an `ARGB8Unorm` target of ours with an `RGBA8Unorm` target of ours would
+//! hold our own arithmetic on both sides, and a blend of ours that stored the wrong code in *both*
+//! formats would pass it. So the cases ask Metal directly: the same destination texels and the same
+//! drawn values into a target of each format, and **both formats' bytes recorded from Metal**. The
+//! recording holds Metal's own `ARGB8Unorm` codes, our side is compared against those, and the
+//! rotation is a relation between two recorded Metal facts instead of an assertion in a doc
+//! comment.
 //!
 //! # What this measured on the oracle
 //!
 //! Metal renders format 84 on this M3 Max: the pipeline is made, the pass completes, and the texels
 //! read back. Over 64 texels of pseudo-random destinations and tie-heavy drawn values, unblended
 //! and under straight alpha, every `ARGB8Unorm` texel held the `RGBA8Unorm` texel's bytes rotated,
-//! byte for byte (`probes/rotated_tiles_and_argb.m`). The cases below widen that to the lane's
-//! thirteen write-mask and blend states over 8,192 texels and record both legs.
+//! byte for byte (`probes/rotated_tiles_and_argb.m`). The cases below widen that to thirteen
+//! write-mask and blend states over 8,192 texels and record both legs.
 //!
 //! # The shape
 //!
@@ -69,7 +65,7 @@ const FILLS: &str = "rt6_samples";
 /// the code the host put there.
 const FILL_FLOAT: &str = "rt6_fill_rgba32float";
 
-/// The blend colour every pass sets, the lane's own, which a `BlendAlpha` factor reads.
+/// The blend colour every pass sets, which a `BlendAlpha` factor reads.
 const BLEND_COLOR: [f32; 4] = [0.2, 0.4, 0.6, 0.8];
 
 /// The two formats each case draws into: Metal's `RGBA8Unorm` and the `ARGB8Unorm` that is said to
@@ -79,8 +75,8 @@ const FORMATS: [(&str, PixelFormat); 2] = [
     ("argb8", PixelFormat::ARGB8Unorm),
 ];
 
-/// The lane's xorshift64*: it stores the shifted state and multiplies without storing the product.
-/// Written out so the values are the lane's own rather than a library's.
+/// An xorshift64*: it stores the shifted state and multiplies without storing the product.
+/// Written out so the values are fixed rather than a library's.
 struct Rng(u64);
 
 impl Rng {
@@ -110,7 +106,7 @@ impl Rng {
     }
 }
 
-/// The drawn `float4`s, from the lane's seed 85: each channel a code's value (6 in 10), a tie at
+/// The drawn `float4`s, from seed 85: each channel a code's value (6 in 10), a tie at
 /// half a code (2 in 10), a value in `[0, 1]` off the codes (1 in 10), or one of -0.25, 1.25, -0
 /// and 1 (1 in 10).
 ///
@@ -140,7 +136,7 @@ fn float_bytes() -> Vec<u8> {
         .collect()
 }
 
-/// The `RGBA8Unorm` texels each target holds before its draw, from the lane's seed 8585.
+/// The `RGBA8Unorm` texels each target holds before its draw, from seed 8585.
 fn destinations() -> Vec<[u8; 4]> {
     let mut generator = Rng::new(8585);
     (0..COUNT)
@@ -180,7 +176,7 @@ struct State {
     blend: Option<[(BlendFactor, BlendFactor, BlendOperation); 2]>,
 }
 
-/// The thirteen states the lane sweeps: every write mask and blend it measured, in its order.
+/// The thirteen states the family sweeps: every write mask and blend, in order.
 fn states() -> Vec<State> {
     use BlendFactor as F;
     use BlendOperation as O;
@@ -302,7 +298,7 @@ pub struct RotatedTarget {
     state: State,
 }
 
-/// Every state the lane sweeps, and the one blend Metal answers that we refuse.
+/// Every state the family sweeps, and the one blend Metal answers that we refuse.
 pub fn all() -> Vec<Box<dyn Case>> {
     let mut cases: Vec<Box<dyn Case>> = Vec::new();
     for state in states() {

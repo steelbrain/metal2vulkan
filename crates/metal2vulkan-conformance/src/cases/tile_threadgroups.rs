@@ -4,9 +4,8 @@
 //! `quad_order(qw, qh)`, each a model of how Metal places the threads of a tile threadgroup — and
 //! Metal's answer here is **run**, not copied. Record mode runs each case on native Metal on the
 //! chip and build the recording is keyed to, and the case records the words Metal's own threads
-//! wrote. The lane's formulas stay exactly where they are, as the readable model, and this module's
-//! own tests check the recorded words against them: that is the cross-check the port
-//! owes the lane, and it is what turns a comment into evidence.
+//! wrote. The formulas stay as the readable model, and this module's own tests check the recorded
+//! words against them, which is what turns a comment into evidence.
 //!
 //! What a case observes is typed: every call of the pass by the Metal selector it makes, the
 //! command buffer's status and error, the records the tile function wrote as a buffer of 32-bit
@@ -73,8 +72,8 @@ const GRID_ATTACHMENTS: [PixelFormat; 3] = [
 /// `ttg_tile_simd_blur`'s one attachment.
 const BLUR_ATTACHMENTS: [PixelFormat; 1] = [PixelFormat::RGBA16Float];
 
-/// The threadgroup shapes of even sides the lane dispatches in a 32x32 tile, each in a pass of its
-/// own over its own attachment and record buffer, as the lane runs them: the ones whose simdgroup
+/// The threadgroup shapes of even sides the case dispatches in a 32x32 tile, each in a pass of its
+/// own over its own attachment and record buffer: the ones whose simdgroup
 /// is a whole row of quads (16x2, 32x2) and the ones whose columns, rows and blocks end partly.
 const EVEN_SHAPES: &[&[[u32; 2]]] = &[
     &[[16, 2]],
@@ -120,7 +119,7 @@ pub fn tile_notice_allowances() -> Vec<Allowance> {
         .collect()
 }
 
-/// The blur's source extent, its origin in it, and its color scale, as the lane's probe set them.
+/// The blur's source extent, its origin in it, and its color scale.
 const SOURCE: [u32; 2] = [160, 160];
 const ORIGIN: [u32; 2] = [3, 5];
 const SCALE: f32 = 0.5;
@@ -234,7 +233,7 @@ const GRID_AREA: [u32; 2] = [40, 24];
 /// The tile `k10ts_tile_grid`'s pass is in.
 const GRID_TILE: u32 = 16;
 
-/// The blur's twelve weights: 1, 2, 3 repeating, as the lane's `weight`.
+/// The blur's twelve weights: 1, 2, 3 repeating.
 fn weight(tap: u32) -> u32 {
     tap % 3 + 1
 }
@@ -344,10 +343,10 @@ impl TileThreadgroups {
     /// The tile pipeline descriptors the case makes, each under the name its site takes.
     fn specs(&self) -> Vec<(String, TilePipelineSpec<'static>)> {
         match self.shape {
-            // The three states the lane makes of one descriptor: Metal's own maximum, a limit
-            // below it, and a limit that is not a threadgroup of even sides. The lane's first
-            // states no limit; here it states Metal's maximum, which an Apple M3 Max answers for
-            // no limit, as every state here states its limit.
+            // The three states the case makes of one descriptor: Metal's own maximum, a limit
+            // below it, and a limit that is not a threadgroup of even sides. The first states
+            // Metal's maximum, which an Apple M3 Max answers for no limit, as every state here
+            // states its limit.
             Shape::ThreadLimits => vec![
                 (
                     "state-limited-1024".to_owned(),
@@ -389,7 +388,7 @@ impl TileThreadgroups {
             Shape::ThreadLimits => Ok(()),
             Shape::Order { passes, .. } => {
                 // Every shape is its own pass over its own attachment and its own record buffer,
-                // as the lane runs them, so one shape's records cannot reach another's.
+                // so one shape's records cannot reach another's.
                 for dispatches in passes {
                     self.order_pass(side, state, &pass_name(dispatches), dispatches, sites)?;
                 }
@@ -806,7 +805,7 @@ mod tests {
     use crate::recording::Recording;
     use crate::transcript::{Node, Transcript};
 
-    /// The lane's `position`: Metal's place of lane `lane` of simdgroup `simdgroup` in a 32x32 tile
+    /// `position`: Metal's place of lane `lane` of simdgroup `simdgroup` in a 32x32 tile
     /// threadgroup. Two columns 16 wide; a column's simdgroup `s` is its 8x4 block
     /// `(s mod 2, s / 2)`, and lane `l` is thread `l mod 4` of the block's quad `l / 4`.
     fn position(simdgroup: u32, lane: u32) -> (u32, u32) {
@@ -818,13 +817,13 @@ mod tests {
         )
     }
 
-    /// The lane's `thread_index`: Metal's `thread_index_in_threadgroup` of (`x`, `y`) in a 32-wide
+    /// `thread_index`: Metal's `thread_index_in_threadgroup` of (`x`, `y`) in a 32-wide
     /// tile threadgroup.
     fn thread_index(x: u32, y: u32) -> u32 {
         ((y / 2) * (SIDE / 2) + x / 2) * 4 + (y % 2) * 2 + x % 2
     }
 
-    /// The lane's `quad_order`: Metal's quad order of a threadgroup of `qw` by `qh` 2x2 quads.
+    /// `quad_order`: Metal's quad order of a threadgroup of `qw` by `qh` 2x2 quads.
     fn quad_order(qw: u32, qh: u32) -> Vec<(u32, u32)> {
         let mut order = Vec::new();
         for c0 in (0..qw).step_by(8) {
@@ -891,7 +890,7 @@ mod tests {
         words(node).into_iter().map(f32::from_bits).collect()
     }
 
-    /// Metal's own 32x32 tile threadgroup, as the recording holds it, is the lane's formula: every
+    /// Metal's own 32x32 tile threadgroup, as the recording holds it, is the formula: every
     /// thread's record at the index the formula gives, and every cell added one once.
     #[test]
     fn the_recorded_32x32_threadgroup_is_the_lanes_formula() {
@@ -918,7 +917,7 @@ mod tests {
         }
     }
 
-    /// Metal's threadgroups of even sides, as the recording holds them, are the lane's quad order,
+    /// Metal's threadgroups of even sides, as the recording holds them, are the quad order,
     /// and the cells outside a threadgroup keep what they held.
     #[test]
     fn the_recorded_even_threadgroups_are_the_lanes_quad_order() {
@@ -965,7 +964,7 @@ mod tests {
     }
 
     /// Metal's tile-sized threadgroup, as the recording holds it, answers the tile as its
-    /// threadgroup and stages every cell of it, which is the lane's claim.
+    /// threadgroup and stages every cell of it.
     #[test]
     fn the_recorded_tile_sized_threadgroup_answers_the_tile() {
         let recorded = only_outcome("tile-grid-threadgroup-is-the-tile");

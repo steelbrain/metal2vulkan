@@ -48,7 +48,7 @@ const FIXTURE: &str = "format_scout";
 /// The entry point that reads a 16 x 16 texture whole, one thread a texel.
 const ENTRY: &str = "scout_read_f";
 
-/// Each texture's side, which the kernel's indexing is written for, and the lane's own.
+/// Each texture's side, which the kernel's indexing is written for.
 const SIDE: u32 = 16;
 
 /// The texels of one texture.
@@ -64,7 +64,7 @@ const BLOCKS: u32 = SIDE / 4;
 /// texture of its own, so a diff names which blocks moved.
 const ROUNDS: [&str; 2] = ["zero-blocks", "seeded-blocks"];
 
-/// One format the lane reads: the case's name and the `MTLPixelFormat`. How its blocks decode and
+/// One format the case reads: its name and the `MTLPixelFormat`. How its blocks decode and
 /// whether its colour is sRGB follow from the format ([`EtcDecode::of`], [`srgb_raw_twin`]), so
 /// there is no second spelling of either to keep in step.
 struct Format {
@@ -72,8 +72,8 @@ struct Format {
     format: PixelFormat,
 }
 
-/// Every ETC2 and EAC format, in the lane's order, because the seed of a round is the format's
-/// place in that order and the bytes must stay the bytes the lane measured.
+/// Every ETC2 and EAC format, in a fixed order, because the seed of a round is the format's place
+/// in that order and the bytes must stay the bytes the recordings hold.
 const FORMATS: [Format; 10] = [
     Format {
         name: "etc2-rgb8",
@@ -117,8 +117,8 @@ const FORMATS: [Format; 10] = [
     },
 ];
 
-/// `count` blocks of `bytes` each of the lane's own seeded xorshift, so a round's blocks are the
-/// lane's blocks: random bits, which decode through every mode.
+/// `count` blocks of `bytes` each of a seeded xorshift, so a round's blocks are the same on every
+/// run: random bits, which decode through every mode.
 fn seeded_blocks(seed: u64, count: usize, bytes: usize) -> Vec<u8> {
     let mut state = seed | 1;
     let mut out = Vec::with_capacity(count * bytes + 8);
@@ -132,8 +132,8 @@ fn seeded_blocks(seed: u64, count: usize, bytes: usize) -> Vec<u8> {
     out
 }
 
-/// The blocks of round `round` of the format at place `at`: zeros, then the lane's own seeded
-/// stream at the lane's own seed for that format's place.
+/// The blocks of round `round` of the format at place `at`: zeros, then the seeded stream at the
+/// seed for that format's place.
 fn blocks(at: usize, round: usize, decode: EtcDecode) -> Vec<u8> {
     let bytes = decode.block_bytes() as usize;
     let count = (BLOCKS * BLOCKS) as usize;
@@ -148,7 +148,7 @@ fn blocks(at: usize, round: usize, decode: EtcDecode) -> Vec<u8> {
 /// Metal's twelve-bit table, an 11-bit value over 2047 (signed 1023), and an `R11` or `RG11`
 /// format's missing channels 0, alpha 1.
 ///
-/// This is the lane's own `metal_texels`, kept as a **cross-check against the recording** rather
+/// This is `metal_texels`, kept as a **cross-check against the recording** rather
 /// than as any case's expectation: the recordings hold Metal's answer, and the test
 /// `every_recorded_texel_is_the_decoders` holds the two against each other.
 pub fn decoders_texels(pf: PixelFormat, blocks: &[u8]) -> Vec<[f32; 4]> {
@@ -188,7 +188,7 @@ pub struct EtcTextures {
     at: usize,
 }
 
-/// Every format's case, in the lane's order.
+/// Every format's case, in [`FORMATS`] order.
 pub fn all() -> Vec<EtcTextures> {
     (0..FORMATS.len()).map(|at| EtcTextures { at }).collect()
 }
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(named.len(), FORMATS.len());
     }
 
-    /// Every format the lane walks has a decode and a case, and no case names a format whose
+    /// Every format the family walks has a decode and a case, and no case names a format whose
     /// blocks nothing here can decode.
     #[test]
     fn every_case_names_an_etc_format() {
@@ -516,10 +516,9 @@ mod tests {
 
     /// Every texel of every committed recording is `metal2vulkan::bind::EtcDecode`'s.
     ///
-    /// **This is the cross-check the port exists for.** The recordings hold what Metal answered on
-    /// this M3 Max; the decoder is what every guest shader on a device without ETC2 actually reads.
-    /// Until this test there was no comparison of the two that did not run through the decoder on
-    /// both sides. A difference is a finding rather than something to edit away: either Apple's
+    /// The recordings hold what Metal answered on an Apple M3 Max; the decoder is what every guest
+    /// shader on a device without ETC2 actually reads. A difference is a finding rather than
+    /// something to edit away: either Apple's
     /// decode is not what we implement, or it moved.
     ///
     /// A case with no recording yet is named, so a missing recording is record mode's work rather
