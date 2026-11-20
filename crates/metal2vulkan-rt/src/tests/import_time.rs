@@ -116,14 +116,24 @@ mod on_device {
             match self.layout {
                 // SAFETY: allocated with `layout`, and nothing uses it any more.
                 Some(layout) => unsafe { std::alloc::dealloc(self.pointer.as_ptr(), layout) },
-                None => {
-                    // SAFETY: mapped by `map_shared` over `len` bytes, and nothing uses it any
-                    // more.
-                    let unmapped = unsafe { libc::munmap(self.pointer.as_ptr().cast(), self.len) };
-                    assert_eq!(unmapped, 0, "the mappings' end");
-                }
+                None => unmap_shared(self.pointer, self.len),
             }
         }
+    }
+
+    /// The end of `len` bytes of mappings `map_shared` made at `pointer`, which nothing uses any
+    /// more.
+    #[cfg(target_os = "linux")]
+    fn unmap_shared(pointer: NonNull<u8>, len: usize) {
+        // SAFETY: mapped by `map_shared` over `len` bytes, and nothing uses it any more.
+        let unmapped = unsafe { libc::munmap(pointer.as_ptr().cast(), len) };
+        assert_eq!(unmapped, 0, "the mappings' end");
+    }
+
+    /// Off Linux the test maps no memfd, so it ends no mapping.
+    #[cfg(not(target_os = "linux"))]
+    fn unmap_shared(_: NonNull<u8>, _: usize) {
+        unreachable!("a memfd off Linux")
     }
 
     /// `len` bytes of shared mappings of a new memfd, by `kind` ([`Kind`]): one mapping of a memfd
