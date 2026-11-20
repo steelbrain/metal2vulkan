@@ -725,70 +725,70 @@ MTLArgument.h	MTLTensorBinding	property	tensorDataType		M			tensors (`MTLTensor`
 MTLArgument.h	MTLTensorBinding	property	indexType		M			tensors (`MTLTensor`)	L	tensor
 MTLArgument.h	MTLTensorBinding	property	dimensions		M			tensors (`MTLTensor`)	L	tensor
 MTLArgument.h	MTLTensorBinding	property	auxiliaryPlanes		M			tensors (`MTLTensor`)	L	tensor
-MTLArgumentEncoder.h	MTLArgumentEncoder	protocol	MTLArgumentEncoder		I	runtime	ArgumentEncoder			
-MTLArgumentEncoder.h	MTLArgumentEncoder	property	device		I	runtime	ArgumentEncoder::device			
-MTLArgumentEncoder.h	MTLArgumentEncoder	property	label		I	runtime	ArgumentEncoder::label			
-MTLArgumentEncoder.h	MTLArgumentEncoder	property	encodedLength		I	runtime	ArgumentEncoder::encoded_length			
-MTLArgumentEncoder.h	MTLArgumentEncoder	property	alignment		I	runtime	ArgumentEncoder::alignment			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setArgumentBuffer:offset:		I	runtime	ArgumentEncoder::set_argument_buffer			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setArgumentBuffer:startOffset:arrayElement:		I	runtime	ArgumentEncoder::set_argument_buffer_start_offset_array_element			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setBuffer:offset:atIndex:		I	runtime	ArgumentEncoder::set_buffer			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setBuffers:offsets:withRange:		I	runtime	ArgumentEncoder::set_buffers			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setTexture:atIndex:		I	runtime	ArgumentEncoder::set_texture			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setTextures:withRange:		I	runtime	ArgumentEncoder::set_textures			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setSamplerState:atIndex:		I	runtime	ArgumentEncoder::set_sampler_state			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setSamplerStates:withRange:		I	runtime	ArgumentEncoder::set_sampler_states			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	constantDataAtIndex:		I	runtime	ArgumentEncoder::constant_data			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setRenderPipelineState:atIndex:		I	runtime	ArgumentEncoder::set_render_pipeline_state			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setRenderPipelineStates:withRange:		I	runtime	ArgumentEncoder::set_render_pipeline_states			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setComputePipelineState:atIndex:		I	runtime	ArgumentEncoder::set_compute_pipeline_state			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setComputePipelineStates:withRange:		I	runtime	ArgumentEncoder::set_compute_pipeline_states			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIndirectCommandBuffer:atIndex:		I	runtime	ArgumentEncoder::set_indirect_command_buffer			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIndirectCommandBuffers:withRange:		I	runtime	ArgumentEncoder::set_indirect_command_buffers			
+MTLArgumentEncoder.h	MTLArgumentEncoder	protocol	MTLArgumentEncoder		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	property	device		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLArgumentEncoder.h	MTLArgumentEncoder	property	encodedLength		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	property	alignment		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setArgumentBuffer:offset:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setArgumentBuffer:startOffset:arrayElement:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setBuffer:offset:atIndex:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setBuffers:offsets:withRange:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setTexture:atIndex:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setTextures:withRange:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setSamplerState:atIndex:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setSamplerStates:withRange:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	constantDataAtIndex:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setRenderPipelineState:atIndex:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setRenderPipelineStates:withRange:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setComputePipelineState:atIndex:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setComputePipelineStates:withRange:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIndirectCommandBuffer:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIndirectCommandBuffers:withRange:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setAccelerationStructure:atIndex:		O			ray tracing		
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	newArgumentEncoderForBufferAtIndex:		I	runtime	ArgumentEncoder::new_argument_encoder_for_buffer_at_index			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setVisibleFunctionTable:atIndex:		I	runtime	ArgumentEncoder::set_visible_function_table			
-MTLArgumentEncoder.h	MTLArgumentEncoder	method	setVisibleFunctionTables:withRange:		I	runtime	ArgumentEncoder::set_visible_function_tables			
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	newArgumentEncoderForBufferAtIndex:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setVisibleFunctionTable:atIndex:		M			argument encoders	M	argument-encoders
+MTLArgumentEncoder.h	MTLArgumentEncoder	method	setVisibleFunctionTables:withRange:		M			argument encoders	M	argument-encoders
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIntersectionFunctionTable:atIndex:		O			ray tracing		
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setIntersectionFunctionTables:withRange:		O			ray tracing		
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setDepthStencilState:atIndex:		M			a depth/stencil state in an argument buffer, which indirect render commands read (`RuntimeGap::IndirectRenderCommands` covers the state's ID)	M	icb-depth-stencil
 MTLArgumentEncoder.h	MTLArgumentEncoder	method	setDepthStencilStates:withRange:		M			a depth/stencil state in an argument buffer, which indirect render commands read	M	icb-depth-stencil
-MTLBinaryArchive.h	MTLBinaryArchiveDescriptor	class	MTLBinaryArchiveDescriptor		I	runtime	BinaryArchiveDescriptor			
-MTLBinaryArchive.h	MTLBinaryArchiveDescriptor	property	url		I	runtime	BinaryArchiveDescriptor.url			
-MTLBinaryArchive.h	MTLBinaryArchive	protocol	MTLBinaryArchive		I	runtime	BinaryArchive			
-MTLBinaryArchive.h	MTLBinaryArchive	property	label		I	runtime	BinaryArchive::label			
-MTLBinaryArchive.h	MTLBinaryArchive	property	device		I	runtime	BinaryArchive::device			
-MTLBinaryArchive.h	MTLBinaryArchive	method	addComputePipelineFunctionsWithDescriptor:error:		I	runtime	BinaryArchive::add_compute_pipeline_functions			
-MTLBinaryArchive.h	MTLBinaryArchive	method	addRenderPipelineFunctionsWithDescriptor:error:		I	runtime	BinaryArchive::add_render_pipeline_functions			
-MTLBinaryArchive.h	MTLBinaryArchive	method	addTileRenderPipelineFunctionsWithDescriptor:error:		I	runtime	BinaryArchive::add_tile_render_pipeline_functions			
-MTLBinaryArchive.h	MTLBinaryArchive	method	addMeshRenderPipelineFunctionsWithDescriptor:error:		I	runtime	BinaryArchive::add_mesh_render_pipeline_functions			
+MTLBinaryArchive.h	MTLBinaryArchiveDescriptor	class	MTLBinaryArchiveDescriptor		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchiveDescriptor	property	url		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	protocol	MTLBinaryArchive		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	addComputePipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	addRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	addTileRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLBinaryArchive.h	MTLBinaryArchive	method	addMeshRenderPipelineFunctionsWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLBinaryArchive.h	MTLBinaryArchive	method	addLibraryWithDescriptor:error:		M			a library's functions in a binary archive (macOS 15)	S	archive
-MTLBinaryArchive.h	MTLBinaryArchive	method	serializeToURL:error:		I	runtime	BinaryArchive::serialize_to_url			
+MTLBinaryArchive.h	MTLBinaryArchive	method	serializeToURL:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLBinaryArchive.h	MTLBinaryArchive	method	addFunctionWithDescriptor:library:error:		M			one function in a binary archive	S	archive
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	protocol	MTLBlitCommandEncoder		I	runtime	BlitCommandEncoder			
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	synchronizeResource:	yes	I	runtime	BlitCommandEncoder::synchronize_resource			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	synchronizeTexture:slice:level:	yes	I	runtime	BlitCommandEncoder::synchronize_texture			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:		I	runtime	BlitCommandEncoder::copy_from_texture_to_texture			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:		I	runtime	BlitCommandEncoder::copy_from_buffer_to_texture	with `BlitOption::NONE`		
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:		I	runtime	BlitCommandEncoder::copy_from_buffer_to_texture			
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	synchronizeTexture:slice:level:	yes	M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:		I	runtime	BlitCommandEncoder::copy_from_texture_to_buffer	with `BlitOption::NONE`		
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:		I	runtime	BlitCommandEncoder::copy_from_texture_to_buffer			
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	generateMipmapsForTexture:		I	runtime	BlitCommandEncoder::generate_mipmaps			
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	fillBuffer:range:value:		I	runtime	BlitCommandEncoder::fill_buffer			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:		I	runtime	BlitCommandEncoder::copy_texture_slices			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTexture:toTexture:		I	runtime	BlitCommandEncoder::copy_from_texture_to_texture			
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTexture:toTexture:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:		I	runtime	BlitCommandEncoder::copy_from_buffer_to_buffer			
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	updateFence:		I	runtime	BlitCommandEncoder::update_fence			
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	waitForFence:		I	runtime	BlitCommandEncoder::wait_for_fence			
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	getTextureAccessCounters:region:mipLevel:slice:resetCounters:countersBuffer:countersBufferOffset:	yes	M			not scheduled: Metal's counts are its texture hardware's units, nondeterministic, and differ between an M3 Max and an M4, so no exact answer exists (`RuntimeGap::TextureAccessCounters`)	L	access-counters
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resetTextureAccessCounters:region:mipLevel:slice:	yes	M			as `getTextureAccessCounters:...` (`RuntimeGap::TextureAccessCounters`)	L	access-counters
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:		I	runtime	BlitCommandEncoder::optimize_contents_for_gpu_access			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:slice:level:		I	runtime	BlitCommandEncoder::optimize_contents_for_gpu_access_slice_level			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:		I	runtime	BlitCommandEncoder::optimize_contents_for_cpu_access			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:slice:level:		I	runtime	BlitCommandEncoder::optimize_contents_for_cpu_access_slice_level			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resetCommandsInBuffer:withRange:		I	runtime	BlitCommandEncoder::reset_commands_in_buffer			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:		I	runtime	BlitCommandEncoder::copy_indirect_command_buffer			
-MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeIndirectCommandBuffer:withRange:		I	runtime	BlitCommandEncoder::optimize_indirect_command_buffer			
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForGPUAccess:slice:level:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeContentsForCPUAccess:slice:level:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resetCommandsInBuffer:withRange:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	optimizeIndirectCommandBuffer:withRange:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	sampleCountersInBuffer:atSampleIndex:withBarrier:		M			counter sample buffers	M	counters
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	resolveCounters:inRange:destinationBuffer:destinationOffset:		M			counter sample buffers	M	counters
 MTLBlitCommandEncoder.h	MTLBlitCommandEncoder	method	copyFromTensor:sourceOrigin:sourceDimensions:toTensor:destinationOrigin:destinationDimensions:		M			tensors	L	tensor
@@ -849,11 +849,11 @@ MTLCommandBuffer.h	MTLCommandBufferEncoderInfo	property	label		M			encoder execu
 MTLCommandBuffer.h	MTLCommandBufferEncoderInfo	property	debugSignposts		M			encoder execution status	M	cmdbuf
 MTLCommandBuffer.h	MTLCommandBufferEncoderInfo	property	errorState		M			encoder execution status	M	cmdbuf
 MTLCommandBuffer.h	MTLCommandBuffer	protocol	MTLCommandBuffer		I	runtime	CommandBuffer			
-MTLCommandBuffer.h	MTLCommandBuffer	property	device		I	runtime	CommandBuffer::device			
-MTLCommandBuffer.h	MTLCommandBuffer	property	commandQueue		I	runtime	CommandBuffer::command_queue			
+MTLCommandBuffer.h	MTLCommandBuffer	property	device		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLCommandBuffer.h	MTLCommandBuffer	property	commandQueue		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLCommandBuffer.h	MTLCommandBuffer	property	retainedReferences		M			YES for every runtime command buffer (it retains what it uses)	S	cmdbuf
 MTLCommandBuffer.h	MTLCommandBuffer	property	errorOptions		M			encoder execution status (`MTLCommandBufferErrorOptionEncoderExecutionStatus`): which encoder faulted, in the error's `encoderInfos`	M	cmdbuf
-MTLCommandBuffer.h	MTLCommandBuffer	property	label		I	runtime	CommandBuffer::label, CommandBuffer::set_label			
+MTLCommandBuffer.h	MTLCommandBuffer	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLCommandBuffer.h	MTLCommandBuffer	property	kernelStartTime		I	runtime	CommandBuffer::kernel_start_time			
 MTLCommandBuffer.h	MTLCommandBuffer	property	kernelEndTime		I	runtime	CommandBuffer::kernel_end_time			
 MTLCommandBuffer.h	MTLCommandBuffer	property	logs		M			shader logging	M	logging
@@ -875,11 +875,11 @@ MTLCommandBuffer.h	MTLCommandBuffer	method	renderCommandEncoderWithDescriptor:		
 MTLCommandBuffer.h	MTLCommandBuffer	method	computeCommandEncoderWithDescriptor:		M			the pass descriptor's dispatch type (`compute_command_encoder_with_dispatch_type` takes it); its sample buffer attachments are counters'	S	passdesc
 MTLCommandBuffer.h	MTLCommandBuffer	method	blitCommandEncoderWithDescriptor:		M			a blit pass descriptor holds only counter sample attachments	S	passdesc
 MTLCommandBuffer.h	MTLCommandBuffer	method	computeCommandEncoder		I	runtime	CommandBuffer::compute_command_encoder			
-MTLCommandBuffer.h	MTLCommandBuffer	method	computeCommandEncoderWithDispatchType:		I	runtime	CommandBuffer::compute_command_encoder_with_dispatch_type			
+MTLCommandBuffer.h	MTLCommandBuffer	method	computeCommandEncoderWithDispatchType:		I	runtime	CommandBuffer::compute_command_encoder			
 MTLCommandBuffer.h	MTLCommandBuffer	method	encodeWaitForEvent:value:		I	runtime	CommandBuffer::encode_wait_for_event			
 MTLCommandBuffer.h	MTLCommandBuffer	method	encodeSignalEvent:value:		I	runtime	CommandBuffer::encode_signal_event			
 MTLCommandBuffer.h	MTLCommandBuffer	method	parallelRenderCommandEncoderWithDescriptor:		M			parallel render encoding	M	parallel
-MTLCommandBuffer.h	MTLCommandBuffer	method	resourceStateCommandEncoder		I	runtime	CommandBuffer::resource_state_command_encoder			
+MTLCommandBuffer.h	MTLCommandBuffer	method	resourceStateCommandEncoder		M			the resource state encoder (sparse textures' mappings)	M	resource-state
 MTLCommandBuffer.h	MTLCommandBuffer	method	resourceStateCommandEncoderWithDescriptor:		M			a resource state pass descriptor holds only counter sample attachments	S	passdesc
 MTLCommandBuffer.h	MTLCommandBuffer	method	accelerationStructureCommandEncoder		O			ray tracing		
 MTLCommandBuffer.h	MTLCommandBuffer	method	accelerationStructureCommandEncoderWithDescriptor:		O			ray tracing		
@@ -889,14 +889,14 @@ MTLCommandBuffer.h	MTLCommandBuffer	method	useResidencySet:		M			residency sets	
 MTLCommandBuffer.h	MTLCommandBuffer	method	useResidencySets:count:		M			residency sets	M	residency
 MTLCommandEncoder.h	MTLCommandEncoder	protocol	MTLCommandEncoder		I	runtime	ComputeCommandEncoder			
 MTLCommandEncoder.h	MTLCommandEncoder	property	device		M			every encoder's device	S	labels
-MTLCommandEncoder.h	MTLCommandEncoder	property	label		I	runtime	BlitCommandEncoder::label, BlitCommandEncoder::set_label, ComputeCommandEncoder::label, ComputeCommandEncoder::set_label, RenderCommandEncoder::label, RenderCommandEncoder::set_label, ResourceStateCommandEncoder::label, ResourceStateCommandEncoder::set_label			
+MTLCommandEncoder.h	MTLCommandEncoder	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLCommandEncoder.h	MTLCommandEncoder	method	endEncoding		I	runtime	ComputeCommandEncoder::end_encoding	each encoder's `end_encoding(self)`		
 MTLCommandEncoder.h	MTLCommandEncoder	method	barrierAfterQueueStages:beforeStages:		M			a barrier between this encoder's stages and earlier work of the queue (macOS 26)	M	barriers
 MTLCommandEncoder.h	MTLCommandEncoder	method	insertDebugSignpost:		M			debug signposts: no effect on results	S	labels
 MTLCommandEncoder.h	MTLCommandEncoder	method	pushDebugGroup:		M			debug groups: no effect on results	S	labels
 MTLCommandEncoder.h	MTLCommandEncoder	method	popDebugGroup		M			debug groups	S	labels
 MTLCommandQueue.h	MTLCommandQueue	protocol	MTLCommandQueue		I	runtime	CommandQueue			
-MTLCommandQueue.h	MTLCommandQueue	property	label		I	runtime	CommandQueue::label, CommandQueue::set_label			
+MTLCommandQueue.h	MTLCommandQueue	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLCommandQueue.h	MTLCommandQueue	property	device		I	runtime	CommandQueue::device			
 MTLCommandQueue.h	MTLCommandQueue	method	commandBuffer		I	runtime	CommandQueue::command_buffer			
 MTLCommandQueue.h	MTLCommandQueue	method	commandBufferWithDescriptor:		M			the descriptor's retained references and error options (log state is shader logging's)	S	cmdbuf
@@ -910,44 +910,44 @@ MTLCommandQueue.h	MTLCommandQueueDescriptor	class	MTLCommandQueueDescriptor		M		
 MTLCommandQueue.h	MTLCommandQueueDescriptor	property	maxCommandBufferCount		M			as `new_command_queue_with_max_command_buffer_count` takes it	S	queue
 MTLCommandQueue.h	MTLCommandQueueDescriptor	property	logState		M			shader logging	M	logging
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	protocol	MTLComputeCommandEncoder		I	runtime	ComputeCommandEncoder			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	property	dispatchType		I	runtime	ComputeCommandEncoder::dispatch_type			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	property	dispatchType		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setComputePipelineState:		I	runtime	ComputeCommandEncoder::set_compute_pipeline_state			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBytes:length:atIndex:		I	runtime	ComputeCommandEncoder::set_bytes	copied at the call; more than 4096 bytes refused		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffer:offset:atIndex:		I	runtime	ComputeCommandEncoder::set_buffer			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBufferOffset:atIndex:		I	runtime	ComputeCommandEncoder::set_buffer_offset			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffers:offsets:withRange:		I	runtime	ComputeCommandEncoder::set_buffers			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffer:offset:attributeStride:atIndex:		I	runtime	ComputeCommandEncoder::set_buffer_with_stride			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffers:offsets:attributeStrides:withRange:		I	runtime	ComputeCommandEncoder::set_buffers_with_strides			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBufferOffset:attributeStride:atIndex:		I	runtime	ComputeCommandEncoder::set_buffer_offset_with_stride			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBytes:length:attributeStride:atIndex:		I	runtime	ComputeCommandEncoder::set_bytes_with_stride	copied at the call; more than 4096 bytes refused		
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setVisibleFunctionTable:atBufferIndex:		I	runtime	ComputeCommandEncoder::set_visible_function_table			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setVisibleFunctionTables:withBufferRange:		I	runtime	ComputeCommandEncoder::set_visible_function_tables			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffers:offsets:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffer:offset:attributeStride:atIndex:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBuffers:offsets:attributeStrides:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBufferOffset:attributeStride:atIndex:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setBytes:length:attributeStride:atIndex:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setAccelerationStructure:atBufferIndex:		O			ray tracing		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setTexture:atIndex:		I	runtime	ComputeCommandEncoder::set_texture			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setTextures:withRange:		I	runtime	ComputeCommandEncoder::set_textures			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setTextures:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerState:atIndex:		I	runtime	ComputeCommandEncoder::set_sampler_state			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerStates:withRange:		I	runtime	ComputeCommandEncoder::set_sampler_states			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerStates:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	ComputeCommandEncoder::set_sampler_state			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	ComputeCommandEncoder::set_sampler_states_with_lod_clamps			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setThreadgroupMemoryLength:atIndex:		I	runtime	ComputeCommandEncoder::set_threadgroup_memory_length			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setImageblockWidth:height:		I	runtime	ComputeCommandEncoder::set_imageblock_size			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setImageblockWidth:height:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setStageInRegion:		I	runtime	ComputeCommandEncoder::set_stage_in_region			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setStageInRegionWithIndirectBuffer:indirectBufferOffset:		I	runtime	ComputeCommandEncoder::set_stage_in_region_indirect			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setStageInRegionWithIndirectBuffer:indirectBufferOffset:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	dispatchThreadgroups:threadsPerThreadgroup:		I	runtime	ComputeCommandEncoder::dispatch_threadgroups			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:		I	runtime	ComputeCommandEncoder::dispatch_threadgroups_indirect			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:		I	runtime	ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	dispatchThreads:threadsPerThreadgroup:		I	runtime	ComputeCommandEncoder::dispatch_threads			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	updateFence:		I	runtime	ComputeCommandEncoder::update_fence			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	waitForFence:		I	runtime	ComputeCommandEncoder::wait_for_fence			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useResource:usage:		I	runtime	ComputeCommandEncoder::use_resource			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useResources:count:usage:		I	runtime	ComputeCommandEncoder::use_resources			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useResources:count:usage:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useHeap:		I	runtime	ComputeCommandEncoder::use_heap			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useHeaps:count:		I	runtime	ComputeCommandEncoder::use_heaps			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	executeCommandsInBuffer:withRange:		I	runtime	ComputeCommandEncoder::execute_commands_in_buffer			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:		I	runtime	ComputeCommandEncoder::execute_commands_in_buffer_indirect			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	memoryBarrierWithScope:		I	runtime	ComputeCommandEncoder::memory_barrier_with_scope			
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	memoryBarrierWithResources:count:		I	runtime	ComputeCommandEncoder::memory_barrier_with_resources			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	useHeaps:count:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	executeCommandsInBuffer:withRange:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	memoryBarrierWithScope:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	memoryBarrierWithResources:count:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	sampleCountersInBuffer:atSampleIndex:withBarrier:		M			counter sample buffers	M	counters
 MTLComputePass.h	MTLComputePassSampleBufferAttachmentDescriptor	class	MTLComputePassSampleBufferAttachmentDescriptor		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
 MTLComputePass.h	MTLComputePassSampleBufferAttachmentDescriptor	property	sampleBuffer		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
@@ -964,7 +964,7 @@ MTLComputePipeline.h	MTLComputePipelineReflection	class	MTLComputePipelineReflec
 MTLComputePipeline.h	MTLComputePipelineReflection	property	bindings		I	translator	ComputePipelineReflection::bindings			
 MTLComputePipeline.h	MTLComputePipelineReflection	property	arguments	yes	I	translator	ComputePipelineReflection::bindings	deprecated for `bindings`		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	class	MTLComputePipelineDescriptor		I	translator	ComputePipelineDescriptor			
-MTLComputePipeline.h	MTLComputePipelineDescriptor	property	label		I	runtime	PipelineOptions.label			
+MTLComputePipeline.h	MTLComputePipelineDescriptor	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	computeFunction		I	translator	ComputePipelineDescriptor.kernel			
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	threadGroupSizeIsMultipleOfThreadExecutionWidth		I	translator	ComputePipelineDescriptor.threadgroup_size_is_multiple_of_execution_width			
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	maxTotalThreadsPerThreadgroup		I	translator	ComputePipelineDescriptor.max_total_threads_per_threadgroup			
@@ -973,7 +973,7 @@ MTLComputePipeline.h	MTLComputePipelineDescriptor	property	buffers		I	translator
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	supportIndirectCommandBuffers		I	translator	ComputePipelineDescriptor.support_indirect_command_buffers			
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	insertLibraries	yes	I	translator	FunctionDescriptor.libraries	the deprecated name of `preloadedLibraries`		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	preloadedLibraries		I	translator	FunctionDescriptor.libraries			
-MTLComputePipeline.h	MTLComputePipelineDescriptor	property	binaryArchives		I	runtime	PipelineOptions.binary_archives			
+MTLComputePipeline.h	MTLComputePipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	method	reset		I	translator	ComputePipelineDescriptor::new	a plain value: assign a new one		
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	linkedFunctions		I	translator	FunctionDescriptor.linked			
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	supportAddingBinaryFunctions		I	translator	ComputePipelineDescriptor.support_adding_binary_functions			
@@ -984,21 +984,21 @@ MTLComputePipeline.h	MTLComputePipelineDescriptor	property	forwardProgressUsage	
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	contentionRelief		M			persistent kernels (macOS 27): forward progress and contention hints, unmeasured	L	persistent
 MTLComputePipeline.h	MTLComputePipelineDescriptor	property	optimizeForPersistentKernel		M			persistent kernels (macOS 27): forward progress and contention hints, unmeasured	L	persistent
 MTLComputePipeline.h	MTLComputePipelineState	protocol	MTLComputePipelineState		I	runtime	ComputePipelineState			
-MTLComputePipeline.h	MTLComputePipelineState	property	label		I	runtime	ComputePipelineState::label			
+MTLComputePipeline.h	MTLComputePipelineState	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLComputePipeline.h	MTLComputePipelineState	property	reflection		M			the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler; the runtime gives the creation's answer at creation (`new_compute_pipeline_state_with_reflection`) and after it (`ComputePipelineState::compiled_reflection`)	S	reflection
 MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithName:		M			a handle by function name; the runtime takes the `Function` (`ComputePipelineState::function_handle`)	S	function-handles
-MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithBinaryFunction:		I	runtime	ComputePipelineState::function_handle			
-MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithBinaryFunctions:error:		I	runtime	ComputePipelineState::new_compute_pipeline_state_with_additional_binary_functions			
-MTLComputePipeline.h	MTLComputePipelineState	property	device		I	runtime	ComputePipelineState::device			
+MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithBinaryFunction:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLComputePipeline.h	MTLComputePipelineState	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLComputePipeline.h	MTLComputePipelineState	property	maxTotalThreadsPerThreadgroup		I	runtime	ComputePipelineState::max_total_threads_per_threadgroup			
 MTLComputePipeline.h	MTLComputePipelineState	property	threadExecutionWidth		I	runtime	ComputePipelineState::thread_execution_width			
 MTLComputePipeline.h	MTLComputePipelineState	property	staticThreadgroupMemoryLength		I	runtime	ComputePipelineState::static_threadgroup_memory_length			
 MTLComputePipeline.h	MTLComputePipelineState	method	imageblockMemoryLengthForDimensions:		I	runtime	ComputePipelineState::imageblock_memory_length_for_dimensions			
 MTLComputePipeline.h	MTLComputePipelineState	property	supportIndirectCommandBuffers		I	runtime	ComputePipelineState::support_indirect_command_buffers			
-MTLComputePipeline.h	MTLComputePipelineState	property	gpuResourceID		I	runtime	ComputePipelineState::gpu_resource_id			
-MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithFunction:		I	runtime	ComputePipelineState::function_handle			
-MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithAdditionalBinaryFunctions:error:		I	runtime	ComputePipelineState::new_compute_pipeline_state_with_additional_binary_functions			
-MTLComputePipeline.h	MTLComputePipelineState	method	newVisibleFunctionTableWithDescriptor:		I	runtime	ComputePipelineState::new_visible_function_table			
+MTLComputePipeline.h	MTLComputePipelineState	property	gpuResourceID		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLComputePipeline.h	MTLComputePipelineState	method	functionHandleWithFunction:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLComputePipeline.h	MTLComputePipelineState	method	newComputePipelineStateWithAdditionalBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLComputePipeline.h	MTLComputePipelineState	method	newVisibleFunctionTableWithDescriptor:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLComputePipeline.h	MTLComputePipelineState	method	newIntersectionFunctionTableWithDescriptor:		O			ray tracing		
 MTLComputePipeline.h	MTLComputePipelineState	property	shaderValidation		M			shader validation (`RuntimeGap::ShaderValidation`, not scheduled)	L	shadervalidation
 MTLComputePipeline.h	MTLComputePipelineState	property	requiredThreadsPerThreadgroup		I	runtime	ComputePipelineState::required_threads_per_threadgroup			
@@ -1034,8 +1034,8 @@ MTLDepthStencil.h	MTLDepthStencilDescriptor	property	backFaceStencil		I	translat
 MTLDepthStencil.h	MTLDepthStencilDescriptor	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
 MTLDepthStencil.h	MTLDepthStencilState	protocol	MTLDepthStencilState		I	runtime	DepthStencilState			
 MTLDepthStencil.h	MTLDepthStencilState	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
-MTLDepthStencil.h	MTLDepthStencilState	property	device		I	runtime	DepthStencilState::device			
-MTLDepthStencil.h	MTLDepthStencilState	property	gpuResourceID		I	runtime	DepthStencilState::gpu_resource_id			
+MTLDepthStencil.h	MTLDepthStencilState	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDepthStencil.h	MTLDepthStencilState	property	gpuResourceID		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h	MTLArgumentDescriptor	class	MTLArgumentDescriptor		I	translator	ArgumentDescriptor			
 MTLDevice.h	MTLArgumentDescriptor	class method	argumentDescriptor		I	translator	ArgumentDescriptor::new	a plain value		
 MTLDevice.h	MTLArgumentDescriptor	property	dataType		I	translator	ArgumentDescriptor.data_type			
@@ -1046,87 +1046,87 @@ MTLDevice.h	MTLArgumentDescriptor	property	textureType		I	translator	ArgumentDes
 MTLDevice.h	MTLArgumentDescriptor	property	constantBlockAlignment		I	translator	ArgumentDescriptor.constant_block_alignment			
 MTLDevice.h	MTLArchitecture	class	MTLArchitecture		M			Apple's GPU architecture name; a Vulkan device has none	S	queries
 MTLDevice.h	MTLArchitecture	property	name		M			Apple's GPU architecture name; a Vulkan device has none	S	queries
-MTLDevice.h	MTLDevice	protocol	MTLDevice		I	runtime	Device, DeviceProperties			
-MTLDevice.h	MTLDevice	property	name		I	runtime	Device::name			
-MTLDevice.h	MTLDevice	property	registryID		I	runtime	Device::registry_id			
+MTLDevice.h	MTLDevice	protocol	MTLDevice		I	runtime	Device			
+MTLDevice.h	MTLDevice	property	name		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	registryID		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h	MTLDevice	property	architecture		M			Apple's GPU architecture name (`MTLArchitecture`); a Vulkan device has no Apple architecture, so only its driver's name could answer	S	queries
-MTLDevice.h	MTLDevice	property	maxThreadsPerThreadgroup		I	runtime	DeviceProperties.max_threads_per_threadgroup			
+MTLDevice.h	MTLDevice	property	maxThreadsPerThreadgroup		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h	MTLDevice	property	lowPower	yes	M			deprecated multi-GPU query; Apple silicon answers NO	S	queries
 MTLDevice.h	MTLDevice	property	headless	yes	M			deprecated multi-GPU query; Apple silicon answers NO	S	queries
 MTLDevice.h	MTLDevice	property	removable	yes	M			deprecated multi-GPU query; Apple silicon answers NO	S	queries
-MTLDevice.h	MTLDevice	property	hasUnifiedMemory		I	runtime	DeviceProperties.has_unified_memory			
+MTLDevice.h	MTLDevice	property	hasUnifiedMemory		I	runtime	Device::has_unified_memory			
 MTLDevice.h	MTLDevice	property	recommendedMaxWorkingSetSize		M			the device-local heap's budget would answer it	S	queries
 MTLDevice.h	MTLDevice	property	location	yes	M			deprecated multi-GPU query; Apple silicon answers built-in	S	queries
 MTLDevice.h	MTLDevice	property	locationNumber	yes	M			deprecated multi-GPU query; Apple silicon answers 0	S	queries
 MTLDevice.h	MTLDevice	property	maxTransferRate	yes	M			deprecated multi-GPU query; Apple silicon answers 0	S	queries
-MTLDevice.h	MTLDevice	property	depth24Stencil8PixelFormatSupported	yes	I	runtime	DeviceProperties::is_depth24_stencil8_pixel_format_supported			
-MTLDevice.h	MTLDevice	property	readWriteTextureSupport		I	runtime	DeviceProperties.read_write_texture_support			
-MTLDevice.h	MTLDevice	property	argumentBuffersSupport		I	runtime	DeviceProperties.argument_buffers_support			
-MTLDevice.h	MTLDevice	property	rasterOrderGroupsSupported		I	runtime	DeviceProperties::are_raster_order_groups_supported			
-MTLDevice.h	MTLDevice	property	supports32BitFloatFiltering		I	runtime	DeviceProperties.supports_32bit_float_filtering			
-MTLDevice.h	MTLDevice	property	supports32BitMSAA		I	runtime	Device::supports_32bit_msaa			
+MTLDevice.h	MTLDevice	property	depth24Stencil8PixelFormatSupported	yes	M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	readWriteTextureSupport		I	runtime	Device::read_write_texture_support			
+MTLDevice.h	MTLDevice	property	argumentBuffersSupport		I	runtime	Device::argument_buffers_support			
+MTLDevice.h	MTLDevice	property	rasterOrderGroupsSupported		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	supports32BitFloatFiltering		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	supports32BitMSAA		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h	MTLDevice	property	supportsQueryTextureLOD		M			capability query; the family rows hold the answer (`FeatureRow::QueryTextureLod`)	S	queries
 MTLDevice.h	MTLDevice	property	supportsBCTextureCompression		M			capability query; the family rows hold the answer (`FeatureRow::BcPixelFormats`)	S	queries
-MTLDevice.h	MTLDevice	property	supportsPullModelInterpolation		I	runtime	DeviceProperties::supports_pull_model_interpolation			
+MTLDevice.h	MTLDevice	property	supportsPullModelInterpolation		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h	MTLDevice	property	barycentricCoordsSupported	yes	M			capability query (deprecated name of the next)	S	queries
 MTLDevice.h	MTLDevice	property	supportsShaderBarycentricCoordinates		M			capability query; the family rows hold the answer (`FeatureRow::BarycentricCoordinates`)	S	queries
 MTLDevice.h	MTLDevice	property	currentAllocatedSize		M			the runtime's sub-allocator knows the total	S	queries
 MTLDevice.h	MTLDevice	method	newLogStateWithDescriptor:error:		M			shader logging (`RuntimeGap::ShaderLogging`)	M	logging
 MTLDevice.h	MTLDevice	method	newCommandQueue		I	runtime	Device::new_command_queue			
-MTLDevice.h	MTLDevice	method	newCommandQueueWithMaxCommandBufferCount:		I	runtime	Device::new_command_queue_with_max_command_buffer_count			
+MTLDevice.h	MTLDevice	method	newCommandQueueWithMaxCommandBufferCount:		I	runtime	Device::new_command_queue			
 MTLDevice.h	MTLDevice	method	newCommandQueueWithDescriptor:		M			the descriptor form of `new_command_queue_with_max_command_buffer_count`	S	queue
 MTLDevice.h	MTLDevice	method	heapTextureSizeAndAlignWithDescriptor:		I	runtime	Device::heap_texture_size_and_align			
 MTLDevice.h	MTLDevice	method	heapBufferSizeAndAlignWithLength:options:		I	runtime	Device::heap_buffer_size_and_align			
-MTLDevice.h	MTLDevice	method	newHeapWithDescriptor:		I	runtime	Device::new_heap			
+MTLDevice.h	MTLDevice	method	newHeapWithDescriptor:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLDevice.h	MTLDevice	method	newBufferWithLength:options:		I	runtime	Device::new_buffer			
-MTLDevice.h	MTLDevice	method	newBufferWithBytes:length:options:		I	runtime	Device::new_buffer_with_bytes			
-MTLDevice.h	MTLDevice	method	newBufferWithBytesNoCopy:length:options:deallocator:		I	runtime	Device::new_buffer_with_bytes_no_copy			
+MTLDevice.h	MTLDevice	method	newBufferWithBytes:length:options:		M			a buffer creation form metal2vulkan-rt does not take	S	buffers
+MTLDevice.h	MTLDevice	method	newBufferWithBytesNoCopy:length:options:deallocator:		M			a buffer creation form metal2vulkan-rt does not take	S	buffers
 MTLDevice.h	MTLDevice	method	newDepthStencilStateWithDescriptor:		I	runtime	Device::new_depth_stencil_state			
 MTLDevice.h	MTLDevice	method	newTextureWithDescriptor:		I	runtime	Device::new_texture			
 MTLDevice.h	MTLDevice	method	newTextureWithDescriptor:iosurface:plane:		O			IOSurface is the consumer's; the runtime offers the plane over a no-copy buffer		
-MTLDevice.h	MTLDevice	method	newSharedTextureWithDescriptor:		I	runtime	Device::new_shared_texture	in process only		
-MTLDevice.h	MTLDevice	method	newSharedTextureWithHandle:		I	runtime	Device::new_shared_texture_with_handle	in process only		
-MTLDevice.h	MTLDevice	method	newSamplerStateWithDescriptor:		I	runtime	Device::new_sampler_state, Device::new_sampler_state_with_options			
+MTLDevice.h	MTLDevice	method	newSharedTextureWithDescriptor:		M			texture and event handles shared across processes	M	sharing
+MTLDevice.h	MTLDevice	method	newSharedTextureWithHandle:		M			texture and event handles shared across processes	M	sharing
+MTLDevice.h	MTLDevice	method	newSamplerStateWithDescriptor:		I	runtime	Device::new_sampler_state			
 MTLDevice.h	MTLDevice	method	newDefaultLibrary		O			an app bundle's `default.metallib`: bundles are macOS's; read the metallib and call `new_library_with_data`		
 MTLDevice.h	MTLDevice	method	newDefaultLibraryWithBundle:error:		O			an `NSBundle`'s `default.metallib`: bundles are macOS's		
 MTLDevice.h	MTLDevice	method	newLibraryWithFile:error:	yes	M			a metallib read from a path	S	library
 MTLDevice.h	MTLDevice	method	newLibraryWithURL:error:		M			a metallib read from a file URL	S	library
-MTLDevice.h	MTLDevice	method	newLibraryWithData:error:		I	runtime	Device::new_library_with_data			
+MTLDevice.h	MTLDevice	method	newLibraryWithData:error:		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
 MTLDevice.h	MTLDevice	method	newLibraryWithSource:options:error:		O			MSL source compiles: shaders come in as metallib or AIR; `Device::new_library_with_source` refuses every source typed, `NotImplemented(LibrarySource)`		
 MTLDevice.h	MTLDevice	method	newLibraryWithSource:options:completionHandler:		O			MSL source compiles; refused typed as `newLibraryWithSource:options:error:` is (`Device::new_library_with_source`)		
 MTLDevice.h	MTLDevice	method	newLibraryWithStitchedDescriptor:error:		M			function stitching	L	stitching
 MTLDevice.h	MTLDevice	method	newLibraryWithStitchedDescriptor:completionHandler:		M			function stitching	L	stitching
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:error:		I	runtime	Device::new_render_pipeline_state			
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:options:reflection:error:		I	runtime	Device::new_render_pipeline_state_with_reflection			
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:options:reflection:error:		I	runtime	Device::new_render_pipeline_state	without reflection, which the consumer builds		
 MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:completionHandler:		I	runtime	Device::new_render_pipeline_state	handler form: the call returns what the handler receives		
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:options:completionHandler:		I	runtime	Device::new_render_pipeline_state_with_reflection	handler form		
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:error:		I	runtime	Device::new_compute_pipeline_state_with_function			
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:options:reflection:error:		I	runtime	Device::new_compute_pipeline_state_with_function_and_reflection			
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:completionHandler:		I	runtime	Device::new_compute_pipeline_state_with_function	handler form		
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:options:completionHandler:		I	runtime	Device::new_compute_pipeline_state_with_function_and_reflection	handler form		
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithDescriptor:options:reflection:error:		I	runtime	Device::new_compute_pipeline_state_with_reflection			
-MTLDevice.h	MTLDevice	method	newComputePipelineStateWithDescriptor:options:completionHandler:		I	runtime	Device::new_compute_pipeline_state_with_reflection	handler form		
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithDescriptor:options:completionHandler:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:error:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:options:reflection:error:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:completionHandler:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithFunction:options:completionHandler:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithDescriptor:options:reflection:error:		I	runtime	Device::new_compute_pipeline_state	without reflection, which the consumer builds		
+MTLDevice.h	MTLDevice	method	newComputePipelineStateWithDescriptor:options:completionHandler:		M			a pipeline creation form metal2vulkan-rt does not take	S	pipelines
 MTLDevice.h	MTLDevice	method	newFence		I	runtime	Device::new_fence			
 MTLDevice.h	MTLDevice	method	supportsFeatureSet:	yes	M			deprecated feature sets; would answer from the family rows	S	queries
-MTLDevice.h	MTLDevice	method	supportsFamily:		I	runtime	Device::supports_family			
-MTLDevice.h	MTLDevice	method	supportsTextureSampleCount:		I	runtime	DeviceProperties::supports_texture_sample_count			
-MTLDevice.h	MTLDevice	method	minimumLinearTextureAlignmentForPixelFormat:		I	runtime	Device::minimum_linear_texture_alignment_for_pixel_format			
+MTLDevice.h	MTLDevice	method	supportsFamily:		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	method	supportsTextureSampleCount:		I	runtime	Device::supports_texture_sample_count			
+MTLDevice.h	MTLDevice	method	minimumLinearTextureAlignmentForPixelFormat:		I	runtime	Device::minimum_linear_texture_alignment			
 MTLDevice.h	MTLDevice	method	minimumTextureBufferAlignmentForPixelFormat:		M			the alignment `Buffer::new_texture` checks a texture buffer's offset against	S	queries
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:reflection:error:		I	runtime	Device::new_tile_render_pipeline_state_with_reflection			
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:completionHandler:		I	runtime	Device::new_tile_render_pipeline_state_with_reflection	handler form		
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:reflection:error:		I	runtime	Device::new_mesh_render_pipeline_state_with_reflection			
-MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:completionHandler:		I	runtime	Device::new_mesh_render_pipeline_state_with_reflection	handler form		
-MTLDevice.h	MTLDevice	property	maxThreadgroupMemoryLength		I	runtime	DeviceProperties.max_threadgroup_memory_length			
-MTLDevice.h	MTLDevice	property	maxArgumentBufferSamplerCount		I	runtime	DeviceProperties.max_argument_buffer_sampler_count			
-MTLDevice.h	MTLDevice	property	programmableSamplePositionsSupported		I	runtime	DeviceProperties::are_programmable_sample_positions_supported			
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:reflection:error:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithTileDescriptor:options:completionHandler:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:reflection:error:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLDevice.h	MTLDevice	method	newRenderPipelineStateWithMeshDescriptor:options:completionHandler:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLDevice.h	MTLDevice	property	maxThreadgroupMemoryLength		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	maxArgumentBufferSamplerCount		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h	MTLDevice	property	programmableSamplePositionsSupported		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h	MTLDevice	method	getDefaultSamplePositions:count:		M			the standard positions a pass without `sample_positions` rasterizes at	S	queries
-MTLDevice.h	MTLDevice	method	newArgumentEncoderWithArguments:		I	runtime	Device::new_argument_encoder_with_arguments			
-MTLDevice.h	MTLDevice	method	supportsRasterizationRateMapWithLayerCount:		I	runtime	DeviceProperties::supports_rasterization_rate_map_with_layer_count			
-MTLDevice.h	MTLDevice	method	newRasterizationRateMapWithDescriptor:		I	runtime	Device::new_rasterization_rate_map			
-MTLDevice.h	MTLDevice	method	newIndirectCommandBufferWithDescriptor:maxCommandCount:options:		I	runtime	Device::new_indirect_command_buffer			
+MTLDevice.h	MTLDevice	method	newArgumentEncoderWithArguments:		M			argument encoders	M	argument-encoders
+MTLDevice.h	MTLDevice	method	supportsRasterizationRateMapWithLayerCount:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLDevice.h	MTLDevice	method	newRasterizationRateMapWithDescriptor:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLDevice.h	MTLDevice	method	newIndirectCommandBufferWithDescriptor:maxCommandCount:options:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
 MTLDevice.h	MTLDevice	method	newEvent		I	runtime	Device::new_event			
 MTLDevice.h	MTLDevice	method	newSharedEvent		I	runtime	Device::new_shared_event			
-MTLDevice.h	MTLDevice	method	newSharedEventWithHandle:		I	runtime	Device::new_shared_event_with_handle	in process only		
+MTLDevice.h	MTLDevice	method	newSharedEventWithHandle:		M			texture and event handles shared across processes	M	sharing
 MTLDevice.h	MTLDevice	property	peerGroupID	yes	M			deprecated multi-GPU query; Apple silicon answers 0	S	queries
 MTLDevice.h	MTLDevice	property	peerIndex	yes	M			deprecated multi-GPU query; Apple silicon answers 0	S	queries
 MTLDevice.h	MTLDevice	property	peerCount	yes	M			deprecated multi-GPU query; Apple silicon answers 1	S	queries
@@ -1135,24 +1135,24 @@ MTLDevice.h	MTLDevice	method	newIOCommandQueueWithDescriptor:error:		M			fast re
 MTLDevice.h	MTLDevice	method	newIOHandleWithURL:compressionMethod:error:	yes	M			fast resource loading	L	io
 MTLDevice.h	MTLDevice	method	newIOFileHandleWithURL:error:		M			fast resource loading	L	io
 MTLDevice.h	MTLDevice	method	newIOFileHandleWithURL:compressionMethod:error:		M			fast resource loading	L	io
-MTLDevice.h	MTLDevice	method	sparseTileSizeWithTextureType:pixelFormat:sampleCount:		I	runtime	Device::sparse_tile_size			
-MTLDevice.h	MTLDevice	property	sparseTileSizeInBytes		I	runtime	Device::sparse_tile_size_in_bytes			
-MTLDevice.h	MTLDevice	method	convertSparsePixelRegions:toTileRegions:withTileSize:alignmentMode:numRegions:		I	runtime	Device::convert_sparse_pixel_regions			
-MTLDevice.h	MTLDevice	method	convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:		I	runtime	Device::convert_sparse_tile_regions			
-MTLDevice.h	MTLDevice	method	sparseTileSizeInBytesForSparsePageSize:		I	runtime	Device::sparse_tile_size_in_bytes_for_page			
-MTLDevice.h	MTLDevice	method	sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:		I	runtime	Device::sparse_tile_size_for_page			
-MTLDevice.h	MTLDevice	property	maxBufferLength		I	runtime	DeviceProperties.max_buffer_length			
+MTLDevice.h	MTLDevice	method	sparseTileSizeWithTextureType:pixelFormat:sampleCount:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLDevice.h	MTLDevice	property	sparseTileSizeInBytes		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLDevice.h	MTLDevice	method	convertSparsePixelRegions:toTileRegions:withTileSize:alignmentMode:numRegions:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLDevice.h	MTLDevice	method	convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLDevice.h	MTLDevice	method	sparseTileSizeInBytesForSparsePageSize:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLDevice.h	MTLDevice	method	sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLDevice.h	MTLDevice	property	maxBufferLength		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h	MTLDevice	property	counterSets		M			counter sets; the runtime samples none, so an empty list would be its answer	S	queries
 MTLDevice.h	MTLDevice	method	newCounterSampleBufferWithDescriptor:error:		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
 MTLDevice.h	MTLDevice	method	sampleTimestamps:gpuTimestamp:		M			a CPU and GPU timestamp pair in the time base of `CommandBuffer::gpu_start_time`	S	queries
-MTLDevice.h	MTLDevice	method	newArgumentEncoderWithBufferBinding:		I	runtime	Device::new_argument_encoder_with_buffer_binding			
+MTLDevice.h	MTLDevice	method	newArgumentEncoderWithBufferBinding:		M			argument encoders	M	argument-encoders
 MTLDevice.h	MTLDevice	method	supportsCounterSampling:		M			the runtime samples no counters, so NO would be its answer	S	queries
-MTLDevice.h	MTLDevice	method	supportsVertexAmplificationCount:		I	runtime	DeviceProperties::supports_vertex_amplification_count			
+MTLDevice.h	MTLDevice	method	supportsVertexAmplificationCount:		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h	MTLDevice	property	supportsDynamicLibraries		M			capability query (`FeatureRow::ComputeDynamicLibraries`)	S	queries
 MTLDevice.h	MTLDevice	property	supportsRenderDynamicLibraries		M			capability query (`FeatureRow::RenderDynamicLibraries`)	S	queries
-MTLDevice.h	MTLDevice	method	newDynamicLibrary:error:		I	runtime	Device::new_dynamic_library			
-MTLDevice.h	MTLDevice	method	newDynamicLibraryWithURL:error:		I	runtime	Device::new_dynamic_library_with_url			
-MTLDevice.h	MTLDevice	method	newBinaryArchiveWithDescriptor:error:		I	runtime	Device::new_binary_archive			
+MTLDevice.h	MTLDevice	method	newDynamicLibrary:error:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLDevice.h	MTLDevice	method	newDynamicLibraryWithURL:error:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLDevice.h	MTLDevice	method	newBinaryArchiveWithDescriptor:error:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLDevice.h	MTLDevice	property	supportsPlacementSparse		M			capability query; the runtime makes no placement-sparse buffers, so NO	S	queries
 MTLDevice.h	MTLDevice	property	supportsRaytracing		M			capability query: the runtime builds no ray tracing, so NO is its answer (the query, not ray tracing)	S	queries
 MTLDevice.h	MTLDevice	method	accelerationStructureSizesWithDescriptor:		O			ray tracing		
@@ -1186,8 +1186,8 @@ MTLDevice.h	MTLDevice	method	newCounterHeapWithDescriptor:error:		M			Metal 4 co
 MTLDevice.h	MTLDevice	method	sizeOfCounterHeapEntry:		M			Metal 4 counter heaps	L	mtl4
 MTLDevice.h	MTLDevice	method	queryTimestampFrequency		M			the GPU timestamp frequency	S	queries
 MTLDevice.h	MTLDevice	method	functionHandleWithBinaryFunction:		M			Metal 4	XL	mtl4
-MTLDevice.h		function	MTLCreateSystemDefaultDevice		I	runtime	Device::system_default			
-MTLDevice.h		function	MTLCopyAllDevices		I	runtime	Device::all			
+MTLDevice.h		function	MTLCreateSystemDefaultDevice		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLDevice.h		function	MTLCopyAllDevices		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLDevice.h		function	MTLCopyAllDevicesWithObserver	yes	M			device hot-plug notifications (`RuntimeGap::DeviceNotifications`, not scheduled)	M	notifications
 MTLDevice.h		function	MTLRemoveDeviceObserver	yes	M			device hot-plug notifications (`RuntimeGap::DeviceNotifications`, not scheduled)	M	notifications
 MTLDeviceCertification.h	NSProcessInfo	category	NSProcessInfo		O			process and device-certification state of the OS, not a GPU object		
@@ -1200,46 +1200,46 @@ MTLDrawable.h	MTLDrawable	method	presentAfterMinimumDuration:		O			presentation:
 MTLDrawable.h	MTLDrawable	method	addPresentedHandler:		O			presentation: no `CAMetalLayer` or drawables; the consumer presents the Vulkan image		
 MTLDrawable.h	MTLDrawable	property	presentedTime		O			presentation: no `CAMetalLayer` or drawables; the consumer presents the Vulkan image		
 MTLDrawable.h	MTLDrawable	property	drawableID		O			presentation: no `CAMetalLayer` or drawables; the consumer presents the Vulkan image		
-MTLDynamicLibrary.h	MTLDynamicLibrary	protocol	MTLDynamicLibrary		I	runtime	DynamicLibrary			
-MTLDynamicLibrary.h	MTLDynamicLibrary	property	label		I	runtime	DynamicLibrary::label			
-MTLDynamicLibrary.h	MTLDynamicLibrary	property	device		I	runtime	DynamicLibrary::device			
-MTLDynamicLibrary.h	MTLDynamicLibrary	property	installName		I	runtime	DynamicLibrary::install_name			
-MTLDynamicLibrary.h	MTLDynamicLibrary	method	serializeToURL:error:		I	runtime	DynamicLibrary::serialize_to_url			
+MTLDynamicLibrary.h	MTLDynamicLibrary	protocol	MTLDynamicLibrary		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLDynamicLibrary.h	MTLDynamicLibrary	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLDynamicLibrary.h	MTLDynamicLibrary	property	device		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLDynamicLibrary.h	MTLDynamicLibrary	property	installName		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLDynamicLibrary.h	MTLDynamicLibrary	method	serializeToURL:error:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLEvent.h	MTLEvent	protocol	MTLEvent		I	runtime	Event			
 MTLEvent.h	MTLEvent	property	device		I	runtime	Event::device			
-MTLEvent.h	MTLEvent	property	label		I	runtime	Event::label			
-MTLEvent.h	MTLSharedEventListener	class	MTLSharedEventListener		I	runtime	SharedEventListener			
-MTLEvent.h	MTLSharedEventListener	method	init		I	runtime	SharedEventListener::new			
+MTLEvent.h	MTLEvent	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLEvent.h	MTLSharedEventListener	class	MTLSharedEventListener		M			the shared event listener	S	events
+MTLEvent.h	MTLSharedEventListener	method	init		M			the shared event listener	S	events
 MTLEvent.h	MTLSharedEventListener	method	initWithDispatchQueue:		O			a GCD dispatch queue is macOS's: the listener runs its own thread		
 MTLEvent.h	MTLSharedEventListener	property	dispatchQueue		O			a GCD dispatch queue is macOS's		
 MTLEvent.h	MTLSharedEventListener	class method	sharedListener		M			a process-wide listener	S	events
 MTLEvent.h	MTLSharedEvent	protocol	MTLSharedEvent		I	runtime	SharedEvent			
 MTLEvent.h	MTLSharedEvent	method	notifyListener:atValue:block:		I	runtime	SharedEvent::notify_listener			
-MTLEvent.h	MTLSharedEvent	method	newSharedEventHandle		I	runtime	SharedEvent::new_shared_event_handle			
+MTLEvent.h	MTLSharedEvent	method	newSharedEventHandle		M			texture and event handles shared across processes	M	sharing
 MTLEvent.h	MTLSharedEvent	method	waitUntilSignaledValue:timeoutMS:		I	runtime	SharedEvent::wait_until_signaled_value			
 MTLEvent.h	MTLSharedEvent	property	signaledValue		I	runtime	SharedEvent::signaled_value			
-MTLEvent.h	MTLSharedEventHandle	class	MTLSharedEventHandle		I	runtime	SharedEventHandle			
-MTLEvent.h	MTLSharedEventHandle	property	label		I	runtime	SharedEventHandle::label			
+MTLEvent.h	MTLSharedEventHandle	class	MTLSharedEventHandle		M			texture and event handles shared across processes	M	sharing
+MTLEvent.h	MTLSharedEventHandle	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLFence.h	MTLFence	protocol	MTLFence		I	runtime	Fence			
-MTLFence.h	MTLFence	property	device		I	runtime	Fence::device			
-MTLFence.h	MTLFence	property	label		I	runtime	Fence::label			
+MTLFence.h	MTLFence	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLFence.h	MTLFence	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLFunctionConstantValues.h	MTLFunctionConstantValues	class	MTLFunctionConstantValues		I	translator	FunctionConstantValues			
 MTLFunctionConstantValues.h	MTLFunctionConstantValues	method	setConstantValue:type:atIndex:		I	translator	FunctionConstantValues::with_index			
 MTLFunctionConstantValues.h	MTLFunctionConstantValues	method	setConstantValues:type:withRange:		I	translator	FunctionConstantValues::with_index	one call an index of the range		
 MTLFunctionConstantValues.h	MTLFunctionConstantValues	method	setConstantValue:type:withName:		I	translator	FunctionConstantValues::with_name			
 MTLFunctionConstantValues.h	MTLFunctionConstantValues	method	reset		I	translator	FunctionConstantValues	a plain value: assign a new one		
-MTLFunctionDescriptor.h	MTLFunctionDescriptor	class	MTLFunctionDescriptor		I	runtime	FunctionDescriptor			
-MTLFunctionDescriptor.h	MTLFunctionDescriptor	class method	functionDescriptor		I	runtime	FunctionDescriptor::new			
-MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	name		I	runtime	FunctionDescriptor.name			
+MTLFunctionDescriptor.h	MTLFunctionDescriptor	class	MTLFunctionDescriptor		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLFunctionDescriptor.h	MTLFunctionDescriptor	class method	functionDescriptor		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	name		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
 MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	specializedName		M			a specialized function's own name	S	functions
-MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	constantValues		I	runtime	FunctionDescriptor.constant_values			
-MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	options		I	runtime	FunctionDescriptor.options			
+MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	constantValues		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	options		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
 MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	binaryArchives		M			binary archives searched for one function's compile (`PipelineOptions.binary_archives` serves pipelines)	S	archive
 MTLFunctionDescriptor.h	MTLIntersectionFunctionDescriptor	class	MTLIntersectionFunctionDescriptor		O			ray tracing		
-MTLFunctionHandle.h	MTLFunctionHandle	protocol	MTLFunctionHandle		I	runtime	FunctionHandle			
+MTLFunctionHandle.h	MTLFunctionHandle	protocol	MTLFunctionHandle		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLFunctionHandle.h	MTLFunctionHandle	property	functionType		M			a handle's function type (the runtime's `FunctionHandle` names its function)	S	function-handles
-MTLFunctionHandle.h	MTLFunctionHandle	property	name		I	runtime	FunctionHandle::name			
-MTLFunctionHandle.h	MTLFunctionHandle	property	device		I	runtime	FunctionHandle::device			
+MTLFunctionHandle.h	MTLFunctionHandle	property	name		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLFunctionHandle.h	MTLFunctionHandle	property	device		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLFunctionHandle.h	MTLFunctionHandle	property	gpuResourceID		M			a handle's resource ID	S	function-handles
 MTLFunctionLog.h	MTLLogContainer	protocol	MTLLogContainer		M			shader logging (`RuntimeGap::ShaderLogging`)	M	logging
 MTLFunctionLog.h	MTLFunctionLogDebugLocation	protocol	MTLFunctionLogDebugLocation		M			shader logging (`RuntimeGap::ShaderLogging`)	M	logging
@@ -1274,32 +1274,32 @@ MTLFunctionStitching.h	MTLStitchedLibraryDescriptor	property	functionGraphs		M		
 MTLFunctionStitching.h	MTLStitchedLibraryDescriptor	property	functions		M			function stitching	L	stitching
 MTLFunctionStitching.h	MTLStitchedLibraryDescriptor	property	binaryArchives		M			function stitching	L	stitching
 MTLFunctionStitching.h	MTLStitchedLibraryDescriptor	property	options		M			function stitching	L	stitching
-MTLHeap.h	MTLHeapDescriptor	class	MTLHeapDescriptor		I	runtime	HeapDescriptor			
-MTLHeap.h	MTLHeapDescriptor	property	size		I	runtime	HeapDescriptor.size			
-MTLHeap.h	MTLHeapDescriptor	property	storageMode		I	runtime	HeapDescriptor.resource_options	`ResourceOptions` holds the three modes		
-MTLHeap.h	MTLHeapDescriptor	property	cpuCacheMode		I	runtime	HeapDescriptor.resource_options			
-MTLHeap.h	MTLHeapDescriptor	property	sparsePageSize		I	runtime	HeapDescriptor.sparse_page_size			
-MTLHeap.h	MTLHeapDescriptor	property	hazardTrackingMode		I	runtime	HeapDescriptor.resource_options			
-MTLHeap.h	MTLHeapDescriptor	property	resourceOptions		I	runtime	HeapDescriptor.resource_options			
-MTLHeap.h	MTLHeapDescriptor	property	type		I	runtime	HeapDescriptor.heap_type			
+MTLHeap.h	MTLHeapDescriptor	class	MTLHeapDescriptor		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	size		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	storageMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	cpuCacheMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	sparsePageSize		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	hazardTrackingMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	resourceOptions		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeapDescriptor	property	type		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLHeap.h	MTLHeapDescriptor	property	maxCompatiblePlacementSparsePageSize		M			placement sparse heaps' largest page size	S	sparse
-MTLHeap.h	MTLHeap	protocol	MTLHeap		I	runtime	Heap			
-MTLHeap.h	MTLHeap	property	label		I	runtime	Heap::label			
-MTLHeap.h	MTLHeap	property	device		I	runtime	Heap::device			
-MTLHeap.h	MTLHeap	property	storageMode		I	runtime	Heap::storage_mode			
-MTLHeap.h	MTLHeap	property	cpuCacheMode		I	runtime	Heap::cpu_cache_mode			
-MTLHeap.h	MTLHeap	property	hazardTrackingMode		I	runtime	Heap::hazard_tracking_mode			
-MTLHeap.h	MTLHeap	property	resourceOptions		I	runtime	Heap::resource_options			
-MTLHeap.h	MTLHeap	property	size		I	runtime	Heap::size			
-MTLHeap.h	MTLHeap	property	usedSize		I	runtime	Heap::used_size			
-MTLHeap.h	MTLHeap	property	currentAllocatedSize		I	runtime	Heap::current_allocated_size			
-MTLHeap.h	MTLHeap	method	maxAvailableSizeWithAlignment:		I	runtime	Heap::max_available_size			
-MTLHeap.h	MTLHeap	method	newBufferWithLength:options:		I	runtime	Heap::new_buffer			
-MTLHeap.h	MTLHeap	method	newTextureWithDescriptor:		I	runtime	Heap::new_texture			
-MTLHeap.h	MTLHeap	method	setPurgeableState:		I	runtime	Heap::set_purgeable_state			
-MTLHeap.h	MTLHeap	property	type		I	runtime	Heap::heap_type			
-MTLHeap.h	MTLHeap	method	newBufferWithLength:options:offset:		I	runtime	Heap::new_buffer_at_offset			
-MTLHeap.h	MTLHeap	method	newTextureWithDescriptor:offset:		I	runtime	Heap::new_texture_at_offset			
+MTLHeap.h	MTLHeap	protocol	MTLHeap		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	storageMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	cpuCacheMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	hazardTrackingMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	resourceOptions		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	size		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	usedSize		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	currentAllocatedSize		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	maxAvailableSizeWithAlignment:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	newBufferWithLength:options:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	newTextureWithDescriptor:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	setPurgeableState:		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	property	type		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLHeap.h	MTLHeap	method	newBufferWithLength:options:offset:		I	runtime	Device::new_heap_buffer	a heap is a range of a block the consumer took (HeapRange)		
+MTLHeap.h	MTLHeap	method	newTextureWithDescriptor:offset:		I	runtime	Device::new_heap_texture	a heap is a range of a block the consumer took (HeapRange)		
 MTLHeap.h	MTLHeap	method	newAccelerationStructureWithSize:		O			ray tracing		
 MTLHeap.h	MTLHeap	method	newAccelerationStructureWithDescriptor:		O			ray tracing		
 MTLHeap.h	MTLHeap	method	newAccelerationStructureWithSize:offset:		O			ray tracing		
@@ -1343,68 +1343,68 @@ MTLIOCompressor.h		function	MTLIOCompressionContextDefaultChunkSize		M			fast re
 MTLIOCompressor.h		function	MTLIOCreateCompressionContext		M			fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`)	L	io
 MTLIOCompressor.h		function	MTLIOCompressionContextAppendData		M			fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`)	L	io
 MTLIOCompressor.h		function	MTLIOFlushAndDestroyCompressionContext		M			fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`)	L	io
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	class	MTLIndirectCommandBufferDescriptor		I	runtime	IndirectCommandBufferDescriptor			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	commandTypes		I	runtime	IndirectCommandBufferDescriptor.command_types			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritPipelineState		I	runtime	IndirectCommandBufferDescriptor.inherit_pipeline_state			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritBuffers		I	runtime	IndirectCommandBufferDescriptor.inherit_buffers			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthStencilState		I	runtime	IndirectCommandBufferDescriptor.inherit_depth_stencil_state			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthBias		I	runtime	IndirectCommandBufferDescriptor.inherit_depth_bias			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthClipMode		I	runtime	IndirectCommandBufferDescriptor.inherit_depth_clip_mode			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritCullMode		I	runtime	IndirectCommandBufferDescriptor.inherit_cull_mode			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritFrontFacingWinding		I	runtime	IndirectCommandBufferDescriptor.inherit_front_facing_winding			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritTriangleFillMode		I	runtime	IndirectCommandBufferDescriptor.inherit_triangle_fill_mode			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxVertexBufferBindCount		I	runtime	IndirectCommandBufferDescriptor.max_vertex_buffer_bind_count			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxFragmentBufferBindCount		I	runtime	IndirectCommandBufferDescriptor.max_fragment_buffer_bind_count			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxKernelBufferBindCount		I	runtime	IndirectCommandBufferDescriptor.max_kernel_buffer_bind_count			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxKernelThreadgroupMemoryBindCount		I	runtime	IndirectCommandBufferDescriptor.max_kernel_threadgroup_memory_bind_count			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxObjectBufferBindCount		I	runtime	IndirectCommandBufferDescriptor.max_object_buffer_bind_count			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxMeshBufferBindCount		I	runtime	IndirectCommandBufferDescriptor.max_mesh_buffer_bind_count			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxObjectThreadgroupMemoryBindCount		I	runtime	IndirectCommandBufferDescriptor.max_object_threadgroup_memory_bind_count			
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	class	MTLIndirectCommandBufferDescriptor		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	commandTypes		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritPipelineState		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritBuffers		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthStencilState		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthBias		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritDepthClipMode		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritCullMode		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritFrontFacingWinding		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	inheritTriangleFillMode		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxVertexBufferBindCount		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxFragmentBufferBindCount		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxKernelBufferBindCount		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxKernelThreadgroupMemoryBindCount		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxObjectBufferBindCount		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxMeshBufferBindCount		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	maxObjectThreadgroupMemoryBindCount		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
 MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportRayTracing		O			ray tracing		
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportDynamicAttributeStride		I	runtime	IndirectCommandBufferDescriptor.support_dynamic_attribute_stride			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportColorAttachmentMapping		I	runtime	IndirectCommandBufferDescriptor.support_color_attachment_mapping			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	protocol	MTLIndirectCommandBuffer		I	runtime	IndirectCommandBuffer			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	property	size		I	runtime	IndirectCommandBuffer::size			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	property	gpuResourceID		I	runtime	IndirectCommandBuffer::gpu_resource_id			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	resetWithRange:		I	runtime	IndirectCommandBuffer::reset_with_range			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	indirectRenderCommandAtIndex:		I	runtime	IndirectCommandBuffer::indirect_render_command_at			
-MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	indirectComputeCommandAtIndex:		I	runtime	IndirectCommandBuffer::indirect_compute_command_at			
-MTLIndirectCommandBuffer.h		function	MTLIndirectCommandBufferExecutionRangeMake		I	runtime	ComputeCommandEncoder::execute_commands_in_buffer	a `Range<u64>`		
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	protocol	MTLIndirectRenderCommand		I	runtime	IndirectRenderCommand			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setRenderPipelineState:		I	runtime	IndirectRenderCommand::set_render_pipeline_state			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setVertexBuffer:offset:atIndex:		I	runtime	IndirectRenderCommand::set_vertex_buffer			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setFragmentBuffer:offset:atIndex:		I	runtime	IndirectRenderCommand::set_fragment_buffer			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setVertexBuffer:offset:attributeStride:atIndex:		I	runtime	IndirectRenderCommand::set_vertex_buffer_with_stride			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:		I	runtime	IndirectRenderCommand::draw_patches			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:		I	runtime	IndirectRenderCommand::draw_indexed_patches			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:		I	runtime	IndirectRenderCommand::draw_primitives			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:		I	runtime	IndirectRenderCommand::draw_indexed_primitives			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setObjectThreadgroupMemoryLength:atIndex:		I	runtime	IndirectRenderCommand::set_object_threadgroup_memory_length			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setObjectBuffer:offset:atIndex:		I	runtime	IndirectRenderCommand::set_object_buffer			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setMeshBuffer:offset:atIndex:		I	runtime	IndirectRenderCommand::set_mesh_buffer			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		I	runtime	IndirectRenderCommand::draw_mesh_threadgroups			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		I	runtime	IndirectRenderCommand::draw_mesh_threads			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setBarrier		I	runtime	IndirectRenderCommand::set_barrier			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	clearBarrier		I	runtime	IndirectRenderCommand::clear_barrier			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthStencilState:		I	runtime	IndirectRenderCommand::set_depth_stencil_state			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthBias:slopeScale:clamp:		I	runtime	IndirectRenderCommand::set_depth_bias			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthClipMode:		I	runtime	IndirectRenderCommand::set_depth_clip_mode			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setCullMode:		I	runtime	IndirectRenderCommand::set_cull_mode			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setFrontFacingWinding:		I	runtime	IndirectRenderCommand::set_front_facing_winding			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setTriangleFillMode:		I	runtime	IndirectRenderCommand::set_triangle_fill_mode			
-MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	reset		I	runtime	IndirectRenderCommand::reset			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	protocol	MTLIndirectComputeCommand		I	runtime	IndirectComputeCommand			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setComputePipelineState:		I	runtime	IndirectComputeCommand::set_compute_pipeline_state			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setKernelBuffer:offset:atIndex:		I	runtime	IndirectComputeCommand::set_kernel_buffer			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setKernelBuffer:offset:attributeStride:atIndex:		I	runtime	IndirectComputeCommand::set_kernel_buffer_with_stride			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	concurrentDispatchThreadgroups:threadsPerThreadgroup:		I	runtime	IndirectComputeCommand::concurrent_dispatch_threadgroups			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	concurrentDispatchThreads:threadsPerThreadgroup:		I	runtime	IndirectComputeCommand::concurrent_dispatch_threads			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setBarrier		I	runtime	IndirectComputeCommand::set_barrier			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	clearBarrier		I	runtime	IndirectComputeCommand::clear_barrier			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setImageblockWidth:height:		I	runtime	IndirectComputeCommand::set_imageblock_size			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	reset		I	runtime	IndirectComputeCommand::reset			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setThreadgroupMemoryLength:atIndex:		I	runtime	IndirectComputeCommand::set_threadgroup_memory_length			
-MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setStageInRegion:		I	runtime	IndirectComputeCommand::set_stage_in_region			
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportDynamicAttributeStride		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBufferDescriptor	property	supportColorAttachmentMapping		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	protocol	MTLIndirectCommandBuffer		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	property	size		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	property	gpuResourceID		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	resetWithRange:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	indirectRenderCommandAtIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h	MTLIndirectCommandBuffer	method	indirectComputeCommandAtIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandBuffer.h		function	MTLIndirectCommandBufferExecutionRangeMake		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	protocol	MTLIndirectRenderCommand		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setRenderPipelineState:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setVertexBuffer:offset:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setFragmentBuffer:offset:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setVertexBuffer:offset:attributeStride:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setObjectThreadgroupMemoryLength:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setObjectBuffer:offset:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setMeshBuffer:offset:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setBarrier		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	clearBarrier		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthStencilState:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthBias:slopeScale:clamp:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setDepthClipMode:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setCullMode:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setFrontFacingWinding:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	setTriangleFillMode:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectRenderCommand	method	reset		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	protocol	MTLIndirectComputeCommand		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setComputePipelineState:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setKernelBuffer:offset:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setKernelBuffer:offset:attributeStride:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	concurrentDispatchThreadgroups:threadsPerThreadgroup:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	concurrentDispatchThreads:threadsPerThreadgroup:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setBarrier		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	clearBarrier		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setImageblockWidth:height:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	reset		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setThreadgroupMemoryLength:atIndex:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLIndirectCommandEncoder.h	MTLIndirectComputeCommand	method	setStageInRegion:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
 MTLIntersectionFunctionTable.h	MTLIntersectionFunctionTableDescriptor	class	MTLIntersectionFunctionTableDescriptor		O			ray tracing		
 MTLIntersectionFunctionTable.h	MTLIntersectionFunctionTableDescriptor	class method	intersectionFunctionTableDescriptor		O			ray tracing		
 MTLIntersectionFunctionTable.h	MTLIntersectionFunctionTableDescriptor	property	functionCount		O			ray tracing		
@@ -1439,19 +1439,19 @@ MTLLibrary.h	MTLFunctionConstant	property	name		I	translator	FunctionConstant::n
 MTLLibrary.h	MTLFunctionConstant	property	type		I	translator	FunctionConstant::data_type			
 MTLLibrary.h	MTLFunctionConstant	property	index		I	translator	FunctionConstant::index			
 MTLLibrary.h	MTLFunctionConstant	property	required		I	translator	FunctionConstant::is_required			
-MTLLibrary.h	MTLFunction	protocol	MTLFunction		I	runtime	Function			
+MTLLibrary.h	MTLFunction	protocol	MTLFunction		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
 MTLLibrary.h	MTLFunction	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
-MTLLibrary.h	MTLFunction	property	device		I	runtime	Function::device			
-MTLLibrary.h	MTLFunction	property	functionType		I	runtime	Function::function_type			
-MTLLibrary.h	MTLFunction	property	patchType		I	runtime	Function::patch_type			
-MTLLibrary.h	MTLFunction	property	patchControlPointCount		I	runtime	Function::patch_control_point_count			
-MTLLibrary.h	MTLFunction	property	vertexAttributes		I	runtime	Function::vertex_attributes			
-MTLLibrary.h	MTLFunction	property	stageInputAttributes		I	runtime	Function::stage_input_attributes			
-MTLLibrary.h	MTLFunction	property	name		I	runtime	Function::name			
-MTLLibrary.h	MTLFunction	property	functionConstantsDictionary		I	runtime	Function::function_constants_dictionary			
-MTLLibrary.h	MTLFunction	method	newArgumentEncoderWithBufferIndex:		I	runtime	Function::new_argument_encoder_with_buffer_index			
-MTLLibrary.h	MTLFunction	method	newArgumentEncoderWithBufferIndex:reflection:	yes	I	runtime	Function::new_argument_encoder_with_buffer_index			
-MTLLibrary.h	MTLFunction	property	options		I	runtime	Function::options			
+MTLLibrary.h	MTLFunction	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLLibrary.h	MTLFunction	property	functionType		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLFunction	property	patchType		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLFunction	property	patchControlPointCount		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLFunction	property	vertexAttributes		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLFunction	property	stageInputAttributes		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLFunction	property	name		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLFunction	property	functionConstantsDictionary		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLFunction	method	newArgumentEncoderWithBufferIndex:		M			argument encoders	M	argument-encoders
+MTLLibrary.h	MTLFunction	method	newArgumentEncoderWithBufferIndex:reflection:	yes	M			argument encoders	M	argument-encoders
+MTLLibrary.h	MTLFunction	property	options		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
 MTLLibrary.h	MTLCompileOptions	class	MTLCompileOptions		O			MSL source compiles: shaders come in as metallib or AIR		
 MTLLibrary.h	MTLCompileOptions	property	preprocessorMacros		O			MSL source compiles: shaders come in as metallib or AIR		
 MTLLibrary.h	MTLCompileOptions	property	fastMathEnabled	yes	O			MSL source compiles: shaders come in as metallib or AIR		
@@ -1472,20 +1472,20 @@ MTLLibrary.h	MTLCompileOptions	property	floatingPointConversionRoundingMode		O		
 MTLLibrary.h	MTLFunctionReflection	class	MTLFunctionReflection		I	translator	FunctionReflection			
 MTLLibrary.h	MTLFunctionReflection	property	bindings		I	translator	FunctionReflection::bindings			
 MTLLibrary.h	MTLFunctionReflection	property	userAnnotation		I	translator	FunctionReflection::user_annotation			
-MTLLibrary.h	MTLLibrary	protocol	MTLLibrary		I	runtime	Library			
+MTLLibrary.h	MTLLibrary	protocol	MTLLibrary		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
 MTLLibrary.h	MTLLibrary	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
-MTLLibrary.h	MTLLibrary	property	device		I	runtime	Library::device			
-MTLLibrary.h	MTLLibrary	method	newFunctionWithName:		I	runtime	Library::new_function_with_name			
-MTLLibrary.h	MTLLibrary	method	newFunctionWithName:constantValues:error:		I	runtime	Library::new_function_with_name_constant_values			
-MTLLibrary.h	MTLLibrary	method	newFunctionWithName:constantValues:completionHandler:		I	runtime	Library::new_function_with_name_constant_values	synchronous: the result is returned		
-MTLLibrary.h	MTLLibrary	method	reflectionForFunctionWithName:		I	runtime	Library::reflection_for_function_with_name			
-MTLLibrary.h	MTLLibrary	method	newFunctionWithDescriptor:completionHandler:		I	runtime	Library::new_function_with_descriptor			
-MTLLibrary.h	MTLLibrary	method	newFunctionWithDescriptor:error:		I	runtime	Library::new_function_with_descriptor			
+MTLLibrary.h	MTLLibrary	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLLibrary.h	MTLLibrary	method	newFunctionWithName:		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLLibrary	method	newFunctionWithName:constantValues:error:		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLLibrary	method	newFunctionWithName:constantValues:completionHandler:		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLLibrary	method	reflectionForFunctionWithName:		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLLibrary	method	newFunctionWithDescriptor:completionHandler:		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLLibrary	method	newFunctionWithDescriptor:error:		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
 MTLLibrary.h	MTLLibrary	method	newIntersectionFunctionWithDescriptor:completionHandler:		O			ray tracing		
 MTLLibrary.h	MTLLibrary	method	newIntersectionFunctionWithDescriptor:error:		O			ray tracing		
-MTLLibrary.h	MTLLibrary	property	functionNames		I	runtime	Library::function_names			
-MTLLibrary.h	MTLLibrary	property	type		I	runtime	Library::library_type			
-MTLLibrary.h	MTLLibrary	property	installName		I	runtime	Library::install_name			
+MTLLibrary.h	MTLLibrary	property	functionNames		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLLibrary	property	type		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
+MTLLibrary.h	MTLLibrary	property	installName		M			libraries and functions as runtime objects; the consumer holds the translator's Library	M	library-objects
 MTLLinkedFunctions.h	MTLLinkedFunctions	class	MTLLinkedFunctions		I	translator	LinkedFunctions			
 MTLLinkedFunctions.h	MTLLinkedFunctions	class method	linkedFunctions		I	translator	LinkedFunctions::new			
 MTLLinkedFunctions.h	MTLLinkedFunctions	property	functions		I	translator	LinkedFunctions.functions			
@@ -1537,42 +1537,42 @@ MTLRasterizationRate.h	MTLRasterizationRateMapDescriptor	property	layers		I	tran
 MTLRasterizationRate.h	MTLRasterizationRateMapDescriptor	property	screenSize		I	translator	RateMapDescriptor.screen_size			
 MTLRasterizationRate.h	MTLRasterizationRateMapDescriptor	property	label		I	translator	RateMapDescriptor.label			
 MTLRasterizationRate.h	MTLRasterizationRateMapDescriptor	property	layerCount		I	translator	RateMapDescriptor.layers			
-MTLRasterizationRate.h	MTLRasterizationRateMap	protocol	MTLRasterizationRateMap		I	runtime	RasterizationRateMap			
-MTLRasterizationRate.h	MTLRasterizationRateMap	property	device		I	runtime	RasterizationRateMap::device			
-MTLRasterizationRate.h	MTLRasterizationRateMap	property	label		I	runtime	RasterizationRateMap::label			
-MTLRasterizationRate.h	MTLRasterizationRateMap	property	screenSize		I	runtime	RasterizationRateMap::screen_size			
-MTLRasterizationRate.h	MTLRasterizationRateMap	property	physicalGranularity		I	runtime	RasterizationRateMap::physical_granularity			
-MTLRasterizationRate.h	MTLRasterizationRateMap	property	layerCount		I	runtime	RasterizationRateMap::layer_count			
-MTLRasterizationRate.h	MTLRasterizationRateMap	property	parameterBufferSizeAndAlign		I	runtime	RasterizationRateMap::parameter_buffer_size_and_align			
-MTLRasterizationRate.h	MTLRasterizationRateMap	method	copyParameterDataToBuffer:offset:		I	runtime	RasterizationRateMap::copy_parameter_data_to_buffer			
-MTLRasterizationRate.h	MTLRasterizationRateMap	method	physicalSizeForLayer:		I	runtime	RasterizationRateMap::physical_size_for_layer			
-MTLRasterizationRate.h	MTLRasterizationRateMap	method	mapScreenToPhysicalCoordinates:forLayer:		I	runtime	RasterizationRateMap::map_screen_to_physical_coordinates			
-MTLRasterizationRate.h	MTLRasterizationRateMap	method	mapPhysicalToScreenCoordinates:forLayer:		I	runtime	RasterizationRateMap::map_physical_to_screen_coordinates			
+MTLRasterizationRate.h	MTLRasterizationRateMap	protocol	MTLRasterizationRateMap		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	property	device		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRasterizationRate.h	MTLRasterizationRateMap	property	screenSize		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	property	physicalGranularity		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	property	layerCount		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	property	parameterBufferSizeAndAlign		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	method	copyParameterDataToBuffer:offset:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	method	physicalSizeForLayer:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	method	mapScreenToPhysicalCoordinates:forLayer:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
+MTLRasterizationRate.h	MTLRasterizationRateMap	method	mapPhysicalToScreenCoordinates:forLayer:		M			rasterization rate maps; the render pass descriptor has no field for one	L	rasterization
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	protocol	MTLRenderCommandEncoder		I	runtime	RenderCommandEncoder			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setRenderPipelineState:		I	runtime	RenderCommandEncoder::set_render_pipeline_state			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBytes:length:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_bytes	copied at the call; more than 4096 bytes refused		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBuffer:offset:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_buffer			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBufferOffset:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_buffer_offset			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBuffers:offsets:withRange:		I	runtime	RenderCommandEncoder::set_vertex_buffers			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBuffer:offset:attributeStride:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_buffer_with_stride			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBuffers:offsets:attributeStrides:withRange:		I	runtime	RenderCommandEncoder::set_vertex_buffers_with_strides			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBufferOffset:attributeStride:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_buffer_offset_with_stride			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBytes:length:attributeStride:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_bytes_with_stride	copied at the call; more than 4096 bytes refused		
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBuffers:offsets:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBuffer:offset:attributeStride:atIndex:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBuffers:offsets:attributeStrides:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBufferOffset:attributeStride:atIndex:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexBytes:length:attributeStride:atIndex:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexTexture:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_texture			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexTextures:withRange:		I	runtime	RenderCommandEncoder::set_vertex_textures			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexTextures:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerState:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_sampler_state			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerStates:withRange:		I	runtime	RenderCommandEncoder::set_vertex_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_sampler_states	a range of one with clamps		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	RenderCommandEncoder::set_vertex_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexVisibleFunctionTable:atBufferIndex:		I	runtime	RenderCommandEncoder::set_vertex_visible_function_table			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexVisibleFunctionTables:withBufferRange:		I	runtime	RenderCommandEncoder::set_vertex_visible_function_tables			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerStates:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_vertex_sampler_state_with_lod_clamps			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexAccelerationStructure:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setViewport:		I	runtime	RenderCommandEncoder::set_viewport			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setViewports:count:		I	runtime	RenderCommandEncoder::set_viewports			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFrontFacingWinding:		I	runtime	RenderCommandEncoder::set_front_facing_winding			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexAmplificationCount:viewMappings:		I	runtime	RenderCommandEncoder::set_vertex_amplification_count			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVertexAmplificationCount:viewMappings:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setCullMode:		I	runtime	RenderCommandEncoder::set_cull_mode			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setDepthClipMode:		I	runtime	RenderCommandEncoder::set_depth_clip_mode			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setDepthBias:slopeScale:clamp:		I	runtime	RenderCommandEncoder::set_depth_bias			
@@ -1583,115 +1583,115 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTriangleFillMode:		I
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentBytes:length:atIndex:		I	runtime	RenderCommandEncoder::set_fragment_bytes	copied at the call; more than 4096 bytes refused		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentBuffer:offset:atIndex:		I	runtime	RenderCommandEncoder::set_fragment_buffer			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentBufferOffset:atIndex:		I	runtime	RenderCommandEncoder::set_fragment_buffer_offset			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentBuffers:offsets:withRange:		I	runtime	RenderCommandEncoder::set_fragment_buffers			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentBuffers:offsets:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentTexture:atIndex:		I	runtime	RenderCommandEncoder::set_fragment_texture			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentTextures:withRange:		I	runtime	RenderCommandEncoder::set_fragment_textures			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentTextures:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerState:atIndex:		I	runtime	RenderCommandEncoder::set_fragment_sampler_state			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerStates:withRange:		I	runtime	RenderCommandEncoder::set_fragment_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_fragment_sampler_states	a range of one with clamps		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	RenderCommandEncoder::set_fragment_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentVisibleFunctionTable:atBufferIndex:		I	runtime	RenderCommandEncoder::set_fragment_visible_function_table			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentVisibleFunctionTables:withBufferRange:		I	runtime	RenderCommandEncoder::set_fragment_visible_function_tables			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerStates:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setFragmentAccelerationStructure:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setBlendColorRed:green:blue:alpha:		I	runtime	RenderCommandEncoder::set_blend_color			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setDepthStencilState:		I	runtime	RenderCommandEncoder::set_depth_stencil_state			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setStencilReferenceValue:		I	runtime	RenderCommandEncoder::set_stencil_reference_value			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setStencilFrontReferenceValue:backReferenceValue:		I	runtime	RenderCommandEncoder::set_stencil_reference_values			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setStencilFrontReferenceValue:backReferenceValue:		I	runtime	RenderCommandEncoder::set_stencil_front_back_reference_value			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setVisibilityResultMode:offset:		I	runtime	RenderCommandEncoder::set_visibility_result_mode			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setColorStoreAction:atIndex:		I	runtime	RenderCommandEncoder::set_color_store_action			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setDepthStoreAction:		I	runtime	RenderCommandEncoder::set_depth_store_action			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setStencilStoreAction:		I	runtime	RenderCommandEncoder::set_stencil_store_action			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setColorStoreActionOptions:atIndex:	yes	I	runtime	RenderCommandEncoder::set_color_store_action_options			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setDepthStoreActionOptions:	yes	I	runtime	RenderCommandEncoder::set_depth_store_action_options			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setStencilStoreActionOptions:	yes	I	runtime	RenderCommandEncoder::set_stencil_store_action_options			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBytes:length:atIndex:		I	runtime	RenderCommandEncoder::set_object_bytes	copied at the call; more than 4096 bytes refused		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBuffer:offset:atIndex:		I	runtime	RenderCommandEncoder::set_object_buffer			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBufferOffset:atIndex:		I	runtime	RenderCommandEncoder::set_object_buffer_offset			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBuffers:offsets:withRange:		I	runtime	RenderCommandEncoder::set_object_buffers			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectTexture:atIndex:		I	runtime	RenderCommandEncoder::set_object_texture			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectTextures:withRange:		I	runtime	RenderCommandEncoder::set_object_textures			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerState:atIndex:		I	runtime	RenderCommandEncoder::set_object_sampler_state			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerStates:withRange:		I	runtime	RenderCommandEncoder::set_object_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_object_sampler_states	a range of one with clamps		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	RenderCommandEncoder::set_object_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectThreadgroupMemoryLength:atIndex:		I	runtime	RenderCommandEncoder::set_object_threadgroup_memory_length			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBytes:length:atIndex:		I	runtime	RenderCommandEncoder::set_mesh_bytes	copied at the call; more than 4096 bytes refused		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBuffer:offset:atIndex:		I	runtime	RenderCommandEncoder::set_mesh_buffer			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBufferOffset:atIndex:		I	runtime	RenderCommandEncoder::set_mesh_buffer_offset			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBuffers:offsets:withRange:		I	runtime	RenderCommandEncoder::set_mesh_buffers			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshTexture:atIndex:		I	runtime	RenderCommandEncoder::set_mesh_texture			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshTextures:withRange:		I	runtime	RenderCommandEncoder::set_mesh_textures			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerState:atIndex:		I	runtime	RenderCommandEncoder::set_mesh_sampler_state			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerStates:withRange:		I	runtime	RenderCommandEncoder::set_mesh_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_mesh_sampler_states	a range of one with clamps		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	RenderCommandEncoder::set_mesh_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		I	runtime	RenderCommandEncoder::draw_mesh_threadgroups			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		I	runtime	RenderCommandEncoder::draw_mesh_threads			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		I	runtime	RenderCommandEncoder::draw_mesh_threadgroups_indirect	an object grid of more than 2^29 threadgroups draws nothing and fails the command buffer with Metal's error (`GpuRecoveryVictim`, as Metal's GPU discards it); one the device cannot launch fails it with `MeshGridPastLimits`: past the task limits where the device does not fold object grids, or, where mesh draws are emulated, past the compute limits		
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setColorStoreActionOptions:atIndex:	yes	M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setDepthStoreActionOptions:	yes	M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setStencilStoreActionOptions:	yes	M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBytes:length:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBuffer:offset:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBufferOffset:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectBuffers:offsets:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectTexture:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectTextures:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerState:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerStates:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setObjectThreadgroupMemoryLength:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBytes:length:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBuffer:offset:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBufferOffset:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshBuffers:offsets:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshTexture:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshTextures:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerState:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerStates:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setMeshSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:vertexStart:vertexCount:instanceCount:		I	runtime	RenderCommandEncoder::draw_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:vertexStart:vertexCount:		I	runtime	RenderCommandEncoder::draw_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:		I	runtime	RenderCommandEncoder::draw_indexed_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:		I	runtime	RenderCommandEncoder::draw_indexed_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:		I	runtime	RenderCommandEncoder::draw_primitives			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:		I	runtime	RenderCommandEncoder::draw_indexed_primitives			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::draw_primitives_indirect			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::draw_indexed_primitives_indirect			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPrimitives:indirectBuffer:indirectBufferOffset:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	textureBarrier	yes	M			deprecated; Metal states it as `memoryBarrierWithScope:` of textures from fragment to fragment, which the runtime has	S	barriers
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	updateFence:afterStages:		I	runtime	RenderCommandEncoder::update_fence			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	waitForFence:beforeStages:		I	runtime	RenderCommandEncoder::wait_for_fence			
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTessellationFactorBuffer:offset:instanceStride:		I	runtime	RenderCommandEncoder::set_tessellation_factor_buffer			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTessellationFactorScale:		I	runtime	RenderCommandEncoder::set_tessellation_factor_scale			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTessellationFactorScale:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:		I	runtime	RenderCommandEncoder::draw_patches			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::draw_patches_indirect			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:		I	runtime	RenderCommandEncoder::draw_indexed_patches			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::draw_indexed_patches_indirect			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileWidth		I	runtime	RenderCommandEncoder::tile_width			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileHeight		I	runtime	RenderCommandEncoder::tile_height			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBytes:length:atIndex:		I	runtime	RenderCommandEncoder::set_tile_bytes	copied at the call; more than 4096 bytes refused		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBuffer:offset:atIndex:		I	runtime	RenderCommandEncoder::set_tile_buffer			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBufferOffset:atIndex:		I	runtime	RenderCommandEncoder::set_tile_buffer_offset			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBuffers:offsets:withRange:		I	runtime	RenderCommandEncoder::set_tile_buffers			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileTexture:atIndex:		I	runtime	RenderCommandEncoder::set_tile_texture			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileTextures:withRange:		I	runtime	RenderCommandEncoder::set_tile_textures			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:atIndex:		I	runtime	RenderCommandEncoder::set_tile_sampler_state			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:withRange:		I	runtime	RenderCommandEncoder::set_tile_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	RenderCommandEncoder::set_tile_sampler_states	a range of one with clamps		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	RenderCommandEncoder::set_tile_sampler_states			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTable:atBufferIndex:		I	runtime	RenderCommandEncoder::set_tile_visible_function_table			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTables:withBufferRange:		I	runtime	RenderCommandEncoder::set_tile_visible_function_tables			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileWidth		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	property	tileHeight		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBytes:length:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBuffer:offset:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBufferOffset:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileBuffers:offsets:withRange:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileTexture:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileTextures:withRange:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:withRange:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerState:lodMinClamp:lodMaxClamp:atIndex:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileSamplerStates:lodMinClamps:lodMaxClamps:withRange:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTable:atBufferIndex:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileVisibleFunctionTables:withBufferRange:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileIntersectionFunctionTable:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileIntersectionFunctionTables:withBufferRange:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileAccelerationStructure:atBufferIndex:		O			ray tracing		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	dispatchThreadsPerTile:		I	runtime	RenderCommandEncoder::dispatch_threads_per_tile			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setThreadgroupMemoryLength:offset:atIndex:		I	runtime	RenderCommandEncoder::set_threadgroup_memory_length			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:	yes	I	runtime	RenderCommandEncoder::use_resource	all stages		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:	yes	I	runtime	RenderCommandEncoder::use_resources	all stages		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:stages:		I	runtime	RenderCommandEncoder::use_resource			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:stages:		I	runtime	RenderCommandEncoder::use_resources			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:	yes	I	runtime	RenderCommandEncoder::use_heap	all stages		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:	yes	I	runtime	RenderCommandEncoder::use_heaps	all stages		
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:stages:		I	runtime	RenderCommandEncoder::use_heap			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:stages:		I	runtime	RenderCommandEncoder::use_heaps			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	executeCommandsInBuffer:withRange:		I	runtime	RenderCommandEncoder::execute_commands_in_buffer			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:		I	runtime	RenderCommandEncoder::execute_commands_in_buffer_indirect			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	memoryBarrierWithScope:afterStages:beforeStages:		I	runtime	RenderCommandEncoder::memory_barrier_with_scope			
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	memoryBarrierWithResources:count:afterStages:beforeStages:		I	runtime	RenderCommandEncoder::memory_barrier_with_resources			
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	dispatchThreadsPerTile:		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setThreadgroupMemoryLength:offset:atIndex:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:	yes	M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:	yes	M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:stages:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:stages:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:	yes	M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:	yes	M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:stages:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:stages:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	executeCommandsInBuffer:withRange:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:		M			indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers)	L	icb
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	memoryBarrierWithScope:afterStages:beforeStages:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	memoryBarrierWithResources:count:afterStages:beforeStages:		M			an encoder call metal2vulkan-rt does not build	M	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	sampleCountersInBuffer:atSampleIndex:withBarrier:		M			counter sample buffers	M	counters
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setColorAttachmentMap:		M			color attachment mapping	M	colormap
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	class	MTLRenderPassAttachmentDescriptor		I	runtime	RenderPassColorAttachmentDescriptor			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	texture		I	runtime	RenderPassColorAttachmentDescriptor.texture			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	level		I	runtime	RenderPassColorAttachmentDescriptor.level			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	slice		I	runtime	RenderPassColorAttachmentDescriptor.slice			
-MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	depthPlane		I	runtime	RenderPassColorAttachmentDescriptor.depth_plane			
+MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	depthPlane		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	resolveTexture		I	runtime	RenderPassColorAttachmentDescriptor.resolve_texture			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	resolveLevel		I	runtime	RenderPassColorAttachmentDescriptor.resolve_level			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	resolveSlice		I	runtime	RenderPassColorAttachmentDescriptor.resolve_slice			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	resolveDepthPlane		I	runtime	RenderPassColorAttachmentDescriptor.resolve_depth_plane			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	loadAction		I	runtime	RenderPassColorAttachmentDescriptor.load_action			
 MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	storeAction		I	runtime	RenderPassColorAttachmentDescriptor.store_action			
-MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	storeActionOptions	yes	I	runtime	RenderPassColorAttachmentDescriptor.store_action_options			
+MTLRenderPass.h	MTLRenderPassAttachmentDescriptor	property	storeActionOptions	yes	M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
 MTLRenderPass.h	MTLRenderPassColorAttachmentDescriptor	class	MTLRenderPassColorAttachmentDescriptor		I	runtime	RenderPassColorAttachmentDescriptor			
 MTLRenderPass.h	MTLRenderPassColorAttachmentDescriptor	property	clearColor		I	runtime	RenderPassColorAttachmentDescriptor.clear_color			
 MTLRenderPass.h	MTLRenderPassDepthAttachmentDescriptor	class	MTLRenderPassDepthAttachmentDescriptor		I	runtime	RenderPassDepthAttachmentDescriptor			
@@ -1713,24 +1713,24 @@ MTLRenderPass.h	MTLRenderPassSampleBufferAttachmentDescriptorArray	class	MTLRend
 MTLRenderPass.h	MTLRenderPassSampleBufferAttachmentDescriptorArray	method	objectAtIndexedSubscript:		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
 MTLRenderPass.h	MTLRenderPassSampleBufferAttachmentDescriptorArray	method	setObject:atIndexedSubscript:		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
 MTLRenderPass.h	MTLRenderPassDescriptor	class	MTLRenderPassDescriptor		I	runtime	RenderPassDescriptor			
-MTLRenderPass.h	MTLRenderPassDescriptor	class method	renderPassDescriptor		I	runtime	RenderPassDescriptor::new			
+MTLRenderPass.h	MTLRenderPassDescriptor	class method	renderPassDescriptor		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	colorAttachments		I	runtime	RenderPassDescriptor.color_attachments			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	depthAttachment		I	runtime	RenderPassDescriptor.depth_attachment			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	stencilAttachment		I	runtime	RenderPassDescriptor.stencil_attachment			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultBuffer		I	runtime	RenderPassDescriptor.visibility_result_buffer			
-MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetArrayLength		I	runtime	RenderPassDescriptor.render_target_array_length			
-MTLRenderPass.h	MTLRenderPassDescriptor	property	imageblockSampleLength		I	runtime	RenderPassDescriptor.imageblock_sample_length			
-MTLRenderPass.h	MTLRenderPassDescriptor	property	threadgroupMemoryLength		I	runtime	RenderPassDescriptor.threadgroup_memory_length			
-MTLRenderPass.h	MTLRenderPassDescriptor	property	tileWidth		I	runtime	RenderPassDescriptor.tile_width			
-MTLRenderPass.h	MTLRenderPassDescriptor	property	tileHeight		I	runtime	RenderPassDescriptor.tile_height			
-MTLRenderPass.h	MTLRenderPassDescriptor	property	defaultRasterSampleCount		I	runtime	RenderPassDescriptor.default_raster_sample_count			
+MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetArrayLength		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
+MTLRenderPass.h	MTLRenderPassDescriptor	property	imageblockSampleLength		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
+MTLRenderPass.h	MTLRenderPassDescriptor	property	threadgroupMemoryLength		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
+MTLRenderPass.h	MTLRenderPassDescriptor	property	tileWidth		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderPass.h	MTLRenderPassDescriptor	property	tileHeight		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderPass.h	MTLRenderPassDescriptor	property	defaultRasterSampleCount		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetWidth		I	runtime	RenderPassDescriptor.render_target_width			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	renderTargetHeight		I	runtime	RenderPassDescriptor.render_target_height			
-MTLRenderPass.h	MTLRenderPassDescriptor	method	setSamplePositions:count:		I	runtime	RenderPassDescriptor.sample_positions			
-MTLRenderPass.h	MTLRenderPassDescriptor	method	getSamplePositions:count:		I	runtime	RenderPassDescriptor.sample_positions			
-MTLRenderPass.h	MTLRenderPassDescriptor	property	rasterizationRateMap		I	runtime	RenderPassDescriptor.rasterization_rate_map			
+MTLRenderPass.h	MTLRenderPassDescriptor	method	setSamplePositions:count:		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
+MTLRenderPass.h	MTLRenderPassDescriptor	method	getSamplePositions:count:		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
+MTLRenderPass.h	MTLRenderPassDescriptor	property	rasterizationRateMap		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	sampleBufferAttachments		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
-MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultType		I	runtime	RenderPassDescriptor.visibility_result_type			
+MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultType		M			a render pass descriptor field metal2vulkan-rt does not take	S	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	supportColorAttachmentMapping		M			color attachment mapping (`RuntimeGap::ColorAttachmentMapping`)	M	colormap
 MTLRenderPass.h		function	MTLClearColorMake		I	runtime	ClearColor::new			
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptor	class	MTLRenderPipelineColorAttachmentDescriptor		I	translator	ColorAttachmentDescriptor			
@@ -1757,7 +1757,7 @@ MTLRenderPipeline.h	MTLRenderPipelineReflection	property	vertexArguments	yes	I	t
 MTLRenderPipeline.h	MTLRenderPipelineReflection	property	fragmentArguments	yes	I	translator	RenderPipelineReflection::fragment_bindings	deprecated for `fragmentBindings`		
 MTLRenderPipeline.h	MTLRenderPipelineReflection	property	tileArguments	yes	I	translator	RenderPipelineReflection::tile_bindings	deprecated for `tileBindings`		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	class	MTLRenderPipelineDescriptor		I	translator	RenderPipelineDescriptor			
-MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	label		I	runtime	PipelineOptions.label			
+MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexFunction		I	translator	RenderPipelineDescriptor.vertex			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	fragmentFunction		I	translator	RenderPipelineDescriptor.fragment			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexDescriptor		I	translator	RenderPipelineDescriptor.vertex_descriptor			
@@ -1781,7 +1781,7 @@ MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	tessellationOutputWindi
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexBuffers		I	translator	RenderPipelineDescriptor.vertex_buffers			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	fragmentBuffers		I	translator	RenderPipelineDescriptor.fragment_buffers			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	supportIndirectCommandBuffers		I	translator	RenderPipelineDescriptor.support_indirect_command_buffers			
-MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	binaryArchives		I	runtime	PipelineOptions.binary_archives			
+MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexPreloadedLibraries		I	translator	FunctionDescriptor.libraries	the vertex stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	fragmentPreloadedLibraries		I	translator	FunctionDescriptor.libraries	the fragment stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	vertexLinkedFunctions		I	translator	FunctionDescriptor.linked	the vertex stage's `StageSource::Function`		
@@ -1792,37 +1792,37 @@ MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	maxVertexCallStackDepth
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	maxFragmentCallStackDepth		I	translator	RenderPipelineDescriptor.max_fragment_call_stack_depth			
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	method	reset		I	translator	RenderPipelineDescriptor::new	a plain value: assign a new one		
 MTLRenderPipeline.h	MTLRenderPipelineDescriptor	property	shaderValidation		M			shader validation (`RuntimeGap::ShaderValidation`, not scheduled)	L	shadervalidation
-MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	class	MTLRenderPipelineFunctionsDescriptor		I	runtime	RenderPipelineFunctionsDescriptor			
-MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	vertexAdditionalBinaryFunctions		I	runtime	RenderPipelineFunctionsDescriptor.vertex_additional_binary_functions			
-MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	fragmentAdditionalBinaryFunctions		I	runtime	RenderPipelineFunctionsDescriptor.fragment_additional_binary_functions			
-MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	tileAdditionalBinaryFunctions		I	runtime	RenderPipelineFunctionsDescriptor.tile_additional_binary_functions			
+MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	class	MTLRenderPipelineFunctionsDescriptor		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	vertexAdditionalBinaryFunctions		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	fragmentAdditionalBinaryFunctions		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineFunctionsDescriptor	property	tileAdditionalBinaryFunctions		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	protocol	MTLRenderPipelineState		I	runtime	RenderPipelineState			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	label		I	runtime	RenderPipelineState::label			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	device		I	runtime	RenderPipelineState::device			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLRenderPipeline.h	MTLRenderPipelineState	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLRenderPipeline.h	MTLRenderPipelineState	property	reflection		M			the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler; the runtime gives the creation's answer at creation (`new_render_pipeline_state_with_reflection`) and after it (`RenderPipelineState::compiled_reflection`)	S	reflection
 MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithName:stage:		M			a handle by function name; the runtime takes the `Function` (`RenderPipelineState::function_handle`)	S	function-handles
-MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithBinaryFunction:stage:		I	runtime	RenderPipelineState::function_handle			
-MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithBinaryFunctions:error:		I	runtime	RenderPipelineState::new_render_pipeline_state_with_additional_binary_functions			
+MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithBinaryFunction:stage:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineDescriptorForSpecialization		M			pipeline specialization (macOS 26): a descriptor to finish an unspecialized state	M	specialization
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerThreadgroup		I	runtime	RenderPipelineState::max_total_threads_per_threadgroup			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	threadgroupSizeMatchesTileSize		I	runtime	RenderPipelineState::threadgroup_size_matches_tile_size			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerThreadgroup		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderPipeline.h	MTLRenderPipelineState	property	threadgroupSizeMatchesTileSize		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
 MTLRenderPipeline.h	MTLRenderPipelineState	property	imageblockSampleLength		I	runtime	RenderPipelineState::imageblock_sample_length			
 MTLRenderPipeline.h	MTLRenderPipelineState	method	imageblockMemoryLengthForDimensions:		I	runtime	RenderPipelineState::imageblock_memory_length_for_dimensions			
 MTLRenderPipeline.h	MTLRenderPipelineState	property	supportIndirectCommandBuffers		I	runtime	RenderPipelineState::support_indirect_command_buffers			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerObjectThreadgroup		I	runtime	RenderPipelineState::max_total_threads_per_object_threadgroup			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerMeshThreadgroup		I	runtime	RenderPipelineState::max_total_threads_per_mesh_threadgroup			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	objectThreadExecutionWidth		I	runtime	RenderPipelineState::object_thread_execution_width			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	meshThreadExecutionWidth		I	runtime	RenderPipelineState::mesh_thread_execution_width			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadgroupsPerMeshGrid		I	runtime	RenderPipelineState::max_total_threadgroups_per_mesh_grid			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	gpuResourceID		I	runtime	RenderPipelineState::gpu_resource_id			
-MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithFunction:stage:		I	runtime	RenderPipelineState::function_handle			
-MTLRenderPipeline.h	MTLRenderPipelineState	method	newVisibleFunctionTableWithDescriptor:stage:		I	runtime	RenderPipelineState::new_visible_function_table			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerObjectThreadgroup		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadsPerMeshThreadgroup		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	objectThreadExecutionWidth		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	meshThreadExecutionWidth		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	maxTotalThreadgroupsPerMeshGrid		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	gpuResourceID		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLRenderPipeline.h	MTLRenderPipelineState	method	functionHandleWithFunction:stage:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLRenderPipeline.h	MTLRenderPipelineState	method	newVisibleFunctionTableWithDescriptor:stage:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	method	newIntersectionFunctionTableWithDescriptor:stage:		O			ray tracing		
-MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithAdditionalBinaryFunctions:error:		I	runtime	RenderPipelineState::new_render_pipeline_state_with_additional_binary_functions			
+MTLRenderPipeline.h	MTLRenderPipelineState	method	newRenderPipelineStateWithAdditionalBinaryFunctions:error:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
 MTLRenderPipeline.h	MTLRenderPipelineState	property	shaderValidation		M			shader validation (`RuntimeGap::ShaderValidation`, not scheduled)	L	shadervalidation
-MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerTileThreadgroup		I	runtime	RenderPipelineState::required_threads_per_tile_threadgroup			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerObjectThreadgroup		I	runtime	RenderPipelineState::required_threads_per_object_threadgroup			
-MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerMeshThreadgroup		I	runtime	RenderPipelineState::required_threads_per_mesh_threadgroup			
+MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerTileThreadgroup		M			tile render pipelines; metal2vulkan-rt makes none	L	tile
+MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerObjectThreadgroup		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
+MTLRenderPipeline.h	MTLRenderPipelineState	property	requiredThreadsPerMeshThreadgroup		M			mesh render pipelines; metal2vulkan-rt makes none	L	mesh
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	class	MTLRenderPipelineColorAttachmentDescriptorArray		I	translator	RenderPipelineDescriptor.color_attachments	an array		
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	method	objectAtIndexedSubscript:		I	translator	RenderPipelineDescriptor.color_attachments			
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptorArray	method	setObject:atIndexedSubscript:		I	translator	RenderPipelineDescriptor.color_attachments			
@@ -1832,14 +1832,14 @@ MTLRenderPipeline.h	MTLTileRenderPipelineColorAttachmentDescriptorArray	class	MT
 MTLRenderPipeline.h	MTLTileRenderPipelineColorAttachmentDescriptorArray	method	objectAtIndexedSubscript:		I	translator	TileRenderPipelineDescriptor.color_attachment_formats			
 MTLRenderPipeline.h	MTLTileRenderPipelineColorAttachmentDescriptorArray	method	setObject:atIndexedSubscript:		I	translator	TileRenderPipelineDescriptor.color_attachment_formats			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	class	MTLTileRenderPipelineDescriptor		I	translator	TileRenderPipelineDescriptor			
-MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	label		I	runtime	PipelineOptions.label			
+MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	tileFunction		I	translator	TileRenderPipelineDescriptor.tile			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	rasterSampleCount		I	translator	TileRenderPipelineDescriptor.raster_sample_count			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	colorAttachments		I	translator	TileRenderPipelineDescriptor.color_attachment_formats			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	threadgroupSizeMatchesTileSize		I	translator	TileRenderPipelineDescriptor.threadgroup_size_matches_tile_size			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	tileBuffers		I	translator	TileRenderPipelineDescriptor.buffers			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	maxTotalThreadsPerThreadgroup		I	translator	TileRenderPipelineDescriptor.max_total_threads_per_threadgroup			
-MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	binaryArchives		I	runtime	PipelineOptions.binary_archives			
+MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	preloadedLibraries		I	translator	FunctionDescriptor.libraries			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	linkedFunctions		I	translator	FunctionDescriptor.linked			
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	supportAddingBinaryFunctions		I	translator	TileRenderPipelineDescriptor.support_adding_binary_functions			
@@ -1848,7 +1848,7 @@ MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	method	reset		I	translator	T
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	shaderValidation		M			shader validation (`RuntimeGap::ShaderValidation`, not scheduled)	L	shadervalidation
 MTLRenderPipeline.h	MTLTileRenderPipelineDescriptor	property	requiredThreadsPerThreadgroup		I	translator	TileRenderPipelineDescriptor.required_threads_per_threadgroup			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	class	MTLMeshRenderPipelineDescriptor		I	translator	MeshPipelineDescriptor			
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	label		I	runtime	PipelineOptions.label			
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	objectFunction		I	translator	MeshPipelineDescriptor.object			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshFunction		I	translator	MeshPipelineDescriptor.mesh			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	fragmentFunction		I	translator	MeshPipelineDescriptor.fragment			
@@ -1870,7 +1870,7 @@ MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	colorAttachments		I
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	depthAttachmentPixelFormat		I	translator	MeshPipelineDescriptor.depth_format			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	stencilAttachmentPixelFormat		I	translator	MeshPipelineDescriptor.stencil_format			
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	supportIndirectCommandBuffers		I	translator	MeshPipelineDescriptor.support_indirect_command_buffers			
-MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	binaryArchives		I	runtime	PipelineOptions.binary_archives			
+MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	binaryArchives		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	objectLinkedFunctions		I	translator	FunctionDescriptor.linked	the object stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	meshLinkedFunctions		I	translator	FunctionDescriptor.linked	the mesh stage's `StageSource::Function`		
 MTLRenderPipeline.h	MTLMeshRenderPipelineDescriptor	property	fragmentLinkedFunctions		I	translator	FunctionDescriptor.linked	the fragment stage's `StageSource::Function`		
@@ -1897,26 +1897,26 @@ MTLResidencySet.h	MTLResidencySet	property	allAllocations		M			residency sets (`
 MTLResidencySet.h	MTLResidencySet	property	allocationCount		M			residency sets (`RuntimeGap::ResidencySets`)	M	residency
 MTLResidencySet.h	MTLResidencySet	method	commit		M			residency sets (`RuntimeGap::ResidencySets`)	M	residency
 MTLResource.h	MTLResource	protocol	MTLResource		I	runtime	Buffer			
-MTLResource.h	MTLResource	property	label		I	runtime	Buffer::label			
-MTLResource.h	MTLResource	property	device		I	runtime	Buffer::device			
-MTLResource.h	MTLResource	property	cpuCacheMode		I	runtime	Buffer::cpu_cache_mode			
-MTLResource.h	MTLResource	property	storageMode		I	runtime	Buffer::storage_mode			
-MTLResource.h	MTLResource	property	hazardTrackingMode		I	runtime	Buffer::hazard_tracking_mode			
-MTLResource.h	MTLResource	property	resourceOptions		I	runtime	Buffer::resource_options			
-MTLResource.h	MTLResource	method	setPurgeableState:		I	runtime	Buffer::set_purgeable_state			
-MTLResource.h	MTLResource	property	heap		I	runtime	Buffer::heap			
-MTLResource.h	MTLResource	property	heapOffset		I	runtime	Buffer::heap_offset			
+MTLResource.h	MTLResource	property	label		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	device		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	cpuCacheMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	storageMode		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLResource.h	MTLResource	property	hazardTrackingMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	resourceOptions		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	method	setPurgeableState:		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLResource.h	MTLResource	property	heap		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLResource.h	MTLResource	property	heapOffset		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLResource.h	MTLResource	property	allocatedSize		M			as `MTLAllocation`'s	S	queries
-MTLResource.h	MTLResource	method	makeAliasable		I	runtime	Buffer::make_aliasable			
-MTLResource.h	MTLResource	method	isAliasable		I	runtime	Buffer::is_aliasable			
+MTLResource.h	MTLResource	method	makeAliasable		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLResource.h	MTLResource	method	isAliasable		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLResource.h	MTLResource	method	setOwnerWithIdentity:		O			memory accounting to another task: an OS service		
-MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	protocol	MTLResourceStateCommandEncoder		I	runtime	ResourceStateCommandEncoder			
-MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateTextureMappings:mode:regions:mipLevels:slices:numRegions:		I	runtime	ResourceStateCommandEncoder::update_texture_mappings			
-MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateTextureMapping:mode:region:mipLevel:slice:		I	runtime	ResourceStateCommandEncoder::update_texture_mapping			
-MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateTextureMapping:mode:indirectBuffer:indirectBufferOffset:		I	runtime	ResourceStateCommandEncoder::update_texture_mapping_indirect			
-MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateFence:		I	runtime	ResourceStateCommandEncoder::update_fence			
-MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	waitForFence:		I	runtime	ResourceStateCommandEncoder::wait_for_fence			
-MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	moveTextureMappingsFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:		I	runtime	ResourceStateCommandEncoder::move_texture_mappings			
+MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	protocol	MTLResourceStateCommandEncoder		M			the resource state encoder (sparse textures' mappings)	M	resource-state
+MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateTextureMappings:mode:regions:mipLevels:slices:numRegions:		M			the resource state encoder (sparse textures' mappings)	M	resource-state
+MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateTextureMapping:mode:region:mipLevel:slice:		M			the resource state encoder (sparse textures' mappings)	M	resource-state
+MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateTextureMapping:mode:indirectBuffer:indirectBufferOffset:		M			the resource state encoder (sparse textures' mappings)	M	resource-state
+MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	updateFence:		M			the resource state encoder (sparse textures' mappings)	M	resource-state
+MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	waitForFence:		M			the resource state encoder (sparse textures' mappings)	M	resource-state
+MTLResourceStateCommandEncoder.h	MTLResourceStateCommandEncoder	method	moveTextureMappingsFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:		M			the resource state encoder (sparse textures' mappings)	M	resource-state
 MTLResourceStatePass.h	MTLResourceStatePassSampleBufferAttachmentDescriptor	class	MTLResourceStatePassSampleBufferAttachmentDescriptor		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
 MTLResourceStatePass.h	MTLResourceStatePassSampleBufferAttachmentDescriptor	property	sampleBuffer		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
 MTLResourceStatePass.h	MTLResourceStatePassSampleBufferAttachmentDescriptor	property	startOfEncoderSampleIndex		M			counter sample buffers (`RuntimeGap::CounterSampleBuffers`)	M	counters
@@ -1952,11 +1952,11 @@ MTLSampler.h	MTLSamplerDescriptor	property	lodMaxClamp		I	translator	SamplerDesc
 MTLSampler.h	MTLSamplerDescriptor	property	lodAverage		I	translator	SamplerDescriptor.lod_average			
 MTLSampler.h	MTLSamplerDescriptor	property	lodBias		I	translator	SamplerDescriptor.lod_bias			
 MTLSampler.h	MTLSamplerDescriptor	property	compareFunction		I	translator	SamplerDescriptor.compare_function			
-MTLSampler.h	MTLSamplerDescriptor	property	supportArgumentBuffers		I	runtime	SamplerStateOptions.support_argument_buffers			
+MTLSampler.h	MTLSamplerDescriptor	property	supportArgumentBuffers		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLSampler.h	MTLSamplerDescriptor	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
 MTLSampler.h	MTLSamplerState	protocol	MTLSamplerState		I	runtime	SamplerState			
 MTLSampler.h	MTLSamplerState	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
-MTLSampler.h	MTLSamplerState	property	device		I	runtime	SamplerState::device			
+MTLSampler.h	MTLSamplerState	property	device		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLSampler.h	MTLSamplerState	property	gpuResourceID		I	runtime	SamplerState::gpu_resource_id			
 MTLStageInputOutputDescriptor.h	MTLBufferLayoutDescriptor	class	MTLBufferLayoutDescriptor		I	translator	StageInputLayoutDescriptor			
 MTLStageInputOutputDescriptor.h	MTLBufferLayoutDescriptor	property	stride		I	translator	StageInputLayoutDescriptor.stride			
@@ -2024,13 +2024,13 @@ MTLTensor.h	MTLTensor	method	replaceSliceOrigin:sliceDimensions:withBytes:stride
 MTLTensor.h	MTLTensor	method	getBytes:strides:fromSliceOrigin:sliceDimensions:		M			tensors (`MTLTensor`)	L	tensor
 MTLTensor.h	MTLTensor	method	getBytes:strides:fromSliceOrigin:sliceDimensions:plane:		M			tensors (`MTLTensor`)	L	tensor
 MTLTensor.h	MTLTensor	method	replaceSliceOrigin:sliceDimensions:plane:withBytes:strides:		M			tensors (`MTLTensor`)	L	tensor
-MTLTexture.h	MTLSharedTextureHandle	class	MTLSharedTextureHandle		I	runtime	SharedTextureHandle			
-MTLTexture.h	MTLSharedTextureHandle	property	device		I	runtime	SharedTextureHandle::device			
+MTLTexture.h	MTLSharedTextureHandle	class	MTLSharedTextureHandle		M			texture and event handles shared across processes	M	sharing
+MTLTexture.h	MTLSharedTextureHandle	property	device		M			texture and event handles shared across processes	M	sharing
 MTLTexture.h	MTLSharedTextureHandle	property	label		M			labels of samplers, depth/stencil states, functions, libraries and texture handles	S	labels
 MTLTexture.h	MTLTextureDescriptor	class	MTLTextureDescriptor		I	runtime	TextureDescriptor			
-MTLTexture.h	MTLTextureDescriptor	class method	texture2DDescriptorWithPixelFormat:width:height:mipmapped:		I	runtime	TextureDescriptor::texture_2d			
-MTLTexture.h	MTLTextureDescriptor	class method	textureCubeDescriptorWithPixelFormat:size:mipmapped:		I	runtime	TextureDescriptor::texture_cube			
-MTLTexture.h	MTLTextureDescriptor	class method	textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:		I	runtime	TextureDescriptor::texture_buffer			
+MTLTexture.h	MTLTextureDescriptor	class method	texture2DDescriptorWithPixelFormat:width:height:mipmapped:		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLTexture.h	MTLTextureDescriptor	class method	textureCubeDescriptorWithPixelFormat:size:mipmapped:		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLTexture.h	MTLTextureDescriptor	class method	textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:		M			a query or call metal2vulkan-rt does not answer	S	queries
 MTLTexture.h	MTLTextureDescriptor	property	textureType		I	runtime	TextureDescriptor.texture_type			
 MTLTexture.h	MTLTextureDescriptor	property	pixelFormat		I	runtime	TextureDescriptor.pixel_format			
 MTLTexture.h	MTLTextureDescriptor	property	width		I	runtime	TextureDescriptor.width			
@@ -2039,12 +2039,12 @@ MTLTexture.h	MTLTextureDescriptor	property	depth		I	runtime	TextureDescriptor.de
 MTLTexture.h	MTLTextureDescriptor	property	mipmapLevelCount		I	runtime	TextureDescriptor.mipmap_level_count			
 MTLTexture.h	MTLTextureDescriptor	property	sampleCount		I	runtime	TextureDescriptor.sample_count			
 MTLTexture.h	MTLTextureDescriptor	property	arrayLength		I	runtime	TextureDescriptor.array_length			
-MTLTexture.h	MTLTextureDescriptor	property	resourceOptions		I	runtime	TextureDescriptor.resource_options			
-MTLTexture.h	MTLTextureDescriptor	property	cpuCacheMode		I	runtime	TextureDescriptor.resource_options	`ResourceOptions` holds the three modes		
-MTLTexture.h	MTLTextureDescriptor	property	storageMode		I	runtime	TextureDescriptor.resource_options			
-MTLTexture.h	MTLTextureDescriptor	property	hazardTrackingMode		I	runtime	TextureDescriptor.resource_options			
+MTLTexture.h	MTLTextureDescriptor	property	resourceOptions		M			a query or call metal2vulkan-rt does not answer	S	queries
+MTLTexture.h	MTLTextureDescriptor	property	cpuCacheMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTextureDescriptor	property	storageMode		I	runtime	TextureDescriptor.storage_mode			
+MTLTexture.h	MTLTextureDescriptor	property	hazardTrackingMode		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLTexture.h	MTLTextureDescriptor	property	usage		I	runtime	TextureDescriptor.usage			
-MTLTexture.h	MTLTextureDescriptor	property	allowGPUOptimizedContents		I	runtime	TextureDescriptor.allow_gpu_optimized_contents			
+MTLTexture.h	MTLTextureDescriptor	property	allowGPUOptimizedContents		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLTexture.h	MTLTextureDescriptor	property	compressionType		M			lossy compression (`RuntimeGap::LossyTextureCompression`, not scheduled)	M	compression
 MTLTexture.h	MTLTextureDescriptor	property	swizzle		I	runtime	TextureDescriptor.swizzle			
 MTLTexture.h	MTLTextureDescriptor	property	placementSparsePageSize		M			placement sparse textures' page size	S	sparse
@@ -2057,29 +2057,29 @@ MTLTexture.h	MTLTextureViewDescriptor	property	swizzle		I	runtime	Texture::new_t
 MTLTexture.h	MTLTextureViewDescriptor	property	minLOD		M			a view's minimum LOD (macOS 27), unmeasured	M	min-lod
 MTLTexture.h	MTLTexture	protocol	MTLTexture		I	runtime	Texture			
 MTLTexture.h	MTLTexture	property	rootResource	yes	M			a view's root resource (deprecated: `parentTexture` and `buffer` answer it)	S	queries
-MTLTexture.h	MTLTexture	property	parentTexture		I	runtime	Texture::parent_texture			
-MTLTexture.h	MTLTexture	property	parentRelativeLevel		I	runtime	Texture::parent_relative_level			
-MTLTexture.h	MTLTexture	property	parentRelativeSlice		I	runtime	Texture::parent_relative_slice			
+MTLTexture.h	MTLTexture	property	parentTexture		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTexture	property	parentRelativeLevel		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
+MTLTexture.h	MTLTexture	property	parentRelativeSlice		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLTexture.h	MTLTexture	property	buffer		M			the buffer a texture over a buffer was made from	S	queries
 MTLTexture.h	MTLTexture	property	bufferOffset		M			the offset of a texture over a buffer in its buffer	S	queries
 MTLTexture.h	MTLTexture	property	bufferBytesPerRow		M			the row pitch of a texture over a buffer	S	queries
 MTLTexture.h	MTLTexture	property	iosurface		O			IOSurface is the consumer's		
 MTLTexture.h	MTLTexture	property	iosurfacePlane		O			IOSurface is the consumer's		
-MTLTexture.h	MTLTexture	property	textureType		I	runtime	Texture::texture_type			
-MTLTexture.h	MTLTexture	property	pixelFormat		I	runtime	Texture::pixel_format			
-MTLTexture.h	MTLTexture	property	width		I	runtime	Texture::width			
-MTLTexture.h	MTLTexture	property	height		I	runtime	Texture::height			
-MTLTexture.h	MTLTexture	property	depth		I	runtime	Texture::depth			
-MTLTexture.h	MTLTexture	property	mipmapLevelCount		I	runtime	Texture::mipmap_level_count			
-MTLTexture.h	MTLTexture	property	sampleCount		I	runtime	Texture::sample_count			
-MTLTexture.h	MTLTexture	property	arrayLength		I	runtime	Texture::array_length			
-MTLTexture.h	MTLTexture	property	usage		I	runtime	Texture::usage			
-MTLTexture.h	MTLTexture	property	shareable		I	runtime	Texture::is_shareable			
+MTLTexture.h	MTLTexture	property	textureType		I	runtime	Texture::descriptor, TextureDescriptor.texture_type	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	pixelFormat		I	runtime	Texture::descriptor, TextureDescriptor.pixel_format	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	width		I	runtime	Texture::descriptor, TextureDescriptor.width	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	height		I	runtime	Texture::descriptor, TextureDescriptor.height	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	depth		I	runtime	Texture::descriptor, TextureDescriptor.depth	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	mipmapLevelCount		I	runtime	Texture::descriptor, TextureDescriptor.mipmap_level_count	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	sampleCount		I	runtime	Texture::descriptor, TextureDescriptor.sample_count	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	arrayLength		I	runtime	Texture::descriptor, TextureDescriptor.array_length	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	usage		I	runtime	Texture::descriptor, TextureDescriptor.usage	through the texture's descriptor		
+MTLTexture.h	MTLTexture	property	shareable		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLTexture.h	MTLTexture	property	framebufferOnly		M			NO for every texture but a drawable's, which the runtime has none of	S	queries
-MTLTexture.h	MTLTexture	property	firstMipmapInTail		I	runtime	Texture::first_mipmap_in_tail			
-MTLTexture.h	MTLTexture	property	tailSizeInBytes		I	runtime	Texture::tail_size_in_bytes			
-MTLTexture.h	MTLTexture	property	isSparse		I	runtime	Texture::is_sparse			
-MTLTexture.h	MTLTexture	property	allowGPUOptimizedContents		I	runtime	Texture::allow_gpu_optimized_contents			
+MTLTexture.h	MTLTexture	property	firstMipmapInTail		M			sparse tiles	S	sparse
+MTLTexture.h	MTLTexture	property	tailSizeInBytes		M			sparse tiles	S	sparse
+MTLTexture.h	MTLTexture	property	isSparse		M			sparse tiles	S	sparse
+MTLTexture.h	MTLTexture	property	allowGPUOptimizedContents		O			the consumer's (metal2vulkan-rt's README, What the consumer implements)		
 MTLTexture.h	MTLTexture	property	compressionType		M			lossy compression (`RuntimeGap::LossyTextureCompression`, not scheduled)	M	compression
 MTLTexture.h	MTLTexture	property	gpuResourceID		I	runtime	Texture::gpu_resource_id			
 MTLTexture.h	MTLTexture	method	getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:		I	runtime	Texture::get_bytes			
@@ -2087,12 +2087,12 @@ MTLTexture.h	MTLTexture	method	replaceRegion:mipmapLevel:slice:withBytes:bytesPe
 MTLTexture.h	MTLTexture	method	getBytes:bytesPerRow:fromRegion:mipmapLevel:		I	runtime	Texture::get_bytes			
 MTLTexture.h	MTLTexture	method	replaceRegion:mipmapLevel:withBytes:bytesPerRow:		I	runtime	Texture::replace_region			
 MTLTexture.h	MTLTexture	method	newTextureViewWithPixelFormat:		I	runtime	Texture::new_texture_view			
-MTLTexture.h	MTLTexture	method	newTextureViewWithPixelFormat:textureType:levels:slices:		I	runtime	Texture::new_texture_view_with_levels_slices			
-MTLTexture.h	MTLTexture	method	newSharedTextureHandle		I	runtime	Texture::new_shared_texture_handle			
+MTLTexture.h	MTLTexture	method	newTextureViewWithPixelFormat:textureType:levels:slices:		I	runtime	Texture::new_texture_view			
+MTLTexture.h	MTLTexture	method	newSharedTextureHandle		M			texture and event handles shared across processes	M	sharing
 MTLTexture.h	MTLTexture	method	newTextureViewWithDescriptor:		I	runtime	Texture::new_texture_view_with_swizzle	the descriptor's fields are its arguments		
 MTLTexture.h	MTLTexture	property	remoteStorageTexture	yes	O			peer-group views of another GPU's texture: multi-GPU Macs only		
 MTLTexture.h	MTLTexture	method	newRemoteTextureViewForDevice:	yes	O			peer-group views of another GPU's texture: multi-GPU Macs only		
-MTLTexture.h	MTLTexture	property	swizzle		I	runtime	Texture::swizzle			
+MTLTexture.h	MTLTexture	property	swizzle		I	runtime	Texture::descriptor, TextureDescriptor.swizzle	through the texture's descriptor		
 MTLTexture.h	MTLTexture	method	newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:		I	runtime	Texture::new_texture_view_with_swizzle			
 MTLTexture.h	MTLTexture	property	sparseTextureTier		M			a placement sparse texture's tier	S	queries
 MTLTexture.h	MTLTexture	property	minLOD		M			a texture's minimum LOD (macOS 27), unmeasured	M	min-lod
@@ -2101,13 +2101,13 @@ MTLTextureViewPool.h	MTLTextureViewPool	protocol	MTLTextureViewPool		M			texture
 MTLTextureViewPool.h	MTLTextureViewPool	method	setTextureView:atIndex:		M			texture view pools (`RuntimeGap::TextureViewPools`)	M	viewpool
 MTLTextureViewPool.h	MTLTextureViewPool	method	setTextureView:descriptor:atIndex:		M			texture view pools (`RuntimeGap::TextureViewPools`)	M	viewpool
 MTLTextureViewPool.h	MTLTextureViewPool	method	setTextureViewFromBuffer:descriptor:offset:bytesPerRow:atIndex:		M			texture view pools (`RuntimeGap::TextureViewPools`)	M	viewpool
-MTLTypes.h		function	MTLOriginMake		I	runtime	Origin::new			
-MTLTypes.h		function	MTLSizeMake		I	runtime	Size::new			
-MTLTypes.h		function	MTLRegionMake1D		I	runtime	Region::new_1d			
-MTLTypes.h		function	MTLRegionMake2D		I	runtime	Region::new_2d			
-MTLTypes.h		function	MTLRegionMake3D		I	runtime	Region::new_3d			
-MTLTypes.h		function	MTLSamplePositionMake		I	runtime	SamplePosition::new			
-MTLTypes.h		function	MTLCoordinate2DMake		I	runtime	Coordinate2D::new			
+MTLTypes.h		function	MTLOriginMake		M			a plain value's constructor	S	values
+MTLTypes.h		function	MTLSizeMake		M			a plain value's constructor	S	values
+MTLTypes.h		function	MTLRegionMake1D		M			a plain value's constructor	S	values
+MTLTypes.h		function	MTLRegionMake2D		M			a plain value's constructor	S	values
+MTLTypes.h		function	MTLRegionMake3D		M			a plain value's constructor	S	values
+MTLTypes.h		function	MTLSamplePositionMake		M			a plain value's constructor	S	values
+MTLTypes.h		function	MTLCoordinate2DMake		M			a plain value's constructor	S	values
 MTLVertexDescriptor.h	MTLVertexBufferLayoutDescriptor	class	MTLVertexBufferLayoutDescriptor		I	translator	VertexBufferLayoutDescriptor			
 MTLVertexDescriptor.h	MTLVertexBufferLayoutDescriptor	property	stride		I	translator	VertexBufferLayoutDescriptor.stride			
 MTLVertexDescriptor.h	MTLVertexBufferLayoutDescriptor	property	stepFunction		I	translator	VertexBufferLayoutDescriptor.step_function			
@@ -2127,10 +2127,10 @@ MTLVertexDescriptor.h	MTLVertexDescriptor	class method	vertexDescriptor		I	trans
 MTLVertexDescriptor.h	MTLVertexDescriptor	property	layouts		I	translator	VertexDescriptor.layouts			
 MTLVertexDescriptor.h	MTLVertexDescriptor	property	attributes		I	translator	VertexDescriptor.attributes			
 MTLVertexDescriptor.h	MTLVertexDescriptor	method	reset		I	translator	VertexDescriptor::new	a plain value: assign a new one		
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class	MTLVisibleFunctionTableDescriptor		I	runtime	VisibleFunctionTableDescriptor			
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class method	visibleFunctionTableDescriptor		I	runtime	VisibleFunctionTableDescriptor::new			
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	property	functionCount		I	runtime	VisibleFunctionTableDescriptor.function_count			
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	protocol	MTLVisibleFunctionTable		I	runtime	VisibleFunctionTable			
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	property	gpuResourceID		I	runtime	VisibleFunctionTable::gpu_resource_id			
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	method	setFunction:atIndex:		I	runtime	VisibleFunctionTable::set_function			
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	method	setFunctions:withRange:		I	runtime	VisibleFunctionTable::set_functions			
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class	MTLVisibleFunctionTableDescriptor		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class method	visibleFunctionTableDescriptor		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	property	functionCount		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	protocol	MTLVisibleFunctionTable		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	property	gpuResourceID		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	method	setFunction:atIndex:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	method	setFunctions:withRange:		M			function tables, function handles and dynamic libraries; a function that reads a function table is refused	L	function-tables
