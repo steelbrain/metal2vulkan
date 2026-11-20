@@ -6,6 +6,9 @@
 //! driver's. Its barrier commands are counted too. The core commands that name a layout and that rt does not record get no entry, so
 //! that a call of one panics (ash's stub for a command it did not load) and the test learns of it.
 //!
+//! Each command buffer's barriers, copies to a buffer and timestamp writes are kept in the order
+//! recorded, for every command buffer submitted ([`submitted`]).
+//!
 //! The same commands keep each image's moves in the order the queue runs them ([`moves`]): each
 //! command buffer's steps, as recorded, are taken in the order `vkQueueSubmit2` hands the command
 //! buffers to the queue. An image made while recording moves home once: a barrier of its first
@@ -78,6 +81,16 @@ enum Step {
 /// A copy from a buffer: [`Moves::copies_in`] counts its steps.
 const COPY_IN: &str = "a copy from a buffer";
 
+/// A command of a command buffer, as [`submitted`] keeps it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ordered {
+    Barrier,
+    /// `vkCmdCopyImageToBuffer`.
+    CopyToBuffer,
+    /// `vkCmdWriteTimestamp2` of this query.
+    Stamp(u32),
+}
+
 /// One device's images' moves, in the order its queue ran its submitted command buffers.
 #[derive(Clone, Default, Debug)]
 pub(crate) struct Moves {
@@ -108,6 +121,7 @@ struct Driver {
     cmd_blit_image: vk::PFN_vkCmdBlitImage,
     cmd_clear_color_image: vk::PFN_vkCmdClearColorImage,
     cmd_begin_rendering: vk::PFN_vkCmdBeginRendering,
+    cmd_write_timestamp2: vk::PFN_vkCmdWriteTimestamp2,
 }
 
 #[derive(Default)]
@@ -130,6 +144,10 @@ struct Record {
     homed: HashMap<(vk::Device, vk::Image), bool>,
     /// Each device's moves.
     moves: HashMap<vk::Device, Moves>,
+    /// Each command buffer's commands since its begin, in the order recorded.
+    order: HashMap<vk::CommandBuffer, Vec<Ordered>>,
+    /// Each device's submitted command buffers' commands, in the order submitted.
+    submitted: HashMap<vk::Device, Vec<Vec<Ordered>>>,
 }
 
 static RECORD: LazyLock<Mutex<Record>> = LazyLock::new(Mutex::default);
@@ -159,6 +177,16 @@ pub(crate) fn forget() {
 /// `device`'s images' moves so far, in the order its queue ran its command buffers.
 pub(crate) fn moves(device: vk::Device) -> Moves {
     record().moves.get(&device).cloned().unwrap_or_default()
+}
+
+/// The commands of each command buffer `device` submitted so far, in the order submitted.
+pub(crate) fn submitted(device: vk::Device) -> Vec<Vec<Ordered>> {
+    record().submitted.get(&device).cloned().unwrap_or_default()
+}
+
+/// Notes `command` of `command_buffer`, in the order recorded.
+fn ordered(command_buffer: vk::CommandBuffer, command: Ordered) {
+    (record().order.entry(command_buffer).or_default()).push(command);
 }
 
 /// Notes `steps` of `command_buffer`, in the order recorded.
@@ -283,6 +311,9 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
             cmd_begin_rendering: std::mem::transmute::<*const c_void, vk::PFN_vkCmdBeginRendering>(
                 load(c"vkCmdBeginRendering"),
             ),
+            cmd_write_timestamp2: std::mem::transmute::<*const c_void, vk::PFN_vkCmdWriteTimestamp2>(
+                load(c"vkCmdWriteTimestamp2"),
+            ),
         }
     };
     record().drivers.insert(handle, driver);
@@ -302,6 +333,7 @@ pub(crate) unsafe fn recorded(instance: &ash::Instance, device: ash::Device) -> 
             b"vkCmdBlitImage" => cmd_blit_image as *const c_void,
             b"vkCmdClearColorImage" => cmd_clear_color_image as *const c_void,
             b"vkCmdBeginRendering" => cmd_begin_rendering as *const c_void,
+            b"vkCmdWriteTimestamp2" => cmd_write_timestamp2 as *const c_void,
             _ => return None,
         };
         Some(function)
@@ -386,7 +418,10 @@ unsafe extern "system" fn begin_command_buffer(
 ) -> vk::Result {
     let (_, driver) = driver_of(command_buffer);
     // Steps of a recording never submitted are not the queue's.
-    record().steps.remove(&command_buffer);
+    let mut record = record();
+    record.steps.remove(&command_buffer);
+    record.order.remove(&command_buffer);
+    drop(record);
     // SAFETY: the caller's arguments, passed on.
     unsafe { (driver.begin_command_buffer)(command_buffer, info) }
 }
@@ -442,6 +477,8 @@ unsafe extern "system" fn queue_submit2(
             };
             for info in infos {
                 take(&mut record, device, info.command_buffer);
+                let order = (record.order.remove(&info.command_buffer)).unwrap_or_default();
+                record.submitted.entry(device).or_default().push(order);
             }
         }
         record.drivers[&device]
@@ -508,6 +545,7 @@ unsafe extern "system" fn cmd_pipeline_barrier2(
 ) {
     let (device, driver) = driver_of(command_buffer);
     *record().barriers.entry(device).or_default() += 1;
+    ordered(command_buffer, Ordered::Barrier);
     // SAFETY: the caller's dependency info and its image barriers.
     let barriers = unsafe {
         let info = &*info;
@@ -611,10 +649,23 @@ unsafe extern "system" fn cmd_copy_image_to_buffer(
     let (device, driver) = driver_of(command_buffer);
     note(device, [("a copy to a buffer", image, layout)]);
     step(command_buffer, [(image, Step::Use("a copy to a buffer"))]);
+    ordered(command_buffer, Ordered::CopyToBuffer);
     // SAFETY: the caller's arguments, passed on.
     unsafe {
         (driver.cmd_copy_image_to_buffer)(command_buffer, image, layout, buffer, count, regions)
     }
+}
+
+unsafe extern "system" fn cmd_write_timestamp2(
+    command_buffer: vk::CommandBuffer,
+    stage: vk::PipelineStageFlags2,
+    pool: vk::QueryPool,
+    query: u32,
+) {
+    let (_, driver) = driver_of(command_buffer);
+    ordered(command_buffer, Ordered::Stamp(query));
+    // SAFETY: the caller's arguments, passed on.
+    unsafe { (driver.cmd_write_timestamp2)(command_buffer, stage, pool, query) }
 }
 
 unsafe extern "system" fn cmd_blit_image(
@@ -709,7 +760,7 @@ unsafe extern "system" fn cmd_begin_rendering(
 }
 
 mod on_device {
-    use super::{barriers, forget, named, Recording};
+    use super::{barriers, forget, named, submitted, Ordered, Recording};
     use crate::tests::command::on_device::{each_device, finished};
     use crate::texture::TextureObject;
     use crate::{
@@ -920,6 +971,82 @@ mod on_device {
                 recorded,
                 "{name}: barriers counted, against the barrier commands recorded"
             );
+        });
+    }
+
+    /// A command buffer's end timestamp is its last command, after its tail: a blit writes a
+    /// texture over a Shared buffer in an image of its own (a texel off the linear image's memory
+    /// alignment), so the command buffer's last segment ends with the copy of that image back to
+    /// the buffer and its end barrier, and only then the end timestamp (the pair's second query,
+    /// an odd one), which `vkCmdWriteTimestamp2` orders after every earlier command. In every
+    /// command buffer the device submits, the uploads among them, an end timestamp is the last
+    /// command seen. lavapipe makes the texture an image of its own; a device that takes it in
+    /// place runs no copy back, and the test says so.
+    #[test]
+    fn a_command_buffer_s_end_timestamp_follows_its_tail() {
+        let _recording = Recording::start();
+        each_device("end stamp", |name, _, device| {
+            let handle = device.core().device.handle();
+            let answer = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let pitch = ROW.next_multiple_of(answer);
+            let block = (device.take_block(MemoryClass::Shared, AT + LEN))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let buffer = (device.new_buffer(block.id, AT, LEN, Some(0)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let source = (device.new_buffer(block.id, 0, ROW * u64::from(HEIGHT), None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let first = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
+            d.usage = TextureUsage::SHADER_READ;
+            let texture = (buffer.new_texture(&d, Some(first), 4, pitch))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let copied = texture.copied_over().is_some();
+            if cfg!(m2v_cpu_icd) {
+                assert!(copied, "{name}: an image of its own");
+            }
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+            let packed = BufferLayout {
+                offset: 0,
+                bytes_per_row: ROW,
+                bytes_per_image: 0,
+            };
+            let (size, at) = ([WIDTH, HEIGHT, 1], TexturePlace::default());
+            (blit.copy_from_buffer(&source, packed, size, &texture, at))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            blit.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let submitted = submitted(handle);
+            for order in &submitted {
+                let end = order
+                    .iter()
+                    .position(|c| matches!(c, Ordered::Stamp(q) if q % 2 == 1));
+                if let Some(at) = end {
+                    assert_eq!(
+                        at + 1,
+                        order.len(),
+                        "{name}: an end stamp not last: {order:?}"
+                    );
+                }
+            }
+            // The tail: the copy back between its two barriers, the end barrier, the end stamp.
+            let tail = |order: &Vec<Ordered>| match order.as_slice() {
+                [.., Ordered::CopyToBuffer, Ordered::Barrier, Ordered::Barrier, last] => {
+                    matches!(last, Ordered::Stamp(q) if q % 2 == 1)
+                }
+                _ => false,
+            };
+            let tails = submitted.iter().filter(|order| tail(order)).count();
+            println!("end stamp: {name}: image of its own {copied}; {tails} tails: {submitted:?}");
+            assert_eq!(tails, usize::from(copied), "{name}: {submitted:?}");
+            drop((command_buffer, queue, texture, source, buffer));
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
 }

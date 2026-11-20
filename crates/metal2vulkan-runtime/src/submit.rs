@@ -289,6 +289,9 @@ pub(crate) struct Upload {
     /// first, which a fill of an upload before it in the same submission may meet
     /// ([`order_fills`]).
     leading: Option<Vec<Filled>>,
+    /// Its pair of timestamp queries, its start written as it began and its end as it ends
+    /// ([`times::begin_own`]); None where it runs untimed.
+    stamps: Option<times::Pair>,
 }
 
 /// A zero fill's buffer and its range of bytes.
@@ -342,6 +345,7 @@ impl Upload {
                 prune_at: HOMES_PRUNE,
                 filled: Vec::new(),
                 leading: None,
+                stamps: times::begin_own(core, command),
             }),
             Err(error) => {
                 core.recorders.give_back(core, recorder);
@@ -1852,7 +1856,7 @@ pub(crate) fn run(core: Arc<Core>) {
             let uploads = state.drop_uploads();
             drop(state);
             for upload in uploads {
-                upload.retire(&core);
+                upload.retire(&core, times::OwnEnd::Unsent);
             }
             core.done.end_all(&core, ended);
             state = work.lock();
@@ -1868,10 +1872,10 @@ pub(crate) fn run(core: Arc<Core>) {
             let captured = state.changes.clear();
             drop(state);
             for upload in uploads {
-                upload.retire(&core);
+                upload.retire(&core, times::OwnEnd::Unsent);
             }
             for copy_in in captured {
-                copy_in.retire(&core);
+                copy_in.retire(&core, times::OwnEnd::Unsent);
             }
             core.done.end_all(&core, ended);
             // The last command buffers this thread ends went to the completion thread first, so
@@ -2077,7 +2081,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         match upload.entries {
             0 => {
                 if let Some(earlier) = empty.replace(upload) {
-                    earlier.retire(core);
+                    earlier.retire(core, times::OwnEnd::Unsent);
                 }
             }
             _ => kept.push(upload),
@@ -2089,7 +2093,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             Ok(upload) => kept.push(upload),
             Err(_) => ok = false,
         },
-        (false, Some(upload)) => upload.retire(core),
+        (false, Some(upload)) => upload.retire(core, times::OwnEnd::Unsent),
         (false, None) => {}
     }
     let mut uploads = kept;
@@ -2098,6 +2102,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     // submission completes: one barrier, at the end of the last.
     if let Some((last, earlier)) = uploads.split_last_mut() {
         for upload in earlier {
+            times::end_own(device, upload.command, upload.stamps);
             // SAFETY: the upload's command buffer was recording under the work lock, which
             // `close` took it out under.
             ok &= unsafe { device.end_command_buffer(upload.command) }.is_ok();
@@ -2115,6 +2120,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         (last.held).extend(backs.into_iter().map(|(_, _, image)| Held::Texture(image)));
         record::barrier(device, last.command, Reach::Host);
         core.counters.count(Metric::Barriers);
+        times::end_own(device, last.command, last.stamps);
         // SAFETY: as above.
         ok &= unsafe { device.end_command_buffer(last.command) }.is_ok();
     }
@@ -2176,6 +2182,10 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
                 );
             }
         }
+        // The runtime's own command buffers of the submission, the uploads ahead of its command
+        // buffers and each copy-in ahead of the one that takes it: counted before the calls, as
+        // each call is.
+        (core.counters).runtime_command_buffers((uploads.len() + copy_ins.len()) as u64);
         for part in &parts {
             let merged = infos(part);
             let infos: Vec<vk::SubmitInfo2<'_>> = merged
@@ -2261,9 +2271,11 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
 }
 
 impl Upload {
-    /// Recycles the upload's recorder and gives up what it holds: once its submission completed,
-    /// or where it never went.
-    pub(crate) fn retire(self, core: &Core) {
+    /// Recycles the upload's recorder and gives up what it holds, and its pair of timestamp
+    /// queries, read where its submission completed (`end`, [`times::retire_own`]): once its
+    /// submission completed, or ended at a loss, or where it never went.
+    pub(crate) fn retire(self, core: &Core, end: times::OwnEnd) {
+        times::retire_own(core, self.stamps, end);
         core.recorders.give_back(core, self.recorder);
     }
 }

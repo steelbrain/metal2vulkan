@@ -33,10 +33,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 /// part waits for can be signalled by the part before it. Each segment's commands end with one
 /// barrier that makes their writes visible to every later command and to the host.
 ///
-/// Its GPU times come from two timestamps, written where its first commands begin and where its
-/// last segment ends, and read once it completes. Their pair of queries comes from the device's
-/// timestamp pools at its first record and goes back as they are read, or as it drops. A command
-/// buffer with no commands, or whose last segment has none, records a `VkCommandBuffer` for them.
+/// Its GPU times come from two timestamps, written where its first commands begin and as the last
+/// command of its last segment, after the copies back of the images its commands wrote and its end
+/// barrier, so they span all the GPU work done for it; read once it completes. Their pair of
+/// queries comes from the device's timestamp pools at its first record and goes back as they are
+/// read, or as it drops. A command buffer with no commands, or whose last segment has none,
+/// records a `VkCommandBuffer` for them.
 /// Where every pair is taken and the device makes no new pool, it runs untimed, its GPU times 0
 /// ([`Metrics::untimed_command_buffers`](crate::Metrics::untimed_command_buffers)).
 ///
@@ -778,11 +780,16 @@ impl CommandBuffer {
     }
 
     /// `GPUEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives seconds:
-    /// the timestamp written where its last segment ended, placed on the host clock through the
-    /// device's calibrated timestamps as [`gpu_start_time`](Self::gpu_start_time) is, and never
-    /// later than the completion the runtime observed; their difference is the two timestamps'
-    /// own span. 0 until it completes, and for one that ended with an error; its start time for
-    /// one that writes no timestamp.
+    /// the timestamp written as the last command of its last segment, after the copies back of
+    /// the images its commands wrote to their buffers and its end barrier (with the moves of the
+    /// drawables it presents), so that from [`gpu_start_time`](Self::gpu_start_time) it spans all
+    /// the GPU work done for it. Placed on the host clock through the device's calibrated
+    /// timestamps as [`gpu_start_time`](Self::gpu_start_time) is, and never later than the
+    /// completion the runtime observed; their difference is the two timestamps' own span. The
+    /// uploads and copy-ins the runtime submits ahead of it are not in it
+    /// ([`Metrics::runtime_command_buffer_gpu_nanos`](crate::Metrics::runtime_command_buffer_gpu_nanos)).
+    /// 0 until it completes, and for one that ended with an error; its start time for one that
+    /// writes no timestamp.
     pub fn gpu_end_time(&self) -> u64 {
         self.state().times.gpu_end
     }
@@ -845,9 +852,11 @@ impl Building {
         &mut segments[last]
     }
 
-    /// At commit: records the end timestamp into the last segment, beginning a command buffer for
-    /// it where the segment has none, and ends it; nothing where the command buffer has nothing
-    /// for the GPU, and no timestamp where it runs untimed.
+    /// At commit: ends the last segment with the end timestamp as its last command, after the
+    /// copies back of the images its commands wrote and its end barrier (`close`), so the
+    /// command buffer's two timestamps span all the GPU work done for it; a command buffer begun
+    /// for it where the segment has none. Nothing where the command buffer has nothing for the
+    /// GPU, and no timestamp where it runs untimed.
     /// A command buffer that presents drawables records the moves of their images to the present
     /// layout in its last segment's end barrier, a command buffer begun for them where the
     /// segment has none, and the segment signals their semaphores.
@@ -855,23 +864,19 @@ impl Building {
         if self.nothing_for_gpu() {
             return Ok(());
         }
-        let last = self.last().command;
-        let command = match last {
-            Some(command) => command,
-            None if self.started && self.stamps.is_none() && self.presents.is_empty() => {
-                return self.close(&[]);
+        if self.last().command.is_none() {
+            if self.started && self.stamps.is_none() && self.presents.is_empty() {
+                return self.close(&[], None);
             }
-            None => self.begin()?,
-        };
-        if let Some(pair) = self.stamps {
-            times::write_end(&self.device.core().device, command, pair.pool, pair.first);
+            self.begin()?;
         }
         let moves: Vec<vk::ImageMemoryBarrier2<'static>> = (self.presents.iter())
             .map(|(drawable, _)| drawable.present_barrier())
             .collect();
         let ready: Vec<vk::Semaphore> = self.presents.iter().map(|&(_, ready)| ready).collect();
         self.last().binary = ready;
-        self.close(&moves)
+        let end = self.stamps;
+        self.close(&moves, end)
     }
 
     /// Nothing for the GPU: no segment holds commands, a wait or a signal, and no drawable is
@@ -907,8 +912,13 @@ impl Building {
         Ok(command)
     }
 
-    /// Ends the last segment's commands, if it has any, `moves` in its end barrier.
-    fn close(&mut self, moves: &[vk::ImageMemoryBarrier2<'_>]) -> Result<(), Error> {
+    /// Ends the last segment's commands, if it has any, `moves` in its end barrier and `end`, the
+    /// command buffer's end timestamp where it is the last segment, after that barrier.
+    fn close(
+        &mut self,
+        moves: &[vk::ImageMemoryBarrier2<'_>],
+        end: Option<Pair>,
+    ) -> Result<(), Error> {
         let core = Arc::clone(self.device.core());
         match self.last().command {
             Some(command) => {
@@ -934,7 +944,7 @@ impl Building {
                 // completes, and may read after an event the segment signals.
                 let host = self.host_written || !self.last().signals.is_empty();
                 self.host_written = false;
-                record::end(&core.device, command, host, moves, &core.counters)
+                record::end(&core.device, command, host, moves, end, &core.counters)
             }
             None => Ok(()),
         }
@@ -942,7 +952,7 @@ impl Building {
 
     /// Starts a new segment after the last one.
     fn split(&mut self) -> Result<(), Error> {
-        self.close(&[])?;
+        self.close(&[], None)?;
         self.gpu.segments.push(Segment::default());
         Ok(())
     }

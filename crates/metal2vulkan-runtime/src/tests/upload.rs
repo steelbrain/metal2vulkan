@@ -20,6 +20,8 @@
 //! - a `replace_region` and a new texture made after a commit held at an event wait go in the
 //!   submission of the next commit, so the held one copies out the bytes from before the call;
 //! - two copies into one texture in two uploads of one submission leave the later one's bytes;
+//! - the runtime's own command buffers (an upload, a Managed copy-in, an upload gone alone) are
+//!   counted as they go and timed as they retire;
 //!
 //! and every gauge reads zero after teardown.
 
@@ -690,6 +692,91 @@ mod on_device {
             );
             drop((held, points, queue, texture, out));
             (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// The runtime's own command buffers, counted as they go and timed as they retire
+    /// (`Metrics::runtime_command_buffers`, `Metrics::runtime_command_buffer_gpu_nanos`): the
+    /// first commit carries one upload, of every call before it (a new texture's move home and
+    /// its zeroing, and a Managed device copy's zeroing), and, where Managed buffers keep a device
+    /// copy, the copy-in of the range `didModifyRange:` named: two, or one on a device of unified
+    /// memory. Then a `get_bytes` of the texture, whose upload goes alone, counts one more. On
+    /// lavapipe each pair is read, none untimed or read as not available, and each adds GPU time.
+    #[test]
+    fn every_device_counts_and_times_its_own_command_buffers() {
+        use crate::tests::managed::on_device::new_managed;
+        each_device("own command buffers", |name, _, device| {
+            let counters = device.counters();
+            let copies = !device.has_unified_memory();
+            let timed = cfg!(m2v_cpu_icd);
+            (device.grant_indices(IndexClass::Texture, 4096, 1)).expect("a grant");
+            let cpu = (device.take_block(MemoryClass::Shared, 256))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed = (new_managed(&device, cpu.id, 0, 256, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let out_block = (device.take_block(MemoryClass::Shared, 256))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let out = (device.new_buffer(out_block.id, 0, 256, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let own = || {
+                let metrics = counters.metrics();
+                (
+                    metrics.runtime_command_buffers,
+                    metrics.runtime_command_buffer_gpu_nanos,
+                    metrics.untimed_command_buffers + metrics.stamps_not_available,
+                )
+            };
+            let before = own();
+
+            let side = 16;
+            let texture = (device.new_texture(&square(side), Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let contents = managed.contents().expect("the consumer's bytes");
+            // SAFETY: the buffer is 256 bytes long, and nothing reads it meanwhile.
+            unsafe { contents.as_ptr().write_bytes(0xA5, 256) };
+            (managed.did_modify_range(0, 256)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+            (blit.copy_from_buffer_to_buffer(&managed, 0, &out, 0, 256))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            blit.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert_eq!(read(&out), vec![0xA5; 256], "{name}: the bytes named");
+            let committed = own();
+            println!("own command buffers: {name}: copy-in {copies}; {before:?} -> {committed:?}");
+            assert_eq!(
+                committed.0 - before.0,
+                1 + u64::from(copies),
+                "{name}: the upload and the copy-in"
+            );
+            assert!(!timed || committed.1 > before.1, "{name}: their GPU time");
+            assert!(!timed || committed.2 == before.2, "{name}: every pair read");
+
+            let mut bytes = vec![0u8; (side * side * 4) as usize];
+            (texture.get_bytes(&mut bytes, u64::from(side * 4), 0, whole(side), 0, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(
+                bytes.iter().all(|&byte| byte == 0),
+                "{name}: a new texture's zeros"
+            );
+            // A command buffer submitted after the upload retires after it.
+            let after = queue.command_buffer().expect("a command buffer");
+            let mut blit = after.blit_command_encoder().expect("an encoder");
+            (blit.fill_buffer(&out, 0..256, 0)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            blit.end_encoding();
+            after.commit().expect("a commit");
+            finished(name, &after);
+            let flushed = own();
+            println!("own command buffers: {name}: the flush {committed:?} -> {flushed:?}");
+            assert_eq!(flushed.0 - committed.0, 1, "{name}: the upload alone");
+            assert!(!timed || flushed.1 > committed.1, "{name}: its GPU time");
+            assert!(!timed || flushed.2 == before.2, "{name}: every pair read");
+            drop((command_buffer, after, queue, texture, managed, out));
+            (device.release_block(out_block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
 

@@ -531,6 +531,8 @@ struct Atomics {
     untimed_command_buffers: AtomicU64,
     sampler_element_writes: AtomicU64,
     stamps_not_available: AtomicU64,
+    runtime_command_buffers: AtomicU64,
+    runtime_command_buffer_gpu_nanos: AtomicU64,
     waits_behind_counter: AtomicU64,
     external_acquires: AtomicU64,
     external_releases: AtomicU64,
@@ -798,6 +800,22 @@ impl Counters {
     /// of those submitted before it ([`Metrics::held_start_gap_nanos`]).
     pub(crate) fn held_start_gap(&self, nanos: u64) {
         self.atomics.held_start_gap_nanos.fetch_add(nanos, Relaxed);
+    }
+
+    /// `count` more of the runtime's own command buffers passed to `vkQueueSubmit2`
+    /// ([`Metrics::runtime_command_buffers`]).
+    pub(crate) fn runtime_command_buffers(&self, count: u64) {
+        self.atomics
+            .runtime_command_buffers
+            .fetch_add(count, Relaxed);
+    }
+
+    /// One of the runtime's own command buffers ran `nanos` nanoseconds of the GPU's between its
+    /// two timestamps ([`Metrics::runtime_command_buffer_gpu_nanos`]).
+    pub(crate) fn runtime_command_buffer_ran(&self, nanos: u64) {
+        self.atomics
+            .runtime_command_buffer_gpu_nanos
+            .fetch_add(nanos, Relaxed);
     }
 
     /// An allocation of `bytes` made for blocks ([`Metrics::block_bytes_made`]).
@@ -1393,6 +1411,8 @@ impl Counters {
             untimed_command_buffers: a.untimed_command_buffers.load(Relaxed),
             sampler_element_writes: a.sampler_element_writes.load(Relaxed),
             stamps_not_available: a.stamps_not_available.load(Relaxed),
+            runtime_command_buffers: a.runtime_command_buffers.load(Relaxed),
+            runtime_command_buffer_gpu_nanos: a.runtime_command_buffer_gpu_nanos.load(Relaxed),
             waits_behind_counter: a.waits_behind_counter.load(Relaxed),
             external_acquires: a.external_acquires.load(Relaxed),
             external_releases: a.external_releases.load(Relaxed),
@@ -2040,7 +2060,9 @@ pub struct Metrics {
     /// Command buffers that ran untimed, their GPU start and end times 0
     /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time)): at their first
     /// record, every pair of the device's timestamp pools was taken and the device made no new
-    /// pool ([`Gauges::timestamp_pools`]).
+    /// pool ([`Gauges::timestamp_pools`]). The runtime's own command buffers that found no pair
+    /// as they began count here too, and their time in
+    /// [`runtime_command_buffer_gpu_nanos`](Self::runtime_command_buffer_gpu_nanos) is lost.
     pub untimed_command_buffers: u64,
     /// Elements of set 1's sampler arrays written (`vkUpdateDescriptorSets`): a sampler state's or
     /// a constexpr sampler's placement and its going write only the elements whose sampler
@@ -2052,8 +2074,24 @@ pub struct Metrics {
     /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time)). A driver whose
     /// timestamps become available only after the signal it orders them before counts every such
     /// command buffer here; a submission the device cancelled at a reset, which signals having run
-    /// nothing, counts too.
+    /// nothing, counts too. The runtime's own command buffers whose pair reads so count here too,
+    /// and add no time to
+    /// [`runtime_command_buffer_gpu_nanos`](Self::runtime_command_buffer_gpu_nanos).
     pub stamps_not_available: u64,
+    /// The runtime's own command buffers passed to `vkQueueSubmit2`, none of them a Metal command
+    /// buffer: the uploads, each leading a submission or going alone (zero fills, moves home and
+    /// the zeroing of new textures, staging copies, acquires of another API's writes, and copies
+    /// between a texture over a buffer and its image of its own), and the Managed buffers'
+    /// copy-ins ([`managed_bytes_captured`](Self::managed_bytes_captured)). Counted before the
+    /// call, as [`submissions`](Self::submissions) is.
+    pub runtime_command_buffers: u64,
+    /// The GPU's nanoseconds those command buffers ran, in total: each one's span from a
+    /// timestamp written as its commands begin to one written after its last, in
+    /// `timestampPeriod`s, counted on the completion thread as it retires. It is no Metal command
+    /// buffer's [`gpu_run`](Self::gpu_run). One whose pair reads as not available
+    /// ([`stamps_not_available`](Self::stamps_not_available)), or that took no pair
+    /// ([`untimed_command_buffers`](Self::untimed_command_buffers)), adds nothing.
+    pub runtime_command_buffer_gpu_nanos: u64,
     /// Rounds of the completion thread in which the progress semaphore's counter read a value
     /// that a host wait on it with a timeout of 0 then reported not reached, so nothing retired in
     /// that round. A command buffer retires only once a host wait has seen its submission's

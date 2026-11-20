@@ -3,7 +3,12 @@
 //!
 //! Each command buffer takes a pair of timestamp queries from the device's pools ([`StampPools`])
 //! as it records its first commands. Its first command buffer writes the first where its commands
-//! begin; its last segment writes the second where it ends. One that finds no pair runs untimed.
+//! begin; its last segment writes the second as its last command, after the copies back of the
+//! images its commands wrote and its end barrier, so the pair spans all the GPU work done for it.
+//! One that finds no pair runs untimed. The runtime's own command buffers, which no Metal command
+//! buffer is (the uploads and the Managed buffers' copy-ins), take a pair each too, written first
+//! and last ([`begin_own`], [`end_own`]), and their spans are summed as they retire
+//! (`Metrics::runtime_command_buffer_gpu_nanos`).
 //! The GPU times are the two timestamps placed on the host clock by the device's last calibration
 //! (`VK_EXT_calibrated_timestamps`, one reading of the GPU's clock and the host's together): one
 //! as the device starts, then one at a completion once [`CALIBRATION_PERIOD`] has passed since
@@ -356,7 +361,9 @@ pub(crate) fn write_start(
     }
 }
 
-/// Records the end timestamp: written once every earlier command of the queue has completed.
+/// Records the end timestamp: written once every earlier command of the queue has completed
+/// (`vkCmdWriteTimestamp2`'s first synchronization scope is every command earlier in submission
+/// order, at its stage, and in a first scope the bottom-of-pipe stage is every stage).
 pub(crate) fn write_end(
     device: &ash::Device,
     command: vk::CommandBuffer,
@@ -373,4 +380,57 @@ pub(crate) fn write_end(
             first + 1,
         )
     };
+}
+
+/// Takes the pair of one of the runtime's own command buffers, which no Metal command buffer is
+/// (an upload or a Managed buffer's copy-in), and writes its start into `command`, which has just
+/// begun recording: None, counted (`Metrics::untimed_command_buffers`), where every pair is taken
+/// and the device makes no new pool.
+pub(crate) fn begin_own(core: &Core, command: vk::CommandBuffer) -> Option<Pair> {
+    let pair = core.stamps.take(&core.device, &core.counters);
+    match pair {
+        Some(pair) => write_start(&core.device, command, pair.pool, pair.first),
+        None => core.counters.count(Metric::UntimedCommandBuffers),
+    }
+    pair
+}
+
+/// Writes the end of `pair` ([`begin_own`]) into `command`: its last command, after its last
+/// barrier, so the pair spans every command of it.
+pub(crate) fn end_own(device: &ash::Device, command: vk::CommandBuffer, pair: Option<Pair>) {
+    if let Some(pair) = pair {
+        write_end(device, command, pair.pool, pair.first);
+    }
+}
+
+/// How one of the runtime's own command buffers retires.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnEnd {
+    /// It never went to `vkQueueSubmit2`: its queries are still reset.
+    Unsent,
+    /// Its submission completed.
+    Completed,
+    /// Its submission was in flight at a loss, the device now idle: nothing of it is read.
+    Lost,
+}
+
+/// Gives back `pair` ([`begin_own`]) as its command buffer retires (`end`). Where it completed,
+/// its span is added to `Metrics::runtime_command_buffer_gpu_nanos` where both timestamps read,
+/// and one that reads as not available is counted ([`Pair::times`]); where it was submitted, both
+/// queries are reset first ([`reset`]).
+pub(crate) fn retire_own(core: &Core, pair: Option<Pair>, end: OwnEnd) {
+    let Some(pair) = pair else {
+        return;
+    };
+    if end == OwnEnd::Completed {
+        // SAFETY: the pair's pool is the device's, and only this retirement resets its two
+        // queries, after this read.
+        if let Some((start, stop)) = unsafe { pair.times(&core.device, &core.counters) } {
+            (core.counters).runtime_command_buffer_ran(core.ticks.span(start, stop));
+        }
+    }
+    if end != OwnEnd::Unsent {
+        reset(&core.device, pair.pool, pair.first, 2);
+    }
+    core.stamps.give_back(pair);
 }

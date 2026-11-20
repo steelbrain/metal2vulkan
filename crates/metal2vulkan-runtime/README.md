@@ -190,7 +190,9 @@ the host had set nor a submitted signal promised, by the length of each hold (`e
 the same buckets); the groups a queue held behind three submissions in flight that went once a
 completion left fewer running (`held_starts`), and the GPU's time behind them, from the latest
 end of the command buffers submitted before each to the start of its first, on their timestamps
-(`held_start_gap_nanos`);
+(`held_start_gap_nanos`); the command buffers of the runtime's own it submitted, the uploads and
+the Managed buffers' copy-ins (`runtime_command_buffers`), and the GPU's time they ran, on
+timestamps of their own (`runtime_command_buffer_gpu_nanos`);
 the copies of textures over a buffer that no linear image holds are split by cause
 (`over_copies_pitch` and the rest, in Textures below);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and
@@ -1673,8 +1675,10 @@ made, with no lock, and never rewritten for layouts.
   once it is scheduled, the `kernel_end_time` of its queue's command buffer before it where that
   is later, as Metal schedules a queue's command buffers in order; `kernel_end_time` is the time
   it was scheduled. `gpu_start_time` and `gpu_end_time` are two
-  timestamp queries, one written where its first commands begin and one where its last segment
-  ends, read once it completes with no wait, and placed on the host clock by the device's last
+  timestamp queries, one written where its first commands begin and one as the last command of
+  its last segment, after the copies back of the images its commands wrote and its end barrier,
+  so the two span all the GPU work done for it, read once it completes with no wait, and placed
+  on the host clock by the device's last
   calibration: one `vkGetCalibratedTimestampsEXT` call reading the GPU's clock and the host's
   together, made as the device starts and again at a completion once 100 ms have passed since
   the last, never for each command buffer. Neither is ever later than the host time the
@@ -1698,7 +1702,12 @@ made, with no lock, and never rewritten for layouts.
   is made (`hostQueryReset`), and a pair as its command buffer retires, those of the two its
   submissions wrote, so no command buffer the GPU runs resets a query. A command buffer with no
   commands, or whose last segment has none, records a `VkCommandBuffer` for its timestamps. One
-  that ends with an error has GPU times of 0.
+  that ends with an error has GPU times of 0. The runtime's own command buffers, which no Metal
+  command buffer is (the uploads that lead a submission or go alone, and the Managed buffers'
+  copy-ins), take a pair each from the same pools, written as their first command and their
+  last, and read as they retire: `Metrics::runtime_command_buffers` counts them and
+  `Metrics::runtime_command_buffer_gpu_nanos` sums their spans, which no Metal command buffer's
+  GPU times hold.
 - `Event` and `SharedEvent` are timeline semaphores whose values are Metal's values. A host set
   (`SharedEvent::set_signaled_value`) raises a floor and never signals the semaphore. A wait
   submits no semaphore wait: it is held until the floor meets it or a signal of its value is
@@ -1820,7 +1829,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   compute and blit work before its first render pass: one with no render pass reports
   `gpu_start_time` equal to its `gpu_end_time`, a length of zero, and one that dispatches before
   its first render pass reports a start after those dispatches. Its `gpu_end_time` is its
-  work's end. Measured on an M3 Max with Mesa 26.3.1, in Vulkan alone, around a 16 ms dispatch:
+  work's end. An upload or a copy-in holds no render pass, so there its span, in
+  `Metrics::runtime_command_buffer_gpu_nanos`, is 0. Measured on an M3 Max with Mesa 26.3.1, in Vulkan alone, around a 16 ms dispatch:
   two timestamps read one value with a pipeline barrier or a buffer fill between them too, 43-56
   µs apart with an empty render pass after the dispatch, and the end one came 51-213 µs before
   the host's calibration after its fence wait. Vulkan allows it: a timestamp may be latched at
@@ -1837,7 +1847,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - On lavapipe a command buffer's completion waits for all the device's later work, of every
   queue: the driver's read of query results waits for the whole device to idle
   (`lvp_GetQueryPoolResults`, with or without `VK_QUERY_RESULT_WAIT_BIT`), and the completion
-  thread reads each command buffer's two timestamps before its completed handlers run. A short
+  thread reads each command buffer's two timestamps before its completed handlers run, and each
+  upload's and copy-in's as it retires. A short
   command buffer committed beside another queue's long one completes once the long one ends.
   Measured with Vulkan alone on Mesa 26.2.6: a read of a completed submission's timestamps
   returned 500.4 ms later, once a later batch that waited on the host could run. It delays and

@@ -6,6 +6,7 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::hazard::Hazards;
 use crate::reaper::{Free, Job};
+use crate::times::{self, Pair};
 use ash::vk;
 use std::sync::Mutex;
 
@@ -131,13 +132,15 @@ pub(crate) fn memory_barrier(reach: Reach) -> vk::MemoryBarrier2<'static> {
 /// wrote Shared memory, or signals an event) the barrier also reaches the host, so Shared memory
 /// reads the GPU's writes once the command buffer completes or the host sees the event. The
 /// barrier also makes the image moves `images`: a presenting command buffer's drawables' moves to
-/// the present layout. A segment begins with no barrier: the one ending each earlier segment,
-/// upload and fill covers it.
+/// the present layout. Where `stamp` is given (the command buffer's last segment), its end
+/// timestamp is the last command, after the barrier. A segment begins with no barrier: the one
+/// ending each earlier segment, upload and fill covers it.
 pub(crate) fn end(
     device: &ash::Device,
     buffer: vk::CommandBuffer,
     host: bool,
     images: &[vk::ImageMemoryBarrier2<'_>],
+    stamp: Option<Pair>,
     counters: &Counters,
 ) -> Result<(), Error> {
     let barrier = [memory_barrier(match host {
@@ -154,6 +157,9 @@ pub(crate) fn end(
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     if host {
         counters.reach_host();
+    }
+    if let Some(pair) = stamp {
+        times::write_end(device, buffer, pair.pool, pair.first);
     }
     // SAFETY: the buffer is recording.
     unsafe { device.end_command_buffer(buffer) }.map_err(Error::vulkan("vkEndCommandBuffer"))

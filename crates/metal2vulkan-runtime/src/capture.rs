@@ -42,6 +42,7 @@ use crate::memory::Block;
 use crate::over::{self, Back, ManagedOvers};
 use crate::record::{self, Reach, Recorder};
 use crate::texture::{Image, OverCopy};
+use crate::times;
 use ash::vk;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Weak};
@@ -187,18 +188,24 @@ pub(crate) struct CopyIn {
     pub(crate) command: vk::CommandBuffer,
     pub(crate) modified: Vec<Modified>,
     pub(crate) images: Vec<Arc<Image>>,
+    /// Its pair of timestamp queries, its start written first and its end last
+    /// ([`times::begin_own`]); None where it runs untimed.
+    pub(crate) stamps: Option<times::Pair>,
 }
 
 impl CopyIn {
-    /// Gives its recorder back and drops what it holds: once what took it retired, or where it
-    /// never went.
-    pub(crate) fn retire(self, core: &Core) {
+    /// Gives its recorder back and drops what it holds, and its pair of timestamp queries, read
+    /// where its submission completed (`end`, [`times::retire_own`]): once what took it retired,
+    /// or ended at a loss, or where it never went.
+    pub(crate) fn retire(self, core: &Core, end: times::OwnEnd) {
         let CopyIn {
             recorder,
             modified,
             images,
+            stamps,
             ..
         } = self;
+        times::retire_own(core, stamps, end);
         core.recorders.give_back(core, recorder);
         drop((modified, images));
     }
@@ -209,7 +216,8 @@ impl CopyIn {
 /// first, then one `vkCmdCopyBuffer` for each buffer from the consumer's block into its device
 /// copy, then the copies in those textures take, or a barrier that makes the copies visible to
 /// every later command. It begins with no barrier of its own: the one ending each earlier command
-/// buffer on the queue puts every earlier command first (`record::end`).
+/// buffer on the queue puts every earlier command first (`record::end`). Its timestamps are its
+/// first command and its last ([`times::begin_own`]).
 ///
 /// Err: [`Error::Vulkan`] where a command pool or buffer cannot be made or ended.
 pub(crate) fn copy_in(core: &Core, named: &[Modified]) -> Result<CopyIn, Error> {
@@ -222,6 +230,7 @@ pub(crate) fn copy_in(core: &Core, named: &[Modified]) -> Result<CopyIn, Error> 
             return Err(error);
         }
     };
+    let stamps = times::begin_own(core, command);
     let backs = backs(named);
     let into = copies_in(named);
     let back_copies: Vec<OverCopy> = backs.iter().map(|(_, copy, _)| *copy).collect();
@@ -254,8 +263,10 @@ pub(crate) fn copy_in(core: &Core, named: &[Modified]) -> Result<CopyIn, Error> 
             false => over::record_side(device, command, &into_copies, true, &core.counters),
         }
     }
+    times::end_own(device, command, stamps);
     // SAFETY: the command buffer is recording, and only this thread has it.
     if let Err(result) = unsafe { device.end_command_buffer(command) } {
+        times::retire_own(core, stamps, times::OwnEnd::Unsent);
         core.recorders.give_back(core, recorder);
         return Err(Error::Vulkan {
             call: "vkEndCommandBuffer",
@@ -269,6 +280,7 @@ pub(crate) fn copy_in(core: &Core, named: &[Modified]) -> Result<CopyIn, Error> 
         command,
         modified: named.to_vec(),
         images,
+        stamps,
     })
 }
 

@@ -2290,6 +2290,8 @@ field	metal2vulkan-runtime::Metrics.render_records_stale	pub render_records_stal
 field	metal2vulkan-runtime::Metrics.resolves	pub resolves: u64
 field	metal2vulkan-runtime::Metrics.ring_block_allocations	pub ring_block_allocations: SiteAllocations
 field	metal2vulkan-runtime::Metrics.ring_writes	pub ring_writes: u64
+field	metal2vulkan-runtime::Metrics.runtime_command_buffer_gpu_nanos	pub runtime_command_buffer_gpu_nanos: u64
+field	metal2vulkan-runtime::Metrics.runtime_command_buffers	pub runtime_command_buffers: u64
 field	metal2vulkan-runtime::Metrics.sampler_element_writes	pub sampler_element_writes: u64
 field	metal2vulkan-runtime::Metrics.scheduled_to_gpu_start	pub scheduled_to_gpu_start: [u64; STAGE_BUCKETS]
 field	metal2vulkan-runtime::Metrics.shared_long_reuses	pub shared_long_reuses: u64

@@ -9,7 +9,7 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
 use crate::submit::{Ended, Finished, Upload};
-use crate::times::{self, Calibration};
+use crate::times::{self, Calibration, OwnEnd};
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -68,6 +68,8 @@ struct Retiree {
     value: u64,
     /// Of a held group's submission ([`Sent::held`]).
     held: bool,
+    /// In flight at a loss ([`Retiree::lost`]): nothing of it is read.
+    lost: bool,
     item: Item,
 }
 
@@ -226,6 +228,7 @@ impl Done {
             state.flight.push_back(Retiree {
                 value,
                 held,
+                lost: false,
                 item: Item::Upload(upload),
             });
         }
@@ -233,6 +236,7 @@ impl Done {
             state.flight.push_back(Retiree {
                 value,
                 held,
+                lost: false,
                 item: Item::CopyIn(copy_in),
             });
         }
@@ -242,6 +246,7 @@ impl Done {
             state.flight.push_back(Retiree {
                 value,
                 held,
+                lost: false,
                 item: Item::Command {
                     cb,
                     gpu,
@@ -274,6 +279,7 @@ impl Done {
             let retiree = Retiree {
                 value,
                 held: false,
+                lost: false,
                 item: Item::Command {
                     cb,
                     gpu,
@@ -322,8 +328,13 @@ pub(crate) fn lose(core: &Core) {
 }
 
 impl Retiree {
-    /// Retires it, a command buffer with its GPU times where it completed.
-    fn retire(self, core: &Core, times: Option<(u64, u64)>) {
+    /// Retires it, a command buffer with its GPU times where it completed; an upload or a copy-in
+    /// with its timestamps read where it completed (`times::retire_own`).
+    fn retire(self, core: &Core, gpu_times: Option<(u64, u64)>) {
+        let end = match self.lost {
+            true => OwnEnd::Lost,
+            false => OwnEnd::Completed,
+        };
         match self.item {
             Item::Command {
                 cb,
@@ -331,9 +342,9 @@ impl Retiree {
                 handlers,
                 error,
                 written,
-            } => command::retire(core, cb, gpu, handlers, error, times, written),
-            Item::Upload(upload) => upload.retire(core),
-            Item::CopyIn(copy_in) => copy_in.retire(core),
+            } => command::retire(core, cb, gpu, handlers, error, gpu_times, written),
+            Item::Upload(upload) => upload.retire(core, end),
+            Item::CopyIn(copy_in) => copy_in.retire(core, end),
         }
     }
 
@@ -353,6 +364,7 @@ impl Retiree {
 
     /// In flight at a loss.
     fn lost(mut self) -> Retiree {
+        self.lost = true;
         if let Item::Command { error, .. } = &mut self.item {
             error.get_or_insert(CommandBufferError::DeviceLost { in_flight: true });
         }
