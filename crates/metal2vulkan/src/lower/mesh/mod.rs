@@ -63,10 +63,11 @@
 //! `set_indices` its `n` indices from the index rounded down to a multiple of `n`. A vertex,
 //! primitive, index or clip distance outside the declared arrays is not stored (Metal does not
 //! define it; Vulkan's out-of-bounds output store is undefined behavior). `set_point_size` stores
-//! a size past Metal's largest point, 511 pixels, as 511, as a vertex function's `[[point_size]]`
-//! is stored (`stage_io::metal_point_size`). Vertex data and primitive data are user outputs keyed
-//! by their field's user key (a fragment input with the same key reads them, the Metal linking
-//! rule); primitive data is decorated `PerPrimitiveEXT` and listed as `IoRole::PrimitiveVarying`.
+//! a size past Metal's largest point, 511 pixels, as 511 and one not greater than 0 as 1.0, as a
+//! vertex function's `[[point_size]]` is stored (`stage_io::metal_point_size`). Vertex data and
+//! primitive data are user outputs keyed by their field's user key (a fragment input with the same
+//! key reads them, the Metal linking rule); primitive data is decorated `PerPrimitiveEXT` and
+//! listed as `IoRole::PrimitiveVarying`.
 //!
 //! `set_render_target_array_index` and `set_viewport_array_index` write the primitive's `Layer` and
 //! `ViewportIndex` by the vertex function's rules for an index past the pass's layers or the

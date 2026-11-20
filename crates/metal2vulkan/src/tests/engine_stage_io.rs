@@ -471,9 +471,10 @@ fn stored_point_sizes(words: &[u32]) -> Vec<u32> {
 
 /// The values `words` store to `PointSize` (`OpDecorate <id> BuiltIn(11) PointSize(1)`), through
 /// the variable itself or an access chain into it (a mesh function's arrayed output), each as
-/// `Some(true)` where it is Metal's largest point applied to a size (an `OpSelect`, opcode 169,
-/// whose first choice is the `float` constant 511.0), `Some(false)` where it is another select
-/// or a constant (opcode 43), and `None` where another instruction computes it.
+/// `Some(true)` where it is Metal's point size of a size (`stage_io::metal_point_size`: an
+/// `OpSelect`, opcode 169, whose second choice is the `float` constant 1.0 and whose first is a
+/// select whose first choice is the `float` constant 511.0), `Some(false)` where it is another
+/// select or a constant (opcode 43), and `None` where another instruction computes it.
 pub(super) fn point_size_stores(words: &[u32]) -> Vec<Option<bool>> {
     let limit = 511.0f32.to_bits();
     let mut insts = Vec::new();
@@ -519,7 +520,13 @@ pub(super) fn point_size_stores(words: &[u32]) -> Vec<Option<bool>> {
         })
         .map(|value| {
             defined(value).map(|(op, o)| match (op, o) {
-                (169, [_, _, _, chosen, _]) => constant(*chosen) == Some(limit),
+                (169, [_, _, _, held, one]) => {
+                    constant(*one) == Some(1.0f32.to_bits())
+                        && matches!(
+                            defined(*held),
+                            Some((169, [_, _, _, chosen, _])) if constant(*chosen) == Some(limit)
+                        )
+                }
                 _ => false,
             })
         })
@@ -529,7 +536,8 @@ pub(super) fn point_size_stores(words: &[u32]) -> Vec<Option<bool>> {
 /// A vertex function's `[[point_size]]` is stored as Metal draws it, a size past Metal's largest
 /// point (511 pixels, `stage_io::METAL_POINT_SIZE_LIMIT`) as 511, on every profile: Vulkan clamps a
 /// point only to the device's `pointSizeRange`, up to 2047.94 on the RTX 5080 and 8191.875 on RADV.
-/// The default 1.0 of a function without one is stored as it is.
+/// A size not greater than 0 is stored as 1.0, which Vulkan's `PointSize` takes. The default 1.0
+/// of a function without one is stored as it is.
 #[test]
 fn a_point_size_past_metals_largest_point_is_stored_as_it() {
     let Some(bc) = fixture() else { return };
