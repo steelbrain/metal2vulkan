@@ -19,8 +19,8 @@ Its limits, measured rather than asserted:
 - **4 call sites send a selector by hand that `objc2-metal` binds no name for**, which is why they are sent with `msg_send!` rather than called. The crate names no container for such a selector, so no receiver typing can reach one and no item here is credited: `detachBacking`, `fillTexture:level:slice:region:bytes:length:`, `setFramebufferOnly:`, `setRotation:`. None of them is an implemented row of the coverage map — the generator fails rather than writing this document if one is, because that would be an item the suite exercises and nothing counts.
 - **9 call sites resolve to no item although some Metal type binds the selector**: an instance send whose receiver this could not type, a message to a class that does not bind the name sent to it, or a selector sent by hand to a receiver whose Rust type is a **supertype** of the one that binds it — which is often why it is sent by hand, since `objc2` casts between two protocol objects nowhere. Each sent its selector to exactly one receiver, so each exercised one item; which one is what the typing could not say. **Every one of their selectors is bound by at least one item some other call site credits**, so none of these sites proves an item is missing from the count. That is not a proof that the count is complete: such a site may have sent its selector to a type other than the credited one, and this cannot tell. To rule it out, spell the receiver's type at the call site — a `let` with a type, rather than a `let` with none — and this re-derives with the item credited to the case that calls it. A pattern binding is not one of the shapes that costs a site: a tuple, a `for`, a `match` arm and a closure parameter are each typed from what made them.
 - **0 call sites typed to a receiver that does not bind the selector sent to it.** The generator fails rather than writing this document if any does, which is what keeps the typing from quietly counting the wrong item.
-- **74 of the map's implemented rows are a container's own**: the `class`, `protocol` and `category` rows, whose name is the container's and not a selector's. No call site can resolve to one, because `objc2-metal` binds no selector by that name, so these are credited by the suite **messaging** the type instead — a call whose receiver is the container or a subtype of it — under the same gate and the same family attribution as the selector it sends.
-- **2 are the header's free functions**, which no container declares. `objc2-metal` binds these as Rust functions, so the receiver typing never sees one; the leg calls such a function by its own C name and the walk reads it as an edge of the call graph.
+- **77 of the map's implemented rows are a container's own**: the `class`, `protocol` and `category` rows, whose name is the container's and not a selector's. No call site can resolve to one, because `objc2-metal` binds no selector by that name, so these are credited by the suite **messaging** the type instead — a call whose receiver is the container or a subtype of it — under the same gate and the same family attribution as the selector it sends.
+- **4 are the header's free functions**, which no container declares. `objc2-metal` binds these as Rust functions, so the receiver typing never sees one; the leg calls such a function by its own C name and the walk reads it as an edge of the call graph.
 - **1 implemented items `objc2-metal` binds no name for at all**, so no case can call them whatever it is authored to do. They are counted apart from the gap below rather than folded into it, because a gap is work and these are not:
   - `MTLFunctionReflection`'s `userAnnotation`
 - The unit a call is attributed to is the **case module**, not the case: a module's cases share one `run`, so which of them encodes which step is not a property of the text. Where a module holds one case the two are the same.
@@ -30,18 +30,18 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 541 |
+| implemented Metal items | 592 |
 | of those, unreachable: `objc2-metal` binds no name for them | 1 |
-| so reachable by some case | 540 |
-| of the reachable, exercised by the suite's Metal leg | 474 |
-| of the reachable, not exercised | 66 |
+| so reachable by some case | 591 |
+| of the reachable, exercised by the suite's Metal leg | 518 |
+| of the reachable, not exercised | 73 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 254 |
-| of those exercised, a case reaching it loosens some site | 220 |
+| of those exercised, no case reaching it loosens anything | 290 |
+| of those exercised, a case reaching it loosens some site | 228 |
 | case modules | 179 |
 | committed recordings | 1319 |
-| distinct SDK items the Metal leg reaches, of any status | 800 |
-| of those, reached only where this cannot name the family | 4 |
+| distinct SDK items the Metal leg reaches, of any status | 804 |
+| of those, reached only where this cannot name the family | 5 |
 | ledger rows (a case whose gap is recorded) | 3778 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
@@ -363,18 +363,21 @@ Every container with an implemented item, by how much of it the suite reaches. *
 |---|---|---|---|---|---|
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
-| `MTLRenderCommandEncoder` | 41 | 0 | 36 | 5 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
+| `MTLRenderCommandEncoder` | 51 | 0 | 46 | 5 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
+| the header's free functions | 4 | 0 | 0 | 4 |  |
 | `MTLFunctionConstantValues` | 5 | 0 | 2 | 3 | `function_constants_half3`, `function_facts`, `library_facts` |
+| `MTLLibrary` | 10 | 0 | 7 | 3 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLRasterizationRateSampleArray` | 3 | 0 | 0 | 3 |  |
 | `MTLRenderPipelineReflection` | 9 | 0 | 6 | 3 | `fragment_imageblock_reflection`, `mesh_pipeline_reflection`, `pipeline_options`, `texture_accesses`… |
-| the header's free functions | 2 | 0 | 0 | 2 |  |
 | `MTLBuffer` | 6 | 0 | 4 | 2 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
-| `MTLComputeCommandEncoder` | 17 | 0 | 15 | 2 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
-| `MTLDevice` | 21 | 0 | 19 | 2 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
+| `MTLComputeCommandEncoder` | 25 | 0 | 23 | 2 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
+| `MTLDevice` | 23 | 0 | 21 | 2 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLFunctionReflection` | 3 | 1 | 0 | 2 |  |
 | `MTLRasterizationRateMapDescriptor` | 10 | 0 | 8 | 2 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLAttributeDescriptorArray` | 3 | 0 | 2 | 1 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
 | `MTLBufferLayoutDescriptorArray` | 3 | 0 | 2 | 1 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
+| `MTLCommandBuffer` | 19 | 0 | 18 | 1 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
+| `MTLCommandQueue` | 4 | 0 | 3 | 1 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
 | `MTLComputePipelineReflection` | 3 | 0 | 2 | 1 | `function_bindings`, `pipeline_option_reflection`, `pipeline_options` |
 | `MTLComputePipelineState` | 7 | 0 | 6 | 1 | `compute_threadgroups`, `pipeline_facts`, `pipeline_handlers`, `pipeline_limits`… |
 | `MTLDepthStencilState` | 1 | 0 | 0 | 1 |  |
@@ -395,16 +398,16 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLAttribute` | 7 | 0 | 7 | 0 | `function_facts`, `library_facts` |
 | `MTLAttributeDescriptor` | 4 | 0 | 4 | 0 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
 | `MTLBinding` | 7 | 0 | 7 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
-| `MTLBlitCommandEncoder` | 9 | 0 | 9 | 0 | `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`… |
+| `MTLBlitCommandEncoder` | 12 | 0 | 12 | 0 | `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`… |
 | `MTLBufferBinding` | 6 | 0 | 6 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
 | `MTLBufferLayoutDescriptor` | 4 | 0 | 4 | 0 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
-| `MTLCommandBuffer` | 18 | 0 | 18 | 0 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
 | `MTLCommandEncoder` | 2 | 0 | 2 | 0 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
-| `MTLCommandQueue` | 3 | 0 | 3 | 0 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
 | `MTLComputePipelineDescriptor` | 14 | 0 | 14 | 0 | `attribute_formats`, `attribute_strides`, `binary_archives`, `blit_indirect_commands`… |
 | `MTLDepthStencilDescriptor` | 5 | 0 | 5 | 0 | `depth_resolve_pairs`, `depth_stencil_space`, `layered_targets`, `pass_sequence_actions`… |
 | `MTLEvent` | 2 | 0 | 2 | 0 | `event_orders`, `fence_orders`, `shared_events` |
+| `MTLFunction` | 8 | 0 | 8 | 0 | `argument_encoder_crossings`, `argument_encoders`, `compute_pipeline_descriptors`, `function_facts`… |
 | `MTLFunctionConstant` | 5 | 0 | 5 | 0 | `function_facts`, `library_facts` |
+| `MTLFunctionDescriptor` | 4 | 0 | 4 | 0 | `library_facts` |
 | `MTLHeap` | 2 | 0 | 2 | 0 | `compressed_moves`, `compute_heap_residency`, `heap_facts`, `resource_facts`… |
 | `MTLLinkedFunctions` | 6 | 0 | 6 | 0 | `mesh_pipeline_descriptors`, `pipeline_descriptors`, `tile_pipeline_descriptors`, `visible_tables` |
 | `MTLMeshRenderPipelineDescriptor` | 25 | 0 | 25 | 0 | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`… |
@@ -415,12 +418,12 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLRenderPassColorAttachmentDescriptor` | 2 | 0 | 2 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLRenderPassColorAttachmentDescriptorArray` | 3 | 0 | 3 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLRenderPassDepthAttachmentDescriptor` | 3 | 0 | 3 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
-| `MTLRenderPassDescriptor` | 7 | 0 | 7 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
+| `MTLRenderPassDescriptor` | 8 | 0 | 8 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLRenderPassStencilAttachmentDescriptor` | 3 | 0 | 3 | 0 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | `MTLRenderPipelineColorAttachmentDescriptor` | 10 | 0 | 10 | 0 | `alpha_coverage_pairs`, `binary_archives`, `blend_interactions`, `blend_sweeps`… |
 | `MTLRenderPipelineDescriptor` | 33 | 0 | 33 | 0 | `alpha_coverage_pairs`, `binary_archives`, `blend_interactions`, `blend_sweeps`… |
 | `MTLRenderPipelineState` | 4 | 0 | 4 | 0 | `pipeline_facts`, `pipeline_handlers`, `pipeline_limits`, `tile_threadgroups`… |
-| `MTLResource` | 1 | 0 | 1 | 0 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
+| `MTLResource` | 2 | 0 | 2 | 0 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLSamplerDescriptor` | 16 | 0 | 16 | 0 | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`… |
 | `MTLSamplerState` | 2 | 0 | 2 | 0 | `pixel_downscales`, `pixel_samplers`, `read_through` |
 | `MTLStencilDescriptor` | 7 | 0 | 7 | 0 | `depth_resolve_pairs`, `depth_stencil_space`, `layered_targets`, `pass_sequence_actions`… |
@@ -446,33 +449,34 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 |---|---|---|---|
 | `MTLArgument.h` | 77 | 59 | 18 |
 | `MTLRasterizationRate.h` | 25 | 12 | 13 |
-| `MTLRenderCommandEncoder.h` | 41 | 36 | 5 |
+| `MTLLibrary.h` | 40 | 35 | 5 |
+| `MTLRenderCommandEncoder.h` | 51 | 46 | 5 |
 | `MTLRenderPipeline.h` | 102 | 97 | 5 |
+| `MTLDevice.h` | 33 | 29 | 4 |
 | `MTLFunctionConstantValues.h` | 5 | 2 | 3 |
 | `MTLStageInputOutputDescriptor.h` | 21 | 18 | 3 |
 | `MTLVertexDescriptor.h` | 19 | 16 | 3 |
 | `MTLBuffer.h` | 6 | 4 | 2 |
-| `MTLComputeCommandEncoder.h` | 17 | 15 | 2 |
+| `MTLComputeCommandEncoder.h` | 25 | 23 | 2 |
 | `MTLComputePipeline.h` | 24 | 22 | 2 |
-| `MTLDevice.h` | 29 | 27 | 2 |
-| `MTLLibrary.h` | 22 | 20 | 2 |
+| `MTLCommandBuffer.h` | 19 | 18 | 1 |
+| `MTLCommandQueue.h` | 4 | 3 | 1 |
 | `MTLDepthStencil.h` | 13 | 12 | 1 |
 | `MTLEvent.h` | 6 | 5 | 1 |
 | `MTLFence.h` | 1 | 0 | 1 |
 | `MTLPipeline.h` | 5 | 4 | 1 |
-| `MTLRenderPass.h` | 29 | 28 | 1 |
+| `MTLRenderPass.h` | 30 | 29 | 1 |
 | `MTLTexture.h` | 39 | 38 | 1 |
 | `MTLAllocation.h` | 1 | 1 | 0 |
-| `MTLBlitCommandEncoder.h` | 9 | 9 | 0 |
-| `MTLCommandBuffer.h` | 18 | 18 | 0 |
+| `MTLBlitCommandEncoder.h` | 12 | 12 | 0 |
 | `MTLCommandEncoder.h` | 2 | 2 | 0 |
-| `MTLCommandQueue.h` | 3 | 3 | 0 |
+| `MTLFunctionDescriptor.h` | 4 | 4 | 0 |
 | `MTLHeap.h` | 2 | 2 | 0 |
 | `MTLLinkedFunctions.h` | 6 | 6 | 0 |
-| `MTLResource.h` | 1 | 1 | 0 |
+| `MTLResource.h` | 2 | 2 | 0 |
 | `MTLSampler.h` | 18 | 18 | 0 |
 
-1 of 27 headers have no exercised item at all, 1 implemented items between them: `MTLFence.h`.
+1 of 28 headers have no exercised item at all, 1 implemented items between them: `MTLFence.h`.
 
 ## Containers with no case at all
 
@@ -480,14 +484,14 @@ An implemented container no case's Metal leg touches. These are the families of 
 
 | container | implemented items | header |
 |---|---|---|
-| the header's free functions | 2 | `MTLRenderPass.h` |
+| the header's free functions | 4 | `MTLDevice.h` |
 | `MTLArgument` | 17 | `MTLArgument.h` |
 | `MTLDepthStencilState` | 1 | `MTLDepthStencil.h` |
 | `MTLFence` | 1 | `MTLFence.h` |
 | `MTLFunctionReflection` | 3 | `MTLLibrary.h` |
 | `MTLRasterizationRateSampleArray` | 3 | `MTLRasterizationRate.h` |
 
-6 containers, 27 implemented items.
+6 containers, 29 implemented items.
 
 ## The suite's shape
 
@@ -510,8 +514,8 @@ An implemented container no case's Metal leg touches. These are the families of 
 | modules forbidding a re-record | 8 |
 | `Side` methods (the suite's whole device vocabulary) | 133 |
 | `Side` methods the Metal leg reaches an SDK item through | 127 |
-| SDK items a case's Metal leg reaches, median | 52 |
-| the same, least and most | 0 and 211 |
+| SDK items a case's Metal leg reaches, median | 53 |
+| the same, least and most | 0 and 212 |
 | Metal call sites in the leg | 1758 |
 | distinct selectors the leg sends | 662 |
 | of those, resolved to an item of the coverage map | 655 |
@@ -523,185 +527,185 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 
 | family | cases | Metal ran | compared | items reached |
 |---|---|---|---|---|
-| `alpha_coverage_pairs` | 17 | 17 | every field | 110 |
-| `argument_encoder_crossings` | 4 | 4 | every field | 38 |
-| `argument_encoders` | 5 | 5 | every field | 54 |
-| `astc_textures` | 42 | 42 | 2 tolerance(s): `Degradation`, `NewRuntimeNotice` | 39 |
-| `attribute_formats` | 2 | 2 | every field | 46 |
-| `attribute_strides` | 4 | 4 | every field | 44 |
-| `bicubic_texel_classes` | 1 | 1 | every field | 29 |
-| `binary_archives` | 6 | 6 | every field | 25 |
-| `blend_interactions` | 4 | 4 | every field | 114 |
-| `blend_sweeps` | 12 | 12 | every field | 114 |
-| `blit_encoder_commands` | 11 | 11 | every field | 44 |
-| `blit_indirect_commands` | 3 | 3 | every field | 80 |
-| `border_swizzles` | 8 | 8 | every field | 56 |
-| `buffer_bind_off_alignment` | 1 | 1 | every field | 20 |
-| `buffer_blits` | 4 | 4 | every field | 19 |
-| `buffer_depth_samples` | 5 | 5 | every field | 55 |
-| `buffer_tails` | 2 | 2 | every field | 46 |
-| `buffer_target_clears` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 57 |
-| `buffer_texture_blits` | 2 | 2 | every field | 35 |
-| `buffer_textures` | 3 | 2 | every field | 41 |
-| `chroma_pairs` | 6 | 6 | every field | 62 |
-| `color_write_masks` | 5 | 5 | every field | 111 |
+| `alpha_coverage_pairs` | 17 | 17 | every field | 113 |
+| `argument_encoder_crossings` | 4 | 4 | every field | 41 |
+| `argument_encoders` | 5 | 5 | every field | 57 |
+| `astc_textures` | 42 | 42 | 2 tolerance(s): `Degradation`, `NewRuntimeNotice` | 41 |
+| `attribute_formats` | 2 | 2 | every field | 48 |
+| `attribute_strides` | 4 | 4 | every field | 46 |
+| `bicubic_texel_classes` | 1 | 1 | every field | 31 |
+| `binary_archives` | 6 | 6 | every field | 27 |
+| `blend_interactions` | 4 | 4 | every field | 117 |
+| `blend_sweeps` | 12 | 12 | every field | 117 |
+| `blit_encoder_commands` | 11 | 11 | every field | 48 |
+| `blit_indirect_commands` | 3 | 3 | every field | 83 |
+| `border_swizzles` | 8 | 8 | every field | 58 |
+| `buffer_bind_off_alignment` | 1 | 1 | every field | 22 |
+| `buffer_blits` | 4 | 4 | every field | 21 |
+| `buffer_depth_samples` | 5 | 5 | every field | 59 |
+| `buffer_tails` | 2 | 2 | every field | 50 |
+| `buffer_target_clears` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 58 |
+| `buffer_texture_blits` | 2 | 2 | every field | 38 |
+| `buffer_textures` | 3 | 2 | every field | 44 |
+| `chroma_pairs` | 6 | 6 | every field | 66 |
+| `color_write_masks` | 5 | 5 | every field | 114 |
 | `command_buffer_facts` | 1 | 1 | every field | 23 |
 | `command_queues` | 1 | 1 | every field | 5 |
-| `compressed_blits` | 4 | 4 | every field | 36 |
-| `compressed_decode` | 10 | 10 | 1 tolerance(s): `NewRuntimeNotice` | 39 |
-| `compressed_moves` | 14 | 14 | every field | 29 |
-| `compressed_views` | 14 | 14 | every field | 36 |
-| `compute_encoder_commands` | 8 | 8 | every field | 53 |
-| `compute_heap_residency` | 1 | 1 | every field | 32 |
-| `compute_pipeline_descriptors` | 3 | 3 | 1 tolerance(s): `AcceptedDifference` | 18 |
-| `compute_render_chains` | 3 | 3 | every field | 138 |
-| `compute_threadgroups` | 2 | 1 | every field | 25 |
-| `copy_out_strides` | 1 | 1 | every field | 35 |
-| `denormal_word_fetches` | 1 | 1 | every field | 39 |
-| `depth_resolve_pairs` | 2 | 2 | every field | 128 |
-| `depth_stencil_space` | 8 | 8 | every field | 131 |
-| `depth_texel_reads` | 1 | 1 | every field | 46 |
+| `compressed_blits` | 4 | 4 | every field | 40 |
+| `compressed_decode` | 10 | 10 | 1 tolerance(s): `NewRuntimeNotice` | 41 |
+| `compressed_moves` | 14 | 14 | every field | 31 |
+| `compressed_views` | 14 | 14 | every field | 39 |
+| `compute_encoder_commands` | 8 | 8 | every field | 62 |
+| `compute_heap_residency` | 1 | 1 | every field | 42 |
+| `compute_pipeline_descriptors` | 3 | 3 | 1 tolerance(s): `AcceptedDifference` | 22 |
+| `compute_render_chains` | 3 | 3 | every field | 141 |
+| `compute_threadgroups` | 2 | 1 | every field | 27 |
+| `copy_out_strides` | 1 | 1 | every field | 38 |
+| `denormal_word_fetches` | 1 | 1 | every field | 41 |
+| `depth_resolve_pairs` | 2 | 2 | every field | 131 |
+| `depth_stencil_space` | 8 | 8 | every field | 134 |
+| `depth_texel_reads` | 1 | 1 | every field | 48 |
 | `device_queries` | 5 | 5 | every field | 3 |
-| `discard_hoist` | 1 | 1 | 1 tolerance(s): `Degradation` | 132 |
-| `draw_state_changes` | 1 | 1 | every field | 134 |
-| `dynamic_libraries` | 3 | 3 | every field | 1 |
+| `discard_hoist` | 1 | 1 | 1 tolerance(s): `Degradation` | 135 |
+| `draw_state_changes` | 1 | 1 | every field | 137 |
+| `dynamic_libraries` | 3 | 3 | every field | 6 |
 | `empty_command_buffers` | 1 | 1 | every field | 20 |
-| `etc_textures` | 10 | 10 | 1 tolerance(s): `Degradation` | 39 |
+| `etc_textures` | 10 | 10 | 1 tolerance(s): `Degradation` | 41 |
 | `event_orders` | 5 | 5 | 2 tolerance(s): `NewRuntimeAccepted` | 27 |
-| `extended_range_blends` | 18 | 18 | every field | 121 |
-| `extended_range_gamut` | 39 | 39 | every field | 112 |
-| `extended_range_gradients` | 8 | 8 | every field | 113 |
-| `extended_range_planes` | 4 | 4 | every field | 26 |
-| `extended_range_targets` | 22 | 22 | every field | 118 |
-| `extended_range_two_planes` | 2 | 2 | every field | 30 |
-| `extended_swizzles` | 15 | 15 | every field | 56 |
+| `extended_range_blends` | 18 | 18 | every field | 124 |
+| `extended_range_gamut` | 39 | 39 | every field | 115 |
+| `extended_range_gradients` | 8 | 8 | every field | 116 |
+| `extended_range_planes` | 4 | 4 | every field | 28 |
+| `extended_range_targets` | 22 | 22 | every field | 121 |
+| `extended_range_two_planes` | 2 | 2 | every field | 32 |
+| `extended_swizzles` | 15 | 15 | every field | 58 |
 | `fence_orders` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 27 |
-| `fetch_ordered` | 6 | 6 | every field | 113 |
-| `format_copies` | 16 | 16 | every field | 35 |
+| `fetch_ordered` | 6 | 6 | every field | 116 |
+| `format_copies` | 16 | 16 | every field | 39 |
 | `format_footprints` | 6 | 6 | 1 tolerance(s): `NewRuntimeAccepted` | 19 |
-| `fragment_imageblock_reflection` | 1 | 1 | every field | 72 |
-| `frame_chains` | 1 | 1 | every field | 135 |
-| `fresh_contents` | 87 | 87 | 1 tolerance(s): `Degradation` | 38 |
-| `function_bindings` | 15 | 15 | every field | 62 |
-| `function_constants_half3` | 1 | 1 | every field | 25 |
-| `function_facts` | 15 | 15 | every field | 21 |
-| `half_output_blends` | 6 | 6 | every field | 114 |
-| `half_read_nans` | 6 | 6 | every field | 46 |
-| `half_storage_writes` | 9 | 9 | every field | 30 |
-| `half_texel_nans` | 8 | 8 | every field | 29 |
-| `half_write_nans` | 7 | 7 | every field | 29 |
+| `fragment_imageblock_reflection` | 1 | 1 | every field | 74 |
+| `frame_chains` | 1 | 1 | every field | 138 |
+| `fresh_contents` | 87 | 87 | 1 tolerance(s): `Degradation` | 41 |
+| `function_bindings` | 15 | 15 | every field | 64 |
+| `function_constants_half3` | 1 | 1 | every field | 27 |
+| `function_facts` | 15 | 15 | every field | 32 |
+| `half_output_blends` | 6 | 6 | every field | 117 |
+| `half_read_nans` | 6 | 6 | every field | 48 |
+| `half_storage_writes` | 9 | 9 | every field | 32 |
+| `half_texel_nans` | 8 | 8 | every field | 31 |
+| `half_write_nans` | 7 | 7 | every field | 31 |
 | `handler_waits` | 3 | 0 | every field | 0 |
-| `heap_facts` | 5 | 5 | every field | 4 |
+| `heap_facts` | 5 | 5 | every field | 5 |
 | `heap_metal_sizes` | 7 | 7 | 1 tolerance(s): `NewRuntimeAccepted` | 14 |
-| `host_detach` | 1 | 1 | every field | 17 |
-| `host_page_writes` | 4 | 4 | every field | 119 |
-| `indirect_command_depth` | 6 | 6 | every field | 144 |
-| `indirect_commands` | 9 | 9 | every field | 146 |
+| `host_detach` | 1 | 1 | every field | 18 |
+| `host_page_writes` | 4 | 4 | every field | 123 |
+| `indirect_command_depth` | 6 | 6 | every field | 147 |
+| `indirect_commands` | 9 | 9 | every field | 149 |
 | `indirect_private_types` | 1 | 0 | every field | 0 |
-| `int_attributes` | 1 | 1 | every field | 99 |
-| `layered_targets` | 5 | 5 | every field | 128 |
-| `level_sizes` | 2 | 2 | every field | 39 |
-| `library_facts` | 9 | 9 | every field | 21 |
-| `math_routines` | 2 | 2 | every field | 23 |
-| `mesh_barriers` | 2 | 2 | every field | 45 |
-| `mesh_commands` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 44 |
-| `mesh_draws` | 6 | 6 | every field | 43 |
-| `mesh_partial_barriers` | 4 | 4 | every field | 42 |
-| `mesh_pipeline_descriptors` | 3 | 3 | every field | 43 |
-| `mesh_pipeline_reflection` | 2 | 2 | every field | 75 |
-| `nan_integer_conversions` | 1 | 1 | 1 tolerance(s): `AcceptedDifference` | 53 |
-| `nearest_positions` | 1 | 1 | every field | 46 |
-| `norm_storage_writes` | 7 | 7 | every field | 41 |
-| `padded_blends` | 17 | 17 | every field | 113 |
-| `padded_fetch` | 11 | 11 | every field | 113 |
-| `pass_attachment_pairs` | 2 | 2 | every field | 113 |
-| `pass_bound_pairs` | 1 | 1 | every field | 114 |
-| `pass_bytes` | 4 | 4 | every field | 23 |
-| `pass_sequence_actions` | 2 | 2 | 1 tolerance(s): `NewRuntimeAccepted` | 129 |
-| `pass_start_reads` | 14 | 14 | 2 tolerance(s): `AcceptedDifference` | 118 |
-| `pipeline_descriptors` | 3 | 3 | every field | 71 |
-| `pipeline_facts` | 9 | 9 | every field | 65 |
-| `pipeline_functions` | 8 | 8 | every field | 1 |
-| `pipeline_handlers` | 24 | 24 | every field | 81 |
-| `pipeline_limits` | 27 | 27 | every field | 18 |
-| `pipeline_option_reflection` | 3 | 3 | every field | 62 |
-| `pipeline_options` | 21 | 21 | every field | 74 |
-| `pixel_downscales` | 7 | 7 | every field | 49 |
-| `pixel_samplers` | 20 | 20 | every field | 49 |
-| `primitive_type_crossings` | 1 | 1 | every field | 112 |
-| `pvrtc_cpu_order` | 6 | 6 | every field | 36 |
-| `pvrtc_rows` | 8 | 8 | every field | 35 |
+| `int_attributes` | 1 | 1 | every field | 102 |
+| `layered_targets` | 5 | 5 | every field | 131 |
+| `level_sizes` | 2 | 2 | every field | 41 |
+| `library_facts` | 9 | 9 | every field | 38 |
+| `math_routines` | 2 | 2 | every field | 25 |
+| `mesh_barriers` | 2 | 2 | every field | 50 |
+| `mesh_commands` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 47 |
+| `mesh_draws` | 6 | 6 | every field | 46 |
+| `mesh_partial_barriers` | 4 | 4 | every field | 45 |
+| `mesh_pipeline_descriptors` | 3 | 3 | every field | 47 |
+| `mesh_pipeline_reflection` | 2 | 2 | every field | 77 |
+| `nan_integer_conversions` | 1 | 1 | 1 tolerance(s): `AcceptedDifference` | 56 |
+| `nearest_positions` | 1 | 1 | every field | 48 |
+| `norm_storage_writes` | 7 | 7 | every field | 43 |
+| `padded_blends` | 17 | 17 | every field | 116 |
+| `padded_fetch` | 11 | 11 | every field | 116 |
+| `pass_attachment_pairs` | 2 | 2 | every field | 116 |
+| `pass_bound_pairs` | 1 | 1 | every field | 117 |
+| `pass_bytes` | 4 | 4 | every field | 25 |
+| `pass_sequence_actions` | 2 | 2 | 1 tolerance(s): `NewRuntimeAccepted` | 132 |
+| `pass_start_reads` | 14 | 14 | 2 tolerance(s): `AcceptedDifference` | 122 |
+| `pipeline_descriptors` | 3 | 3 | every field | 75 |
+| `pipeline_facts` | 9 | 9 | every field | 67 |
+| `pipeline_functions` | 8 | 8 | every field | 5 |
+| `pipeline_handlers` | 24 | 24 | every field | 83 |
+| `pipeline_limits` | 27 | 27 | every field | 20 |
+| `pipeline_option_reflection` | 3 | 3 | every field | 64 |
+| `pipeline_options` | 21 | 21 | every field | 76 |
+| `pixel_downscales` | 7 | 7 | every field | 51 |
+| `pixel_samplers` | 20 | 20 | every field | 51 |
+| `primitive_type_crossings` | 1 | 1 | every field | 115 |
+| `pvrtc_cpu_order` | 6 | 6 | every field | 39 |
+| `pvrtc_rows` | 8 | 8 | every field | 39 |
 | `rate_map_degenerate_forms` | 3 | 3 | every field | 19 |
 | `rate_map_sweeps` | 9 | 9 | every field | 19 |
 | `rate_maps` | 2 | 2 | every field | 14 |
-| `read_through` | 13 | 13 | every field | 59 |
-| `read_write_tiers` | 6 | 6 | every field | 44 |
-| `render_chains` | 3 | 3 | every field | 132 |
-| `render_depth_stencil_state` | 3 | 3 | every field | 132 |
-| `render_draw_forms` | 4 | 4 | every field | 117 |
-| `render_pass_descriptors` | 12 | 12 | every field | 28 |
-| `render_residency` | 2 | 2 | every field | 116 |
-| `render_state` | 3 | 3 | every field | 144 |
-| `resolve_then_load` | 1 | 1 | every field | 120 |
-| `resource_facts` | 4 | 4 | every field | 22 |
-| `rgb10a2_srgb` | 8 | 8 | every field | 73 |
-| `rotated_planes` | 20 | 20 | 1 tolerance(s): `Degradation` | 111 |
-| `rotated_targets` | 14 | 14 | every field | 114 |
+| `read_through` | 13 | 13 | every field | 61 |
+| `read_write_tiers` | 6 | 6 | every field | 46 |
+| `render_chains` | 3 | 3 | every field | 135 |
+| `render_depth_stencil_state` | 3 | 3 | every field | 135 |
+| `render_draw_forms` | 4 | 4 | every field | 120 |
+| `render_pass_descriptors` | 12 | 12 | every field | 29 |
+| `render_residency` | 2 | 2 | every field | 121 |
+| `render_state` | 3 | 3 | every field | 155 |
+| `resolve_then_load` | 1 | 1 | every field | 123 |
+| `resource_facts` | 4 | 4 | every field | 23 |
+| `rgb10a2_srgb` | 8 | 8 | every field | 76 |
+| `rotated_planes` | 20 | 20 | 1 tolerance(s): `Degradation` | 114 |
+| `rotated_targets` | 14 | 14 | every field | 117 |
 | `sample_fills` | 17 | 0 | 1 tolerance(s): `Degradation` | 0 |
-| `sample_positions` | 19 | 16 | every field | 112 |
-| `sampler_crossings` | 8 | 8 | every field | 57 |
-| `sampler_filtering` | 15 | 15 | every field | 57 |
+| `sample_positions` | 19 | 16 | every field | 115 |
+| `sampler_crossings` | 8 | 8 | every field | 59 |
+| `sampler_filtering` | 15 | 15 | every field | 59 |
 | `scheduled_handlers` | 1 | 1 | every field | 16 |
-| `shader_stencil` | 2 | 2 | every field | 128 |
-| `shared_creator_formats` | 2 | 2 | every field | 22 |
+| `shader_stencil` | 2 | 2 | every field | 131 |
+| `shared_creator_formats` | 2 | 2 | every field | 23 |
 | `shared_events` | 2 | 2 | every field | 13 |
-| `shared_exponent_storage` | 5 | 5 | every field | 40 |
-| `simdgroup_lockstep` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 23 |
-| `snorm_tile_store` | 7 | 7 | 1 tolerance(s): `Degradation` | 111 |
+| `shared_exponent_storage` | 5 | 5 | every field | 42 |
+| `simdgroup_lockstep` | 2 | 2 | 1 tolerance(s): `AcceptedDifference` | 25 |
+| `snorm_tile_store` | 7 | 7 | 1 tolerance(s): `Degradation` | 114 |
 | `sparse_heaps` | 6 | 6 | every field | 15 |
-| `sparse_mappings` | 14 | 14 | every field | 31 |
+| `sparse_mappings` | 14 | 14 | every field | 32 |
 | `sparse_tiles` | 4 | 4 | every field | 1 |
-| `srgb_fetch` | 2 | 2 | every field | 127 |
-| `stage_in_regions` | 1 | 1 | every field | 46 |
-| `stage_in_unread` | 1 | 1 | every field | 46 |
-| `stencil_resolve_pairs` | 2 | 2 | every field | 129 |
-| `stencil_resolved_sample` | 1 | 1 | every field | 129 |
+| `srgb_fetch` | 2 | 2 | every field | 130 |
+| `stage_in_regions` | 1 | 1 | every field | 48 |
+| `stage_in_unread` | 1 | 1 | every field | 48 |
+| `stencil_resolve_pairs` | 2 | 2 | every field | 132 |
+| `stencil_resolved_sample` | 1 | 1 | every field | 132 |
 | `surface_fills` | 1 | 0 | every field | 0 |
 | `surface_textures` | 10 | 10 | every field | 29 |
-| `swizzled_storage` | 6 | 6 | every field | 41 |
-| `tessellation_crossings` | 6 | 6 | every field | 99 |
-| `tessellation_rendered` | 1 | 1 | every field | 115 |
-| `tessellation_sweeps` | 7 | 7 | every field | 100 |
-| `texel_swizzles` | 6 | 6 | every field | 39 |
-| `texture_accesses` | 1 | 1 | every field | 18 |
+| `swizzled_storage` | 6 | 6 | every field | 43 |
+| `tessellation_crossings` | 6 | 6 | every field | 102 |
+| `tessellation_rendered` | 1 | 1 | every field | 118 |
+| `tessellation_sweeps` | 7 | 7 | every field | 103 |
+| `texel_swizzles` | 6 | 6 | every field | 41 |
+| `texture_accesses` | 1 | 1 | every field | 20 |
 | `texture_buffer_fills` | 3 | 0 | every field | 0 |
-| `texture_buffer_tails` | 1 | 1 | every field | 46 |
-| `texture_descriptor_pairs` | 5 | 5 | 1 tolerance(s): `NewRuntimeAccepted` | 26 |
-| `texture_fills` | 54 | 2 | 1 tolerance(s): `Degradation` | 39 |
-| `texture_view_casts` | 5 | 5 | every field | 74 |
+| `texture_buffer_tails` | 1 | 1 | every field | 49 |
+| `texture_descriptor_pairs` | 5 | 5 | 1 tolerance(s): `NewRuntimeAccepted` | 27 |
+| `texture_fills` | 54 | 2 | 1 tolerance(s): `Degradation` | 42 |
+| `texture_view_casts` | 5 | 5 | every field | 77 |
 | `texture_views` | 4 | 4 | every field | 37 |
 | `textures` | 76 | 76 | every field | 10 |
-| `threadgroup_start` | 1 | 1 | every field | 22 |
-| `tile_pipeline_descriptors` | 3 | 3 | every field | 27 |
-| `tile_pipeline_reflection` | 1 | 1 | every field | 75 |
-| `tile_threadgroups` | 8 | 8 | every field | 46 |
-| `topology_classes` | 2 | 2 | every field | 110 |
-| `two_plane_copies` | 3 | 1 | every field | 39 |
-| `two_plane_heap_blits` | 1 | 1 | every field | 37 |
-| `two_plane_samples` | 16 | 16 | every field | 46 |
-| `vector_word_phases` | 4 | 4 | every field | 21 |
-| `vertex_attribute_strides` | 2 | 2 | every field | 99 |
-| `vertex_constant_step` | 1 | 1 | every field | 100 |
-| `vertex_fetch_reach` | 1 | 1 | every field | 100 |
-| `vertex_formats` | 4 | 4 | every field | 99 |
-| `vertex_step_rate` | 1 | 1 | every field | 99 |
-| `visibility` | 16 | 16 | 1 tolerance(s): `Degradation` | 124 |
-| `visible_tables` | 18 | 18 | every field | 34 |
-| `wide_int_attributes` | 2 | 2 | every field | 99 |
-| `wide_points` | 1 | 1 | every field | 113 |
-| `ycbcr_gathers` | 4 | 4 | every field | 48 |
-| `ycbcr_minify` | 2 | 2 | every field | 48 |
-| `ycbcr_textures` | 2 | 2 | 1 tolerance(s): `NewRuntimeAccepted` | 37 |
+| `threadgroup_start` | 1 | 1 | every field | 24 |
+| `tile_pipeline_descriptors` | 3 | 3 | every field | 31 |
+| `tile_pipeline_reflection` | 1 | 1 | every field | 77 |
+| `tile_threadgroups` | 8 | 8 | every field | 49 |
+| `topology_classes` | 2 | 2 | every field | 113 |
+| `two_plane_copies` | 3 | 1 | every field | 42 |
+| `two_plane_heap_blits` | 1 | 1 | every field | 40 |
+| `two_plane_samples` | 16 | 16 | every field | 48 |
+| `vector_word_phases` | 4 | 4 | every field | 23 |
+| `vertex_attribute_strides` | 2 | 2 | every field | 102 |
+| `vertex_constant_step` | 1 | 1 | every field | 103 |
+| `vertex_fetch_reach` | 1 | 1 | every field | 103 |
+| `vertex_formats` | 4 | 4 | every field | 102 |
+| `vertex_step_rate` | 1 | 1 | every field | 102 |
+| `visibility` | 16 | 16 | 1 tolerance(s): `Degradation` | 127 |
+| `visible_tables` | 18 | 18 | every field | 38 |
+| `wide_int_attributes` | 2 | 2 | every field | 102 |
+| `wide_points` | 1 | 1 | every field | 116 |
+| `ycbcr_gathers` | 4 | 4 | every field | 50 |
+| `ycbcr_minify` | 2 | 2 | every field | 50 |
+| `ycbcr_textures` | 2 | 2 | 1 tolerance(s): `NewRuntimeAccepted` | 39 |
 
 ## Every implemented item
 
@@ -711,6 +715,8 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
+| `MTLCreateSystemDefaultDevice` | no | — | — |
+| `MTLCopyAllDevices` | no | — | — |
 | `MTLClearColorMake` | no | — | — |
 | `MTLTextureSwizzleChannelsMake` | no | — | — |
 
@@ -816,6 +822,9 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 |---|---|---|---|
 | `MTLBlitCommandEncoder` | yes | `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `command_buffer_facts`, `compressed_blits`, `compressed_moves`, `compressed_views`, `compute_render_chains`, `copy_out_strides`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `empty_command_buffers`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fence_orders`, `fetch_ordered`, `format_copies`, `fresh_contents`, `half_output_blends`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `layered_targets`, `nan_integer_conversions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_targets`, `sample_positions`, `scheduled_handlers`, `shader_stencil`, `sparse_mappings`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `surface_textures`, `tessellation_rendered`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits`, `wide_points` | 495 |
 | `synchronizeResource:` | yes | `blit_encoder_commands` | 11 |
+| `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | yes | `buffer_tails`, `buffer_texture_blits`, `chroma_pairs`, `compressed_blits`, `format_copies`, `pvrtc_rows`, `two_plane_heap_blits` | 39 |
+| `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | yes | `blit_encoder_commands`, `sparse_mappings` | 25 |
+| `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:` | yes | `blit_encoder_commands`, `buffer_depth_samples`, `buffer_tails`, `chroma_pairs`, `compressed_blits`, `compressed_views`, `copy_out_strides`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies` | 164 |
 | `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:` | yes | `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `half_output_blends`, `indirect_command_depth`, `indirect_commands`, `layered_targets`, `nan_integer_conversions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_targets`, `sample_positions`, `shader_stencil`, `sparse_mappings`, `srgb_fetch`, `stencil_resolve_pairs`, `surface_textures`, `tessellation_rendered`, `wide_points` | 296 |
 | `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:` | yes | `blit_encoder_commands`, `buffer_depth_samples`, `buffer_tails`, `chroma_pairs`, `compressed_blits`, `copy_out_strides`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `stencil_resolved_sample`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies` | 151 |
 | `generateMipmapsForTexture:` | yes | `blit_encoder_commands` | 11 |
@@ -872,6 +881,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `kernelEndTime` | yes | `command_buffer_facts`, `empty_command_buffers` | 2 |
 | `GPUStartTime` | yes | `command_buffer_facts`, `empty_command_buffers` | 2 |
 | `GPUEndTime` | yes | `command_buffer_facts`, `empty_command_buffers` | 2 |
+| `enqueue` | no | — | — |
 | `commit` | yes | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `empty_command_buffers`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fence_orders`, `fetch_ordered`, `format_copies`, `frame_chains`, `fresh_contents`, `function_constants_half3`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_events`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_mappings`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `surface_textures`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 923 |
 | `addScheduledHandler:` | yes | `empty_command_buffers`, `event_orders`, `scheduled_handlers` | 7 |
 | `waitUntilScheduled` | yes | `scheduled_handlers` | 1 |
@@ -900,6 +910,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `MTLCommandQueue` | yes | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `command_queues`, `compressed_blits`, `compressed_decode`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `empty_command_buffers`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fence_orders`, `fetch_ordered`, `format_copies`, `frame_chains`, `fresh_contents`, `function_constants_half3`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_events`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_mappings`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `surface_textures`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 908 |
 | `device` | yes | `command_buffer_facts` | 1 |
 | `commandBuffer` | yes | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `command_queues`, `compressed_blits`, `compressed_decode`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `empty_command_buffers`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fence_orders`, `fetch_ordered`, `format_copies`, `frame_chains`, `fresh_contents`, `function_constants_half3`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_events`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_mappings`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `surface_textures`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 908 |
+| `commandBufferWithUnretainedReferences` | no | — | — |
 
 ### `MTLComputeCommandEncoder`
 
@@ -910,9 +921,13 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `setBytes:length:atIndex:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `setBuffer:offset:atIndex:` | yes | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_depth_samples`, `buffer_tails`, `chroma_pairs`, `compressed_decode`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `frame_chains`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pixel_downscales`, `pixel_samplers`, `read_through`, `read_write_tiers`, `resolve_then_load`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `simdgroup_lockstep`, `stage_in_regions`, `stage_in_unread`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `texture_view_casts`, `threadgroup_start`, `two_plane_samples`, `vector_word_phases`, `visible_tables`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 395 |
 | `setBufferOffset:atIndex:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
+| `setBuffers:offsets:withRange:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `setTexture:atIndex:` | yes | `argument_encoders`, `astc_textures`, `attribute_formats`, `bicubic_texel_classes`, `blit_indirect_commands`, `border_swizzles`, `buffer_depth_samples`, `buffer_tails`, `chroma_pairs`, `compressed_decode`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `frame_chains`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pixel_downscales`, `pixel_samplers`, `read_through`, `read_write_tiers`, `resolve_then_load`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `simdgroup_lockstep`, `stage_in_regions`, `stage_in_unread`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `texture_view_casts`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 367 |
+| `setTextures:withRange:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `setSamplerState:atIndex:` | yes | `argument_encoders`, `astc_textures`, `attribute_formats`, `bicubic_texel_classes`, `border_swizzles`, `buffer_tails`, `chroma_pairs`, `compressed_decode`, `compute_encoder_commands`, `compute_heap_residency`, `compute_threadgroups`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_two_planes`, `extended_swizzles`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pixel_downscales`, `pixel_samplers`, `read_through`, `read_write_tiers`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `simdgroup_lockstep`, `stage_in_regions`, `stage_in_unread`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 308 |
+| `setSamplerStates:withRange:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `setSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
+| `setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `setThreadgroupMemoryLength:atIndex:` | yes | `compute_encoder_commands`, `compute_heap_residency`, `threadgroup_start` | 10 |
 | `setStageInRegion:` | yes | `attribute_formats`, `attribute_strides`, `compute_heap_residency`, `stage_in_regions`, `stage_in_unread` | 9 |
 | `dispatchThreadgroups:threadsPerThreadgroup:` | yes | `argument_encoders`, `attribute_strides`, `buffer_bind_off_alignment`, `buffer_depth_samples`, `compute_encoder_commands`, `compute_heap_residency`, `compute_threadgroups`, `extended_range_two_planes`, `pass_bytes`, `shared_exponent_storage`, `simdgroup_lockstep`, `threadgroup_start`, `vector_word_phases`, `visible_tables` | 61 |
@@ -921,7 +936,11 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `updateFence:` | no | — | — |
 | `waitForFence:` | no | — | — |
 | `useResource:usage:` | yes | `argument_encoders`, `astc_textures`, `attribute_formats`, `bicubic_texel_classes`, `blit_indirect_commands`, `border_swizzles`, `buffer_tails`, `chroma_pairs`, `compressed_decode`, `compute_encoder_commands`, `compute_heap_residency`, `compute_threadgroups`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_two_planes`, `extended_swizzles`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `indirect_command_depth`, `indirect_commands`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pixel_downscales`, `pixel_samplers`, `read_through`, `read_write_tiers`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `simdgroup_lockstep`, `stage_in_regions`, `stage_in_unread`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 326 |
+| `useResources:count:usage:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `useHeap:` | yes | `compute_heap_residency` | 1 |
+| `useHeaps:count:` | yes | `compute_heap_residency` | 1 |
+| `memoryBarrierWithScope:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
+| `memoryBarrierWithResources:count:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 
 ### `MTLComputePipelineDescriptor`
 
@@ -991,9 +1010,11 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `heapTextureSizeAndAlignWithDescriptor:` | yes | `compressed_moves`, `format_footprints`, `heap_metal_sizes`, `texture_descriptor_pairs`, `two_plane_copies`, `ycbcr_textures` | 35 |
 | `heapBufferSizeAndAlignWithLength:options:` | yes | `device_queries` | 5 |
 | `newBufferWithLength:options:` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `empty_command_buffers`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fence_orders`, `fetch_ordered`, `format_copies`, `frame_chains`, `fresh_contents`, `function_constants_half3`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `resource_facts`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `scheduled_handlers`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_mappings`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `surface_textures`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 938 |
+| `newBufferWithBytesNoCopy:length:options:deallocator:` | yes | `host_detach`, `host_page_writes` | 5 |
 | `newDepthStencilStateWithDescriptor:` | yes | `depth_resolve_pairs`, `depth_stencil_space`, `layered_targets`, `pass_sequence_actions`, `render_depth_stencil_state`, `shader_stencil`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `visibility` | 43 |
 | `newTextureWithDescriptor:` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `bicubic_texel_classes`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `border_swizzles`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_render_chains`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `etc_textures`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `format_footprints`, `frame_chains`, `fresh_contents`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `heap_metal_sizes`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `layered_targets`, `level_sizes`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `resource_facts`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_rendered`, `texel_swizzles`, `texture_buffer_tails`, `texture_descriptor_pairs`, `texture_fills`, `texture_view_casts`, `texture_views`, `textures`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `visibility`, `wide_points`, `ycbcr_textures` | 907 |
 | `newSamplerStateWithDescriptor:` | yes | `argument_encoder_crossings`, `argument_encoders`, `border_swizzles`, `chroma_pairs`, `compute_encoder_commands`, `compute_render_chains`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `extended_swizzles`, `frame_chains`, `half_read_nans`, `nearest_positions`, `pixel_downscales`, `pixel_samplers`, `read_through`, `render_chains`, `render_state`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify` | 159 |
+| `newLibraryWithData:error:` | yes | `dynamic_libraries` | 3 |
 | `newRenderPipelineStateWithDescriptor:error:` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `nan_integer_conversions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_facts`, `pipeline_handlers`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points` | 410 |
 | `newRenderPipelineStateWithDescriptor:options:reflection:error:` | yes | `binary_archives`, `fragment_imageblock_reflection`, `pipeline_handlers`, `pipeline_options`, `texture_accesses` | 53 |
 | `newRenderPipelineStateWithDescriptor:completionHandler:` | yes | `pipeline_handlers` | 24 |
@@ -1017,6 +1038,19 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 |---|---|---|---|
 | `MTLFence` | no | — | — |
 
+### `MTLFunction`
+
+| item | exercised | families | cases Metal ran |
+|---|---|---|---|
+| `MTLFunction` | yes | `argument_encoder_crossings`, `argument_encoders`, `compute_pipeline_descriptors`, `function_facts`, `library_facts`, `mesh_pipeline_descriptors`, `pipeline_descriptors`, `pipeline_functions`, `tile_pipeline_descriptors`, `visible_tables` | 71 |
+| `functionType` | yes | `function_facts`, `library_facts`, `visible_tables` | 42 |
+| `patchType` | yes | `function_facts`, `library_facts` | 24 |
+| `patchControlPointCount` | yes | `function_facts`, `library_facts` | 24 |
+| `vertexAttributes` | yes | `function_facts`, `library_facts` | 24 |
+| `stageInputAttributes` | yes | `function_facts`, `library_facts` | 24 |
+| `name` | yes | `compute_pipeline_descriptors`, `function_facts`, `library_facts`, `mesh_pipeline_descriptors`, `pipeline_descriptors`, `pipeline_functions`, `tile_pipeline_descriptors` | 44 |
+| `functionConstantsDictionary` | yes | `function_facts`, `library_facts` | 24 |
+
 ### `MTLFunctionConstant`
 
 | item | exercised | families | cases Metal ran |
@@ -1037,6 +1071,15 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `setConstantValue:type:withName:` | no | — | — |
 | `reset` | no | — | — |
 
+### `MTLFunctionDescriptor`
+
+| item | exercised | families | cases Metal ran |
+|---|---|---|---|
+| `MTLFunctionDescriptor` | yes | `library_facts` | 9 |
+| `functionDescriptor` | yes | `library_facts` | 9 |
+| `name` | yes | `library_facts` | 9 |
+| `constantValues` | yes | `library_facts` | 9 |
+
 ### `MTLFunctionReflection`
 
 | item | exercised | families | cases Metal ran |
@@ -1051,6 +1094,21 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 |---|---|---|---|
 | `newBufferWithLength:options:offset:` | yes | `compute_heap_residency`, `heap_facts`, `resource_facts`, `texture_fills`, `two_plane_heap_blits` | 13 |
 | `newTextureWithDescriptor:offset:` | yes | `compressed_moves`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` | 18 |
+
+### `MTLLibrary`
+
+| item | exercised | families | cases Metal ran |
+|---|---|---|---|
+| `MTLLibrary` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_constants_half3`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_limits`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 1037 |
+| `newFunctionWithName:` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `etc_textures`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_limits`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 1024 |
+| `newFunctionWithName:constantValues:error:` | yes | `function_constants_half3`, `function_facts` | 16 |
+| `newFunctionWithName:constantValues:completionHandler:` | no | — | — |
+| `reflectionForFunctionWithName:` | no | — | — |
+| `newFunctionWithDescriptor:completionHandler:` | no | — | — |
+| `newFunctionWithDescriptor:error:` | yes | `library_facts` | 9 |
+| `functionNames` | yes | `dynamic_libraries`, `library_facts` | 12 |
+| `type` | yes | `dynamic_libraries`, `library_facts` | 12 |
+| `installName` | yes | `dynamic_libraries`, `library_facts` | 12 |
 
 ### `MTLLinkedFunctions`
 
@@ -1183,9 +1241,13 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `setVertexBytes:length:atIndex:` | yes | `compute_render_chains`, `depth_resolve_pairs`, `draw_state_changes`, `extended_range_gradients`, `frame_chains`, `host_page_writes`, `pass_bound_pairs`, `pass_start_reads`, `render_chains`, `resolve_then_load`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `wide_points` | 42 |
 | `setVertexBuffer:offset:atIndex:` | yes | `color_write_masks`, `depth_stencil_space`, `fetch_ordered`, `indirect_command_depth`, `int_attributes`, `layered_targets`, `primitive_type_crossings`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `rotated_planes`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes` | 134 |
 | `setVertexBufferOffset:atIndex:` | yes | `render_state` | 3 |
+| `setVertexBuffers:offsets:withRange:` | yes | `render_state` | 3 |
 | `setVertexTexture:atIndex:` | yes | `render_state` | 3 |
+| `setVertexTextures:withRange:` | yes | `render_state` | 3 |
 | `setVertexSamplerState:atIndex:` | yes | `render_state` | 3 |
+| `setVertexSamplerStates:withRange:` | yes | `render_state` | 3 |
 | `setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | yes | `render_state` | 3 |
+| `setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | yes | `render_state` | 3 |
 | `setViewport:` | yes | `draw_state_changes`, `indirect_command_depth`, `pass_bound_pairs`, `pass_sequence_actions`, `wide_points` | 11 |
 | `setViewports:count:` | yes | `render_state` | 3 |
 | `setFrontFacingWinding:` | yes | `depth_stencil_space`, `render_state`, `tessellation_rendered` | 12 |
@@ -1198,9 +1260,13 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `setFragmentBytes:length:atIndex:` | yes | `depth_resolve_pairs`, `pass_start_reads`, `render_state`, `resolve_then_load`, `stencil_resolve_pairs`, `stencil_resolved_sample` | 23 |
 | `setFragmentBuffer:offset:atIndex:` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `compute_render_chains`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `frame_chains`, `half_output_blends`, `layered_targets`, `mesh_barriers`, `nan_integer_conversions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_sequence_actions`, `render_chains`, `render_depth_stencil_state`, `render_residency`, `render_state`, `rgb10a2_srgb`, `rotated_targets`, `shader_stencil` | 207 |
 | `setFragmentBufferOffset:atIndex:` | yes | `render_state` | 3 |
+| `setFragmentBuffers:offsets:withRange:` | yes | `render_state` | 3 |
 | `setFragmentTexture:atIndex:` | yes | `compute_render_chains`, `discard_hoist`, `draw_state_changes`, `frame_chains`, `pass_start_reads`, `render_chains`, `render_residency`, `rotated_planes` | 45 |
+| `setFragmentTextures:withRange:` | yes | `render_state` | 3 |
 | `setFragmentSamplerState:atIndex:` | yes | `compute_render_chains`, `discard_hoist`, `draw_state_changes`, `frame_chains`, `render_chains` | 9 |
+| `setFragmentSamplerStates:withRange:` | yes | `render_state` | 3 |
 | `setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | yes | `render_state` | 3 |
+| `setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | yes | `render_state` | 3 |
 | `setBlendColorRed:green:blue:alpha:` | yes | `blend_interactions`, `blend_sweeps`, `half_output_blends`, `rotated_targets` | 36 |
 | `setDepthStencilState:` | yes | `depth_resolve_pairs`, `depth_stencil_space`, `layered_targets`, `pass_sequence_actions`, `render_depth_stencil_state`, `shader_stencil`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `visibility` | 43 |
 | `setStencilReferenceValue:` | yes | `depth_stencil_space`, `render_depth_stencil_state`, `shader_stencil`, `stencil_resolve_pairs`, `stencil_resolved_sample` | 16 |
@@ -1219,6 +1285,8 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `waitForFence:beforeStages:` | no | — | — |
 | `setTessellationFactorBuffer:offset:instanceStride:` | yes | `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps` | 14 |
 | `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:` | yes | `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps` | 14 |
+| `memoryBarrierWithScope:afterStages:beforeStages:` | yes | `mesh_barriers`, `pass_start_reads`, `render_residency` | 18 |
+| `memoryBarrierWithResources:count:afterStages:beforeStages:` | yes | `mesh_barriers`, `render_residency` | 4 |
 
 ### `MTLRenderPassAttachmentDescriptor`
 
@@ -1263,6 +1331,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
 | `MTLRenderPassDescriptor` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_depth_samples`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `tile_threadgroups`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 412 |
+| `renderPassDescriptor` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_depth_samples`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `tile_threadgroups`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 412 |
 | `colorAttachments` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `tile_threadgroups`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 407 |
 | `depthAttachment` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_depth_samples`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 381 |
 | `stencilAttachment` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_depth_samples`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` | 381 |
@@ -1367,6 +1436,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | item | exercised | families | cases Metal ran |
 |---|---|---|---|
 | `MTLResource` | yes | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `command_buffer_facts`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `etc_textures`, `event_orders`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fence_orders`, `fetch_ordered`, `format_copies`, `format_footprints`, `frame_chains`, `fresh_contents`, `function_constants_half3`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `heap_facts`, `host_detach`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `resource_facts`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_creator_formats`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `sparse_heaps`, `sparse_mappings`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `surface_textures`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_buffer_tails`, `texture_descriptor_pairs`, `texture_fills`, `texture_view_casts`, `texture_views`, `textures`, `threadgroup_start`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 1045 |
+| `storageMode` | yes | `buffer_textures`, `heap_facts`, `resource_facts`, `shared_creator_formats`, `texture_descriptor_pairs` | 18 |
 
 ### `MTLSamplerDescriptor`
 
@@ -1634,8 +1704,8 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 
 | item | status | note | families |
 |---|---|---|---|
-| `MTL4ComputeCommandEncoder` `stages` | missing | Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) | `visible_tables` |
-| `MTL4LibraryDescriptor` `source` | missing | Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) | `binary_archives`, `blit_encoder_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `copy_out_strides`, `dynamic_libraries`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
+| `MTL4ComputeCommandEncoder` `stages` | missing | Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) | `visible_tables` |
+| `MTL4LibraryDescriptor` `source` | missing | Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) | `binary_archives`, `blit_encoder_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `copy_out_strides`, `dynamic_libraries`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
 | `MTLArgumentEncoder` `alignment` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
 | `MTLArgumentEncoder` `constantDataAtIndex:` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
 | `MTLArgumentEncoder` `device` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
@@ -1648,8 +1718,8 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLArgumentEncoder` `setBuffers:offsets:withRange:` | missing | argument encoders | `argument_encoders` |
 | `MTLArgumentEncoder` `setComputePipelineState:atIndex:` | missing | argument encoders | `argument_encoders` |
 | `MTLArgumentEncoder` `setComputePipelineStates:withRange:` | missing | argument encoders | `argument_encoders` |
-| `MTLArgumentEncoder` `setIndirectCommandBuffer:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `argument_encoders` |
-| `MTLArgumentEncoder` `setIndirectCommandBuffers:withRange:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `argument_encoders` |
+| `MTLArgumentEncoder` `setIndirectCommandBuffer:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `argument_encoders` |
+| `MTLArgumentEncoder` `setIndirectCommandBuffers:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `argument_encoders` |
 | `MTLArgumentEncoder` `setRenderPipelineState:atIndex:` | missing | argument encoders | `argument_encoders` |
 | `MTLArgumentEncoder` `setRenderPipelineStates:withRange:` | missing | argument encoders | `argument_encoders` |
 | `MTLArgumentEncoder` `setSamplerState:atIndex:` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
@@ -1666,61 +1736,48 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLBinaryArchive` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `binary_archives` |
 | `MTLBinaryArchive` `serializeToURL:error:` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `binary_archives` |
 | `MTLBinaryArchiveDescriptor` `url` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `binary_archives` |
-| `MTLBlitCommandEncoder` `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands`, `sparse_mappings` |
-| `MTLBlitCommandEncoder` `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands`, `buffer_depth_samples`, `buffer_tails`, `chroma_pairs`, `compressed_blits`, `compressed_views`, `copy_out_strides`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies` |
-| `MTLBlitCommandEncoder` `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | missing | an encoder call metal2vulkan-rt does not build | `buffer_tails`, `buffer_texture_blits`, `chroma_pairs`, `compressed_blits`, `format_copies`, `pvrtc_rows`, `two_plane_heap_blits` |
-| `MTLBlitCommandEncoder` `copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands` |
-| `MTLBlitCommandEncoder` `copyFromTexture:toTexture:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands` |
-| `MTLBlitCommandEncoder` `copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLBlitCommandEncoder` `copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:` | missing | whole slices and levels, as copies `BlitCommandEncoder::copy_from_texture` makes | `blit_encoder_commands` |
+| `MTLBlitCommandEncoder` `copyFromTexture:toTexture:` | missing | every slice and level, as copies `BlitCommandEncoder::copy_from_texture` makes | `blit_encoder_commands` |
+| `MTLBlitCommandEncoder` `copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
 | `MTLBlitCommandEncoder` `optimizeContentsForCPUAccess:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands` |
 | `MTLBlitCommandEncoder` `optimizeContentsForCPUAccess:slice:level:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands` |
 | `MTLBlitCommandEncoder` `optimizeContentsForGPUAccess:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands` |
 | `MTLBlitCommandEncoder` `optimizeContentsForGPUAccess:slice:level:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands` |
-| `MTLBlitCommandEncoder` `optimizeIndirectCommandBuffer:withRange:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLBlitCommandEncoder` `resetCommandsInBuffer:withRange:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLBlitCommandEncoder` `synchronizeTexture:slice:level:` | missing | an encoder call metal2vulkan-rt does not build | `blit_encoder_commands` |
-| `MTLCommandBuffer` `commandQueue` | missing | an encoder call metal2vulkan-rt does not build | `command_buffer_facts` |
-| `MTLCommandBuffer` `device` | missing | an encoder call metal2vulkan-rt does not build | `command_buffer_facts` |
+| `MTLBlitCommandEncoder` `optimizeIndirectCommandBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLBlitCommandEncoder` `resetCommandsInBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLBlitCommandEncoder` `synchronizeTexture:slice:level:` | missing | one slice and level of `BlitCommandEncoder::synchronize_resource` | `blit_encoder_commands` |
+| `MTLCommandBuffer` `commandQueue` | missing | a query metal2vulkan-rt does not answer | `command_buffer_facts` |
+| `MTLCommandBuffer` `device` | missing | a query metal2vulkan-rt does not answer | `command_buffer_facts` |
 | `MTLCommandBuffer` `resourceStateCommandEncoder` | missing | the resource state encoder (sparse textures' mappings) | `command_buffer_facts`, `sparse_mappings` |
 | `MTLCommandQueue` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `command_buffer_facts` |
 | `MTLComputeCommandEncoder` `dispatchType` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `attribute_strides`, `buffer_bind_off_alignment`, `compute_encoder_commands`, `compute_heap_residency`, `threadgroup_start`, `vector_word_phases` |
-| `MTLComputeCommandEncoder` `executeCommandsInBuffer:withRange:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLComputeCommandEncoder` `memoryBarrierWithResources:count:` | missing | an encoder call metal2vulkan-rt does not build | `compute_encoder_commands`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `memoryBarrierWithScope:` | missing | an encoder call metal2vulkan-rt does not build | `compute_encoder_commands`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setBuffer:offset:attributeStride:atIndex:` | missing | an encoder call metal2vulkan-rt does not build | `attribute_strides`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setBufferOffset:attributeStride:atIndex:` | missing | an encoder call metal2vulkan-rt does not build | `attribute_strides`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setBuffers:offsets:attributeStrides:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `attribute_strides`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setBuffers:offsets:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `compute_encoder_commands`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setBytes:length:attributeStride:atIndex:` | missing | an encoder call metal2vulkan-rt does not build | `attribute_strides`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `compute_encoder_commands`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setSamplerStates:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `compute_encoder_commands`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setStageInRegionWithIndirectBuffer:indirectBufferOffset:` | missing | an encoder call metal2vulkan-rt does not build | `stage_in_regions` |
-| `MTLComputeCommandEncoder` `setTextures:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `compute_encoder_commands`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setVisibleFunctionTable:atBufferIndex:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
-| `MTLComputeCommandEncoder` `useHeaps:count:` | missing | an encoder call metal2vulkan-rt does not build | `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `useResources:count:usage:` | missing | an encoder call metal2vulkan-rt does not build | `compute_encoder_commands`, `compute_heap_residency` |
+| `MTLComputeCommandEncoder` `executeCommandsInBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLComputeCommandEncoder` `setBuffer:offset:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
+| `MTLComputeCommandEncoder` `setBufferOffset:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
+| `MTLComputeCommandEncoder` `setBuffers:offsets:attributeStrides:withRange:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
+| `MTLComputeCommandEncoder` `setBytes:length:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
+| `MTLComputeCommandEncoder` `setStageInRegionWithIndirectBuffer:indirectBufferOffset:` | missing | a stage-in region the GPU reads | `stage_in_regions` |
+| `MTLComputeCommandEncoder` `setVisibleFunctionTable:atBufferIndex:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLComputePipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `binary_archives`, `compute_pipeline_descriptors` |
 | `MTLComputePipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `compute_pipeline_descriptors`, `pipeline_facts`, `pipeline_handlers` |
 | `MTLComputePipelineState` `device` | missing | a query or call metal2vulkan-rt does not answer | `pipeline_facts`, `pipeline_handlers` |
-| `MTLComputePipelineState` `functionHandleWithFunction:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
+| `MTLComputePipelineState` `functionHandleWithFunction:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLComputePipelineState` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `pipeline_facts`, `pipeline_handlers` |
-| `MTLComputePipelineState` `newVisibleFunctionTableWithDescriptor:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
+| `MTLComputePipelineState` `newVisibleFunctionTableWithDescriptor:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLDevice` `convertSparsePixelRegions:toTileRegions:withTileSize:alignmentMode:numRegions:` | missing | tile render pipelines; metal2vulkan-rt makes none | `device_queries` |
 | `MTLDevice` `convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:` | missing | tile render pipelines; metal2vulkan-rt makes none | `device_queries` |
 | `MTLDevice` `newArgumentEncoderWithArguments:` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
 | `MTLDevice` `newBinaryArchiveWithDescriptor:error:` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `binary_archives` |
-| `MTLDevice` `newBufferWithBytes:length:options:` | missing | a buffer creation form metal2vulkan-rt does not take | `buffer_depth_samples` |
-| `MTLDevice` `newBufferWithBytesNoCopy:length:options:deallocator:` | missing | a buffer creation form metal2vulkan-rt does not take | `host_detach`, `host_page_writes` |
+| `MTLDevice` `newBufferWithBytes:length:options:` | missing | a buffer made with bytes; Managed: `Device::new_managed_buffer` | `buffer_depth_samples` |
 | `MTLDevice` `newComputePipelineStateWithDescriptor:options:completionHandler:` | missing | a pipeline creation form metal2vulkan-rt does not take | `pipeline_handlers` |
 | `MTLDevice` `newComputePipelineStateWithFunction:completionHandler:` | missing | a pipeline creation form metal2vulkan-rt does not take | `pipeline_handlers` |
 | `MTLDevice` `newComputePipelineStateWithFunction:error:` | missing | a pipeline creation form metal2vulkan-rt does not take | `argument_encoders`, `astc_textures`, `bicubic_texel_classes`, `blit_encoder_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `format_copies`, `frame_chains`, `fresh_contents`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pass_bytes`, `pipeline_handlers`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `resolve_then_load`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `shared_exponent_storage`, `simdgroup_lockstep`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` |
 | `MTLDevice` `newComputePipelineStateWithFunction:options:completionHandler:` | missing | a pipeline creation form metal2vulkan-rt does not take | `pipeline_handlers` |
 | `MTLDevice` `newComputePipelineStateWithFunction:options:reflection:error:` | missing | a pipeline creation form metal2vulkan-rt does not take | `function_bindings`, `pipeline_handlers`, `pipeline_option_reflection`, `pipeline_options` |
-| `MTLDevice` `newDynamicLibrary:error:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `dynamic_libraries` |
-| `MTLDevice` `newDynamicLibraryWithURL:error:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `dynamic_libraries` |
+| `MTLDevice` `newDynamicLibrary:error:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
+| `MTLDevice` `newDynamicLibraryWithURL:error:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
 | `MTLDevice` `newHeapWithDescriptor:` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `blit_encoder_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `compute_heap_residency`, `copy_out_strides`, `format_copies`, `fresh_contents`, `heap_facts`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_residency`, `resource_facts`, `sparse_heaps`, `sparse_mappings`, `texture_buffer_tails`, `texture_descriptor_pairs`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
-| `MTLDevice` `newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLDevice` `newLibraryWithData:error:` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `dynamic_libraries` |
+| `MTLDevice` `newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLDevice` `newLibraryWithURL:error:` | missing | a metallib read from a file URL | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_constants_half3`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_limits`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` |
 | `MTLDevice` `newRasterizationRateMapWithDescriptor:` | missing | rasterization rate maps; the render pass descriptor has no field for one | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLDevice` `newRenderPipelineStateWithDescriptor:options:completionHandler:` | missing | a pipeline creation form metal2vulkan-rt does not take | `pipeline_handlers` |
@@ -1739,27 +1796,17 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLDevice` `sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:` | missing | tile render pipelines; metal2vulkan-rt makes none | `sparse_mappings`, `sparse_tiles` |
 | `MTLDevice` `supportsRasterizationRateMapWithLayerCount:` | missing | rasterization rate maps; the render pass descriptor has no field for one | `device_queries` |
 | `MTLDevice` `supportsVertexAmplificationCount:` | missing | a query or call metal2vulkan-rt does not answer | `device_queries` |
-| `MTLDynamicLibrary` `device` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `dynamic_libraries` |
-| `MTLDynamicLibrary` `installName` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `dynamic_libraries` |
+| `MTLDynamicLibrary` `device` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
+| `MTLDynamicLibrary` `installName` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
 | `MTLDynamicLibrary` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `dynamic_libraries` |
-| `MTLDynamicLibrary` `serializeToURL:error:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `dynamic_libraries` |
+| `MTLDynamicLibrary` `serializeToURL:error:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
 | `MTLEvent` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `shared_events` |
 | `MTLFunction` `device` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `function_facts`, `library_facts` |
-| `MTLFunction` `functionConstantsDictionary` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `function_facts`, `library_facts` |
-| `MTLFunction` `functionType` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `function_facts`, `library_facts`, `visible_tables` |
-| `MTLFunction` `name` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `compute_pipeline_descriptors`, `function_facts`, `library_facts`, `mesh_pipeline_descriptors`, `pipeline_descriptors`, `pipeline_functions`, `tile_pipeline_descriptors` |
 | `MTLFunction` `newArgumentEncoderWithBufferIndex:` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
-| `MTLFunction` `options` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `function_facts`, `library_facts` |
-| `MTLFunction` `patchControlPointCount` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `function_facts`, `library_facts` |
-| `MTLFunction` `patchType` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `function_facts`, `library_facts` |
-| `MTLFunction` `stageInputAttributes` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `function_facts`, `library_facts` |
-| `MTLFunction` `vertexAttributes` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `function_facts`, `library_facts` |
-| `MTLFunctionDescriptor` `constantValues` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `library_facts` |
-| `MTLFunctionDescriptor` `functionDescriptor` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `library_facts` |
-| `MTLFunctionDescriptor` `name` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `library_facts` |
-| `MTLFunctionDescriptor` `options` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `library_facts` |
-| `MTLFunctionHandle` `device` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
-| `MTLFunctionHandle` `name` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
+| `MTLFunction` `options` | missing | a function's options (`MTLFunctionOptions`) | `function_facts`, `library_facts` |
+| `MTLFunctionDescriptor` `options` | missing | a function's options (`MTLFunctionOptions`) | `library_facts` |
+| `MTLFunctionHandle` `device` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
+| `MTLFunctionHandle` `name` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLHeap` `cpuCacheMode` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `heap_facts`, `resource_facts`, `texture_descriptor_pairs` |
 | `MTLHeap` `currentAllocatedSize` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `heap_facts`, `resource_facts`, `texture_descriptor_pairs` |
 | `MTLHeap` `device` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `heap_facts`, `resource_facts`, `texture_descriptor_pairs` |
@@ -1781,62 +1828,56 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLHeapDescriptor` `sparsePageSize` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `render_residency`, `sparse_heaps`, `sparse_mappings` |
 | `MTLHeapDescriptor` `storageMode` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `compute_heap_residency`, `heap_facts`, `render_residency`, `resource_facts`, `sparse_heaps`, `sparse_mappings`, `texture_descriptor_pairs` |
 | `MTLHeapDescriptor` `type` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `blit_encoder_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `compute_heap_residency`, `copy_out_strides`, `format_copies`, `fresh_contents`, `heap_facts`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_residency`, `resource_facts`, `sparse_heaps`, `sparse_mappings`, `texture_buffer_tails`, `texture_descriptor_pairs`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
-| `MTLIndirectCommandBuffer` `indirectComputeCommandAtIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBuffer` `indirectRenderCommandAtIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBuffer` `resetWithRange:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBuffer` `size` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `commandTypes` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritBuffers` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritCullMode` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritDepthBias` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritDepthClipMode` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritDepthStencilState` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritFrontFacingWinding` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritPipelineState` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritTriangleFillMode` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxFragmentBufferBindCount` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxKernelBufferBindCount` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxKernelThreadgroupMemoryBindCount` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxMeshBufferBindCount` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxObjectBufferBindCount` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxObjectThreadgroupMemoryBindCount` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxVertexBufferBindCount` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `supportColorAttachmentMapping` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `supportDynamicAttributeStride` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `clearBarrier` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `concurrentDispatchThreadgroups:threadsPerThreadgroup:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `concurrentDispatchThreads:threadsPerThreadgroup:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `reset` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `setBarrier` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `setComputePipelineState:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `setImageblockWidth:height:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `setKernelBuffer:offset:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `setKernelBuffer:offset:attributeStride:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `setStageInRegion:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `setThreadgroupMemoryLength:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectRenderCommand` `clearBarrier` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth` |
-| `MTLIndirectRenderCommand` `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands`, `mesh_commands` |
-| `MTLIndirectRenderCommand` `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `mesh_commands` |
-| `MTLIndirectRenderCommand` `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth` |
-| `MTLIndirectRenderCommand` `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectRenderCommand` `reset` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `setBarrier` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `setFragmentBuffer:offset:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectRenderCommand` `setMeshBuffer:offset:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `mesh_commands` |
-| `MTLIndirectRenderCommand` `setObjectBuffer:offset:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands`, `mesh_commands` |
-| `MTLIndirectRenderCommand` `setObjectThreadgroupMemoryLength:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `setRenderPipelineState:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectRenderCommand` `setVertexBuffer:offset:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectRenderCommand` `setVertexBuffer:offset:attributeStride:atIndex:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_commands` |
+| `MTLIndirectCommandBuffer` `indirectComputeCommandAtIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBuffer` `indirectRenderCommandAtIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBuffer` `resetWithRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBuffer` `size` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBufferDescriptor` `commandTypes` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritBuffers` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritCullMode` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritDepthBias` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritDepthClipMode` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritDepthStencilState` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritFrontFacingWinding` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritPipelineState` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritTriangleFillMode` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxFragmentBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxKernelBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxKernelThreadgroupMemoryBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxMeshBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxObjectBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxObjectThreadgroupMemoryBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxVertexBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `supportColorAttachmentMapping` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `supportDynamicAttributeStride` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `clearBarrier` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `concurrentDispatchThreadgroups:threadsPerThreadgroup:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `concurrentDispatchThreads:threadsPerThreadgroup:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `reset` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `setBarrier` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `setComputePipelineState:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `setImageblockWidth:height:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `setKernelBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `setKernelBuffer:offset:attributeStride:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `setStageInRegion:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `setThreadgroupMemoryLength:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectRenderCommand` `clearBarrier` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth` |
+| `MTLIndirectRenderCommand` `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands`, `mesh_commands` |
+| `MTLIndirectRenderCommand` `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `mesh_commands` |
+| `MTLIndirectRenderCommand` `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth` |
+| `MTLIndirectRenderCommand` `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectRenderCommand` `reset` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `setBarrier` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `setFragmentBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectRenderCommand` `setMeshBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `mesh_commands` |
+| `MTLIndirectRenderCommand` `setObjectBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands`, `mesh_commands` |
+| `MTLIndirectRenderCommand` `setObjectThreadgroupMemoryLength:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `setRenderPipelineState:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectRenderCommand` `setVertexBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectRenderCommand` `setVertexBuffer:offset:attributeStride:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
 | `MTLLibrary` `device` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `dynamic_libraries`, `library_facts` |
-| `MTLLibrary` `functionNames` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `dynamic_libraries`, `library_facts` |
-| `MTLLibrary` `installName` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `dynamic_libraries`, `library_facts` |
-| `MTLLibrary` `newFunctionWithDescriptor:error:` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `library_facts` |
-| `MTLLibrary` `newFunctionWithName:` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `etc_textures`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_limits`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` |
-| `MTLLibrary` `newFunctionWithName:constantValues:error:` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `function_constants_half3`, `function_facts` |
-| `MTLLibrary` `type` | missing | libraries and functions as runtime objects; the consumer holds the translator's Library | `dynamic_libraries`, `library_facts` |
 | `MTLMeshRenderPipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `mesh_pipeline_descriptors` |
 | `MTLMeshRenderPipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `mesh_pipeline_descriptors` |
 | `MTLRasterizationRateMap` `copyParameterDataToBuffer:offset:` | missing | rasterization rate maps; the render pass descriptor has no field for one | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
@@ -1850,67 +1891,56 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLRasterizationRateMap` `physicalSizeForLayer:` | missing | rasterization rate maps; the render pass descriptor has no field for one | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLRasterizationRateMap` `screenSize` | missing | rasterization rate maps; the render pass descriptor has no field for one | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLRenderCommandEncoder` `dispatchThreadsPerTile:` | missing | tile render pipelines; metal2vulkan-rt makes none | `tile_threadgroups` |
-| `MTLRenderCommandEncoder` `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:` | missing | an encoder call metal2vulkan-rt does not build | `tessellation_sweeps` |
-| `MTLRenderCommandEncoder` `drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` | missing | an encoder call metal2vulkan-rt does not build | `render_draw_forms` |
+| `MTLRenderCommandEncoder` `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:` | missing | patches through a control-point index buffer | `tessellation_sweeps` |
+| `MTLRenderCommandEncoder` `drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` | missing | indirect draws | `render_draw_forms` |
 | `MTLRenderCommandEncoder` `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-rt makes none | `mesh_barriers`, `mesh_draws`, `mesh_partial_barriers` |
 | `MTLRenderCommandEncoder` `drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-rt makes none | `mesh_barriers`, `mesh_draws` |
 | `MTLRenderCommandEncoder` `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-rt makes none | `mesh_draws`, `mesh_partial_barriers` |
-| `MTLRenderCommandEncoder` `drawPrimitives:indirectBuffer:indirectBufferOffset:` | missing | an encoder call metal2vulkan-rt does not build | `render_draw_forms`, `visibility` |
-| `MTLRenderCommandEncoder` `executeCommandsInBuffer:withRange:` | missing | indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLRenderCommandEncoder` `memoryBarrierWithResources:count:afterStages:beforeStages:` | missing | an encoder call metal2vulkan-rt does not build | `mesh_barriers`, `render_residency` |
-| `MTLRenderCommandEncoder` `memoryBarrierWithScope:afterStages:beforeStages:` | missing | an encoder call metal2vulkan-rt does not build | `mesh_barriers`, `pass_start_reads`, `render_residency` |
-| `MTLRenderCommandEncoder` `setFragmentBuffers:offsets:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `render_state` |
-| `MTLRenderCommandEncoder` `setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `render_state` |
-| `MTLRenderCommandEncoder` `setFragmentSamplerStates:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `render_state` |
-| `MTLRenderCommandEncoder` `setFragmentTextures:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `render_state` |
+| `MTLRenderCommandEncoder` `drawPrimitives:indirectBuffer:indirectBufferOffset:` | missing | indirect draws | `render_draw_forms`, `visibility` |
+| `MTLRenderCommandEncoder` `executeCommandsInBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLRenderCommandEncoder` `setMeshBuffer:offset:atIndex:` | missing | mesh render pipelines; metal2vulkan-rt makes none | `mesh_barriers`, `mesh_partial_barriers` |
 | `MTLRenderCommandEncoder` `setObjectBuffer:offset:atIndex:` | missing | mesh render pipelines; metal2vulkan-rt makes none | `mesh_barriers`, `mesh_draws`, `mesh_partial_barriers` |
 | `MTLRenderCommandEncoder` `setObjectBytes:length:atIndex:` | missing | mesh render pipelines; metal2vulkan-rt makes none | `mesh_draws`, `mesh_partial_barriers` |
-| `MTLRenderCommandEncoder` `setTessellationFactorScale:` | missing | an encoder call metal2vulkan-rt does not build | `tessellation_crossings`, `tessellation_sweeps` |
+| `MTLRenderCommandEncoder` `setTessellationFactorScale:` | missing | a tessellation factor scale; a state that enables one is refused (`RenderPipelineKind::Tessellation`) | `tessellation_crossings`, `tessellation_sweeps` |
 | `MTLRenderCommandEncoder` `setTileBuffer:offset:atIndex:` | missing | tile render pipelines; metal2vulkan-rt makes none | `tile_threadgroups` |
 | `MTLRenderCommandEncoder` `setTileBytes:length:atIndex:` | missing | tile render pipelines; metal2vulkan-rt makes none | `tile_threadgroups` |
 | `MTLRenderCommandEncoder` `setTileTexture:atIndex:` | missing | tile render pipelines; metal2vulkan-rt makes none | `tile_threadgroups` |
-| `MTLRenderCommandEncoder` `setVertexBuffer:offset:attributeStride:atIndex:` | missing | an encoder call metal2vulkan-rt does not build | `vertex_attribute_strides` |
-| `MTLRenderCommandEncoder` `setVertexBuffers:offsets:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `render_state` |
-| `MTLRenderCommandEncoder` `setVertexBytes:length:attributeStride:atIndex:` | missing | an encoder call metal2vulkan-rt does not build | `vertex_attribute_strides` |
-| `MTLRenderCommandEncoder` `setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `render_state` |
-| `MTLRenderCommandEncoder` `setVertexSamplerStates:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `render_state` |
-| `MTLRenderCommandEncoder` `setVertexTextures:withRange:` | missing | an encoder call metal2vulkan-rt does not build | `render_state` |
-| `MTLRenderCommandEncoder` `useHeap:` | missing | an encoder call metal2vulkan-rt does not build | `render_residency` |
-| `MTLRenderCommandEncoder` `useHeap:stages:` | missing | an encoder call metal2vulkan-rt does not build | `render_residency` |
-| `MTLRenderCommandEncoder` `useHeaps:count:` | missing | an encoder call metal2vulkan-rt does not build | `render_residency` |
-| `MTLRenderCommandEncoder` `useHeaps:count:stages:` | missing | an encoder call metal2vulkan-rt does not build | `render_residency` |
-| `MTLRenderCommandEncoder` `useResource:usage:` | missing | an encoder call metal2vulkan-rt does not build | `render_residency` |
-| `MTLRenderCommandEncoder` `useResource:usage:stages:` | missing | an encoder call metal2vulkan-rt does not build | `indirect_command_depth`, `indirect_commands`, `mesh_commands`, `render_residency` |
-| `MTLRenderCommandEncoder` `useResources:count:usage:` | missing | an encoder call metal2vulkan-rt does not build | `render_residency` |
-| `MTLRenderCommandEncoder` `useResources:count:usage:stages:` | missing | an encoder call metal2vulkan-rt does not build | `render_residency` |
-| `MTLRenderPassAttachmentDescriptor` `depthPlane` | missing | a render pass descriptor field metal2vulkan-rt does not take | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
-| `MTLRenderPassAttachmentDescriptor` `storeActionOptions` | missing | a render pass descriptor field metal2vulkan-rt does not take | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
-| `MTLRenderPassDescriptor` `defaultRasterSampleCount` | missing | a render pass descriptor field metal2vulkan-rt does not take | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
-| `MTLRenderPassDescriptor` `getSamplePositions:count:` | missing | a render pass descriptor field metal2vulkan-rt does not take | `render_pass_descriptors` |
-| `MTLRenderPassDescriptor` `imageblockSampleLength` | missing | a render pass descriptor field metal2vulkan-rt does not take | `render_pass_descriptors` |
-| `MTLRenderPassDescriptor` `rasterizationRateMap` | missing | a render pass descriptor field metal2vulkan-rt does not take | `render_pass_descriptors` |
-| `MTLRenderPassDescriptor` `renderPassDescriptor` | missing | a render pass descriptor field metal2vulkan-rt does not take | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_depth_samples`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `tile_threadgroups`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
-| `MTLRenderPassDescriptor` `renderTargetArrayLength` | missing | a render pass descriptor field metal2vulkan-rt does not take | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
-| `MTLRenderPassDescriptor` `setSamplePositions:count:` | missing | a render pass descriptor field metal2vulkan-rt does not take | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
-| `MTLRenderPassDescriptor` `threadgroupMemoryLength` | missing | a render pass descriptor field metal2vulkan-rt does not take | `render_pass_descriptors` |
+| `MTLRenderCommandEncoder` `setVertexBuffer:offset:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `vertex_attribute_strides` |
+| `MTLRenderCommandEncoder` `setVertexBytes:length:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `vertex_attribute_strides` |
+| `MTLRenderCommandEncoder` `useHeap:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
+| `MTLRenderCommandEncoder` `useHeap:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
+| `MTLRenderCommandEncoder` `useHeaps:count:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
+| `MTLRenderCommandEncoder` `useHeaps:count:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
+| `MTLRenderCommandEncoder` `useResource:usage:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
+| `MTLRenderCommandEncoder` `useResource:usage:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `indirect_command_depth`, `indirect_commands`, `mesh_commands`, `render_residency` |
+| `MTLRenderCommandEncoder` `useResources:count:usage:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
+| `MTLRenderCommandEncoder` `useResources:count:usage:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
+| `MTLRenderPassAttachmentDescriptor` `depthPlane` | missing | a 3D texture's depth plane as an attachment; such an attachment is refused (`RenderPassKind::TextureType`) | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
+| `MTLRenderPassAttachmentDescriptor` `storeActionOptions` | missing | store action options, whose one option needs more than one sample | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
+| `MTLRenderPassDescriptor` `defaultRasterSampleCount` | missing | a pass with no attachment, which is refused (`RenderPassKind::NoAttachment`) | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
+| `MTLRenderPassDescriptor` `getSamplePositions:count:` | missing | programmable sample positions | `render_pass_descriptors` |
+| `MTLRenderPassDescriptor` `imageblockSampleLength` | missing | a pass's imageblock memory, which tile functions use | `render_pass_descriptors` |
+| `MTLRenderPassDescriptor` `rasterizationRateMap` | missing | rasterization rate maps | `render_pass_descriptors` |
+| `MTLRenderPassDescriptor` `renderTargetArrayLength` | missing | layered rendering | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
+| `MTLRenderPassDescriptor` `setSamplePositions:count:` | missing | programmable sample positions | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
+| `MTLRenderPassDescriptor` `threadgroupMemoryLength` | missing | a pass's threadgroup memory, which tile functions use | `render_pass_descriptors` |
 | `MTLRenderPassDescriptor` `tileHeight` | missing | tile render pipelines; metal2vulkan-rt makes none | `render_pass_descriptors`, `tile_threadgroups` |
 | `MTLRenderPassDescriptor` `tileWidth` | missing | tile render pipelines; metal2vulkan-rt makes none | `render_pass_descriptors`, `tile_threadgroups` |
-| `MTLRenderPassDescriptor` `visibilityResultType` | missing | a render pass descriptor field metal2vulkan-rt does not take | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
+| `MTLRenderPassDescriptor` `visibilityResultType` | missing | what an enabled visibility result mode writes; only `Disabled` is built | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
 | `MTLRenderPipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `binary_archives`, `pipeline_descriptors` |
 | `MTLRenderPipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_handlers`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
-| `MTLRenderPipelineFunctionsDescriptor` `fragmentAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `pipeline_functions` |
-| `MTLRenderPipelineFunctionsDescriptor` `tileAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `pipeline_functions` |
-| `MTLRenderPipelineFunctionsDescriptor` `vertexAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `pipeline_functions` |
+| `MTLRenderPipelineFunctionsDescriptor` `fragmentAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `pipeline_functions` |
+| `MTLRenderPipelineFunctionsDescriptor` `tileAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `pipeline_functions` |
+| `MTLRenderPipelineFunctionsDescriptor` `vertexAdditionalBinaryFunctions` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `pipeline_functions` |
 | `MTLRenderPipelineState` `device` | missing | a query or call metal2vulkan-rt does not answer | `pipeline_facts`, `pipeline_handlers` |
-| `MTLRenderPipelineState` `functionHandleWithFunction:stage:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
+| `MTLRenderPipelineState` `functionHandleWithFunction:stage:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLRenderPipelineState` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `pipeline_facts`, `pipeline_handlers` |
 | `MTLRenderPipelineState` `maxTotalThreadgroupsPerMeshGrid` | missing | mesh render pipelines; metal2vulkan-rt makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `maxTotalThreadsPerMeshThreadgroup` | missing | mesh render pipelines; metal2vulkan-rt makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `maxTotalThreadsPerObjectThreadgroup` | missing | mesh render pipelines; metal2vulkan-rt makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `maxTotalThreadsPerThreadgroup` | missing | tile render pipelines; metal2vulkan-rt makes none | `pipeline_facts`, `pipeline_handlers`, `pipeline_limits`, `tile_threadgroups` |
 | `MTLRenderPipelineState` `meshThreadExecutionWidth` | missing | mesh render pipelines; metal2vulkan-rt makes none | `pipeline_limits` |
-| `MTLRenderPipelineState` `newVisibleFunctionTableWithDescriptor:stage:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
+| `MTLRenderPipelineState` `newVisibleFunctionTableWithDescriptor:stage:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLRenderPipelineState` `objectThreadExecutionWidth` | missing | mesh render pipelines; metal2vulkan-rt makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `requiredThreadsPerMeshThreadgroup` | missing | mesh render pipelines; metal2vulkan-rt makes none | `pipeline_limits` |
 | `MTLRenderPipelineState` `requiredThreadsPerObjectThreadgroup` | missing | mesh render pipelines; metal2vulkan-rt makes none | `pipeline_limits` |
@@ -1926,7 +1956,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLResource` `makeAliasable` | missing | a query or call metal2vulkan-rt does not answer | `resource_facts` |
 | `MTLResource` `resourceOptions` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `heap_facts`, `resource_facts`, `shared_creator_formats`, `texture_descriptor_pairs` |
 | `MTLResource` `setPurgeableState:` | missing | a query or call metal2vulkan-rt does not answer | `resource_facts` |
-| `MTLResource` `storageMode` | missing | a query or call metal2vulkan-rt does not answer | `buffer_textures`, `heap_facts`, `resource_facts`, `shared_creator_formats`, `texture_descriptor_pairs` |
 | `MTLResourceStateCommandEncoder` `moveTextureMappingsFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | missing | the resource state encoder (sparse textures' mappings) | `sparse_mappings` |
 | `MTLResourceStateCommandEncoder` `updateFence:` | missing | the resource state encoder (sparse textures' mappings) | `sparse_mappings` |
 | `MTLResourceStateCommandEncoder` `updateTextureMapping:mode:indirectBuffer:indirectBufferOffset:` | missing | the resource state encoder (sparse textures' mappings) | `sparse_mappings` |
@@ -1948,14 +1977,14 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLTexture` `tailSizeInBytes` | missing | sparse tiles | `sparse_heaps`, `sparse_mappings` |
 | `MTLTextureDescriptor` `allowGPUOptimizedContents` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `astc_textures`, `blit_encoder_commands`, `border_swizzles`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `copy_out_strides`, `denormal_word_fetches`, `etc_textures`, `extended_swizzles`, `format_copies`, `format_footprints`, `fresh_contents`, `heap_metal_sizes`, `level_sizes`, `norm_storage_writes`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `resource_facts`, `sampler_crossings`, `sampler_filtering`, `shared_creator_formats`, `shared_exponent_storage`, `sparse_heaps`, `sparse_mappings`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `texture_descriptor_pairs`, `texture_fills`, `texture_view_casts`, `texture_views`, `two_plane_copies`, `two_plane_heap_blits`, `ycbcr_textures` |
 | `MTLTextureDescriptor` `texture2DDescriptorWithPixelFormat:width:height:mipmapped:` | missing | a query or call metal2vulkan-rt does not answer | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `bicubic_texel_classes`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `buffer_depth_samples`, `buffer_tails`, `buffer_target_clears`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_render_chains`, `copy_out_strides`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `fetch_ordered`, `format_copies`, `format_footprints`, `frame_chains`, `fresh_contents`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `layered_targets`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `nan_integer_conversions`, `nearest_positions`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `pixel_downscales`, `pixel_samplers`, `primitive_type_crossings`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_rendered`, `texture_buffer_tails`, `texture_fills`, `textures`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `visibility`, `wide_points` |
-| `MTLTextureDescriptor` `textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:` | missing | a query or call metal2vulkan-rt does not answer | `blit_encoder_commands`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `copy_out_strides`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
+| `MTLTextureDescriptor` `textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:` | missing | a texture buffer's descriptor; a texture buffer is refused (`Gap::TextureBuffer`) | `blit_encoder_commands`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `copy_out_strides`, `format_copies`, `fresh_contents`, `pvrtc_cpu_order`, `pvrtc_rows`, `texture_buffer_tails`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
 | `MTLTileRenderPipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `tile_pipeline_descriptors` |
 | `MTLTileRenderPipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) | `tile_pipeline_descriptors` |
-| `MTLVisibleFunctionTable` `gpuResourceID` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
-| `MTLVisibleFunctionTable` `setFunction:atIndex:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
-| `MTLVisibleFunctionTable` `setFunctions:withRange:` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
-| `MTLVisibleFunctionTableDescriptor` `functionCount` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
-| `MTLVisibleFunctionTableDescriptor` `visibleFunctionTableDescriptor` | missing | function tables, function handles and dynamic libraries; a function that reads a function table is refused | `visible_tables` |
+| `MTLVisibleFunctionTable` `gpuResourceID` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
+| `MTLVisibleFunctionTable` `setFunction:atIndex:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
+| `MTLVisibleFunctionTable` `setFunctions:withRange:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
+| `MTLVisibleFunctionTableDescriptor` `functionCount` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
+| `MTLVisibleFunctionTableDescriptor` `visibleFunctionTableDescriptor` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 
 ## Called, attributed to no family
 
@@ -1963,6 +1992,7 @@ An item the Metal leg calls that no case module was found to reach: a `Side` met
 
 | item | status |
 |---|---|
+| the header's free functions `MTLCreateSystemDefaultDevice` | implemented |
 | `MTLDevice` `name` | missing |
 | `MTLDevice` `supportsFamily:` | missing |
 | `MTLFunctionConstantValues` `setConstantValue:type:withName:` | implemented |

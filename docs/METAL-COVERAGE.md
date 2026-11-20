@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 542 | 25 |
-| missing | 1171 | 38 |
-| out of scope | 422 | 5 |
+| implemented | 593 | 25 |
+| missing | 1118 | 38 |
+| out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 209; by the translator's values: 333. Missing by size: S 185, M 270, L 340, XL 376.
+Implemented by the runtime: 237; by the translator's values: 356. Missing by size: S 191, M 209, L 342, XL 376.
 
 ## Missing, in build order
 
@@ -24,16 +24,16 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | Group | Size | Items | Examples |
 |---|---|---|---|
 | labels, debug groups and signposts | S | 15 | `MTLBuffer.addDebugMarker:range:`, `MTLBuffer.removeAllDebugMarkers`, `MTLCommandBuffer.pushDebugGroup:`, ... |
-| command buffer options (descriptor, unretained references, `enqueue`, encoder error status) | S/M | 12 | `MTLCommandBufferDescriptor`, `MTLCommandBufferDescriptor.retainedReferences`, `MTLCommandBufferDescriptor.errorOptions`, ... |
+| command buffer options (descriptor, retained references, encoder error status) | S/M | 10 | `MTLCommandBufferDescriptor`, `MTLCommandBufferDescriptor.retainedReferences`, `MTLCommandBufferDescriptor.errorOptions`, ... |
 | command queue descriptor | S | 3 | `MTLCommandQueueDescriptor`, `MTLCommandQueueDescriptor.maxCommandBufferCount`, `MTLDevice.newCommandQueueWithDescriptor:` |
 | compute, blit and resource-state pass descriptors | S | 10 | `MTLBlitPassDescriptor`, `MTLBlitPassDescriptor.blitPassDescriptor`, `MTLCommandBuffer.computeCommandEncoderWithDescriptor:`, ... |
 | libraries from a file path or URL | S | 2 | `MTLDevice.newLibraryWithFile:error:`, `MTLDevice.newLibraryWithURL:error:` |
-| device, state and resource queries | S | 76 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLComputePipelineState.device`, ... |
+| device, state and resource queries | S | 73 | `MTLAllocation.allocatedSize`, `MTLBuffer.sparseBufferTier`, `MTLCommandBuffer.device`, ... |
 | plain-value constructors (`MTLOriginMake` and the rest) | S | 7 | `MTLOriginMake`, `MTLSizeMake`, `MTLRegionMake1D`, ... |
-| buffer creation forms (with bytes, with no copy) | S | 2 | `MTLDevice.newBufferWithBytes:length:options:`, `MTLDevice.newBufferWithBytesNoCopy:length:options:deallocator:` |
+| a buffer made with bytes | S | 1 | `MTLDevice.newBufferWithBytes:length:options:` |
 | pipeline creation forms (from a function, with a completion handler) | S | 6 | `MTLDevice.newRenderPipelineStateWithDescriptor:options:completionHandler:`, `MTLDevice.newComputePipelineStateWithFunction:error:`, `MTLDevice.newComputePipelineStateWithFunction:options:reflection:error:`, ... |
-| render pass descriptor fields | S | 11 | `MTLRenderPassAttachmentDescriptor.depthPlane`, `MTLRenderPassAttachmentDescriptor.storeActionOptions`, `MTLRenderPassDescriptor.renderPassDescriptor`, ... |
-| encoder calls (range and stride setters, indirect draws, resource and heap uses) | M | 59 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:`, `MTLBlitCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:`, ... |
+| render pass descriptor fields | S/M/L | 10 | `MTLRenderPassAttachmentDescriptor.depthPlane`, `MTLRenderPassAttachmentDescriptor.storeActionOptions`, `MTLRenderPassDescriptor.renderTargetArrayLength`, ... |
+| encoder calls (stride setters, indirect draws, store action options, a render encoder's resource and heap uses) | S/M/L | 36 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
 | function handles by name, and a handle's type and ID | S | 4 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.gpuResourceID`, ... |
@@ -49,7 +49,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | pipeline specialization (macOS 26) | M | 1 | `MTLRenderPipelineState.newRenderPipelineDescriptorForSpecialization` |
 | placement sparse buffers | M | 1 | `MTLDevice.newBufferWithLength:options:placementSparsePageSize:` |
 | texture and event handles shared across processes | M | 8 | `MTLDevice.newSharedTextureWithDescriptor:`, `MTLDevice.newSharedTextureWithHandle:`, `MTLDevice.newSharedEventWithHandle:`, ... |
-| libraries and functions as runtime objects | M | 25 | `MTLDevice.newLibraryWithData:error:`, `MTLFunctionDescriptor`, `MTLFunctionDescriptor.functionDescriptor`, ... |
+| a function's options (`MTLFunctionOptions`) | S | 2 | `MTLFunctionDescriptor.options`, `MTLFunction.options` |
 | argument encoders | M | 24 | `MTLArgumentEncoder`, `MTLArgumentEncoder.device`, `MTLArgumentEncoder.encodedLength`, ... |
 | the resource state encoder | M | 8 | `MTLCommandBuffer.resourceStateCommandEncoder`, `MTLResourceStateCommandEncoder`, `MTLResourceStateCommandEncoder.updateTextureMappings:mode:regions:mipLevels:slices:numRegions:`, ... |
 | indirect command buffers | L | 71 | `MTLArgumentEncoder.setIndirectCommandBuffer:atIndex:`, `MTLArgumentEncoder.setIndirectCommandBuffers:withRange:`, `MTLBlitCommandEncoder.resetCommandsInBuffer:withRange:`, ... |
@@ -179,247 +179,247 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4Archive` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Archive.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Archive.newComputePipelineStateWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Archive.newComputePipelineStateWithDescriptor:dynamicLinkingDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Archive.newRenderPipelineStateWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Archive.newRenderPipelineStateWithDescriptor:dynamicLinkingDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Archive.newBinaryFunctionWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4Archive` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Archive.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Archive.newComputePipelineStateWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Archive.newComputePipelineStateWithDescriptor:dynamicLinkingDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Archive.newRenderPipelineStateWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Archive.newRenderPipelineStateWithDescriptor:dynamicLinkingDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Archive.newBinaryFunctionWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4ArgumentTable.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4ArgumentTableDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTableDescriptor.maxBufferBindCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTableDescriptor.maxTextureBindCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTableDescriptor.maxSamplerStateBindCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTableDescriptor.initializeBindings` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTableDescriptor.supportAttributeStrides` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTableDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTable` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTable.setAddress:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTable.setAddress:attributeStride:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTable.setResource:atBufferIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTable.setTexture:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTable.setSamplerState:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTable.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ArgumentTable.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4ArgumentTableDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTableDescriptor.maxBufferBindCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTableDescriptor.maxTextureBindCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTableDescriptor.maxSamplerStateBindCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTableDescriptor.initializeBindings` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTableDescriptor.supportAttributeStrides` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTableDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTable` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTable.setAddress:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTable.setAddress:attributeStride:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTable.setResource:atBufferIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTable.setTexture:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTable.setSamplerState:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTable.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ArgumentTable.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4BinaryFunction.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4BinaryFunction` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4BinaryFunction.name` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4BinaryFunction.functionType` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4BinaryFunction` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4BinaryFunction.name` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4BinaryFunction.functionType` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4BinaryFunctionDescriptor.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4BinaryFunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4BinaryFunctionDescriptor.name` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4BinaryFunctionDescriptor.functionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4BinaryFunctionDescriptor.options` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4BinaryFunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4BinaryFunctionDescriptor.name` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4BinaryFunctionDescriptor.functionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4BinaryFunctionDescriptor.options` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4BufferRange.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4BufferRangeMake` | function | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4BufferRangeMake` | function | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4CommandAllocator.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4CommandAllocatorDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandAllocatorDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandAllocator` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandAllocator.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandAllocator.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandAllocator.allocatedSize` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandAllocator.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4CommandAllocatorDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandAllocatorDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandAllocator` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandAllocator.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandAllocator.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandAllocator.allocatedSize` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandAllocator.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4CommandBuffer.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4CommandBufferOptions` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBufferOptions.logState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.beginCommandBufferWithAllocator:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.beginCommandBufferWithAllocator:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.endCommandBuffer` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.renderCommandEncoderWithDescriptor:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.renderCommandEncoderWithDescriptor:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.computeCommandEncoder` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.machineLearningCommandEncoder` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.useResidencySet:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.useResidencySets:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.pushDebugGroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.popDebugGroup` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.writeTimestampIntoHeap:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandBuffer.resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4CommandBufferOptions` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBufferOptions.logState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.beginCommandBufferWithAllocator:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.beginCommandBufferWithAllocator:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.endCommandBuffer` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.renderCommandEncoderWithDescriptor:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.renderCommandEncoderWithDescriptor:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.computeCommandEncoder` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.machineLearningCommandEncoder` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.useResidencySet:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.useResidencySets:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.pushDebugGroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.popDebugGroup` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.writeTimestampIntoHeap:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandBuffer.resolveCounterHeap:withRange:intoBuffer:waitFence:updateFence:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4CommandEncoder.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4CommandEncoder` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.commandBuffer` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.barrierAfterQueueStages:beforeStages:visibilityOptions:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.barrierAfterStages:beforeQueueStages:visibilityOptions:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.barrierAfterEncoderStages:beforeEncoderStages:visibilityOptions:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.updateFence:afterEncoderStages:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.waitForFence:beforeEncoderStages:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.insertDebugSignpost:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.pushDebugGroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.popDebugGroup` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandEncoder.endEncoding` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4CommandEncoder` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.commandBuffer` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.barrierAfterQueueStages:beforeStages:visibilityOptions:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.barrierAfterStages:beforeQueueStages:visibilityOptions:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.barrierAfterEncoderStages:beforeEncoderStages:visibilityOptions:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.updateFence:afterEncoderStages:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.waitForFence:beforeEncoderStages:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.insertDebugSignpost:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.pushDebugGroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.popDebugGroup` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandEncoder.endEncoding` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4CommandQueue.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4CommitOptions` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommitOptions.addFeedbackHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueueDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueueDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueueDescriptor.feedbackQueue` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.commit:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.commit:count:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.signalEvent:value:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.waitForEvent:value:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.signalDrawable:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.waitForDrawable:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.addResidencySet:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.addResidencySets:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.removeResidencySet:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.removeResidencySets:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.updateTextureMappings:heap:operations:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.copyTextureMappingsFromTexture:toTexture:operations:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.updateBufferMappings:heap:operations:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommandQueue.copyBufferMappingsFromBuffer:toBuffer:operations:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4CommitOptions` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommitOptions.addFeedbackHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueueDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueueDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueueDescriptor.feedbackQueue` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.commit:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.commit:count:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.signalEvent:value:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.waitForEvent:value:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.signalDrawable:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.waitForDrawable:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.addResidencySet:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.addResidencySets:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.removeResidencySet:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.removeResidencySets:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.updateTextureMappings:heap:operations:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.copyTextureMappingsFromTexture:toTexture:operations:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.updateBufferMappings:heap:operations:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommandQueue.copyBufferMappingsFromBuffer:toBuffer:operations:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4CommitFeedback.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4CommitFeedback` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommitFeedback.error` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommitFeedback.GPUStartTime` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CommitFeedback.GPUEndTime` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4CommitFeedback` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommitFeedback.error` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommitFeedback.GPUStartTime` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CommitFeedback.GPUEndTime` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4Compiler.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4CompilerDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CompilerDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CompilerDescriptor.pipelineDataSetSerializer` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CompilerTaskOptions` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CompilerTaskOptions.lookupArchives` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.pipelineDataSetSerializer` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newLibraryWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newDynamicLibrary:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newDynamicLibraryWithURL:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newComputePipelineStateWithDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newComputePipelineStateWithDescriptor:dynamicLinkingDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newRenderPipelineStateWithDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newRenderPipelineStateWithDescriptor:dynamicLinkingDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newRenderPipelineStateBySpecializationWithDescriptor:pipeline:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newBinaryFunctionWithDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newLibraryWithDescriptor:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newDynamicLibrary:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newDynamicLibraryWithURL:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newComputePipelineStateWithDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newComputePipelineStateWithDescriptor:dynamicLinkingDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newRenderPipelineStateWithDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newRenderPipelineStateWithDescriptor:dynamicLinkingDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newRenderPipelineStateBySpecializationWithDescriptor:pipeline:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newBinaryFunctionWithDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newMachineLearningPipelineStateWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4Compiler.newMachineLearningPipelineStateWithDescriptor:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4CompilerDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CompilerDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CompilerDescriptor.pipelineDataSetSerializer` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CompilerTaskOptions` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CompilerTaskOptions.lookupArchives` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.device` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.pipelineDataSetSerializer` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newLibraryWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newDynamicLibrary:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newDynamicLibraryWithURL:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newComputePipelineStateWithDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newComputePipelineStateWithDescriptor:dynamicLinkingDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newRenderPipelineStateWithDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newRenderPipelineStateWithDescriptor:dynamicLinkingDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newRenderPipelineStateBySpecializationWithDescriptor:pipeline:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newBinaryFunctionWithDescriptor:compilerTaskOptions:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newLibraryWithDescriptor:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newDynamicLibrary:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newDynamicLibraryWithURL:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newComputePipelineStateWithDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newComputePipelineStateWithDescriptor:dynamicLinkingDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newRenderPipelineStateWithDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newRenderPipelineStateWithDescriptor:dynamicLinkingDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newRenderPipelineStateBySpecializationWithDescriptor:pipeline:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newBinaryFunctionWithDescriptor:compilerTaskOptions:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newMachineLearningPipelineStateWithDescriptor:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4Compiler.newMachineLearningPipelineStateWithDescriptor:completionHandler:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4CompilerTask.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4CompilerTask` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CompilerTask.compiler` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CompilerTask.status` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4CompilerTask.waitUntilCompleted` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4CompilerTask` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CompilerTask.compiler` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CompilerTask.status` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4CompilerTask.waitUntilCompleted` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4ComputeCommandEncoder.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4ComputeCommandEncoder` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.stages` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.setComputePipelineState:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.setThreadgroupMemoryLength:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.setImageblockWidth:height:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.dispatchThreads:threadsPerThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.dispatchThreadgroups:threadsPerThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.dispatchThreadgroupsWithIndirectBuffer:threadsPerThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.dispatchThreadsWithIndirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.executeCommandsInBuffer:withRange:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.executeCommandsInBuffer:indirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromTexture:toTexture:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromTensor:sourceOrigin:sourceDimensions:toTensor:destinationOrigin:destinationDimensions:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyFromTensor:sourceOrigin:sourceDimensions:sourcePlane:toTensor:destinationOrigin:destinationDimensions:destinationPlane:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.generateMipmapsForTexture:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.fillBuffer:range:value:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.optimizeContentsForGPUAccess:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.optimizeContentsForGPUAccess:slice:level:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.optimizeContentsForCPUAccess:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.optimizeContentsForCPUAccess:slice:level:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.resetCommandsInBuffer:withRange:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.optimizeIndirectCommandBuffer:withRange:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputeCommandEncoder.setArgumentTable:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4ComputeCommandEncoder` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.stages` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.setComputePipelineState:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.setThreadgroupMemoryLength:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.setImageblockWidth:height:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.dispatchThreads:threadsPerThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.dispatchThreadgroups:threadsPerThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.dispatchThreadgroupsWithIndirectBuffer:threadsPerThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.dispatchThreadsWithIndirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.executeCommandsInBuffer:withRange:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.executeCommandsInBuffer:indirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromTexture:toTexture:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromTensor:sourceOrigin:sourceDimensions:toTensor:destinationOrigin:destinationDimensions:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyFromTensor:sourceOrigin:sourceDimensions:sourcePlane:toTensor:destinationOrigin:destinationDimensions:destinationPlane:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.generateMipmapsForTexture:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.fillBuffer:range:value:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.optimizeContentsForGPUAccess:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.optimizeContentsForGPUAccess:slice:level:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.optimizeContentsForCPUAccess:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.optimizeContentsForCPUAccess:slice:level:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.resetCommandsInBuffer:withRange:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.optimizeIndirectCommandBuffer:withRange:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputeCommandEncoder.setArgumentTable:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 | `MTL4ComputeCommandEncoder.buildAccelerationStructure:descriptor:scratchBuffer:` | method | out of scope | ray tracing |
 | `MTL4ComputeCommandEncoder.refitAccelerationStructure:descriptor:destination:scratchBuffer:` | method | out of scope | ray tracing |
 | `MTL4ComputeCommandEncoder.refitAccelerationStructure:descriptor:destination:scratchBuffer:options:` | method | out of scope | ray tracing |
 | `MTL4ComputeCommandEncoder.copyAccelerationStructure:toAccelerationStructure:` | method | out of scope | ray tracing |
 | `MTL4ComputeCommandEncoder.writeCompactedAccelerationStructureSize:toBuffer:` | method | out of scope | ray tracing |
 | `MTL4ComputeCommandEncoder.copyAndCompactAccelerationStructure:toAccelerationStructure:` | method | out of scope | ray tracing |
-| `MTL4ComputeCommandEncoder.writeTimestampWithGranularity:intoHeap:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4ComputeCommandEncoder.writeTimestampWithGranularity:intoHeap:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4ComputePipeline.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4ComputePipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.computeFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.maxTotalThreadsPerThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.requiredThreadsPerThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.supportBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.staticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.supportIndirectCommandBuffers` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.forwardProgressUsage` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.contentionRelief` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.optimizeForPersistentKernel` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4ComputePipelineDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4ComputePipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.computeFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.maxTotalThreadsPerThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.requiredThreadsPerThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.supportBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.staticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.supportIndirectCommandBuffers` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.forwardProgressUsage` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.contentionRelief` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.optimizeForPersistentKernel` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4ComputePipelineDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4Counters.h
 
@@ -439,43 +439,43 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4FunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4FunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4LibraryDescriptor.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4LibraryDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4LibraryDescriptor.source` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4LibraryDescriptor.options` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4LibraryDescriptor.name` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4LibraryDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4LibraryDescriptor.source` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4LibraryDescriptor.options` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4LibraryDescriptor.name` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4LibraryFunctionDescriptor.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4LibraryFunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4LibraryFunctionDescriptor.name` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4LibraryFunctionDescriptor.library` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4LibraryFunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4LibraryFunctionDescriptor.name` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4LibraryFunctionDescriptor.library` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4LinkingDescriptor.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4StaticLinkingDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4StaticLinkingDescriptor.functionDescriptors` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4StaticLinkingDescriptor.privateFunctionDescriptors` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4StaticLinkingDescriptor.groups` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineStageDynamicLinkingDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineStageDynamicLinkingDescriptor.maxCallStackDepth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineStageDynamicLinkingDescriptor.binaryLinkedFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineStageDynamicLinkingDescriptor.preloadedLibraries` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDynamicLinkingDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDynamicLinkingDescriptor.vertexLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDynamicLinkingDescriptor.fragmentLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDynamicLinkingDescriptor.tileLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDynamicLinkingDescriptor.objectLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDynamicLinkingDescriptor.meshLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4StaticLinkingDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4StaticLinkingDescriptor.functionDescriptors` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4StaticLinkingDescriptor.privateFunctionDescriptors` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4StaticLinkingDescriptor.groups` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineStageDynamicLinkingDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineStageDynamicLinkingDescriptor.maxCallStackDepth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineStageDynamicLinkingDescriptor.binaryLinkedFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineStageDynamicLinkingDescriptor.preloadedLibraries` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDynamicLinkingDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDynamicLinkingDescriptor.vertexLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDynamicLinkingDescriptor.fragmentLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDynamicLinkingDescriptor.tileLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDynamicLinkingDescriptor.objectLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDynamicLinkingDescriptor.meshLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4MachineLearningCommandEncoder.h
 
@@ -509,201 +509,201 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4MeshRenderPipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.objectFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.meshFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.fragmentFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.maxTotalThreadsPerMeshThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.requiredThreadsPerObjectThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.requiredThreadsPerMeshThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.payloadMemoryLength` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.maxTotalThreadgroupsPerMeshGrid` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.rasterSampleCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.alphaToCoverageState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.alphaToOneState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.rasterizationEnabled` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.maxVertexAmplificationCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.colorAttachments` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.objectStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.meshStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.fragmentStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.supportObjectBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.supportMeshBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.supportFragmentBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.colorAttachmentMappingState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.supportIndirectCommandBuffers` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4MeshRenderPipelineDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4MeshRenderPipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.objectFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.meshFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.fragmentFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.maxTotalThreadsPerObjectThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.maxTotalThreadsPerMeshThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.requiredThreadsPerObjectThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.requiredThreadsPerMeshThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.objectThreadgroupSizeIsMultipleOfThreadExecutionWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.meshThreadgroupSizeIsMultipleOfThreadExecutionWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.payloadMemoryLength` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.maxTotalThreadgroupsPerMeshGrid` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.rasterSampleCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.alphaToCoverageState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.alphaToOneState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.rasterizationEnabled` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.maxVertexAmplificationCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.colorAttachments` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.objectStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.meshStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.fragmentStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.supportObjectBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.supportMeshBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.supportFragmentBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.colorAttachmentMappingState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.supportIndirectCommandBuffers` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4MeshRenderPipelineDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4PipelineDataSetSerializer.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4PipelineDataSetSerializerDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineDataSetSerializerDescriptor.configuration` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineDataSetSerializer` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineDataSetSerializer.serializeAsArchiveAndFlushToURL:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineDataSetSerializer.serializeAsPipelinesScriptWithError:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4PipelineDataSetSerializerDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineDataSetSerializerDescriptor.configuration` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineDataSetSerializer` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineDataSetSerializer.serializeAsArchiveAndFlushToURL:error:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineDataSetSerializer.serializeAsPipelinesScriptWithError:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4PipelineState.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4PipelineOptions` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineOptions.shaderValidation` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineOptions.shaderReflection` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4PipelineDescriptor.options` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4PipelineOptions` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineOptions.shaderValidation` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineOptions.shaderReflection` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineDescriptor.label` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4PipelineDescriptor.options` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4RenderCommandEncoder.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4RenderCommandEncoder` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.tileWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.tileHeight` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setColorAttachmentMap:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setRenderPipelineState:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setViewport:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setViewports:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setVertexAmplificationCount:viewMappings:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setCullMode:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setDepthClipMode:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setDepthBias:slopeScale:clamp:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setDepthTestMinBound:maxBound:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setScissorRect:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setScissorRects:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setTriangleFillMode:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setBlendColorRed:green:blue:alpha:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setDepthStencilState:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setStencilReferenceValue:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setStencilFrontReferenceValue:backReferenceValue:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setVisibilityResultMode:offset:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setColorStoreAction:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setDepthStoreAction:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setStencilStoreAction:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawPrimitives:vertexStart:vertexCount:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawPrimitives:vertexStart:vertexCount:instanceCount:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferLength:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferLength:instanceCount:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferLength:instanceCount:baseVertex:baseInstance:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawPrimitives:indirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawIndexedPrimitives:indexType:indexBuffer:indexBufferLength:indirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.executeCommandsInBuffer:withRange:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.executeCommandsInBuffer:indirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setObjectThreadgroupMemoryLength:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.drawMeshThreadgroupsWithIndirectBuffer:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.dispatchThreadsPerTile:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setThreadgroupMemoryLength:offset:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setArgumentTable:atStages:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.setFrontFacingWinding:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderCommandEncoder.writeTimestampWithGranularity:afterStage:intoHeap:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4RenderCommandEncoder` | protocol | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.tileWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.tileHeight` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setColorAttachmentMap:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setRenderPipelineState:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setViewport:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setViewports:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setVertexAmplificationCount:viewMappings:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setCullMode:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setDepthClipMode:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setDepthBias:slopeScale:clamp:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setDepthTestMinBound:maxBound:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setScissorRect:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setScissorRects:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setTriangleFillMode:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setBlendColorRed:green:blue:alpha:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setDepthStencilState:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setStencilReferenceValue:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setStencilFrontReferenceValue:backReferenceValue:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setVisibilityResultMode:offset:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setColorStoreAction:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setDepthStoreAction:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setStencilStoreAction:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawPrimitives:vertexStart:vertexCount:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawPrimitives:vertexStart:vertexCount:instanceCount:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferLength:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferLength:instanceCount:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferLength:instanceCount:baseVertex:baseInstance:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawPrimitives:indirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawIndexedPrimitives:indexType:indexBuffer:indexBufferLength:indirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.executeCommandsInBuffer:withRange:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.executeCommandsInBuffer:indirectBuffer:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setObjectThreadgroupMemoryLength:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.drawMeshThreadgroupsWithIndirectBuffer:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.dispatchThreadsPerTile:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setThreadgroupMemoryLength:offset:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setArgumentTable:atStages:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.setFrontFacingWinding:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderCommandEncoder.writeTimestampWithGranularity:afterStage:intoHeap:atIndex:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4RenderPass.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4RenderPassDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.colorAttachments` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.depthAttachment` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.stencilAttachment` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.renderTargetArrayLength` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.imageblockSampleLength` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.threadgroupMemoryLength` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.tileWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.tileHeight` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.defaultRasterSampleCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.renderTargetWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.renderTargetHeight` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.rasterizationRateMap` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.visibilityResultBuffer` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.visibilityResultType` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.setSamplePositions:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.getSamplePositions:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPassDescriptor.supportColorAttachmentMapping` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4RenderPassDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.colorAttachments` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.depthAttachment` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.stencilAttachment` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.renderTargetArrayLength` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.imageblockSampleLength` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.threadgroupMemoryLength` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.tileWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.tileHeight` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.defaultRasterSampleCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.renderTargetWidth` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.renderTargetHeight` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.rasterizationRateMap` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.visibilityResultBuffer` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.visibilityResultType` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.setSamplePositions:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.getSamplePositions:count:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPassDescriptor.supportColorAttachmentMapping` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4RenderPipeline.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4RenderPipelineColorAttachmentDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.pixelFormat` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.blendingState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.sourceRGBBlendFactor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.destinationRGBBlendFactor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.rgbBlendOperation` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.sourceAlphaBlendFactor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.destinationAlphaBlendFactor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.alphaBlendOperation` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.writeMask` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptorArray` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineColorAttachmentDescriptorArray.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineBinaryFunctionsDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineBinaryFunctionsDescriptor.vertexAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineBinaryFunctionsDescriptor.fragmentAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineBinaryFunctionsDescriptor.tileAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineBinaryFunctionsDescriptor.objectAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineBinaryFunctionsDescriptor.meshAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineBinaryFunctionsDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.vertexFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.fragmentFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.vertexDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.rasterSampleCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.alphaToCoverageState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.alphaToOneState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.rasterizationEnabled` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.maxVertexAmplificationCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.colorAttachments` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.inputPrimitiveTopology` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.vertexStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.fragmentStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.supportVertexBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.supportFragmentBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.colorAttachmentMappingState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.supportIndirectCommandBuffers` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4RenderPipelineDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4RenderPipelineColorAttachmentDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.pixelFormat` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.blendingState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.sourceRGBBlendFactor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.destinationRGBBlendFactor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.rgbBlendOperation` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.sourceAlphaBlendFactor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.destinationAlphaBlendFactor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.alphaBlendOperation` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.writeMask` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptorArray` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineColorAttachmentDescriptorArray.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineBinaryFunctionsDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineBinaryFunctionsDescriptor.vertexAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineBinaryFunctionsDescriptor.fragmentAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineBinaryFunctionsDescriptor.tileAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineBinaryFunctionsDescriptor.objectAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineBinaryFunctionsDescriptor.meshAdditionalBinaryFunctions` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineBinaryFunctionsDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.vertexFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.fragmentFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.vertexDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.rasterSampleCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.alphaToCoverageState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.alphaToOneState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.rasterizationEnabled` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.maxVertexAmplificationCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.colorAttachments` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.inputPrimitiveTopology` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.vertexStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.fragmentStaticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.supportVertexBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.supportFragmentBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.colorAttachmentMappingState` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.supportIndirectCommandBuffers` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4RenderPipelineDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4SpecializedFunctionDescriptor.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4SpecializedFunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4SpecializedFunctionDescriptor.functionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4SpecializedFunctionDescriptor.specializedName` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4SpecializedFunctionDescriptor.constantValues` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4SpecializedFunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4SpecializedFunctionDescriptor.functionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4SpecializedFunctionDescriptor.specializedName` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4SpecializedFunctionDescriptor.constantValues` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4StitchedFunctionDescriptor.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4StitchedFunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4StitchedFunctionDescriptor.functionGraph` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4StitchedFunctionDescriptor.functionDescriptors` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4StitchedFunctionDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4StitchedFunctionDescriptor.functionGraph` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4StitchedFunctionDescriptor.functionDescriptors` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTL4TileRenderPipeline.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTL4TileRenderPipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.tileFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.rasterSampleCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.colorAttachments` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.threadgroupSizeMatchesTileSize` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.maxTotalThreadsPerThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.requiredThreadsPerThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.staticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.supportBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
-| `MTL4TileRenderPipelineDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler, `RuntimeGap::Metal4Api`) |
+| `MTL4TileRenderPipelineDescriptor` | class | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.tileFunctionDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.rasterSampleCount` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.colorAttachments` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.threadgroupSizeMatchesTileSize` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.maxTotalThreadsPerThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.requiredThreadsPerThreadgroup` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.staticLinkingDescriptor` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.supportBinaryLinking` | property | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
+| `MTL4TileRenderPipelineDescriptor.reset` | method | missing | XL: Metal 4's command model (`MTL4CommandQueue`, `MTL4CommandBuffer`, argument tables, the compiler) |
 
 ### MTLAccelerationStructure.h
 
@@ -881,7 +881,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
 | `MTLAllocation` | protocol | implemented | `Buffer` (runtime) |
-| `MTLAllocation.allocatedSize` | property | missing | S: a buffer's, texture's or heap's allocated bytes (`IndirectCommandBuffer` and `VisibleFunctionTable` answer it, and `Texture::allocated_size` a heap's texture's) |
+| `MTLAllocation.allocatedSize` | property | missing | S: a buffer's, texture's or heap's allocated bytes |
 
 ### MTLArgument.h
 
@@ -1004,15 +1004,15 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLArgumentEncoder.setRenderPipelineStates:withRange:` | method | missing | M: argument encoders |
 | `MTLArgumentEncoder.setComputePipelineState:atIndex:` | method | missing | M: argument encoders |
 | `MTLArgumentEncoder.setComputePipelineStates:withRange:` | method | missing | M: argument encoders |
-| `MTLArgumentEncoder.setIndirectCommandBuffer:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLArgumentEncoder.setIndirectCommandBuffers:withRange:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
+| `MTLArgumentEncoder.setIndirectCommandBuffer:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLArgumentEncoder.setIndirectCommandBuffers:withRange:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
 | `MTLArgumentEncoder.setAccelerationStructure:atIndex:` | method | out of scope | ray tracing |
 | `MTLArgumentEncoder.newArgumentEncoderForBufferAtIndex:` | method | missing | M: argument encoders |
 | `MTLArgumentEncoder.setVisibleFunctionTable:atIndex:` | method | missing | M: argument encoders |
 | `MTLArgumentEncoder.setVisibleFunctionTables:withRange:` | method | missing | M: argument encoders |
 | `MTLArgumentEncoder.setIntersectionFunctionTable:atIndex:` | method | out of scope | ray tracing |
 | `MTLArgumentEncoder.setIntersectionFunctionTables:withRange:` | method | out of scope | ray tracing |
-| `MTLArgumentEncoder.setDepthStencilState:atIndex:` | method | missing | M: a depth/stencil state in an argument buffer, which indirect render commands read (`RuntimeGap::IndirectRenderCommands` covers the state's ID) |
+| `MTLArgumentEncoder.setDepthStencilState:atIndex:` | method | missing | M: a depth/stencil state in an argument buffer, which indirect render commands read |
 | `MTLArgumentEncoder.setDepthStencilStates:withRange:` | method | missing | M: a depth/stencil state in an argument buffer, which indirect render commands read |
 
 ### MTLBinaryArchive.h
@@ -1038,28 +1038,28 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 |---|---|---|---|
 | `MTLBlitCommandEncoder` | protocol | implemented | `BlitCommandEncoder` (runtime) |
 | `MTLBlitCommandEncoder.synchronizeResource:` (deprecated) | method | implemented | `BlitCommandEncoder::synchronize_resource` (runtime) |
-| `MTLBlitCommandEncoder.synchronizeTexture:slice:level:` (deprecated) | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:` | method | implemented | `BlitCommandEncoder::copy_from_texture_to_buffer` (runtime): with `BlitOption::NONE` |
+| `MTLBlitCommandEncoder.synchronizeTexture:slice:level:` (deprecated) | method | missing | S: one slice and level of `BlitCommandEncoder::synchronize_resource` |
+| `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | method | implemented | `BlitCommandEncoder::copy_from_texture` (runtime) |
+| `MTLBlitCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` | method | implemented | `BlitCommandEncoder::copy_from_buffer` (runtime) |
+| `MTLBlitCommandEncoder.copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:options:` | method | implemented | `BlitCommandEncoder::copy_from_buffer` (runtime): with no option |
+| `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:` | method | implemented | `BlitCommandEncoder::copy_from_texture_to_buffer` (runtime) |
 | `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:` | method | implemented | `BlitCommandEncoder::copy_from_texture_to_buffer` (runtime) |
 | `MTLBlitCommandEncoder.generateMipmapsForTexture:` | method | implemented | `BlitCommandEncoder::generate_mipmaps` (runtime) |
 | `MTLBlitCommandEncoder.fillBuffer:range:value:` | method | implemented | `BlitCommandEncoder::fill_buffer` (runtime) |
-| `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.copyFromTexture:toTexture:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:` | method | missing | S: whole slices and levels, as copies `BlitCommandEncoder::copy_from_texture` makes |
+| `MTLBlitCommandEncoder.copyFromTexture:toTexture:` | method | missing | S: every slice and level, as copies `BlitCommandEncoder::copy_from_texture` makes |
 | `MTLBlitCommandEncoder.copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:` | method | implemented | `BlitCommandEncoder::copy_from_buffer_to_buffer` (runtime) |
 | `MTLBlitCommandEncoder.updateFence:` | method | implemented | `BlitCommandEncoder::update_fence` (runtime) |
 | `MTLBlitCommandEncoder.waitForFence:` | method | implemented | `BlitCommandEncoder::wait_for_fence` (runtime) |
-| `MTLBlitCommandEncoder.getTextureAccessCounters:region:mipLevel:slice:resetCounters:countersBuffer:countersBufferOffset:` (deprecated) | method | missing | L: not scheduled: Metal's counts are its texture hardware's units, nondeterministic, and differ between an M3 Max and an M4, so no exact answer exists (`RuntimeGap::TextureAccessCounters`) |
-| `MTLBlitCommandEncoder.resetTextureAccessCounters:region:mipLevel:slice:` (deprecated) | method | missing | L: as `getTextureAccessCounters:...` (`RuntimeGap::TextureAccessCounters`) |
-| `MTLBlitCommandEncoder.optimizeContentsForGPUAccess:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.optimizeContentsForGPUAccess:slice:level:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.optimizeContentsForCPUAccess:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.optimizeContentsForCPUAccess:slice:level:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLBlitCommandEncoder.resetCommandsInBuffer:withRange:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLBlitCommandEncoder.copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLBlitCommandEncoder.optimizeIndirectCommandBuffer:withRange:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
+| `MTLBlitCommandEncoder.getTextureAccessCounters:region:mipLevel:slice:resetCounters:countersBuffer:countersBufferOffset:` (deprecated) | method | missing | L: not scheduled: Metal's counts are its texture hardware's units, nondeterministic, and differ between an M3 Max and an M4, so no exact answer exists |
+| `MTLBlitCommandEncoder.resetTextureAccessCounters:region:mipLevel:slice:` (deprecated) | method | missing | L: as `getTextureAccessCounters:...` |
+| `MTLBlitCommandEncoder.optimizeContentsForGPUAccess:` | method | missing | S: an encoder call metal2vulkan-rt does not build |
+| `MTLBlitCommandEncoder.optimizeContentsForGPUAccess:slice:level:` | method | missing | S: an encoder call metal2vulkan-rt does not build |
+| `MTLBlitCommandEncoder.optimizeContentsForCPUAccess:` | method | missing | S: an encoder call metal2vulkan-rt does not build |
+| `MTLBlitCommandEncoder.optimizeContentsForCPUAccess:slice:level:` | method | missing | S: an encoder call metal2vulkan-rt does not build |
+| `MTLBlitCommandEncoder.resetCommandsInBuffer:withRange:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLBlitCommandEncoder.copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLBlitCommandEncoder.optimizeIndirectCommandBuffer:withRange:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
 | `MTLBlitCommandEncoder.sampleCountersInBuffer:atSampleIndex:withBarrier:` | method | missing | M: counter sample buffers |
 | `MTLBlitCommandEncoder.resolveCounters:inRange:destinationBuffer:destinationOffset:` | method | missing | M: counter sample buffers |
 | `MTLBlitCommandEncoder.copyFromTensor:sourceOrigin:sourceDimensions:toTensor:destinationOrigin:destinationDimensions:` | method | missing | L: tensors |
@@ -1069,16 +1069,16 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLBlitPassSampleBufferAttachmentDescriptor` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLBlitPassSampleBufferAttachmentDescriptor.sampleBuffer` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLBlitPassSampleBufferAttachmentDescriptor.startOfEncoderSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLBlitPassSampleBufferAttachmentDescriptor.endOfEncoderSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLBlitPassSampleBufferAttachmentDescriptorArray` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLBlitPassSampleBufferAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLBlitPassSampleBufferAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLBlitPassSampleBufferAttachmentDescriptor` | class | missing | M: counter sample buffers |
+| `MTLBlitPassSampleBufferAttachmentDescriptor.sampleBuffer` | property | missing | M: counter sample buffers |
+| `MTLBlitPassSampleBufferAttachmentDescriptor.startOfEncoderSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLBlitPassSampleBufferAttachmentDescriptor.endOfEncoderSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLBlitPassSampleBufferAttachmentDescriptorArray` | class | missing | M: counter sample buffers |
+| `MTLBlitPassSampleBufferAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | M: counter sample buffers |
+| `MTLBlitPassSampleBufferAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | M: counter sample buffers |
 | `MTLBlitPassDescriptor` | class | missing | S: see `blitCommandEncoderWithDescriptor:` |
 | `MTLBlitPassDescriptor.blitPassDescriptor` | class method | missing | S: see `blitCommandEncoderWithDescriptor:` |
-| `MTLBlitPassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLBlitPassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers |
 
 ### MTLBuffer.h
 
@@ -1145,8 +1145,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLCommandBufferEncoderInfo.debugSignposts` | property | missing | M: encoder execution status |
 | `MTLCommandBufferEncoderInfo.errorState` | property | missing | M: encoder execution status |
 | `MTLCommandBuffer` | protocol | implemented | `CommandBuffer` (runtime) |
-| `MTLCommandBuffer.device` | property | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLCommandBuffer.commandQueue` | property | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLCommandBuffer.device` | property | missing | S: a query metal2vulkan-rt does not answer |
+| `MTLCommandBuffer.commandQueue` | property | missing | S: a query metal2vulkan-rt does not answer |
 | `MTLCommandBuffer.retainedReferences` | property | missing | S: YES for every runtime command buffer (it retains what it uses) |
 | `MTLCommandBuffer.errorOptions` | property | missing | M: encoder execution status (`MTLCommandBufferErrorOptionEncoderExecutionStatus`): which encoder faulted, in the error's `encoderInfos` |
 | `MTLCommandBuffer.label` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
@@ -1155,7 +1155,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLCommandBuffer.logs` | property | missing | M: shader logging |
 | `MTLCommandBuffer.GPUStartTime` | property | implemented | `CommandBuffer::gpu_start_time` (runtime) |
 | `MTLCommandBuffer.GPUEndTime` | property | implemented | `CommandBuffer::gpu_end_time` (runtime) |
-| `MTLCommandBuffer.enqueue` | method | missing | S: reserving the command buffer's place in its queue before commit |
+| `MTLCommandBuffer.enqueue` | method | implemented | `CommandBuffer::enqueue` (runtime) |
 | `MTLCommandBuffer.commit` | method | implemented | `CommandBuffer::commit` (runtime) |
 | `MTLCommandBuffer.addScheduledHandler:` | method | implemented | `CommandBuffer::add_scheduled_handler` (runtime) |
 | `MTLCommandBuffer.presentDrawable:` | method | out of scope | presentation: no drawables; the consumer presents the Vulkan image |
@@ -1206,7 +1206,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLCommandQueue.device` | property | implemented | `CommandQueue::device` (runtime) |
 | `MTLCommandQueue.commandBuffer` | method | implemented | `CommandQueue::command_buffer` (runtime) |
 | `MTLCommandQueue.commandBufferWithDescriptor:` | method | missing | S: the descriptor's retained references and error options (log state is shader logging's) |
-| `MTLCommandQueue.commandBufferWithUnretainedReferences` | method | missing | S: the runtime retains what a command buffer uses until it completes, which every valid program also gets from unretained references; only `retainedReferences` would answer NO |
+| `MTLCommandQueue.commandBufferWithUnretainedReferences` | method | implemented | `CommandQueue::command_buffer` (runtime): the same call |
 | `MTLCommandQueue.insertDebugCaptureBoundary` (deprecated) | method | missing | S: deprecated capture boundary (GPU capture) |
 | `MTLCommandQueue.addResidencySet:` | method | missing | M: residency sets |
 | `MTLCommandQueue.addResidencySets:count:` | method | missing | M: residency sets |
@@ -1226,56 +1226,56 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputeCommandEncoder.setBytes:length:atIndex:` | method | implemented | `ComputeCommandEncoder::set_bytes` (runtime): copied at the call; more than 4096 bytes refused |
 | `MTLComputeCommandEncoder.setBuffer:offset:atIndex:` | method | implemented | `ComputeCommandEncoder::set_buffer` (runtime) |
 | `MTLComputeCommandEncoder.setBufferOffset:atIndex:` | method | implemented | `ComputeCommandEncoder::set_buffer_offset` (runtime) |
-| `MTLComputeCommandEncoder.setBuffers:offsets:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLComputeCommandEncoder.setBuffer:offset:attributeStride:atIndex:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLComputeCommandEncoder.setBuffers:offsets:attributeStrides:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLComputeCommandEncoder.setBufferOffset:attributeStride:atIndex:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLComputeCommandEncoder.setBytes:length:attributeStride:atIndex:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLComputeCommandEncoder.setVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLComputeCommandEncoder.setVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLComputeCommandEncoder.setBuffers:offsets:withRange:` | method | implemented | `ComputeCommandEncoder::set_buffer` (runtime): a loop of it |
+| `MTLComputeCommandEncoder.setBuffer:offset:attributeStride:atIndex:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
+| `MTLComputeCommandEncoder.setBuffers:offsets:attributeStrides:withRange:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
+| `MTLComputeCommandEncoder.setBufferOffset:attributeStride:atIndex:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
+| `MTLComputeCommandEncoder.setBytes:length:attributeStride:atIndex:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
+| `MTLComputeCommandEncoder.setVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLComputeCommandEncoder.setVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLComputeCommandEncoder.setIntersectionFunctionTable:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLComputeCommandEncoder.setIntersectionFunctionTables:withBufferRange:` | method | out of scope | ray tracing |
 | `MTLComputeCommandEncoder.setAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLComputeCommandEncoder.setTexture:atIndex:` | method | implemented | `ComputeCommandEncoder::set_texture` (runtime) |
-| `MTLComputeCommandEncoder.setTextures:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLComputeCommandEncoder.setTextures:withRange:` | method | implemented | `ComputeCommandEncoder::set_texture` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.setSamplerState:atIndex:` | method | implemented | `ComputeCommandEncoder::set_sampler_state` (runtime) |
-| `MTLComputeCommandEncoder.setSamplerStates:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLComputeCommandEncoder.setSamplerStates:withRange:` | method | implemented | `ComputeCommandEncoder::set_sampler_state` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.setSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `ComputeCommandEncoder::set_sampler_state` (runtime) |
-| `MTLComputeCommandEncoder.setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLComputeCommandEncoder.setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | implemented | `ComputeCommandEncoder::set_sampler_state_with_lod_clamps` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.setThreadgroupMemoryLength:atIndex:` | method | implemented | `ComputeCommandEncoder::set_threadgroup_memory_length` (runtime) |
-| `MTLComputeCommandEncoder.setImageblockWidth:height:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLComputeCommandEncoder.setImageblockWidth:height:` | method | missing | M: explicit imageblocks; a kernel that declares one is refused (`Gap::KernelInput`) |
 | `MTLComputeCommandEncoder.setStageInRegion:` | method | implemented | `ComputeCommandEncoder::set_stage_in_region` (runtime) |
-| `MTLComputeCommandEncoder.setStageInRegionWithIndirectBuffer:indirectBufferOffset:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLComputeCommandEncoder.setStageInRegionWithIndirectBuffer:indirectBufferOffset:` | method | missing | M: a stage-in region the GPU reads |
 | `MTLComputeCommandEncoder.dispatchThreadgroups:threadsPerThreadgroup:` | method | implemented | `ComputeCommandEncoder::dispatch_threadgroups` (runtime) |
 | `MTLComputeCommandEncoder.dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:` | method | implemented | `ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer` (runtime) |
 | `MTLComputeCommandEncoder.dispatchThreads:threadsPerThreadgroup:` | method | implemented | `ComputeCommandEncoder::dispatch_threads` (runtime) |
 | `MTLComputeCommandEncoder.updateFence:` | method | implemented | `ComputeCommandEncoder::update_fence` (runtime) |
 | `MTLComputeCommandEncoder.waitForFence:` | method | implemented | `ComputeCommandEncoder::wait_for_fence` (runtime) |
 | `MTLComputeCommandEncoder.useResource:usage:` | method | implemented | `ComputeCommandEncoder::use_resource` (runtime) |
-| `MTLComputeCommandEncoder.useResources:count:usage:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLComputeCommandEncoder.useResources:count:usage:` | method | implemented | `ComputeCommandEncoder::use_resource` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.useHeap:` | method | implemented | `ComputeCommandEncoder::use_heap` (runtime) |
-| `MTLComputeCommandEncoder.useHeaps:count:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLComputeCommandEncoder.executeCommandsInBuffer:withRange:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLComputeCommandEncoder.executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLComputeCommandEncoder.memoryBarrierWithScope:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLComputeCommandEncoder.memoryBarrierWithResources:count:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLComputeCommandEncoder.useHeaps:count:` | method | implemented | `ComputeCommandEncoder::use_heap` (runtime): a loop of it |
+| `MTLComputeCommandEncoder.executeCommandsInBuffer:withRange:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLComputeCommandEncoder.executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLComputeCommandEncoder.memoryBarrierWithScope:` | method | implemented | `ComputeCommandEncoder::memory_barrier` (runtime): one global memory barrier |
+| `MTLComputeCommandEncoder.memoryBarrierWithResources:count:` | method | implemented | `ComputeCommandEncoder::memory_barrier` (runtime): one global memory barrier |
 | `MTLComputeCommandEncoder.sampleCountersInBuffer:atSampleIndex:withBarrier:` | method | missing | M: counter sample buffers |
 
 ### MTLComputePass.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLComputePassSampleBufferAttachmentDescriptor` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLComputePassSampleBufferAttachmentDescriptor.sampleBuffer` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLComputePassSampleBufferAttachmentDescriptor.startOfEncoderSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLComputePassSampleBufferAttachmentDescriptor.endOfEncoderSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLComputePassSampleBufferAttachmentDescriptorArray` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLComputePassSampleBufferAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLComputePassSampleBufferAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLComputePassSampleBufferAttachmentDescriptor` | class | missing | M: counter sample buffers |
+| `MTLComputePassSampleBufferAttachmentDescriptor.sampleBuffer` | property | missing | M: counter sample buffers |
+| `MTLComputePassSampleBufferAttachmentDescriptor.startOfEncoderSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLComputePassSampleBufferAttachmentDescriptor.endOfEncoderSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLComputePassSampleBufferAttachmentDescriptorArray` | class | missing | M: counter sample buffers |
+| `MTLComputePassSampleBufferAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | M: counter sample buffers |
+| `MTLComputePassSampleBufferAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | M: counter sample buffers |
 | `MTLComputePassDescriptor` | class | missing | S: see `computeCommandEncoderWithDescriptor:` |
 | `MTLComputePassDescriptor.computePassDescriptor` | class method | missing | S: see `computeCommandEncoderWithDescriptor:` |
 | `MTLComputePassDescriptor.dispatchType` | property | missing | S: see `computeCommandEncoderWithDescriptor:` |
-| `MTLComputePassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLComputePassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers |
 
 ### MTLComputePipeline.h
 
@@ -1299,17 +1299,17 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputePipelineDescriptor.linkedFunctions` | property | implemented | `FunctionDescriptor.linked` (translator) |
 | `MTLComputePipelineDescriptor.supportAddingBinaryFunctions` | property | implemented | `ComputePipelineDescriptor.support_adding_binary_functions` (translator) |
 | `MTLComputePipelineDescriptor.maxCallStackDepth` | property | implemented | `ComputePipelineDescriptor.max_call_stack_depth` (translator) |
-| `MTLComputePipelineDescriptor.shaderValidation` | property | missing | L: shader validation (`RuntimeGap::ShaderValidation`, not scheduled) |
+| `MTLComputePipelineDescriptor.shaderValidation` | property | missing | L: shader validation (not scheduled) |
 | `MTLComputePipelineDescriptor.requiredThreadsPerThreadgroup` | property | implemented | `ComputePipelineDescriptor.required_threads_per_threadgroup` (translator) |
 | `MTLComputePipelineDescriptor.forwardProgressUsage` | property | missing | L: persistent kernels (macOS 27): forward progress and contention hints, unmeasured |
 | `MTLComputePipelineDescriptor.contentionRelief` | property | missing | L: persistent kernels (macOS 27): forward progress and contention hints, unmeasured |
 | `MTLComputePipelineDescriptor.optimizeForPersistentKernel` | property | missing | L: persistent kernels (macOS 27): forward progress and contention hints, unmeasured |
 | `MTLComputePipelineState` | protocol | implemented | `ComputePipelineState` (runtime) |
 | `MTLComputePipelineState.label` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
-| `MTLComputePipelineState.reflection` | property | missing | S: the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler; the runtime gives the creation's answer at creation (`new_compute_pipeline_state_with_reflection`) and after it (`ComputePipelineState::compiled_reflection`) |
-| `MTLComputePipelineState.functionHandleWithName:` | method | missing | S: a handle by function name; the runtime takes the `Function` (`ComputePipelineState::function_handle`) |
-| `MTLComputePipelineState.functionHandleWithBinaryFunction:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLComputePipelineState.newComputePipelineStateWithBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLComputePipelineState.reflection` | property | missing | S: the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler |
+| `MTLComputePipelineState.functionHandleWithName:` | method | missing | S: a handle by function name |
+| `MTLComputePipelineState.functionHandleWithBinaryFunction:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLComputePipelineState.newComputePipelineStateWithBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLComputePipelineState.device` | property | missing | S: a query or call metal2vulkan-rt does not answer |
 | `MTLComputePipelineState.maxTotalThreadsPerThreadgroup` | property | implemented | `ComputePipelineState::max_total_threads_per_threadgroup` (runtime) |
 | `MTLComputePipelineState.threadExecutionWidth` | property | implemented | `ComputePipelineState::thread_execution_width` (runtime) |
@@ -1317,11 +1317,11 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputePipelineState.imageblockMemoryLengthForDimensions:` | method | implemented | `ComputePipelineState::imageblock_memory_length_for_dimensions` (runtime) |
 | `MTLComputePipelineState.supportIndirectCommandBuffers` | property | implemented | `ComputePipelineState::support_indirect_command_buffers` (runtime) |
 | `MTLComputePipelineState.gpuResourceID` | property | missing | S: a query or call metal2vulkan-rt does not answer |
-| `MTLComputePipelineState.functionHandleWithFunction:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLComputePipelineState.newComputePipelineStateWithAdditionalBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLComputePipelineState.newVisibleFunctionTableWithDescriptor:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLComputePipelineState.functionHandleWithFunction:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLComputePipelineState.newComputePipelineStateWithAdditionalBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLComputePipelineState.newVisibleFunctionTableWithDescriptor:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLComputePipelineState.newIntersectionFunctionTableWithDescriptor:` | method | out of scope | ray tracing |
-| `MTLComputePipelineState.shaderValidation` | property | missing | L: shader validation (`RuntimeGap::ShaderValidation`, not scheduled) |
+| `MTLComputePipelineState.shaderValidation` | property | missing | L: shader validation (not scheduled) |
 | `MTLComputePipelineState.requiredThreadsPerThreadgroup` | property | implemented | `ComputePipelineState::required_threads_per_threadgroup` (runtime) |
 | `MTLComputePipelineState.recommendedPersistentThreadgroupsPerGridForThreadsPerThreadgroup:` | method | missing | L: persistent kernels (macOS 27) |
 | `MTLComputePipelineState.forwardProgressUsage` | property | missing | L: persistent kernels (macOS 27) |
@@ -1330,21 +1330,21 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLCounter` | protocol | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounter.name` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSet` | protocol | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSet.name` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSet.counters` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBufferDescriptor` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBufferDescriptor.counterSet` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBufferDescriptor.label` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBufferDescriptor.storageMode` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBufferDescriptor.sampleCount` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBuffer` | protocol | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBuffer.device` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBuffer.label` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBuffer.sampleCount` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLCounterSampleBuffer.resolveCounterRange:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLCounter` | protocol | missing | M: counter sample buffers |
+| `MTLCounter.name` | property | missing | M: counter sample buffers |
+| `MTLCounterSet` | protocol | missing | M: counter sample buffers |
+| `MTLCounterSet.name` | property | missing | M: counter sample buffers |
+| `MTLCounterSet.counters` | property | missing | M: counter sample buffers |
+| `MTLCounterSampleBufferDescriptor` | class | missing | M: counter sample buffers |
+| `MTLCounterSampleBufferDescriptor.counterSet` | property | missing | M: counter sample buffers |
+| `MTLCounterSampleBufferDescriptor.label` | property | missing | M: counter sample buffers |
+| `MTLCounterSampleBufferDescriptor.storageMode` | property | missing | M: counter sample buffers |
+| `MTLCounterSampleBufferDescriptor.sampleCount` | property | missing | M: counter sample buffers |
+| `MTLCounterSampleBuffer` | protocol | missing | M: counter sample buffers |
+| `MTLCounterSampleBuffer.device` | property | missing | M: counter sample buffers |
+| `MTLCounterSampleBuffer.label` | property | missing | M: counter sample buffers |
+| `MTLCounterSampleBuffer.sampleCount` | property | missing | M: counter sample buffers |
+| `MTLCounterSampleBuffer.resolveCounterRange:` | method | missing | M: counter sample buffers |
 
 ### MTLDepthStencil.h
 
@@ -1401,13 +1401,13 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.rasterOrderGroupsSupported` | property | missing | S: a query or call metal2vulkan-rt does not answer |
 | `MTLDevice.supports32BitFloatFiltering` | property | missing | S: a query or call metal2vulkan-rt does not answer |
 | `MTLDevice.supports32BitMSAA` | property | missing | S: a query or call metal2vulkan-rt does not answer |
-| `MTLDevice.supportsQueryTextureLOD` | property | missing | S: capability query; the family rows hold the answer (`FeatureRow::QueryTextureLod`) |
-| `MTLDevice.supportsBCTextureCompression` | property | missing | S: capability query; the family rows hold the answer (`FeatureRow::BcPixelFormats`) |
+| `MTLDevice.supportsQueryTextureLOD` | property | missing | S: capability query |
+| `MTLDevice.supportsBCTextureCompression` | property | missing | S: capability query |
 | `MTLDevice.supportsPullModelInterpolation` | property | missing | S: a query or call metal2vulkan-rt does not answer |
 | `MTLDevice.barycentricCoordsSupported` (deprecated) | property | missing | S: capability query (deprecated name of the next) |
-| `MTLDevice.supportsShaderBarycentricCoordinates` | property | missing | S: capability query; the family rows hold the answer (`FeatureRow::BarycentricCoordinates`) |
+| `MTLDevice.supportsShaderBarycentricCoordinates` | property | missing | S: capability query |
 | `MTLDevice.currentAllocatedSize` | property | missing | S: the runtime's sub-allocator knows the total |
-| `MTLDevice.newLogStateWithDescriptor:error:` | method | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
+| `MTLDevice.newLogStateWithDescriptor:error:` | method | missing | M: shader logging |
 | `MTLDevice.newCommandQueue` | method | implemented | `Device::new_command_queue` (runtime) |
 | `MTLDevice.newCommandQueueWithMaxCommandBufferCount:` | method | implemented | `Device::new_command_queue` (runtime) |
 | `MTLDevice.newCommandQueueWithDescriptor:` | method | missing | S: the descriptor form of `new_command_queue_with_max_command_buffer_count` |
@@ -1415,8 +1415,8 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.heapBufferSizeAndAlignWithLength:options:` | method | implemented | `Device::heap_buffer_size_and_align` (runtime) |
 | `MTLDevice.newHeapWithDescriptor:` | method | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLDevice.newBufferWithLength:options:` | method | implemented | `Device::new_buffer` (runtime) |
-| `MTLDevice.newBufferWithBytes:length:options:` | method | missing | S: a buffer creation form metal2vulkan-rt does not take |
-| `MTLDevice.newBufferWithBytesNoCopy:length:options:deallocator:` | method | missing | S: a buffer creation form metal2vulkan-rt does not take |
+| `MTLDevice.newBufferWithBytes:length:options:` | method | missing | S: a buffer made with bytes; Managed: `Device::new_managed_buffer` |
+| `MTLDevice.newBufferWithBytesNoCopy:length:options:deallocator:` | method | implemented | `Device::import_host_memory, Device::new_buffer` (runtime): a block over the bytes, and a buffer in it; Managed: Device::new_managed_buffer |
 | `MTLDevice.newDepthStencilStateWithDescriptor:` | method | implemented | `Device::new_depth_stencil_state` (runtime) |
 | `MTLDevice.newTextureWithDescriptor:` | method | implemented | `Device::new_texture` (runtime) |
 | `MTLDevice.newTextureWithDescriptor:iosurface:plane:` | method | out of scope | IOSurface is the consumer's; the runtime offers the plane over a no-copy buffer |
@@ -1427,9 +1427,9 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.newDefaultLibraryWithBundle:error:` | method | out of scope | an `NSBundle`'s `default.metallib`: bundles are macOS's |
 | `MTLDevice.newLibraryWithFile:error:` (deprecated) | method | missing | S: a metallib read from a path |
 | `MTLDevice.newLibraryWithURL:error:` | method | missing | S: a metallib read from a file URL |
-| `MTLDevice.newLibraryWithData:error:` | method | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLDevice.newLibraryWithSource:options:error:` | method | out of scope | MSL source compiles: shaders come in as metallib or AIR; `Device::new_library_with_source` refuses every source typed, `NotImplemented(LibrarySource)` |
-| `MTLDevice.newLibraryWithSource:options:completionHandler:` | method | out of scope | MSL source compiles; refused typed as `newLibraryWithSource:options:error:` is (`Device::new_library_with_source`) |
+| `MTLDevice.newLibraryWithData:error:` | method | implemented | `Library::from_metallib` (translator): the consumer holds the library |
+| `MTLDevice.newLibraryWithSource:options:error:` | method | out of scope | MSL source compiles: shaders come in as metallib or AIR |
+| `MTLDevice.newLibraryWithSource:options:completionHandler:` | method | out of scope | MSL source compiles, as `newLibraryWithSource:options:error:` |
 | `MTLDevice.newLibraryWithStitchedDescriptor:error:` | method | missing | L: function stitching |
 | `MTLDevice.newLibraryWithStitchedDescriptor:completionHandler:` | method | missing | L: function stitching |
 | `MTLDevice.newRenderPipelineStateWithDescriptor:error:` | method | implemented | `Device::new_render_pipeline_state` (runtime) |
@@ -1447,7 +1447,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.supportsFamily:` | method | missing | S: a query or call metal2vulkan-rt does not answer |
 | `MTLDevice.supportsTextureSampleCount:` | method | implemented | `Device::supports_texture_sample_count` (runtime) |
 | `MTLDevice.minimumLinearTextureAlignmentForPixelFormat:` | method | implemented | `Device::minimum_linear_texture_alignment` (runtime) |
-| `MTLDevice.minimumTextureBufferAlignmentForPixelFormat:` | method | missing | S: the alignment `Buffer::new_texture` checks a texture buffer's offset against |
+| `MTLDevice.minimumTextureBufferAlignmentForPixelFormat:` | method | missing | S: a texture buffer's offset alignment; a texture buffer is refused (`Gap::TextureBuffer`) |
 | `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:reflection:error:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLDevice.newRenderPipelineStateWithTileDescriptor:options:completionHandler:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLDevice.newRenderPipelineStateWithMeshDescriptor:options:reflection:error:` | method | missing | L: mesh render pipelines; metal2vulkan-rt makes none |
@@ -1459,14 +1459,14 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.newArgumentEncoderWithArguments:` | method | missing | M: argument encoders |
 | `MTLDevice.supportsRasterizationRateMapWithLayerCount:` | method | missing | L: rasterization rate maps; the render pass descriptor has no field for one |
 | `MTLDevice.newRasterizationRateMapWithDescriptor:` | method | missing | L: rasterization rate maps; the render pass descriptor has no field for one |
-| `MTLDevice.newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
+| `MTLDevice.newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
 | `MTLDevice.newEvent` | method | implemented | `Device::new_event` (runtime) |
 | `MTLDevice.newSharedEvent` | method | implemented | `Device::new_shared_event` (runtime) |
 | `MTLDevice.newSharedEventWithHandle:` | method | missing | M: texture and event handles shared across processes |
 | `MTLDevice.peerGroupID` (deprecated) | property | missing | S: deprecated multi-GPU query; Apple silicon answers 0 |
 | `MTLDevice.peerIndex` (deprecated) | property | missing | S: deprecated multi-GPU query; Apple silicon answers 0 |
 | `MTLDevice.peerCount` (deprecated) | property | missing | S: deprecated multi-GPU query; Apple silicon answers 1 |
-| `MTLDevice.newIOHandleWithURL:error:` (deprecated) | method | missing | L: fast resource loading (`RuntimeGap::IoCommandQueues`) |
+| `MTLDevice.newIOHandleWithURL:error:` (deprecated) | method | missing | L: fast resource loading |
 | `MTLDevice.newIOCommandQueueWithDescriptor:error:` | method | missing | L: fast resource loading |
 | `MTLDevice.newIOHandleWithURL:compressionMethod:error:` (deprecated) | method | missing | L: fast resource loading |
 | `MTLDevice.newIOFileHandleWithURL:error:` | method | missing | L: fast resource loading |
@@ -1477,17 +1477,17 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.convertSparseTileRegions:toPixelRegions:withTileSize:numRegions:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLDevice.sparseTileSizeInBytesForSparsePageSize:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLDevice.sparseTileSizeWithTextureType:pixelFormat:sampleCount:sparsePageSize:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
-| `MTLDevice.maxBufferLength` | property | missing | S: a query or call metal2vulkan-rt does not answer |
+| `MTLDevice.maxBufferLength` | property | out of scope | the consumer's: it states one no larger than `MAX_BUFFER_LENGTH` (metal2vulkan-rt's README, Memory blocks and buffers) |
 | `MTLDevice.counterSets` | property | missing | S: counter sets; the runtime samples none, so an empty list would be its answer |
-| `MTLDevice.newCounterSampleBufferWithDescriptor:error:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLDevice.newCounterSampleBufferWithDescriptor:error:` | method | missing | M: counter sample buffers |
 | `MTLDevice.sampleTimestamps:gpuTimestamp:` | method | missing | S: a CPU and GPU timestamp pair in the time base of `CommandBuffer::gpu_start_time` |
 | `MTLDevice.newArgumentEncoderWithBufferBinding:` | method | missing | M: argument encoders |
 | `MTLDevice.supportsCounterSampling:` | method | missing | S: the runtime samples no counters, so NO would be its answer |
 | `MTLDevice.supportsVertexAmplificationCount:` | method | missing | S: a query or call metal2vulkan-rt does not answer |
-| `MTLDevice.supportsDynamicLibraries` | property | missing | S: capability query (`FeatureRow::ComputeDynamicLibraries`) |
-| `MTLDevice.supportsRenderDynamicLibraries` | property | missing | S: capability query (`FeatureRow::RenderDynamicLibraries`) |
-| `MTLDevice.newDynamicLibrary:error:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLDevice.newDynamicLibraryWithURL:error:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLDevice.supportsDynamicLibraries` | property | missing | S: capability query |
+| `MTLDevice.supportsRenderDynamicLibraries` | property | missing | S: capability query |
+| `MTLDevice.newDynamicLibrary:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLDevice.newDynamicLibraryWithURL:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLDevice.newBinaryArchiveWithDescriptor:error:` | method | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLDevice.supportsPlacementSparse` | property | missing | S: capability query; the runtime makes no placement-sparse buffers, so NO |
 | `MTLDevice.supportsRaytracing` | property | missing | S: capability query: the runtime builds no ray tracing, so NO is its answer (the query, not ray tracing) |
@@ -1496,13 +1496,13 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.newAccelerationStructureWithDescriptor:` | method | out of scope | ray tracing |
 | `MTLDevice.heapAccelerationStructureSizeAndAlignWithSize:` | method | out of scope | ray tracing |
 | `MTLDevice.heapAccelerationStructureSizeAndAlignWithDescriptor:` | method | out of scope | ray tracing |
-| `MTLDevice.supportsFunctionPointers` | property | missing | S: capability query (`FeatureRow::FunctionPointersCompute`) |
-| `MTLDevice.supportsFunctionPointersFromRender` | property | missing | S: capability query (`FeatureRow::FunctionPointersRender`) |
+| `MTLDevice.supportsFunctionPointers` | property | missing | S: capability query |
+| `MTLDevice.supportsFunctionPointersFromRender` | property | missing | S: capability query |
 | `MTLDevice.supportsRaytracingFromRender` | property | missing | S: capability query: NO (as `supportsRaytracing`) |
 | `MTLDevice.supportsPrimitiveMotionBlur` | property | missing | S: capability query: NO (as `supportsRaytracing`) |
 | `MTLDevice.shouldMaximizeConcurrentCompilation` | property | missing | S: a compile-concurrency hint; the runtime compiles on the calling thread |
 | `MTLDevice.maximumConcurrentCompilationTaskCount` | property | missing | S: compile concurrency |
-| `MTLDevice.newResidencySetWithDescriptor:error:` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
+| `MTLDevice.newResidencySetWithDescriptor:error:` | method | missing | M: residency sets |
 | `MTLDevice.tensorSizeAndAlignWithDescriptor:` | method | missing | L: tensors |
 | `MTLDevice.newTensorWithDescriptor:error:` | method | missing | L: tensors |
 | `MTLDevice.newTensorWithDescriptor:attachments:error:` | method | missing | L: tensors |
@@ -1513,7 +1513,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.newMTL4CommandQueueWithDescriptor:error:` | method | missing | XL: Metal 4 |
 | `MTLDevice.newCommandBuffer` | method | missing | XL: Metal 4 |
 | `MTLDevice.newArgumentTableWithDescriptor:error:` | method | missing | XL: Metal 4 |
-| `MTLDevice.newTextureViewPoolWithDescriptor:error:` | method | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
+| `MTLDevice.newTextureViewPoolWithDescriptor:error:` | method | missing | M: texture view pools |
 | `MTLDevice.newCompilerWithDescriptor:error:` | method | missing | XL: Metal 4 |
 | `MTLDevice.newArchiveWithURL:error:` | method | missing | XL: Metal 4 |
 | `MTLDevice.newPipelineDataSetSerializerWithDescriptor:` | method | missing | XL: Metal 4 |
@@ -1522,10 +1522,10 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLDevice.sizeOfCounterHeapEntry:` | method | missing | L: Metal 4 counter heaps |
 | `MTLDevice.queryTimestampFrequency` | method | missing | S: the GPU timestamp frequency |
 | `MTLDevice.functionHandleWithBinaryFunction:` | method | missing | XL: Metal 4 |
-| `MTLCreateSystemDefaultDevice` | function | missing | S: a query or call metal2vulkan-rt does not answer |
-| `MTLCopyAllDevices` | function | missing | S: a query or call metal2vulkan-rt does not answer |
-| `MTLCopyAllDevicesWithObserver` (deprecated) | function | missing | M: device hot-plug notifications (`RuntimeGap::DeviceNotifications`, not scheduled) |
-| `MTLRemoveDeviceObserver` (deprecated) | function | missing | M: device hot-plug notifications (`RuntimeGap::DeviceNotifications`, not scheduled) |
+| `MTLCreateSystemDefaultDevice` | function | implemented | `Device::new` (runtime): for the physical device the consumer chose |
+| `MTLCopyAllDevices` | function | implemented | `Instance::physical_devices` (runtime) |
+| `MTLCopyAllDevicesWithObserver` (deprecated) | function | missing | M: device hot-plug notifications (not scheduled) |
+| `MTLRemoveDeviceObserver` (deprecated) | function | missing | M: device hot-plug notifications (not scheduled) |
 
 ### MTLDeviceCertification.h
 
@@ -1551,11 +1551,11 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLDynamicLibrary` | protocol | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLDynamicLibrary` | protocol | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLDynamicLibrary.label` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
-| `MTLDynamicLibrary.device` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLDynamicLibrary.installName` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLDynamicLibrary.serializeToURL:error:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLDynamicLibrary.device` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLDynamicLibrary.installName` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLDynamicLibrary.serializeToURL:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 
 ### MTLEvent.h
 
@@ -1599,12 +1599,12 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLFunctionDescriptor` | class | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunctionDescriptor.functionDescriptor` | class method | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunctionDescriptor.name` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
+| `MTLFunctionDescriptor` | class | implemented | `FunctionDescriptor` (translator) |
+| `MTLFunctionDescriptor.functionDescriptor` | class method | implemented | `FunctionDescriptor::new` (translator) |
+| `MTLFunctionDescriptor.name` | property | implemented | `Library::function, FunctionDescriptor.function` (translator): the function itself, by name |
 | `MTLFunctionDescriptor.specializedName` | property | missing | S: a specialized function's own name |
-| `MTLFunctionDescriptor.constantValues` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunctionDescriptor.options` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
+| `MTLFunctionDescriptor.constantValues` | property | implemented | `FunctionDescriptor.constants` (translator) |
+| `MTLFunctionDescriptor.options` | property | missing | S: a function's options (`MTLFunctionOptions`) |
 | `MTLFunctionDescriptor.binaryArchives` | property | missing | S: binary archives searched for one function's compile (`PipelineOptions.binary_archives` serves pipelines) |
 | `MTLIntersectionFunctionDescriptor` | class | out of scope | ray tracing |
 
@@ -1612,27 +1612,27 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLFunctionHandle` | protocol | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLFunctionHandle` | protocol | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLFunctionHandle.functionType` | property | missing | S: a handle's function type (the runtime's `FunctionHandle` names its function) |
-| `MTLFunctionHandle.name` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLFunctionHandle.device` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLFunctionHandle.name` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLFunctionHandle.device` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLFunctionHandle.gpuResourceID` | property | missing | S: a handle's resource ID |
 
 ### MTLFunctionLog.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLLogContainer` | protocol | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLogDebugLocation` | protocol | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLogDebugLocation.functionName` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLogDebugLocation.URL` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLogDebugLocation.line` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLogDebugLocation.column` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLog` | protocol | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLog.type` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLog.encoderLabel` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLog.function` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLFunctionLog.debugLocation` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
+| `MTLLogContainer` | protocol | missing | M: shader logging |
+| `MTLFunctionLogDebugLocation` | protocol | missing | M: shader logging |
+| `MTLFunctionLogDebugLocation.functionName` | property | missing | M: shader logging |
+| `MTLFunctionLogDebugLocation.URL` | property | missing | M: shader logging |
+| `MTLFunctionLogDebugLocation.line` | property | missing | M: shader logging |
+| `MTLFunctionLogDebugLocation.column` | property | missing | M: shader logging |
+| `MTLFunctionLog` | protocol | missing | M: shader logging |
+| `MTLFunctionLog.type` | property | missing | M: shader logging |
+| `MTLFunctionLog.encoderLabel` | property | missing | M: shader logging |
+| `MTLFunctionLog.function` | property | missing | M: shader logging |
+| `MTLFunctionLog.debugLocation` | property | missing | M: shader logging |
 
 ### MTLFunctionStitching.h
 
@@ -1700,127 +1700,127 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLIOCommandBuffer` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.addCompletedHandler:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.loadBytes:size:sourceHandle:sourceHandleOffset:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.loadBuffer:offset:size:sourceHandle:sourceHandleOffset:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.loadTexture:slice:level:size:sourceBytesPerRow:sourceBytesPerImage:destinationOrigin:sourceHandle:sourceHandleOffset:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.copyStatusToBuffer:offset:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.commit` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.waitUntilCompleted` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.tryCancel` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.addBarrier` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.pushDebugGroup:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.popDebugGroup` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.enqueue` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.waitForEvent:value:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.signalEvent:value:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.label` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.status` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandBuffer.error` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
+| `MTLIOCommandBuffer` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.addCompletedHandler:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.loadBytes:size:sourceHandle:sourceHandleOffset:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.loadBuffer:offset:size:sourceHandle:sourceHandleOffset:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.loadTexture:slice:level:size:sourceBytesPerRow:sourceBytesPerImage:destinationOrigin:sourceHandle:sourceHandleOffset:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.copyStatusToBuffer:offset:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.commit` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.waitUntilCompleted` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.tryCancel` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.addBarrier` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.pushDebugGroup:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.popDebugGroup` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.enqueue` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.waitForEvent:value:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.signalEvent:value:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.label` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.status` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandBuffer.error` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
 
 ### MTLIOCommandQueue.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLIOCommandQueue` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueue.enqueueBarrier` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueue.commandBuffer` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueue.commandBufferWithUnretainedReferences` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueue.label` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOScratchBuffer` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOScratchBuffer.buffer` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOScratchBufferAllocator` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOScratchBufferAllocator.newScratchBufferWithMinimumSize:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueueDescriptor` | class | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueueDescriptor.maxCommandBufferCount` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueueDescriptor.priority` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueueDescriptor.type` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueueDescriptor.maxCommandsInFlight` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCommandQueueDescriptor.scratchBufferAllocator` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOFileHandle` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOFileHandle.label` | property | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
+| `MTLIOCommandQueue` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueue.enqueueBarrier` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueue.commandBuffer` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueue.commandBufferWithUnretainedReferences` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueue.label` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOScratchBuffer` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOScratchBuffer.buffer` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOScratchBufferAllocator` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOScratchBufferAllocator.newScratchBufferWithMinimumSize:` | method | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueueDescriptor` | class | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueueDescriptor.maxCommandBufferCount` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueueDescriptor.priority` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueueDescriptor.type` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueueDescriptor.maxCommandsInFlight` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCommandQueueDescriptor.scratchBufferAllocator` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOFileHandle` | protocol | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOFileHandle.label` | property | missing | L: fast resource loading (`MTLIOCommandQueue`) |
 
 ### MTLIOCompressor.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLIOCompressionContextDefaultChunkSize` | function | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCreateCompressionContext` | function | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOCompressionContextAppendData` | function | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
-| `MTLIOFlushAndDestroyCompressionContext` | function | missing | L: fast resource loading (`MTLIOCommandQueue`, `RuntimeGap::IoCommandQueues`) |
+| `MTLIOCompressionContextDefaultChunkSize` | function | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCreateCompressionContext` | function | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOCompressionContextAppendData` | function | missing | L: fast resource loading (`MTLIOCommandQueue`) |
+| `MTLIOFlushAndDestroyCompressionContext` | function | missing | L: fast resource loading (`MTLIOCommandQueue`) |
 
 ### MTLIndirectCommandBuffer.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLIndirectCommandBufferDescriptor` | class | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.commandTypes` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.inheritPipelineState` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.inheritBuffers` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.inheritDepthStencilState` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.inheritDepthBias` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.inheritDepthClipMode` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.inheritCullMode` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.inheritFrontFacingWinding` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.inheritTriangleFillMode` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.maxVertexBufferBindCount` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.maxFragmentBufferBindCount` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.maxKernelBufferBindCount` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.maxKernelThreadgroupMemoryBindCount` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.maxObjectBufferBindCount` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.maxMeshBufferBindCount` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.maxObjectThreadgroupMemoryBindCount` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
+| `MTLIndirectCommandBufferDescriptor` | class | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.commandTypes` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.inheritPipelineState` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.inheritBuffers` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.inheritDepthStencilState` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.inheritDepthBias` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.inheritDepthClipMode` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.inheritCullMode` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.inheritFrontFacingWinding` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.inheritTriangleFillMode` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.maxVertexBufferBindCount` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.maxFragmentBufferBindCount` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.maxKernelBufferBindCount` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.maxKernelThreadgroupMemoryBindCount` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.maxObjectBufferBindCount` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.maxMeshBufferBindCount` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.maxObjectThreadgroupMemoryBindCount` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
 | `MTLIndirectCommandBufferDescriptor.supportRayTracing` | property | out of scope | ray tracing |
-| `MTLIndirectCommandBufferDescriptor.supportDynamicAttributeStride` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferDescriptor.supportColorAttachmentMapping` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBuffer` | protocol | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBuffer.size` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBuffer.gpuResourceID` | property | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBuffer.resetWithRange:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBuffer.indirectRenderCommandAtIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBuffer.indirectComputeCommandAtIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectCommandBufferExecutionRangeMake` | function | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
+| `MTLIndirectCommandBufferDescriptor.supportDynamicAttributeStride` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferDescriptor.supportColorAttachmentMapping` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBuffer` | protocol | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBuffer.size` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBuffer.gpuResourceID` | property | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBuffer.resetWithRange:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBuffer.indirectRenderCommandAtIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBuffer.indirectComputeCommandAtIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectCommandBufferExecutionRangeMake` | function | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
 
 ### MTLIndirectCommandEncoder.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLIndirectRenderCommand` | protocol | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setRenderPipelineState:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setVertexBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setFragmentBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setVertexBuffer:offset:attributeStride:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setObjectThreadgroupMemoryLength:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setObjectBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setMeshBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setBarrier` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.clearBarrier` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setDepthStencilState:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setDepthBias:slopeScale:clamp:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setDepthClipMode:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setCullMode:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setFrontFacingWinding:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.setTriangleFillMode:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectRenderCommand.reset` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand` | protocol | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.setComputePipelineState:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.setKernelBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.setKernelBuffer:offset:attributeStride:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.concurrentDispatchThreadgroups:threadsPerThreadgroup:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.concurrentDispatchThreads:threadsPerThreadgroup:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.setBarrier` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.clearBarrier` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.setImageblockWidth:height:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.reset` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.setThreadgroupMemoryLength:atIndex:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLIndirectComputeCommand.setStageInRegion:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
+| `MTLIndirectRenderCommand` | protocol | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setRenderPipelineState:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setVertexBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setFragmentBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setVertexBuffer:offset:attributeStride:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setObjectThreadgroupMemoryLength:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setObjectBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setMeshBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setBarrier` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.clearBarrier` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setDepthStencilState:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setDepthBias:slopeScale:clamp:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setDepthClipMode:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setCullMode:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setFrontFacingWinding:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.setTriangleFillMode:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectRenderCommand.reset` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand` | protocol | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.setComputePipelineState:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.setKernelBuffer:offset:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.setKernelBuffer:offset:attributeStride:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.concurrentDispatchThreadgroups:threadsPerThreadgroup:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.concurrentDispatchThreads:threadsPerThreadgroup:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.setBarrier` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.clearBarrier` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.setImageblockWidth:height:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.reset` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.setThreadgroupMemoryLength:atIndex:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLIndirectComputeCommand.setStageInRegion:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
 
 ### MTLIntersectionFunctionTable.h
 
@@ -1865,19 +1865,19 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLFunctionConstant.type` | property | implemented | `FunctionConstant::data_type` (translator) |
 | `MTLFunctionConstant.index` | property | implemented | `FunctionConstant::index` (translator) |
 | `MTLFunctionConstant.required` | property | implemented | `FunctionConstant::is_required` (translator) |
-| `MTLFunction` | protocol | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
+| `MTLFunction` | protocol | implemented | `Function` (translator) |
 | `MTLFunction.label` | property | missing | S: labels of samplers, depth/stencil states, functions, libraries and texture handles |
 | `MTLFunction.device` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
-| `MTLFunction.functionType` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunction.patchType` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunction.patchControlPointCount` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunction.vertexAttributes` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunction.stageInputAttributes` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunction.name` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLFunction.functionConstantsDictionary` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
+| `MTLFunction.functionType` | property | implemented | `Function::properties, FunctionProperties::function_type` (translator) |
+| `MTLFunction.patchType` | property | implemented | `Function::properties, FunctionProperties::patch_type` (translator) |
+| `MTLFunction.patchControlPointCount` | property | implemented | `Function::properties, FunctionProperties::patch_control_point_count` (translator) |
+| `MTLFunction.vertexAttributes` | property | implemented | `Function::properties, FunctionProperties::vertex_attributes` (translator) |
+| `MTLFunction.stageInputAttributes` | property | implemented | `Function::properties, FunctionProperties::stage_input_attributes` (translator) |
+| `MTLFunction.name` | property | implemented | `Function::info, FunctionInfo.name` (translator) |
+| `MTLFunction.functionConstantsDictionary` | property | implemented | `Function::function_constants_dictionary` (translator) |
 | `MTLFunction.newArgumentEncoderWithBufferIndex:` | method | missing | M: argument encoders |
 | `MTLFunction.newArgumentEncoderWithBufferIndex:reflection:` (deprecated) | method | missing | M: argument encoders |
-| `MTLFunction.options` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
+| `MTLFunction.options` | property | missing | S: a function's options (`MTLFunctionOptions`) |
 | `MTLCompileOptions` | class | out of scope | MSL source compiles: shaders come in as metallib or AIR |
 | `MTLCompileOptions.preprocessorMacros` | property | out of scope | MSL source compiles: shaders come in as metallib or AIR |
 | `MTLCompileOptions.fastMathEnabled` (deprecated) | property | out of scope | MSL source compiles: shaders come in as metallib or AIR |
@@ -1898,20 +1898,20 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLFunctionReflection` | class | implemented | `FunctionReflection` (translator) |
 | `MTLFunctionReflection.bindings` | property | implemented | `FunctionReflection::bindings` (translator) |
 | `MTLFunctionReflection.userAnnotation` | property | implemented | `FunctionReflection::user_annotation` (translator) |
-| `MTLLibrary` | protocol | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
+| `MTLLibrary` | protocol | implemented | `Library` (translator) |
 | `MTLLibrary.label` | property | missing | S: labels of samplers, depth/stencil states, functions, libraries and texture handles |
 | `MTLLibrary.device` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
-| `MTLLibrary.newFunctionWithName:` | method | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLLibrary.newFunctionWithName:constantValues:error:` | method | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLLibrary.newFunctionWithName:constantValues:completionHandler:` | method | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLLibrary.reflectionForFunctionWithName:` | method | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLLibrary.newFunctionWithDescriptor:completionHandler:` | method | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLLibrary.newFunctionWithDescriptor:error:` | method | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
+| `MTLLibrary.newFunctionWithName:` | method | implemented | `Library::function` (translator) |
+| `MTLLibrary.newFunctionWithName:constantValues:error:` | method | implemented | `Library::function, FunctionDescriptor.constants` (translator): the function with its constant values, in its stage's descriptor |
+| `MTLLibrary.newFunctionWithName:constantValues:completionHandler:` | method | implemented | `Library::function, FunctionDescriptor.constants` (translator): the function with its constant values, in its stage's descriptor |
+| `MTLLibrary.reflectionForFunctionWithName:` | method | implemented | `Library::function, Function::reflection` (translator) |
+| `MTLLibrary.newFunctionWithDescriptor:completionHandler:` | method | implemented | `FunctionDescriptor.specialized` (translator): the stage's descriptor, specialized |
+| `MTLLibrary.newFunctionWithDescriptor:error:` | method | implemented | `FunctionDescriptor.specialized` (translator): the stage's descriptor, specialized |
 | `MTLLibrary.newIntersectionFunctionWithDescriptor:completionHandler:` | method | out of scope | ray tracing |
 | `MTLLibrary.newIntersectionFunctionWithDescriptor:error:` | method | out of scope | ray tracing |
-| `MTLLibrary.functionNames` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLLibrary.type` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
-| `MTLLibrary.installName` | property | missing | M: libraries and functions as runtime objects; the consumer holds the translator's Library |
+| `MTLLibrary.functionNames` | property | implemented | `Library::functions, FunctionInfo.name` (translator) |
+| `MTLLibrary.type` | property | implemented | `Library::library_type` (translator) |
+| `MTLLibrary.installName` | property | implemented | `Library::install_name` (translator) |
 
 ### MTLLinkedFunctions.h
 
@@ -1928,11 +1928,11 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLLogState` | protocol | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLLogState.addLogHandler:` | method | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLLogStateDescriptor` | class | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLLogStateDescriptor.level` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
-| `MTLLogStateDescriptor.bufferSize` | property | missing | M: shader logging (`RuntimeGap::ShaderLogging`) |
+| `MTLLogState` | protocol | missing | M: shader logging |
+| `MTLLogState.addLogHandler:` | method | missing | M: shader logging |
+| `MTLLogStateDescriptor` | class | missing | M: shader logging |
+| `MTLLogStateDescriptor.level` | property | missing | M: shader logging |
+| `MTLLogStateDescriptor.bufferSize` | property | missing | M: shader logging |
 
 ### MTLParallelRenderCommandEncoder.h
 
@@ -2009,26 +2009,26 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.setVertexBytes:length:atIndex:` | method | implemented | `RenderCommandEncoder::set_vertex_bytes` (runtime): copied at the call; more than 4096 bytes refused |
 | `MTLRenderCommandEncoder.setVertexBuffer:offset:atIndex:` | method | implemented | `RenderCommandEncoder::set_vertex_buffer` (runtime) |
 | `MTLRenderCommandEncoder.setVertexBufferOffset:atIndex:` | method | implemented | `RenderCommandEncoder::set_vertex_buffer_offset` (runtime) |
-| `MTLRenderCommandEncoder.setVertexBuffers:offsets:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.setVertexBuffer:offset:attributeStride:atIndex:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.setVertexBuffers:offsets:attributeStrides:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.setVertexBufferOffset:attributeStride:atIndex:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.setVertexBytes:length:attributeStride:atIndex:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setVertexBuffers:offsets:withRange:` | method | implemented | `RenderCommandEncoder::set_vertex_buffer` (runtime): a loop of it |
+| `MTLRenderCommandEncoder.setVertexBuffer:offset:attributeStride:atIndex:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
+| `MTLRenderCommandEncoder.setVertexBuffers:offsets:attributeStrides:withRange:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
+| `MTLRenderCommandEncoder.setVertexBufferOffset:attributeStride:atIndex:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
+| `MTLRenderCommandEncoder.setVertexBytes:length:attributeStride:atIndex:` | method | missing | M: a bind with a per-bind stride, which stage-in and vertex fetch read |
 | `MTLRenderCommandEncoder.setVertexTexture:atIndex:` | method | implemented | `RenderCommandEncoder::set_vertex_texture` (runtime) |
-| `MTLRenderCommandEncoder.setVertexTextures:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setVertexTextures:withRange:` | method | implemented | `RenderCommandEncoder::set_vertex_texture` (runtime): a loop of it |
 | `MTLRenderCommandEncoder.setVertexSamplerState:atIndex:` | method | implemented | `RenderCommandEncoder::set_vertex_sampler_state` (runtime) |
-| `MTLRenderCommandEncoder.setVertexSamplerStates:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setVertexSamplerStates:withRange:` | method | implemented | `RenderCommandEncoder::set_vertex_sampler_state` (runtime): a loop of it |
 | `MTLRenderCommandEncoder.setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `RenderCommandEncoder::set_vertex_sampler_state_with_lod_clamps` (runtime) |
-| `MTLRenderCommandEncoder.setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.setVertexVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderCommandEncoder.setVertexVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLRenderCommandEncoder.setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | implemented | `RenderCommandEncoder::set_vertex_sampler_state_with_lod_clamps` (runtime): a loop of it |
+| `MTLRenderCommandEncoder.setVertexVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setVertexVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLRenderCommandEncoder.setVertexIntersectionFunctionTable:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setVertexIntersectionFunctionTables:withBufferRange:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setVertexAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setViewport:` | method | implemented | `RenderCommandEncoder::set_viewport` (runtime) |
 | `MTLRenderCommandEncoder.setViewports:count:` | method | implemented | `RenderCommandEncoder::set_viewports` (runtime) |
 | `MTLRenderCommandEncoder.setFrontFacingWinding:` | method | implemented | `RenderCommandEncoder::set_front_facing_winding` (runtime) |
-| `MTLRenderCommandEncoder.setVertexAmplificationCount:viewMappings:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setVertexAmplificationCount:viewMappings:` | method | missing | L: vertex amplification; a state that asks for it is refused (`RenderPipelineKind::VertexAmplification`) |
 | `MTLRenderCommandEncoder.setCullMode:` | method | implemented | `RenderCommandEncoder::set_cull_mode` (runtime) |
 | `MTLRenderCommandEncoder.setDepthClipMode:` | method | implemented | `RenderCommandEncoder::set_depth_clip_mode` (runtime) |
 | `MTLRenderCommandEncoder.setDepthBias:slopeScale:clamp:` | method | implemented | `RenderCommandEncoder::set_depth_bias` (runtime) |
@@ -2039,15 +2039,15 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.setFragmentBytes:length:atIndex:` | method | implemented | `RenderCommandEncoder::set_fragment_bytes` (runtime): copied at the call; more than 4096 bytes refused |
 | `MTLRenderCommandEncoder.setFragmentBuffer:offset:atIndex:` | method | implemented | `RenderCommandEncoder::set_fragment_buffer` (runtime) |
 | `MTLRenderCommandEncoder.setFragmentBufferOffset:atIndex:` | method | implemented | `RenderCommandEncoder::set_fragment_buffer_offset` (runtime) |
-| `MTLRenderCommandEncoder.setFragmentBuffers:offsets:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setFragmentBuffers:offsets:withRange:` | method | implemented | `RenderCommandEncoder::set_fragment_buffer` (runtime): a loop of it |
 | `MTLRenderCommandEncoder.setFragmentTexture:atIndex:` | method | implemented | `RenderCommandEncoder::set_fragment_texture` (runtime) |
-| `MTLRenderCommandEncoder.setFragmentTextures:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setFragmentTextures:withRange:` | method | implemented | `RenderCommandEncoder::set_fragment_texture` (runtime): a loop of it |
 | `MTLRenderCommandEncoder.setFragmentSamplerState:atIndex:` | method | implemented | `RenderCommandEncoder::set_fragment_sampler_state` (runtime) |
-| `MTLRenderCommandEncoder.setFragmentSamplerStates:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setFragmentSamplerStates:withRange:` | method | implemented | `RenderCommandEncoder::set_fragment_sampler_state` (runtime): a loop of it |
 | `MTLRenderCommandEncoder.setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps` (runtime) |
-| `MTLRenderCommandEncoder.setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.setFragmentVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderCommandEncoder.setFragmentVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLRenderCommandEncoder.setFragmentSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | implemented | `RenderCommandEncoder::set_fragment_sampler_state_with_lod_clamps` (runtime): a loop of it |
+| `MTLRenderCommandEncoder.setFragmentVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setFragmentVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLRenderCommandEncoder.setFragmentIntersectionFunctionTable:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setFragmentIntersectionFunctionTables:withBufferRange:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setFragmentAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
@@ -2059,9 +2059,9 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.setColorStoreAction:atIndex:` | method | implemented | `RenderCommandEncoder::set_color_store_action` (runtime) |
 | `MTLRenderCommandEncoder.setDepthStoreAction:` | method | implemented | `RenderCommandEncoder::set_depth_store_action` (runtime) |
 | `MTLRenderCommandEncoder.setStencilStoreAction:` | method | implemented | `RenderCommandEncoder::set_stencil_store_action` (runtime) |
-| `MTLRenderCommandEncoder.setColorStoreActionOptions:atIndex:` (deprecated) | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.setDepthStoreActionOptions:` (deprecated) | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.setStencilStoreActionOptions:` (deprecated) | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setColorStoreActionOptions:atIndex:` (deprecated) | method | missing | S: store action options, whose one option needs more than one sample |
+| `MTLRenderCommandEncoder.setDepthStoreActionOptions:` (deprecated) | method | missing | S: store action options, whose one option needs more than one sample |
+| `MTLRenderCommandEncoder.setStencilStoreActionOptions:` (deprecated) | method | missing | S: store action options, whose one option needs more than one sample |
 | `MTLRenderCommandEncoder.setObjectBytes:length:atIndex:` | method | missing | L: mesh render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderCommandEncoder.setObjectBuffer:offset:atIndex:` | method | missing | L: mesh render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderCommandEncoder.setObjectBufferOffset:atIndex:` | method | missing | L: mesh render pipelines; metal2vulkan-rt makes none |
@@ -2092,17 +2092,17 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:` | method | implemented | `RenderCommandEncoder::draw_indexed_primitives` (runtime) |
 | `MTLRenderCommandEncoder.drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | method | implemented | `RenderCommandEncoder::draw_primitives` (runtime) |
 | `MTLRenderCommandEncoder.drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | method | implemented | `RenderCommandEncoder::draw_indexed_primitives` (runtime) |
-| `MTLRenderCommandEncoder.drawPrimitives:indirectBuffer:indirectBufferOffset:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.drawPrimitives:indirectBuffer:indirectBufferOffset:` | method | missing | M: indirect draws |
+| `MTLRenderCommandEncoder.drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: indirect draws |
 | `MTLRenderCommandEncoder.textureBarrier` (deprecated) | method | missing | S: deprecated; Metal states it as `memoryBarrierWithScope:` of textures from fragment to fragment, which the runtime has |
 | `MTLRenderCommandEncoder.updateFence:afterStages:` | method | implemented | `RenderCommandEncoder::update_fence` (runtime) |
 | `MTLRenderCommandEncoder.waitForFence:beforeStages:` | method | implemented | `RenderCommandEncoder::wait_for_fence` (runtime) |
 | `MTLRenderCommandEncoder.setTessellationFactorBuffer:offset:instanceStride:` | method | implemented | `RenderCommandEncoder::set_tessellation_factor_buffer` (runtime) |
-| `MTLRenderCommandEncoder.setTessellationFactorScale:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setTessellationFactorScale:` | method | missing | S: a tessellation factor scale; a state that enables one is refused (`RenderPipelineKind::Tessellation`) |
 | `MTLRenderCommandEncoder.drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:` | method | implemented | `RenderCommandEncoder::draw_patches` (runtime) |
-| `MTLRenderCommandEncoder.drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: indirect draws |
+| `MTLRenderCommandEncoder.drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:` | method | missing | M: patches through a control-point index buffer |
+| `MTLRenderCommandEncoder.drawIndexedPatches:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:indirectBuffer:indirectBufferOffset:` | method | missing | M: patches through a control-point index buffer, drawn indirectly |
 | `MTLRenderCommandEncoder.tileWidth` | property | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderCommandEncoder.tileHeight` | property | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderCommandEncoder.setTileBytes:length:atIndex:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
@@ -2115,25 +2115,25 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.setTileSamplerStates:withRange:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderCommandEncoder.setTileSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderCommandEncoder.setTileSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
-| `MTLRenderCommandEncoder.setTileVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderCommandEncoder.setTileVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLRenderCommandEncoder.setTileVisibleFunctionTable:atBufferIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderCommandEncoder.setTileVisibleFunctionTables:withBufferRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLRenderCommandEncoder.setTileIntersectionFunctionTable:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setTileIntersectionFunctionTables:withBufferRange:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.setTileAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.dispatchThreadsPerTile:` | method | missing | L: tile render pipelines; metal2vulkan-rt makes none |
-| `MTLRenderCommandEncoder.setThreadgroupMemoryLength:offset:atIndex:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.useResource:usage:` (deprecated) | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.useResources:count:usage:` (deprecated) | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.useResource:usage:stages:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.useResources:count:usage:stages:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.useHeap:` (deprecated) | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.useHeaps:count:` (deprecated) | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.useHeap:stages:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.useHeaps:count:stages:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.executeCommandsInBuffer:withRange:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLRenderCommandEncoder.executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:` | method | missing | L: indirect command buffers; a state that asks for them is refused (Gap::IndirectCommandBuffers) |
-| `MTLRenderCommandEncoder.memoryBarrierWithScope:afterStages:beforeStages:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
-| `MTLRenderCommandEncoder.memoryBarrierWithResources:count:afterStages:beforeStages:` | method | missing | M: an encoder call metal2vulkan-rt does not build |
+| `MTLRenderCommandEncoder.setThreadgroupMemoryLength:offset:atIndex:` | method | missing | M: a render pass's threadgroup memory, which tile functions use |
+| `MTLRenderCommandEncoder.useResource:usage:` (deprecated) | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.useResources:count:usage:` (deprecated) | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.useResource:usage:stages:` | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.useResources:count:usage:stages:` | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.useHeap:` (deprecated) | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.useHeaps:count:` (deprecated) | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.useHeap:stages:` | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.useHeaps:count:stages:` | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.executeCommandsInBuffer:withRange:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLRenderCommandEncoder.executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:` | method | missing | L: indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) |
+| `MTLRenderCommandEncoder.memoryBarrierWithScope:afterStages:beforeStages:` | method | implemented | `RenderCommandEncoder::memory_barrier` (runtime): one global memory barrier |
+| `MTLRenderCommandEncoder.memoryBarrierWithResources:count:afterStages:beforeStages:` | method | implemented | `RenderCommandEncoder::memory_barrier` (runtime): one global memory barrier |
 | `MTLRenderCommandEncoder.sampleCountersInBuffer:atSampleIndex:withBarrier:` | method | missing | M: counter sample buffers |
 | `MTLRenderCommandEncoder.setColorAttachmentMap:` | method | missing | M: color attachment mapping |
 
@@ -2145,14 +2145,14 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPassAttachmentDescriptor.texture` | property | implemented | `RenderPassColorAttachmentDescriptor.texture` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.level` | property | implemented | `RenderPassColorAttachmentDescriptor.level` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.slice` | property | implemented | `RenderPassColorAttachmentDescriptor.slice` (runtime) |
-| `MTLRenderPassAttachmentDescriptor.depthPlane` | property | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
+| `MTLRenderPassAttachmentDescriptor.depthPlane` | property | missing | M: a 3D texture's depth plane as an attachment; such an attachment is refused (`RenderPassKind::TextureType`) |
 | `MTLRenderPassAttachmentDescriptor.resolveTexture` | property | implemented | `RenderPassColorAttachmentDescriptor.resolve_texture` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.resolveLevel` | property | implemented | `RenderPassColorAttachmentDescriptor.resolve_level` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.resolveSlice` | property | implemented | `RenderPassColorAttachmentDescriptor.resolve_slice` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.resolveDepthPlane` | property | implemented | `RenderPassColorAttachmentDescriptor.resolve_depth_plane` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.loadAction` | property | implemented | `RenderPassColorAttachmentDescriptor.load_action` (runtime) |
 | `MTLRenderPassAttachmentDescriptor.storeAction` | property | implemented | `RenderPassColorAttachmentDescriptor.store_action` (runtime) |
-| `MTLRenderPassAttachmentDescriptor.storeActionOptions` (deprecated) | property | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
+| `MTLRenderPassAttachmentDescriptor.storeActionOptions` (deprecated) | property | missing | S: store action options, whose one option needs more than one sample |
 | `MTLRenderPassColorAttachmentDescriptor` | class | implemented | `RenderPassColorAttachmentDescriptor` (runtime) |
 | `MTLRenderPassColorAttachmentDescriptor.clearColor` | property | implemented | `RenderPassColorAttachmentDescriptor.clear_color` (runtime) |
 | `MTLRenderPassDepthAttachmentDescriptor` | class | implemented | `RenderPassDepthAttachmentDescriptor` (runtime) |
@@ -2164,35 +2164,35 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPassColorAttachmentDescriptorArray` | class | implemented | `RenderPassDescriptor.color_attachments` (runtime): an array |
 | `MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | implemented | `RenderPassDescriptor.color_attachments` (runtime) |
 | `MTLRenderPassColorAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | implemented | `RenderPassDescriptor.color_attachments` (runtime) |
-| `MTLRenderPassSampleBufferAttachmentDescriptor` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassSampleBufferAttachmentDescriptor.sampleBuffer` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassSampleBufferAttachmentDescriptor.startOfVertexSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassSampleBufferAttachmentDescriptor.endOfVertexSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassSampleBufferAttachmentDescriptor.startOfFragmentSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassSampleBufferAttachmentDescriptor.endOfFragmentSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassSampleBufferAttachmentDescriptorArray` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassSampleBufferAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassSampleBufferAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLRenderPassSampleBufferAttachmentDescriptor` | class | missing | M: counter sample buffers |
+| `MTLRenderPassSampleBufferAttachmentDescriptor.sampleBuffer` | property | missing | M: counter sample buffers |
+| `MTLRenderPassSampleBufferAttachmentDescriptor.startOfVertexSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLRenderPassSampleBufferAttachmentDescriptor.endOfVertexSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLRenderPassSampleBufferAttachmentDescriptor.startOfFragmentSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLRenderPassSampleBufferAttachmentDescriptor.endOfFragmentSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLRenderPassSampleBufferAttachmentDescriptorArray` | class | missing | M: counter sample buffers |
+| `MTLRenderPassSampleBufferAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | M: counter sample buffers |
+| `MTLRenderPassSampleBufferAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | M: counter sample buffers |
 | `MTLRenderPassDescriptor` | class | implemented | `RenderPassDescriptor` (runtime) |
-| `MTLRenderPassDescriptor.renderPassDescriptor` | class method | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
+| `MTLRenderPassDescriptor.renderPassDescriptor` | class method | implemented | `RenderPassDescriptor` (runtime): its `Default`, Metal's |
 | `MTLRenderPassDescriptor.colorAttachments` | property | implemented | `RenderPassDescriptor.color_attachments` (runtime) |
 | `MTLRenderPassDescriptor.depthAttachment` | property | implemented | `RenderPassDescriptor.depth_attachment` (runtime) |
 | `MTLRenderPassDescriptor.stencilAttachment` | property | implemented | `RenderPassDescriptor.stencil_attachment` (runtime) |
 | `MTLRenderPassDescriptor.visibilityResultBuffer` | property | implemented | `RenderPassDescriptor.visibility_result_buffer` (runtime) |
-| `MTLRenderPassDescriptor.renderTargetArrayLength` | property | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
-| `MTLRenderPassDescriptor.imageblockSampleLength` | property | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
-| `MTLRenderPassDescriptor.threadgroupMemoryLength` | property | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
+| `MTLRenderPassDescriptor.renderTargetArrayLength` | property | missing | M: layered rendering |
+| `MTLRenderPassDescriptor.imageblockSampleLength` | property | missing | M: a pass's imageblock memory, which tile functions use |
+| `MTLRenderPassDescriptor.threadgroupMemoryLength` | property | missing | M: a pass's threadgroup memory, which tile functions use |
 | `MTLRenderPassDescriptor.tileWidth` | property | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderPassDescriptor.tileHeight` | property | missing | L: tile render pipelines; metal2vulkan-rt makes none |
-| `MTLRenderPassDescriptor.defaultRasterSampleCount` | property | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
+| `MTLRenderPassDescriptor.defaultRasterSampleCount` | property | missing | M: a pass with no attachment, which is refused (`RenderPassKind::NoAttachment`) |
 | `MTLRenderPassDescriptor.renderTargetWidth` | property | implemented | `RenderPassDescriptor.render_target_width` (runtime) |
 | `MTLRenderPassDescriptor.renderTargetHeight` | property | implemented | `RenderPassDescriptor.render_target_height` (runtime) |
-| `MTLRenderPassDescriptor.setSamplePositions:count:` | method | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
-| `MTLRenderPassDescriptor.getSamplePositions:count:` | method | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
-| `MTLRenderPassDescriptor.rasterizationRateMap` | property | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
-| `MTLRenderPassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLRenderPassDescriptor.visibilityResultType` | property | missing | S: a render pass descriptor field metal2vulkan-rt does not take |
-| `MTLRenderPassDescriptor.supportColorAttachmentMapping` | property | missing | M: color attachment mapping (`RuntimeGap::ColorAttachmentMapping`) |
+| `MTLRenderPassDescriptor.setSamplePositions:count:` | method | missing | M: programmable sample positions |
+| `MTLRenderPassDescriptor.getSamplePositions:count:` | method | missing | M: programmable sample positions |
+| `MTLRenderPassDescriptor.rasterizationRateMap` | property | missing | L: rasterization rate maps |
+| `MTLRenderPassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers |
+| `MTLRenderPassDescriptor.visibilityResultType` | property | missing | S: what an enabled visibility result mode writes; only `Disabled` is built |
+| `MTLRenderPassDescriptor.supportColorAttachmentMapping` | property | missing | M: color attachment mapping |
 | `MTLClearColorMake` | function | implemented | `ClearColor::new` (runtime) |
 
 ### MTLRenderPipeline.h
@@ -2209,10 +2209,10 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPipelineColorAttachmentDescriptor.destinationAlphaBlendFactor` | property | implemented | `ColorAttachmentDescriptor.destination_alpha_blend_factor` (translator) |
 | `MTLRenderPipelineColorAttachmentDescriptor.alphaBlendOperation` | property | implemented | `ColorAttachmentDescriptor.alpha_blend_operation` (translator) |
 | `MTLRenderPipelineColorAttachmentDescriptor.writeMask` | property | implemented | `ColorAttachmentDescriptor.write_mask` (translator) |
-| `MTLLogicalToPhysicalColorAttachmentMap` | class | missing | M: color attachment mapping (`RuntimeGap::ColorAttachmentMapping`) |
-| `MTLLogicalToPhysicalColorAttachmentMap.setPhysicalIndex:forLogicalIndex:` | method | missing | M: color attachment mapping (`RuntimeGap::ColorAttachmentMapping`) |
-| `MTLLogicalToPhysicalColorAttachmentMap.getPhysicalIndexForLogicalIndex:` | method | missing | M: color attachment mapping (`RuntimeGap::ColorAttachmentMapping`) |
-| `MTLLogicalToPhysicalColorAttachmentMap.reset` | method | missing | M: color attachment mapping (`RuntimeGap::ColorAttachmentMapping`) |
+| `MTLLogicalToPhysicalColorAttachmentMap` | class | missing | M: color attachment mapping |
+| `MTLLogicalToPhysicalColorAttachmentMap.setPhysicalIndex:forLogicalIndex:` | method | missing | M: color attachment mapping |
+| `MTLLogicalToPhysicalColorAttachmentMap.getPhysicalIndexForLogicalIndex:` | method | missing | M: color attachment mapping |
+| `MTLLogicalToPhysicalColorAttachmentMap.reset` | method | missing | M: color attachment mapping |
 | `MTLRenderPipelineReflection` | class | implemented | `RenderPipelineReflection` (translator) |
 | `MTLRenderPipelineReflection.vertexBindings` | property | implemented | `RenderPipelineReflection::vertex_bindings` (translator) |
 | `MTLRenderPipelineReflection.fragmentBindings` | property | implemented | `RenderPipelineReflection::fragment_bindings` (translator) |
@@ -2257,18 +2257,18 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPipelineDescriptor.maxVertexCallStackDepth` | property | implemented | `RenderPipelineDescriptor.max_vertex_call_stack_depth` (translator) |
 | `MTLRenderPipelineDescriptor.maxFragmentCallStackDepth` | property | implemented | `RenderPipelineDescriptor.max_fragment_call_stack_depth` (translator) |
 | `MTLRenderPipelineDescriptor.reset` | method | implemented | `RenderPipelineDescriptor::new` (translator): a plain value: assign a new one |
-| `MTLRenderPipelineDescriptor.shaderValidation` | property | missing | L: shader validation (`RuntimeGap::ShaderValidation`, not scheduled) |
-| `MTLRenderPipelineFunctionsDescriptor` | class | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderPipelineFunctionsDescriptor.vertexAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderPipelineFunctionsDescriptor.fragmentAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderPipelineFunctionsDescriptor.tileAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLRenderPipelineDescriptor.shaderValidation` | property | missing | L: shader validation (not scheduled) |
+| `MTLRenderPipelineFunctionsDescriptor` | class | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineFunctionsDescriptor.vertexAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineFunctionsDescriptor.fragmentAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineFunctionsDescriptor.tileAdditionalBinaryFunctions` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLRenderPipelineState` | protocol | implemented | `RenderPipelineState` (runtime) |
 | `MTLRenderPipelineState.label` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLRenderPipelineState.device` | property | missing | S: a query or call metal2vulkan-rt does not answer |
-| `MTLRenderPipelineState.reflection` | property | missing | S: the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler; the runtime gives the creation's answer at creation (`new_render_pipeline_state_with_reflection`) and after it (`RenderPipelineState::compiled_reflection`) |
-| `MTLRenderPipelineState.functionHandleWithName:stage:` | method | missing | S: a handle by function name; the runtime takes the `Function` (`RenderPipelineState::function_handle`) |
-| `MTLRenderPipelineState.functionHandleWithBinaryFunction:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderPipelineState.newRenderPipelineStateWithBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLRenderPipelineState.reflection` | property | missing | S: the state's reflection after creation (macOS 26), nil for a state a device made, set only by Metal 4's compiler |
+| `MTLRenderPipelineState.functionHandleWithName:stage:` | method | missing | S: a handle by function name |
+| `MTLRenderPipelineState.functionHandleWithBinaryFunction:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineState.newRenderPipelineStateWithBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLRenderPipelineState.newRenderPipelineDescriptorForSpecialization` | method | missing | M: pipeline specialization (macOS 26): a descriptor to finish an unspecialized state |
 | `MTLRenderPipelineState.maxTotalThreadsPerThreadgroup` | property | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderPipelineState.threadgroupSizeMatchesTileSize` | property | missing | L: tile render pipelines; metal2vulkan-rt makes none |
@@ -2281,11 +2281,11 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderPipelineState.meshThreadExecutionWidth` | property | missing | L: mesh render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderPipelineState.maxTotalThreadgroupsPerMeshGrid` | property | missing | L: mesh render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderPipelineState.gpuResourceID` | property | missing | S: a query or call metal2vulkan-rt does not answer |
-| `MTLRenderPipelineState.functionHandleWithFunction:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderPipelineState.newVisibleFunctionTableWithDescriptor:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLRenderPipelineState.functionHandleWithFunction:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineState.newVisibleFunctionTableWithDescriptor:stage:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 | `MTLRenderPipelineState.newIntersectionFunctionTableWithDescriptor:stage:` | method | out of scope | ray tracing |
-| `MTLRenderPipelineState.newRenderPipelineStateWithAdditionalBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLRenderPipelineState.shaderValidation` | property | missing | L: shader validation (`RuntimeGap::ShaderValidation`, not scheduled) |
+| `MTLRenderPipelineState.newRenderPipelineStateWithAdditionalBinaryFunctions:error:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLRenderPipelineState.shaderValidation` | property | missing | L: shader validation (not scheduled) |
 | `MTLRenderPipelineState.requiredThreadsPerTileThreadgroup` | property | missing | L: tile render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderPipelineState.requiredThreadsPerObjectThreadgroup` | property | missing | L: mesh render pipelines; metal2vulkan-rt makes none |
 | `MTLRenderPipelineState.requiredThreadsPerMeshThreadgroup` | property | missing | L: mesh render pipelines; metal2vulkan-rt makes none |
@@ -2311,7 +2311,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLTileRenderPipelineDescriptor.supportAddingBinaryFunctions` | property | implemented | `TileRenderPipelineDescriptor.support_adding_binary_functions` (translator) |
 | `MTLTileRenderPipelineDescriptor.maxCallStackDepth` | property | implemented | `TileRenderPipelineDescriptor.max_call_stack_depth` (translator) |
 | `MTLTileRenderPipelineDescriptor.reset` | method | implemented | `TileRenderPipelineDescriptor::new` (translator): a plain value: assign a new one |
-| `MTLTileRenderPipelineDescriptor.shaderValidation` | property | missing | L: shader validation (`RuntimeGap::ShaderValidation`, not scheduled) |
+| `MTLTileRenderPipelineDescriptor.shaderValidation` | property | missing | L: shader validation (not scheduled) |
 | `MTLTileRenderPipelineDescriptor.requiredThreadsPerThreadgroup` | property | implemented | `TileRenderPipelineDescriptor.required_threads_per_threadgroup` (translator) |
 | `MTLMeshRenderPipelineDescriptor` | class | implemented | `MeshPipelineDescriptor` (translator) |
 | `MTLMeshRenderPipelineDescriptor.label` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
@@ -2341,7 +2341,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLMeshRenderPipelineDescriptor.meshLinkedFunctions` | property | implemented | `FunctionDescriptor.linked` (translator): the mesh stage's `StageSource::Function` |
 | `MTLMeshRenderPipelineDescriptor.fragmentLinkedFunctions` | property | implemented | `FunctionDescriptor.linked` (translator): the fragment stage's `StageSource::Function` |
 | `MTLMeshRenderPipelineDescriptor.reset` | method | implemented | `MeshPipelineDescriptor::new` (translator): a plain value: assign a new one |
-| `MTLMeshRenderPipelineDescriptor.shaderValidation` | property | missing | L: shader validation (`RuntimeGap::ShaderValidation`, not scheduled) |
+| `MTLMeshRenderPipelineDescriptor.shaderValidation` | property | missing | L: shader validation (not scheduled) |
 | `MTLMeshRenderPipelineDescriptor.requiredThreadsPerObjectThreadgroup` | property | implemented | `MeshPipelineDescriptor.required_threads_per_object_threadgroup` (translator) |
 | `MTLMeshRenderPipelineDescriptor.requiredThreadsPerMeshThreadgroup` | property | implemented | `MeshPipelineDescriptor.required_threads_per_mesh_threadgroup` (translator) |
 
@@ -2349,24 +2349,24 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLResidencySetDescriptor` | class | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySetDescriptor.label` | property | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySetDescriptor.initialCapacity` | property | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet` | protocol | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.device` | property | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.label` | property | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.allocatedSize` | property | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.requestResidency` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.endResidency` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.addAllocation:` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.addAllocations:count:` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.removeAllocation:` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.removeAllocations:count:` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.removeAllAllocations` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.containsAllocation:` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.allAllocations` | property | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.allocationCount` | property | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
-| `MTLResidencySet.commit` | method | missing | M: residency sets (`RuntimeGap::ResidencySets`) |
+| `MTLResidencySetDescriptor` | class | missing | M: residency sets |
+| `MTLResidencySetDescriptor.label` | property | missing | M: residency sets |
+| `MTLResidencySetDescriptor.initialCapacity` | property | missing | M: residency sets |
+| `MTLResidencySet` | protocol | missing | M: residency sets |
+| `MTLResidencySet.device` | property | missing | M: residency sets |
+| `MTLResidencySet.label` | property | missing | M: residency sets |
+| `MTLResidencySet.allocatedSize` | property | missing | M: residency sets |
+| `MTLResidencySet.requestResidency` | method | missing | M: residency sets |
+| `MTLResidencySet.endResidency` | method | missing | M: residency sets |
+| `MTLResidencySet.addAllocation:` | method | missing | M: residency sets |
+| `MTLResidencySet.addAllocations:count:` | method | missing | M: residency sets |
+| `MTLResidencySet.removeAllocation:` | method | missing | M: residency sets |
+| `MTLResidencySet.removeAllocations:count:` | method | missing | M: residency sets |
+| `MTLResidencySet.removeAllAllocations` | method | missing | M: residency sets |
+| `MTLResidencySet.containsAllocation:` | method | missing | M: residency sets |
+| `MTLResidencySet.allAllocations` | property | missing | M: residency sets |
+| `MTLResidencySet.allocationCount` | property | missing | M: residency sets |
+| `MTLResidencySet.commit` | method | missing | M: residency sets |
 
 ### MTLResource.h
 
@@ -2376,7 +2376,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLResource.label` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLResource.device` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLResource.cpuCacheMode` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
-| `MTLResource.storageMode` | property | missing | S: a query or call metal2vulkan-rt does not answer |
+| `MTLResource.storageMode` | property | implemented | `Texture::descriptor, TextureDescriptor.storage_mode` (runtime): a texture's, through its descriptor; a buffer's is its block's class, which the consumer chose |
 | `MTLResource.hazardTrackingMode` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLResource.resourceOptions` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLResource.setPurgeableState:` | method | missing | S: a query or call metal2vulkan-rt does not answer |
@@ -2403,30 +2403,30 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLResourceStatePassSampleBufferAttachmentDescriptor` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLResourceStatePassSampleBufferAttachmentDescriptor.sampleBuffer` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLResourceStatePassSampleBufferAttachmentDescriptor.startOfEncoderSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLResourceStatePassSampleBufferAttachmentDescriptor.endOfEncoderSampleIndex` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLResourceStatePassSampleBufferAttachmentDescriptorArray` | class | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLResourceStatePassSampleBufferAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
-| `MTLResourceStatePassSampleBufferAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLResourceStatePassSampleBufferAttachmentDescriptor` | class | missing | M: counter sample buffers |
+| `MTLResourceStatePassSampleBufferAttachmentDescriptor.sampleBuffer` | property | missing | M: counter sample buffers |
+| `MTLResourceStatePassSampleBufferAttachmentDescriptor.startOfEncoderSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLResourceStatePassSampleBufferAttachmentDescriptor.endOfEncoderSampleIndex` | property | missing | M: counter sample buffers |
+| `MTLResourceStatePassSampleBufferAttachmentDescriptorArray` | class | missing | M: counter sample buffers |
+| `MTLResourceStatePassSampleBufferAttachmentDescriptorArray.objectAtIndexedSubscript:` | method | missing | M: counter sample buffers |
+| `MTLResourceStatePassSampleBufferAttachmentDescriptorArray.setObject:atIndexedSubscript:` | method | missing | M: counter sample buffers |
 | `MTLResourceStatePassDescriptor` | class | missing | S: see `resourceStateCommandEncoderWithDescriptor:` |
 | `MTLResourceStatePassDescriptor.resourceStatePassDescriptor` | class method | missing | S: see `resourceStateCommandEncoderWithDescriptor:` |
-| `MTLResourceStatePassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers (`RuntimeGap::CounterSampleBuffers`) |
+| `MTLResourceStatePassDescriptor.sampleBufferAttachments` | property | missing | M: counter sample buffers |
 
 ### MTLResourceViewPool.h
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLResourceViewPoolDescriptor` | class | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLResourceViewPoolDescriptor.resourceViewCount` | property | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLResourceViewPoolDescriptor.label` | property | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLResourceViewPool` | protocol | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLResourceViewPool.baseResourceID` | property | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLResourceViewPool.resourceViewCount` | property | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLResourceViewPool.device` | property | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLResourceViewPool.label` | property | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLResourceViewPool.copyResourceViewsFromPool:sourceRange:destinationIndex:` | method | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
+| `MTLResourceViewPoolDescriptor` | class | missing | M: texture view pools |
+| `MTLResourceViewPoolDescriptor.resourceViewCount` | property | missing | M: texture view pools |
+| `MTLResourceViewPoolDescriptor.label` | property | missing | M: texture view pools |
+| `MTLResourceViewPool` | protocol | missing | M: texture view pools |
+| `MTLResourceViewPool.baseResourceID` | property | missing | M: texture view pools |
+| `MTLResourceViewPool.resourceViewCount` | property | missing | M: texture view pools |
+| `MTLResourceViewPool.device` | property | missing | M: texture view pools |
+| `MTLResourceViewPool.label` | property | missing | M: texture view pools |
+| `MTLResourceViewPool.copyResourceViewsFromPool:sourceRange:destinationIndex:` | method | missing | M: texture view pools |
 
 ### MTLSampler.h
 
@@ -2541,7 +2541,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLTextureDescriptor` | class | implemented | `TextureDescriptor` (runtime) |
 | `MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:mipmapped:` | class method | missing | S: a query or call metal2vulkan-rt does not answer |
 | `MTLTextureDescriptor.textureCubeDescriptorWithPixelFormat:size:mipmapped:` | class method | missing | S: a query or call metal2vulkan-rt does not answer |
-| `MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:` | class method | missing | S: a query or call metal2vulkan-rt does not answer |
+| `MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat:width:resourceOptions:usage:` | class method | missing | S: a texture buffer's descriptor; a texture buffer is refused (`Gap::TextureBuffer`) |
 | `MTLTextureDescriptor.textureType` | property | implemented | `TextureDescriptor.texture_type` (runtime) |
 | `MTLTextureDescriptor.pixelFormat` | property | implemented | `TextureDescriptor.pixel_format` (runtime) |
 | `MTLTextureDescriptor.width` | property | implemented | `TextureDescriptor.width` (runtime) |
@@ -2550,13 +2550,13 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLTextureDescriptor.mipmapLevelCount` | property | implemented | `TextureDescriptor.mipmap_level_count` (runtime) |
 | `MTLTextureDescriptor.sampleCount` | property | implemented | `TextureDescriptor.sample_count` (runtime) |
 | `MTLTextureDescriptor.arrayLength` | property | implemented | `TextureDescriptor.array_length` (runtime) |
-| `MTLTextureDescriptor.resourceOptions` | property | missing | S: a query or call metal2vulkan-rt does not answer |
+| `MTLTextureDescriptor.resourceOptions` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLTextureDescriptor.cpuCacheMode` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLTextureDescriptor.storageMode` | property | implemented | `TextureDescriptor.storage_mode` (runtime) |
 | `MTLTextureDescriptor.hazardTrackingMode` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
 | `MTLTextureDescriptor.usage` | property | implemented | `TextureDescriptor.usage` (runtime) |
 | `MTLTextureDescriptor.allowGPUOptimizedContents` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
-| `MTLTextureDescriptor.compressionType` | property | missing | M: lossy compression (`RuntimeGap::LossyTextureCompression`, not scheduled) |
+| `MTLTextureDescriptor.compressionType` | property | missing | M: lossy compression (not scheduled) |
 | `MTLTextureDescriptor.swizzle` | property | implemented | `TextureDescriptor.swizzle` (runtime) |
 | `MTLTextureDescriptor.placementSparsePageSize` | property | missing | S: placement sparse textures' page size |
 | `MTLTextureViewDescriptor` | class | implemented | `Texture::new_texture_view_with_swizzle` (runtime): its fields are the method's arguments |
@@ -2591,7 +2591,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLTexture.tailSizeInBytes` | property | missing | S: sparse tiles |
 | `MTLTexture.isSparse` | property | missing | S: sparse tiles |
 | `MTLTexture.allowGPUOptimizedContents` | property | out of scope | the consumer's (metal2vulkan-rt's README, What the consumer implements) |
-| `MTLTexture.compressionType` | property | missing | M: lossy compression (`RuntimeGap::LossyTextureCompression`, not scheduled) |
+| `MTLTexture.compressionType` | property | missing | M: lossy compression (not scheduled) |
 | `MTLTexture.gpuResourceID` | property | implemented | `Texture::gpu_resource_id` (runtime) |
 | `MTLTexture.getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:` | method | implemented | `Texture::get_bytes` (runtime) |
 | `MTLTexture.replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:` | method | implemented | `Texture::replace_region` (runtime) |
@@ -2613,10 +2613,10 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLTextureViewPool` | protocol | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLTextureViewPool.setTextureView:atIndex:` | method | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLTextureViewPool.setTextureView:descriptor:atIndex:` | method | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
-| `MTLTextureViewPool.setTextureViewFromBuffer:descriptor:offset:bytesPerRow:atIndex:` | method | missing | M: texture view pools (`RuntimeGap::TextureViewPools`) |
+| `MTLTextureViewPool` | protocol | missing | M: texture view pools |
+| `MTLTextureViewPool.setTextureView:atIndex:` | method | missing | M: texture view pools |
+| `MTLTextureViewPool.setTextureView:descriptor:atIndex:` | method | missing | M: texture view pools |
+| `MTLTextureViewPool.setTextureViewFromBuffer:descriptor:offset:bytesPerRow:atIndex:` | method | missing | M: texture view pools |
 
 ### MTLTypes.h
 
@@ -2658,11 +2658,11 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLVisibleFunctionTableDescriptor` | class | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLVisibleFunctionTableDescriptor.visibleFunctionTableDescriptor` | class method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLVisibleFunctionTableDescriptor.functionCount` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLVisibleFunctionTable` | protocol | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLVisibleFunctionTable.gpuResourceID` | property | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLVisibleFunctionTable.setFunction:atIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
-| `MTLVisibleFunctionTable.setFunctions:withRange:` | method | missing | L: function tables, function handles and dynamic libraries; a function that reads a function table is refused |
+| `MTLVisibleFunctionTableDescriptor` | class | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLVisibleFunctionTableDescriptor.visibleFunctionTableDescriptor` | class method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLVisibleFunctionTableDescriptor.functionCount` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLVisibleFunctionTable` | protocol | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLVisibleFunctionTable.gpuResourceID` | property | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLVisibleFunctionTable.setFunction:atIndex:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
+| `MTLVisibleFunctionTable.setFunctions:withRange:` | method | missing | L: function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) |
 
