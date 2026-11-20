@@ -969,7 +969,7 @@ fn nvidia_computes_half_on_16_bit_floats_under_the_float_controls() {
         return;
     };
     let of = |desc: DeviceDescription| {
-        Device::new(desc, DevicePolicy::default())
+        Device::from_queries(desc, DevicePolicy::default())
             .expect("device")
             .profile()
             .clone()

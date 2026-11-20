@@ -73,7 +73,7 @@ fn devices() -> Vec<(String, Device)> {
             let stem = p.file_stem().expect("stem").to_string_lossy().into_owned();
             let text = std::fs::read_to_string(&p).expect("profile");
             let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-            let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+            let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
             (stem, dev)
         })
         .collect();

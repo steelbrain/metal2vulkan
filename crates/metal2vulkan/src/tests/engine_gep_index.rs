@@ -48,7 +48,7 @@ fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
     }
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

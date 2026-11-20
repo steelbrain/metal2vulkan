@@ -150,7 +150,7 @@ fn device(stem: &str) -> Device {
         .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// The early-tests variant (`read_only_tests`) and the function's own tests (`shader_tests`) a

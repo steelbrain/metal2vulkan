@@ -35,7 +35,7 @@ const PROFILES: [&str; 3] = ["lavapipe", "amd-rdna3-radv", "moltenvk-m3"];
 
 /// Kernel `entry`'s pipeline on profile `stem`.
 fn compiled(library: &Library, stem: &str, entry: &str) -> Result<(), Error> {
-    let dev = Device::new(
+    let dev = Device::from_queries(
         description(stem).expect("committed description"),
         DevicePolicy::default(),
     )

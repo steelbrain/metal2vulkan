@@ -1169,7 +1169,7 @@ fn a_queried_description_derives_a_device() {
     dev.v11_props.subgroup_supported_stages = avk::ShaderStageFlags::ALL;
     dev.v11_props.subgroup_supported_operations = avk::SubgroupFeatureFlags::from_raw(0xff);
     let desc = dev.query().unwrap();
-    Device::new(desc, DevicePolicy::default()).expect("queried description derives");
+    Device::from_queries(desc, DevicePolicy::default()).expect("queried description derives");
 }
 
 #[test]

@@ -17,7 +17,7 @@ fn the_modules_are_valid_on_every_committed_device() {
         }
         let text = std::fs::read_to_string(&path).expect("read");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let device = Device::new(desc, DevicePolicy::default()).expect("device");
+        let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let profile = device.profile();
         assert_valid(merge_vertex_typed_module().expect("vertex"), profile);
         assert_valid(fragment_typed_module().expect("fragment"), profile);

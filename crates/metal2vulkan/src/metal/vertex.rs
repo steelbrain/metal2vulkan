@@ -531,7 +531,7 @@ mod tests {
         );
         desc.features
             .remove(&VkFeature::VertexAttributeInstanceRateDivisor);
-        let plain = Device::new(desc.clone(), DevicePolicy::default()).unwrap();
+        let plain = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
         desc.features
             .insert(VkFeature::VertexAttributeInstanceRateDivisor);
         // Listed with the extension that exposes it below Vulkan 1.4.
@@ -540,9 +540,9 @@ mod tests {
         desc.limits.max_vertex_attrib_divisor = 4;
         // No nonzero first instance with a divisor (VUID-vkCmdDraw-pNext-09461): pulled.
         desc.limits.supports_non_zero_first_instance = false;
-        let zero_first = Device::new(desc.clone(), DevicePolicy::default()).unwrap();
+        let zero_first = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
         desc.limits.supports_non_zero_first_instance = true;
-        let divisor = Device::new(desc, DevicePolicy::default()).unwrap();
+        let divisor = Device::from_queries(desc, DevicePolicy::default()).unwrap();
         use VertexStepFunction as S;
         let fetch = |dev: &Device, f, s, r| attribute_fetch(f, s, r, dev.profile());
         let fixed = |rate, divisor| {
@@ -620,7 +620,7 @@ mod tests {
                 },
             );
         }
-        let dev = Device::new(desc, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
         assert!(dev.profile().supports_format(
             vk::Format::E5B9G9R9_UFLOAT_PACK32,
             FormatUsage::VertexBuffer
@@ -662,9 +662,9 @@ mod tests {
             isolation: GuestIsolation::Off,
             ..DevicePolicy::UNTRUSTED
         };
-        let checked = Device::new(bare.clone(), DevicePolicy::default()).unwrap();
-        let off = Device::new(bare, unsafe_off).unwrap();
-        let robust = Device::new(robust, DevicePolicy::default()).unwrap();
+        let checked = Device::from_queries(bare.clone(), DevicePolicy::default()).unwrap();
+        let off = Device::from_queries(bare, unsafe_off).unwrap();
+        let robust = Device::from_queries(robust, DevicePolicy::default()).unwrap();
         assert_eq!(contain::encoding(checked.profile()), Check::InShader);
         assert_eq!(contain::encoding(robust.profile()), Check::None);
         assert_eq!(contain::encoding(off.profile()), Check::None);
@@ -704,7 +704,7 @@ mod tests {
             {
                 continue;
             }
-            let dev = Device::new(desc, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
             for v in [
                 VertexFormat::Float,
                 VertexFormat::Float2,

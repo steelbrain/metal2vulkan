@@ -285,7 +285,7 @@ fn a_band_needs_tessellation_and_no_barycentric_weights() {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     let budget = Budget::standard();
     let both = render(&bc, "pv_vertex", "pv_both", PixelFormat::RGBA8Unorm);
-    let dev = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
     for primitive in PRIMITIVES {
         match dev.compile_render_variant(&both, &band_key(primitive), &budget) {
             Err(Error::Unsupported(u)) => {
@@ -296,7 +296,7 @@ fn a_band_needs_tessellation_and_no_barycentric_weights() {
         }
     }
     desc.features.remove(&F::TessellationShader);
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let flat = render(&bc, "pv_vertex", "pv_flat", PixelFormat::RGBA8Unorm);
     for primitive in PRIMITIVES {
         match dev.compile_render_variant(&flat, &band_key(primitive), &budget) {

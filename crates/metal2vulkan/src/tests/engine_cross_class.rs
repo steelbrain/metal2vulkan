@@ -450,7 +450,7 @@ fn devices() -> Vec<(String, Device)> {
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         out.push((
             stem,
-            Device::new(desc, DevicePolicy::default()).expect("device"),
+            Device::from_queries(desc, DevicePolicy::default()).expect("device"),
         ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

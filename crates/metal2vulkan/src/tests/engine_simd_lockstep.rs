@@ -2387,129 +2387,14 @@ fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
     );
 }
 
-/// On a driver with a stage bound's defect (`DriverWorkaround::SerializedStageWrapsLargeModules`,
-/// a stage corrupted past the size it compiles intact, and
-/// `DriverWorkaround::CompilerMemoryGrowsWithStageSize`, a compile past the size measured within
-/// host-sized memory; ANV: the Iris Xe of RPL-P), a module whose entry weighs more than either
-/// bound (`pipeline::compile`'s `stage_bound`, here bounds the test sets) is never emitted: the
-/// pressured kernel of `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`,
-/// whose emulated module passes a bound, is planned again keeping the `Direct` tier's pin to 32
-/// lanes, its answers Metal's; under a bound its `Direct` module passes too, it is refused
-/// (`Feature::StageSize`, that bound's defect named, and as its symbol, which its Display prints,
-/// the module's entry weight and the bound it passed), and past both, the serialized stage's
-/// defect, which faults the driver, is named. The same profile without either defect emits the
-/// emulated module under every bound.
-#[test]
-fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
-    use crate::device::profile::DriverWorkaround;
-    use crate::device::Device;
-    use crate::error::{DiagName, Feature, Needs};
-    use crate::lower::simd::{WIDEST_PIN, WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
-    use crate::pipeline::compile::{compile_bitcode_bounded, StageBounds};
-    use crate::pipeline::testing::meter;
-    use crate::spirv::roll::entry_weight;
-    let half = |t: u32| if t & 31 < 16 { t ^ 1 } else { t };
-    let fan = Padding::Fan((WIDEST_PIN_FLOOR / 2 + 16).max(WIDEST_PIN_WORDS as usize + 8));
-    let Some(bc) = assemble("device_half", &device_half_padded(fan, None)) else {
-        return;
-    };
-    let entry = EntryRef::Name("device_half");
-    let weight = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
-    let serialized = DriverWorkaround::SerializedStageWrapsLargeModules;
-    let memory = DriverWorkaround::CompilerMemoryGrowsWithStageSize;
-    let iris_desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
-    let iris = Device::new(iris_desc, DevicePolicy::default()).unwrap();
-    let iris = iris.profile();
-    assert!(iris.workarounds().contains(&serialized));
-    assert!(iris.workarounds().contains(&memory));
-    // The same profile without either defect: every other workaround kept, so its modules are the
-    // Iris Xe's.
-    let mut other = iris.fields().clone();
-    other
-        .workarounds
-        .retain(|w| *w != serialized && *w != memory);
-    let other = &crate::device::profile::DeviceProfile::of(
-        other,
-        crate::device::profile::ProfileFacts::ROWS,
-    );
-    assert!(!other.workarounds().contains(&serialized));
-    assert!(!other.workarounds().contains(&memory));
-    // One defect's bound at `cap`, the other's past every module.
-    let at = |defect, cap| match defect == serialized {
-        true => StageBounds {
-            serialized: cap,
-            compiled: u64::MAX,
-        },
-        false => StageBounds {
-            serialized: u64::MAX,
-            compiled: cap,
-        },
-    };
-    // The defect a refusal names, checking it names the module's entry weight `weight` and the
-    // bound `bound` it passed.
-    let refused_for = |refused: Error, weight: u64, bound: u64| match refused {
-        Error::Unsupported(u) if u.feature == Feature::StageSize => {
-            let named = format!("entry weight {weight}, past the bound {bound}");
-            assert_eq!(u.symbol, Some(DiagName::new(named.as_str())), "{u}");
-            assert!(u.to_string().contains(&named), "{u}");
-            match u.needs {
-                Needs::DriverDefect(defect) => defect,
-                needs => panic!("{needs:?}"),
-            }
-        }
-        refused => panic!("{refused:?}"),
-    };
-    // Unbounded, the kernel emulates its simdgroups in place of the widest mode on both.
-    let compile = |p, bounds| compile_bitcode_bounded(&bc, entry, p, &mut meter(), bounds);
-    let (_, plan, emulated) = compile(iris, at(serialized, u64::MAX)).expect("emulated");
-    assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
-    let emulated = weight(&emulated);
-    let want: Vec<u32> = (0..64).map(half).collect();
-    let mut pinned = 0;
-    for defect in [serialized, memory] {
-        // Under a bound the emulated module passes: planned again keeping the pin, exact at 32
-        // lanes.
-        let (_, plan, module) = compile(iris, at(defect, emulated - 1)).expect("planned again");
-        assert_eq!(plan.simd.1, Tier::Direct, "{defect:?}");
-        assert_eq!(uses(&plan, WIDEST_PIN), 0);
-        assert_eq!(plan.subgroup.size, Some(32));
-        pinned = weight(&module);
-        assert!(pinned < emulated, "pinned {pinned}, emulated {emulated}");
-        assert_eq!(run_words(&plan, &module, 64, SubgroupSize::W32), want);
-        // Under a bound the pinned module passes too: refused, the bound's defect named.
-        let refused = compile(iris, at(defect, pinned - 1)).expect_err("past the bound");
-        assert_eq!(refused_for(refused, pinned, pinned - 1), defect);
-        // Without the defect, the emulated module is emitted under either bound.
-        for cap in [emulated - 1, pinned - 1] {
-            let (_, plan, module) = compile(other, at(defect, cap)).expect("emitted");
-            assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
-            assert!(weight(&module) > cap, "{cap}");
-            for lanes in CHUNKED {
-                assert_eq!(run_words(&plan, &module, 64, lanes), want, "{lanes:?}");
-            }
-        }
-    }
-    // Past both bounds, the serialized stage's defect is named.
-    let both = StageBounds {
-        serialized: pinned - 1,
-        compiled: pinned - 1,
-    };
-    let refused = compile(iris, both).expect_err("past both bounds");
-    assert_eq!(refused_for(refused, pinned, pinned - 1), serialized);
-}
-
-/// On a profile `Device::from_queries` built, every stage is held under the compiled bound
-/// (`device::profile::StageBound::Every`; here bounds the test sets), whatever the driver: the
-/// pressured kernel of `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`,
+/// Every stage is held under the compiled bound (here bounds the test sets), whatever the driver:
+/// the pressured kernel of `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`,
 /// whose emulated module passes the bound, is planned again keeping the `Direct` tier's pin to 32
 /// lanes, its answers Metal's; under a bound its `Direct` module passes too, it is refused
 /// (`Feature::StageSize`, `Needs::StageBound`, and as its symbol the module's entry weight and the
-/// bound it passed). The serialized stage's bound is no bound there. Through `Device::new`, the
-/// same description under a driver that names no stage-size defect (RADV) emits the emulated
-/// module under every bound.
+/// bound it passed).
 #[test]
 fn every_stage_from_queries_keeps_the_widest_pin_or_is_refused() {
-    use crate::device::profile::StageBound;
     use crate::device::Device;
     use crate::error::{DiagName, Feature, Needs};
     use crate::lower::simd::{WIDEST_PIN, WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
@@ -2524,19 +2409,11 @@ fn every_stage_from_queries_keeps_the_widest_pin_or_is_refused() {
     let entry = EntryRef::Name("device_half");
     let weight = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
     let want: Vec<u32> = (0..64).map(half).collect();
-    let mut desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
-    let queries = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+    let desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
+    let queries = Device::from_queries(desc, DevicePolicy::default()).unwrap();
     let queries = queries.profile();
-    assert_eq!(queries.stage_bound(), StageBound::Every);
-    desc.driver_id = Some(crate::vk::DriverId::MESA_RADV);
-    let radv = Device::new(desc, DevicePolicy::default()).unwrap();
-    let radv = radv.profile();
-    assert_eq!(radv.stage_bound(), StageBound::Defects);
     let compile = |p, bounds| compile_bitcode_bounded(&bc, entry, p, &mut meter(), bounds);
-    let compiled = |cap| StageBounds {
-        serialized: u64::MAX,
-        compiled: cap,
-    };
+    let compiled = |cap| StageBounds { compiled: cap };
     // Unbounded, the kernel emulates its simdgroups in place of the widest mode.
     let (_, plan, emulated) = compile(queries, compiled(u64::MAX)).expect("emulated");
     assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
@@ -2558,31 +2435,10 @@ fn every_stage_from_queries_keeps_the_widest_pin_or_is_refused() {
         }
         refused => panic!("{refused:?}"),
     }
-    // The serialized stage's bound is none of its bounds.
-    let serialized = StageBounds {
-        serialized: pinned - 1,
-        compiled: u64::MAX,
-    };
-    let (_, plan, module) = compile(queries, serialized).expect("emitted");
-    assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
-    assert_eq!(weight(&module), emulated);
-    // Through `Device::new` under a driver that names no stage-size defect, no bound at all.
-    for cap in [emulated - 1, pinned - 1] {
-        let both = StageBounds {
-            serialized: cap,
-            compiled: cap,
-        };
-        let (_, plan, module) = compile(radv, both).expect("emitted");
-        assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
-        assert_eq!(weight(&module), emulated, "{cap}");
-        for lanes in CHUNKED {
-            assert_eq!(run_words(&plan, &module, 64, lanes), want, "{lanes:?}");
-        }
-    }
 }
 
 /// One input, one answer, whichever path compiles it: on the Iris Xe, the pressured kernel of
-/// `a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused`, past a bound its emulated
+/// `every_stage_from_queries_keeps_the_widest_pin_or_is_refused`, past a bound its emulated
 /// module passes (planned again keeping the pin) and past one its pinned module passes too
 /// (refused, `Feature::StageSize`), is charged the same work units compiled alone
 /// (`Device::compile_function`) and compiled from a creation's entries
@@ -2608,15 +2464,12 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         return;
     };
     let iris_desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
-    let iris = Device::new(iris_desc, DevicePolicy::default()).unwrap();
+    let iris = Device::from_queries(iris_desc, DevicePolicy::default()).unwrap();
     let iris = iris.profile();
     let library = Library::from_air(&bc).expect("library");
     let fd = FunctionDescriptor::new(library.function("device_half").expect("the kernel"));
-    // The serialized stage's bound at `cap`; the compiled one past every module.
-    let at = |cap| StageBounds {
-        serialized: cap,
-        compiled: u64::MAX,
-    };
+    // The stage bound at `cap`.
+    let at = |cap| StageBounds { compiled: cap };
     let weight = |cap| {
         let compiled = compile_bitcode_bounded(
             &bc,
@@ -2693,16 +2546,13 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
 /// measured stage bounds (`StageBounds::MEASURED`). On the Iris Xe, whose subgroup size range
 /// offers the widest mode's pin and which has maximal reconvergence, the kernel emulates its
 /// simdgroups, a module past the compiled bound, and is planned again keeping the pin, a module
-/// under it: through `Device::new`, whose ANV identity names the compiler's memory defect, and
-/// through `Device::from_queries`, which bounds every stage. The same description without maximal
-/// reconvergence emulates its simdgroups for the lockstep pair, so it has no pin to keep: it is
-/// refused, its symbol naming the emulated module's weight and the bound, as `Needs::StageBound`
-/// through `Device::from_queries` and as the compiler's memory defect through `Device::new` on
-/// ANV; through `Device::new` under a driver that names no stage-size defect (Intel's Windows
-/// driver), its emulated module is emitted past the bound.
+/// under it. The same description without maximal reconvergence emulates its simdgroups for the
+/// lockstep pair, so it has no pin to keep: it is refused as `Needs::StageBound`, its symbol
+/// naming the emulated module's weight and the bound, under any driver (Intel's Windows driver
+/// too).
 #[test]
 fn the_stage_bound_fixture_keeps_the_pin_or_is_refused() {
-    use crate::device::profile::{DeviceProfile, DriverWorkaround, StageBound};
+    use crate::device::profile::DeviceProfile;
     use crate::device::{Device, DeviceDescription};
     use crate::error::{DiagName, Feature, Needs};
     use crate::lower::simd::WIDEST_PIN;
@@ -2722,10 +2572,7 @@ fn the_stage_bound_fixture_keeps_the_pin_or_is_refused() {
     let entry = EntryRef::Name("stage_bound_matrix");
     let weight = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
     let bound = StageBounds::MEASURED.compiled;
-    let unbounded = StageBounds {
-        serialized: u64::MAX,
-        compiled: u64::MAX,
-    };
+    let unbounded = StageBounds { compiled: u64::MAX };
     let inputs = LowerInputs::new();
     let kept =
         |p: &DeviceProfile| compile_bitcode_kept(&bc, entry, p, &inputs, &mut meter(), SPIRV_WORDS);
@@ -2733,10 +2580,9 @@ fn the_stage_bound_fixture_keeps_the_pin_or_is_refused() {
         .join("../metal2vulkan-validation/profiles/intel-irisxe-rplp-anv.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let anv = Device::new(desc.clone(), DevicePolicy::default()).unwrap();
     let queries = Device::from_queries(desc, DevicePolicy::default()).unwrap();
-    assert_eq!(queries.profile().stage_bound(), StageBound::Every);
-    for p in [anv.profile(), queries.profile()] {
+    {
+        let p = queries.profile();
         assert!(p.fields().subgroup.maximal_reconvergence);
         // Unbounded, the kernel emulates its simdgroups in place of the widest mode, past the
         // bound.
@@ -2762,35 +2608,24 @@ fn the_stage_bound_fixture_keeps_the_pin_or_is_refused() {
         "the description names shaderMaximalReconvergence"
     );
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let anv = Device::new(desc.clone(), DevicePolicy::default()).unwrap();
     let queries = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
     let mut windows = desc;
     windows.driver_id = Some(crate::vk::DriverId::INTEL_PROPRIETARY_WINDOWS);
-    let windows = Device::new(windows, DevicePolicy::default()).unwrap();
-    let memory = Needs::DriverDefect(DriverWorkaround::CompilerMemoryGrowsWithStageSize);
-    let paths = [
-        (anv.profile(), Some(memory)),
-        (queries.profile(), Some(Needs::StageBound)),
-        (windows.profile(), None),
-    ];
-    for (p, needs) in paths {
+    let windows = Device::from_queries(windows, DevicePolicy::default()).unwrap();
+    for p in [queries.profile(), windows.profile()] {
         assert!(!p.fields().subgroup.maximal_reconvergence);
         let compiled = compile_bitcode_bounded(&bc, entry, p, &mut meter(), unbounded);
         let (_, plan, module) = compiled.expect("emulated");
         assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 0));
         let alone = weight(&module);
         assert!(alone > bound, "emulated {alone}");
-        match (kept(p), needs) {
-            (Err(Error::Unsupported(u)), Some(needs)) if u.feature == Feature::StageSize => {
+        match kept(p) {
+            Err(Error::Unsupported(u)) if u.feature == Feature::StageSize => {
                 let named = format!("entry weight {alone}, past the bound {bound}");
                 assert_eq!(u.symbol, Some(DiagName::new(named.as_str())), "{u}");
-                assert_eq!(u.needs, needs);
+                assert_eq!(u.needs, Needs::StageBound);
             }
-            (Ok((_, plan, module)), None) => {
-                assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 0));
-                assert_eq!(weight(&module), alone);
-            }
-            (got, needs) => panic!("{needs:?}: {:?}", got.map(|_| ())),
+            got => panic!("{:?}", got.map(|_| ())),
         }
     }
 }

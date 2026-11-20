@@ -197,7 +197,8 @@ fn rgba4_opaque_black_swizzled_follows_exposure() {
     );
     let d = DeviceDescription::from_khronos_json(&with, None).unwrap();
     assert!(d.rgba4_opaque_black_swizzled);
-    let dev = crate::device::Device::new(d, crate::device::DevicePolicy::default()).unwrap();
+    let dev =
+        crate::device::Device::from_queries(d, crate::device::DevicePolicy::default()).unwrap();
     assert!(dev
         .profile()
         .fields()
@@ -234,7 +235,8 @@ fn the_arm_spelling_of_rasterization_order_access_is_the_ext_one() {
         .extensions
         .contains(&VkExtension::ExtRasterizationOrderAttachmentAccess));
     assert!(d.has(VkFeature::RasterizationOrderColorAttachmentAccess));
-    let dev = crate::device::Device::new(d, crate::device::DevicePolicy::default()).unwrap();
+    let dev =
+        crate::device::Device::from_queries(d, crate::device::DevicePolicy::default()).unwrap();
     assert!(
         dev.profile()
             .fields()
@@ -798,10 +800,12 @@ fn required_features_are_cumulative() {
 #[cfg(feature = "serde")]
 #[test]
 fn descriptions_and_policies_round_trip_through_serde() {
-    let policies = [
-        DevicePolicy::default(),
-        DevicePolicy::default().exact_answers(),
-    ];
+    let unsafe_off = DevicePolicy {
+        containment: crate::device::ContainmentPolicy::UnsafeOff,
+        isolation: crate::device::profile::GuestIsolation::Off,
+        ..DevicePolicy::default()
+    };
+    let policies = [DevicePolicy::default(), unsafe_off];
     for (stem, text) in committed_profiles() {
         let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
         let json = serde_json::to_string(&description).unwrap();
@@ -811,8 +815,8 @@ fn descriptions_and_policies_round_trip_through_serde() {
             let policy_json = serde_json::to_string(&policy).unwrap();
             let decoded_policy: DevicePolicy = serde_json::from_str(&policy_json).unwrap();
             assert_eq!(decoded_policy, policy, "{stem}");
-            let original = Device::new(description.clone(), policy).unwrap();
-            let rebuilt = Device::new(decoded.clone(), decoded_policy).unwrap();
+            let original = Device::from_queries(description.clone(), policy).unwrap();
+            let rebuilt = Device::from_queries(decoded.clone(), decoded_policy).unwrap();
             assert_eq!(
                 rebuilt.profile().fingerprint(),
                 original.profile().fingerprint(),

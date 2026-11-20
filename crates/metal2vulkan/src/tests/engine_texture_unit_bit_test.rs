@@ -45,7 +45,7 @@ fn a_cube_sample_no_picked_unit_reaches_is_deleted() {
     let library = Library::from_air(&bc).expect("library");
     for stem in PROFILES {
         let text = specialized(&bc, stem);
-        let dev = Device::new(
+        let dev = Device::from_queries(
             description(stem).expect("committed description"),
             DevicePolicy::default(),
         )

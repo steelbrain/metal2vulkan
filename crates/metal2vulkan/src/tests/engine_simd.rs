@@ -53,7 +53,7 @@ pub(super) fn wave64() -> DeviceProfile {
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
     let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -68,7 +68,7 @@ fn moltenvk_without_int64() -> DeviceProfile {
     let cleared = text.replace("\"shaderInt64\": true", "\"shaderInt64\": false");
     assert_ne!(cleared, text, "the description names shaderInt64");
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let p = Device::new(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();
@@ -356,7 +356,7 @@ fn moltenvk_without_quads() -> DeviceProfile {
     let cleared = text.replace("\"VK_SUBGROUP_FEATURE_QUAD_BIT\",", "");
     assert_ne!(cleared, text, "the description lists the quad class");
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let p = Device::new(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();
@@ -580,7 +580,7 @@ fn a_device_that_cannot_pin_the_stage_refuses_a_pinned_kernel() {
     );
     let nvk = |text: &str| {
         let desc = DeviceDescription::from_khronos_json(text, None).expect("description");
-        Device::new(desc, DevicePolicy::default())
+        Device::from_queries(desc, DevicePolicy::default())
             .expect("device")
             .profile()
             .clone()
@@ -1013,7 +1013,7 @@ fn uniform_control_flow_mode_without_maximal_reconvergence() {
     );
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
     let queries = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
-    let p = Device::new(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();
@@ -1684,17 +1684,13 @@ fn fragment_group_operations_run_full_quads() {
     );
 }
 
-/// MoltenVK 1.4.2 drops `VK_KHR_shader_quad_control` (`shaderQuadControl`) on Apple's GPUs, where
-/// it still hands the fragment function to Metal, whose helpers take part in every simdgroup
-/// operation (`DriverDeviation::MetalFullQuads`). The committed `moltenvk-m3` description, a
-/// capture of 1.4.2 that states neither the feature nor its extension, compiles
-/// each fragment function whose group operations observe other lanes: it declares no
-/// `RequireFullQuadsKHR` and no `QuadControlKHR`, requires `VkProperty::MetalFullQuads` and not
-/// the feature, still reads every lane through the ballot of the live lanes, and passes L3. The
-/// same description without the deviation refuses each, needing the feature.
+/// MoltenVK 1.4.2 drops `VK_KHR_shader_quad_control` (`shaderQuadControl`) on Apple's GPUs. The
+/// committed `moltenvk-m3` description, a capture of 1.4.2 that states neither the feature nor
+/// its extension, refuses each fragment function whose group operations observe other lanes,
+/// needing the feature.
 #[test]
-fn a_device_that_runs_metal_s_helpers_runs_full_quads_without_quad_control() {
-    use crate::error::{Capability, DriverDeviation, Unsupported};
+fn a_device_without_quad_control_refuses_full_quads() {
+    use crate::error::{Capability, Unsupported};
     let Some(quads) = assemble("gsm2_quad_ops") else {
         return;
     };
@@ -1704,58 +1700,26 @@ fn a_device_that_runs_metal_s_helpers_runs_full_quads_without_quad_control() {
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     assert!(!desc.features.contains(&VkFeature::ShaderQuadControl));
     assert!(!desc.extensions.contains(&VkExtension::KhrShaderQuadControl));
-    let device = |taken: bool| {
-        Device::with_deviation(
-            desc.clone(),
-            DevicePolicy::default(),
-            DriverDeviation::MetalFullQuads,
-            taken,
-        )
+    let without = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
-        .clone()
-    };
-    let (metals, without) = (device(true), device(false));
-    assert!(!metals.fields().subgroup.quad_control);
-    assert!(metals.takes_driver_deviation(DriverDeviation::MetalFullQuads));
-    assert!(!without.takes_driver_deviation(DriverDeviation::MetalFullQuads));
+        .clone();
+    assert!(!without.fields().subgroup.quad_control);
+    let want = Unsupported::needs(
+        Feature::SubgroupOperations,
+        Capability::Feature(VkFeature::ShaderQuadControl),
+    );
     for entry in [
         "fragment_quad_fills",
         "fragment_quad_fills_and_rotations",
         "fragment_simd_fills",
         "fragment_quad_scans",
     ] {
-        let a = compile(&quads, entry, &metals).unwrap_or_else(|e| panic!("{entry}: {e}"));
-        assert!(
-            a.requirements
-                .properties
-                .contains(&VkProperty::MetalFullQuads),
-            "{entry}: the property"
-        );
-        assert!(
-            !a.requirements
-                .features
-                .contains(&VkFeature::ShaderQuadControl),
-            "{entry}: no feature"
-        );
-        let (_, words) = link_and_validate(&a, &metals).expect("valid");
-        let text = spirv_dis(&words);
-        assert!(
-            !text.contains("RequireFullQuadsKHR")
-                && !text.contains("QuadControlKHR")
-                && !text.contains("OpGroupNonUniformQuadBroadcast")
-                && !text.contains("OpGroupNonUniformQuadSwap"),
-            "{entry}"
-        );
-        let want = Unsupported::needs(
-            Feature::SubgroupOperations,
-            Capability::Feature(VkFeature::ShaderQuadControl),
-        );
         match compile(&quads, entry, &without) {
             Err(Error::Unsupported(u)) => {
                 assert_eq!((u.feature, u.needs), (want.feature, want.needs), "{entry}")
             }
-            other => panic!("{entry} without the deviation: {:?}", other.map(|_| ())),
+            other => panic!("{entry} without the feature: {:?}", other.map(|_| ())),
         }
     }
 }

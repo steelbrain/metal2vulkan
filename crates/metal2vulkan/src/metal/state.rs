@@ -509,7 +509,7 @@ mod tests {
         } else {
             desc.features.remove(&VkFeature::DualSrcBlend);
         }
-        Device::new(desc, DevicePolicy::default()).unwrap()
+        Device::from_queries(desc, DevicePolicy::default()).unwrap()
     }
 
     /// Every concrete factor maps, the names agree, and only `Source1*` needs `dualSrcBlend`.
@@ -629,7 +629,7 @@ mod tests {
             .into_iter()
             .find(|(s, _)| s == name)
             .unwrap();
-        Device::new(desc, DevicePolicy::default()).unwrap()
+        Device::from_queries(desc, DevicePolicy::default()).unwrap()
     }
 
     /// The encoder's fill mode, depth clip mode, and depth bias clamp map where the device has

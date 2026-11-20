@@ -3413,7 +3413,7 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
                 index: (index == 1).then_some(1),
                 ..IoDecor::default()
             };
-            let half = declared == io && half_variable(cx, attachment, f);
+            let half = false;
             let sp = &mut cx.families.stage_io;
             let object = declare(sp, key.clone(), IoDir::Output, declared, deco, half)?;
             if half {
@@ -3718,26 +3718,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         )
         .saturating_add(rounding.saturating_mul(rets));
     Ok(())
-}
-
-/// Whether a color output of form `f` to `attachment`, through a variable of its own type, is
-/// declared with 16-bit `float` lanes (`StageIo::half_outputs`): a `half` output on a profile that
-/// enables `storageInputOutput16` and `shaderFloat16` under `HalfOutputs::Sixteen` (`Device::new`'s
-/// profile; `Device::from_queries`' widens every one), so the device receives the `half` the
-/// function returns as a `half`, as Metal's attachment does, and blends and converts it as its own
-/// `half` output. Its value is a `half`, also where the attachment's write rounds a lane
-/// (`color_write::plan`: a `half` lane rounds only to a float format of no more precision and the
-/// same exponent range), so the conversion that stores it is exact. Not to an attachment held with
-/// its channels rotated, whose output may be premultiplied in `float` (`rotated_blend_form`).
-fn half_variable(cx: &SelectCx<'_>, attachment: u32, f: Form) -> bool {
-    use crate::device::profile::HalfOutputs;
-    use crate::device::requirements::VkFeature;
-    let fields = cx.profile.fields();
-    f.float_fmt() == Some(FloatFmt::Half)
-        && cx.profile.half_outputs() == HalfOutputs::Sixteen
-        && (fields.enabled.features).contains(&VkFeature::StorageInputOutput16)
-        && fields.leaf.float16
-        && !cx.inputs.rotated_colors.contains(&attachment)
 }
 
 /// Whether AIR type `ty` of entry `e` is `half` or a vector of it: a `half` color output

@@ -68,7 +68,7 @@ fn device_with(stem: &str, policy: DevicePolicy) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let description = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(description, policy).expect("device")
+    Device::from_queries(description, policy).expect("device")
 }
 
 /// The fullscreen triangle drawn white into one `RGBA8Unorm` attachment at `samples`.
@@ -889,7 +889,7 @@ fn device_without(stem: &str, features: &[&str]) -> Device {
         text = text.replace(&on, &format!("\"{f}\": false"));
     }
     let description = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(description, DevicePolicy::default()).expect("device")
+    Device::from_queries(description, DevicePolicy::default()).expect("device")
 }
 
 /// Assert that pipeline `p` draws its logic operation in its fragment function: no Vulkan

@@ -169,10 +169,7 @@ impl MetalDeviceProperties {
         let threads = l
             .max_compute_work_group_invocations
             .min(apple_gpu::MAX_THREADS_PER_THREADGROUP);
-        let per_axis = match profile.deep_threadgroups() {
-            DeepThreadgroups::Axes => l.max_compute_work_group_size.map(|axis| axis.min(threads)),
-            DeepThreadgroups::OneRow => [threads; 3],
-        };
+        let per_axis = [threads; 3];
         let d = &f.descriptors;
         let argument_buffers_tier = if f.buffer_access == BufferAccess::Addressed
             && d.runtime_descriptor_array

@@ -384,7 +384,7 @@ fn devices(policy: DevicePolicy) -> Vec<(String, Device)> {
         let text = std::fs::read_to_string(&path).expect("read profile");
         let desc = DeviceDescription::from_khronos_json(&text, None)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let dev = Device::new(desc, policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let dev = Device::from_queries(desc, policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
         out.push((stem, dev));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

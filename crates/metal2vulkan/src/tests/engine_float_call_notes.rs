@@ -33,7 +33,7 @@ use crate::lower::arith::libm::Mode;
 use crate::lower::arith::{denormal, float_binop_notes, float_call_notes, nan, narrow, FloatFmt};
 use crate::pipeline::artifact::{EntryMath, PrecisionNote};
 use crate::pipeline::testing::{
-    compile, exact_maths, llvm_assemble, meter, typed_module, AssembleError, Scratch,
+    compile, llvm_assemble, meter, typed_module, AssembleError, Scratch,
 };
 use crate::spirv::testing::committed_profiles_with;
 use std::collections::{BTreeMap, BTreeSet};
@@ -307,7 +307,9 @@ fn note_class(p: &DeviceProfile) -> NoteClass {
 /// One committed profile per note class (the first by name).
 fn one_profile_per_class() -> BTreeMap<NoteClass, (String, DeviceProfile)> {
     let mut out = BTreeMap::new();
-    for (stem, p) in committed_profiles_with(exact_maths()).expect("profiles") {
+    for (stem, p) in
+        committed_profiles_with(crate::device::DevicePolicy::default()).expect("profiles")
+    {
         out.entry(note_class(&p)).or_insert((stem, p));
     }
     let routes: BTreeSet<Route> = out.keys().map(|(route, _, _, _)| *route).collect();
@@ -670,7 +672,8 @@ fn a_fast_math_entry_on_moltenvk_records_no_note_for_metals_own_operations() {
     let Some(bitcode) = assemble("moltenvk", 0, &module(&kernels)) else {
         return;
     };
-    let profiles = committed_profiles_with(exact_maths()).expect("profiles");
+    let profiles =
+        committed_profiles_with(crate::device::DevicePolicy::default()).expect("profiles");
     let by_stem = |stem: &str| {
         profiles
             .iter()

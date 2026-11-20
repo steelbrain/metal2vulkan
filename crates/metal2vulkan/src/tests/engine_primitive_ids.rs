@@ -57,11 +57,12 @@ fn withholding(colors: u32, more: &[VkFeature]) -> Device {
     }
     desc.limits.max_color_attachments = colors;
     desc.limits.max_fragment_output_attachments = colors;
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 fn device(stem: &str) -> Device {
-    Device::new(description(stem).expect("profile"), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem).expect("profile"), DevicePolicy::default())
+        .expect("device")
 }
 
 fn function(bc: &[u8], name: &str) -> FunctionDescriptor {

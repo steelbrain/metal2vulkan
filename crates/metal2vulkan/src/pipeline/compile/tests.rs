@@ -63,7 +63,7 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
 
 /// Committed profile `stem` as a device with the default policy.
 fn device(stem: &str) -> Device {
-    Device::new(description(stem), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
 }
 
 /// Committed profile `stem` as the Khronos reader describes it.
@@ -1642,7 +1642,7 @@ fn a_render_pipeline_requires_extended_dynamic_state_exactly_when_it_makes_one_d
     )));
     d.rasterization_enabled = false;
     let compile = |desc: &DeviceDescription| {
-        let dev = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
         let pipe = dev
             .compile_render_pipeline(&d, &Budget::standard())
             .expect("render pipeline");
@@ -1738,7 +1738,7 @@ fn a_vertex_pipeline_makes_its_input_assembly_dynamic_exactly_with_both_extended
     )));
     d.rasterization_enabled = false;
     let compile = |desc: &DeviceDescription| {
-        let dev = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
         dev.compile_render_pipeline(&d, &Budget::standard())
             .expect("render pipeline")
     };
@@ -1850,7 +1850,7 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
         c.destination_rgb_blend_factor = metal::BlendFactor::One;
     }
     let compile = |desc: &DeviceDescription, policy: DevicePolicy, d: &RenderPipelineDescriptor| {
-        let dev = Device::new(desc.clone(), policy).expect("device");
+        let dev = Device::from_queries(desc.clone(), policy).expect("device");
         let pipe = dev.compile_render_pipeline(d, &Budget::standard())?;
         for s in &pipe.stages {
             l3(&s.spirv, &pipe.requirements, &dev);
@@ -2222,7 +2222,7 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
         d
     };
     let compile = |desc: &DeviceDescription, d: &RenderPipelineDescriptor| {
-        let dev = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
         let pipe = dev.compile_render_pipeline(d, &Budget::standard())?;
         for s in &pipe.stages {
             l3(&s.spirv, &pipe.requirements, &dev);
@@ -2452,7 +2452,7 @@ fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
     };
     let compile = |stem: &str, d: &RenderPipelineDescriptor| {
         let desc = description(stem);
-        let dev = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
         let pipe = dev.compile_render_pipeline(d, &Budget::standard())?;
         let enables = desc
             .required_enables(&pipe.requirements)
@@ -2876,7 +2876,7 @@ fn a_render_pipeline_requires_the_portability_features_it_uses() {
     };
     // Every pipeline that compiles requires only what its device enabled.
     let compile = |desc: &DeviceDescription, d: &RenderPipelineDescriptor| {
-        let dev = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
         dev.compile_render_pipeline(d, &Budget::standard())
             .map(|p| {
                 assert_eq!(dev.profile().check(&p.requirements), Ok(()));
@@ -2964,7 +2964,8 @@ fn a_render_pipeline_requires_its_framebuffer_sample_counts() {
         ),
     ] {
         d.raster_sample_count = count;
-        let dev = Device::new(description("lavapipe"), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(description("lavapipe"), DevicePolicy::default()).expect("device");
         let pipe = dev
             .compile_render_pipeline(&d, &Budget::standard())
             .expect("lavapipe");
@@ -3043,7 +3044,7 @@ fn the_interface_states_why_a_slot_takes_no_snapshot() {
         (d.features).remove(&VkFeature::ShaderDemoteToHelperInvocation),
         "the 780M's profile demotes"
     );
-    let ends = Device::new(d, DevicePolicy::default()).expect("device");
+    let ends = Device::from_queries(d, DevicePolicy::default()).expect("device");
     for (name, dev, refusals) in [
         ("demote", &demotes, Vec::new()),
         ("no demote", &ends, vec![(0, SnapshotRefusal::Branch)]),
@@ -3149,10 +3150,7 @@ fn a_snapshot_variant_reads_its_texture_in_the_copy_alone() {
         inputs
     };
     let mut interlocked = 0;
-    let policies = [
-        ("default", DevicePolicy::default()),
-        ("exact", DevicePolicy::default().exact_answers()),
-    ];
+    let policies = [("default", DevicePolicy::default())];
     for (stem, name, policy) in [
         "intel-irisxe-anv",
         "nvidia-rtx5080-laptop",

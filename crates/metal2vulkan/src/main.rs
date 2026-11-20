@@ -235,13 +235,13 @@ fn run(
             let description =
                 DeviceDescription::from_khronos_json(json, args.profile_name.as_deref())
                     .map_err(|e| Failure::detailed("profile not read", e.to_string()))?;
-            Device::new(description, DevicePolicy::default())
+            Device::from_queries(description, DevicePolicy::default())
                 .map_err(|e| Failure::detailed("profile refused", e.to_string()))?
         }
         DeviceFile::Device(json) => {
             let device = ReproDevice::from_json(json)
                 .map_err(|e| Failure::detailed("device not read", e))?;
-            Device::new(device.description, device.policy)
+            Device::from_queries(device.description, device.policy)
                 .map_err(|e| Failure::detailed("device refused", e.to_string()))?
         }
     };

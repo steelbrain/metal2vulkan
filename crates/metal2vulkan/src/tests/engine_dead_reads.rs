@@ -59,7 +59,7 @@ fn device_without(stem: &str, features: &[VkFeature]) -> Device {
     for f in features {
         assert!(desc.features.remove(f), "{stem} has {f:?}");
     }
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// The devices of the raster order tests, each with whether it has the pixel interlock.
@@ -173,7 +173,7 @@ fn a_raster_order_group_on_an_input_dead_after_specialization_takes_no_interlock
         }
         cases.push((name.to_owned(), dev, interlock, "dfr_output", vec![0]));
     }
-    let floor = Device::new(
+    let floor = Device::from_queries(
         description("vk12-floor").expect("profile"),
         DevicePolicy::default(),
     )

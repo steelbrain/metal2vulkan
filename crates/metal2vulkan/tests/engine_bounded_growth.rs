@@ -208,7 +208,7 @@ fn compile_cost_grows_linearly_with_the_block_count() {
         .join("../metal2vulkan-validation/profiles/vk12-floor.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect("vk12-floor");
-    let device = Device::new(description, DevicePolicy::default()).expect("vk12-floor");
+    let device = Device::from_queries(description, DevicePolicy::default()).expect("vk12-floor");
     let Some(small) = assemble(&irreducible_chain(SMALL)) else {
         return;
     };

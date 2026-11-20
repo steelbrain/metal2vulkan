@@ -88,7 +88,7 @@ fn device(stem: &str, bare: bool) -> Device {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
     }
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// Each profile of [`PROFILES`], and each without buffer robustness (`true`).

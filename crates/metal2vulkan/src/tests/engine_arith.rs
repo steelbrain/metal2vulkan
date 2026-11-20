@@ -11,7 +11,7 @@
 //! an integer where it needs one. `llvm-as` assembles the generated module; without it the test
 //! skips visibly.
 //!
-//! Every profile here takes Metal's `half` rounding and NaN (`exact_maths`), whose answers these
+//! Every profile here takes Metal's `half` rounding and NaN (the default policy), whose answers these
 //! tests check; the maths functions are the device's on every device but MoltenVK
 //! (`engine_native_maths`).
 
@@ -30,8 +30,7 @@ use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{plan_bitcode, EntryRef};
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, description, exact_maths, link_and_validate, llvm_assemble, meter, profile,
-    AssembleError, Scratch,
+    compile, description, link_and_validate, llvm_assemble, meter, profile, AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
@@ -1140,7 +1139,7 @@ fn arith_kernels_validate_and_compute_on_every_profile() {
     let (mut met, mut refused) = (Vec::new(), Vec::new());
     let mut computed = 0;
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let missing = kk.needs.iter().copied().find(|n| !has(&p, *n));
@@ -1272,7 +1271,7 @@ fn wide_divisions_share_one_routine_per_form() {
     .expect("description");
     desc.driver_id = Some(crate::vk::DriverId::MOLTENVK);
     desc.driver_version = 10401;
-    let converted = Device::new(desc, exact_maths())
+    let converted = Device::from_queries(desc, crate::device::DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();
@@ -1283,7 +1282,7 @@ fn wide_divisions_share_one_routine_per_form() {
     let cases = [
         (
             "vk12-floor",
-            profile("vk12-floor", exact_maths()).expect("profile"),
+            profile("vk12-floor", crate::device::DevicePolicy::default()).expect("profile"),
             3,
             5,
             0,
@@ -1291,7 +1290,7 @@ fn wide_divisions_share_one_routine_per_form() {
         ("vk12-floor under MoltenVK 1.4.1", converted, 3, 5, 0x2),
         (
             "amd-rdna3-radv",
-            profile("amd-rdna3-radv", exact_maths()).expect("profile"),
+            profile("amd-rdna3-radv", crate::device::DevicePolicy::default()).expect("profile"),
             1,
             0,
             0,
@@ -1359,7 +1358,7 @@ fn fused_multiply_adds_take_the_profiles_route() {
         ("lavapipe", 0, true),
         ("vk12-floor", 0, true),
     ] {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1481,8 +1480,8 @@ fn a_half_fused_multiply_add_is_the_devices_16_bit_fma_on_from_queries() {
     ] {
         let what = format!("fma_half_rounds_once on {stem} (from_queries)");
         let desc = description(stem).expect("description");
-        let device =
-            Device::from_queries(desc, exact_maths()).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let device = Device::from_queries(desc, crate::device::DevicePolicy::default())
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
         let p = device.profile();
         let controls = half_controls(p);
         let route = if controls {
@@ -1659,7 +1658,8 @@ fn dot_is_the_devices_op_dot_on_every_profile() {
         "vk12-floor",
         "lunarg-desktop-baseline-2023",
     ] {
-        for policy in [exact_maths(), DevicePolicy::default()] {
+        {
+            let policy = DevicePolicy::default();
             let p = profile(stem, policy).expect("profile");
             let metal = p.fields().float_functions == FloatFunctions::Metal;
             for kk in &ks {
@@ -1723,7 +1723,7 @@ fn fast_fmod_is_metals_composition() {
         ("lavapipe", 0, 1),
         ("vk12-floor", 0, 1),
     ] {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let kk = &ks[0];
         let what = format!("{} on {stem}", kk.name);
         let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1777,7 +1777,7 @@ fn an_ordered_not_equal_is_the_negated_unordered_equal() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let kk = &ks[0];
         let what = format!("{} on {stem}", kk.name);
         let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1843,7 +1843,7 @@ fn an_arcp_division_is_the_devices_quotient() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1928,9 +1928,9 @@ fn a_fast_division_leaves_its_nans_to_the_device() {
     let Some(bitcode) = assemble("fast-divide-specials", &module(&ks)) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_, fact, _| !fact);
+    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_| true);
     for stem in every_profile() {
-        let p = profile(&stem, exact_maths()).expect("profile");
+        let p = profile(&stem, crate::device::DevicePolicy::default()).expect("profile");
         let device_nans =
             p.takes_driver_deviation(crate::error::DriverDeviation::MetalCanonicalNans);
         for kk in &ks {
@@ -2031,7 +2031,7 @@ fn a_division_without_arcp_is_the_devices_quotient() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let device_nans =
             p.takes_driver_deviation(crate::error::DriverDeviation::MetalCanonicalNans);
         for kk in &ks {
@@ -2112,7 +2112,7 @@ fn fast_sincos_is_the_devices_sine_and_cosine() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe", "vk12-floor"] {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2178,7 +2178,7 @@ fn device_float_environment_notes_follow_the_operations() {
         return;
     };
     for (stem, column) in [("moltenvk-m3", 0), ("lavapipe", 1)] {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for (kk, (m3, lp)) in ks.iter().zip(&notes) {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2233,7 +2233,7 @@ fn a_float_remainder_is_the_devices_without_every_flag() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2286,7 +2286,7 @@ fn unlowered_arithmetic_refuses_as_not_implemented() {
     let Some(bitcode) = assemble("refusals", &text) else {
         return;
     };
-    let p = profile("moltenvk-m3", exact_maths()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::default()).expect("profile");
     for kk in &cases {
         match compile(&bitcode, kk.name, &p) {
             Err(Error::Unsupported(u)) => {
@@ -2393,7 +2393,7 @@ fn float_ops_without_contract_and_reassoc_are_no_contraction() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2492,7 +2492,7 @@ fn arithmetic_the_air_lets_a_compiler_rewrite_notes_fast_math_rewrites() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for (i, kk) in ks.iter().enumerate() {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2556,7 +2556,9 @@ fn narrow_float_module_growth_is_bounded() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{} on {stem}: L3: {e}", kk.name));
             a.module.words.len()
         };
-        let words = ks.each_ref().map(|kk| words_on(exact_maths(), kk));
+        let words = ks
+            .each_ref()
+            .map(|kk| words_on(crate::device::DevicePolicy::default(), kk));
         eprintln!(
             "half and bfloat growth on {stem}: float {} words, half {} ({:+}), bfloat {} ({:+})",
             words[0],
@@ -2628,7 +2630,7 @@ fn half_rounding_follows_the_operation() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2764,7 +2766,7 @@ fn a_measured_half_sum_requires_the_arithmetic_fact_alone() {
     };
     let mut converting = 0;
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let converted = crate::lower::arith::narrow::quantize_form(&p)
             == crate::spirv::builder::QuantizeForm::Converted;
         let ha = p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfArithmetic)
@@ -2853,7 +2855,7 @@ fn a_half_rounding_without_float16_is_the_quantize_alone() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for (kk, &(_, _, quantizes)) in ks.iter().zip(&cases) {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -3034,7 +3036,7 @@ fn float_ops_without_fast_flags_preserve_signed_zero_inf_nan() {
     };
     let (mut declared, mut noted) = (0, 0);
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let supported = p.fields().float_controls.f32.signed_zero_inf_nan_preserve;
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
@@ -3147,7 +3149,7 @@ fn a_convert_tells_a_nan_by_its_bits_where_the_entry_may_assume_none() {
     };
     let mut bits = 0;
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -3167,29 +3169,10 @@ fn a_convert_tells_a_nan_by_its_bits_where_the_entry_may_assume_none() {
     assert!(bits >= PROFILES.len(), "{bits} by bits");
 }
 
-/// The profile of committed profile `stem` with its driver's `MetalFloatFunctions` deviation
-/// taken or not as `metal` says, and nothing else changed.
-fn with_float_functions(stem: &str, metal: bool) -> DeviceProfile {
-    use crate::device::{Device, DeviceDescription};
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let deviation = crate::error::DriverDeviation::MetalFloatFunctions;
-    Device::with_deviation(desc, exact_maths(), deviation, metal)
-        .expect("device")
-        .profile()
-        .clone()
-}
-
 /// An `arcp` division is the device's `OpFDiv(x, y)` itself on every profile, which MoltenVK hands
 /// Metal's compiler as the AIR's own fast `x / y` (Metal's compiler does not treat `x * (1.0 / y)`
 /// the same way: case 24c263bb's `(a * 255) / a` was 255 on Metal and 254 as `x` times the
-/// device's `OpFDiv(1, y)`). Where the device's `float` division is Metal's (its driver's
-/// deviation `MetalFloatFunctions`) and Metal compiles the entry with fast math (it declares no
-/// `SignedZeroInfNanPreserve`), the quotient is Metal's own and records no note; elsewhere it
-/// records `DeviceArithmetic`. The interpreter's `OpFDiv` is correctly rounded: `RN(1e10 / 3)` is
+/// device's `OpFDiv(1, y)`). The quotient records `DeviceArithmetic`. The interpreter's `OpFDiv` is correctly rounded: `RN(1e10 / 3)` is
 /// `0x4f46aea1`.
 #[test]
 fn a_fast_division_is_the_device_s_quotient() {
@@ -3226,10 +3209,10 @@ fn a_fast_division_is_the_device_s_quotient() {
     let Some(bitcode) = assemble("fast-quotient", &module(&ks)) else {
         return;
     };
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::default()).expect("profile");
     for (kk, fast_math) in ks.iter().zip(fast_math) {
-        for metal in [true, false] {
-            let p = with_float_functions("moltenvk-m3", metal);
-            let what = format!("{} with the fact {metal}", kk.name);
+        {
+            let what = kk.name.to_string();
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
                 link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -3238,11 +3221,8 @@ fn a_fast_division_is_the_device_s_quotient() {
                 !fast_math,
                 "{what}: SignedZeroInfNanPreserve"
             );
-            // Metal's own quotient in a fast entry records no note; the device's elsewhere does.
-            let device = metal && fast_math;
-            assert_eq!(
+            assert!(
                 a.precision.contains(&PrecisionNote::DeviceArithmetic),
-                !device,
                 "{what}: {:?}",
                 a.precision
             );
@@ -3266,33 +3246,6 @@ fn ob(name: &str, b: u32) -> String {
         "{}  %{name} = bitcast i32 %{name}.w to float\n",
         word(&format!("{name}.w"), b)
     )
-}
-
-/// Committed profile `stem` with its driver's `MetalCanonicalNans` deviation taken or not as
-/// `fact` says.
-fn profile_with_canonical_nans(stem: &str, fact: bool) -> DeviceProfile {
-    profile_with_fact(
-        stem,
-        crate::error::DriverDeviation::MetalCanonicalNans,
-        fact,
-    )
-}
-
-/// Committed profile `stem` with its driver's deviation `deviation` taken or not as `fact` says.
-fn profile_with_fact(
-    stem: &str,
-    deviation: crate::error::DriverDeviation,
-    fact: bool,
-) -> DeviceProfile {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(&path).expect("profile");
-    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::with_deviation(desc, exact_maths(), deviation, fact)
-        .expect("device")
-        .profile()
-        .clone()
 }
 
 /// The bits tests' `OpUGreaterThan` in the entry point's own function of module `words` (one
@@ -3354,33 +3307,27 @@ fn stores_nan(bits: u32, half: bool) -> bool {
 }
 
 /// Kernels `ks` of `bitcode` (each storing a NaN's bits, `half` ones zero-extended where `half`)
-/// on `lavapipe` and `moltenvk-m3`, each with its driver's deviation `MetalCanonicalNans` taken
-/// and not: the module selects no NaN, so it is the same word for word on both sides of the fact;
-/// it records `PrecisionNote::NativeNanEncoding` exactly where `noted(kernel, fact, moves)` or it
-/// reads a `half` from its bits by the device's widening or encodes one by its narrowing
-/// (`narrow::widens_bits`, `narrow::encodes_bits`: both profiles have `shaderFloat16`) on a profile
-/// whose moves of a NaN are not measured (`moves`, `DriverDeviation::MetalNanMoves`: the M3 Max's
-/// identity on MoltenVK), and never `DeviceNanEncoding`; it requires `VkProperty::MetalNanMoves`
-/// exactly where `moves` and it reads or encodes a `half` so, or `noted` drops the note for the
-/// moves; and the interpreter's answer is the kernel's `want`, or a NaN, its bits the device's,
-/// where it has none, but for the kernels `unread` names, whose device instruction the interpreter
-/// does not evaluate.
+/// on `lavapipe` and `moltenvk-m3`: the module selects no NaN; it records
+/// `PrecisionNote::NativeNanEncoding` exactly where `noted(kernel)` or it reads a `half` from its
+/// bits by the device's widening or encodes one by its narrowing (`narrow::widens_bits`,
+/// `narrow::encodes_bits`: both profiles have `shaderFloat16`), and never `DeviceNanEncoding`; and
+/// the interpreter's answer is the kernel's `want`, or a NaN, its bits the device's, where it has
+/// none, but for the kernels `unread` names, whose device instruction the interpreter does not
+/// evaluate.
 fn nans_are_the_device_s(
     bitcode: &[u8],
     ks: &[Kernel],
     half: bool,
     unread: &[&str],
-    noted: &dyn Fn(&str, bool, bool) -> bool,
+    noted: &dyn Fn(&str) -> bool,
 ) {
     for stem in ["lavapipe", "moltenvk-m3"] {
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in ks {
-            let mut emitted = Vec::new();
-            for fact in [false, true] {
-                let p = profile_with_canonical_nans(stem, fact);
-                let what = format!("{} on {stem}, MetalCanonicalNans {fact}", kk.name);
+            {
+                let what = format!("{} on {stem}", kk.name);
                 let a = compile(bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                let (_, words) =
-                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
                 let (_, m) = crate::pipeline::testing::typed_module(bitcode, kk.name, &p)
                     .unwrap_or_else(|e| panic!("{what}: {e:?}"));
                 let widens = crate::lower::arith::narrow::widens_bits(&m, &mut meter())
@@ -3388,20 +3335,11 @@ fn nans_are_the_device_s(
                         Ok(w || crate::lower::arith::narrow::encodes_bits(&m, &mut meter())?)
                     })
                     .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                let moves = p.takes_driver_deviation(crate::error::DriverDeviation::MetalNanMoves);
                 assert_eq!(
                     a.precision.contains(&PrecisionNote::NativeNanEncoding),
-                    noted(kk.name, fact, moves) || (widens && !moves),
+                    noted(kk.name) || widens,
                     "{what}: {:?}",
                     a.precision
-                );
-                let moved = noted(kk.name, fact, false) && !noted(kk.name, fact, true);
-                assert_eq!(
-                    a.requirements
-                        .properties
-                        .contains(&crate::device::requirements::VkProperty::MetalNanMoves),
-                    moves && (widens || moved),
-                    "{what}"
                 );
                 assert!(
                     !a.precision.contains(&PrecisionNote::DeviceNanEncoding),
@@ -3415,13 +3353,7 @@ fn nans_are_the_device_s(
                         None => assert!(stores_nan(got, half), "{what}: {got:#x}"),
                     }
                 }
-                emitted.push(words);
             }
-            assert!(
-                emitted[0] == emitted[1],
-                "{} on {stem}: the module changes with the fact",
-                kk.name
-            );
         }
     }
 }
@@ -3451,37 +3383,19 @@ fn a_float_nan_is_the_device_s_on_every_profile() {
     let Some(bitcode) = assemble("nan-fact", &module(&ks)) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, false, &[], &|name, fact, _| {
-        name == "nan_round" || !fact
-    });
-    // The committed profiles state the fact for the measured device only.
-    for (stem, fact) in [("moltenvk-m3", true), ("lavapipe", false)] {
-        let p = profile(stem, exact_maths()).expect("profile");
-        assert_eq!(
-            p.fingerprint(),
-            profile_with_canonical_nans(stem, fact).fingerprint(),
-            "{stem}"
-        );
-    }
+    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_| true);
 }
 
 // ---- Metal's float denormals ----
 
 /// Metal reads an `f32` denormal operand of `+ - *`, a comparison, `sqrt`, `floor`, `ceil` and
 /// `ldexp` as the zero of its sign and flushes a denormal result. The module leaves the reading to
-/// the device: where the profile takes its driver's measured deviation `MetalFloatDenormals` it
-/// requires the fact for `+ - *`, the comparison, `sqrt` and `ldexp` (whose denormal operand and
-/// result are the device's products, `math::ldexp_bits`), which then read them as Metal does;
-/// elsewhere they are the device's, noted `DeviceDenormals` (`sqrt`, the device's maths function,
-/// off Metal's own functions notes them beside its precision on either). `floor` and `ceil` are
-/// the device's whatever the fact: noted, but on a profile that takes the unary deviation
-/// `MetalUnaryDenormals` (moltenvk-m3), which requires its property instead and reads them as the
-/// zero of their sign as Metal does. Flipping the fact changes the requirement and the note, never
-/// the module. The interpreter keeps denormals as
+/// the device: each is the device's, noted `DeviceDenormals` (`ldexp`'s denormal operand and
+/// result are the device's products, `math::ldexp_bits`). The interpreter keeps denormals as
 /// lavapipe does. The operands are bits (volatile private words), so each kernel's float
 /// operation is its only one.
 #[test]
-fn float_denormals_are_the_devices_and_noted_off_the_device_fact() {
+fn float_denormals_are_the_devices_and_noted() {
     // The kernel's float `%r` from `body`, Metal's word, and the word of a device that keeps
     // denormals (the interpreter, where the module leaves them to the device).
     let float = |name: &'static str, body: String, metal: u32| Kernel {
@@ -3604,73 +3518,20 @@ fn float_denormals_are_the_devices_and_noted_off_the_device_fact() {
     let Some(bitcode) = assemble("denormal-fact", &text) else {
         return;
     };
-    let deviation = crate::error::DriverDeviation::MetalFloatDenormals;
     for stem in ["moltenvk-m3", "lavapipe"] {
-        let mut emitted: Vec<Vec<Vec<u32>>> = Vec::new();
-        for fact in [true, false] {
-            let p = profile_with_fact(stem, deviation, fact);
-            let mut per = Vec::new();
-            for (kk, device) in ks.iter().zip(&devices) {
-                let what = format!("{} on {stem}, MetalFloatDenormals {fact}", kk.name);
-                let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                let (_, words) =
-                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                let never = matches!(kk.name, "den_floor" | "den_ceil");
-                // Floor and ceiling follow the unary deviation alone.
-                let unary =
-                    p.takes_driver_deviation(crate::error::DriverDeviation::MetalUnaryDenormals);
-                // The device's `Sqrt`, a maths function off Metal's own functions, records its
-                // denormals with its precision.
-                let function = kk.name == "den_sqrt"
-                    && p.fields().float_functions != crate::device::profile::FloatFunctions::Metal;
-                assert_eq!(
-                    a.requirements
-                        .properties
-                        .contains(&crate::device::requirements::VkProperty::MetalFloatDenormals),
-                    fact && !never,
-                    "{what}"
-                );
-                if never {
-                    assert_eq!(
-                        a.requirements.properties.contains(
-                            &crate::device::requirements::VkProperty::MetalUnaryDenormals
-                        ),
-                        unary,
-                        "{what}"
-                    );
-                }
-                let noted = match never {
-                    true => !unary,
-                    false => function || !fact,
-                };
-                assert_eq!(
-                    a.precision.contains(&PrecisionNote::DeviceDenormals),
-                    noted,
-                    "{what}: {:?}",
-                    a.precision
-                );
-                let got = interpret(&bitcode, kk.name, &p);
-                assert_eq!(got, *device, "{what}: {got:#x} != {device:#x}");
-                per.push(words);
-            }
-            emitted.push(per);
-        }
-        for (i, kk) in ks.iter().enumerate() {
-            assert_eq!(
-                emitted[0][i], emitted[1][i],
-                "{} on {stem}: the module with and without the fact",
-                kk.name
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        for (kk, device) in ks.iter().zip(&devices) {
+            let what = format!("{} on {stem}", kk.name);
+            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            assert!(
+                a.precision.contains(&PrecisionNote::DeviceDenormals),
+                "{what}: {:?}",
+                a.precision
             );
+            let got = interpret(&bitcode, kk.name, &p);
+            assert_eq!(got, *device, "{what}: {got:#x} != {device:#x}");
         }
-    }
-    // The committed profiles state the fact for the measured device only.
-    for (stem, fact) in [("moltenvk-m3", true), ("lavapipe", false)] {
-        let p = profile(stem, exact_maths()).expect("profile");
-        assert_eq!(
-            p.fingerprint(),
-            profile_with_fact(stem, deviation, fact).fingerprint(),
-            "{stem}"
-        );
     }
 }
 
@@ -3702,7 +3563,7 @@ fn sincos_answers_the_device_s_nan() {
         return;
     };
     let unread = ["sincos_nan_sine", "sincos_nan_cosine"];
-    nans_are_the_device_s(&bitcode, &ks, false, &unread, &|_, fact, _| !fact);
+    nans_are_the_device_s(&bitcode, &ks, false, &unread, &|_| true);
 }
 
 /// A NaN test (Metal's saturating conversion's) is `OpIsNan` only in an entry that declares
@@ -3769,7 +3630,7 @@ fn a_nan_test_no_float_mode_folds() {
     };
     let (mut bits_tested, mut is_nan_tested) = (0, 0);
     for stem in PROFILES.into_iter().chain(["lavapipe"]) {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -3820,7 +3681,7 @@ fn a_nan_test_no_float_mode_folds() {
             Err(AssembleError::Rejected(e)) => panic!("llvm-as rejected {entry}: {e}"),
         };
         for stem in PROFILES.into_iter().chain(["lavapipe"]) {
-            let p = profile(stem, exact_maths()).expect("profile");
+            let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
             let what = format!("{entry} on {stem}");
             let a = compile(&bitcode, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
@@ -3910,7 +3771,7 @@ fn half_nans_answer_the_device_s_nan() {
     let Some(bitcode) = assemble("nan-half", &text) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, true, &[], &|_, fact, _| !fact);
+    nans_are_the_device_s(&bitcode, &ks, true, &[], &|_| true);
 }
 
 /// Class C: Metal widens a `half` NaN to the canonical `float` NaN `0x7FC00000`, sign and payload
@@ -3951,7 +3812,7 @@ fn a_widened_half_nan_keeps_its_payload_on_every_profile() {
     let Some(bitcode) = assemble("nan-widen", &text) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_, _, moves| !moves);
+    nans_are_the_device_s(&bitcode, &ks, false, &[], &|_| true);
 }
 
 /// Class D: Metal's `half` `fneg` and `fabs` answer the canonical `half` NaN `0x7E00`, with or
@@ -3997,9 +3858,7 @@ fn half_sign_operations_keep_a_nan_s_payload_on_every_profile() {
     let Some(bitcode) = assemble("nan-half-sign", &text) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, true, &[], &|name, _, moves| {
-        name != "half_kept" && !(moves && name.starts_with("half_fabs"))
-    });
+    nans_are_the_device_s(&bitcode, &ks, true, &[], &|name| name != "half_kept");
 }
 
 /// A `half` read from its bits by the device's widening and moved through the registers to a
@@ -4303,101 +4162,6 @@ fn pack_conversions_are_metals_where_measured() {
     }
 }
 
-/// A `half` rounded from a `float` the function holds, by an AIR `fptrunc` of a sum, a product, a
-/// quotient or a fused multiply-add, records no `NativeHalfConversion` on a profile that takes
-/// `DriverDeviation::MetalHalfConversion` (`moltenvk-m3`), and the module requires
-/// `VkProperty::MetalHalfConversion`; without the deviation (the same profile with it dropped) each
-/// records the note and requires nothing. A `half` function the lowering computes in `float` and
-/// rounds through the conversion keeps the note there, as on every profile: Metal computes it
-/// otherwise.
-#[test]
-fn half_conversions_are_metals_where_measured() {
-    use crate::device::requirements::VkProperty;
-    use crate::error::DriverDeviation;
-    let halves = |x: &str| {
-        format!(
-            "  %h = fptrunc float {x} to half\n  %hb = bitcast half %h to i16\n  %r = zext i16 %hb to i32\n"
-        )
-    };
-    let two = format!("{}{}", of("a", 0.3), of("b", 1.7));
-    // (name, body, whether the rounding converts a `float` the function holds alone).
-    let cases = [
-        ("conv_sum", format!("{two}  %s = fadd float %a, %b\n{}", halves("%s")), true),
-        ("conv_product", format!("{two}  %s = fmul float %a, %b\n{}", halves("%s")), true),
-        ("conv_quotient", format!("{two}  %s = fdiv float %a, %b\n{}", halves("%s")), true),
-        (
-            "conv_fma",
-            format!(
-                "{two}  %s = call float @air.fma.f32(float %a, float %b, float %a)\n{}",
-                halves("%s")
-            ),
-            true,
-        ),
-        (
-            "half_tanh",
-            format!(
-                "{}  %g = fptrunc float %a to half\n  %t = call half @air.tanh.f16(half %g)\n  %tb = bitcast half %t to i16\n  %r = zext i16 %tb to i32\n",
-                of("a", 0.3)
-            ),
-            false,
-        ),
-    ];
-    let ks: Vec<Kernel> = cases
-        .iter()
-        .map(|(name, body, _)| Kernel {
-            want: None,
-            ..k(name, body.clone(), 0)
-        })
-        .collect();
-    let text = module(&ks).replace(
-        DECLS,
-        &format!(
-            "{DECLS}declare float @air.fma.f32(float, float, float)\ndeclare half @air.tanh.f16(half)\n"
-        ),
-    );
-    let Some(bitcode) = assemble("half-conversions", &text) else {
-        return;
-    };
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
-    let text = std::fs::read_to_string(&path).expect("profile");
-    for taken in [true, false] {
-        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let p = Device::with_deviation(
-            desc,
-            DevicePolicy::default(),
-            DriverDeviation::MetalHalfConversion,
-            taken,
-        )
-        .expect("device")
-        .profile()
-        .clone();
-        assert_eq!(
-            p.takes_driver_deviation(DriverDeviation::MetalHalfConversion),
-            taken
-        );
-        for ((name, _, measured), kk) in cases.iter().zip(&ks) {
-            let what = format!("{name}, the deviation taken: {taken}");
-            let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let exempt = taken && *measured;
-            assert_eq!(
-                a.precision.contains(&PrecisionNote::NativeHalfConversion),
-                !exempt,
-                "{what}: {:?}",
-                a.precision
-            );
-            assert_eq!(
-                a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfConversion),
-                exempt,
-                "{what}"
-            );
-        }
-    }
-}
-
 /// Class E: Metal's `float` `fneg` and `fabs` (`air.fabs`, `air.fast_fabs`, and `llvm.fabs`, which
 /// takes `air.fabs`'s answer) flip or clear the sign bit alone, with and without fast-math flags: a
 /// NaN keeps its payload, signaling or not, and a denormal stays. The lowering is the device's
@@ -4480,7 +4244,7 @@ fn float_sign_operations_are_the_devices_on_every_profile() {
         })
     };
     for stem in PROFILES.iter().copied().chain(["lavapipe"]) {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -4683,7 +4447,7 @@ fn float_min_max_are_the_device_s_on_every_profile() {
         })
     };
     for stem in PROFILES.iter().copied().chain(["lavapipe"]) {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -4785,7 +4549,7 @@ fn half_fmod_is_its_float_remainder_on_every_profile() {
         return;
     };
     for stem in PROFILES.iter().copied().chain(["lavapipe"]) {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -4881,7 +4645,7 @@ fn mix_is_the_devices_fmix_on_every_profile() {
         .copied()
         .chain(["lavapipe", "amd-rdna3-radv"])
     {
-        let p = profile_with_canonical_nans(stem, false);
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         let metal = p.fields().float_functions == FloatFunctions::Metal;
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
@@ -4968,10 +4732,5 @@ fn half_functions_answer_the_device_s_nan() {
     let Some(bitcode) = assemble("nan-half-functions", &text) else {
         return;
     };
-    nans_are_the_device_s(&bitcode, &ks, true, &["half_asin"], &|name, fact, _| {
-        name.starts_with("half_round")
-            || name.starts_with("half_fract")
-            || name == "half_asin"
-            || !fact
-    });
+    nans_are_the_device_s(&bitcode, &ks, true, &["half_asin"], &|_| true);
 }

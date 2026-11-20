@@ -81,7 +81,7 @@ fn without_offset_operand(stem: &str) -> DeviceProfile {
     let mut desc = description(stem).expect("description");
     desc.features.remove(&VkFeature::Maintenance8);
     desc.features.remove(&VkFeature::ShaderImageGatherExtended);
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

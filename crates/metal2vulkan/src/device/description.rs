@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::device::profile::{DriverWorkaround, FloatControls, Limits};
+use crate::device::profile::{FloatControls, Limits};
 use crate::device::requirements::{ApiVersion, FormatUsage, VkExtension, VkFeature};
 use crate::vk;
 
@@ -82,15 +82,6 @@ pub struct DeviceDescription {
     /// `maxBufferLength` and the runtime's heap sizes read them from the `Device`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub allocation: AllocationLimits,
-    /// The driver workarounds the consumer measured on this device itself, which the profile
-    /// takes beside those its driver's identity names: the cost facts no identity decides,
-    /// [`DriverWorkaround::UniformBufferPerLaneReadsSerialize`] and
-    /// [`DriverWorkaround::ExternalUniformReadsSkipACache`], which the runtime's view check
-    /// measures once per driver and release. A profile field (its workarounds), so its fingerprint
-    /// and every cache key follow it. Empty unless the consumer fills it (`new`, `query` and
-    /// `from_khronos_json` leave it so).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub measured: BTreeSet<DriverWorkaround>,
 }
 
 /// A device's allocation sizes, [`DeviceDescription::allocation`]: device facts that size
@@ -168,12 +159,9 @@ impl GeneratedCommandsProperties {
     }
 }
 
-/// `VkPhysicalDeviceProperties::vendorID` of Apple's GPUs.
-pub(crate) const APPLE_VENDOR_ID: u32 = 0x106B;
-
 impl DeviceDescription {
     /// A description of a device of `api_version` that enables nothing and reports zero limits.
-    /// Callers fill the public fields; `Device::new` validates the result.
+    /// Callers fill the public fields; `Device::from_queries` validates the result.
     pub fn new(api_version: ApiVersion) -> DeviceDescription {
         DeviceDescription {
             api_version,
@@ -195,7 +183,6 @@ impl DeviceDescription {
             khr_format_feature_flags2: false,
             generated_commands: None,
             allocation: AllocationLimits::default(),
-            measured: BTreeSet::new(),
         }
     }
 
@@ -216,34 +203,6 @@ impl DeviceDescription {
     /// Whether the feature is enabled.
     pub fn has(&self, feature: VkFeature) -> bool {
         self.features.contains(&feature)
-    }
-
-    /// This description without what names its driver and GPU rather than answers a Vulkan
-    /// query: no `driver_id`, `driver_version`, `vendor_id`, `device_id` or `device_name`, and no
-    /// `measured` workarounds ([`Device::from_queries`](crate::device::Device::from_queries)).
-    pub(crate) fn without_identity(self) -> DeviceDescription {
-        DeviceDescription {
-            driver_id: None,
-            driver_version: 0,
-            vendor_id: 0,
-            device_id: 0,
-            device_name: String::new(),
-            measured: BTreeSet::new(),
-            ..self
-        }
-    }
-
-    /// Whether `GLSL.std.450 InterpolateAtOffset` reads at the pixel center plus its offset, as
-    /// GLSL.std.450 states ("An offset of (0, 0) identifies the center of the pixel"): every
-    /// driver but MoltenVK, whose SPIRV-Cross converts the instruction to Metal's
-    /// `interpolate_at_offset(offset + 0.4375)`, which Metal measures from the pixel's upper-left
-    /// corner, so offset 0 reads a sixteenth of a pixel from the center. That conversion is read in
-    /// SPIRV-Cross's source and Metal's reading measured on the Apple M3 Max; no release of
-    /// MoltenVK is measured to read at the center, so none takes it: a device without it has
-    /// `VkProperty::InterpolateAtOffsetFromSevenSixteenths`, where translation moves a Metal
-    /// offset by 7/16 and reads nothing else through the instruction.
-    pub(crate) fn interpolates_at_offset_centered(&self) -> bool {
-        self.driver_id != Some(vk::DriverId::MOLTENVK)
     }
 }
 

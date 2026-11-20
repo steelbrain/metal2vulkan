@@ -814,8 +814,7 @@ pub enum PrecisionNote {
     /// (`NoContraction`). The AIR's value is any of the rewrites those flags allow, and Metal's
     /// compiler takes its own grouping and fusion, so the roundings may differ: by any amount
     /// relative to the result where a sum of mixed signs is grouped otherwise, or a multiply-add
-    /// fused on one side alone. On a device without `shaderFloat16`, under
-    /// `HalfChainPolicy::AtExits` (the default), a chain of such `half` additions, subtractions and
+    /// fused on one side alone. On a device without `shaderFloat16` a chain of such `half` additions, subtractions and
     /// products is held at `float` precision between the roundings where its values leave it
     /// (`lower::arith::half_chain`): the result may differ from the rounded operations' by the
     /// roundings skipped, and a value inside the chain past `half`'s range stays finite. On
@@ -1134,7 +1133,7 @@ pub enum PrecisionNote {
     ///
     /// On every device, a linear sample of a two-plane YCbCr texture whose planes the function
     /// reads in place (`lower::sampler::in_place`) by Vulkan's Y′CbCr model of the codes
-    /// (`YCbCrInPlacePolicy::Model`, the default; `Exact` takes Metal's filter) records it too,
+    /// records it too,
     /// under the slot's bound converted 4:2:0 format and, through a runtime sampler slot, the bound
     /// word's linear filter that addresses no border, announced as `ycbcr-filter-not-exact`. The
     /// `float` result's counterpart is [`PrecisionNote::FloatSampleFilter`]. Validation derives no

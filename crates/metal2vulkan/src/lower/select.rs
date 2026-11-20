@@ -47,7 +47,7 @@ use crate::air::ir::{
 use crate::air::Entry;
 use crate::budget::{tree_bytes, Growth, Meter};
 use crate::device::function_storage;
-use crate::device::profile::{Limits, NarrowWrap, PushWindow};
+use crate::device::profile::Limits;
 use crate::device::requirements::{VkFeature, VkLimit};
 use crate::device::subgroup::{self, SimdClass, SubgroupRequirement, Tier};
 use crate::device::DeviceProfile;
@@ -1610,11 +1610,8 @@ fn select_body(
             }
         }
     }
-    // The narrow results whose bits above their width no use reads, unmasked on a profile that
-    // masks only the read ones.
-    if cx.profile.narrow_wrap() == NarrowWrap::Read {
-        arith::demand::drop_unread_wraps(body, values, &mut strategy, m)?;
-    }
+    // The narrow results whose bits above their width no use reads, unmasked.
+    arith::demand::drop_unread_wraps(body, values, &mut strategy, m)?;
     phis.sort();
     Ok(BodySelection {
         strategy,
@@ -1680,16 +1677,11 @@ fn finish(
     }
 
     stage_io::finish_merged(&mut cx)?;
-    let placement = push::place(
-        stage,
-        cx.profile.push_window(),
-        cx.inputs.push_base,
-        &cx.push,
-    );
+    let placement = push::place(stage, cx.inputs.push_base, &cx.push);
     access::accept_placement(&cx, &placement)?;
     // On the floor every stage that pushes more than one short field ends with its tail, a hole
     // above the others, so every load a driver widens from them stays inside its upload.
-    push::check_floor(cx.profile.push_window(), &placement)
+    push::check_floor(&placement)
         .map_err(|detail| Error::Internal(InternalError::new(InternalKind::Invariant, detail)))?;
 
     // A kernel compiled for dispatches with a partial simdgroup emulates its simdgroups whatever
@@ -1924,11 +1916,10 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
     )
 }
 
-/// Under the identity domains on profile `p`, the plans lowered so far: a kernel, or on the floor's
-/// push window (`PushWindow::Floor`, `Device::from_queries`' profile) a vertex or fragment
-/// function, that reaches memory only through its buffer slots' device addresses, the device
-/// addresses it loads or makes from integers (`access::dynamic`, no root table), its textures'
-/// and runtime samplers' resource IDs and its constexpr samplers' pushed indices, with no
+/// Under the identity domains on profile `p`, the plans lowered so far: a kernel, a vertex or a
+/// fragment function that reaches memory only through its buffer slots' device addresses, the
+/// device addresses it loads or makes from integers (`access::dynamic`, no root table), its
+/// textures' and runtime samplers' resource IDs and its constexpr samplers' pushed indices, with no
 /// descriptor and no state of a bound texture or sampler but its resource ID's
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). The values it reads of the encoder are
 /// pushed: the dispatch's region, a storage texture's integer channel widths, the compute
@@ -1963,7 +1954,7 @@ pub(crate) const BICUBIC_LINE_FORM: &str = "a bicubic filter of a 1D texture";
 fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
     let stage = match plan.stage {
         Stage::Kernel => true,
-        Stage::Vertex | Stage::Fragment => p.push_window() == PushWindow::Floor,
+        Stage::Vertex | Stage::Fragment => true,
         _ => false,
     };
     if !stage {

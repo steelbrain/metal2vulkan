@@ -157,7 +157,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect(stem);
-    Device::new(description, DevicePolicy::default()).expect(stem)
+    Device::from_queries(description, DevicePolicy::default()).expect(stem)
 }
 
 /// Profiles that bind textures by descriptor and by heap index.

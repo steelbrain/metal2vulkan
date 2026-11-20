@@ -77,15 +77,13 @@
 //! as Metal's object grid is (measured: an indirect draw runs every threadgroup and reports the
 //! grid its wrapped threads fill); it is `NumWorkgroups` wherever no axis wraps.
 //!
-//! Under the identity domains ([`DispatchPlan::identity_region`]) every dispatch states its region,
+//! Under the identity domains ([`DispatchPlan::identity`]) every dispatch states its region,
 //! and the region's grid selects the grid builtins' form: a dispatch the host knows
 //! (`dispatchThreads`, `dispatchThreadgroups`, and each piece of a split of either) states Metal's
 //! `threads_per_grid` in `region[1].xyz`, so the pieces of a split read Metal's whole grid; an
 //! indirect dispatch states `region[1].xyz = 0` and takes the single-region form, its grid
 //! `NumWorkgroups · L`, which needs its workgroup size to be Metal's threadgroup size. So one
-//! pipeline runs every dispatch of a threadgroup size. The base and `L` take one of two forms
-//! (`IdentityRegion`). On `Device::new`'s profile the grid selects them too, and the kernel
-//! declares no `MultiRegion`. On `Device::from_queries`' the base is `region[0].xyz` on every
+//! pipeline runs every dispatch of a threadgroup size. The base is `region[0].xyz` on every
 //! dispatch (0 for one that is not split and for an indirect one), and `MultiRegion` says only
 //! whether `L` is the region's nominal size (1, a region whose threadgroup size is not its
 //! pipeline's, as the binder's edge regions are) or the pipeline's `(sx, sy, sz)` (0, the
@@ -187,7 +185,6 @@
 
 use crate::air::abi::{Builtin, ParamBinding, ParamRole};
 use crate::air::ir::{ArgIdx, Value};
-use crate::device::profile::{DeepThreadgroups, IdentityRegion, ObliviousEdge};
 use crate::device::subgroup::{self, SimdClass, Tier};
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith;
@@ -463,15 +460,10 @@ pub struct PlannedParam {
 enum RegionSelect {
     /// The `MultiRegion` specialization constant.
     Spec(ConstId),
-    /// Under the identity domains on `Device::new`'s profile (`IdentityRegion::Grid`), the
-    /// region's grid: `region[1].xyz` is Metal's `threads_per_grid` for every dispatch the host
-    /// knows, and all 0 for an indirect one. So one pipeline runs both, with no constant to
-    /// specialize.
-    Grid,
-    /// Under the identity domains on `Device::from_queries`' profile (`IdentityRegion::Sized`):
-    /// the region's grid as [`RegionSelect::Grid`], but the base is the region's on every
-    /// dispatch, and the `MultiRegion` constant says only whether `L` is the region's nominal
-    /// size.
+    /// Under the identity domains, the region's grid: `region[1].xyz` is Metal's
+    /// `threads_per_grid` for every dispatch the host knows, and all 0 for an indirect one, so one
+    /// pipeline runs both. The base is the region's on every dispatch, and the `MultiRegion`
+    /// constant says only whether `L` is the region's nominal size.
     Sized(ConstId),
 }
 
@@ -541,9 +533,8 @@ pub struct DispatchPlan {
     /// grid tiles).
     pub grid_edge: bool,
     /// Under the identity domains a kernel tells a region from an indirect dispatch by the
-    /// region's grid, and reads its base and `L` as the profile's form says
-    /// ([`RegionSelect::Grid`], [`RegionSelect::Sized`]). `None` outside them.
-    pub identity_region: Option<IdentityRegion>,
+    /// region's grid, and reads its base and `L` as [`RegionSelect::Sized`] says.
+    pub identity: bool,
     /// The subgroup size the pipeline pins in a flattened tier
     /// (`SubgroupRequirement::size`): `lin` multiplies the subgroup index by it as a constant and
     /// never reads `SubgroupSize`. `None` outside the flattened tiers and where the stage pins no
@@ -612,15 +603,12 @@ fn reads_region(b: KernelBuiltin, tile_sized: bool) -> bool {
 
 /// Whether a kernel's partial-threadgroups variant runs its grid in tiles
 /// ([`DispatchPlan::grid_edge`]): a kernel that does not observe its threadgroup partition
-/// (`pipeline::compile::partition`, decided from its AIR) on a profile whose [`ObliviousEdge`] is
-/// `Grid`, under the identity domains, whose regions state their base on every dispatch
-/// ([`IdentityRegion::Sized`]).
+/// (`pipeline::compile::partition`, decided from its AIR) under the identity domains, whose
+/// regions state their base on every dispatch ([`RegionSelect::Sized`]).
 fn grid_edge(cx: &SelectCx<'_>) -> bool {
     use crate::pipeline::compile::partition::{partition, Partition};
     cx.stage == crate::pipeline::sym::Stage::Kernel
-        && cx.profile.oblivious_edge() == ObliviousEdge::Grid
         && crate::lower::access::identity(cx.profile)
-        && cx.profile.identity_region() == IdentityRegion::Sized
         && partition(cx.entry) == Partition::Oblivious
 }
 
@@ -746,7 +734,6 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
     }
     let deep = local_size == LocalSizeForm::Spec
         && cx.stage == crate::pipeline::sym::Stage::Kernel
-        && cx.profile.deep_threadgroups() == DeepThreadgroups::OneRow
         && !cx.families.barrier.compute_derivatives;
     Ok(DispatchPlan {
         local_size,
@@ -764,8 +751,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         object_grid: !folded_groups && cx.stage == crate::pipeline::sym::Stage::Object,
         partial_groups,
         grid_edge,
-        identity_region: crate::lower::access::identity(cx.profile)
-            .then(|| cx.profile.identity_region()),
+        identity: crate::lower::access::identity(cx.profile),
         pinned_subgroup_size,
         deep,
     })
@@ -1307,19 +1293,18 @@ impl KernelDecl {
                 mb.workgroup_size(sn, one, one)?;
             }
         }
-        let multi_region = match (dp.multi_region, dp.identity_region) {
+        let multi_region = match (dp.multi_region, dp.identity) {
             (false, _) => None,
-            (true, Some(IdentityRegion::Grid)) => Some(RegionSelect::Grid),
-            (true, form) => {
+            (true, identity) => {
                 let b = mb.ty(Type::Bool)?;
                 let mr = mb.spec(
                     keys.multi_region,
                     b,
                     ConstBits(u64::from(defaults.multi_region)),
                 )?;
-                Some(match form {
-                    Some(_) => RegionSelect::Sized(mr),
-                    None => RegionSelect::Spec(mr),
+                Some(match identity {
+                    true => RegionSelect::Sized(mr),
+                    false => RegionSelect::Spec(mr),
                 })
             }
         };
@@ -1906,7 +1891,7 @@ impl KernelDecl {
         }
         let nominal = fb.composite_construct(self.uvec3, &axes)?;
         match sel {
-            RegionSelect::Spec(_) | RegionSelect::Grid => {
+            RegionSelect::Spec(_) => {
                 let mr = self.selected(fb, sel, region)?;
                 let zero = self.splat(fb, 0)?;
                 let base = fb.select(mr, base, zero)?;
@@ -1946,7 +1931,7 @@ impl KernelDecl {
     ) -> BResult<SValue> {
         match sel {
             RegionSelect::Spec(mr) => fb.module().const_value(mr),
-            RegionSelect::Grid | RegionSelect::Sized(_) => {
+            RegionSelect::Sized(_) => {
                 let r = region(fb)?;
                 let r1 = fb.composite_extract(r, &[1])?;
                 let [x, y, z] = [0, 1, 2].map(|i| fb.composite_extract(r1, &[i]));

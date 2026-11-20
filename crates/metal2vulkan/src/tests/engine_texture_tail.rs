@@ -693,7 +693,7 @@ fn without_robust_images(stem: &str) -> DeviceProfile {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustImageAccess);
     desc.features.remove(&VkFeature::RobustImageAccess2);
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

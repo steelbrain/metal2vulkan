@@ -7,10 +7,9 @@
 //! states the texture's size, its planes' places and rows, and its conversion
 //! (`bind::YCbCrInPlace::words`). Each texel the samples read is Metal's (`ycbcr_convert`'s module
 //! docs: the luma code, the chroma pairs' 9/3/3/1 filter, the range's and the matrix's
-//! conversion), and a linear sample is Metal's filter of those steps on the grid `2048`
-//! (`metal_step`) under `YCbCrInPlacePolicy::Exact`; a nearest sample is the texel at Metal's
-//! position. Under `YCbCrInPlacePolicy::Model` (the default) a linear sample is Vulkan's Y′CbCr
-//! model of the codes (`model`), within the `float` arithmetic's rounding. The texel buffer
+//! conversion), and a nearest sample is the texel at Metal's position. A linear sample is Vulkan's
+//! Y′CbCr model of the codes (`model`), within the `float` arithmetic's rounding, where the
+//! model takes it, and Metal's filter of the steps on the grid `2048` (`metal_step`) elsewhere. The texel buffer
 //! traps every fetch outside it, so each tap's elements lie within the planes.
 
 use std::collections::BTreeMap;
@@ -19,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::bind::ycbcr_convert::{ycbcr_read, YCbCrCodes, YCbCrMatrix, YCbCrPlanes, YCbCrRange};
 use crate::bind::YCbCrInPlace;
 use crate::device::profile::DeviceProfile;
-use crate::device::{DevicePolicy, YCbCrInPlacePolicy};
+use crate::device::DevicePolicy;
 use crate::lower::select::{LowerInputs, Plan};
 use crate::metal::format::ycbcr_format;
 use crate::metal::sampler::SamplerWord;
@@ -67,15 +66,6 @@ fn lavapipe() -> DeviceProfile {
 
 fn m3() -> DeviceProfile {
     profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
-}
-
-/// Profile `stem` under `YCbCrInPlacePolicy::Exact`, the default policy's every other field.
-fn exact(stem: &str) -> DeviceProfile {
-    let policy = DevicePolicy {
-        ycbcr_in_place_reads: YCbCrInPlacePolicy::Exact,
-        ..DevicePolicy::default()
-    };
-    profile(stem, policy).expect("profile")
 }
 
 /// The words of `constexpr sampler(filter::linear, ...)`: minification and magnification
@@ -642,11 +632,9 @@ fn metal(planes: &Planes, linear: bool, (qx, qy): (i64, i64), offset: (i64, i64)
     std::array::from_fn(|c| metal_step(taps.map(|t| t[c]), a, b))
 }
 
-/// Under `YCbCrInPlacePolicy::Exact` every sample of each format's random planes under each
-/// conversion, through constexpr and runtime samplers (nearest and linear; a runtime sampler's
-/// repeat sampled as clamp-to-edge, as a 4:2:0 texture's), with a constant offset or none, `float`
-/// and `half` results, on lavapipe and on MoltenVK, is Metal's: a quarter of the positions past an
-/// edge.
+/// Every sample the model does not take (a constexpr nearest sampler's) of each format's random
+/// planes under each conversion, `float` and `half` results, on lavapipe and on MoltenVK, is
+/// Metal's: a quarter of the positions past an edge.
 #[test]
 fn in_place_samples_are_metals() {
     let conversions = [
@@ -692,46 +680,13 @@ fn in_place_samples_are_metals() {
         })
         .flatten()
         .collect();
-    let edge = SamplerAddressMode::ClampToEdge;
-    let cases = [
-        (
-            "constexpr linear",
-            Through::Constexpr(linear(1, false, 0)),
-            true,
-            (0, 0),
-        ),
-        (
+    {
+        let (name, through, linear, offset) = (
             "constexpr nearest",
             Through::Constexpr(sampler_words(0, 0, 1, false, 0)),
             false,
             (0, 0),
-        ),
-        (
-            "constexpr offset",
-            Through::Constexpr(linear(1, false, 0)),
-            true,
-            (2, -1),
-        ),
-        (
-            "runtime linear",
-            Through::Runtime(word(true, edge)),
-            true,
-            (0, 0),
-        ),
-        (
-            "runtime nearest",
-            Through::Runtime(word(false, edge)),
-            false,
-            (0, 0),
-        ),
-        (
-            "runtime repeat",
-            Through::Runtime(word(true, SamplerAddressMode::Repeat)),
-            true,
-            (0, 0),
-        ),
-    ];
-    for (name, through, linear, offset) in cases {
+        );
         for half in [false, true] {
             let sampler = match through {
                 Through::Constexpr(w) => Some(w),
@@ -744,7 +699,7 @@ fn in_place_samples_are_metals() {
                 return;
             };
             for stem in ["lavapipe", "moltenvk-m3"] {
-                let p = exact(stem);
+                let p = profile(stem, DevicePolicy::default()).expect("profile");
                 let what = format!("{name} half={half} on {stem}");
                 let a = compile_with(&bc, "k", &p, &inputs(true))
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -839,14 +794,14 @@ fn half_value(h: u32) -> f64 {
     }
 }
 
-/// Under `YCbCrInPlacePolicy::Model` (the default) a linear sample of each format's random planes
+/// A linear sample of each format's random planes
 /// under each conversion, through a constexpr sampler (normalized and pixel coordinates, with a
 /// texel offset on edge axes) and a runtime one (clamp-to-edge, and repeat sampled as
 /// clamp-to-edge), `float` and `half` results, on lavapipe and on MoltenVK, is the model's within
 /// the `float` arithmetic's rounding (and a `half`'s), alpha 1, and its compile records the filter
 /// note under the bound format (and the bound word's linear filter that addresses no border);
 /// a runtime sampler's nearest word takes Metal's sample, bit for bit. A constexpr nearest or
-/// border sampler takes Metal's sample under either value.
+/// border sampler takes Metal's sample.
 #[test]
 fn in_place_linear_samples_are_the_model_s() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -987,14 +942,6 @@ fn in_place_linear_samples_are_the_model_s() {
                             .any(|t| t.key == SpecKey::BoundTexelFormat(TEXTURE)),
                     "{what}: {:?}",
                     a.specialized
-                );
-                let exact_form = compile_with(&bc, "k", &exact(stem), &inputs(true))
-                    .unwrap_or_else(|e| panic!("{what}, exact: {e}"));
-                assert!(
-                    !exact_form.specialized.iter().any(|s| s.note == note)
-                        && !exact_form.precision.contains(&note),
-                    "{what}, exact: {:?}",
-                    exact_form.specialized
                 );
                 let (plan, m) = typed_module_with(&bc, "k", &p, &inputs(true))
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -1226,10 +1173,9 @@ fn in_place_gathers_are_metals() {
 /// samples or gathers as each lane asks: its compile on MoltenVK on the M3 binds the texture's
 /// image and notes the device's filter of the format there (`PrecisionNote::HalfSampleFilter` and
 /// `FloatSampleFilter`, announced `ycbcr-filter-not-exact`), and states the in-place form with
-/// the sampler, whose compile reads the planes for both and notes no pixel sampler's scaling:
-/// under `YCbCrInPlacePolicy::Exact` Metal's filter and Metal's taps, noting no filter; under the
-/// model (the default) the model's sample where the bound word filters linearly and addresses no
-/// border, noting the filter there alone, and Metal's taps.
+/// the sampler, whose compile reads the planes for both and notes no pixel sampler's scaling: the
+/// model's sample where the bound word filters linearly and addresses no border, noting the filter
+/// there alone, and Metal's taps.
 #[test]
 fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -1263,14 +1209,8 @@ fn a_slot_that_samples_and_gathers_reads_its_planes_in_place() {
             "{what}: {:?}",
             image.facts
         );
-        for (policy, p, sample) in [
-            (
-                "exact",
-                exact("moltenvk-m3"),
-                "sampler.ycbcr_in_place.runtime",
-            ),
-            ("model", m3(), "sampler.ycbcr_in_place.model.runtime"),
-        ] {
+        {
+            let (policy, p, sample) = ("model", m3(), "sampler.ycbcr_in_place.model.runtime");
             let what = format!("{what}, in place, {policy}");
             let a =
                 compile_with(&bc, "k", &p, &inputs(true)).unwrap_or_else(|e| panic!("{what}: {e}"));

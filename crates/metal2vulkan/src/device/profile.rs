@@ -1,6 +1,6 @@
 //! `DeviceProfile` and its translation-relevant fields.
 //!
-//! `Device::new(desc, policy)` is the only producer of a [`DeviceProfile`]. The profile is the
+//! `Device::from_queries(desc, policy)` is the only producer of a [`DeviceProfile`]. The profile is the
 //! normalized projection of a device description plus the policy; lowering selects representations
 //! from it and nothing else. Derivation lives in `device::derive`, the fingerprint in
 //! [`DeviceProfile::fingerprint`].
@@ -49,13 +49,11 @@ const SPIRV_VAL_RELAXATIONS: [(VkFeature, &str); 5] = [
     (VkFeature::Maintenance8, "--allow-offset-texture-operand"),
 ];
 
-/// The normalized, translation-relevant device projection. Opaque; built only by `Device::new`.
+/// The normalized, translation-relevant device projection. Opaque; built only by
+/// `Device::from_queries`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceProfile {
     fields: ProfileFields,
-    /// The facts whose form `Device::new` takes from its driver's rows and `Device::from_queries`
-    /// from no identity ([`ProfileFacts`]).
-    facts: ProfileFacts,
     /// [`DeviceProfile::fingerprint`], derived once here, where the fields are fixed.
     ///
     /// Deriving it renders every field of the profile -- a format table alone is tens of
@@ -69,14 +67,13 @@ pub struct DeviceProfile {
 }
 
 impl DeviceProfile {
-    /// The profile of `fields` and `facts`, with its fingerprint derived (the only way to build
-    /// one): the fingerprint is a function of both, so holding them together is what keeps it true
-    /// of them. A test's edit goes through `edit`, which only the crate's tests build.
-    pub(crate) fn of(fields: ProfileFields, facts: ProfileFacts) -> DeviceProfile {
-        let fingerprint = fingerprint_of(&fields, facts);
+    /// The profile of `fields`, with its fingerprint derived (the only way to build one): the
+    /// fingerprint is a function of the fields, so holding them together is what keeps it true of
+    /// them. A test's edit goes through `edit`, which only the crate's tests build.
+    pub(crate) fn of(fields: ProfileFields) -> DeviceProfile {
+        let fingerprint = fingerprint_of(&fields);
         DeviceProfile {
             fields,
-            facts,
             fingerprint,
         }
     }
@@ -87,84 +84,8 @@ impl DeviceProfile {
     #[cfg(test)]
     pub(crate) fn edit<T>(&mut self, change: impl FnOnce(&mut ProfileFields) -> T) -> T {
         let answer = change(&mut self.fields);
-        self.fingerprint = fingerprint_of(&self.fields, self.facts);
+        self.fingerprint = fingerprint_of(&self.fields);
         answer
-    }
-
-    /// Which stages the compile holds under a stage bound.
-    pub(crate) fn stage_bound(&self) -> StageBound {
-        self.facts.stage_bound
-    }
-
-    /// Where a `half` rounded through the conversion pair under the float controls is noted.
-    pub(crate) fn half_pair_note(&self) -> HalfPairNote {
-        self.facts.half_pair_note
-    }
-
-    /// Whether a stage of implementation-defined reconvergence records it as a note.
-    pub(crate) fn reconvergence_note(&self) -> ReconvergenceNote {
-        self.facts.reconvergence_note
-    }
-
-    /// Whether a render pipeline that draws into a signed normalized or `RGB9E5Float` attachment
-    /// records Metal's tile store of it as a note.
-    pub(crate) fn snorm_minimum_note(&self) -> SnormMinimumNote {
-        self.facts.snorm_minimum_note
-    }
-
-    /// Which narrow integer results clear the bits above their width.
-    pub(crate) fn narrow_wrap(&self) -> NarrowWrap {
-        self.facts.narrow_wrap
-    }
-
-    /// Whether a `half` color output may be declared with 16-bit `float` lanes.
-    pub(crate) fn half_outputs(&self) -> HalfOutputs {
-        self.facts.half_outputs
-    }
-
-    /// How many bytes of push constants a kernel's push window holds.
-    pub(crate) fn push_window(&self) -> PushWindow {
-        self.facts.push_window
-    }
-
-    /// Which `half` fused multiply-adds take the device's 16-bit `Fma`.
-    pub(crate) fn half_fma(&self) -> HalfFma {
-        self.facts.half_fma
-    }
-
-    /// How a kernel under the identity domains reads its dispatch region's base and threadgroup
-    /// size.
-    pub(crate) fn identity_region(&self) -> IdentityRegion {
-        self.facts.identity_region
-    }
-
-    /// How the partial-threadgroups variant of a kernel that does not observe its threadgroup
-    /// partition runs the threads past its grid.
-    pub(crate) fn oblivious_edge(&self) -> ObliviousEdge {
-        self.facts.oblivious_edge
-    }
-
-    /// How a kernel whose workgroup is its threadgroup runs a threadgroup deeper than the
-    /// device's `maxComputeWorkGroupSize[2]`.
-    pub(crate) fn deep_threadgroups(&self) -> DeepThreadgroups {
-        self.facts.deep_threadgroups
-    }
-
-    /// What a read of an argument the pipeline's function constants removed does beside taking
-    /// zero.
-    pub(crate) fn absent_reads(&self) -> AbsentReads {
-        self.facts.absent_reads
-    }
-
-    /// Whether a threadgroup memory access is contained, and how a kernel's threadgroup arena
-    /// holds its words when every access of it is a whole, aligned `float` word.
-    pub(crate) fn threadgroup_memory(&self) -> ThreadgroupMemory {
-        self.facts.threadgroup_memory
-    }
-
-    /// What a program's threadgroup memory holds before the program writes it.
-    pub(crate) fn threadgroup_start(&self) -> ThreadgroupStart {
-        self.facts.threadgroup_start
     }
 
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
@@ -305,11 +226,8 @@ impl DeviceProfile {
     }
 
     /// Whether a function reads a two-plane YCbCr texture's planes in place where its slot reads
-    /// the texture only so (`bind::YCbCrInPlace`): on every device made by
-    /// [`Device::from_queries`](crate::device::Device::from_queries); by [`Device::new`](crate::device::Device::new),
-    /// on an integrated GPU or a CPU device, which reads host memory with no bus between, and
-    /// elsewhere every such texture's image of converted texels is read. The image holds Metal's texels exactly; the planes read in place are
-    /// sampled as `DevicePolicy::ycbcr_in_place_reads` says. The runtime reads it
+    /// the texture only so (`bind::YCbCrInPlace`): on every device. The planes read in place are
+    /// sampled by Vulkan's Y′CbCr model where the sample allows it. The runtime reads it
     /// to state a texture's planes (`TextureFacts::ycbcr_in_place`).
     pub fn reads_ycbcr_planes_in_place(&self) -> bool {
         self.fields.ycbcr_in_place
@@ -561,7 +479,7 @@ pub(crate) fn fingerprints_derived() -> u64 {
 /// The fingerprint of `fields` ([`DeviceProfile::fingerprint`]): the rendering streams into the
 /// hash, because a materialized rendering of a profile with a format table is tens of kilobytes
 /// that no input-scaled ledger charge accounts for.
-fn fingerprint_of(fields: &ProfileFields, facts: ProfileFacts) -> Hash256 {
+fn fingerprint_of(fields: &ProfileFields) -> Hash256 {
     use sha2::{Digest, Sha256};
     use std::fmt::Write as _;
     struct Hashing(Sha256);
@@ -577,307 +495,7 @@ fn fingerprint_of(fields: &ProfileFields, facts: ProfileFacts) -> Hash256 {
     // `Hashing` never fails, and `Debug` of these plain-data types only fails when the
     // writer does.
     let _ = write!(h, "{:?}", fields);
-    // A profile whose facts are its driver's rows' (`Device::new`'s) renders its fields alone, as
-    // every profile did before those facts were the profile's own; any other renders its facts
-    // after them.
-    if facts != ProfileFacts::ROWS {
-        let _ = write!(h, "{facts:?}");
-    }
     h.0.finalize().into()
-}
-
-/// The facts of a profile whose form `Device::new` takes from its driver's identity rows
-/// (`device::derive`) and `Device::from_queries`, which reads no identity, takes the same on every
-/// device: one field each, which the translator reads alone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ProfileFacts {
-    /// Which stages the compile holds under a stage bound.
-    pub(crate) stage_bound: StageBound,
-    /// Where a `half` rounded through the conversion pair under the float controls is noted.
-    pub(crate) half_pair_note: HalfPairNote,
-    /// Whether a stage of implementation-defined reconvergence records it as a note.
-    pub(crate) reconvergence_note: ReconvergenceNote,
-    /// Whether a render pipeline that draws into a signed normalized or `RGB9E5Float` attachment
-    /// records Metal's tile store of it as a note.
-    pub(crate) snorm_minimum_note: SnormMinimumNote,
-    /// Which narrow integer results clear the bits above their width.
-    pub(crate) narrow_wrap: NarrowWrap,
-    /// Whether a `half` color output may be declared with 16-bit `float` lanes.
-    pub(crate) half_outputs: HalfOutputs,
-    /// How many bytes of push constants a kernel's push window holds.
-    pub(crate) push_window: PushWindow,
-    /// Which `half` fused multiply-adds take the device's 16-bit `Fma`.
-    pub(crate) half_fma: HalfFma,
-    /// How a kernel under the identity domains reads its dispatch region's base and threadgroup
-    /// size.
-    pub(crate) identity_region: IdentityRegion,
-    /// How the partial-threadgroups variant of a kernel that does not observe its threadgroup
-    /// partition runs the threads past its grid.
-    pub(crate) oblivious_edge: ObliviousEdge,
-    /// How a kernel whose workgroup is its threadgroup runs a deep threadgroup, and the
-    /// threadgroup the device reports it runs.
-    pub(crate) deep_threadgroups: DeepThreadgroups,
-    /// What a read of an argument the pipeline's function constants removed does beside taking
-    /// zero.
-    pub(crate) absent_reads: AbsentReads,
-    /// Whether a threadgroup memory access is contained, and how a kernel's threadgroup arena
-    /// holds its words when every access of it is a whole, aligned `float` word.
-    pub(crate) threadgroup_memory: ThreadgroupMemory,
-    /// What a program's threadgroup memory holds before the program writes it.
-    pub(crate) threadgroup_start: ThreadgroupStart,
-}
-
-impl ProfileFacts {
-    /// `Device::new`'s: each fact as its driver's rows decide it.
-    pub(crate) const ROWS: ProfileFacts = ProfileFacts {
-        stage_bound: StageBound::Defects,
-        half_pair_note: HalfPairNote::Fused,
-        reconvergence_note: ReconvergenceNote::Field,
-        snorm_minimum_note: SnormMinimumNote::Announced,
-        narrow_wrap: NarrowWrap::Every,
-        half_outputs: HalfOutputs::Sixteen,
-        push_window: PushWindow::Guaranteed,
-        half_fma: HalfFma::Measured,
-        identity_region: IdentityRegion::Grid,
-        oblivious_edge: ObliviousEdge::Partial,
-        deep_threadgroups: DeepThreadgroups::Axes,
-        absent_reads: AbsentReads::Marked,
-        threadgroup_memory: ThreadgroupMemory::Contained,
-        threadgroup_start: ThreadgroupStart::Unwritten,
-    };
-
-    /// `Device::from_queries`': each fact the same on every device.
-    pub(crate) const EVERY: ProfileFacts = ProfileFacts {
-        stage_bound: StageBound::Every,
-        half_pair_note: HalfPairNote::Every,
-        reconvergence_note: ReconvergenceNote::Noted,
-        snorm_minimum_note: SnormMinimumNote::Noted,
-        narrow_wrap: NarrowWrap::Read,
-        half_outputs: HalfOutputs::Widened,
-        push_window: PushWindow::Floor,
-        half_fma: HalfFma::Native,
-        identity_region: IdentityRegion::Sized,
-        oblivious_edge: ObliviousEdge::Grid,
-        deep_threadgroups: DeepThreadgroups::OneRow,
-        absent_reads: AbsentReads::Nil,
-        threadgroup_memory: ThreadgroupMemory::Native,
-        threadgroup_start: ThreadgroupStart::Zero,
-    };
-}
-
-/// Which narrow integer results (an `i8` or `i16` held in a wider container) clear the container's
-/// bits above their width after an operation that can set them: an add, subtract, multiply or
-/// shift left not marked `nuw`, a signed divide or remainder, an arithmetic shift right
-/// (`lower::arith::ops::int_binary`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NarrowWrap {
-    /// Every such result: `Device::new`'s profile.
-    Every,
-    /// Only a result whose high bits a use reads (`lower::arith::demand`): a use that reads only
-    /// the low bits (another wrapping operation, a truncation, a sign extension) leaves them
-    /// unread. `Device::from_queries`' profile.
-    Read,
-}
-
-/// How many bytes of push constants a kernel's push window holds (`lower::push::window`): the
-/// fields a kernel reads from push constants up to it, the rest from its `ArgumentTable`. Under
-/// the identity domains, vertex and fragment functions lower on the floor's window alone
-/// (`lower::select`'s `identity_admits`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PushWindow {
-    /// 128 bytes, what Vulkan guarantees (`maxPushConstantsSize`): `Device::new`'s profile.
-    Guaranteed,
-    /// 256 bytes, the new runtime's floor for `maxPushConstantsSize`, which every captured device
-    /// reports: a dispatch region and 24 buffer addresses below a stage's tail
-    /// (`lower::push::tail`). `Device::from_queries`' profile.
-    Floor,
-}
-
-/// How a kernel under the identity domains reads the base and Metal's threadgroup size `L` of its
-/// dispatch region (`lower::dispatch`'s `RegionSelect`). Either way the region's grid tells a
-/// region of a dispatch the host knows from an indirect dispatch, for the grid builtins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum IdentityRegion {
-    /// The grid selects them too: the region's base and nominal size where it states a grid, else
-    /// 0 and the pipeline's size. The kernel declares no `MultiRegion`: `Device::new`'s profile.
-    Grid,
-    /// The base is the region's on every dispatch, and `L` is its nominal size where `MultiRegion`
-    /// is 1, else the pipeline's, which the driver folds when it specializes: every dispatch the
-    /// consumer launches at its pipeline's own size reads no decode. `Device::from_queries`'
-    /// profile.
-    Sized,
-}
-
-/// How the partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) of a kernel that
-/// does not observe its threadgroup partition runs the threads a ragged grid's last threadgroups
-/// leave over (`lower::dispatch`'s grid edge). Such a kernel reads only `thread_position_in_grid`
-/// and `threads_per_grid`, so both forms run the same threads with the same answers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ObliviousEdge {
-    /// As any kernel's: where the region is flagged `NONUNIFORM`, the threadgroup runs Metal's
-    /// partial threadgroup, its position in the threadgroup `lin` divided over the threads left.
-    /// `Device::new`'s profile.
-    Partial,
-    /// Under the identity domains the variant runs its grid in tiles (`RuntimeFact::GridTiles`):
-    /// each workgroup one power-of-two tile of the grid that its region gives, its positions
-    /// masks and shifts of its local index, and an invocation past the grid returning before the
-    /// body. `Device::from_queries`' profile.
-    Grid,
-}
-
-/// What a read of a texture, sampler or threadgroup memory argument the pipeline's function
-/// constants removed does beside taking zero (`lower::access::absent`). Metal gives such a read
-/// no value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AbsentReads {
-    /// Where the read runs it sets `StatusBits::ABSENT_ARGUMENT_READ` in the command buffer's
-    /// `ExecutionStatus` word, which the consumer reports as a failed execution:
-    /// `Device::new`'s profile.
-    Marked,
-    /// It takes zero and writes no status word, a read's zeros and a query's size of 0 being
-    /// what the nil texture, set 1's element 0, answers too: `Device::from_queries`' profile.
-    Nil,
-}
-
-/// Whether an access of threadgroup memory (a threadgroup arena's, `memory::arena`, its atomics,
-/// memory intrinsics, pointer cells and imageblock, and a typed threadgroup object's) is contained,
-/// and how a kernel's threadgroup arena holds its words when every access of it is a whole, aligned
-/// `float` word: a scalar `float`, or a vector of them, at an offset its alignment proves a
-/// multiple of its bytes, with no atomic, no memory intrinsic and no access of another type
-/// (`lower::access::local`'s `TgWords`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ThreadgroupMemory {
-    /// Every access contained, as the profile's containment says (`lower::access::local`): a load
-    /// past the arena reads zero and a store past it is dropped, and a typed object's dynamic index
-    /// is clamped to its level. Every arena is a `u32` array whose words each access composes:
-    /// `Device::new`'s profile.
-    Contained,
-    /// No access contained: one past the memory is undefined, as in Metal, and reads or writes
-    /// what the device's access there does. An arena whose every access is a whole, aligned `float`
-    /// word is a `float` array of its own words, each access one typed load or store per lane at
-    /// its word index, with no branch and no bitcast: `Device::from_queries`' profile.
-    Native,
-}
-
-/// What a program's threadgroup memory holds before the program writes it: the words of the
-/// `Workgroup` variables that hold it, a function's threadgroup arena (its declared threadgroup
-/// variables, its `[[threadgroup(n)]]` arguments and its imageblock, `memory::arena`) and its
-/// typed threadgroup objects (`lower::access::local`). Metal's documents give threadgroup memory
-/// no first contents; an Apple GPU reads zero there.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ThreadgroupStart {
-    /// Whatever the device's memory holds: no `Workgroup` variable has an initializer.
-    /// `Device::new`'s profile.
-    Unwritten,
-    /// Zero: each of those variables has a null initializer, which needs
-    /// `shaderZeroInitializeWorkgroupMemory` (a function that uses threadgroup memory on a
-    /// profile without it is refused). The translator's own `Workgroup` words, which it writes
-    /// before any read of them, have none. `Device::from_queries`' profile.
-    Zero,
-}
-
-/// How a kernel whose workgroup is its threadgroup (`lower::dispatch::LocalSizeForm::Spec`) runs
-/// a threadgroup deeper than the device's `maxComputeWorkGroupSize[2]`, and so what the device
-/// reports as Metal's `maxThreadsPerThreadgroup` (`MetalDeviceProperties`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DeepThreadgroups {
-    /// As its workgroup, axis for axis, so a device that holds fewer threads along `z` than the
-    /// threadgroup refuses it at its plan (`bind::dispatch`'s local-size checks), and the device
-    /// reports each axis's `maxComputeWorkGroupSize`: `Device::new`'s profile.
-    Axes,
-    /// As one row past [`DEEP_THREADGROUP`](crate::lower::dispatch::DEEP_THREADGROUP) along `z`
-    /// (`SpecKey::DeepThreadgroup`), within every device's sizes, so the device reports
-    /// `maxComputeWorkGroupInvocations` on every axis, as an Apple GPU reports 1024 on each:
-    /// `Device::from_queries`' profile.
-    OneRow,
-}
-
-/// Which `half` fused multiply-adds take the device's 16-bit `Fma` (`lower::arith::fma::half_route`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HalfFma {
-    /// Those on a driver measured to compute it as Metal's `half` `fma`
-    /// (`DriverDeviation::MetalHalfFma`), with no note; elsewhere `OpFmaKHR` on 16 bits where the
-    /// profile has `shaderFmaFloat16` and computes `half` under the 16-bit float controls, else the
-    /// device's `float` `Fma` rounded to `half`, noted `NativeFma`: `Device::new`'s profile.
-    Measured,
-    /// Every one where the profile computes `half` under the 16-bit float controls (it has
-    /// `shaderFloat16`, and the controls that make a 16-bit conversion Metal's), noted `NativeFma`
-    /// as the device's `Fma` is on every route; elsewhere the device's `float` `Fma` rounded to
-    /// `half`, noted the same. `Device::from_queries`' profile, keyed on no identity.
-    Native,
-}
-
-/// How a `half` color output (a scalar or vector of AIR's `half`) reaches the device
-/// (`lower::stage_io`'s `half_variable`, `StageIo::half_outputs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HalfOutputs {
-    /// Declared with 16-bit `float` lanes where the profile enables `storageInputOutput16` and
-    /// `shaderFloat16`, so the device receives the `half` as Metal's attachment does; 32-bit, the
-    /// `half` widened, elsewhere: `Device::new`'s profile.
-    Sixteen,
-    /// 32-bit on every device, the `half` widened to `float`, which holds every `half` exactly:
-    /// `storageInputOutput16` is not a query that may choose a second form.
-    /// `Device::from_queries`' profile.
-    Widened,
-}
-
-/// Whether a stage whose reconvergence is implementation-defined (`Reconvergence::ImplementationDefined`:
-/// a tangled instruction on a device without maximal reconvergence) records
-/// `PrecisionNote::DeviceReconvergence`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReconvergenceNote {
-    /// No note: the artifact's `reconvergence` field alone says it, which `metal2vulkan-runtime`
-    /// announces as `ImplementationDefinedReconvergence`: `Device::new`'s profile.
-    Field,
-    /// The note, beside the field, a static note of the stage: `Device::from_queries`' profile.
-    Noted,
-}
-
-/// Whether a render pipeline that draws into a single-sampled color attachment records Metal's
-/// tile store as a note: `PrecisionNote::SnormMinimumKept` into a signed normalized format, whose
-/// minimum code Metal's pass stores as the code above it in each tile a draw reaches, and
-/// `PrecisionNote::SharedExponentKept` into `RGB9E5Float`, whose unnormalized words Metal's pass
-/// stores normalized; the device's pass keeps both.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SnormMinimumNote {
-    /// No note: `metal2vulkan-runtime` announces each at a draw in a pass that loads such an
-    /// attachment, which only its encoder knows: `Device::new`'s profile.
-    Announced,
-    /// The note, a static note of the pipeline: `Device::from_queries`' profile.
-    Noted,
-}
-
-/// Where a module records `PrecisionNote::NativeHalfConversion` for a `half` it rounds through the
-/// device's conversion and its widening under the 16-bit float controls
-/// (`QuantizeForm::Controlled`), Metal's `half(float)` by the Vulkan spec.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HalfPairNote {
-    /// Only where the pair narrows the result of `f32` arithmetic on a driver that fuses that
-    /// operation into the narrowing (`DriverWorkaround::HalfConversionFusedWithArithmetic`); a
-    /// driver that folds the pair (`DriverWorkaround::HalfConversionPairFolded`) takes the
-    /// `Converted` form, noted as such: `Device::new`'s profile.
-    Fused,
-    /// Every such module, on every device, a static note of the rounding: a driver's compiler may
-    /// fold the pair into the value it started from or fuse the `f32` operation computing the
-    /// value into the narrowing. `Device::from_queries`' profile, keyed on no identity.
-    Every,
-}
-
-/// Which stages a profile's compile holds under a stage bound (`pipeline::compile`'s stage
-/// bounds): the entry weight past which a module is not handed to the driver, a kernel planned
-/// again keeping the widest mode's pin where only its emulation passed it, and every other module
-/// refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StageBound {
-    /// Only where the profile names a stage-size defect of its driver
-    /// (`DriverWorkaround::SerializedStageWrapsLargeModules`,
-    /// `DriverWorkaround::CompilerMemoryGrowsWithStageSize`), refused as that defect
-    /// (`Needs::DriverDefect`): `Device::new`'s profile.
-    Defects,
-    /// Every stage, on every device, at the heaviest entry measured to compile within host-sized
-    /// memory (`pipeline::compile::COMPILED_STAGE_WEIGHT`), refused as `Needs::StageBound`:
-    /// `Device::from_queries`' profile, keyed on no identity.
-    Every,
 }
 
 /// Every field of a profile, policy included. The fingerprint hashes all of them.
@@ -889,8 +507,6 @@ pub struct ProfileFields {
     pub handle_domain: HandleDomain,
     pub containment: Containment,
     pub isolation: GuestIsolation,
-    /// How a fast-math `half` chain rounds without `shaderFloat16` (`DevicePolicy::half_chains`).
-    pub half_chains: crate::device::HalfChainPolicy,
     pub leaf: LeafCaps,
     pub subgroup: SubgroupModel,
     pub images: ImageCaps,
@@ -935,9 +551,6 @@ pub struct ProfileFields {
     /// which its refresh reads across the bus once per encoder where the in-place form would read
     /// the planes there at every pass. Both forms read Metal's texels exactly.
     pub ycbcr_in_place: bool,
-    /// How a sample of planes read in place converts and filters them
-    /// (`DevicePolicy::ycbcr_in_place_reads`).
-    pub ycbcr_in_place_reads: crate::device::YCbCrInPlacePolicy,
     /// The Function storage a thread holds correctly (`device::function_storage`): a stage's
     /// private memory, its call stacks included, may take this much a thread
     /// (`VkLimit::FunctionStorageBytesPerThread`), and a vertex or fragment function on a device
@@ -1646,9 +1259,7 @@ pub enum DriverWorkaround {
     /// our bare-Vulkan probes: at `N` = 16 and 8, scalar and three lanes, every such program
     /// answered sign-extended, while `OpBitFieldUExtract(x, 0, N)` in place of the mask answered
     /// right; the RTX 5080 (Blackwell) on the same release answered every program right. Derived
-    /// for NVIDIA's driver on the 3090's generation, GA10x
-    /// ([`NVIDIA_AMPERE_GA10X`](crate::device::NVIDIA_AMPERE_GA10X)), which its compiler
-    /// targets alike. Every narrow integer's mask in a 32-bit container is
+    /// for NVIDIA's driver on the 3090's generation, GA10x, which its compiler targets alike. Every narrow integer's mask in a 32-bit container is
     /// emitted as `OpBitFieldUExtract(x, 0, N)` there (`lower::arith::ops::mask`), which is the
     /// same bits on every device.
     NarrowMaskAfterSignedClamp,

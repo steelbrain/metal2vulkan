@@ -127,7 +127,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d_grad.v4f32(ptr addrspace(1), 
 fn p(stem: &str) -> DeviceProfile {
     let mut desc = crate::pipeline::testing::description(stem).expect(stem);
     desc.features.remove(&VkFeature::SamplerAnisotropy);
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect(stem)
         .profile()
         .clone()
@@ -344,7 +344,7 @@ fn a_bound_anisotropic_sampler_asks_for_the_variant() {
     let text = std::fs::read_to_string(&path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     assert!(desc.features.remove(&VkFeature::SamplerAnisotropy));
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let pipeline = |inputs: &LoweringInputs| {
         let function = Library::from_air(&bc)
             .and_then(|lib| lib.function("k"))
@@ -574,7 +574,10 @@ fn anisotropy_of(stem: &str, policy: DevicePolicy, withheld: bool) -> DeviceProf
             "{stem}"
         );
     }
-    Device::new(desc, policy).expect(stem).profile().clone()
+    Device::from_queries(desc, policy)
+        .expect(stem)
+        .profile()
+        .clone()
 }
 
 /// Without `samplerAnisotropy` every Vulkan sampler is isotropic, so Metal's anisotropic filter is
@@ -689,31 +692,13 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_cube_grad.v4f32(ptr addrspace(
     )
 }
 
-/// `moltenvk-m3` whose kernel cube-gradient route its description does not state (a MoltenVK
-/// release no measurement covers).
-fn unmeasured_moltenvk() -> DeviceProfile {
-    let desc = crate::pipeline::testing::description("moltenvk-m3").expect("moltenvk-m3");
-    let route = crate::error::DriverDeviation::CubeGradientRoute;
-    crate::device::Device::with_deviation(
-        desc,
-        crate::device::DevicePolicy::default(),
-        route,
-        false,
-    )
-    .expect("device")
-    .profile()
-    .clone()
-}
-
 /// A cube's explicit gradients through a constexpr sampler of `maxAnisotropy` 8 under a linear
 /// mip filter take Metal's footprint in the shader on every device without `samplerAnisotropy`:
 /// Metal's level and taps (no gradient sample, the level count queried, tap 0 and the loop's tap
 /// of one explicit level each, `AnisotropicFilter` recorded and `CubeGradientFootprint` not).
 /// Through an isotropic sampler a device without the feature keeps its own gradient sample, at the
-/// footprint the cube's form hands it. On a measured route (`moltenvk-m3`, whose kernels hand
-/// Metal's own gradients) the device's gradient sample stays, unrecorded; on MoltenVK where its
-/// kernel route is not measured it stays too, Vulkan's rule's form, recorded as
-/// `CubeGradientFootprint`.
+/// footprint the cube's form hands it. On `moltenvk-m3`, whose sampler is anisotropic, the device's
+/// gradient sample stays, Vulkan's rule's form, recorded as `CubeGradientFootprint`.
 #[test]
 fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
     const GRAD: u32 = 0x4;
@@ -727,10 +712,7 @@ fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
         };
         let explicit = if taps { WRITTEN_TAPS as usize } else { 2 };
         let mut shader = Vec::new();
-        let mut device = vec![
-            ("moltenvk-m3", full("moltenvk-m3")),
-            ("unmeasured MoltenVK", unmeasured_moltenvk()),
-        ];
+        let mut device = vec![("moltenvk-m3", full("moltenvk-m3"))];
         for stem in ["lavapipe", "amd-rdna3-radv", "intel-irisxe-anv"] {
             match taps {
                 true => shader.push((stem, p(stem))),
@@ -767,20 +749,13 @@ fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
                 "{what}: {:?}",
                 a.precision
             );
-            // Metal's own sampler on a measured route takes Metal's own gradients; on an
-            // unmeasured one, Vulkan's rule's form, the device's reading.
-            match stem {
-                "moltenvk-m3" => assert!(
-                    !a.precision.contains(&PrecisionNote::CubeGradientFootprint),
-                    "{what}: {:?}",
-                    a.precision
-                ),
-                "unmeasured MoltenVK" => assert!(
+            // Vulkan's rule's form, the device's reading.
+            if stem == "moltenvk-m3" {
+                assert!(
                     a.precision.contains(&PrecisionNote::CubeGradientFootprint),
                     "{what}: {:?}",
                     a.precision
-                ),
-                _ => {}
+                );
             }
         }
     }

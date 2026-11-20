@@ -23,20 +23,17 @@
 //! (`0x3C01`). Where a profile takes the device's 16-bit arithmetic, each operation reads its
 //! operands as 16-bit floats with no conversion between them: a 16-bit float widened and narrowed
 //! back is that float (`FunctionBuilder::convert`), and a narrowed constant is a 16-bit constant.
-//! Without `shaderFloat16` the `fast` chain is held at `float` precision under
-//! `HalfChainPolicy::AtExits` (`lower::arith::half_chain`), and rounded at each operation under
-//! `HalfChainPolicy::EachOperation`.
+//! Without `shaderFloat16` the `fast` chain is held at `float` precision
+//! (`lower::arith::half_chain`).
 //!
 //! `llvm-as` assembles the modules; without it the tests skip visibly.
 
 use std::collections::BTreeSet;
 
-use crate::device::HalfChainPolicy;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, exact_maths, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
-    Scratch,
+    compile, link_and_validate, llvm_assemble, profile, typed_module, AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::testing::committed_profiles;
@@ -509,22 +506,15 @@ fn half_operations_read_their_16_bit_operands_directly() {
     );
 }
 
-/// Without `shaderFloat16` the `fast` chain's first sum is held at `float` under
-/// `HalfChainPolicy::AtExits`, the default: one quantize, at the chain's exit, and the chain's
-/// sum rounded once; under `HalfChainPolicy::EachOperation` (`exact_answers`) each sum rounds, two
-/// quantizes and the rounded chain. The chain without flags rounds each sum under both, and a
-/// profile with `shaderFloat16` takes no quantize under either. Each `fast` chain notes
-/// `FastMathRewrites`, and the two values make two profile fingerprints.
+/// Without `shaderFloat16` the `fast` chain's first sum is held at `float`: one quantize, at the
+/// chain's exit, and the chain's sum rounded once. The chain without flags rounds each sum, two
+/// quantizes and the rounded chain, and a profile with `shaderFloat16` takes no quantize. Each
+/// `fast` chain notes `FastMathRewrites`.
 #[test]
 fn half_chains_without_float16_round_at_their_exits_by_default() {
     let Some(bc) = assemble_text(HALF_MODULE) else {
         return;
     };
-    assert_eq!(
-        crate::device::DevicePolicy::UNTRUSTED.half_chains,
-        HalfChainPolicy::AtExits
-    );
-    assert_eq!(exact_maths().half_chains, HalfChainPolicy::EachOperation);
     let quantizes = |words: &[u32]| {
         let mut n = 0;
         let mut i = 5;
@@ -536,39 +526,30 @@ fn half_chains_without_float16_round_at_their_exits_by_default() {
         n
     };
     let mut emulated = 0;
-    for (stem, fast_p) in committed_profiles().expect("profiles") {
-        let exact_p = profile(&stem, exact_maths()).expect("profile");
-        // The switch changes emitted code, so the profile's fingerprint (every cache key) covers it.
-        assert_ne!(
-            fast_p.fingerprint(),
-            exact_p.fingerprint(),
-            "{stem}: the half chains' policy keys no profile"
-        );
-        let device = crate::lower::arith::narrow::quantize_form(&fast_p)
+    for (stem, p) in committed_profiles().expect("profiles") {
+        let device = crate::lower::arith::narrow::quantize_form(&p)
             == crate::spirv::builder::QuantizeForm::Device;
         emulated += usize::from(device);
         for (entry, fast) in [("fast_half_chain", true), ("strict_half_chain", false)] {
-            for (policy, p) in [("AtExits", &fast_p), ("EachOperation", &exact_p)] {
-                let what = format!("{stem} {entry} {policy}");
-                let a = compile(&bc, entry, p).unwrap_or_else(|e| panic!("{what}: {e}"));
-                let (_, words) =
-                    link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                let held = device && fast && policy == "AtExits";
-                let want = match (device, held) {
-                    (false, _) => 0,
-                    (true, true) => 1,
-                    (true, false) => 2,
-                };
-                assert_eq!(quantizes(&words), want, "{what}: OpQuantizeToF16");
-                let stored = interpret(&bc, entry, p, HALF_INPUT)[0] & 0xFFFF;
-                assert_eq!(stored, if held { HELD } else { ROUNDED }, "{what}: stored");
-                assert_eq!(
-                    a.precision.contains(&PrecisionNote::FastMathRewrites),
-                    fast,
-                    "{what}: {:?}",
-                    a.precision
-                );
-            }
+            let what = format!("{stem} {entry}");
+            let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            let (_, words) =
+                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let held = device && fast;
+            let want = match (device, held) {
+                (false, _) => 0,
+                (true, true) => 1,
+                (true, false) => 2,
+            };
+            assert_eq!(quantizes(&words), want, "{what}: OpQuantizeToF16");
+            let stored = interpret(&bc, entry, &p, HALF_INPUT)[0] & 0xFFFF;
+            assert_eq!(stored, if held { HELD } else { ROUNDED }, "{what}: stored");
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::FastMathRewrites),
+                fast,
+                "{what}: {:?}",
+                a.precision
+            );
         }
     }
     assert!(emulated > 0, "no committed profile lacks shaderFloat16");

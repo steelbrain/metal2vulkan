@@ -66,7 +66,7 @@ fn without_robustness(stem: &str) -> DeviceProfile {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustBufferAccess);
     desc.features.remove(&VkFeature::RobustBufferAccess2);
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -925,71 +925,33 @@ fn mode_two_refuses_fragment_texture_writes_it_would_round() {
 /// A fragment function's output to a normalized or small float attachment is written as computed
 /// on every profile, its conversion the device's: nothing rounds (no `OpIsNan` of a rounding), the
 /// attachment is not listed as rounded, and its blend of one and zero takes no Vulkan blend, as
-/// Metal's stores the output as written. Where the profile's
-/// driver is measured to convert a `float` output to a half-float or unsigned small float channel
-/// as Metal does (`MetalSmallFloatColorWrites`: RADV on the Radeon 780M, ANV on the Iris Xe of
-/// RPL-P and the UHD 770 of RPL-S, NVIDIA's on the RTX 3090), or an output to a 16-bit unorm or
-/// snorm channel (`MetalNorm16ColorWrites`: the 780M; a blended snorm channel's NaN aside), the
-/// module requires the property and records no `PrecisionNote::DeviceColorConversion` (a small
-/// float's NaN, as computed, is the device's: `PrecisionNote::DeviceNanEncoding`); elsewhere (the
-/// RTX 5080 Laptop GPU, lavapipe; a `half` output to `RG11B10Float`) it records the conversion and
-/// requires neither, but for a `half` output to a half-float channel, a half already, which records
-/// none.
+/// Metal's stores the output as written. The module records `PrecisionNote::DeviceColorConversion`
+/// but for a `half` output to a half-float channel, a half already, which records none.
 #[test]
-fn measured_color_conversions_are_left_to_the_device() {
-    use crate::device::requirements::VkProperty;
+fn color_conversions_are_left_to_the_device() {
     use crate::pipeline::artifact::PrecisionNote;
     let Some(bc) = assemble("rt6_samples.ll") else {
         return;
     };
-    let small = VkProperty::MetalSmallFloatColorWrites;
-    let norm16 = VkProperty::MetalNorm16ColorWrites;
-    // The RTX 3090 (not a committed capture): the RTX 5080 Laptop GPU's capture with its id.
-    let rtx_3090 = {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/profiles/nvidia-rtx5080-laptop.json");
-        let text = std::fs::read_to_string(path).expect("profile");
-        let mut d = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        d.device_id = crate::device::driver_facts::NVIDIA_RTX_3090;
-        Device::new(d, DevicePolicy::default())
-            .expect("device")
-            .profile()
-            .clone()
-    };
-    for (stem, p, small_taken, norm16_taken) in [
-        ("amd-780m-radv", prof("amd-780m-radv"), true, true),
-        (
-            "intel-irisxe-rplp-anv",
-            prof("intel-irisxe-rplp-anv"),
-            true,
-            false,
-        ),
-        ("rtx-3090", rtx_3090, true, false),
-        (
-            "intel-uhd770-rpls-anv",
-            prof("intel-uhd770-rpls-anv"),
-            true,
-            false,
-        ),
-        (
-            "nvidia-rtx5080-laptop",
-            prof("nvidia-rtx5080-laptop"),
-            false,
-            false,
-        ),
-        ("lavapipe", prof("lavapipe"), false, false),
+    for stem in [
+        "amd-780m-radv",
+        "intel-irisxe-rplp-anv",
+        "intel-uhd770-rpls-anv",
+        "nvidia-rtx5080-laptop",
+        "lavapipe",
     ] {
+        let p = prof(stem);
         let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
         for (entry, float) in [
             ("rt6_fill_rgba32float", true),
             ("rt6_fill_rgba16float", false),
         ] {
-            for (pf, property, taken) in [
-                (PixelFormat::RGBA16Float, small, small_taken && float),
-                (PixelFormat::R16Float, small, small_taken && float),
-                (PixelFormat::RG11B10Float, small, small_taken && float),
-                (PixelFormat::RGBA16Unorm, norm16, norm16_taken),
-                (PixelFormat::RG16Snorm, norm16, norm16_taken),
+            for pf in [
+                PixelFormat::RGBA16Float,
+                PixelFormat::R16Float,
+                PixelFormat::RG11B10Float,
+                PixelFormat::RGBA16Unorm,
+                PixelFormat::RG16Snorm,
             ] {
                 for blended in [false, true] {
                     let what = format!("{stem} {entry} {pf:?} blended {blended}");
@@ -1005,29 +967,15 @@ fn measured_color_conversions_are_left_to_the_device() {
                     let text = spirv_dis(&words[1]);
                     assert!(!text.contains("OpIsNan"), "{what}\n{text}");
                     assert!(!f.interface.io.rounded_colors.contains(&0), "{what}");
-                    // A blended snorm channel's NaN is Metal's -1.0, which no device stores.
-                    let taken = taken && !(blended && pf == PixelFormat::RG16Snorm);
-                    assert_eq!(
-                        f.requirements.properties.contains(&property),
-                        taken,
-                        "{what}"
-                    );
                     // A `half` output to a half-float channel is a half already.
                     let held =
                         !float && matches!(pf, PixelFormat::RGBA16Float | PixelFormat::R16Float);
                     assert_eq!(
                         f.precision.contains(&PrecisionNote::DeviceColorConversion),
-                        !taken && !held,
+                        !held,
                         "{what}: {:?}",
                         f.precision
                     );
-                    if taken && property == small {
-                        assert!(
-                            f.precision.contains(&PrecisionNote::DeviceNanEncoding),
-                            "{what}: {:?}",
-                            f.precision
-                        );
-                    }
                     let blend = l.graphics.as_ref().expect("graphics").color_attachments[0]
                         .as_ref()
                         .expect("attachment")

@@ -494,7 +494,7 @@ fn an_object_function_passes_its_payload_to_its_mesh_functions() {
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         desc.limits.mesh.max_task_payload_size = payload_size;
         desc.limits.mesh.max_task_payload_and_shared_memory_size = together;
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let got = compile(&draws, "mesh_draws_object", dev.profile())
             .map(|_| ())
             .map_err(|e| match e {
@@ -546,7 +546,7 @@ fn a_mesh_functions_threadgroup_memory_is_its_workgroups() {
     for (available, fits) in [(260, true), (259, false)] {
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         desc.limits.mesh.max_mesh_shared_memory_size = available;
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         match compile(&outputs, "mesh_outputs_points", dev.profile()) {
             Ok(_) => assert!(fits, "{stem} at {available}"),
             Err(Error::Unsupported(u)) => {
@@ -631,7 +631,7 @@ fn a_mesh_point_size_is_noted_only_where_the_mesh_outputs_points() {
         let text = std::fs::read_to_string(path).expect("profile");
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         desc.limits.max_point_size = 64;
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         for (topology, bitcode) in &modules {
             let a = compile(bitcode, "mesh_outputs_points", dev.profile())
                 .unwrap_or_else(|e| panic!("{stem} {topology}: {e}"));
@@ -656,7 +656,7 @@ pub(super) fn device(stem: &str) -> crate::device::Device {
         .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// The `OpDecorate ... PerPrimitiveEXT` instructions of a module.
@@ -1877,7 +1877,7 @@ fn a_mesh_function_stages_its_indices_where_the_driver_misplaces_component_store
     for (available, fits) in [(16, true), (15, false)] {
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         desc.limits.mesh.max_mesh_shared_memory_size = available;
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         // The refusal's feature and needs (its location is the entry's).
         let got = compile(&draws, "mesh_draws_grid", dev.profile())
             .map(|_| ())
@@ -1925,7 +1925,7 @@ fn a_mesh_functions_buffer_writes_need_no_stage_store_feature() {
         ] {
             desc.features.remove(&f);
         }
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let p = dev.profile();
         let a =
             compile(&barrier, "mesh_barrier_writer", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -2592,7 +2592,7 @@ fn an_object_functions_threadgroup_memory_is_the_encoders_lengths() {
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.limits.mesh.max_task_shared_memory_size = 76;
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let made = pipeline(&dev).unwrap_or_else(|e| panic!("{stem} at 76: {e}"));
     made.plan(&dev, &with_length(Some(64)).shape())
         .unwrap_or_else(|e| panic!("{stem} at 76: 64 bytes: {e}"));

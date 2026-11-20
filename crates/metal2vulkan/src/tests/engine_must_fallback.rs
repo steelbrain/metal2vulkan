@@ -82,7 +82,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect(stem);
-    Device::new(description, DevicePolicy::default()).expect(stem)
+    Device::from_queries(description, DevicePolicy::default()).expect(stem)
 }
 
 /// A module that defines no function is a library of none, and asking it for one is refused as

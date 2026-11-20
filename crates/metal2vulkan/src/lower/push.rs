@@ -1,10 +1,8 @@
 //! Push placement: the complete algorithm. Families only contribute fields.
 //!
-//! Each stage has a push window: vertex `[0, 64)`, fragment `[64, 128)`, compute `[0, 128)`.
-//! Vulkan guarantees `maxPushConstantsSize ≥ 128`, so those windows depend neither on the other
-//! stage nor on the device. On a profile whose push window is the runtime's floor
-//! (`PushWindow::Floor`, `Device::from_queries`'), which requires `maxPushConstantsSize ≥ 256`, a
-//! compute window is `[0, 256)` (a dispatch region and 24 buffer addresses below its tail), and a render
+//! Each stage has a push window on the runtime's floor, which requires
+//! `maxPushConstantsSize ≥ 256`: a compute window is `[0, 256)` (a dispatch region and 24 buffer
+//! addresses below its tail), and a render
 //! pipeline's two stages share one range `[0, 256)`, dense by link: the vertex function's fields
 //! from 0, the fragment function's from its `LoweringInputs::push_base`, the vertex function's push
 //! end, so only the fields the pair places take space (a four-byte field the fragment function
@@ -43,26 +41,16 @@
 
 use std::collections::BTreeSet;
 
-use crate::device::profile::PushWindow;
 use crate::pipeline::interface::{PlacedField, PushLoc, PushPlacement};
 use crate::pipeline::sym::{PushField, Stage};
 
-/// The byte range `[start, end)` of `stage`'s push window on a profile whose push window is `w`;
-/// `base` is a fragment function's `LoweringInputs::push_base`, which only the floor reads.
-pub const fn window(stage: Stage, w: PushWindow, base: u32) -> (u32, u32) {
+/// The byte range `[start, end)` of `stage`'s push window; `base` is a fragment function's
+/// `LoweringInputs::push_base`.
+pub const fn window(stage: Stage, base: u32) -> (u32, u32) {
     match stage {
-        Stage::Vertex => match w {
-            PushWindow::Guaranteed => (0, 64),
-            PushWindow::Floor => (0, VERTEX_FLOOR_END),
-        },
-        Stage::Fragment => match w {
-            PushWindow::Guaranteed => (64, 128),
-            PushWindow::Floor => (base, FLOOR_BYTES),
-        },
-        Stage::Kernel => match w {
-            PushWindow::Guaranteed => (0, 128),
-            PushWindow::Floor => (0, FLOOR_BYTES),
-        },
+        Stage::Vertex => (0, VERTEX_FLOOR_END),
+        Stage::Fragment => (base, FLOOR_BYTES),
+        Stage::Kernel => (0, FLOOR_BYTES),
         // A mesh render pipeline's object, mesh and fragment functions share the 128 bytes: the
         // fragment function keeps its window, and the vertex function's is split.
         Stage::Object => (0, 32),
@@ -70,7 +58,7 @@ pub const fn window(stage: Stage, w: PushWindow, base: u32) -> (u32, u32) {
     }
 }
 
-/// The push bytes of the runtime's floor (`PushWindow::Floor`): its `maxPushConstantsSize`.
+/// The push bytes of the runtime's floor: its `maxPushConstantsSize`.
 pub const FLOOR_BYTES: u32 = 256;
 
 /// The end of a vertex function's window on the floor: the floor's end less one address, so the
@@ -232,22 +220,11 @@ fn align_up(v: u32, a: u32) -> u32 {
     v.div_ceil(a).saturating_mul(a)
 }
 
-/// Place `fields` for `stage` in its push window on a profile whose push window is `w`, from a
-/// fragment function's `base` there ([`window`]): on the floor with its tail ([`tail`]).
-pub fn place(
-    stage: Stage,
-    w: PushWindow,
-    base: u32,
-    fields: &BTreeSet<PushField>,
-) -> PushPlacement {
-    let (start, end) = window(stage, w, base);
-    let (pushed, offsets, word, push_end) = match w {
-        PushWindow::Guaranteed => {
-            let (n, offsets, push_end) = dense(start, end, fields);
-            (n, offsets, None, push_end)
-        }
-        PushWindow::Floor => floor(start, end, fields),
-    };
+/// Place `fields` for `stage` in its push window, from a fragment function's `base` there
+/// ([`window`]), with its tail ([`tail`]).
+pub fn place(stage: Stage, base: u32, fields: &BTreeSet<PushField>) -> PushPlacement {
+    let (start, end) = window(stage, base);
+    let (pushed, offsets, word, push_end) = floor(start, end, fields);
     let mut table = 0u32;
     let mut placed = Vec::with_capacity(fields.len());
     // `BTreeSet` iterates in the derived `Ord`: exactly the kind order, then slot order.
@@ -364,20 +341,16 @@ fn tail_layout(start: u32, end: u32, pushed: &[PushField]) -> Option<(Vec<u32>, 
 /// gives it a size. That is the first field with a size that does not fit, so the fields are read
 /// only up to it, at most the window's worth plus one, however many there are; a step that asks
 /// once per slot it moves (`access::finish_slots`) then costs no walk of every slot's field.
-pub fn spills(stage: Stage, w: PushWindow, base: u32, fields: &BTreeSet<PushField>) -> bool {
-    let (start, end) = window(stage, w, base);
-    let pushed = match w {
-        PushWindow::Guaranteed => dense(start, end, fields).0,
-        PushWindow::Floor => floor(start, end, fields).0,
-    };
+pub fn spills(stage: Stage, base: u32, fields: &BTreeSet<PushField>) -> bool {
+    let (start, end) = window(stage, base);
+    let pushed = floor(start, end, fields).0;
     // Every shape has a size, so any field past the pushed ones gives the table one.
     pushed < fields.len()
 }
 
 /// The tail of `placement` ([`place`] on the floor): its tail word (`PushField::TailWord`), or
 /// its highest pushed field, where it lies at least [`HOLE_BYTES`] above every other pushed
-/// field's end. A placement packed in the guaranteed window has none: no alignment there leaves
-/// 24 bytes.
+/// field's end.
 pub fn tail(placement: &PushPlacement) -> Option<PushField> {
     let pushed = || {
         (placement.fields.iter()).filter_map(|f| match f.loc {
@@ -401,12 +374,11 @@ pub fn tail(placement: &PushPlacement) -> Option<PushField> {
     (at >= below(skip)? + HOLE_BYTES).then_some(field)
 }
 
-/// The floor's bound on `placement`, a stage's on a profile whose push window is `w`: on the
-/// floor a stage that pushes more than one field, or one of more than two words, ends with its
-/// tail ([`tail`]), a field of a tail kind or the tail word, of one or two words; its push range
-/// ends with its highest pushed byte, by the floor's end; off the floor no stage pushes the tail
-/// word. `Err` names the placement that passes it.
-pub fn check_floor(w: PushWindow, placement: &PushPlacement) -> Result<(), String> {
+/// The floor's bound on `placement`, a stage's: a stage that pushes more than one field, or one
+/// of more than two words, ends with its tail ([`tail`]), a field of a tail kind or the tail word,
+/// of one or two words; its push range ends with its highest pushed byte, by the floor's end.
+/// `Err` names the placement that passes it.
+pub fn check_floor(placement: &PushPlacement) -> Result<(), String> {
     let pushed: Vec<(PushField, u32, u32)> = (placement.fields.iter())
         .filter_map(|f| match f.loc {
             PushLoc::Push { offset } => Some((f.field, offset, f.size)),
@@ -420,20 +392,13 @@ pub fn check_floor(w: PushWindow, placement: &PushPlacement) -> Result<(), Strin
         .map(|&(_, offset, size)| offset + size)
         .chain(word)
         .max();
-    let ok = match w {
-        PushWindow::Guaranteed => word.is_none(),
-        PushWindow::Floor => {
-            let single =
-                word.is_none() && matches!(pushed.as_slice(), [(_, _, size)] if *size <= 8);
-            let tailed = tail(placement).is_some_and(|t| {
-                (tail_kind(t) || t == PushField::TailWord) && shape(t).size() <= 8
-            });
-            let range = placement.push_range.map(|(offset, size)| offset + size);
-            (pushed.is_empty() || single || tailed)
-                && range == top
-                && top.is_none_or(|t| t <= FLOOR_BYTES)
-        }
-    };
+    let single = word.is_none() && matches!(pushed.as_slice(), [(_, _, size)] if *size <= 8);
+    let tailed = tail(placement)
+        .is_some_and(|t| (tail_kind(t) || t == PushField::TailWord) && shape(t).size() <= 8);
+    let range = placement.push_range.map(|(offset, size)| offset + size);
+    let ok = (pushed.is_empty() || single || tailed)
+        && range == top
+        && top.is_none_or(|t| t <= FLOOR_BYTES);
     match ok {
         true => Ok(()),
         false => Err(format!(
@@ -514,32 +479,19 @@ mod tests {
     /// ([`tail`]) lies above every other pushed field and the floor's bound holds
     /// ([`check_floor`]); the guaranteed window has no tail.
     fn check(stage: Stage, fields: &BTreeSet<PushField>) -> PushPlacement {
-        check_in(stage, PushWindow::Guaranteed, fields)
+        check_at(stage, 0, fields)
     }
 
-    /// [`check`] on a profile whose push window is `w`.
-    fn check_in(stage: Stage, w: PushWindow, fields: &BTreeSet<PushField>) -> PushPlacement {
-        check_at(stage, w, 0, fields)
-    }
-
-    /// [`check_in`] from a fragment function's push `base`.
-    fn check_at(
-        stage: Stage,
-        w: PushWindow,
-        base: u32,
-        fields: &BTreeSet<PushField>,
-    ) -> PushPlacement {
-        let p = place(stage, w, base, fields);
-        assert_eq!(spills(stage, w, base, fields), p.argument_table_size > 0);
-        let (start, end) = window(stage, w, base);
+    /// [`check`] from a fragment function's push `base`.
+    fn check_at(stage: Stage, base: u32, fields: &BTreeSet<PushField>) -> PushPlacement {
+        let p = place(stage, base, fields);
+        assert_eq!(spills(stage, base, fields), p.argument_table_size > 0);
+        let (start, end) = window(stage, base);
         assert_eq!(p.stage, stage);
         let order: Vec<PushField> = p.fields.iter().map(|f| f.field).collect();
         assert_eq!(order, fields.iter().copied().collect::<Vec<_>>());
-        assert_eq!(check_floor(w, &p), Ok(()));
+        assert_eq!(check_floor(&p), Ok(()));
         let top = tail(&p);
-        if w == PushWindow::Guaranteed {
-            assert_eq!(top, None);
-        }
         let (mut push_end, mut table_end, mut spilled) = (start, 0u32, false);
         let mut tail_end = p.tail_word.map(|at| (at, at + 4));
         for f in &p.fields {
@@ -592,74 +544,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn one_bind_offset_opens_the_stage_window() {
-        for (stage, base) in [
-            (Stage::Vertex, 0),
-            (Stage::Fragment, 64),
-            (Stage::Kernel, 0),
-        ] {
-            let fields = [PushField::SlotBindOffset(slot(stage, 0))].into();
-            let p = check(stage, &fields);
-            assert_eq!(p.fields[0].loc, PushLoc::Push { offset: base });
-            assert_eq!(p.push_range, Some((base, 4)));
-        }
-    }
-
-    /// Fields arrive in any order and are placed in kind order, each aligned: a `u32` residual,
-    /// then an 8-aligned guest base after 4 bytes of padding.
-    #[test]
-    fn fields_are_placed_in_kind_order_with_alignment() {
-        let s = slot(Stage::Kernel, 3);
-        let fields = [
-            PushField::SlotGuestBase(s),
-            PushField::VertexBufferStride(0),
-            PushField::SlotBindOffset(s),
-            PushField::DispatchRegion,
-        ]
-        .into();
-        let p = check(Stage::Kernel, &fields);
-        let locs: Vec<(PushField, PushLoc)> = p.fields.iter().map(|f| (f.field, f.loc)).collect();
-        assert_eq!(
-            locs,
-            vec![
-                (PushField::DispatchRegion, PushLoc::Push { offset: 0 }),
-                (PushField::SlotBindOffset(s), PushLoc::Push { offset: 32 }),
-                (PushField::SlotGuestBase(s), PushLoc::Push { offset: 40 }),
-                (
-                    PushField::VertexBufferStride(0),
-                    PushLoc::Push { offset: 48 }
-                ),
-            ]
-        );
-        assert_eq!(p.push_range, Some((0, 52)));
-    }
-
-    /// 31 residuals fill 124 bytes of the compute window; the first guest base would end past
-    /// 128, so it and every later field go to the `ArgumentTable`.
-    #[test]
-    fn the_first_field_that_does_not_fit_spills_it_and_the_rest() {
-        let mut fields = BTreeSet::new();
-        for i in 0..31 {
-            fields.insert(PushField::SlotBindOffset(slot(Stage::Kernel, i)));
-            fields.insert(PushField::SlotGuestBase(slot(Stage::Kernel, i)));
-        }
-        let p = check(Stage::Kernel, &fields);
-        let pushed = p
-            .fields
-            .iter()
-            .filter(|f| matches!(f.loc, PushLoc::Push { .. }))
-            .count();
-        assert_eq!(pushed, 31);
-        assert_eq!(p.push_range, Some((0, 124)));
-        assert_eq!(p.argument_table_size, 31 * 8 + 8);
-        assert_eq!(
-            p.fields[31].loc,
-            PushLoc::ArgumentTable { offset: 0 },
-            "the first spilled field starts the table"
-        );
-    }
-
     /// A kernel's dispatch region and its buffers' addresses: 12 addresses fill the guaranteed
     /// window. On the floor the addresses hold no tail kind, so the tail word ends the push, 24
     /// bytes above them: 24 addresses end at 224 and the word at 252, and a 25th spills; with a
@@ -680,18 +564,7 @@ mod tests {
                 .filter(|f| matches!(f.loc, PushLoc::Push { .. }))
                 .count()
         };
-        let guaranteed = check_in(Stage::Kernel, PushWindow::Guaranteed, &fields(12));
-        assert_eq!(
-            (guaranteed.push_range, guaranteed.argument_table_size),
-            (Some((0, 128)), 0)
-        );
-        assert!(spills(
-            Stage::Kernel,
-            PushWindow::Guaranteed,
-            0,
-            &fields(13)
-        ));
-        let floor = check_in(Stage::Kernel, PushWindow::Floor, &fields(24));
+        let floor = check(Stage::Kernel, &fields(24));
         assert_eq!(
             (floor.push_range, floor.argument_table_size),
             (Some((0, 252)), 0)
@@ -701,22 +574,16 @@ mod tests {
             (tail(&floor), floor.tail_word),
             (Some(PushField::TailWord), Some(248))
         );
-        assert!(spills(Stage::Kernel, PushWindow::Floor, 0, &fields(25)));
+        assert!(spills(Stage::Kernel, 0, &fields(25)));
         let mut spilled = fields(25);
         spilled.insert(PushField::ArgumentTableAddress);
-        let p = check_in(Stage::Kernel, PushWindow::Floor, &spilled);
+        let p = check(Stage::Kernel, &spilled);
         assert_eq!((p.push_range, p.argument_table_size), (Some((0, 252)), 32));
         assert_eq!(
             (pushed(&p), p.tail_word),
             (24, Some(248)),
             "the address, the region and 22 buffer addresses"
         );
-        for stage in [Stage::Object, Stage::Mesh] {
-            assert_eq!(
-                window(stage, PushWindow::Floor, 0),
-                window(stage, PushWindow::Guaranteed, 0)
-            );
-        }
     }
 
     /// The floor's tail: a kernel's highest field of a tail kind moves 24 bytes above its other
@@ -740,9 +607,7 @@ mod tests {
             PushField::SlotBounds(a),
         ]
         .into();
-        let packed = check_in(Stage::Kernel, PushWindow::Guaranteed, &fields);
-        assert_eq!(packed.push_range, Some((0, 64)));
-        let p = check_in(Stage::Kernel, PushWindow::Floor, &fields);
+        let p = check(Stage::Kernel, &fields);
         assert_eq!(tail(&p), Some(PushField::SlotBounds(a)));
         assert_eq!(at(&p, PushField::ZeroAddress), PushLoc::Push { offset: 48 });
         assert_eq!(
@@ -760,7 +625,7 @@ mod tests {
         assert_eq!(p.tail_word, None);
         // A second slot's bounds: the higher one is the tail, the first stays packed.
         fields.insert(PushField::SlotBounds(b));
-        let p = check_in(Stage::Kernel, PushWindow::Floor, &fields);
+        let p = check(Stage::Kernel, &fields);
         assert_eq!(tail(&p), Some(PushField::SlotBounds(b)));
         assert_eq!(
             at(&p, PushField::SlotBounds(a)),
@@ -772,24 +637,14 @@ mod tests {
         );
         assert_eq!(p.push_range, Some((0, 96)));
         // A region alone: the tail word, 24 bytes above it.
-        let region = check_in(
-            Stage::Kernel,
-            PushWindow::Floor,
-            &[PushField::DispatchRegion].into(),
-        );
+        let region = check_in(Stage::Kernel, &[PushField::DispatchRegion].into());
         assert_eq!(tail(&region), Some(PushField::TailWord));
         assert_eq!(region.tail_word, Some(56));
         assert_eq!(region.push_range, Some((0, 60)));
         // One address alone: no tail.
-        let one = check_in(
-            Stage::Kernel,
-            PushWindow::Floor,
-            &[PushField::SlotGuestBase(a)].into(),
-        );
+        let one = check_in(Stage::Kernel, &[PushField::SlotGuestBase(a)].into());
         assert_eq!((tail(&one), one.push_range), (None, Some((0, 8))));
-        assert!(check_in(Stage::Kernel, PushWindow::Floor, &BTreeSet::new())
-            .fields
-            .is_empty());
+        assert!(check(Stage::Kernel, &BTreeSet::new()).fields.is_empty());
     }
 
     /// The floor's bound, which `select` checks on every placement: a stage that pushes more than
@@ -805,15 +660,12 @@ mod tests {
             PushField::SlotBounds(a),
         ]
         .into();
-        let p = place(Stage::Kernel, PushWindow::Floor, 0, &fields);
-        assert_eq!(check_floor(PushWindow::Floor, &p), Ok(()));
-        let packed = place(Stage::Kernel, PushWindow::Guaranteed, 0, &fields);
-        assert_eq!(check_floor(PushWindow::Guaranteed, &packed), Ok(()));
-        assert!(check_floor(PushWindow::Floor, &packed).is_err(), "no hole");
+        let p = place(Stage::Kernel, 0, &fields);
+        assert_eq!(check_floor(&p), Ok(()));
         let mut short = p.clone();
         short.push_range = Some((0, 80));
         assert!(
-            check_floor(PushWindow::Floor, &short).is_err(),
+            check_floor(&short).is_err(),
             "a range that does not end with the tail"
         );
         let mut moved = p.clone();
@@ -823,28 +675,16 @@ mod tests {
             }
         }
         moved.push_range = Some((0, 64));
-        assert!(
-            check_floor(PushWindow::Floor, &moved).is_err(),
-            "a hole of 16"
-        );
-        let region = place(
-            Stage::Kernel,
-            PushWindow::Floor,
-            0,
-            &[PushField::DispatchRegion].into(),
-        );
-        assert_eq!(check_floor(PushWindow::Floor, &region), Ok(()));
-        assert!(check_floor(PushWindow::Guaranteed, &region).is_err());
+        assert!(check_floor(&moved).is_err(), "a hole of 16");
+        let region = place(Stage::Kernel, 0, &[PushField::DispatchRegion].into());
+        assert_eq!(check_floor(&region), Ok(()));
         let mut bare = region.clone();
         bare.tail_word = None;
         bare.push_range = Some((0, 32));
-        assert!(
-            check_floor(PushWindow::Floor, &bare).is_err(),
-            "a long field alone"
-        );
+        assert!(check_floor(&bare).is_err(), "a long field alone");
         let mut past = region;
         past.push_range = Some((0, 260));
-        assert!(check_floor(PushWindow::Floor, &past).is_err());
+        assert!(check_floor(&past).is_err());
     }
 
     /// The windows a pipeline of each kind pushes, pinned: on the guaranteed window the fixed
@@ -854,21 +694,9 @@ mod tests {
     #[test]
     fn each_kind_pushes_its_own_window() {
         for base in [0, 8, 40, 248] {
-            assert_eq!(window(Stage::Vertex, PushWindow::Guaranteed, base), (0, 64));
-            assert_eq!(
-                window(Stage::Fragment, PushWindow::Guaranteed, base),
-                (64, 128)
-            );
-            assert_eq!(
-                window(Stage::Kernel, PushWindow::Guaranteed, base),
-                (0, 128)
-            );
-            assert_eq!(window(Stage::Kernel, PushWindow::Floor, base), (0, 256));
-            assert_eq!(window(Stage::Vertex, PushWindow::Floor, base), (0, 248));
-            assert_eq!(
-                window(Stage::Fragment, PushWindow::Floor, base),
-                (base, 256)
-            );
+            assert_eq!(window(Stage::Kernel, base), (0, 256));
+            assert_eq!(window(Stage::Vertex, base), (0, 248));
+            assert_eq!(window(Stage::Fragment, base), (base, 256));
         }
     }
 
@@ -883,28 +711,23 @@ mod tests {
         let vertex: BTreeSet<PushField> = (0..3)
             .map(|i| PushField::SlotGuestBase(slot(Stage::Vertex, i)))
             .collect();
-        let v = check_at(Stage::Vertex, PushWindow::Floor, 0, &vertex);
+        let v = check_at(Stage::Vertex, 0, &vertex);
         assert_eq!(v.push_range, Some((0, 52)), "the tail word at 48");
         let fragment = |n: u32| -> BTreeSet<PushField> {
             (0..n)
                 .map(|i| PushField::SlotGuestBase(slot(Stage::Fragment, i)))
                 .collect()
         };
-        let f = check_at(Stage::Fragment, PushWindow::Floor, 52, &fragment(2));
+        let f = check_at(Stage::Fragment, 52, &fragment(2));
         assert_eq!(
             f.push_range,
             Some((52, 48)),
             "two addresses from 56, the word at 96"
         );
-        let full = check_at(Stage::Fragment, PushWindow::Floor, 24, &fragment(25));
+        let full = check_at(Stage::Fragment, 24, &fragment(25));
         assert_eq!(full.push_range, Some((24, 228)), "to the word at 248");
         assert_eq!(full.argument_table_size, 0);
-        assert!(spills(
-            Stage::Fragment,
-            PushWindow::Floor,
-            24,
-            &fragment(26)
-        ));
+        assert!(spills(Stage::Fragment, 24, &fragment(26)));
         // A vertex function's window ends at 248: 27 addresses end at 216 below the word at 240,
         // and a 28th spills.
         let wide = |n: u32| -> BTreeSet<PushField> {
@@ -912,15 +735,15 @@ mod tests {
                 .map(|i| PushField::SlotGuestBase(slot(Stage::Vertex, i)))
                 .collect()
         };
-        let v = check_at(Stage::Vertex, PushWindow::Floor, 0, &wide(27));
+        let v = check_at(Stage::Vertex, 0, &wide(27));
         assert_eq!((v.push_range, v.argument_table_size), (Some((0, 244)), 0));
-        assert!(spills(Stage::Vertex, PushWindow::Floor, 0, &wide(28)));
+        assert!(spills(Stage::Vertex, 0, &wide(28)));
         // The fragment function from the fullest vertex function's end, 244, pushes its block's
         // address, 8-aligned, at 248, alone, and spills the rest; from 248 the same.
         let mut spilled = fragment(2);
         spilled.insert(PushField::ArgumentTableAddress);
         for (base, range) in [(248, (248, 8)), (244, (244, 12))] {
-            let f = check_at(Stage::Fragment, PushWindow::Floor, base, &spilled);
+            let f = check_at(Stage::Fragment, base, &spilled);
             assert_eq!((f.push_range, f.argument_table_size), (Some(range), 16));
             assert_eq!(
                 (f.fields[0].field, f.fields[0].loc),
@@ -931,21 +754,6 @@ mod tests {
                 "from {base}"
             );
         }
-    }
-
-    /// The vertex window holds 16 residuals; the 17th spills even though a later, smaller field
-    /// would still fit nowhere else: placement is a prefix of the order.
-    #[test]
-    fn the_vertex_window_holds_sixty_four_bytes() {
-        let mut fields: BTreeSet<PushField> = (0..17)
-            .map(|i| PushField::SlotBindOffset(slot(Stage::Vertex, i)))
-            .collect();
-        fields.insert(PushField::VertexBufferStride(0));
-        let p = check(Stage::Vertex, &fields);
-        assert_eq!(p.push_range, Some((0, 64)));
-        assert_eq!(p.fields[16].loc, PushLoc::ArgumentTable { offset: 0 });
-        assert_eq!(p.fields[17].loc, PushLoc::ArgumentTable { offset: 4 });
-        assert_eq!(p.argument_table_size, 16);
     }
 
     /// A synthetic sweep over field sets built from every kind: the invariants hold for each.
@@ -970,11 +778,7 @@ mod tests {
             ]
         };
         let mut state = 0x2545_f491_4f6c_dd1du64;
-        let windows = [PushWindow::Guaranteed, PushWindow::Floor];
-        for (stage, w) in [Stage::Vertex, Stage::Fragment, Stage::Kernel]
-            .into_iter()
-            .flat_map(|stage| windows.map(|w| (stage, w)))
-        {
+        for stage in [Stage::Vertex, Stage::Fragment, Stage::Kernel] {
             for _ in 0..200 {
                 let mut fields = BTreeSet::new();
                 state ^= state << 13;
@@ -985,7 +789,7 @@ mod tests {
                     let pick = ((state >> (i % 50)) % 10) as usize;
                     fields.insert(kinds(stage, i % 31)[pick]);
                 }
-                check_in(stage, w, &fields);
+                check(stage, &fields);
             }
         }
     }
@@ -1033,7 +837,7 @@ mod tests {
                 later.insert(PushField::SlotGuestBase(slot(i)));
                 later.insert(PushField::VertexBufferStride(i));
             }
-            let (start, end) = window(stage, PushWindow::Guaranteed, 0);
+            let (start, end) = window(stage, 0);
             let firsts = [
                 None,
                 Some(PushField::RootTableAddress),
@@ -1045,7 +849,7 @@ mod tests {
                     let mut fields = rest;
                     fields.insert(PushField::ExecutionStatusAddress);
                     fields.extend(first);
-                    let placement = place(stage, PushWindow::Guaranteed, 0, &fields);
+                    let placement = place(stage, 0, &fields);
                     let status = placement
                         .fields
                         .iter()
@@ -1083,7 +887,7 @@ mod tests {
             later.insert(PushField::SlotGuestBase(slot(Stage::Vertex, i)));
             later.insert(PushField::VertexBufferStride(i));
         }
-        let (start, end) = window(Stage::Vertex, PushWindow::Guaranteed, 0);
+        let (start, end) = window(Stage::Vertex, 0);
         for (root, status) in [(false, false), (true, false), (false, true), (true, true)] {
             let mut fields = later.clone();
             fields.insert(PushField::CaptureIndexAddress);

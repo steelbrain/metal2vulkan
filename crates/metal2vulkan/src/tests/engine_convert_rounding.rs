@@ -108,7 +108,7 @@ fn profile(stem: &str, int64: bool) -> DeviceProfile {
     if !int64 {
         assert!(desc.features.remove(&VkFeature::ShaderInt64), "{stem}");
     }
-    let p = Device::new(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();

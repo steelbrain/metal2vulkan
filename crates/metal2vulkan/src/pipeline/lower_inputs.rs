@@ -948,7 +948,7 @@ pub struct LoweringInputs {
     #[cfg_attr(feature = "serde", serde(default))]
     pub unit_axes: u8,
     /// Where a fragment function's push fields start on `Device::from_queries`' profile
-    /// (`PushWindow::Floor`), whose render pipeline pushes one range `[0, 256)` for both stages:
+    ///, whose render pipeline pushes one range `[0, 256)` for both stages:
     /// its vertex function's fields first, from 0, then the fragment function's from this offset,
     /// the vertex function's push end
     /// ([`CompiledFunction::fragment_push_base`](crate::library::CompiledFunction::fragment_push_base)).

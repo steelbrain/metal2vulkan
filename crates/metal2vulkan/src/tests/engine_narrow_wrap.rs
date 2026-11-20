@@ -225,7 +225,7 @@ fn bitcode() -> Option<Vec<u8>> {
 
 /// The two profiles of committed description `stem`: `Device::new`'s and `Device::from_queries`'.
 fn both(stem: &str) -> [(&'static str, DeviceProfile); 2] {
-    let new = Device::new(
+    let new = Device::from_queries(
         description(stem).expect("description"),
         DevicePolicy::default(),
     );

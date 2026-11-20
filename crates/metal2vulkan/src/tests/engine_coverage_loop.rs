@@ -112,7 +112,7 @@ fn description(stem: &str) -> DeviceDescription {
 }
 
 fn device(stem: &str) -> Device {
-    Device::new(description(stem), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
 }
 
 /// The refusal of a memory writer on a driver that runs it once per covered sample where that

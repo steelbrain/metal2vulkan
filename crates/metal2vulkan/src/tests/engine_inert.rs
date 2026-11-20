@@ -141,7 +141,7 @@ fn a_kernel_is_inert_where_it_loops_nowhere_and_writes_only_its_threadgroups_mem
         return;
     };
     for stem in PROFILES {
-        let device = Device::new(
+        let device = Device::from_queries(
             description(stem).expect("description"),
             DevicePolicy::default(),
         )

@@ -231,8 +231,7 @@ pub fn committed_profiles() -> Result<Vec<(String, DeviceProfile)>, String> {
     committed_profiles_under(DevicePolicy::default())
 }
 
-/// [`committed_profiles`] under `policy` (the tests of Metal's NaN and `half` rounding take
-/// [`crate::pipeline::testing::exact_maths`]).
+/// [`committed_profiles`] under `policy`.
 pub fn committed_profiles_with(
     policy: DevicePolicy,
 ) -> Result<Vec<(String, DeviceProfile)>, String> {
@@ -251,7 +250,7 @@ fn committed_profiles_under(policy: DevicePolicy) -> Result<Vec<(String, DeviceP
     }
     let mut out = Vec::new();
     for (stem, desc) in committed_descriptions()? {
-        let dev = Device::new(desc.clone(), policy).map_err(|e| format!("{stem}: {e}"))?;
+        let dev = Device::from_queries(desc.clone(), policy).map_err(|e| format!("{stem}: {e}"))?;
         out.push((stem.clone(), dev.profile().clone()));
     }
     lock().push((policy, out.clone()));

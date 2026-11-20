@@ -85,7 +85,7 @@ fn devices() -> Vec<(String, Device)> {
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         out.push((
             stem,
-            Device::new(desc, DevicePolicy::default()).expect("device"),
+            Device::from_queries(desc, DevicePolicy::default()).expect("device"),
         ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -449,7 +449,7 @@ fn an_indirect_draw_without_draw_indirect_first_instance_reads_its_arguments() {
     );
     assert_ne!(edited, text, "lavapipe states the feature");
     let without = DeviceDescription::from_khronos_json(&edited, None).expect("description");
-    let without = Device::new(without, DevicePolicy::default()).expect("device");
+    let without = Device::from_queries(without, DevicePolicy::default()).expect("device");
     for (dev, missing) in [(without, true), (device("lavapipe"), false)] {
         let stem = if missing { "without" } else { "lavapipe" };
         let p = render_pipeline(&dev, &bc).unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -511,7 +511,7 @@ fn an_indexed_draw_past_its_index_buffer_is_bounded() {
     );
     assert_ne!(edited, text, "lavapipe states the feature");
     let without = DeviceDescription::from_khronos_json(&edited, None).expect("description");
-    let without = Device::new(without, DevicePolicy::default()).expect("device");
+    let without = Device::from_queries(without, DevicePolicy::default()).expect("device");
     let mut devices = devices_by_robustness();
     devices.push((
         "lavapipe without robustBufferAccess2".into(),
@@ -622,7 +622,7 @@ fn an_indexed_indirect_draw_reads_its_arguments_where_nothing_bounds_its_indices
     );
     assert_ne!(edited, text, "lavapipe states the feature");
     let without = DeviceDescription::from_khronos_json(&edited, None).expect("description");
-    let without = Device::new(without, DevicePolicy::default()).expect("device");
+    let without = Device::from_queries(without, DevicePolicy::default()).expect("device");
     let mut devices = devices_by_robustness();
     devices.push((
         "lavapipe without robustBufferAccess2".into(),

@@ -44,11 +44,12 @@ fn narrowed(stem: &str) -> Device {
     let mut desc = description(stem).expect("profile");
     desc.limits.max_color_attachments = 4;
     desc.limits.max_fragment_output_attachments = 4;
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 fn device(stem: &str) -> Device {
-    Device::new(description(stem).expect("profile"), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem).expect("profile"), DevicePolicy::default())
+        .expect("device")
 }
 
 /// A different format at each color index, so an attachment's place in a group shows.

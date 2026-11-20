@@ -649,9 +649,8 @@ pub(crate) fn note_tile_store(
     p: &DeviceProfile,
     modules: &mut [StageModule],
 ) {
-    use crate::device::profile::SnormMinimumNote;
     use PixelFormat as P;
-    if p.snorm_minimum_note() != SnormMinimumNote::Noted || d.raster_sample_count > 1 {
+    if d.raster_sample_count > 1 {
         return;
     }
     let formats = || d.color_attachments.iter().flatten().map(|a| a.pixel_format);

@@ -53,7 +53,7 @@ fn a_pipeline_covering_by_alpha_notes_the_device_s_coverage() {
         "intel-irisxe-anv",
         "nvidia-rtx5080-laptop",
     ] {
-        let dev = Device::new(
+        let dev = Device::from_queries(
             description(stem).expect("committed description"),
             DevicePolicy::default(),
         )

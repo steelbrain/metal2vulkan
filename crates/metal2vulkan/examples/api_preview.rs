@@ -75,7 +75,7 @@ fn committed_device(stem: &str) -> Result<Device> {
         "crates/metal2vulkan-validation/profiles/{stem}.json"
     )))?;
     let description = DeviceDescription::from_khronos_json(&json, None)?;
-    let device = Device::new(description, DevicePolicy::default())?;
+    let device = Device::from_queries(description, DevicePolicy::default())?;
     Ok(device)
 }
 

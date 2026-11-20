@@ -735,9 +735,6 @@ pub struct ArithPlan {
     /// padded or bfloat form ([`ArithPlan::converts`]) by the device's arithmetic
     /// ([`extended_range`]): [`finish`] then records `PrecisionNote::DevicePackConversion`.
     pub extended_range: bool,
-    /// Whether a `half` fused multiply-add takes the device's 16-bit `Fma` ([`fma::Route::F16`]),
-    /// recorded at selection: the module then requires `VkProperty::MetalHalfFma`.
-    pub f16_fma: bool,
     /// Whether a `float` operation leaves its `f32` denormals to the device because the device
     /// reads them as Metal does ([`denormal::device_flushes`]), recorded at selection: the module
     /// then requires `VkProperty::MetalFloatDenormals`, or, where its entry declares the 16-bit
@@ -808,11 +805,9 @@ impl ArithPlan {
         self.extended_range = true;
     }
 
-    /// Record fused multiply-add `fma`, selected: the device's 16-bit `Fma` measured to be Metal's
-    /// ([`ArithPlan::f16_fma`]), or the device's `Fma`, on `float` or on 16-bit floats
-    /// ([`ArithPlan::native_fma`]).
+    /// Record fused multiply-add `fma`, selected: the device's `Fma`, on `float` or on 16-bit
+    /// floats ([`ArithPlan::native_fma`]).
     pub fn take_fma(&mut self, fma: fma::Fma) {
-        self.f16_fma |= fma.route == fma::Route::F16;
         self.native_fma |= matches!(fma.route, fma::Route::Native | fma::Route::F16Native);
     }
 }
@@ -2422,7 +2417,7 @@ fn native_fma(fma: fma::Fma) -> OpNotes {
         fma::Route::Native | fma::Route::F16Native => {
             OpNotes::everywhere(BTreeSet::from([PrecisionNote::NativeFma]))
         }
-        fma::Route::Khr | fma::Route::F16 | fma::Route::F16Khr => OpNotes::default(),
+        fma::Route::Khr => OpNotes::default(),
     }
 }
 

@@ -260,7 +260,7 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
     let stride = SLOT * formats.len() as u32;
     let fetch = VkProperty::MetalNormalizedVertexFetch;
     for stem in [PROFILE, "lavapipe", "amd-780m-radv"] {
-        let dev = Device::new(
+        let dev = Device::from_queries(
             description(stem).expect("committed description"),
             DevicePolicy::default(),
         )
@@ -622,7 +622,7 @@ fn a_constant_step_is_a_zero_divisor_only_where_a_zero_stride_is_legal() {
         divisor: 0,
     };
     let derive = |desc: crate::device::DeviceDescription| {
-        crate::device::Device::new(desc, DevicePolicy::default())
+        crate::device::Device::from_queries(desc, DevicePolicy::default())
             .expect("the description derives")
             .profile()
             .clone()

@@ -120,7 +120,7 @@ fn lavapipe() -> Device {
     let text = std::fs::read_to_string(path).expect("profile");
     let desc =
         crate::device::DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// The unit axes `plan` states, with their relief (`RuntimeFact::UnitAxes`).

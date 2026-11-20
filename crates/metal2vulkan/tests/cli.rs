@@ -165,7 +165,7 @@ fn a_kernel_writes_the_pipeline_the_library_compiles() {
 
     let json = std::fs::read_to_string(profile("moltenvk-m3")).unwrap();
     let description = DeviceDescription::from_khronos_json(&json, None).unwrap();
-    let device = Device::new(description, DevicePolicy::default()).unwrap();
+    let device = Device::from_queries(description, DevicePolicy::default()).unwrap();
     let library = Library::parse(&std::fs::read(&input).unwrap()).unwrap();
     let kernel = FunctionDescriptor::new(library.function("ob3_texture_array").unwrap());
     let descriptor = ComputePipelineDescriptor::new(StageSource::Function(kernel));
@@ -503,7 +503,7 @@ fn a_runtime_bundle_replays_the_refusal_on_the_device_it_names() {
     let device_json = ReproDevice::new(description.clone(), DevicePolicy::default())
         .to_json()
         .unwrap();
-    let device = Device::new(description, DevicePolicy::default()).unwrap();
+    let device = Device::from_queries(description, DevicePolicy::default()).unwrap();
 
     // A kernel that reads [[stage_in]], with no stage-input descriptor.
     let library = Library::parse(&std::fs::read(fixture("ob3_stage_input.air")).unwrap()).unwrap();

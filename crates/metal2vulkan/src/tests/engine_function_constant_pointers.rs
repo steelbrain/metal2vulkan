@@ -138,7 +138,7 @@ fn device() -> Device {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description =
         DeviceDescription::from_khronos_json(&text, None).expect("nvidia-rtx5080-laptop");
-    Device::new(description, DevicePolicy::default()).expect("nvidia-rtx5080-laptop")
+    Device::from_queries(description, DevicePolicy::default()).expect("nvidia-rtx5080-laptop")
 }
 
 /// The `uintN` type of `lanes` lanes.

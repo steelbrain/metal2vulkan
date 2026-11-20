@@ -103,7 +103,7 @@ use crate::air::ir::{
     IntPredicate, Type, TypeId, Value, ValueId,
 };
 use crate::budget::{tree_bytes, Meter, PRIVATE_ARENA_BYTES};
-use crate::device::profile::{Containment, GuestIsolation, ThreadgroupMemory, ThreadgroupStart};
+use crate::device::profile::{Containment, GuestIsolation};
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, Limit, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
@@ -464,7 +464,7 @@ pub struct LocalPlan {
     pub positions: BTreeMap<Home, u32>,
     /// Whether the threadgroup arena's array and every typed threadgroup object are declared with
     /// a null initializer, so the function's threadgroup memory reads zero until it writes it
-    /// (`ThreadgroupStart::Zero`, [`zero_threadgroup`]).
+    /// ([`zero_threadgroup`]).
     pub zeroed: bool,
 }
 
@@ -636,14 +636,10 @@ fn count_and_init(
     Ok((count, init))
 }
 
-/// Where the profile's threadgroup memory starts at zero (`ThreadgroupStart::Zero`), record that
-/// the function's threadgroup memory, a `Workgroup` variable, is declared with a null initializer:
-/// `Unsupported{ZeroedThreadgroupMemory}` on a profile without
+/// Record that the function's threadgroup memory, a `Workgroup` variable, is declared with a null
+/// initializer, so it starts at zero: `Unsupported{ZeroedThreadgroupMemory}` on a profile without
 /// `shaderZeroInitializeWorkgroupMemory`, which Vulkan requires of any initializer there.
 fn zero_threadgroup(cx: &mut SelectCx<'_>) -> Result<(), Error> {
-    if cx.profile.threadgroup_start() != ThreadgroupStart::Zero {
-        return Ok(());
-    }
     let feature = VkFeature::ShaderZeroInitializeWorkgroupMemory;
     if !cx.profile.fields().enabled.features.contains(&feature) {
         return Err(Unsupported::needs(
@@ -710,9 +706,7 @@ pub(super) fn use_arena(cx: &mut SelectCx<'_>, arena: Arena) -> Result<(), Error
             // function's.
             shape.tile = (fragment || super::tile::is_tile(cx)) && !shape.regions.is_empty();
             // Only a kernel's own workgroup arena may be of `float` words.
-            let floats = cx.stage == Stage::Kernel
-                && !super::tile::is_tile(cx)
-                && cx.profile.threadgroup_memory() == ThreadgroupMemory::Native;
+            let floats = cx.stage == Stage::Kernel && !super::tile::is_tile(cx);
             if !floats {
                 shape.words = TgWords::Composed;
             }
@@ -1195,12 +1189,9 @@ pub(crate) fn access(
 }
 
 /// Whether an access of `arena` is contained (the module docs): unless the profile's containment
-/// is `UnsafeOff`, or the arena is threadgroup memory on a profile that contains none
-/// (`ThreadgroupMemory::Native`).
+/// is `UnsafeOff`, or the arena is threadgroup memory, which no profile contains.
 pub(crate) fn contained(cx: &SelectCx<'_>, arena: Arena) -> bool {
-    cx.profile.fields().containment != Containment::UnsafeOff
-        && !(arena == Arena::Threadgroup
-            && cx.profile.threadgroup_memory() == ThreadgroupMemory::Native)
+    cx.profile.fields().containment != Containment::UnsafeOff && arena != Arena::Threadgroup
 }
 
 /// A pointer's offset shape while reading its definitions: `Empty` is a join's identity.
@@ -2064,7 +2055,7 @@ pub(super) fn emit_access_at(
 
 /// Load or store (`stored`) `a`'s leaf, whole `float` words, at byte offset `off` of an arena of
 /// `float` words (`ArenaDecl::floats`, the module docs): lane `j` of `lanes` at word
-/// `off / 4 + j`, one typed access each, uncontained (`ThreadgroupMemory::Native`).
+/// `off / 4 + j`, one typed access each, uncontained.
 fn float_words(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,

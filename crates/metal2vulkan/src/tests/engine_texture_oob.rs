@@ -1131,7 +1131,7 @@ fn device(stem: &str, drop: &[VkFeature]) -> Device {
     for f in drop {
         desc.features.remove(f);
     }
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// Every committed profile, one with `robustImageAccess` but not `robustImageAccess2`, and two

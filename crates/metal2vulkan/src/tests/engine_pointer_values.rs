@@ -58,7 +58,7 @@ fn profile(stem: &str) -> DeviceProfile {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -77,7 +77,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustBufferAccess);
     desc.features.remove(&VkFeature::RobustBufferAccess2);
-    let p = Device::new(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();

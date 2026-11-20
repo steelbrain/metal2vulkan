@@ -79,7 +79,7 @@ fn the_modules_come_numbered_and_refuse_another_count() {
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(&path).expect("read");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let device = Device::new(desc, DevicePolicy::default()).expect("device");
+    let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     for draw in every_draw(4) {
         let modules = depth_stencil_resolve_modules(&device, draw, Feature::Format);
         match modules {

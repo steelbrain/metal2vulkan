@@ -165,7 +165,7 @@ fn queried(stem: &str) -> DeviceProfile {
 /// `stem` through `Device::new`.
 fn through_new(stem: &str) -> DeviceProfile {
     let desc = description(stem).expect("description");
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

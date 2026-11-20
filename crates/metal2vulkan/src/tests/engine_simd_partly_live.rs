@@ -419,7 +419,7 @@ fn wave64() -> DeviceProfile {
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
     let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

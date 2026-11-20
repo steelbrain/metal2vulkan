@@ -36,8 +36,8 @@ use crate::memory::static_root::analyze_memory;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, engine_dir, exact_maths, link_and_validate, llvm_assemble, meter, profile,
-    typed_module, AssembleError, Scratch,
+    compile, engine_dir, link_and_validate, llvm_assemble, meter, profile, typed_module,
+    AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::ir::StorageClass;
@@ -196,7 +196,7 @@ fn ext_insts(words: &[u32]) -> (Vec<u32>, bool) {
 
 /// The stored word of `entry` on the interpreter.
 fn interpret(bitcode: &[u8], entry: &str, stem: &str) -> u32 {
-    let p = profile(stem, exact_maths()).expect("profile");
+    let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
     let mut m = meter();
     let decoded = air::decode(bitcode, &mut m).expect("decode");
     let req = SpecRequest {
@@ -240,7 +240,7 @@ fn metal_math_variants_select_their_forms() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for k in &KERNELS {
             let what = format!("{} on {stem}", k.name);
             let a = compile(&bitcode, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -308,7 +308,7 @@ fn srgb_fixtures_take_the_transfer_by_the_devices_pow() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, exact_maths()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
         for (bc, entry, instruction) in [
             (&decode_bc, "a1_srgb_decode_all_bytes", UNPACK_UNORM_4X8),
             (&encode_bc, "a1_srgb_encode_sweep", PACK_UNORM_4X8),

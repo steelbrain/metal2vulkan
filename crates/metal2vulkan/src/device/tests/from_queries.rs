@@ -2,7 +2,6 @@
 //! nothing it derives.
 
 use super::*;
-use crate::device::description::APPLE_VENDOR_ID;
 
 /// The identities each committed profile is also read under, each with a device type: MoltenVK
 /// on an Apple GPU, the NVIDIA driver on a GA10x, RADV, Intel's Mesa driver and none.
@@ -11,14 +10,14 @@ fn identities() -> [(Option<vk::DriverId>, u32, u32, vk::PhysicalDeviceType); 5]
     [
         (
             Some(vk::DriverId::MOLTENVK),
-            APPLE_VENDOR_ID,
+            0x106b,
             0x1_0009,
             T::INTEGRATED_GPU,
         ),
         (
             Some(vk::DriverId::NVIDIA_PROPRIETARY),
             0x10de,
-            NVIDIA_AMPERE_GA10X[0],
+            0x2204,
             T::DISCRETE_GPU,
         ),
         (
@@ -39,11 +38,9 @@ fn identities() -> [(Option<vk::DriverId>, u32, u32, vk::PhysicalDeviceType); 5]
 
 /// On every committed profile, descriptions that differ only in `driver_id`, `vendor_id`,
 /// `device_id` and the device type give one profile, whose only workarounds are the two every
-/// device but Apple's takes and which reads YCbCr planes in place; `Device::new` reads the
-/// identity, so at least one profile differs there.
+/// device but Apple's takes and which reads YCbCr planes in place.
 #[test]
 fn from_queries_derives_one_profile_whatever_the_identity() {
-    let mut new_differs = false;
     for (stem, _) in committed_profiles() {
         let desc = profile(&stem);
         let derived: Vec<Option<DeviceProfile>> = identities()
@@ -74,14 +71,7 @@ fn from_queries_derives_one_profile_whatever_the_identity() {
             "{stem}"
         );
         assert!(queried.reads_ycbcr_planes_in_place(), "{stem}");
-        if let Ok(identified) = Device::new(desc, DevicePolicy::default()) {
-            new_differs |= identified.profile() != queried;
-        }
     }
-    assert!(
-        new_differs,
-        "no committed profile's identity changes Device::new"
-    );
 }
 
 /// The owned synthetic kernel of `from_queries_keeps_the_narrow_mask_on_ga10x`: two loaded words'
@@ -126,9 +116,7 @@ entry:
 /// A narrow mask over a signed clamp, to exactly 16 bits' range, of a sum of two values
 /// sign-extended from 16 bits ([`NARROW_CLAMP`]), on an NVIDIA Ampere GA10x description (the RTX
 /// 50's capture under the RTX 3090's identity): `Device::from_queries` masks it with
-/// `OpBitwiseAnd`, as on every device, and emits no `OpBitFieldUExtract`; `Device::new` reads the
-/// identity and takes `OpBitFieldUExtract` in place of every such mask
-/// (`DriverWorkaround::NarrowMaskAfterSignedClamp`).
+/// `OpBitwiseAnd`, as on every device, and emits no `OpBitFieldUExtract`.
 #[test]
 fn from_queries_keeps_the_narrow_mask_on_ga10x() {
     use crate::budget::SPIRV_WORDS;
@@ -148,7 +136,6 @@ fn from_queries_keeps_the_narrow_mask_on_ga10x() {
     desc.driver_id = Some(vk::DriverId::NVIDIA_PROPRIETARY);
     desc.vendor_id = 0x10de;
     desc.device_id = 0x2204;
-    assert!(NVIDIA_AMPERE_GA10X.contains(&desc.device_id));
     // The unsigned extracts and the ANDs of the kernel compiled on `p`.
     let counts = |p: &DeviceProfile| {
         let entry = EntryRef::Name("narrow_clamp");
@@ -172,15 +159,8 @@ fn from_queries_keeps_the_narrow_mask_on_ga10x() {
             .count();
         (extracts, ands)
     };
-    let queried = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+    let queried = Device::from_queries(desc, DevicePolicy::default()).unwrap();
     let (extracts, ands) = counts(queried.profile());
     assert_eq!(extracts, 0, "from_queries: an extract");
     assert!(ands > 0, "from_queries: no mask");
-    let identified = Device::new(desc, DevicePolicy::default()).unwrap();
-    assert!(identified
-        .profile()
-        .workarounds()
-        .contains(&DriverWorkaround::NarrowMaskAfterSignedClamp));
-    let (extracts, _) = counts(identified.profile());
-    assert!(extracts > 0, "Device::new: no extract");
 }

@@ -185,7 +185,8 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
     let mut extrapolations = 0usize;
     let mut refused = Vec::new();
     for stem in stems() {
-        let dev = Device::new(description(&stem), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
         let functions = interpolation_functions(&dev);
         let fields = dev.profile().fields();
         let centered = fields
@@ -355,7 +356,8 @@ fn an_interpolant_chosen_at_run_time_is_not_lowered() {
     };
     let mut checked = 0;
     for stem in stems() {
-        let dev = Device::new(description(&stem), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
         for samples in [1, 4] {
             let what = format!("{stem} pm_selected at {samples}");
             let d = render(&lib, "pm_selected", (PixelFormat::RGBA32Float, 1), samples);

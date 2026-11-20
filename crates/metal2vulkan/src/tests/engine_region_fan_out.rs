@@ -91,7 +91,7 @@ fn a_fanned_out_draw_runs_its_variant() {
     };
     let budget = Budget::standard();
     for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
-        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(stem), DevicePolicy::default()).expect("device");
         let base = dev
             .compile_render_pipeline(&d, &budget)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -235,7 +235,7 @@ fn replay_variant_fans_out(merged: bool) {
     };
     let budget = Budget::standard();
     for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
-        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(stem), DevicePolicy::default()).expect("device");
         let base = dev
             .compile_render_pipeline(&d, &budget)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -406,7 +406,8 @@ fn an_amplified_draw_keeps_the_plain_variant() {
     };
     d.max_vertex_amplification_count = 2;
     let budget = Budget::standard();
-    let dev = Device::new(description("lavapipe"), DevicePolicy::default()).expect("device");
+    let dev =
+        Device::from_queries(description("lavapipe"), DevicePolicy::default()).expect("device");
     let base = dev
         .compile_render_pipeline(&d, &budget)
         .unwrap_or_else(|e| panic!("{e}"));

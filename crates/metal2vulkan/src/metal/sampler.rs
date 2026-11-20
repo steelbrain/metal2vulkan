@@ -1221,7 +1221,6 @@ mod tests {
     use super::*;
     use crate::device::requirements::VkExtension;
     use crate::device::{Device, DevicePolicy};
-    use crate::error::DriverDeviation;
     use crate::metal::format::tests::committed_descriptions;
     use crate::metal::format::FormatEmulation;
     use crate::metal::SamplerReductionMode;
@@ -1376,7 +1375,7 @@ mod tests {
             desc.features.remove(f);
         }
         desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
-        Device::new(desc, DevicePolicy::default()).unwrap()
+        Device::from_queries(desc, DevicePolicy::default()).unwrap()
     }
 
     /// What a plan reads of a bound sampler's shape to check its separate textures' views
@@ -1470,7 +1469,7 @@ mod tests {
         ];
         let (mut checked, mut past_limit, mut withheld) = (0, 0, 0);
         for (stem, description) in committed_descriptions() {
-            let dev = Device::new(description, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(description, DevicePolicy::default()).unwrap();
             let p = dev.profile();
             let limit = f32::from_bits(p.fields().limits.max_sampler_lod_bias_bits);
             if p.fields()
@@ -1550,7 +1549,7 @@ mod tests {
             .unwrap()
             .1;
         floor.limits.max_sampler_lod_bias_bits = 15.5f32.to_bits();
-        let floor = Device::new(floor, DevicePolicy::default()).unwrap();
+        let floor = Device::from_queries(floor, DevicePolicy::default()).unwrap();
         let p = floor.profile();
         assert!(!(p.fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias));
         let exact = |b: f32| match device_lod_bias(b, p) {
@@ -1575,7 +1574,12 @@ mod tests {
         assert_eq!(device_lod_bias(-f32::NAN, p).bias().to_bits(), 0);
         let (stem, mvk) = committed_descriptions()
             .into_iter()
-            .map(|(stem, d)| (stem, Device::new(d, DevicePolicy::default()).unwrap()))
+            .map(|(stem, d)| {
+                (
+                    stem,
+                    Device::from_queries(d, DevicePolicy::default()).unwrap(),
+                )
+            })
             .find(|(_, dev)| {
                 (dev.profile().fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias)
             })
@@ -1601,7 +1605,7 @@ mod tests {
     fn the_device_lod_bias_carries_its_note_where_it_is_not_the_bias() {
         let note = Some(PrecisionNote::CappedLodBias);
         for (stem, d) in committed_descriptions() {
-            let dev = Device::new(d, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(d, DevicePolicy::default()).unwrap();
             let p = dev.profile();
             let withheld = (p.fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias);
             let limit = f32::from_bits(p.fields().limits.max_sampler_lod_bias_bits).max(0.0);
@@ -1695,71 +1699,6 @@ mod tests {
     /// `NotMipmapped`; one whose filters differ, an isotropic one, and every sampler off Metal's
     /// sampler keep the clamp that chooses Metal's filter.
     #[test]
-    fn metals_own_anisotropic_sampler_reads_not_mipmapped_at_level_zero() {
-        use SamplerMinMagFilter::{Linear, Nearest};
-        let with = |metal_sampler: bool| {
-            let (_, mut desc) = committed_descriptions()
-                .into_iter()
-                .find(|(s, _)| s == "vk12-floor")
-                .unwrap();
-            desc.features.insert(VkFeature::SamplerAnisotropy);
-            desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
-            Device::with_deviation(
-                desc,
-                DevicePolicy::default(),
-                DriverDeviation::MetalSampler,
-                metal_sampler,
-            )
-            .unwrap()
-        };
-        for (metal_sampler, min, mag, anisotropy, lo, hi, lods) in [
-            (true, Linear, Linear, 8, 0.0, f32::MAX, (0.0, 0.0)),
-            (true, Nearest, Nearest, 16, 0.0, f32::MAX, (0.0, 0.0)),
-            (true, Linear, Linear, 2, 1.0, f32::MAX, (0.0, 0.0)),
-            (true, Linear, Linear, 8, 0.125, 2.0, (0.0, 0.0)),
-            (
-                true,
-                Linear,
-                Nearest,
-                8,
-                0.0,
-                f32::MAX,
-                (0.0, NOT_MIPMAPPED_MAX_LOD),
-            ),
-            (
-                true,
-                Linear,
-                Linear,
-                1,
-                0.0,
-                f32::MAX,
-                (0.0, NOT_MIPMAPPED_MAX_LOD),
-            ),
-            (
-                false,
-                Linear,
-                Linear,
-                8,
-                0.0,
-                f32::MAX,
-                (0.0, NOT_MIPMAPPED_MAX_LOD),
-            ),
-        ] {
-            let dev = with(metal_sampler);
-            let mut d = metal_default();
-            d.min_filter = min;
-            d.mag_filter = mag;
-            d.max_anisotropy = anisotropy;
-            d.lod_min_clamp = lo;
-            d.lod_max_clamp = hi;
-            let s = vk_sampler(&d, SamplerUse::default(), dev.profile()).unwrap();
-            let what = format!("{min:?} {mag:?} {anisotropy} [{lo}, {hi}], {metal_sampler}");
-            assert_eq!(s.mipmap_mode, vk::SamplerMipmapMode::NEAREST, "{what}");
-            assert_eq!((s.min_lod, s.max_lod), lods, "{what}");
-        }
-    }
-
-    #[test]
     fn filters_lods_and_compare() {
         let dev = device(&[], &[]);
         let mut d = metal_default();
@@ -1807,11 +1746,11 @@ mod tests {
         let mvk = committed("moltenvk-m3");
         assert!(mvk.extensions.contains(&VkExtension::KhrPortabilitySubset));
         assert!(mvk.features.contains(&mutable));
-        let dev = Device::new(mvk.clone(), DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(mvk.clone(), DevicePolicy::default()).unwrap();
         assert!(vk_sampler(&d, compare, dev.profile()).is_ok());
         let mut withheld = mvk;
         withheld.features.remove(&mutable);
-        let dev = Device::new(withheld, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(withheld, DevicePolicy::default()).unwrap();
         assert_eq!(
             vk_sampler(&d, compare, dev.profile()),
             Err(Unsupported::needs(Feature::SamplerCompare, Capability::Feature(mutable)).into())
@@ -1819,7 +1758,7 @@ mod tests {
         assert!(vk_sampler(&d, SamplerUse::default(), dev.profile()).is_ok());
         let lavapipe = committed("lavapipe");
         assert!(!lavapipe.features.contains(&mutable));
-        let dev = Device::new(lavapipe, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(lavapipe, DevicePolicy::default()).unwrap();
         assert!(vk_sampler(&d, compare, dev.profile()).is_ok());
     }
 
@@ -1855,23 +1794,14 @@ mod tests {
     #[test]
     fn a_nearest_filter_is_handed_its_anisotropy() {
         use SamplerMinMagFilter::{Linear, Nearest};
-        let with = |metal_sampler: bool| {
-            let (_, mut desc) = committed_descriptions()
-                .into_iter()
-                .find(|(s, _)| s == "vk12-floor")
-                .unwrap();
-            desc.features.insert(VkFeature::SamplerAnisotropy);
-            desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
-            Device::with_deviation(
-                desc,
-                DevicePolicy::default(),
-                DriverDeviation::MetalSampler,
-                metal_sampler,
-            )
-            .unwrap()
-        };
-        for metal_sampler in [false, true] {
-            let dev = with(metal_sampler);
+        let (_, mut desc) = committed_descriptions()
+            .into_iter()
+            .find(|(s, _)| s == "vk12-floor")
+            .unwrap();
+        desc.features.insert(VkFeature::SamplerAnisotropy);
+        desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
+        let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+        {
             for (min, mag) in [
                 (Linear, Linear),
                 (Nearest, Nearest),
@@ -1883,11 +1813,7 @@ mod tests {
                 d.mag_filter = mag;
                 d.max_anisotropy = 5;
                 let s = vk_sampler(&d, SamplerUse::default(), dev.profile()).unwrap();
-                assert_eq!(
-                    s.max_anisotropy,
-                    Some(8.0),
-                    "{min:?} {mag:?}, Metal's sampler {metal_sampler}"
-                );
+                assert_eq!(s.max_anisotropy, Some(8.0), "{min:?} {mag:?}");
             }
         }
     }
@@ -2060,35 +1986,28 @@ mod tests {
     }
 
     /// An opaque-black border through a non-identity view mapping, the texture's swizzle composed
-    /// on the format's, needs the device to swizzle borders, or Metal's sampler; a view whose
-    /// border texel is not Metal's (`A8Unorm` through `A8_UNORM`) refuses, or names the direct
-    /// format where its view would read Metal's; other borders, identity mappings, and samplers
+    /// on the format's, needs the device to swizzle borders; a view whose
+    /// border texel is not Metal's (`A8Unorm` through `A8_UNORM`) refuses; other borders, identity mappings, and samplers
     /// without a border axis need nothing.
     #[test]
     fn border_swizzle_follows_the_view_mapping() {
         use vk::ComponentSwizzle as S;
         let plain = device(&[], &[]);
-        let with = |swizzle: bool, metal_sampler: bool| {
+        let swizzling = {
             let (_, mut desc) = committed_descriptions()
                 .into_iter()
                 .find(|(s, _)| s == "vk12-floor")
                 .unwrap();
-            if swizzle {
-                desc.extensions.extend([
-                    VkExtension::ExtBorderColorSwizzle,
-                    VkExtension::ExtCustomBorderColor,
-                ]);
-                desc.features.extend([
-                    VkFeature::BorderColorSwizzle,
-                    VkFeature::BorderColorSwizzleFromImage,
-                ]);
-            }
-            let policy = DevicePolicy::default();
-            Device::with_deviation(desc, policy, DriverDeviation::MetalSampler, metal_sampler)
-                .unwrap()
+            desc.extensions.extend([
+                VkExtension::ExtBorderColorSwizzle,
+                VkExtension::ExtCustomBorderColor,
+            ]);
+            desc.features.extend([
+                VkFeature::BorderColorSwizzle,
+                VkFeature::BorderColorSwizzleFromImage,
+            ]);
+            Device::from_queries(desc, DevicePolicy::default()).unwrap()
         };
-        let swizzling = with(true, false);
-        let metal = with(false, true);
         let mapping = |format, components, emulation| FormatMapping {
             format,
             components,
@@ -2154,7 +2073,7 @@ mod tests {
             TextureSwizzle::Green,
             TextureSwizzle::Blue,
         );
-        for dev in [&plain, &swizzling, &metal] {
+        for dev in [&plain, &swizzling] {
             assert_eq!(check(&black, rgba, &direct, own, dev), Ok(()));
             for d in [&white, &zero, &unused] {
                 for s in [own, argb] {
@@ -2165,19 +2084,17 @@ mod tests {
             }
         }
         // `A8_UNORM` reads an opaque-black border's alpha as 1, Metal's `A8Unorm` as the color's
-        // red, 0; only Metal's sampler reads it so.
+        // red, 0.
         for dev in [&plain, &swizzling] {
             assert_eq!(
                 check(&black, alpha, &a8_unorm, own, dev),
                 Err(Unsupported::not_implemented(Feature::SamplerBorderColor).into())
             );
         }
-        assert_eq!(check(&black, alpha, &a8_unorm, own, &metal), Ok(()));
         // `R8_UNORM`'s `(0, 0, 0, R)` reads the border's red as alpha, Metal's texel, where the
         // device swizzles borders.
         assert_eq!(check(&black, alpha, &a8, own, &plain), features());
         assert_eq!(check(&black, alpha, &a8, own, &swizzling), Ok(()));
-        assert_eq!(check(&black, alpha, &a8, own, &metal), Ok(()));
         // The texture's swizzle is composed on the format's mapping.
         for m in [&direct, &twin] {
             for s in [own, argb] {
@@ -2187,7 +2104,6 @@ mod tests {
                 };
                 assert_eq!(check(&black, rgba, m, s, &plain), expected, "{m:?} {s:?}");
                 assert_eq!(check(&black, rgba, m, s, &swizzling), Ok(()));
-                assert_eq!(check(&black, rgba, m, s, &metal), Ok(()));
             }
         }
     }
@@ -2260,7 +2176,7 @@ mod tests {
                 ]);
             }
             desc.rgba4_opaque_black_swizzled = rgba4;
-            Device::new(desc, DevicePolicy::default()).unwrap()
+            Device::from_queries(desc, DevicePolicy::default()).unwrap()
         };
         let direct = FormatMapping {
             format: vk::Format::R4G4B4A4_UNORM_PACK16,
@@ -2330,13 +2246,13 @@ mod tests {
     /// A runtime sampler made per view: through a mapping other than the identity, with
     /// `borderColorSwizzle` and without `borderColorSwizzleFromImage`, the device reads an
     /// opaque-black border as Metal's texel when the sampler carries the view's mapping
-    /// (`Mapped`); one the binder cannot make per view needs `FromImage` there. Both features, or
-    /// Metal's sampler, read the stated border through any view; without `borderColorSwizzle`
+    /// (`Mapped`); one the binder cannot make per view needs `FromImage` there. Both features read
+    /// the stated border through any view; without `borderColorSwizzle`
     /// the mapping is refused for it alone.
     #[test]
     fn opaque_black_maps_the_sampler_where_the_view_cannot() {
         use vk::ComponentSwizzle as S;
-        let with = |features: &[VkFeature], metal_sampler: bool| {
+        let with = |features: &[VkFeature]| {
             let (_, mut desc) = committed_descriptions()
                 .into_iter()
                 .find(|(s, _)| s == "vk12-floor")
@@ -2348,20 +2264,14 @@ mod tests {
                 ]);
                 desc.features.extend(features.iter().copied());
             }
-            let policy = DevicePolicy::default();
-            Device::with_deviation(desc, policy, DriverDeviation::MetalSampler, metal_sampler)
-                .unwrap()
+            Device::from_queries(desc, DevicePolicy::default()).unwrap()
         };
-        let plain = with(&[], false);
-        let swizzle_only = with(&[VkFeature::BorderColorSwizzle], false);
-        let both = with(
-            &[
-                VkFeature::BorderColorSwizzle,
-                VkFeature::BorderColorSwizzleFromImage,
-            ],
-            false,
-        );
-        let metal = with(&[], true);
+        let plain = with(&[]);
+        let swizzle_only = with(&[VkFeature::BorderColorSwizzle]);
+        let both = with(&[
+            VkFeature::BorderColorSwizzle,
+            VkFeature::BorderColorSwizzleFromImage,
+        ]);
         let direct = FormatMapping {
             format: vk::Format::R8G8B8A8_UNORM,
             components: vk::ComponentMapping::IDENTITY,
@@ -2394,7 +2304,7 @@ mod tests {
             )
             .into()
         };
-        for dev in [&plain, &swizzle_only, &both, &metal] {
+        for dev in [&plain, &swizzle_only, &both] {
             let p = dev.profile();
             assert_eq!(
                 opaque_black_border(rgba, &direct, own, p),
@@ -2402,7 +2312,8 @@ mod tests {
             );
             assert_eq!(check_border_view(true, rgba, &direct, own, p), Ok(()));
         }
-        for dev in [&both, &metal] {
+        {
+            let dev = &both;
             for (m, s) in [(&direct, argb), (&twin, own), (&twin, argb)] {
                 let p = dev.profile();
                 assert_eq!(
@@ -2776,7 +2687,7 @@ mod tests {
             let mut desc = desc;
             desc.features.insert(VkFeature::SamplerAnisotropy);
             desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
-            let dev = Device::new(desc, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
             {
                 let use_ = SamplerUse::new(false, false);
                 let (linear, nearest) = device_anisotropy_by_filters(use_, dev.profile());

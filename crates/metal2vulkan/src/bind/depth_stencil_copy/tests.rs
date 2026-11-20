@@ -130,7 +130,7 @@ fn committed_devices() -> Vec<(String, Device)> {
             .unwrap_or_default();
         let text = std::fs::read_to_string(&path).expect("read");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let device = Device::new(desc, DevicePolicy::default()).expect("device");
+        let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         out.push((stem, device));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

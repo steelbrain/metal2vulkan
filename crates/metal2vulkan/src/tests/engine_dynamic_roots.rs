@@ -69,7 +69,10 @@ fn profile(stem: &str, robust: bool, policy: DevicePolicy) -> DeviceProfile {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
     }
-    Device::new(desc, policy).expect("device").profile().clone()
+    Device::from_queries(desc, policy)
+        .expect("device")
+        .profile()
+        .clone()
 }
 
 /// Profile-A profiles in both descriptor encodings (the device-address check is emitted in both:

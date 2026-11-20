@@ -62,7 +62,7 @@ fn description(stem: &str) -> DeviceDescription {
 }
 
 fn device(stem: &str) -> Device {
-    Device::new(description(stem), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
 }
 
 /// A render pipeline of `vertex` and `fragment` from `bc` with `maxVertexAmplificationCount`
@@ -326,7 +326,7 @@ fn the_dropped_variant_needs_no_output_layer() {
     assert!(desc
         .extensions
         .contains(&VkExtension::ExtShaderViewportIndexLayer));
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let d = render(&bc, "amp_vertex_layer", None, 1);
     let budget = Budget::standard();
     match dev.compile_render_pipeline(&d, &budget) {

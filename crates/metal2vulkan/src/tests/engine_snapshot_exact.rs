@@ -195,12 +195,10 @@ fn a_snapshot_slot_translates_under_every_form() {
         (PixelFormat::RGBA8UnormSRGB, SnapshotForm::Bits),
     ];
     for stem in PROFILES {
-        for (label, policy) in [
-            ("the fast default", DevicePolicy::default()),
-            ("exact answers", DevicePolicy::default().exact_answers()),
-        ] {
+        {
+            let (label, policy) = ("the default", DevicePolicy::default());
             let desc = crate::pipeline::testing::description(stem).expect("description");
-            let dev = Device::new(desc, policy).expect("device");
+            let dev = Device::from_queries(desc, policy).expect("device");
             let base = dev
                 .compile_render_pipeline(&d, &Budget::standard())
                 .unwrap_or_else(|e| panic!("{stem}/{label}: {e}"));
@@ -238,7 +236,7 @@ fn a_snapshot_slot_translates_under_every_form() {
 /// invariant lives, instead of leaving the builder to refuse the encode: over float lanes every
 /// integer form, and over unsigned integer lanes every float code form (the pairing that otherwise
 /// reaches `FClamp`). The binder never names such a pairing (`SnapshotForm::of`), so the key is
-/// forged. On ANV's Iris Xe profile under `exact_answers`.
+/// forged. On ANV's Iris Xe profile.
 #[test]
 fn the_copy_of_a_snapshot_slot_refuses_a_form_its_fetch_s_lanes_do_not_hold() {
     let (Some(bc), Some(uint)) = (fixture("tob_renders"), assemble(UINT_READ)) else {
@@ -246,7 +244,7 @@ fn the_copy_of_a_snapshot_slot_refuses_a_form_its_fetch_s_lanes_do_not_hold() {
     };
     let stem = "intel-irisxe-anv";
     let desc = crate::pipeline::testing::description(stem).expect("description");
-    let dev = Device::new(desc, DevicePolicy::default().exact_answers()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     // The float slot's fragment, and the unsigned integer slot's into an integer attachment.
     let legs = [
         ("uint", "sx_read_u", &uint, PixelFormat::RGBA8Uint, false),
@@ -303,10 +301,8 @@ fn the_snapshot_estimate_bounds_the_copy_it_emits() {
     };
     let mut checked = 0;
     for stem in PROFILES {
-        for policy in [
-            DevicePolicy::default(),
-            DevicePolicy::default().exact_answers(),
-        ] {
+        {
+            let policy = DevicePolicy::default();
             let p = profile(stem, policy).expect("profile");
             for form in FORMS {
                 let inputs = inputs(form);

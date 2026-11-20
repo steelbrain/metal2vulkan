@@ -56,7 +56,7 @@ fn profile(stem: &str, unrestricted: bool) -> DeviceProfile {
         desc.extensions
             .remove(&VkExtension::ExtDepthRangeUnrestricted);
     }
-    let p = Device::new(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();
@@ -294,7 +294,7 @@ fn a_depth_clamp_range_draw_runs_the_variant_with_the_states_range() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         for (fragment, writes) in [("rfb_depth", true), ("rfb_position", false)] {
             let what = format!("{stem} {fragment}");
             let mut d = RenderPipelineDescriptor::new(function("rfb_full"));

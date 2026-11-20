@@ -691,7 +691,7 @@ fn without_robust_images(stem: &str) -> DeviceProfile {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustImageAccess);
     desc.features.remove(&VkFeature::RobustImageAccess2);
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -1502,7 +1502,7 @@ fn m3_device() -> Device {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// A render pipeline whose vertex and fragment functions both read a texture from an argument
@@ -4610,7 +4610,7 @@ fn an_argument_sampler_array_has_the_heap_sampler_capacity() {
     // The answer on `desc`, and the element count of the kernel's set-1 sampler array or the
     // kernel's refusal.
     let array = |desc: DeviceDescription| -> (u32, Result<u32, Error>) {
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let f = library.function("argument_sampler_sample").expect("entry");
         let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
         let count = dev

@@ -93,7 +93,7 @@ fn a_draw_into_colors_the_pipeline_lacks_runs_the_variant_writing_zero() {
         ),
     ];
     for stem in ["moltenvk-m3", "lavapipe"] {
-        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(stem), DevicePolicy::default()).expect("device");
         let base = dev
             .compile_render_pipeline(&d, &budget)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -193,7 +193,8 @@ fn a_function_writing_a_color_it_would_zero_stores_the_zero_there() {
     let Some(bc) = fixture("stage_io") else {
         return;
     };
-    let dev = Device::new(description("lavapipe"), DevicePolicy::default()).expect("device");
+    let dev =
+        Device::from_queries(description("lavapipe"), DevicePolicy::default()).expect("device");
     let p = dev.profile();
     for (format, numeric) in [
         (PixelFormat::RGBA32Uint, IoNumeric::Uint),
@@ -257,7 +258,7 @@ fn a_draw_without_colors_the_pipeline_has_runs_the_variant_dropping_them() {
         base_instance: 0,
     };
     for stem in ["moltenvk-m3", "lavapipe"] {
-        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(stem), DevicePolicy::default()).expect("device");
         let base = dev
             .compile_render_pipeline(&d, &budget)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));

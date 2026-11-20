@@ -54,7 +54,7 @@ fn devices() -> Vec<(String, Device)> {
             .unwrap_or_default();
         let text = std::fs::read_to_string(&path).expect("read profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device derives");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device derives");
         out.push((stem, dev));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

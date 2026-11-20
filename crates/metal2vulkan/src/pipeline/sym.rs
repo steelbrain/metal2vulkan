@@ -1105,7 +1105,7 @@ pub enum PushField {
     /// The function states `RuntimeFact::FramebufferFetch` for the color, and its fetches are
     /// ordered after earlier draws only by the consumer's barriers, not after an overlapping
     /// earlier fragment of the same draw (`PrecisionNote::UnorderedFetchWithinDraw`). Ordered
-    /// before the slot addresses, so on the floor (`PushWindow::Floor`) a fragment function that
+    /// before the slot addresses, so on the floor a fragment function that
     /// pushes no parameter block's address places it in the four bytes a vertex function's push
     /// end may leave below the fragment function's first eight-byte field.
     FetchedColor { color: u32, texels: SampledType },
@@ -1315,7 +1315,7 @@ pub enum PushField {
     /// returns where both words are all ones (`lower::push::emit_tail_guard`), which the consumer
     /// never pushes.
     SlotBounds(SlotRef),
-    /// On `Device::from_queries`' profile (`PushWindow::Floor`), the zero word (`u32`) a stage
+    /// On `Device::from_queries`' profile, the zero word (`u32`) a stage
     /// whose pushed fields include no tail kind (`lower::push::tail_kind`) pushes as its tail,
     /// `lower::push::HOLE_BYTES` above them, and returns where it is non-zero: the consumer pushes
     /// it zero with the stage's other fields, so the branch is never taken. No placement lists it

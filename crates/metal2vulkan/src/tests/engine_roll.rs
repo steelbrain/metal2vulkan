@@ -188,7 +188,7 @@ fn moltenvk_floor() -> crate::device::profile::DeviceProfile {
     .expect("description");
     desc.driver_id = Some(crate::vk::DriverId::MOLTENVK);
     desc.driver_version = 10401;
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

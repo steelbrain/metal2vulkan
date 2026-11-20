@@ -235,7 +235,7 @@ pub(super) fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// The pipeline of kernel `entry` with the four functions linked, through the public API.

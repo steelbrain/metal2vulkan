@@ -24,7 +24,7 @@ fn profile_with_level(stem: &str, level: u32) -> DeviceProfile {
     );
     assert_ne!(edited, text, "{stem} states the level");
     let desc = DeviceDescription::from_khronos_json(&edited, None).expect("description");
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

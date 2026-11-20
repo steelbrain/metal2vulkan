@@ -36,7 +36,8 @@ fn committed_devices() -> Vec<(String, Device)> {
             let stem = p.file_stem().unwrap().to_string_lossy().into_owned();
             let text = std::fs::read_to_string(&p).expect("profile is readable");
             let desc = DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
-            let device = Device::new(desc, DevicePolicy::default()).expect("device derives");
+            let device =
+                Device::from_queries(desc, DevicePolicy::default()).expect("device derives");
             (stem, device)
         })
         .collect();

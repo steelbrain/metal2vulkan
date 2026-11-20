@@ -64,7 +64,7 @@ fn description(stem: &str) -> DeviceDescription {
 }
 
 fn profile_of(desc: DeviceDescription) -> DeviceProfile {
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -244,7 +244,7 @@ fn a_region_draw_runs_its_variant() {
         base_instance: 0,
     };
     for stem in ["lavapipe", "intel-irisxe-rplp-anv"] {
-        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(stem), DevicePolicy::default()).expect("device");
         let base = dev
             .compile_render_pipeline(&d, &budget)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));

@@ -124,7 +124,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{AbiInt, ParamBinding, ParamRole};
 use crate::air::ir::{AddrSpace, CastOp, Const, Inst, InstId, InstKind, Type, Value, ValueId};
 use crate::budget::Meter;
-use crate::device::profile::{BufferAccess, Containment, DriverWorkaround, Limits, PushWindow};
+use crate::device::profile::{BufferAccess, Containment, DriverWorkaround, Limits};
 use crate::device::requirements::VkLimit;
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
@@ -1222,9 +1222,8 @@ struct Census {
     /// Under the identity domains a device-address slot reads its own address
     /// ([`address_field`]), not the root table.
     identity: bool,
-    /// The profile's push window and the stage's push base, which decide where the fields
-    /// spill.
-    window: (PushWindow, u32),
+    /// The stage's push base, which decides where the fields spill.
+    push_base: u32,
 }
 
 impl Census {
@@ -1232,7 +1231,7 @@ impl Census {
     /// pointer reads the root table.
     fn new(
         push: &BTreeSet<PushField>,
-        (dynamic, identity, window): (bool, bool, (PushWindow, u32)),
+        (dynamic, identity, push_base): (bool, bool, u32),
         forms: impl Iterator<Item = (SlotRef, SlotLowering)>,
         m: &mut Meter,
     ) -> Result<Census, Error> {
@@ -1242,7 +1241,7 @@ impl Census {
             texel: 0,
             fields: push.clone(),
             identity,
-            window,
+            push_base,
         };
         let mut psb = dynamic;
         for (slot, l) in forms {
@@ -1278,7 +1277,7 @@ impl Census {
             // Under the identity domains the spilled fields are a parameter block at a pushed
             // address, no descriptor.
             uniform_buffers: u32::from(
-                !self.identity && table::spills(stage, self.window.0, self.window.1, &self.fields),
+                !self.identity && table::spills(stage, self.push_base, &self.fields),
             )
             .saturating_add(self.uniform),
             storage_buffers: self.storage,
@@ -1484,7 +1483,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         (
             cx.families.access.dynamic.used,
             identity(p),
-            (p.push_window(), cx.inputs.push_base),
+            cx.inputs.push_base,
         ),
         forms,
         m,
@@ -1717,8 +1716,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     }
     let counts = census.counts(stage);
     cx.descriptors = cx.descriptors.plus(&counts);
-    cx.families.access.argument_table =
-        table::spills(stage, p.push_window(), cx.inputs.push_base, &cx.push);
+    cx.families.access.argument_table = table::spills(stage, cx.inputs.push_base, &cx.push);
     // Under the identity domains a function whose fields spill, of any stage, reads them from a
     // parameter block whose address its window holds first: a render pipeline's stages too, in
     // their shares of the floor's one range (`push::VERTEX_FLOOR_END`).

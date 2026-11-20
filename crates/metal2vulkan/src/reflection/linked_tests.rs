@@ -273,7 +273,7 @@ fn a_rasterizing_void_vertex_function_is_refused_at_its_link() {
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect("profile");
-    let device = Device::new(description, DevicePolicy::default()).expect("device");
+    let device = Device::from_queries(description, DevicePolicy::default()).expect("device");
     let refused = Err(Error::InvalidDescriptor(
         DescriptorError::RasterizedVoidVertex,
     ));
@@ -656,7 +656,7 @@ fn a_dropped_unwritten_fragment_input_is_absent_from_the_compiled_fragment() {
             let description = DeviceDescription::from_khronos_json(&text, None).expect(stem);
             (
                 stem,
-                Device::new(description, DevicePolicy::default()).expect(stem),
+                Device::from_queries(description, DevicePolicy::default()).expect(stem),
             )
         })
         .collect();
@@ -725,7 +725,7 @@ fn tessellated_and_mesh_pipelines_answer_an_unwritten_fragment_input_as_a_vertex
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect(stem);
-    let device = Device::new(description, DevicePolicy::default()).expect(stem);
+    let device = Device::from_queries(description, DevicePolicy::default()).expect(stem);
     let budget = Budget::standard();
     for attached in [true, false] {
         let named = attached.then(|| (vec!["color".to_string()], None));
@@ -795,7 +795,7 @@ fn one_creation_specializes_each_stage_once() {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect(stem);
-    let device = Device::new(description, DevicePolicy::default()).expect(stem);
+    let device = Device::from_queries(description, DevicePolicy::default()).expect(stem);
     let budget = Budget::standard();
     let mut descriptor = RenderPipelineDescriptor::new(source(&library, "varying_vertex"));
     descriptor.fragment = Some(source(&library, "depth_writing_fragment"));

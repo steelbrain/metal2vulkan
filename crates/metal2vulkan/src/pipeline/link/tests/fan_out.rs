@@ -389,12 +389,7 @@ fn a_regions_variant_draws_its_vertex_function_s_copies() {
     let regions = fanned(RegionFanOut::RegionCopies);
     not_implemented(link(&[&v, &f], &regions, &p).unwrap_err());
     let fields = BTreeSet::from([PushField::RegionBox]);
-    v.interface.push = crate::lower::push::place(
-        Stage::Vertex,
-        crate::device::profile::PushWindow::Guaranteed,
-        0,
-        &fields,
-    );
+    v.interface.push = crate::lower::push::place(Stage::Vertex, 0, &fields);
     let offset = match v.interface.push.fields.as_slice() {
         [placed] => match placed.loc {
             crate::pipeline::interface::PushLoc::Push { offset } => offset,

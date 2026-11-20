@@ -978,68 +978,20 @@ fn output_widths(words: &[u32]) -> Vec<u32> {
     found
 }
 
-/// A `half` color output (`stage_io_fragment_point`'s `half4` to color 0) is declared with 16-bit
-/// float lanes on a profile that enables `storageInputOutput16` and `shaderFloat16`
-/// (`StageIo::half_outputs`), so the device receives the `half` the function returns as a `half`,
-/// and the module requires `StorageInputOutput16`; on a profile without it (lavapipe) the output is
-/// 32-bit, the `half` widened, as is a `float` output (`stage_io_fragment`) everywhere and a
-/// `half` one to an attachment held with its channels rotated. Each module passes L3. The profile
-/// `Device::from_queries` derives never takes the 16-bit form: there every device receives the
-/// `half` widened.
+/// A `half` color output (`stage_io_fragment_point`'s `half4` to color 0) is declared 32-bit, the
+/// `half` widened, on every device, as is a `float` output (`stage_io_fragment`) and a `half` one
+/// to an attachment held with its channels rotated; the module requires no
+/// `StorageInputOutput16`. Each module passes L3.
 #[test]
-fn a_half_color_output_is_declared_16_bit_where_the_device_enables_it() {
-    use crate::device::profile::HalfOutputs;
+fn a_half_color_output_is_declared_32_bit_on_every_device() {
     use crate::device::requirements::VkFeature;
     use crate::lower::select::LowerInputs;
     use crate::pipeline::testing::compile_with;
     let Some(bc) = fixture() else { return };
-    let color = VaryingKey::color(0, 0);
-    let mut seen = [false; 2];
     for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
         let p = prof(stem);
-        let leaf = p.fields().leaf;
-        let sixteen = p.half_outputs() == HalfOutputs::Sixteen
-            && (p.fields().enabled.features).contains(&VkFeature::StorageInputOutput16)
-            && leaf.float16;
-        seen[usize::from(sixteen)] = true;
         let half = compile(&bc, "stage_io_fragment_point", &p).expect("half");
         let words = validate(&half, &alone(&half, &p), &p);
-        let io16 = half
-            .requirements
-            .features
-            .contains(&VkFeature::StorageInputOutput16);
-        match sixteen {
-            true => {
-                assert_eq!(
-                    half.interface.io.half_outputs,
-                    std::slice::from_ref(&color),
-                    "{stem}"
-                );
-                assert_eq!(output_widths(&words), [16], "{stem}");
-                assert!(io16, "{stem}: {:?}", half.requirements.features);
-            }
-            false => {
-                assert!(half.interface.io.half_outputs.is_empty(), "{stem}");
-                assert_eq!(output_widths(&words), [32], "{stem}");
-                assert!(!io16, "{stem}");
-            }
-        }
-        let float = compile(&bc, "stage_io_fragment", &p).expect("float");
-        assert!(float.interface.io.half_outputs.is_empty(), "{stem}");
-        let words = validate(&float, &alone(&float, &p), &p);
-        assert!(output_widths(&words).iter().all(|w| *w == 32), "{stem}");
-        let mut inputs = LowerInputs::new();
-        inputs.rotated_colors.insert(0);
-        let rotated = compile_with(&bc, "stage_io_fragment_point", &p, &inputs).expect("rotated");
-        assert!(rotated.interface.io.half_outputs.is_empty(), "{stem}");
-        let desc = crate::pipeline::testing::description(stem).expect("description");
-        let queried = crate::device::Device::from_queries(desc, DevicePolicy::default())
-            .expect("from_queries")
-            .profile()
-            .clone();
-        assert_eq!(queried.half_outputs(), HalfOutputs::Widened, "{stem}");
-        let half = compile(&bc, "stage_io_fragment_point", &queried).expect("queried half");
-        let words = validate(&half, &alone(&half, &queried), &queried);
         assert!(half.interface.io.half_outputs.is_empty(), "{stem}");
         assert_eq!(output_widths(&words), [32], "{stem}");
         assert!(
@@ -1049,8 +1001,15 @@ fn a_half_color_output_is_declared_16_bit_where_the_device_enables_it() {
                 .contains(&VkFeature::StorageInputOutput16),
             "{stem}"
         );
+        let float = compile(&bc, "stage_io_fragment", &p).expect("float");
+        assert!(float.interface.io.half_outputs.is_empty(), "{stem}");
+        let words = validate(&float, &alone(&float, &p), &p);
+        assert!(output_widths(&words).iter().all(|w| *w == 32), "{stem}");
+        let mut inputs = LowerInputs::new();
+        inputs.rotated_colors.insert(0);
+        let rotated = compile_with(&bc, "stage_io_fragment_point", &p, &inputs).expect("rotated");
+        assert!(rotated.interface.io.half_outputs.is_empty(), "{stem}");
     }
-    assert_eq!(seen, [true, true], "both kinds of profile are exercised");
 }
 
 /// A `half` color output of a module without fast math (the `stage_io` fixture stating

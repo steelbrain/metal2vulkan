@@ -103,25 +103,11 @@ pub fn select(cx: &mut SelectCx<'_>, at: InstId, inst: &Inst) -> Result<Option<A
     Ok(Some(AbsentRead { result, marks }))
 }
 
-/// What an absent read needs, stated for the stage, and whether it marks the status: on a profile
-/// whose absent reads mark it (`AbsentReads::Marked`), the `ExecutionStatus` buffer
-/// ([`state_status`]) and the stage's stores and atomics, a device without them refusing the read
-/// as `FunctionConstantArgument`, naming what it needs; on one whose absent reads read as nil
-/// (`AbsentReads::Nil`), nothing, and the read does not mark. The texture and sampler families'
-/// arms on the absent handle need the same.
-pub fn require(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
-    if cx.profile.absent_reads() == AbsentReads::Nil {
-        return Ok(false);
-    }
-    if let Some(StatusShort::Stores(f)) = status_short(cx) {
-        return Err(
-            Unsupported::needs(Feature::FunctionConstantArgument, Capability::Feature(f)).into(),
-        );
-    }
-    state_status(cx, StatusBinding::Required);
-    cx.facts
-        .insert(RuntimeFact::AbsentArgumentRead { stage: cx.stage });
-    Ok(true)
+/// What an absent read needs, stated for the stage, and whether it marks the status: nothing, and
+/// it does not mark, an absent read reading as nil. The texture and sampler families' arms on the
+/// absent handle need the same.
+pub fn require(_cx: &mut SelectCx<'_>) -> Result<bool, Error> {
+    Ok(false)
 }
 
 /// What the stage lacks to write the command buffer's `ExecutionStatus` words. Each refusal

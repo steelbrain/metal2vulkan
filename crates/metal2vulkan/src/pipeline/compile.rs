@@ -213,12 +213,7 @@ impl<'a> From<&'a MeshPipelineDescriptor> for FragmentPass<'a> {
             logic_operation: None,
             depth_compare_clamp_mask: 0,
             color_group: None,
-            push_base: crate::lower::push::window(
-                crate::pipeline::sym::Stage::Mesh,
-                crate::device::profile::PushWindow::Floor,
-                0,
-            )
-            .1,
+            push_base: crate::lower::push::window(crate::pipeline::sym::Stage::Mesh, 0).1,
         }
     }
 }
@@ -2721,10 +2716,8 @@ pub(crate) fn fragment_inputs(
     out.logic_operation = d.logic_operation;
     out.depth_compare_clamp_mask = d.depth_compare_clamp_mask;
     out.texture_write_rounding = d.texture_write_rounding_mode;
-    // Only the floor's one render range moves the fragment function's fields.
-    if p.push_window() == crate::device::profile::PushWindow::Floor {
-        out.push_base = d.push_base;
-    }
+    // The floor's one render range moves the fragment function's fields.
+    out.push_base = d.push_base;
     out
 }
 
@@ -3354,28 +3347,11 @@ fn lower_bounded<K>(
     let native_widening = widens && !controls && !measured_widening;
     // A `half` rounded through the conversion and its widening under the float controls: Metal's
     // `half(float)` by the Vulkan spec, but a driver's compiler may fold the pair into the value it
-    // started from (NVIDIA's) or fuse the `float` operation computing the value into the narrowing
-    // and round its exact result once (RADV's). On a profile that notes every such pair
-    // (`HalfPairNote::Every`), the module records the native note on every device, a static note
-    // of the rounding; on one that notes it as its driver's rows say (`HalfPairNote::Fused`), only
-    // a `half` rounded from `float` arithmetic on a driver that fuses the operation into the
-    // narrowing (`DriverWorkaround::HalfConversionFusedWithArithmetic`) records it.
+    // started from or fuse the `float` operation computing the value into the narrowing and round
+    // its exact result once. The module records the native note on every device, a static note of
+    // the rounding.
     let controlled = quantize == crate::spirv::builder::QuantizeForm::Controlled;
-    let controlled_pair = match p.half_pair_note() {
-        crate::device::profile::HalfPairNote::Every => {
-            Some(controlled && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?)
-        }
-        crate::device::profile::HalfPairNote::Fused => None,
-    };
-    let fused =
-        match controlled_pair {
-            Some(pair) => pair,
-            None => controlled
-                && p.workarounds().contains(
-                    &crate::device::profile::DriverWorkaround::HalfConversionFusedWithArithmetic,
-                )
-                && crate::lower::arith::narrow::rounds_arithmetic(&module, m)?,
-        };
+    let fused = controlled && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
     // Its NaN's bits, and those of a `half` held widened that a widening to `float` or a `half`
     // `fabs` moves: Metal's where the device's widening and narrowing are measured to answer
     // them (`DriverDeviation::MetalNanMoves`) and the module moves its `half` values only as
@@ -3498,12 +3474,6 @@ fn lower_bounded<K>(
             true => VkProperty::DeviceSampling,
             false => VkProperty::MetalSampler,
         });
-    }
-    // A `half` fused multiply-add left to the device's 16-bit `Fma` because it is Metal's.
-    if plan.families.arith.f16_fma {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalHalfFma);
     }
     // A NaN's bits left to the device's widening, narrowing, negation or magnitude because they
     // are Metal's.
@@ -3646,11 +3616,9 @@ fn lower_bounded<K>(
         }
     }
     // Implementation-defined where a tangled instruction runs without maximal reconvergence
-    // (`lower::simd` chooses the entry's reconvergence mode), which the stage's note records on a
-    // profile that notes it (`ReconvergenceNote::Noted`).
+    // (`lower::simd` chooses the entry's reconvergence mode), which the stage's note records.
     let reconvergence = crate::lower::simd::reconvergence(&plan);
     if reconvergence == Reconvergence::ImplementationDefined
-        && p.reconvergence_note() == crate::device::profile::ReconvergenceNote::Noted
         && !precision.contains(&PrecisionNote::DeviceReconvergence)
     {
         precision.push(PrecisionNote::DeviceReconvergence);

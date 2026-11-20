@@ -1020,7 +1020,7 @@ fn case_lines(case: &Case, budget: &Budget) -> Result<Vec<String>, Error> {
 
 /// The compile layer's device of the lavapipe profile.
 fn lavapipe() -> crate::device::Device {
-    crate::device::Device::new(
+    crate::device::Device::from_queries(
         crate::device::DeviceDescription::from_khronos_json(
             &std::fs::read_to_string(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

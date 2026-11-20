@@ -486,7 +486,7 @@ fn description(stem: &str) -> DeviceDescription {
 }
 
 fn device(stem: &str) -> Device {
-    Device::new(description(stem), DevicePolicy::default())
+    Device::from_queries(description(stem), DevicePolicy::default())
         .unwrap_or_else(|e| panic!("{stem}: {e}"))
 }
 
@@ -499,7 +499,7 @@ fn floor_with_16_bit() -> Device {
     let mut desc = description("vk12-floor");
     desc.features
         .extend([VkFeature::ShaderInt16, VkFeature::StorageBuffer16BitAccess]);
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .unwrap_or_else(|e| panic!("{FLOOR_WITH_16_BIT}: {e}"))
 }
 

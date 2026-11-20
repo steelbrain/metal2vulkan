@@ -94,7 +94,7 @@ fn description(stem: &str) -> DeviceDescription {
 
 /// The device of committed profile `stem`.
 fn device(stem: &str) -> Device {
-    Device::new(description(stem), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
 }
 
 /// [`KERNEL`], assembled; `None` where `llvm-as` is missing (the test then skips visibly).
@@ -192,7 +192,7 @@ fn a_heap_storage_read_compiles_where_the_formats_bits_grant_it() {
     assert!(!plan.families.access.heap_unreadable);
 
     let old = crate::pipeline::testing::description_at_1_2(IRIS, false).expect("description");
-    let old = Device::new(old, DevicePolicy::default()).expect("device");
+    let old = Device::from_queries(old, DevicePolicy::default()).expect("device");
     assert!(!old.profile().storage_reads_by_format_bits());
     match pipeline(&old, &bc) {
         Err(Error::Unsupported(u)) => {
@@ -460,7 +460,7 @@ fn a_tier_format_without_its_read_bit_is_refused() {
     props.optimal_tiling = props
         .optimal_tiling
         .difference(vk::FormatFeatureFlags2::STORAGE_READ_WITHOUT_FORMAT);
-    let cleared = Device::new(desc, DevicePolicy::default()).expect("device");
+    let cleared = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     assert!(cleared.profile().storage_reads_by_format_bits());
     let bit = Capability::Format {
         format,

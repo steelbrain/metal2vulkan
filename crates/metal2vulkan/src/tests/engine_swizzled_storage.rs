@@ -317,7 +317,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
         for f in &all {
             desc.features.remove(f);
         }
-        let p = Device::new(desc, DevicePolicy::default())
+        let p = Device::from_queries(desc, DevicePolicy::default())
             .expect("device")
             .profile()
             .clone();
@@ -704,7 +704,7 @@ fn devices() -> Vec<(String, Device)> {
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         out.push((
             stem,
-            Device::new(desc, crate::device::DevicePolicy::default()).expect("device"),
+            Device::from_queries(desc, crate::device::DevicePolicy::default()).expect("device"),
         ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

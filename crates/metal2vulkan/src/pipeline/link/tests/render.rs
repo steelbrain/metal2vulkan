@@ -2529,7 +2529,7 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
         )
         .expect("description");
         edit(&mut d);
-        crate::device::Device::new(d, DevicePolicy::default())
+        crate::device::Device::from_queries(d, DevicePolicy::default())
             .expect("device")
             .profile()
             .clone()

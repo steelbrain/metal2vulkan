@@ -101,10 +101,10 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
             .clone()
             .with_enabled(&rec)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let dev = Device::new(restricted, DevicePolicy::default())
+        let dev = Device::from_queries(restricted, DevicePolicy::default())
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(dev.required_enables(), rec, "{stem}");
-        let full = Device::new(desc.clone(), DevicePolicy::default()).unwrap();
+        let full = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
         assert_eq!(full.required_enables(), rec, "{stem}");
         assert_eq!(
             rec.extensions.contains(&VkExtension::KhrPortabilitySubset),
@@ -154,9 +154,9 @@ fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
             assert_eq!(rec.features.contains(f), reported, "{reported}: {f:?}");
         }
         let restricted = d.clone().with_enabled(&rec).unwrap();
-        let dev = Device::new(restricted, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(restricted, DevicePolicy::default()).unwrap();
         assert_eq!(dev.required_enables(), rec, "{reported}");
-        let whole = Device::new(d.clone(), DevicePolicy::default()).unwrap();
+        let whole = Device::from_queries(d.clone(), DevicePolicy::default()).unwrap();
         assert_eq!(whole.required_enables(), rec, "{reported}");
     }
     // Under `UnsafeOff` robust buffer access is not recommended, so neither rule side is lost.
@@ -192,13 +192,13 @@ fn the_swiftshader_recommendation_keeps_vuid_10247() {
         .features
         .contains(&VkFeature::DescriptorBindingSampledImageUpdateAfterBind));
     let restricted = desc.clone().with_enabled(&rec).unwrap();
-    let stated = Device::new(restricted.clone(), DevicePolicy::default()).unwrap();
+    let stated = Device::from_queries(restricted.clone(), DevicePolicy::default()).unwrap();
     assert_eq!(stated.required_enables(), rec);
     let mut with_buffers = restricted;
     with_buffers
         .features
         .extend(BUFFER_UPDATE_AFTER_BIND.iter().copied());
-    let both = Device::new(with_buffers, DevicePolicy::default()).unwrap();
+    let both = Device::from_queries(with_buffers, DevicePolicy::default()).unwrap();
     assert_eq!(both.required_enables(), rec);
     let mut fields = both.profile().fields().clone();
     assert!(fields.descriptors.update_after_bind_storage_buffer);
@@ -304,7 +304,7 @@ fn extended_dynamic_state2_is_enabled_below_1_3_and_implied_from_it() {
         assert!(rec.extensions.contains(&extension), "{extension:?}");
         assert!(rec.features.contains(&feature), "{feature:?}");
     }
-    let dev = Device::new(
+    let dev = Device::from_queries(
         d.clone().with_enabled(&rec).unwrap(),
         DevicePolicy::default(),
     )
@@ -383,7 +383,7 @@ fn unsafe_containment_recommends_no_robust_buffer_access() {
     assert!(!rec.features.contains(&VkFeature::RobustBufferAccess));
     assert!(!rec.features.contains(&VkFeature::RobustBufferAccess2));
     let restricted = desc.with_enabled(&rec).unwrap();
-    Device::new(restricted, policy).unwrap();
+    Device::from_queries(restricted, policy).unwrap();
 }
 
 #[test]
@@ -486,13 +486,13 @@ fn device_new_refuses_a_feature_without_its_companion() {
         }
         let mut d = floor_with(&[VkExtension::ExtRobustness2], &[f]);
         d.features.remove(&needs);
-        let e = match Device::new(d.clone(), DevicePolicy::default()) {
+        let e = match Device::from_queries(d.clone(), DevicePolicy::default()) {
             Err(Error::InvalidDescriptor(DescriptorError::DeviceDescription { detail })) => detail,
             other => panic!("{other:?}"),
         };
         assert!(e.contains(vuid), "{e}");
         d.features.insert(needs);
-        Device::new(d, DevicePolicy::default()).unwrap();
+        Device::from_queries(d, DevicePolicy::default()).unwrap();
     }
 }
 
@@ -722,7 +722,7 @@ fn required_enables_follow_version_dependencies_formats_and_flags() {
 fn device_new_refuses_unexposed_features() {
     let mut d = profile("vk12-floor");
     d.features.insert(VkFeature::Maintenance8);
-    let e = match Device::new(d.clone(), DevicePolicy::default()) {
+    let e = match Device::from_queries(d.clone(), DevicePolicy::default()) {
         Err(Error::InvalidDescriptor(DescriptorError::DeviceDescription { detail })) => detail,
         other => panic!("{other:?}"),
     };
@@ -731,7 +731,7 @@ fn device_new_refuses_unexposed_features() {
         "{e}"
     );
     d.extensions.insert(VkExtension::KhrMaintenance8);
-    Device::new(d, DevicePolicy::default()).unwrap();
+    Device::from_queries(d, DevicePolicy::default()).unwrap();
 }
 
 /// The profile's format tables hold only formats the description exposes: a queried description
@@ -772,7 +772,7 @@ fn profile_format_tables_hold_only_exposed_formats() {
     let entry = d.formats.formats[&vk::Format::R8_UNORM];
     d.formats.formats.insert(vk::Format::A8_UNORM, entry);
     let a8 = |d: &DeviceDescription| {
-        Device::new(d.clone(), DevicePolicy::default())
+        Device::from_queries(d.clone(), DevicePolicy::default())
             .unwrap()
             .profile()
             .supports_format(vk::Format::A8_UNORM, FormatUsage::SampledImage)
@@ -807,7 +807,7 @@ fn a_storage_read_without_a_format_is_enabled_by_the_feature_the_version_or_the_
         let opened = desc.clone().with_enabled(&enabled).unwrap();
         (
             enabled,
-            Device::new(opened.clone(), policy).unwrap(),
+            Device::from_queries(opened.clone(), policy).unwrap(),
             opened,
         )
     };

@@ -152,7 +152,7 @@ fn devices_with(tweak: impl Fn(&mut DeviceDescription)) -> Vec<(String, Device)>
             tweak(&mut desc);
             (
                 stem,
-                Device::new(desc, DevicePolicy::default()).expect("device"),
+                Device::from_queries(desc, DevicePolicy::default()).expect("device"),
             )
         })
         .collect();
@@ -1437,7 +1437,7 @@ fn gate_lavapipe(tweak: impl Fn(&mut Option<GeneratedCommandsProperties>)) -> De
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     tweak(&mut desc.generated_commands);
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// The limit `set` changes on a description that states the facts.

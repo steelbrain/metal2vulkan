@@ -71,7 +71,7 @@ fn device() -> Device {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(&path).expect("committed profile");
     let description = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(description, DevicePolicy::default()).expect("device")
+    Device::from_queries(description, DevicePolicy::default()).expect("device")
 }
 
 /// The fixture's library, or `None` where `llvm-as` is absent.

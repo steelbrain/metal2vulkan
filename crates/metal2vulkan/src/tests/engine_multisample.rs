@@ -277,7 +277,8 @@ fn multisampled_fragments_read_the_pixel_center_or_are_refused() {
     let mut biased = Vec::new();
     let mut by_device_profiles = Vec::new();
     for stem in stems() {
-        let dev = Device::new(description(&stem), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
         let fields = dev.profile().fields();
         let rate = fields.fragment.sample_rate_shading;
         let stores = fields.leaf.fragment_stores_and_atomics;
@@ -442,7 +443,8 @@ fn a_pixel_rate_center_varying_reads_the_pixel_center_where_the_device_has_the_f
     let mut by_device_form = Vec::new();
     let mut refused_split = Vec::new();
     for stem in stems() {
-        let dev = Device::new(description(&stem), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
         for samples in [1, 4] {
             let what = format!("{stem} at {samples}");
             let p = match dev
@@ -528,7 +530,7 @@ fn a_pixel_rate_read_at_an_unstated_position_is_noted() {
         return;
     };
     for stem in ["moltenvk-m3", "amd-780m-radv"] {
-        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(stem), DevicePolicy::default()).expect("device");
         for samples in [1, 4] {
             let p = dev
                 .compile_render_pipeline(&stage_io_render(&stage_io, samples), &Budget::standard())
@@ -565,7 +567,8 @@ fn programmable_blending_beside_position_w_compiles_noted() {
     };
     let mut compiled = Vec::new();
     for stem in stems() {
-        let dev = Device::new(description(&stem), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
         let what = format!("{stem} {FETCH_DEPTH}");
         let d = render_after(&lib, FETCH_VERTEX, FETCH_DEPTH, 4);
         match dev.compile_render_pipeline(&d, &Budget::standard()) {
@@ -605,7 +608,7 @@ fn the_interface_states_the_pixel_reads() {
     let mut multisampled = LoweringInputs::new();
     multisampled.multisampled = true;
     for stem in ["lavapipe", "moltenvk-m3"] {
-        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(stem), DevicePolicy::default()).expect("device");
         // (function, reads z or w, reads a center varying)
         for (fragment, depth, center) in [
             (CENTER, false, true),
@@ -652,7 +655,7 @@ fn a_center_varying_at_sample_rate_needs_a_centered_offset_and_the_interpolation
         if withheld {
             assert!(desc.features.remove(&feature));
         }
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let mut needs = Vec::new();
         if biased {
             needs.push(CENTERED);
@@ -715,7 +718,7 @@ fn a_moltenvk_device_is_biased_by_its_driver() {
         (unmeasured_moltenvk(), false),
     ] {
         assert_eq!(desc.driver_id, Some(crate::vk::DriverId::MOLTENVK));
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         assert!(!dev
             .profile()
             .fields()
@@ -769,7 +772,7 @@ fn a_center_varying_at_sample_rate_reads_as_it_is_where_the_driver_reads_it_at_t
             if withheld {
                 assert!(desc.features.remove(&feature), "{stem}");
             }
-            let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+            let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
             assert!(reads_center_at_pixel(&dev), "{stem}");
             for fragment in [CENTER, SAMPLED, COUNTER] {
                 let what = format!("{stem} {fragment} withheld={withheld}");
@@ -861,7 +864,7 @@ fn get_num_samples_reads_the_pipeline_sample_count() {
     let lib = Library::from_air(&bc).expect("library");
     let mut checked = 0;
     for stem in ["moltenvk-m3", "lavapipe"] {
-        let dev = Device::new(description(stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(stem), DevicePolicy::default()).expect("device");
         let a = compile(&bc, "spc_num_samples", dev.profile()).expect("spc_num_samples");
         assert!(a.facts.contains(&RuntimeFact::SampleCount), "{stem}");
         for samples in [1, 4] {
@@ -904,7 +907,7 @@ fn get_num_samples_reads_the_pipeline_sample_count() {
     std::fs::write(&ll, other).expect("write");
     let bc = llvm_assemble(&ll);
     let bc = bc.expect("assembled");
-    let p = Device::new(description("lavapipe"), DevicePolicy::default()).expect("device");
+    let p = Device::from_queries(description("lavapipe"), DevicePolicy::default()).expect("device");
     match compile(&bc, "spc_num_samples", p.profile()) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::Lowering(LowerFamily::Fragment));

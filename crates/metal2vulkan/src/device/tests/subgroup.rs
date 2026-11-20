@@ -597,7 +597,7 @@ fn metal_properties_report_d3_d4_values() {
     formatless
         .features
         .insert(VkFeature::ShaderStorageImageWriteWithoutFormat);
-    let formatless = Device::new(formatless, DevicePolicy::default()).unwrap();
+    let formatless = Device::from_queries(formatless, DevicePolicy::default()).unwrap();
     assert_eq!(
         formatless.metal_properties().read_write_texture_tier,
         ReadWriteTextureTier::Tier1

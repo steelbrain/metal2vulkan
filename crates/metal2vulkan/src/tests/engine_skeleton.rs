@@ -175,7 +175,7 @@ fn containment_without_robustness_guards_the_store() {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustBufferAccess);
     desc.features.remove(&VkFeature::RobustBufferAccess2);
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let p = dev.profile();
     let a = compile(&bitcode, "store_const", p).expect("compile");
     assert!(a.strategies.entries.contains_key("access.store.checked"));

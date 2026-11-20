@@ -903,21 +903,14 @@ fn emulated_reductions_scans_and_votes_stay_compact() {
     );
 }
 
-/// `moltenvk-m3`'s profile (whole subgroups) without its driver's deviation `MetalCanonicalNans`,
-/// as [`PROFILES`] lack it: a float result's NaN select is then the same on both sides of a ratio.
+/// `moltenvk-m3`'s profile (whole subgroups), whose NaN encoding is the device's: a float result's
+/// NaN select is then the same on both sides of a ratio.
 fn whole_subgroups_without_the_nan_fact() -> DeviceProfile {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(&path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let nans = crate::error::DriverDeviation::MetalCanonicalNans;
-    let with = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
-    assert_eq!(
-        with.profile().fields().nan_encoding,
-        crate::device::profile::NanEncoding::MetalCanonical,
-        "moltenvk-m3's driver has the deviation"
-    );
-    Device::with_deviation(desc, DevicePolicy::default(), nans, false)
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -1650,7 +1643,7 @@ fn emulated_shuffles_keep_metals_reconvergence_without_maximal_reconvergence() {
         "the description names shaderMaximalReconvergence"
     );
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let p = dev.profile();
     assert!(!p.fields().subgroup.maximal_reconvergence);
     let a = compile(&bc, "dsm2_shuffle_past_n", p).expect("compile");
@@ -1671,7 +1664,7 @@ fn lavapipe() -> Device {
     let text = std::fs::read_to_string(path).expect("profile");
     let desc =
         crate::device::DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     assert_eq!(
         dev.profile().fields().limits.max_compute_shared_memory_size,
         32 * 1024
@@ -2173,7 +2166,7 @@ fn device(name: &str) -> Device {
     let text = std::fs::read_to_string(path).expect("profile");
     let desc =
         crate::device::DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// `quad_ballot` and `simd_active_threads_mask` on emulated simdgroups, uniform and divergent (run
@@ -2736,7 +2729,7 @@ fn wave64() -> Device {
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
     let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// `kernel void name(texture2d_ms<uint> t [[texture(0)]], device uint *out [[buffer(0)]], uint2

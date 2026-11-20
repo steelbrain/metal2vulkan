@@ -152,7 +152,7 @@ fn a_float_write_notes_the_device_s_half_conversion_under_the_bound_format() {
     };
     let (mut noted, mut measured) = (0, 0);
     for (stem, desc) in committed_descriptions().expect("profiles") {
-        let dev = Device::new(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
         let p = dev.profile();
         let rounds = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
         let nans = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans);

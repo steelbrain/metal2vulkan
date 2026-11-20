@@ -207,7 +207,7 @@ fn a_rotated_draw_runs_the_rotated_weights_variant() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         for (fragment, reads) in [("pv_both", true), ("pv_flat", false)] {
             let what = format!("{stem} {fragment}");
             let mut d = RenderPipelineDescriptor::new(function("pv_vertex"));

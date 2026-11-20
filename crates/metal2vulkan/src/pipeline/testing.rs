@@ -104,7 +104,8 @@ pub fn description_at_1_2(stem: &str, flags2: bool) -> Result<DeviceDescription,
 
 /// Committed profile `stem` (`validation/profiles/<stem>.json`) derived under `policy`.
 pub fn profile(stem: &str, policy: DevicePolicy) -> Result<DeviceProfile, String> {
-    let dev = Device::new(description(stem)?, policy).map_err(|e| format!("{stem}: {e}"))?;
+    let dev =
+        Device::from_queries(description(stem)?, policy).map_err(|e| format!("{stem}: {e}"))?;
     Ok(dev.profile().clone())
 }
 
@@ -117,7 +118,7 @@ pub fn profile_with_storage_buffers(
 ) -> Result<DeviceProfile, String> {
     let mut desc = description(stem)?;
     desc.limits.max_per_stage_descriptor_storage_buffers = storage;
-    let dev = Device::new(desc, policy).map_err(|e| format!("{stem}: {e}"))?;
+    let dev = Device::from_queries(desc, policy).map_err(|e| format!("{stem}: {e}"))?;
     Ok(dev.profile().clone())
 }
 
@@ -135,7 +136,7 @@ pub fn formatless_floor(policy: DevicePolicy) -> Result<DeviceProfile, String> {
         VkFeature::ShaderStorageImageReadWithoutFormat,
         VkFeature::ShaderStorageImageWriteWithoutFormat,
     ]);
-    let dev = Device::new(desc, policy).map_err(|e| format!("{FORMATLESS_FLOOR}: {e}"))?;
+    let dev = Device::from_queries(desc, policy).map_err(|e| format!("{FORMATLESS_FLOOR}: {e}"))?;
     Ok(dev.profile().clone())
 }
 
@@ -158,12 +159,6 @@ pub fn device_nan_bits(a: &FunctionArtifact) -> bool {
         || a.requirements
             .properties
             .contains(&crate::device::requirements::VkProperty::MetalNanMoves)
-}
-
-/// The default policy with Metal's answers wherever a choice still offers them
-/// ([`DevicePolicy::exact_answers`]).
-pub fn exact_maths() -> DevicePolicy {
-    DevicePolicy::default().exact_answers()
 }
 
 /// A fresh per-attempt meter with the standard caps and no deadline.

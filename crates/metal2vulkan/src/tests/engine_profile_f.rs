@@ -326,7 +326,7 @@ fn roadmap_with(storage: u32) -> DeviceProfile {
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.limits.max_per_stage_descriptor_storage_buffers = storage;
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

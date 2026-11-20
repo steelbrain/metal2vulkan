@@ -440,7 +440,7 @@ fn the_binder_writes_the_structure_and_the_table_the_consumer_binds() {
         .join("../metal2vulkan-validation/profiles");
     let text = std::fs::read_to_string(path.join("lavapipe.json")).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let lib = Library::from_air(&bc).expect("library");
     let f = lib.function("k").expect("entry");
     let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
@@ -2082,7 +2082,7 @@ fn run_counts(
         .join("../metal2vulkan-validation/profiles");
     let text = std::fs::read_to_string(path.join(format!("{stem}.json"))).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let lib = Library::from_air(bc).expect("library");
     let f = lib.function(entry).expect("entry");
     let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));

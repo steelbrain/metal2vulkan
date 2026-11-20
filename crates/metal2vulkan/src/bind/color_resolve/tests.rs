@@ -171,7 +171,7 @@ fn the_modules_come_numbered_and_refuse_another_count_or_planes() {
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(&path).expect("read");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let device = Device::new(desc, DevicePolicy::default()).expect("device");
+    let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let format = representatives()[0];
     for (format, source) in cases(format) {
         let modules =

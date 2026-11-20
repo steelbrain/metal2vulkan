@@ -1,9 +1,9 @@
 //! `half` arithmetic held at `float` precision between its roundings on a device without
-//! `shaderFloat16`: the fast form of that capability's emulation (`DevicePolicy::half_chains`).
+//! `shaderFloat16`: the fast form of that capability's emulation.
 //!
 //! Without `shaderFloat16` a module computes a `half` `+ - *` in `float` on its operands held
 //! widened and rounds the result by the device's `OpQuantizeToF16` ([`super::narrow::round`],
-//! `PrecisionNote::NativeHalfQuantize`). Under `HalfChainPolicy::AtExits` (the default) [`plan`]
+//! `PrecisionNote::NativeHalfQuantize`). [`plan`]
 //! marks each addition, subtraction and product on `half` whose flags hold `contract` and
 //! `reassoc` and whose result is read, and only by such operations: selection computes it in
 //! `float` and leaves it unrounded ([`super::ArithPlan::held_at_float`]). A chain of them rounds
@@ -14,26 +14,21 @@
 //! `PrecisionNote::FastMathRewrites`, which records the difference: the roundings the chain skips,
 //! and a value inside it past `half`'s range staying finite.
 //!
-//! Under `HalfChainPolicy::EachOperation`, and on a device with `shaderFloat16` under either value,
-//! nothing is marked.
+//! On a device with `shaderFloat16` nothing is marked.
 
 use std::collections::BTreeSet;
 
 use crate::air::ir::{BinOp as AirBin, FastMath, InstId, InstKind, Type, Value};
 use crate::budget::Meter;
-use crate::device::HalfChainPolicy;
 use crate::error::Error;
 use crate::lower::select::SelectCx;
 use crate::spirv::builder::QuantizeForm;
 
 /// The `half` additions, subtractions and products of `cx`'s body held at `float` precision: on a
-/// profile without `shaderFloat16` under `HalfChainPolicy::AtExits`, each whose flags hold
+/// profile without `shaderFloat16`, each whose flags hold
 /// `contract` and `reassoc` and whose every use is such an operation; none elsewhere.
 pub fn plan(cx: &SelectCx<'_>, m: &mut Meter) -> Result<BTreeSet<InstId>, Error> {
-    let fields = cx.profile.fields();
-    if fields.half_chains != HalfChainPolicy::AtExits
-        || super::narrow::quantize_form(cx.profile) != QuantizeForm::Device
-    {
+    if super::narrow::quantize_form(cx.profile) != QuantizeForm::Device {
         return Ok(BTreeSet::new());
     }
     let n = cx.body.insts.len();

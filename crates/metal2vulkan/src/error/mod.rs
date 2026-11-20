@@ -543,14 +543,11 @@ pub enum Needs {
     /// change. A device without the defect runs the input.
     RuntimeDriverDefect(RuntimeDriverDefect),
     /// The stage, as this device's plan writes it, is heavier than the translator hands any
-    /// driver of a device [`Device::from_queries`](crate::device::Device::from_queries) made: its
-    /// entry weight passes the heaviest stage measured to compile within host-sized memory
+    /// driver: its entry weight passes the heaviest stage measured to compile within host-sized memory
     /// ([`Unsupported::symbol`] names the weight and the bound). The weight is the plan's, so a
     /// device whose plan writes the stage lighter translates it: one that keeps its widest
     /// simdgroup mode pinned where this one emulates simdgroups. A gap of the translator rather
-    /// than of the device: no such device is handed a stage past the bound. A device
-    /// [`Device::new`](crate::device::Device::new) made bounds a stage only where its driver is
-    /// measured to need it ([`Needs::DriverDefect`]).
+    /// than of the device: no device is handed a stage past the bound.
     StageBound,
     /// A device that claims this Metal GPU family (`MTLGPUFamily`'s raw value, 1010 for Apple10),
     /// which the device does not: Metal itself refuses the input on a device without the family,

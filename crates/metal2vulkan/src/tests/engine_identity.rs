@@ -1048,7 +1048,7 @@ fn identity_without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
     for f in drop {
         desc.features.remove(f);
     }
-    Device::new(desc, identity())
+    Device::from_queries(desc, identity())
         .expect("device")
         .profile()
         .clone()
@@ -1469,7 +1469,7 @@ fn slot_addresses_past_the_window_are_read_from_the_pushed_parameter_block() {
     }
 }
 
-/// On `Device::from_queries`' profile a kernel's push window is 256 bytes (`PushWindow::Floor`):
+/// On `Device::from_queries`' profile a kernel's push window is 256 bytes:
 /// the same kernel's 21 slot addresses are all pushed, with no block, below its tail word 24 bytes
 /// above them (`PushPlacement::tail_word`). A kernel's 31, Metal's most buffer slots, would end
 /// past the floor with the word: its block's address and 27 slot addresses end at 224, the word is
@@ -1975,7 +1975,7 @@ fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
     }
     let desc = crate::pipeline::testing::description("nvidia-rtx50-linux")
         .unwrap_or_else(|e| panic!("{e}"));
-    let new = Device::new(desc.clone(), identity()).unwrap_or_else(|e| panic!("{e}"));
+    let new = Device::from_queries(desc.clone(), identity()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
         new.metal_properties().max_threads_per_threadgroup,
         [1024, 1024, 64]
@@ -2300,7 +2300,7 @@ fn the_partition_query_answers_what_the_compile_does() {
             let desc =
                 crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
             for dev in [
-                Device::new(desc.clone(), identity()),
+                Device::from_queries(desc.clone(), identity()),
                 Device::from_queries(desc, identity()),
             ] {
                 let dev = dev.unwrap_or_else(|e| panic!("{e}"));
@@ -2800,7 +2800,7 @@ fn a_storage_read_the_formats_bits_grant_is_formatless_under_the_identity_domain
         other => panic!("cleared: {:?}", other.map(|_| ())),
     }
 
-    let old = Device::new(desc, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+    let old = Device::from_queries(desc, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
     match compiled(&old) {
         Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat { slot })) => {
             assert_eq!((slot.class, slot.index), (SlotClass::Texture, 0));

@@ -217,7 +217,7 @@ fn device_new_still_refuses_render_functions_under_the_identity_domains() {
     let d = descriptor(&library);
     for stem in PROFILES {
         let desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
-        let device = Device::new(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
         match device.compile_render_pipeline(&d, &Budget::standard()) {
             Err(Error::Unsupported(u)) => {
                 assert_eq!(

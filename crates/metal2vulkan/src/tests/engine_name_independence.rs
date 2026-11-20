@@ -216,7 +216,7 @@ fn devices() -> Vec<(&'static str, Device)> {
                 .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let description = DeviceDescription::from_khronos_json(&text, None)
                 .unwrap_or_else(|e| panic!("{stem}: {e}"));
-            let device = Device::new(description, DevicePolicy::default())
+            let device = Device::from_queries(description, DevicePolicy::default())
                 .unwrap_or_else(|e| panic!("{stem}: {e}"));
             (stem, device)
         })

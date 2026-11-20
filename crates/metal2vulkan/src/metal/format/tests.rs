@@ -21,7 +21,8 @@ pub(crate) fn committed_devices() -> Vec<(String, Device)> {
     committed_descriptions()
         .into_iter()
         .map(|(stem, desc)| {
-            let device = Device::new(desc, DevicePolicy::default()).expect("device derives");
+            let device =
+                Device::from_queries(desc, DevicePolicy::default()).expect("device derives");
             (stem, device)
         })
         .collect()
@@ -48,7 +49,7 @@ fn floor_with(formats: &[(vk::Format, vk::FormatFeatureFlags)]) -> DeviceDescrip
 }
 
 fn device(desc: DeviceDescription) -> Device {
-    Device::new(desc, DevicePolicy::default()).expect("device derives")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device derives")
 }
 
 fn usages(list: &[FormatUsage]) -> BTreeSet<FormatUsage> {

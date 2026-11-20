@@ -17,7 +17,6 @@
 
 use std::collections::BTreeSet;
 
-use crate::device::profile::PushWindow;
 use crate::lower::push::{self, FieldShape};
 use crate::pipeline::interface::{PushLoc, PushPlacement};
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
@@ -37,10 +36,9 @@ pub struct Table {
     pub fields: Vec<PushField>,
 }
 
-/// Whether `stage`'s placement of `fields` in push window `w` spills into the `ArgumentTable`
-/// (`push::spills`).
-pub fn spills(stage: Stage, w: PushWindow, base: u32, fields: &BTreeSet<PushField>) -> bool {
-    push::spills(stage, w, base, fields)
+/// Whether `stage`'s placement of `fields` spills into the `ArgumentTable` (`push::spills`).
+pub fn spills(stage: Stage, base: u32, fields: &BTreeSet<PushField>) -> bool {
+    push::spills(stage, base, fields)
 }
 
 /// The binding symbol of `stage`'s `ArgumentTable`.

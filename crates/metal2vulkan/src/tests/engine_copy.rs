@@ -80,7 +80,7 @@ fn variant(stem: &str, unrobust: bool, no_int64: bool) -> DeviceProfile {
     if no_int64 {
         desc.features.remove(&VkFeature::ShaderInt64);
     }
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

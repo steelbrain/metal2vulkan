@@ -395,7 +395,7 @@ fn a_second_output_needs_dual_source_blending() {
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     assert!(desc.features.remove(&VkFeature::DualSrcBlend));
-    let p = Device::new(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone();

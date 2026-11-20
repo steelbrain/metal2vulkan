@@ -503,7 +503,7 @@ fn an_anisotropic_sampler_takes_the_axis_gradients() {
                         .features
                         .remove(&crate::device::requirements::VkFeature::SamplerAnisotropy));
                 }
-                crate::device::Device::new(desc, DevicePolicy::default())
+                crate::device::Device::from_queries(desc, DevicePolicy::default())
                     .expect(stem)
                     .profile()
                     .clone()

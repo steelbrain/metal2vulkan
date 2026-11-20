@@ -301,10 +301,8 @@ fn every_half_pattern_moves_as_its_bits() {
     // Each (policy, profile) and the module it compiles to; each distinct module runs once.
     let mut runs: Vec<(&str, String, Arc<[u32]>)> = Vec::new();
     let mut modules: BTreeMap<Arc<[u32]>, Compiled> = BTreeMap::new();
-    for (policy_name, policy) in [
-        ("default", DevicePolicy::default()),
-        ("exact answers", DevicePolicy::default().exact_answers()),
-    ] {
+    {
+        let (policy_name, policy) = ("default", DevicePolicy::default());
         for (stem, p) in committed_profiles_with(policy).expect("profiles") {
             let Some((words, compiled)) = compile_once(&stem, &p, &bc, policy_name) else {
                 continue;

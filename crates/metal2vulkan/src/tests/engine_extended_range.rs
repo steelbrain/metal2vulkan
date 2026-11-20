@@ -805,7 +805,7 @@ fn devices() -> Vec<(String, Device)> {
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         out.push((
             stem,
-            Device::new(desc, DevicePolicy::default()).expect("device"),
+            Device::from_queries(desc, DevicePolicy::default()).expect("device"),
         ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1102,15 +1102,11 @@ fn ycbcr_write_slots_store_each_texel_s_bits_and_mark() {
 }
 
 /// A `half` read of a slot bound in an extended-range form decodes the texel's codes and rounds
-/// the decoded `f32` through the device's conversion (`narrow::round_texel`). On `moltenvk-m3`,
-/// which takes `DriverDeviation::MetalHalfConversion`, the module records no
-/// `NativeHalfConversion` for it and requires `VkProperty::MetalHalfConversion`; it records
-/// `DevicePackConversion`, which states the decoded `half` against Metal's. Without the deviation
-/// (the same profile with it dropped) it records the note and requires nothing.
+/// the decoded `f32` through the device's conversion (`narrow::round_texel`). On `moltenvk-m3` the
+/// module records `NativeHalfConversion` for it and `DevicePackConversion`, which states the
+/// decoded `half` against Metal's.
 #[test]
-fn decoded_half_texels_round_by_the_measured_conversion() {
-    use crate::device::requirements::VkProperty;
-    use crate::error::DriverDeviation;
+fn decoded_half_texels_round_by_the_device_s_conversion() {
     use crate::pipeline::artifact::PrecisionNote;
     let Some(bc) = assemble("decoded-halves", &kernel(Source::Read, true, 0)) else {
         return;
@@ -1118,20 +1114,15 @@ fn decoded_half_texels_round_by_the_measured_conversion() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(&path).expect("profile");
+    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
+    let p = Device::from_queries(desc, DevicePolicy::default())
+        .expect("device")
+        .profile()
+        .clone();
     for form in FORMS {
         let i = inputs(form, Source::Read);
-        for taken in [true, false] {
-            let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-            let p = Device::with_deviation(
-                desc,
-                DevicePolicy::default(),
-                DriverDeviation::MetalHalfConversion,
-                taken,
-            )
-            .expect("device")
-            .profile()
-            .clone();
-            let what = format!("{form:?}, the deviation taken: {taken}");
+        {
+            let what = format!("{form:?}");
             let a = compile_bitcode(
                 &bc,
                 EntryRef::Name("k"),
@@ -1143,9 +1134,8 @@ fn decoded_half_texels_round_by_the_measured_conversion() {
             )
             .unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert_eq!(
+            assert!(
                 a.precision.contains(&PrecisionNote::NativeHalfConversion),
-                !taken,
                 "{what}: {:?}",
                 a.precision
             );
@@ -1153,13 +1143,6 @@ fn decoded_half_texels_round_by_the_measured_conversion() {
                 a.precision.contains(&PrecisionNote::DevicePackConversion),
                 "{what}: {:?}",
                 a.precision
-            );
-            assert_eq!(
-                a.requirements
-                    .properties
-                    .contains(&VkProperty::MetalHalfConversion),
-                taken,
-                "{what}"
             );
         }
     }

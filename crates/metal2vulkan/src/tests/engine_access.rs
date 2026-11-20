@@ -86,7 +86,7 @@ fn profile_with(stem: &str, robust: bool, standard_layout: bool) -> DeviceProfil
         desc.features
             .remove(&VkFeature::UniformBufferStandardLayout);
     }
-    Device::new(desc, policy())
+    Device::from_queries(desc, policy())
         .expect("device")
         .profile()
         .clone()
@@ -349,28 +349,6 @@ fn a_uniform_view_read_at_its_bind_offset_drops_the_residual() {
 /// Xe RPL-P under ANV, where the row was measured.
 const AT_BIND_PROFILE: &str = "intel-irisxe-rplp-anv";
 
-/// A committed profile, its description measuring `DriverWorkaround::ExternalUniformReadsSkipACache`
-/// where `measured` (the fact comes from that set alone), with `uniformBufferStandardLayout` or
-/// without.
-fn texel_profile(stem: &str, measured: bool, standard_layout: bool) -> DeviceProfile {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    if !standard_layout {
-        desc.features
-            .remove(&VkFeature::UniformBufferStandardLayout);
-    }
-    if measured {
-        (desc.measured).insert(DriverWorkaround::ExternalUniformReadsSkipACache);
-    }
-    Device::new(desc, policy())
-        .expect("device")
-        .profile()
-        .clone()
-}
-
 /// A kernel reading byte `i` of a `constant` window of 6 bytes, `i` the first word of its
 /// `device` buffer 2 (an indexed read: no constant offset), into word 0 of buffer 1.
 const INDEXED_BYTE: &str = r#"define void @indexed_byte_load(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1, ptr addrspace(1) noundef "air-buffer-no-alias" %2) {
@@ -407,120 +385,6 @@ fn texel_buffer(index: u32, bytes: &[u8]) -> Image {
     let mut image = Image::new(kslot(index), [texels.len() as u32, 1, 1], 1, 1, 1);
     image.texels = texels;
     image
-}
-
-/// On a profile whose description measured `DriverWorkaround::ExternalUniformReadsSkipACache`, a
-/// `constant` slot of a short window with an indexed read reads through a uniform texel buffer:
-/// its form is `DescriptorView::UniformTexel`, the slot's one variable is a `UniformConstant`
-/// sampled image of `Dim` `Buffer` (no `Uniform` block), the module passes L3, and the read takes
-/// the last byte at the residual pushed, at residuals 0, 4, 16 and 256, with
-/// `uniformBufferStandardLayout` and without. A slot read at a constant offset alone
-/// (`buffer_end_byte_load_constant`) keeps its uniform buffer there, and the same profile with
-/// nothing measured (the Iris Xe's own identity included) keeps the uniform buffer for both.
-#[test]
-fn a_short_constant_window_reads_through_a_uniform_texel_buffer() {
-    use crate::spirv::interp::run_with_images;
-    use crate::spirv::ir::{Dim, ImageType, ImageUsage};
-    let entry = "indexed_byte_load";
-    let Some(bc) = assemble_text(entry, INDEXED_BYTE) else {
-        return;
-    };
-    let Some(constant) = assemble_file("buffer_end_byte_load_constant") else {
-        return;
-    };
-    let data = [9u8, 8, 7, 6, 5, 0xC3];
-    let form_of = |bc: &[u8], entry: &str, p: &DeviceProfile, what: &str| {
-        let a = compile(bc, entry, p).unwrap_or_else(|e| panic!("{what}: {e}"));
-        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        match a.interface.slots.get(&sref(0)) {
-            Some(SlotInterface::Buffer(b)) => b.form,
-            other => panic!("{what}: {other:?}"),
-        }
-    };
-    for standard in [true, false] {
-        let what = format!("standard={standard}");
-        let p = texel_profile("intel-irisxe-rplp-anv", true, standard);
-        assert!(
-            p.workarounds()
-                .contains(&DriverWorkaround::ExternalUniformReadsSkipACache),
-            "{what}"
-        );
-        assert_eq!(
-            form_of(&bc, entry, &p, &what),
-            BufferForm::Descriptor(DescriptorView::UniformTexel),
-            "{what}"
-        );
-        let plain = match standard {
-            true => DescriptorView::UniformWords,
-            false => DescriptorView::UniformVec4,
-        };
-        let constant_entry = "buffer_end_byte_load_constant";
-        assert_eq!(
-            form_of(&constant, constant_entry, &p, &what),
-            BufferForm::Descriptor(plain),
-            "{what}: a constant offset alone"
-        );
-        let (plan, m) = typed_module(&bc, entry, &p).expect("module");
-        let slot: Vec<_> = (m.globals().iter())
-            .filter(|g| g.kind == GlobalKind::Resource(kslot(0)))
-            .collect();
-        assert_eq!(slot.len(), 1, "{what}: the slot's variables");
-        assert_eq!(slot[0].class, StorageClass::UniformConstant, "{what}");
-        assert!(
-            matches!(
-                m.types().get(slot[0].pointee),
-                Ok(Type::Image(ImageType {
-                    dim: Dim::Buffer,
-                    usage: ImageUsage::Sampled,
-                    ..
-                }))
-            ),
-            "{what}: {:?}",
-            m.types().get(slot[0].pointee)
-        );
-        for r in [0u32, 4, 16, 256] {
-            let mut bytes = bound(0, r, &data, 0x44).bytes;
-            bytes.resize(bytes.len().max(512), 0x44);
-            let res = Resources {
-                buffers: vec![bound(1, 0, &[0; 4], 0), bound(2, 0, &5u32.to_le_bytes(), 0)],
-                push: push_bytes(&plan, &[(0, r)]),
-                spec: Default::default(),
-            };
-            let (out, _) =
-                run_with_images(&m, &Config::default(), res, vec![texel_buffer(0, &bytes)])
-                    .unwrap_or_else(|e| panic!("{what} r={r}: {e:?}"));
-            assert_eq!(out.buffers[0][..4], [0xC3, 0, 0, 0], "{what} r={r}");
-        }
-    }
-    let p = texel_profile("intel-irisxe-rplp-anv", false, true);
-    assert_eq!(
-        form_of(&bc, entry, &p, "unmeasured"),
-        BufferForm::Descriptor(DescriptorView::UniformWords)
-    );
-}
-
-/// A uniform view takes the texel form for a `Bounded` window of at most
-/// `views::TEXEL_WINDOW_BYTES` alone, on a profile whose description measured
-/// `DriverWorkaround::ExternalUniformReadsSkipACache`: 4096 bytes is one, 4097 keeps its uniform
-/// buffer, as does every window on lavapipe's profile, which measured nothing.
-#[test]
-fn only_a_window_within_the_bound_takes_the_texel_form() {
-    use crate::lower::access::texel_view;
-    use crate::memory::views::{ViewKind, TEXEL_WINDOW_BYTES};
-    let iris = texel_profile("intel-irisxe-rplp-anv", true, true);
-    let lavapipe = profile_with("lavapipe", true, true);
-    let window = |len| Window::Bounded { start: 0, len };
-    assert!(matches!(
-        texel_view(&iris, window(TEXEL_WINDOW_BYTES)),
-        Some(ViewKind::UniformTexel { vecs: 257 })
-    ));
-    assert!(matches!(
-        texel_view(&iris, window(1)),
-        Some(ViewKind::UniformTexel { vecs: 1 })
-    ));
-    assert_eq!(texel_view(&iris, window(TEXEL_WINDOW_BYTES + 1)), None);
-    assert_eq!(texel_view(&iris, Window::Whole), None);
-    assert_eq!(texel_view(&lavapipe, window(16)), None);
 }
 
 /// Whether a function of `m` reads push member `field` with the specialization constant of `key`
@@ -1878,7 +1742,7 @@ fn the_highest_storage_slots_fall_back_to_device_addresses() {
         let text = std::fs::read_to_string(path).expect("profile");
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         desc.limits.max_per_stage_descriptor_storage_buffers = 2;
-        let p = Device::new(desc, policy())
+        let p = Device::from_queries(desc, policy())
             .expect("device")
             .profile()
             .clone();
@@ -1925,7 +1789,7 @@ fn the_highest_storage_slots_fall_back_to_device_addresses() {
             let mut written = profile_desc(stem);
             written.limits.max_per_stage_descriptor_storage_buffers = 0;
             for desc in [strict, written] {
-                let p = Device::new(desc, policy())
+                let p = Device::from_queries(desc, policy())
                     .expect("device")
                     .profile()
                     .clone();
@@ -1977,7 +1841,7 @@ fn a_looping_kernel_reserves_no_status_binding_in_the_fallback() {
         let text = std::fs::read_to_string(path).expect("profile");
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         desc.limits.max_per_stage_descriptor_storage_buffers = 2;
-        let p = Device::new(desc, policy())
+        let p = Device::from_queries(desc, policy())
             .expect("device")
             .profile()
             .clone();
@@ -2236,7 +2100,7 @@ fn profile_without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
     for f in features {
         desc.features.remove(f);
     }
-    Device::new(desc, policy())
+    Device::from_queries(desc, policy())
         .expect("device")
         .profile()
         .clone()

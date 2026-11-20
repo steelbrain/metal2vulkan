@@ -1535,9 +1535,7 @@ fn in_place_sample(
         .ok_or_else(|| cx.invariant("a sampling call without a coordinate"))?;
     // The model takes a linear sample that addresses no border and whose offset no parent's size
     // places: a constexpr sampler's state decides now, a runtime sampler's word as it runs.
-    let model = cx.profile.fields().ycbcr_in_place_reads
-        == crate::device::YCbCrInPlacePolicy::Model
-        && gather.is_none()
+    let model = gather.is_none()
         && !offset_base
         && match &state {
             State::Constant {

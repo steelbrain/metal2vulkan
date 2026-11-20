@@ -117,7 +117,7 @@ fn m3() -> Device {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 fn compute(dev: &Device, bc: &[u8], entry: &str) -> ComputePipeline {
@@ -631,7 +631,7 @@ fn heap_plans_are_total_on_the_committed_profiles() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let lib = Library::from_air(&bc).expect("library");
         let f = lib.function("argument_buffer_read").expect("entry");
         let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
@@ -1468,7 +1468,7 @@ fn heap_samplers_need_the_filter_features_of_every_held_member() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let lib = Library::from_air(&bc).expect("library");
         let filters = p.supports_format(
             vk::Format::R32_SFLOAT,
@@ -2289,9 +2289,8 @@ declare { <4 x float>, i8 } @air.sample_texture_cube_grad.v4f32(ptr addrspace(1)
 /// A cube's explicit gradients through an argument buffer's sampler take their footprint by the
 /// sampler's table entry word, so the plan takes every listed sampler for that use, an anisotropic
 /// one included: an isotropic sampler plans with the array's `ArgumentSampler` writes, as an
-/// anisotropic one does. A driver whose cube-gradient route is not measured (`moltenvk-m3` without
-/// its measured route) takes Vulkan's rule, the device's reading, alike. Run on every committed
-/// profile that compiles the use, and the unmeasured description.
+/// anisotropic one does, under Vulkan's rule, the device's reading. Run on every committed
+/// profile that compiles the use, `moltenvk-m3` among them.
 #[test]
 fn a_cube_gradient_use_takes_an_anisotropic_argument_sampler_by_its_word() {
     let Some(bc) = assemble("argument_sampler_cube_grad", CUBE_GRADIENT) else {
@@ -2304,39 +2303,30 @@ fn a_cube_gradient_use_takes_an_anisotropic_argument_sampler_by_its_word() {
         let text = std::fs::read_to_string(path).expect("profile");
         DeviceDescription::from_khronos_json(&text, None).expect("description")
     };
-    let mut devices: Vec<(String, Device)> = crate::spirv::testing::committed_profiles()
+    let devices: Vec<(String, Device)> = crate::spirv::testing::committed_profiles()
         .expect("profiles")
         .into_iter()
         .map(|(stem, _)| {
-            let dev = Device::new(description(&stem), DevicePolicy::default()).expect("device");
+            let dev =
+                Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
             (stem, dev)
         })
         .collect();
-    let route = crate::error::DriverDeviation::CubeGradientRoute;
-    let unmeasured = Device::with_deviation(
-        description("moltenvk-m3"),
-        DevicePolicy::default(),
-        route,
-        false,
-    )
-    .expect("device");
-    devices.push(("unmeasured".to_string(), unmeasured));
-    let (mut taken_on, mut unmeasured_on) = (0, 0);
+    let (mut taken_on, mut m3_on) = (0, 0);
     for (stem, dev) in devices {
         let lib = Library::from_air(&bc).expect("library");
         let f = lib.function("argument_sampler_cube_grad").expect("entry");
         let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
         let Ok(pipe) = dev.compile_compute_pipeline(&d, &Budget::standard()) else {
-            assert_ne!(
-                stem, "unmeasured",
-                "the unmeasured description compiles the use"
-            );
+            assert_ne!(stem, "moltenvk-m3", "moltenvk-m3 compiles the use");
             continue;
         };
         let route = dev.profile().fields().cube_gradients.compute;
-        if stem == "unmeasured" {
-            assert_eq!(route, crate::device::profile::CubeGradientRoute::Vulkan);
-        }
+        assert_eq!(
+            route,
+            crate::device::profile::CubeGradientRoute::Vulkan,
+            "{stem}"
+        );
         let arrays: Vec<(u32, HandleClass)> = pipe.layout.sets[1]
             .bindings
             .iter()
@@ -2389,10 +2379,10 @@ fn a_cube_gradient_use_takes_an_anisotropic_argument_sampler_by_its_word() {
             );
         }
         taken_on += 1;
-        unmeasured_on += usize::from(stem == "unmeasured");
+        m3_on += usize::from(stem == "moltenvk-m3");
     }
     assert!(taken_on > 0, "no profile took the anisotropic sampler");
-    assert_eq!(unmeasured_on, 1, "the unmeasured description takes it");
+    assert_eq!(m3_on, 1, "moltenvk-m3 takes it");
 }
 
 /// A plan depends on the argument samplers only through their shape (`ArgumentSamplersShape`: the
@@ -2784,7 +2774,7 @@ fn a_heap_texture_s_ycbcr_filter_note_holds_where_its_sampler_can_filter() {
             .join("../metal2vulkan-validation/profiles/lavapipe.json");
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::new(desc, DevicePolicy::default()).expect("device")
+        Device::from_queries(desc, DevicePolicy::default()).expect("device")
     };
     for entry in ["argument_sampler_sample", "argument_sampler_compare"] {
         let native = argument_sampler_pipeline(&lavapipe, entry).expect("lavapipe");

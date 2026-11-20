@@ -61,7 +61,7 @@ fn queried(stem: &str) -> DeviceProfile {
 
 /// `stem` through `Device::new`.
 fn through_new(stem: &str) -> Device {
-    Device::new(
+    Device::from_queries(
         description(stem).expect("description"),
         DevicePolicy::default(),
     )

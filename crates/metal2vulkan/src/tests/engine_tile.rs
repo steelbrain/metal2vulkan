@@ -893,7 +893,7 @@ fn a_tile_pipeline_places_its_threadgroup_arguments() {
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.limits.max_storage_buffer_range = 256;
-    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
     let pipe = dev
         .compile_tile_pipeline(&d, &Budget::standard())
         .expect("a tile pipeline");
@@ -912,7 +912,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 fn descriptor(

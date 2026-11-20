@@ -1326,7 +1326,7 @@ fn m3_with(edit: impl FnOnce(&mut crate::device::profile::Limits)) -> DeviceProf
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     edit(&mut desc.limits);
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()

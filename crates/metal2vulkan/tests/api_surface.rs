@@ -230,26 +230,6 @@ surface! {
         struct StageSimd N;
         enum ContainmentPolicy N;
         struct DevicePolicy N;
-        enum HeapCompressionPolicy N;
-        enum HeapAnswerPolicy N;
-        enum CompletionPolicy N;
-        enum BatchOrderPolicy N;
-        enum RenderLoweringPolicy N;
-        enum HostPageTexturePolicy N;
-        enum HalfChainPolicy N;
-        enum YCbCrInPlacePolicy N;
-        enum PipelineWaitPolicy N;
-        enum WideLinePolicy N;
-        enum ExtendedRangeBlitPolicy N;
-        enum QueueSharingPolicy N;
-        enum UnsharedIsolationPolicy N;
-        enum QueueTurnPolicy N;
-        enum DontCareColorPolicy N;
-        enum UnstoredDontCarePolicy N;
-        enum VertexReachPolicy N;
-        enum RateMapRegionPolicy N;
-        enum ManagedCopyInPolicy N;
-        enum IndirectRecordsPolicy N;
         struct DeviceProfile O;
         struct SpirvValidation N;
         struct EnabledCaps N;
@@ -258,9 +238,6 @@ surface! {
         struct FloatControls N;
         struct FloatWidthControls N;
         enum DriverWorkaround N;
-        enum DriverFact N;
-        struct DriverDiagnostic N;
-        const NVIDIA_AMPERE_GA10X;
         enum GuestIsolation N;
         enum HandleDomain N;
         enum Independence N;
@@ -1202,7 +1179,7 @@ fn device_under(stem: &str, policy: DevicePolicy) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, policy).expect("device")
+    Device::from_queries(desc, policy).expect("device")
 }
 
 /// A buffer bound at `offset` in a `length`-byte allocation.
@@ -1626,7 +1603,7 @@ fn a_multisampled_pipeline_compiles_the_fragment_for_it() {
                 let mut desc =
                     DeviceDescription::from_khronos_json(&text, None).expect("description");
                 desc.device_id = device_id;
-                Device::new(desc, DevicePolicy::default()).expect("device")
+                Device::from_queries(desc, DevicePolicy::default()).expect("device")
             }
         };
         let mut multisampled = with_color_writes(&dev, LoweringInputs::new(), &[(0, half)]);

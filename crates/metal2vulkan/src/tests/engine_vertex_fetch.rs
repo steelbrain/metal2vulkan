@@ -251,7 +251,7 @@ fn prof_with(stem: &str, change: impl FnOnce(&mut DeviceDescription)) -> DeviceP
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     change(&mut desc);
-    Device::new(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::default())
         .expect("device")
         .profile()
         .clone()
@@ -1219,7 +1219,7 @@ fn a_label_pipeline_reads_its_integer_attribute_as_float() {
     for stem in &stems {
         let text = std::fs::read_to_string(dir.join(format!("{stem}.json"))).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::new(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
         let p = match dev.compile_render_pipeline(&d, &Budget::standard()) {
             Ok(p) => p,
             // A device without the depth and stencil format (roadmap-2022).

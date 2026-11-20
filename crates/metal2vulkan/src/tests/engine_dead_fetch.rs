@@ -57,7 +57,7 @@ fn device(stem: &str) -> Device {
         .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// Function `name` of `library` specialized with `dfk_reads` = `live` and `dfk_weight` one where

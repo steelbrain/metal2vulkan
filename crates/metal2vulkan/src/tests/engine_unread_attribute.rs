@@ -100,7 +100,7 @@ fn an_attribute_read_only_into_a_gated_off_varying_needs_no_descriptor_entry() {
         "nvidia-rtx5080-laptop",
         "vk12-floor",
     ] {
-        let dev = Device::new(
+        let dev = Device::from_queries(
             description(stem).expect("committed description"),
             DevicePolicy::default(),
         )

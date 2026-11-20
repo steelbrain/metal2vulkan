@@ -40,7 +40,7 @@ fn profiles() -> [(&'static str, DeviceProfile); 2] {
         if !int64 {
             assert!(desc.features.remove(&VkFeature::ShaderInt64));
         }
-        let p = Device::new(desc, DevicePolicy::default())
+        let p = Device::from_queries(desc, DevicePolicy::default())
             .expect("device")
             .profile()
             .clone();

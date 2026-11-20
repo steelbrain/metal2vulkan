@@ -101,7 +101,7 @@ pub(super) fn device(stem: &str, tweak: impl FnOnce(&mut DeviceDescription)) -> 
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     tweak(&mut desc);
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 fn no_robustness(desc: &mut DeviceDescription) {

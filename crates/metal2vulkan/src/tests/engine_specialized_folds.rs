@@ -42,7 +42,7 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
 
 fn device() -> Device {
     let description = description("nvidia-rtx5080-laptop").expect("committed description");
-    Device::new(description, DevicePolicy::default()).expect("device")
+    Device::from_queries(description, DevicePolicy::default()).expect("device")
 }
 
 /// A function constant's value: `ty` with `lanes` as its little-endian lanes of `width` bytes.

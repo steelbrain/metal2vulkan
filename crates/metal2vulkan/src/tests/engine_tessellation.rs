@@ -737,7 +737,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::new(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
 /// A render pipeline of post-tessellation function `vertex` of the fixture, with fragment
@@ -1680,7 +1680,7 @@ fn an_emulated_function_counts_its_draw_s_buffers_against_the_stage_s_limit() {
     let with_storage = |buffers: u32| {
         let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         desc.limits.max_per_stage_descriptor_storage_buffers = buffers;
-        Device::new(desc, DevicePolicy::default()).expect("device")
+        Device::from_queries(desc, DevicePolicy::default()).expect("device")
     };
     let budget = Budget::standard();
     // Its control points and patch inputs are pulled from two buffers, which no device address
