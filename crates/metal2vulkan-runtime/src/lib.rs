@@ -128,7 +128,7 @@ pub use pass::{
     RenderPassColorAttachmentDescriptor, RenderPassDepthAttachmentDescriptor, RenderPassDescriptor,
     RenderPassStencilAttachmentDescriptor, StoreAction, MAX_COLOR_ATTACHMENTS,
 };
-pub use pipeline::ComputePipelineState;
+pub use pipeline::{ComputePipelineState, DispatchVariant};
 pub use pixel_format_info::{PixelFormatInfo, TextureLevelInfo, TextureLevelQuery};
 pub use queue::CommandQueue;
 pub use render::RenderPipelineState;

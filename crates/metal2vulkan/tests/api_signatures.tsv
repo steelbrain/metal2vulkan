@@ -7470,6 +7470,7 @@ method	metal2vulkan-runtime::ComputePipelineDescriptor::new	pub fn new(kernel: S
 method	metal2vulkan-runtime::ComputePipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error>
 method	metal2vulkan-runtime::ComputePipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
 method	metal2vulkan-runtime::ComputePipelineDescriptor::uses_direct_arguments	pub fn uses_direct_arguments(&self, budget: &crate::Budget) -> Result<bool, Error>
+method	metal2vulkan-runtime::ComputePipelineState::dispatch_variant	pub fn dispatch_variant(&self, dispatch: Dispatch, threads_per_threadgroup: [u32; 3], threadgroup_memory_lengths: &[(u32, u32)]) -> Option<DispatchVariant>
 method	metal2vulkan-runtime::ComputePipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, _dimensions: [u32; 3]) -> Result<u64, Error>
 method	metal2vulkan-runtime::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
 method	metal2vulkan-runtime::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
@@ -8744,6 +8745,7 @@ struct	metal2vulkan-runtime::DepthStencilState	#[derive(Clone)] pub struct Depth
 struct	metal2vulkan-runtime::Device	#[derive(Clone)] pub struct Device
 struct	metal2vulkan-runtime::DeviceExtension	#[derive(Clone)] pub struct DeviceExtension
 struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
+struct	metal2vulkan-runtime::DispatchVariant	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct DispatchVariant
 struct	metal2vulkan-runtime::Event	#[derive(Clone)] pub struct Event
 struct	metal2vulkan-runtime::Export	#[derive(Debug)] #[non_exhaustive] pub struct Export
 struct	metal2vulkan-runtime::Fence	#[derive(Clone)] pub struct Fence

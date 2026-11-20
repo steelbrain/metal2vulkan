@@ -47,7 +47,9 @@ use crate::arrays::BINDINGS;
 use crate::cache;
 use crate::counters::{FirstUse, Gauge, Metric};
 use crate::device::{lock, Core};
-use crate::encoder::{decide, size_checked, threadgroup_memory, Dispatch, Module};
+use crate::encoder::{
+    decide, size_checked, threadgroup_memory, Dispatch, Lengths, Module, BUFFER_SLOTS,
+};
 use crate::error::{Error, Gap, KernelInputKind, Refusal};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
@@ -69,6 +71,7 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 
 /// The push window: the parameters a kernel reads from push constants, `[0, 256)` on every device,
@@ -92,6 +95,25 @@ pub struct ComputePipelineState {
     pub(crate) inner: Arc<PipelineInner>,
 }
 
+/// No Metal counterpart: the `VkPipeline` a dispatch of a compute state runs, as a key for a
+/// consumer's pre-pass beside [`ComputePipelineState::prepare_dispatch`]
+/// ([`ComputePipelineState::dispatch_variant`]). Two keys are equal exactly when their
+/// dispatches run the same `VkPipeline`: of one compiled content, the same module, workgroup size
+/// and threadgroup memory lengths. The states of one content share its `VkPipeline`s, so their
+/// keys compare equal; keys of different contents never do, on any device, even once one content
+/// is gone, so one memo serves every state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DispatchVariant {
+    content: u64,
+    module: Module,
+    local: [u32; 3],
+    lengths: Lengths,
+}
+
+/// The number the next [`Compiled`] takes: each content made has its own, never reused in the
+/// process, which a [`DispatchVariant`] names it by.
+static CONTENTS: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) struct PipelineInner {
     /// What the state's content compiles to, shared with every state of that content.
     pub(crate) compiled: Arc<Compiled>,
@@ -103,6 +125,8 @@ pub(crate) struct PipelineInner {
 /// and held by the device's map of kernels until the map forgets it.
 pub(crate) struct Compiled {
     core: Arc<Core>,
+    /// Its number ([`CONTENTS`]).
+    id: u64,
     /// The module of whole grids, threadgroup dispatches and indirect dispatches; for a kernel
     /// that does not observe its threadgroup partition, of every dispatch.
     pub(crate) whole: Kernel,
@@ -910,11 +934,11 @@ impl Compiled {
         if let (Form::Sized { .. }, Some(size)) = (&compiled.form, required) {
             let ragged = size.map(|axis| axis.saturating_add(1));
             for dispatch in [Dispatch::Threadgroups([1; 3]), Dispatch::Threads(ragged)] {
-                let mut lengths = Vec::new();
-                let found = compiled.dispatched(dispatch, size, &[], &mut lengths);
-                if let Some((kernel, local, tiles)) = found {
+                let found = compiled.dispatched(dispatch, size, &[]);
+                if let Some((kernel, module, local, lengths)) = found {
                     if kernel.interface.threadgroups.is_empty() {
-                        kernel.make_ahead(&compiled.core, (local, &lengths, tiles));
+                        let key = (local, lengths.as_slice(), module == Module::Tiles);
+                        kernel.make_ahead(&compiled.core, key);
                     }
                 }
             }
@@ -934,6 +958,7 @@ impl Compiled {
         core.counters.rise(Gauge::Kernels);
         Compiled {
             core,
+            id: CONTENTS.fetch_add(1, Relaxed),
             whole,
             form,
             emulated,
@@ -1311,6 +1336,11 @@ fn interface(
             _ => None,
         })
         .collect();
+    // At most the lengths `setThreadgroupMemoryLength:atIndex:` sets, one at each of its indices,
+    // which a dispatch holds inline (`Lengths`).
+    if threadgroups.len() > BUFFER_SLOTS as usize {
+        return Err(KernelInputKind::Specialization);
+    }
     let mut constants = Vec::new();
     for constant in &stage.specialization.constants {
         if constant.size != 4 {
@@ -1478,15 +1508,46 @@ impl ComputePipelineState {
     ) {
         let compiled = &self.inner.compiled;
         let (size, set) = (threads_per_threadgroup, threadgroup_memory_lengths);
-        let mut lengths = Vec::new();
-        let Some((kernel, local, tiles)) = compiled.dispatched(dispatch, size, set, &mut lengths)
+        let Some((kernel, module, local, lengths)) = compiled.dispatched(dispatch, size, set)
         else {
             return;
         };
         let core = &compiled.core;
-        if let Some(nanos) = kernel.make_ahead(core, (local, &lengths, tiles)) {
+        let key = (local, lengths.as_slice(), module == Module::Tiles);
+        if let Some(nanos) = kernel.make_ahead(core, key) {
             core.counters.made_ahead(nanos);
         }
+    }
+
+    /// No Metal counterpart: a hook for a consumer's pre-pass, beside
+    /// [`prepare_dispatch`](Self::prepare_dispatch), with its arguments. The key of the
+    /// `VkPipeline` the dispatch runs, decided as the dispatch and `prepare_dispatch` decide it:
+    /// dispatches whose keys are equal run one `VkPipeline`, so a pre-pass that calls
+    /// `prepare_dispatch` once for each key it has not met makes each pipeline once. What the
+    /// decision does not read does not change the key: the size of an observing kernel's grid
+    /// beyond whether its last threadgroups are partial, or a tiling kernel's direct grid and
+    /// threadgroup size.
+    ///
+    /// None where the dispatch would refuse its threadgroup size, its variant or its threadgroup
+    /// memory, or records nothing (a grid with no threads, a kernel that writes no memory): where
+    /// `prepare_dispatch` makes nothing whatever was made before. It takes no lock and makes
+    /// nothing, allocates nothing where it answers a key, and says nothing of whether the
+    /// pipeline is made.
+    pub fn dispatch_variant(
+        &self,
+        dispatch: Dispatch,
+        threads_per_threadgroup: [u32; 3],
+        threadgroup_memory_lengths: &[(u32, u32)],
+    ) -> Option<DispatchVariant> {
+        let compiled = &self.inner.compiled;
+        let (size, set) = (threads_per_threadgroup, threadgroup_memory_lengths);
+        let (_, module, local, lengths) = compiled.dispatched(dispatch, size, set)?;
+        Some(DispatchVariant {
+            content: compiled.id,
+            module,
+            local,
+            lengths,
+        })
     }
 
     /// `maxTotalThreadsPerThreadgroup`: the translator's answer for the device, which is Metal's
@@ -1651,18 +1712,16 @@ impl Compiled {
     }
 
     /// What a dispatch of `dispatch` at threadgroup size `size`, with the encoder's threadgroup
-    /// memory lengths `set`, runs, decided as the dispatch decides it: its module, its workgroup
-    /// size and whether it runs grid tiles, with its module's threadgroup memory lengths in
-    /// `lengths`. None where the dispatch refuses its threadgroup size, its variant or its
-    /// threadgroup memory, or records nothing (a grid with no threads, a kernel that writes no
-    /// memory).
+    /// memory lengths `set`, runs, decided as the dispatch decides it: its kernel, its module, its
+    /// workgroup size and its kernel's threadgroup memory lengths. None where the dispatch refuses
+    /// its threadgroup size, its variant or its threadgroup memory, or records nothing (a grid
+    /// with no threads, a kernel that writes no memory).
     fn dispatched(
         &self,
         dispatch: Dispatch,
         size: [u32; 3],
         set: &[(u32, u32)],
-        lengths: &mut Vec<u32>,
-    ) -> Option<(&Kernel, [u32; 3], bool)> {
+    ) -> Option<(&Kernel, Module, [u32; 3], Lengths)> {
         let interface = &self.whole.interface;
         if size_checked(interface, size).is_err() || !interface.has_effects {
             return None;
@@ -1672,8 +1731,8 @@ impl Compiled {
             return None;
         }
         let max = self.core.limits.max_shared_memory;
-        threadgroup_memory(kernel, set, choice.local, max, lengths).ok()?;
-        Some((kernel, choice.local, module == Module::Tiles))
+        let lengths = threadgroup_memory(kernel, set, choice.local, max).ok()?;
+        Some((kernel, module, choice.local, lengths))
     }
 }
 

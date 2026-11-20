@@ -751,6 +751,146 @@ mod on_device {
         });
     }
 
+    /// `ComputePipelineState::dispatch_variant`'s keys name exactly the `VkPipeline`s the
+    /// dispatches run: over a table of dispatches of `icb_replay_grid_template`, an observing
+    /// kernel with a threadgroup memory argument, two keys are equal exactly when the entries run
+    /// one module at one size and threadgroup memory length. Grids that differ only in their
+    /// extent or their call share a key, the ragged ones on the partial-threadgroups variant
+    /// another, and a different threadgroup size or length gives another. `prepare_dispatch` on
+    /// each entry in turn makes one pipeline for each key not met before and none for one met. A
+    /// second state of the same content answers the same keys and finds their pipelines made; a
+    /// state of another content (the same function with a required threadgroup size) answers
+    /// another key and makes its own pipeline. What the dispatch refuses or records nothing for
+    /// has no key.
+    #[test]
+    fn every_device_keys_a_dispatch_by_the_pipeline_it_runs() {
+        use crate::Dispatch;
+        use std::collections::HashSet;
+
+        let Some(descriptor) = descriptor("icb_replay_grid_template") else {
+            return;
+        };
+        each_device("compute_dispatch_variant", |name, _, device| {
+            let raw = device.raw();
+            // SAFETY: the physical device is the instance's.
+            let shared = unsafe {
+                raw.instance
+                    .get_physical_device_properties(raw.physical_device)
+                    .limits
+                    .max_compute_shared_memory_size
+            };
+            let length = |size: [u32; 3]| (4 * size.iter().product::<u32>()).next_multiple_of(16);
+            let (size, small) = ([4, 2, 1], [2, 2, 1]);
+            // Each entry: the dispatch, its size, its threadgroup memory length, and the pipeline
+            // it runs.
+            let table = [
+                (Dispatch::Threads([8, 4, 1]), size, length(size), "whole"),
+                (Dispatch::Threads([16, 8, 1]), size, length(size), "whole"),
+                (
+                    Dispatch::Threadgroups([3, 2, 1]),
+                    size,
+                    length(size),
+                    "whole",
+                ),
+                (Dispatch::Indirect, size, length(size), "whole"),
+                (Dispatch::Threads([10, 3, 1]), size, length(size), "partial"),
+                (Dispatch::Threads([9, 5, 1]), size, length(size), "partial"),
+                (
+                    Dispatch::Threadgroups([3, 2, 1]),
+                    small,
+                    length(small),
+                    "whole, small",
+                ),
+                (
+                    Dispatch::Threads([8, 4, 1]),
+                    size,
+                    2 * length(size),
+                    "whole, longer",
+                ),
+            ];
+            let first = state(name, &device, &descriptor);
+            type Entry<'a> = (Dispatch, [u32; 3], u32, &'a str);
+            let key = |state: &ComputePipelineState, (dispatch, size, length, pipeline): Entry| {
+                (state.dispatch_variant(dispatch, size, &[(0, length)]))
+                    .unwrap_or_else(|| panic!("{name}: {pipeline}: {dispatch:?} by {size:?}"))
+            };
+            let keys: Vec<_> = table.iter().map(|&entry| key(&first, entry)).collect();
+            for (a, key_a) in table.iter().zip(&keys) {
+                for (b, key_b) in table.iter().zip(&keys) {
+                    assert_eq!(key_a == key_b, a.3 == b.3, "{name}: {a:?} and {b:?}");
+                }
+            }
+            let counters = device.counters();
+            let mut met = HashSet::new();
+            for (&(dispatch, size, length, pipeline), variant) in table.iter().zip(&keys) {
+                let before = counters.metrics();
+                first.prepare_dispatch(dispatch, size, &[(0, length)]);
+                let after = counters.metrics();
+                let new = u64::from(met.insert(*variant));
+                assert_eq!(
+                    (
+                        after.made_ahead_variants - before.made_ahead_variants,
+                        after.pipelines_created - before.pipelines_created,
+                    ),
+                    (new, new),
+                    "{name}: {pipeline}: {dispatch:?} by {size:?}: a make for a key not met"
+                );
+            }
+            let pipelines: HashSet<&str> = table.iter().map(|entry| entry.3).collect();
+            assert_eq!(
+                met.len(),
+                pipelines.len(),
+                "{name}: one key for each pipeline"
+            );
+            let again = state(name, &device, &descriptor);
+            let before = counters.metrics();
+            for (&entry, made) in table.iter().zip(&keys) {
+                assert_eq!(
+                    key(&again, entry),
+                    *made,
+                    "{name}: {entry:?}: the content's key"
+                );
+                let (dispatch, size, length, _) = entry;
+                again.prepare_dispatch(dispatch, size, &[(0, length)]);
+            }
+            assert_eq!(
+                counters.metrics().made_ahead_variants - before.made_ahead_variants,
+                0,
+                "{name}: the content's pipelines, made"
+            );
+            let mut required = descriptor.clone();
+            required.required_threads_per_threadgroup = Some(size);
+            let other = state(name, &device, &required);
+            let other_key = key(&other, table[0]);
+            assert!(!keys.contains(&other_key), "{name}: another content's key");
+            let before = counters.metrics();
+            let (dispatch, at, bytes, _) = table[0];
+            other.prepare_dispatch(dispatch, at, &[(0, bytes)]);
+            assert_eq!(
+                counters.metrics().made_ahead_variants - before.made_ahead_variants,
+                1,
+                "{name}: another content's pipeline"
+            );
+            let refused = [
+                (Dispatch::Threads([0, 4, 1]), [4, 4, 1], length([4, 4, 1])),
+                (Dispatch::Threads([8, 1, 1]), [2048, 1, 1], 16),
+                (Dispatch::Threads([8, 1, 1]), [8, 1, 1], shared + 16),
+            ];
+            for (dispatch, size, length) in refused {
+                assert_eq!(
+                    first.dispatch_variant(dispatch, size, &[(0, length)]),
+                    None,
+                    "{name}: {dispatch:?} by {size:?} at {length}: no key"
+                );
+            }
+            println!(
+                "{name}: {} dispatches, {} keys, one make each",
+                table.len(),
+                met.len()
+            );
+        });
+    }
+
     /// `simd_float_products`, a kernel that runs only whole SIMD groups, has its emulated-SIMD-group
     /// variant lowered with its state; `prepare_dispatch` in threadgroups of 80, which are not
     /// whole SIMD groups, makes that variant's pipeline and lowers nothing: the dispatch then adds

@@ -235,8 +235,6 @@ pub struct ComputeCommandEncoder {
     samplers: Vec<Option<Lent<SamplerState>>>,
     /// Threadgroup memory lengths by index, as set.
     threadgroup_lengths: Vec<(u32, u32)>,
-    /// The lengths of the last variant looked up, in its kernel's order, kept to reuse.
-    lengths: Vec<u32>,
     /// `use_resource` declarations.
     declared: Vec<Declared>,
     /// A `use_resource` declaration writes a Shared buffer.
@@ -289,7 +287,7 @@ struct DispatchFacts {
 }
 
 /// Which of its state's modules a dispatch runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Module {
     /// The state's whole module.
     Whole,
@@ -464,7 +462,6 @@ impl CommandBuffer {
             copied: 0,
             samplers: vec![None; SAMPLER_SLOTS as usize],
             threadgroup_lengths: Vec::new(),
-            lengths: Vec::new(),
             declared: Vec::new(),
             declared_shared_write: false,
             declared_unstored_write: None,
@@ -1033,10 +1030,9 @@ impl ComputeCommandEncoder {
         let vk_pipeline = match self.last {
             Some(last) if last.module == module && last.local == local => last.pipeline,
             _ => {
-                let lengths = &mut self.lengths;
                 let (set, max) = (&self.threadgroup_lengths, limits.max_shared_memory);
-                threadgroup_memory(kernel, set, local, max, lengths)?;
-                kernel.pipeline(core, (local, lengths, module == Module::Tiles))?
+                let lengths = threadgroup_memory(kernel, set, local, max)?;
+                kernel.pipeline(core, (local, lengths.as_slice(), module == Module::Tiles))?
             }
         };
         self.last = Some(Last {
@@ -1263,26 +1259,41 @@ pub(crate) fn decide(
     }
 }
 
+/// The threadgroup memory lengths of a kernel's threadgroup arguments, in the order of
+/// `Interface::threadgroups`, held inline: a kernel takes at most [`BUFFER_SLOTS`], the indices
+/// `setThreadgroupMemoryLength:atIndex:` takes, as its state's make refuses a module with more.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct Lengths {
+    words: [u32; BUFFER_SLOTS as usize],
+    count: u8,
+}
+
+impl Lengths {
+    /// One length for each threadgroup argument.
+    pub(crate) fn as_slice(&self) -> &[u32] {
+        &self.words[..usize::from(self.count)]
+    }
+}
+
 /// The threadgroup memory lengths of `kernel`'s threadgroups, from the encoder's `set` (0 for an
-/// index it set none at), into `lengths`, checked at workgroup `local` against the device's
-/// `max` bytes.
+/// index it set none at), checked at workgroup `local` against the device's `max` bytes.
 pub(crate) fn threadgroup_memory(
     kernel: &Kernel,
     set: &[(u32, u32)],
     local: [u32; 3],
     max: u32,
-    lengths: &mut Vec<u32>,
-) -> Result<(), Error> {
-    lengths.clear();
-    lengths.extend(
-        (kernel.interface.threadgroups.iter()).map(|&index| threadgroup_length(set, index)),
-    );
+) -> Result<Lengths, Error> {
+    let mut lengths = Lengths::default();
+    for (word, &index) in (lengths.words.iter_mut()).zip(&kernel.interface.threadgroups) {
+        *word = threadgroup_length(set, index);
+        lengths.count += 1;
+    }
     let threads = local.iter().map(|&axis| u64::from(axis)).product::<u64>();
-    let length = kernel.interface.memory.bytes(lengths, threads);
+    let length = kernel.interface.memory.bytes(lengths.as_slice(), threads);
     if length > u64::from(max) {
         return Err(Error::Limit(Limit::ThreadgroupMemory { length, max }));
     }
-    Ok(())
+    Ok(lengths)
 }
 
 fn threadgroup_length(set: &[(u32, u32)], index: u32) -> u32 {

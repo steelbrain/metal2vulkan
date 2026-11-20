@@ -1387,10 +1387,11 @@ pub enum KernelInputKind {
     /// Metal's counterpart is the kernel's arguments, which Metal binds however many there are.
     PushBytes,
     /// A specialization constant the runtime does not set: an explicit imageblock's width or
-    /// height, a sampler state's fields, a constant that is not 4 bytes, or the threadgroup
-    /// memory length of an argument the kernel does not take. Metal's counterpart is the state
-    /// the constant stands for: `setImageblockWidth:height:`, a sampler state's descriptor, or
-    /// `setThreadgroupMemoryLength:atIndex:`.
+    /// height, a sampler state's fields, a constant that is not 4 bytes, the threadgroup memory
+    /// length of an argument the kernel does not take, or a kernel's threadgroup memory lengths
+    /// past the 31 indices `setThreadgroupMemoryLength:atIndex:` sets. Metal's counterpart is the
+    /// state the constant stands for: `setImageblockWidth:height:`, a sampler state's descriptor,
+    /// or `setThreadgroupMemoryLength:atIndex:`.
     Specialization,
     /// A workgroup the module fixes in a shape the runtime does not run: a subgroup multiple
     /// outside a flattened local size (a compute-derivative group), or a module that neither

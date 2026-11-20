@@ -2261,6 +2261,19 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   is made again by the next call or dispatch that needs it. What a dispatch records is the same
   whether or not its pipeline was made ahead. `Metrics::made_ahead_variants` counts what the
   calls made, with their time in `made_ahead_variant_nanos`.
+- `ComputePipelineState::dispatch_variant`, beside it with the same arguments, has no Metal
+  counterpart either: it answers a `DispatchVariant`, the key of the `VkPipeline` the dispatch
+  runs, decided by the same function, so a pre-pass can call `prepare_dispatch` once for each key
+  it has not met. Two keys are equal exactly when their dispatches run one `VkPipeline`: of one
+  compiled content (the states of one content share theirs), the same module, workgroup size and
+  threadgroup memory lengths. What the decision does not read does not change the key: an
+  observing kernel's grid beyond whether its last threadgroups are partial, a tiling kernel's
+  direct grid and threadgroup size. Keys of different contents never compare equal. It answers
+  None where `prepare_dispatch` makes nothing whatever was made before, takes no lock, makes
+  nothing, allocates nothing where it answers a key, and says nothing of whether the pipeline is
+  made. A kernel holds at most 31
+  threadgroup memory lengths, the indices `setThreadgroupMemoryLength:atIndex:` sets; a module
+  with more is refused at the state's creation (`KernelInputKind::Specialization`).
 - Each lowering of a state's creation is one translation within its own 500 MiB ceiling, one
   after another, so the width of the consumer's creating threads multiplies the bound:
   creations on 4 threads at once hold at most 2 GiB of translation.

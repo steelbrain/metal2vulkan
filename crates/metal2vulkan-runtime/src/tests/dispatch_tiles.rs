@@ -348,4 +348,64 @@ mod on_device {
             );
         });
     }
+
+    /// `ComputePipelineState::dispatch_variant` keys the dispatches of `tiles_mark`, a tiling
+    /// kernel, by the `VkPipeline` each runs: every direct dispatch, whatever its grid, its call
+    /// and its threadgroup size, runs the kernel's tiles, the pipeline made with the state, so
+    /// they share one key and prepared they make nothing; an indirect dispatch runs the whole
+    /// module at its own size, without tiles, one key and one pipeline for each size. The state's
+    /// creation and the preparations make one pipeline for each key.
+    #[test]
+    fn every_device_keys_a_tiling_kernel_s_dispatches_by_the_pipeline_they_run() {
+        use crate::Dispatch;
+        use std::collections::HashSet;
+
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("dispatch tiles variant", |name, _, device| {
+            let counters = device.counters();
+            let before = counters.metrics();
+            let state = pipeline(name, &device, &library, "tiles_mark");
+            assert_eq!(form(&state), "tiled", "{name}: the form");
+            let made = counters.metrics();
+            // Each entry: the dispatch, its size, and the pipeline it runs.
+            let table = [
+                (Dispatch::Threadgroups([5, 3, 1]), [7, 9, 1], "tiles"),
+                (Dispatch::Threadgroups([11, 6, 1]), [8, 8, 1], "tiles"),
+                (Dispatch::Threads([70, 45, 1]), [32, 1, 1], "tiles"),
+                (Dispatch::Indirect, [7, 9, 1], "whole, 7 by 9"),
+                (Dispatch::Indirect, [8, 8, 1], "whole, 8 by 8"),
+            ];
+            let keys: Vec<_> = (table.iter())
+                .map(|&(dispatch, size, pipeline)| {
+                    (state.dispatch_variant(dispatch, size, &[]))
+                        .unwrap_or_else(|| panic!("{name}: {pipeline}: {dispatch:?} by {size:?}"))
+                })
+                .collect();
+            for (a, key_a) in table.iter().zip(&keys) {
+                for (b, key_b) in table.iter().zip(&keys) {
+                    assert_eq!(key_a == key_b, a.2 == b.2, "{name}: {a:?} and {b:?}");
+                }
+            }
+            for &(dispatch, size, _) in &table {
+                state.prepare_dispatch(dispatch, size, &[]);
+            }
+            let after = counters.metrics();
+            let pipelines: HashSet<&str> = table.iter().map(|entry| entry.2).collect();
+            assert_eq!(
+                (
+                    after.pipelines_created - before.pipelines_created,
+                    after.made_ahead_variants - made.made_ahead_variants,
+                ),
+                (pipelines.len() as u64, pipelines.len() as u64 - 1),
+                "{name}: one pipeline for each key, the tiles' made with the state"
+            );
+            println!(
+                "dispatch tiles variant: {name}: {} dispatches, {} keys",
+                table.len(),
+                pipelines.len()
+            );
+        });
+    }
 }
