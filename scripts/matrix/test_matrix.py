@@ -337,5 +337,25 @@ class DeviceTestTests(unittest.TestCase):
         self.assertNotIn(matrix.DEVICE_TEST_FILTER, script)
 
 
+class ArgumentTests(unittest.TestCase):
+    def test_an_argument_the_usage_does_not_name_prints_it_and_starts_no_run(self):
+        for argv in (["run", "--help"], ["run", "-h"], ["run", "--leg", "lavapipe"], ["run", "--legs"],
+                     ["run", "--legs", "--dry-run"], ["run", "a", "b"], ["show", "--dry-run"]):
+            with self.subTest(argv=argv), mock.patch.object(matrix, "run_cmd") as run, \
+                    mock.patch.object(matrix, "show_cmd") as show, mock.patch.object(matrix, "git") as git:
+                with self.assertRaises(SystemExit) as exit:
+                    matrix.main(argv)
+                self.assertIn("matrix run [SHA]", str(exit.exception.code))
+                run.assert_not_called()
+                show.assert_not_called()
+                git.assert_not_called()
+
+    def test_a_named_run_passes_its_sha_legs_and_dry_run(self):
+        with mock.patch.object(matrix, "run_cmd", return_value=0) as run, \
+                mock.patch.object(matrix, "git", side_effect=lambda *a: a[-1]):
+            matrix.main(["run", "abc", "--legs", "lavapipe,1002:744c", "--dry-run"])
+        run.assert_called_once_with("abc^{commit}", ["lavapipe", "1002:744c"], True)
+
+
 if __name__ == "__main__":
     unittest.main()
