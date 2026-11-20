@@ -861,21 +861,27 @@ planes' first use, so `Surface::wait_until_ready()` returns at once.
   8-bit 1920x1080 picture, 24,883,200 for a 16-bit 3840x2160 one), that is 2 copies and about
   8.6 MB a picture used, and a picture's copies take 0.288 ms of GPU time on the Radeon 780M,
   0.294 ms on the RX 550, 0.520 ms on the Iris Xe (Raptor Lake) and 0.653 ms on the RTX 3090.
+  In a 336-second guest walk on an RTX 3090 (rt at 7096fa7de3), all 13,613 such copies
+  (228.6 MiB) were of textures over imported memory, 1.05 copies and 16 KB a frame on average
+  over 13,005 frames and 78 copies in the worst one; no texture over a block of the runtime's
+  own was copied.
 - On the NVIDIA cards we measured in Thunderbolt enclosures, freeing host-visible memory takes
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one idle allocation at a time,
-  at its idle age, whatever the queues are doing, so a submit can meet a free and wait for the
-  rest of it. `Metrics::allocations_freed` counts the frees, and
-  `Metrics::submissions_during_frees` the submits made while one was in progress.
-- NVIDIA's Linux driver also holds a submit made while another thread is inside
-  `vkAllocateMemory` until the allocation returns, device-local memory included. A take that
-  leaves its class no wholly free unit sets the block-maker making the class's next allocation
-  at once, so the take's own first submission can wait out that allocation. On an RTX 3090
-  (driver 620.70.06, rt at ac1896537f) a 16 MiB Private allocation of 661 µs held the submit of
-  the first command buffer to read a new 16 MiB Private buffer for 603 µs; on an RTX 2080 one of
-  647 µs held it for 579 µs; the other submits took a median of 2 to 3 µs. A submit waits at most
-  the rest of one allocation, and the pool makes one per 16 MiB the consumer takes, about what the
-  take would spend allocating on its own thread.
+  at its idle age, whatever the queues are doing. `Metrics::allocations_freed` counts the frees,
+  and `Metrics::submissions_during_frees` the submits made while one was in progress.
+- NVIDIA's Linux driver holds a submit made while another thread is inside `vkAllocateMemory` or
+  `vkFreeMemory` until that call returns, device-local memory included, and calls made back to
+  back hold it through all of them. In a 336-second guest walk on an RTX 3090 (driver
+  620.70.06, rt at 7096fa7de3), every submit of 5 ms or more overlapped such calls on other
+  threads for 97 to 100% of its length: a 64 MiB Shared allocation made inside a take held one
+  submit for 14.2 ms; frees of imported blocks, 0.4 to 2.9 ms each and 52 in one second, held four
+  submits for 5.2 to 6.9 ms; and the pool's trim after the workload, five 64 MiB frees of 7.7 to
+  13.9 ms made back to back, held one submit for 48.7 ms. A take that leaves its class no wholly
+  free unit also sets the block-maker making the class's next allocation at once, so the take's
+  own first submission can wait out that allocation: on the same card (rt at ac1896537f) a
+  16 MiB Private allocation of 661 µs held the next submit for 603 µs, and on an RTX 2080 one of
+  647 µs held it for 579 µs.
 - NVIDIA's Linux driver allocates host-visible memory at about 0.14 ms per MiB on an RTX 3090 and
   0.2 ms per MiB on an RTX 2080, in every form we tried (plain, with a device address, dedicated,
   cached or not), against about 0.03 ms per MiB for device-local memory on the 3090. A take longer
