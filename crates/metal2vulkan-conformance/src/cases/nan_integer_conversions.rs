@@ -37,6 +37,7 @@ use crate::case::{
 };
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
+use crate::replay::notice_allowance;
 use crate::transcript::{Aspect, ByteLayout, Element, Gaps, Node, Observed, Region, Sites, Value};
 use metal2vulkan::metal::PixelFormat;
 
@@ -351,8 +352,13 @@ impl Case for NanIntegerConversions {
     fn allowances(&self) -> Vec<Allowance> {
         // Every word compares exactly. Both answers come back through `Shared` buffers, so a
         // device without unified memory announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason).
-        vec![crate::replay::shared_memory_notice()]
+        // (`crate::replay::shared_memory_notice` holds the whole reason). The fragment fill's pass
+        // loads nothing into the tile, which MoltenVK announced on the M3 Max (job
+        // m3-max-55436), as `rgb10a2_srgb`'s fills do.
+        vec![
+            crate::replay::shared_memory_notice(),
+            notice_allowance(metal2vulkan_runtime::Degradation::DontCareLoadTiles.code()),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
