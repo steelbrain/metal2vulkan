@@ -1956,9 +1956,6 @@ pub(crate) const BICUBIC_PIXEL_FORM: &str = "a bicubic filter at pixel coordinat
 /// [`identity_refusal`]'s form for a 1D texture's bicubic sample.
 pub(crate) const BICUBIC_LINE_FORM: &str = "a bicubic filter of a 1D texture";
 
-/// [`identity_refusal`]'s form for a two-plane texture's linear sample read in place.
-pub(crate) const IN_PLACE_LINEAR_FORM: &str = "a two-plane texture's linear sample read in place";
-
 /// The first form plan `plan` on profile `p` holds that the identity domains do not lower yet, as
 /// a Metal program reaches it, which [`identity_admits`]'s refusal names (diagnostics only);
 /// `None` where it holds none.
@@ -2072,8 +2069,9 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
     // texture slot's bicubic sample at normalized coordinates, the bound format's treatment read
     // from its push field (`PushField::BicubicTexels`): no argument buffer's sampler, array of
     // samplers, bicubic sample at pixel coordinates, bicubic sample of a 1D texture
-    // (`Routine::Line`), two-plane texture's linear sample read in place (`Routine::Quad`), or
-    // specialization of a slot's state.
+    // (`Routine::Line`), or specialization of a slot's state. A two-plane texture's sample read in
+    // place (`Routine::Quad`) never reaches here: its slot's `PushField::YCbCrInPlace` is refused
+    // first, as an encoder value the identity domains do not source.
     use crate::lower::sampler::bicubic::routines::Routine;
     let sampled = &plan.families.sampler;
     let refused = [
@@ -2098,10 +2096,6 @@ fn identity_refusal(plan: &Plan, p: &DeviceProfile) -> Option<String> {
         (
             sampled.bicubic_routines.contains(&Routine::Line),
             BICUBIC_LINE_FORM,
-        ),
-        (
-            sampled.bicubic_routines.contains(&Routine::Quad),
-            IN_PLACE_LINEAR_FORM,
         ),
         (
             (sampled.slots.values()).any(|r| r.min_level || r.emulated),

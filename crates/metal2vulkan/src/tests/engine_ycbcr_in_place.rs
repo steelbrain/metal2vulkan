@@ -1649,10 +1649,11 @@ fn a_runtime_sampler_s_filter_note_holds_only_where_the_bound_word_filters() {
 }
 
 /// Under the identity domains a linear sample through a runtime sampler of a two-plane texture
-/// whose planes are read in place (`Routine::Quad`) is refused, not implemented, naming its own
-/// form ([`IN_PLACE_LINEAR_FORM`](crate::lower::select::IN_PLACE_LINEAR_FORM)).
+/// whose planes are read in place (`Routine::Quad`) is refused, not implemented, naming the encoder
+/// value its slot reads, `PushField::YCbCrInPlace`, which the identity domains refuse before any
+/// sampler form.
 #[test]
-fn an_in_place_linear_sample_is_refused_with_its_own_form_under_the_identity_domains() {
+fn an_in_place_linear_sample_is_refused_as_its_slot_s_encoder_value_under_the_identity_domains() {
     use crate::device::profile::{HandleDomain, PointerDomain};
     use crate::error::{Error, Feature, Needs};
     let Some(bc) = assemble("identity runtime", &kernel(None, Form::Float)) else {
@@ -1672,7 +1673,10 @@ fn an_in_place_linear_sample_is_refused_with_its_own_form_under_the_identity_dom
             );
             assert_eq!(
                 u.symbol.map(|f| f.to_string()).as_deref(),
-                Some(crate::lower::select::IN_PLACE_LINEAR_FORM)
+                Some(
+                    "an encoder value the function reads as YCbCrInPlace(SlotRef { stage: Kernel, \
+                     class: Texture, index: 0 })"
+                )
             );
         }
         other => panic!("{other:?}"),

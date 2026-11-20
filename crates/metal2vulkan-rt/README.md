@@ -2309,10 +2309,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   - a sample, gather or comparison of an argument buffer's texture, and a depth texture of one
     both compared and sampled without comparison: no test yet;
   - an argument buffer's sampler, and an array of samplers: no test yet;
-  - a bicubic sample of a 1D texture or at pixel coordinates ("a bicubic filter of a 1D texture
-    or at pixel coordinates, or a two-plane texture's linear sample read in place"): the
-    translator test
-    `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts it;
+  - a bicubic sample at pixel coordinates ("a bicubic filter at pixel coordinates") and one of a
+    1D texture ("a bicubic filter of a 1D texture"): the translator test
+    `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts each text;
   - an argument buffer's texture of a type the identity arrays hold no element of (a texture
     buffer, a cube read as an array, level views, a two-plane, extended-range, RGBX or `ulong`
     form, or a storage texture with a format), one read through another numeric type than its
