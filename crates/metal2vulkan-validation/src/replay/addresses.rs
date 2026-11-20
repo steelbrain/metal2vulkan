@@ -1,7 +1,8 @@
 //! The address map (`docs/REPLAY-STREAM.md`, section 5): the recorded ranges of the live objects,
 //! each with the address the player's runtime gave its object, nested where one lies in another (a
-//! buffer in a block); where a typed address goes; and the census of the 8-byte words of written
-//! bytes that fall in a range, which moves none of them.
+//! buffer in a block); where a typed address goes; the census of the 8-byte words of written
+//! bytes that fall in a range; and the move of those that fall in the range of an object the
+//! program may hold the address of.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -153,23 +154,26 @@ impl AddressMap {
         )
     }
 
-    /// The first 8-byte word of `bytes` at a multiple of 8 from the target's start (`bytes` starts
+    /// Move each 8-byte word of `bytes` at a multiple of 8 from the target's start (`bytes` starts
     /// `offset` bytes into the target) whose value lies in the live range of an object `noted`
-    /// holds, at any level: the word's offset in the target, its value and that object.
-    pub fn noted_word(
-        &self,
-        bytes: &[u8],
-        offset: u64,
-        noted: impl Fn(u64) -> bool,
-    ) -> Option<(u64, u64, u64)> {
+    /// holds, at any level, to where that value goes ([`relocated`](Self::relocated)): its
+    /// innermost live range's new address plus its offset into that range. The count is the words
+    /// moved, those whose new value is their own among them.
+    pub fn move_noted(&self, bytes: &mut [u8], offset: u64, noted: impl Fn(u64) -> bool) -> u64 {
         let first = ((8 - offset % 8) % 8) as usize;
-        (first..bytes.len().saturating_sub(7))
-            .step_by(8)
-            .find_map(|at| {
-                let value = u64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"));
-                let object = self.holders(value).find(|&object| noted(object))?;
-                Some((offset + at as u64, value, object))
-            })
+        let mut moved = 0;
+        for at in (first..bytes.len().saturating_sub(7)).step_by(8) {
+            let word = &mut bytes[at..at + 8];
+            let value = u64::from_le_bytes((&*word).try_into().expect("8 bytes"));
+            let Some(to) = self.relocated(value) else {
+                continue;
+            };
+            if self.holders(value).any(&noted) {
+                word.copy_from_slice(&to.to_le_bytes());
+                moved += 1;
+            }
+        }
+        moved
     }
 
     /// The objects whose live ranges hold `value`, outermost first.

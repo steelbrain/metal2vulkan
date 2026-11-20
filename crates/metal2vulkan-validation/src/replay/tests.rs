@@ -1225,14 +1225,16 @@ fn a_typed_address_argument_moves_with_its_object() {
 }
 
 /// Once the stream notes a buffer escaped (`m2v.bufferEscaped`), a written word whose value lies in
-/// its recorded range stops the play, naming the word, its target, the buffer and the note's kind;
-/// the same word into a buffer with no note played as written before it. A note of a kind past 3,
-/// or of an object no call made, is an invalid stream.
+/// its recorded range moves to where the backend made the buffer, plus its offset, in an
+/// `m2v.write` and in `set*Bytes` data alike, and is counted as noted; the same word written
+/// before the note, and a word into a buffer with no note, play as written. A note of a kind past
+/// 3, or of an object no call made, is an invalid stream.
 #[test]
-fn a_word_into_a_buffer_noted_escaped_stops_the_play() {
+fn a_word_into_a_buffer_noted_escaped_moves_with_it() {
     let mut kept = Kept::default();
     let noted = BLOCK;
     let plain = BLOCK + 0x1_0000;
+    let word = |value: u64| value.to_le_bytes().to_vec();
     let (report, ended) = played(&mut kept, |w| {
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
         let length = [Value::Uint(0x100), Value::Uint(0)];
@@ -1240,30 +1242,32 @@ fn a_word_into_a_buffer_noted_escaped_stops_the_play() {
         w.call(made, 1, 2, &length, &addressed(noted, 0x100))?;
         w.call(made, 1, 3, &length, &addressed(plain, 0x100))?;
         w.call(made, 1, 4, &length, &addressed(BLOCK + 0x2_0000, 0x100))?;
-        let into = |target: u64, offset: u64, word: u64| {
-            let pair = [
-                Value::Uint(offset),
-                Value::Bytes(word.to_le_bytes().to_vec()),
-            ];
-            (target, pair)
-        };
-        let (target, pair) = into(4, 8, plain + 8);
-        w.call("m2v.write", target, 0, &pair, &[])?;
+        let into = |offset: u64, value: u64| [Value::Uint(offset), Value::Bytes(word(value))];
+        w.call("m2v.write", 4, 0, &into(0, noted + 0x10), &[])?;
         w.call("m2v.bufferEscaped", 2, 0, &[Value::Uint(1)], &[])?;
-        let (target, pair) = into(4, 16, noted + 0x10);
-        w.call("m2v.write", target, 0, &pair, &[])
+        w.call("m2v.write", 4, 0, &into(8, plain + 8), &[])?;
+        w.call("m2v.write", 4, 0, &into(16, noted + 0x10), &[])?;
+        let bytes = [
+            Value::Bytes(word(noted + 0x20)),
+            Value::Uint(8),
+            Value::Uint(0),
+        ];
+        w.call("setBytes:length:atIndex:", 9, 0, &bytes, &[])
     });
-    match ended {
-        Err(PlayError::NotedWord {
-            target: 4,
-            offset: 16,
-            value,
-            buffer: 2,
-            kind: 1,
-        }) if value == noted + 0x10 => {}
-        other => panic!("the play went on past a word into a noted buffer: {other:?}"),
-    }
-    assert_eq!(kept.writes, [(4, 8, (plain + 8).to_le_bytes().to_vec())]);
+    ended.unwrap();
+    // The backend made the noted buffer at 0x1000_0000.
+    assert_eq!(
+        kept.writes,
+        [
+            (4, 0, word(noted + 0x10)),
+            (4, 8, word(plain + 8)),
+            (4, 16, word(0x1000_0010)),
+        ]
+    );
+    let constants = kept.args.last().and_then(|args| args.first());
+    assert_eq!(constants, Some(&Value::Bytes(word(0x1000_0020))));
+    assert_eq!(report.total.stream["address_looking_words"], 4);
+    assert_eq!(report.total.stream["noted_words"], 2);
     assert_eq!(report.escape_notes, 1);
 
     for (receiver, kind) in [(2, 4), (9, 0)] {

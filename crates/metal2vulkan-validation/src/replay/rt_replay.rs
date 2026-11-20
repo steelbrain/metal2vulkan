@@ -2464,6 +2464,91 @@ fn a_data_word_in_a_live_range_plays_as_written_on_the_new_runtime() {
     assert_eq!(census(&report), [1, 1, 0]);
 }
 
+/// A buffer the stream noted escaped (`m2v.bufferEscaped`, a `gpuAddress` read) in a block at a
+/// recorded address, and a buffer of the same block whose written word is that buffer's recorded
+/// address plus 16. The new runtime makes the block elsewhere, so the player moves the word to the
+/// buffer's address in the play plus 16, counted as noted, and `ab_address` (`out[i] =
+/// held.p[i]`, the word its constant buffer) follows it: `out` holds the buffer's words from the
+/// fifth on, exactly.
+#[test]
+fn a_noted_buffer_s_address_in_written_bytes_moves_and_a_kernel_follows_it() {
+    const THREADS: u64 = 16;
+    let dir = ScratchDir::new("rt-replay-noted-address").unwrap();
+    let block = 1u64 << 46;
+    let data: Vec<u32> = (0..64).map(|i| 3 * i + 1).collect();
+    let path = written(&dir, |w| {
+        let ll = metal2vulkan_devtools::engine_dir().join("ab_pointers.ll");
+        let library = w.blob(&library_of(&dir, &ll, &[("ab_address", 2, 0)]))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let data_of = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &data_of, &[])?;
+        let kernel = [Value::Str("ab_address".into())];
+        w.call("newFunctionWithName:", 3, 4, &kernel, &[])?;
+        let made = "newComputePipelineStateWithFunction:error:";
+        w.call(made, 1, 5, &[Value::Object(4)], &[])?;
+        let at = |address: u64, length: u64| {
+            [
+                ("gpuAddress", Value::Address(address)),
+                ("gpuLength", Value::Uint(length)),
+            ]
+        };
+        let length = [Value::Uint(0x1_0000), Value::Uint(0)];
+        let selector = "m2v.newBlockWithLength:storageMode:";
+        w.call(selector, 1, 6, &length, &at(block, 0x1_0000))?;
+        // The data, the held word and the output, each of 256 bytes in the Shared block.
+        let selector = "m2v.newBufferInBlock:offset:length:options:";
+        for (buffer, offset) in [(7, 0x100), (8, 0x200), (9, 0x300)] {
+            let inner = [
+                Value::Object(6),
+                Value::Uint(offset),
+                Value::Uint(0x100),
+                Value::Uint(0),
+            ];
+            w.call(selector, 6, buffer, &inner, &at(block + offset, 0x100))?;
+        }
+        let words: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
+        w.call(
+            "m2v.write",
+            7,
+            0,
+            &[Value::Uint(0), Value::Bytes(words)],
+            &[],
+        )?;
+        w.call("m2v.bufferEscaped", 7, 0, &[Value::Uint(0)], &[])?;
+        let held = (block + 0x100 + 16).to_le_bytes().to_vec();
+        w.call(
+            "m2v.write",
+            8,
+            0,
+            &[Value::Uint(0), Value::Bytes(held)],
+            &[],
+        )?;
+        w.call("commandBuffer", 2, 10, &[], &[])?;
+        w.call("computeCommandEncoder", 10, 11, &[], &[])?;
+        w.call("setComputePipelineState:", 11, 0, &[Value::Object(5)], &[])?;
+        for (buffer, index) in [(8, 0), (9, 1)] {
+            let bind = [Value::Object(buffer), Value::Uint(0), Value::Uint(index)];
+            w.call("setBuffer:offset:atIndex:", 11, 0, &bind, &[])?;
+        }
+        let size = |width| uints(&[("width", width), ("height", 1), ("depth", 1)]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, 11, 0, &[size(1), size(THREADS)], &[])?;
+        w.call("endEncoding", 11, 0, &[], &[])?;
+        w.call("commit", 10, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 10, 0, &[], &[])
+    });
+    let (report, lines, out) =
+        play_then("noted-address", &path, |backend| backend.read(9).unwrap());
+    let followed: Vec<u8> = (data[4..4 + THREADS as usize].iter())
+        .flat_map(|word| word.to_le_bytes())
+        .collect();
+    assert_eq!(out[..followed.len()], followed[..], "{lines:?}");
+    assert_eq!(report.total.stream["noted_words"], 1);
+    assert_eq!(report.escape_notes, 1);
+    assert_eq!(report.first_skip, None);
+}
+
 /// A copy back to the guest's RAM plays in the host's one-copy form: one buffer copy of the whole
 /// words its runs span within the buffer into a scratch of the play's own, after its command
 /// buffer, which a wait for that command buffer waits for; then the CPU copies each run out of the

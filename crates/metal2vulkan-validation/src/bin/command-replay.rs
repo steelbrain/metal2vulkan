@@ -26,8 +26,9 @@
 //! (the recording range, where it came from, and whether the play ends there), then `device NAME
 //! runtime rt snapshots yes|no`, each frame's `frame` and `end` lines as the frame ends
 //! (flushed, so a play that never ends leaves the frames it finished), `addresses ...` (the
-//! written words that look like addresses, which play as recorded, the address arguments and those
-//! moved, and the objects whose ID differs from the recording's), the player's other report lines,
+//! written words that look like addresses, which play as recorded but those a noted buffer's range
+//! holds, which move, the address arguments and those moved, and the objects whose ID differs from
+//! the recording's), the player's other report lines,
 //! the
 //! backend's own lines, `until-frame F` where the play stopped there (at `--until-frame` or at the
 //! recording range), `cut SEGMENT OFFSET` where
@@ -713,10 +714,12 @@ fn run<B: Backend>(
         notes => format!("escape notes {notes}"),
     };
     report.line(&format!(
-        "addresses address_looking_words={} misaligned_address_words={} address_arguments={} \
-         relocated_words={} differing_ids={differing_ids}: written words play as recorded; {notes}",
+        "addresses address_looking_words={} misaligned_address_words={} noted_words={} \
+         address_arguments={} relocated_words={} differing_ids={differing_ids}: written words play \
+         as recorded, the noted ones moved; {notes}",
         fixed("address_looking_words"),
         fixed("misaligned_address_words"),
+        fixed("noted_words"),
         fixed("address_arguments"),
         fixed("relocated_words"),
     ));

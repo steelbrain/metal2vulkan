@@ -495,7 +495,8 @@ re-record on that venue.
 - `command-replay play` plays a replay stream ([REPLAY-STREAM.md](REPLAY-STREAM.md)) on a Vulkan
   device through the runtime and writes its report: the runtime's counters for each group of
   command buffers it waited for, each frame and the whole play, the census of written words that
-  look like addresses (they play as recorded) and the address arguments it moved,
+  look like addresses (they play as recorded, but those in a buffer's range the stream noted
+  escaped, which move with it) and the address arguments it moved,
   and a SHA-256 of each checked buffer or texture against the recorded one. `command-replay dump`
   prints a stream's calls.
 

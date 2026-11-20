@@ -184,11 +184,12 @@ and the (name id, value) answer pairs.
   address in a buffer in a block moves with the buffer. One outside every live range stays. The
   report counts the address values (`address_arguments`) and those that moved
   (`relocated_words`).
-- **Written words play as recorded.** A word's value is no reason to move it: the bytes the
-  player puts into an object (`m2v.write`, a copied buffer's `contents`, the copies from the
-  guest's RAM, a Private range's bytes before a dispatch) and the data of every
-  `set*Bytes:length:atIndex:` play as the stream holds them. A word there that
-  is an address, which a stream recorded before the escape note cannot tell from data, keeps its
+- **Written words play as recorded, but noted ones.** A word's value alone is no reason to move
+  it: the bytes the player puts into an object (`m2v.write`, a copied buffer's `contents`, the
+  copies from the guest's RAM, a Private range's bytes before a dispatch) and the data of every
+  `set*Bytes:length:atIndex:` play as the stream holds them, except the words that lie in the
+  range of a buffer the stream noted escaped (below). A word there that is an address of a buffer
+  with no note, which a stream recorded before the escape note cannot tell from data, keeps its
   recorded value. The player counts, as a census that writes nothing, the words that look like
   addresses: in the bytes put into an object that answered a `gpuAddress` and in `set*Bytes`
   data, each 8-byte word at an offset that is a multiple of 8 from the target's start whose value
@@ -202,10 +203,15 @@ and the (name id, value) answer pairs.
   read of a texture or view over it, and 3 for a residency set's add. The recorder writes it once
   in the buffer's life, at the first escape, in stream order: after the `m2v.write` records of
   the commits before it and before those of every commit after it. The buffer is a no-copy one,
-  never Managed. Once a buffer's note is read, a written word that looks like an address (above)
-  whose value lies in that buffer's recorded range stops the play, naming its target and offset,
-  its value, the buffer and the note's kind (`PlayError::NotedWord`): the word may be the
-  buffer's address, which the play would have to move, and that move is not built. A note of a
+  never Managed. Once a buffer's note is read, and until its release, a written word that
+  looks like an address (above) whose value lies in that buffer's recorded range may be its
+  address: the player moves it before the bytes reach the runtime, as it moves an address
+  argument, to the address the play put the object of the innermost live range the value lies in,
+  plus its offset into that range (the buffer's, or a buffer's inside it), and counts it
+  (`noted_words`). A word that points into memory no live range holds (a buffer the stream never
+  made, one released, a range a newer object parted) cannot be told from data, and plays as
+  recorded. Where the play put the object elsewhere, a buffer whose bytes hold a moved word reads
+  back other bytes than the recording's, and its `m2v.check` differs by those words. A note of a
   kind past 3, or of an object no call made, is an invalid stream. A stream recorded before the
   recorder wrote the note holds none, and the report's `addresses` line says it predates the note
   (section 10).
@@ -655,7 +661,8 @@ records as text, and
     and dispatches their calls issued (`draws` and `dispatches`: an encoder's calls whose
     selectors begin `draw` and `dispatch`), the written words that look like addresses
     (`address_looking_words`) and the 8-byte values at offsets 4 past a multiple of 8 that lie in
-    a live range (`misaligned_address_words`), both played as recorded (section 5), the address
+    a live range (`misaligned_address_words`), both played as recorded (section 5), but those of
+    the first in a noted buffer's range, moved (`noted_words`), the address
     arguments (`address_arguments`) and those it moved (`relocated_words`), and the bytes it
     wrote or copied in, `m2v.write`, the copied
     buffers' `contents`, the copies from the guest's RAM and the `m2v.privateBytes` bytes before
@@ -885,10 +892,11 @@ stream may differ from what the program did` first where the stream's header lac
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then
 `device NAME runtime rt snapshots yes|no`, then on a device that keeps a
 device copy of each Managed buffer, `managed digests: ...` (above), then
-`addresses address_looking_words=N misaligned_address_words=N address_arguments=N
-relocated_words=N differing_ids=N: written words play as recorded; NOTES` (the census of the
-written words that look like addresses, at a multiple of 8 and 4 past one, which play as the
-stream holds them; the address arguments and those moved; `NOTES` `the stream predates the escape
+`addresses address_looking_words=N misaligned_address_words=N noted_words=N address_arguments=N
+relocated_words=N differing_ids=N: written words play as recorded, the noted ones moved; NOTES`
+(the census of the written words that look like addresses, at a multiple of 8 and 4 past one,
+which play as the stream holds them, and of the first those a noted buffer's range holds, which
+move; the address arguments and those moved; `NOTES` `the stream predates the escape
 note` where it holds no `m2v.bufferEscaped` record, else `escape notes N`; and the objects
 whose ID differs from the recording's, those of the compute pipeline states' typed gap and of
 the skipped objects aside: any such object makes the play an error, as a word that names it
