@@ -1528,7 +1528,11 @@ pub struct Metrics {
     /// that zeroed any ([`texture_clears`](Self::texture_clears)), however many it zeroed, also
     /// counted in [`barriers`](Self::barriers).
     pub texture_clear_barriers: u64,
-    /// `VkPipeline`s created.
+    /// `VkPipeline`s created, each counted as its `vkCreateComputePipelines` or
+    /// `vkCreateGraphicsPipelines` call returns it: one a state's creation makes for a content the
+    /// device does not hold, or one a first use makes
+    /// ([`first_use_waits`](Self::first_use_waits)). A state of a content the device holds makes
+    /// none, a call still inside the driver is not counted yet, and one that failed is not counted.
     pub pipelines_created: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
     /// for a workgroup size (a threadgroup size, or the tile of an image-only kernel's grid more
@@ -1665,9 +1669,11 @@ pub struct Metrics {
     /// direct and indirect: each was checked as Metal checks it, and nothing was recorded, bound
     /// or read for it, as it has no effect a program can observe.
     pub dispatches_without_effects: u64,
-    /// Kernels the translator lowered, each a module of a compute pipeline content the device did
-    /// not hold compiled: one for a kernel that does not observe its threadgroup partition, two
-    /// for one that does. A state of a content the device holds lowers nothing.
+    /// Functions the translator lowered, each a module of a pipeline content the device did not
+    /// hold compiled: of a compute content, one for a kernel that does not observe its threadgroup
+    /// partition and two for one that does; of a render content, one for each of its functions
+    /// that the cache directory did not hold. A state of a content the device holds lowers
+    /// nothing.
     pub translations: u64,
     /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
     pub translations_loaded: u64,
