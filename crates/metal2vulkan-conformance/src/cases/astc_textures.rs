@@ -790,17 +790,15 @@ mod tests {
                 .map(|allowance| allowance.loosening)
                 .collect();
             // An sRGB form's twin holds Metal's own codes and an HDR format's Metal's halves, so
-            // neither loosens a texel; only the fourteen linear ones do.
+            // neither loosens a texel; only the fourteen linear ones do, each round by the old
+            // runtime's compact twin's bound and by the device decode's (the new runtime's).
             if case.compact_bound().is_none() {
                 assert!(bounds.is_empty(), "{}: {bounds:?}", format.name);
                 continue;
             }
-            assert_eq!(
-                bounds,
-                vec![Loosening::Absolute(LEDGERS_COMPACT_BOUND); ROUNDS.len()],
-                "{}",
-                format.name
-            );
+            let mut expected = vec![Loosening::Absolute(LEDGERS_COMPACT_BOUND); ROUNDS.len()];
+            expected.extend(vec![Loosening::Absolute(DEVICE_DECODE_BOUND); ROUNDS.len()]);
+            assert_eq!(bounds, expected, "{}", format.name);
             loosened += 1;
         }
         assert_eq!(loosened, 14);
