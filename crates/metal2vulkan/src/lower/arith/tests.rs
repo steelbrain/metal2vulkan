@@ -1946,13 +1946,13 @@ fn signed_narrow_saturation_clamps_without_signed_min_or_max() {
     }
 }
 
-/// A narrow integer's mask in a 32-bit container is `OpBitFieldUExtract(x, 0, N)` and never
-/// `OpBitwiseAnd`, and the source-arithmetic shape whose mask a driver dropped (NVIDIA 615.71.09
-/// on Ampere GA10x) answers its definition at every edge: two values sign-extended from `N` bits,
+/// A narrow integer's mask in a 32-bit container is `OpBitwiseAnd` by `2^N - 1` and never
+/// `OpBitFieldUExtract`, and the source-arithmetic shape whose mask a driver dropped (NVIDIA
+/// 615.71.09 on Ampere GA10x) answers its definition at every edge: two values sign-extended from `N` bits,
 /// added or subtracted, clamped signed to exactly `N` bits' range (`SClamp`, and `SMin` then
 /// `SMax`), truncated to `N` bits. At 8 and 16 bits, scalar and three lanes.
 #[test]
-fn a_narrow_mask_after_a_signed_clamp_is_an_extract() {
+fn a_narrow_mask_after_a_signed_clamp_is_an_and() {
     let mut rng = Rng(0x0D0D_0D0E);
     for bits in [8u8, 16] {
         let vals = int_values(bits, &mut rng, 3);
@@ -1996,8 +1996,8 @@ fn a_narrow_mask_after_a_signed_clamp_is_an_extract() {
                         )
                     })
                     .count();
-                assert!(extracts > 0, "{what}: no extract");
-                assert_eq!(ands, 0, "{what}: a mask");
+                assert!(ands > 0, "{what}: no mask");
+                assert_eq!(extracts, 0, "{what}: an extract");
                 let usize_lanes = usize::from(lanes);
                 let mut cases: Vec<Case> = Vec::new();
                 for (i, x) in vals.iter().enumerate() {

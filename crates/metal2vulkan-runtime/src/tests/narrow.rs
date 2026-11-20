@@ -2,9 +2,10 @@
 //! kind: a kernel the translator compiles adds and subtracts two values sign-extended from 16 and
 //! from 8 bits, clamps each result signed to exactly its width's range, truncates it and
 //! zero-extends it. On every device the module clears the bits above each width with
-//! `OpBitFieldUExtract(x, 0, N)`, never `OpBitwiseAnd` by the width's mask, which a driver's
-//! compiler dropped after the clamp (NVIDIA 615.71.09 on Ampere GA10x answered sign-extended words;
-//! 620.70.06 does not), and every word is zero-extended.
+//! `OpBitwiseAnd` by the width's mask, never `OpBitFieldUExtract(x, 0, N)`, which Intel's Windows
+//! driver 101.2145 loses its device on (a driver's compiler dropped the mask after the clamp on
+//! NVIDIA 615.71.09 on Ampere GA10x, which answered sign-extended words; 620.70.06 does not), and
+//! every word is zero-extended.
 //!
 //! `llvm-as` assembles the kernel; without it the test skips visibly.
 
@@ -156,8 +157,8 @@ entry:
         (extracts, ands)
     }
 
-    /// The kernel, translated, clears its narrow results' high bits by extracts and answers every
-    /// word zero-extended on every device.
+    /// The kernel, translated, clears its narrow results' high bits by masks and answers every word
+    /// zero-extended on every device.
     #[test]
     fn every_device_zero_extends_a_narrow_clamped_sum() {
         let bitcode = match llvm_assemble_text(KERNEL) {
@@ -179,8 +180,8 @@ entry:
                 .compile_compute_pipeline(&descriptor, &Budget::standard())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let (extracts, ands) = masks(&pipeline.stage.spirv);
-            assert!(extracts >= 4, "{name}: {extracts} extracts");
-            assert_eq!(ands, 0, "{name}: masks by a narrow width's bits");
+            assert!(ands >= 4, "{name}: {ands} masks by a narrow width's bits");
+            assert_eq!(extracts, 0, "{name}: {extracts} extracts");
             let state = device
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));

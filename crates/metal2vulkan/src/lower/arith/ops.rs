@@ -127,25 +127,15 @@ pub fn fsplat(fb: &mut FunctionBuilder<'_>, f: Form, x: f64) -> BResult<Value> {
     splat(fb, f, f.const_bits(x))
 }
 
-/// `x` with the bits above its AIR width cleared (a no-op for a full-width integer): in a 32-bit
-/// container `OpBitFieldUExtract(x, 0, N)`, on every device, else `x & (2^N - 1)`, the same bits.
-/// No driver can drop the extract as one did the mask after a signed clamp to exactly the narrow
-/// range (NVIDIA 615.71.09 on Ampere GA10x answered the clamp's sign-extended words).
+/// `x` with the bits above its AIR width cleared (a no-op for a full-width integer): `x & (2^N -
+/// 1)`, on every device. `OpBitFieldUExtract(x, 0, N)` gives the same bits, but Intel's Windows
+/// driver 101.2145 on the UHD 630 loses its device on a desktop's first pipelines in that form, so
+/// the mask is the one form. NVIDIA 615.71.09 on Ampere GA10x dropped this mask after a signed
+/// clamp to exactly the narrow range (it answered sign-extended words); 620.70.06 does not, and no
+/// card we run has that driver on that architecture (the runtime's README, known gaps).
 pub fn mask(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
     if !f.legalized() {
         return Ok(x);
-    }
-    if f.container() == 32 {
-        let u32_ = Form {
-            held: Held::Int {
-                bits: 32,
-                container: 32,
-            },
-            lanes: 1,
-        };
-        let zero = splat(fb, u32_, 0)?;
-        let width = splat(fb, u32_, u64::from(f.bits()))?;
-        return fb.bit_field_extract(false, x, zero, width);
     }
     let m = splat(fb, f, ones(f.bits()))?;
     fb.binary(BinOp::BitwiseAnd, x, m)

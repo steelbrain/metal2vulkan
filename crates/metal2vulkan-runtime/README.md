@@ -2463,6 +2463,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of pipeline states
 
+- A narrow integer's high bits (an 8- or 16-bit value held in a 32-bit word) are cleared by
+  `OpBitwiseAnd` by the width's mask on every device. NVIDIA's driver 615.71.09 on Ampere GA10x
+  dropped that mask after a signed clamp to exactly the narrow range, so such a kernel answered the
+  clamp's sign-extended words there; 620.70.06 answers right, and no card the runtime is run on has
+  that driver on that architecture. The other form, `OpBitFieldUExtract(x, 0, N)`, loses the
+  device on Intel's Windows driver 101.2145 (UHD 630) at a desktop's first pipelines, so it is not
+  used. Test: `tests::narrow`'s `every_device_zero_extends_a_narrow_clamped_sum`.
 - Some forms argument buffers take under `MTLArgumentBuffersTier1` or `MTLArgumentBuffersTier2`,
   which `Device::argument_buffers_support` answers, are not lowered by the translator's identity
   domains, which every state is translated under: a state over a function that holds one is
