@@ -39,9 +39,9 @@
 //!
 //! The uploads not yet submitted are bounded: a call that finds them holding [`UPLOAD_ENTRIES`]
 //! calls, or [`UPLOAD_BYTES`] of memory they alone keep, has them submitted and waits for them to
-//! complete before it records. The release of an object one of them holds that is shared outside
-//! rt (a surface plane's image, or an exported block) has them go at once, with no wait
-//! ([`Work::release`]). A new texture's move to its home layout holds nothing until the
+//! complete before it records. The release of a texture or a block one of them holds has them go
+//! at once, with no wait ([`Work::release`]), so its memory goes back once they complete, with no
+//! later call. A new texture's move to its home layout holds nothing until the
 //! submission that takes the upload of its commit, which records the moves of every upload it
 //! takes in one barrier where the textures still live. Copies stage their bytes in the device's
 //! staging region ([`crate::staging`]), which the work lock guards with the uploads; they go
@@ -61,7 +61,7 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
 use crate::fill;
-use crate::memory::{Block, Internal, Own};
+use crate::memory::{Block, Internal};
 use crate::over::{self, Leans};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
@@ -306,18 +306,6 @@ pub(crate) enum Held {
 }
 
 impl Held {
-    /// Whether the object is shared outside rt, so its release has the uploads not yet
-    /// submitted go at once ([`Work::release`]): a surface plane's image (an exported surface's
-    /// in place, a Direct3D 11 texture's), or an exported block (an exported surface's in the
-    /// copy form among them).
-    fn shared(&self) -> bool {
-        match self {
-            Held::Texture(image) => image.surface(),
-            Held::Block(block) => matches!(block.memory.own, Some(Own::Export(_))),
-            Held::Staging(_) | Held::Copy(_) => false,
-        }
-    }
-
     /// Whether `self` and `other` are the same object.
     fn is(&self, other: &Held) -> bool {
         match (self, other) {
@@ -974,11 +962,11 @@ impl Work {
     /// The last holder of `held` outside the uploads let go of it, `bytes` of a texture's image
     /// or of a block: whether an upload not yet submitted holds it. Such a release is counted
     /// ([`Metrics::held_releases`](crate::Metrics::held_releases), with its bytes), as one that
-    /// would start a send where no such release came since those uploads came to hold it
-    /// ([`Metrics::held_release_starts`](crate::Metrics::held_release_starts)). Where `held` is
-    /// shared outside rt ([`Held::shared`]), every upload not yet submitted goes at once, alone
-    /// where no group goes, with no wait ([`flush`](Self::flush)), so what they hold is freed
-    /// once they complete, with no later call.
+    /// starts a send where no such release came since those uploads came to hold it
+    /// ([`Metrics::held_release_starts`](crate::Metrics::held_release_starts)), and every upload
+    /// not yet submitted goes at once, alone where no group goes, with no wait
+    /// ([`flush`](Self::flush)), so what they hold is freed once they complete, with no later
+    /// call.
     pub(crate) fn release(&self, core: &Core, held: &Held, bytes: u64) -> bool {
         let mut state = self.lock();
         let mut holds = false;
@@ -996,11 +984,9 @@ impl Work {
         for upload in state.unsent_mut() {
             upload.met = upload.held.len();
         }
-        if held.shared() {
-            state.flush();
-            drop(state);
-            self.wake();
-        }
+        state.flush();
+        drop(state);
+        self.wake();
         true
     }
 

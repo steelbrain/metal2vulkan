@@ -9,8 +9,7 @@
 //!   take half the region, and each texture reads its last call's bytes; once the reads have
 //!   waited for every copy, the next copy's span starts at the region's start;
 //! - textures released while the upload holds them for a copy, and a block released while it
-//!   holds it for a zero fill, count against the bound: a block of the bound's length alone keeps
-//!   the upload pending, and past the bound the next call sends it and frees them;
+//!   holds it for a zero fill, each send it: each is freed with no later call;
 //! - zero fills past [`UPLOAD_ENTRIES`] submit it;
 //! - the staging gauge counts the region once a copy made it, and a copy larger than the region's
 //!   staging buffer of its own until the upload that copies through it is gone;
@@ -213,13 +212,14 @@ mod on_device {
                 .get_bytes(&mut [0; 4], 4, 4, texel, 0, 0)
                 .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
 
-            // Textures of 4 MiB released after a copy of 64 bytes: the upload holds them alone.
-            let big = 1024;
-            let rounds = 3 * UPLOAD_BYTES / (4 * MIB);
-            let before = submissions();
+            // Textures of 4 MiB released after a copy of 64 bytes, and a Private block after a
+            // zero fill, each while the upload holds it alone: the release sends the upload, so
+            // each is freed once it completes, with no later call.
+            let rounds = 4;
+            let starts = counters.metrics().held_release_starts;
             for round in 0..rounds {
                 let texture = device
-                    .new_texture(&square(big), Some(4101))
+                    .new_texture(&square(1024), Some(4101))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 texture
                     .replace_region(
@@ -232,31 +232,12 @@ mod on_device {
                     )
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 drop(texture);
-                let (_, bytes, _) = core.work.pending();
-                assert!(
-                    bytes <= UPLOAD_BYTES + 8 * MIB,
-                    "{name}: round {round}: the upload keeps {bytes} bytes"
-                );
+                wait_until("the released texture freed with no later call", || {
+                    counters.gauges().textures == targets.len() as u64
+                });
             }
-            assert!(
-                submissions() >= before + 2,
-                "{name}: {rounds} released textures submitted {} times",
-                submissions() - before
-            );
-            // The copy targets, and at most one bound's worth of released textures.
-            let kept = targets.len() as u64 + UPLOAD_BYTES / (4 * MIB);
-            wait_until("the released textures freed down to one upload's", || {
-                counters.gauges().textures <= kept
-            });
-
-            // A Private block released after a zero fill counts against the bound. The block is
-            // the bound's length, so the upload starts this part empty (the read of a texel sends
-            // it and waits) whatever the textures above left in it, which differs by device.
-            targets[0]
-                .get_bytes(&mut [0; 4], 4, 4, texel, 0, 0)
-                .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
             let released = device
-                .take_block(MemoryClass::Private, UPLOAD_BYTES)
+                .take_block(MemoryClass::Private, MIB)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = device
                 .new_buffer(released.id, 0, 256, Some(0))
@@ -266,44 +247,19 @@ mod on_device {
             device
                 .release_block(released)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let (_, bytes, _) = core.work.pending();
-            assert_eq!(bytes, UPLOAD_BYTES, "{name}: the released block is counted");
-            // At the bound and not past it, a fill keeps the upload pending: the released block
-            // still counts, where a send would have started the count again. The upload's own
-            // count, not the device's submissions: the block-maker thread's zero fills of the
-            // blocks it makes and is given back submit beside it, when they come (on llvmpipe,
-            // one came inside this step).
+            wait_until(
+                "the released block back in the pool with no later call",
+                || core.pool.holds(released_id),
+            );
+            let starts = counters.metrics().held_release_starts - starts;
+            assert!(
+                starts <= rounds + 1,
+                "{name}: {starts} sends started by {} releases",
+                rounds + 1
+            );
             let fills = device
                 .take_block(MemoryClass::Private, UPLOAD_BYTES)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let buffer = device
-                .new_buffer(fills.id, 0, 256, Some(0))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            drop(buffer);
-            let (_, bytes, _) = core.work.pending();
-            assert_eq!(bytes, UPLOAD_BYTES, "{name}: a fill at the bound");
-            assert!(!core.pool.holds(released_id), "{name}: the block held");
-            // A texture released after a copy takes it past the bound: the next fill sends the
-            // upload, and the block comes back to the pool.
-            let small = device
-                .new_texture(&square(64), Some(4102))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            small
-                .replace_region(whole(4), 0, 0, crate::HostBytes::from(&[7; 64][..]), 16, 64)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            drop(small);
-            let buffer = device
-                .new_buffer(fills.id, 256, 256, Some(0))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            drop(buffer);
-            let (_, bytes, _) = core.work.pending();
-            assert!(
-                bytes < UPLOAD_BYTES,
-                "{name}: a fill past the bound keeps {bytes} bytes pending"
-            );
-            wait_until("the released block back in the pool", || {
-                core.pool.holds(released_id)
-            });
 
             // Zero fills past the upload's calls.
             let before = submissions();

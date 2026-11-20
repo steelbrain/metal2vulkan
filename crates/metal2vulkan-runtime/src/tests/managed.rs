@@ -1143,8 +1143,9 @@ pub(crate) mod on_device {
 
     /// The upload of a Managed texture's region keeps the bytes it reads until it retires: with
     /// the texture, its named buffer and the block's handle gone right after the call, and the
-    /// upload not yet submitted, the named buffer's block stays out of the pool until the upload
-    /// has run. Named bytes lie in Shared memory with no device copy, on every device.
+    /// upload not yet submitted, the block's release sends the upload, and the block goes back to
+    /// the pool once it has run, with no later call. Named bytes lie in Shared memory with no
+    /// device copy, on every device.
     #[test]
     fn every_device_keeps_the_bytes_a_managed_texture_s_upload_reads_until_it_retires() {
         each_device("managed texture upload hold", |name, _, device| {
@@ -1169,13 +1170,9 @@ pub(crate) mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop((texture, named, cpu));
             let core = device.core();
-            assert!(
-                !core.pool.holds(read),
-                "{name}: the bytes the pending upload reads went back to the pool"
-            );
-            let value = core.work.flush();
-            (core.done.wait(core, value)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            within("the read bytes' return", || core.pool.holds(read));
+            within("the read bytes' return with no later call", || {
+                core.pool.holds(read)
+            });
         });
     }
 }

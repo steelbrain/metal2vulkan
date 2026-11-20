@@ -1950,16 +1950,14 @@ pub struct Metrics {
     /// Releases of a texture or a block while an upload not yet submitted held it: a texture
     /// whose last handle and last command buffer were gone, or a block given back, while a call's
     /// upload (a copy, a zero fill, a move home, an acquire of another API's writes) still held
-    /// its image or its memory. The release of an object shared outside rt (a surface plane's
-    /// image, or an exported block) has the uploads go at once, with no wait; any other release
-    /// leaves them for the next submission or for their bound
-    /// ([`upload_waits`](Self::upload_waits)).
+    /// its image or its memory. Each such release has the uploads go at once, with no wait, so
+    /// the memory goes back once they complete, with no later call.
     pub held_releases: u64,
     /// The bytes of the images and blocks [`held_releases`](Self::held_releases) counts.
     pub held_release_bytes: u64,
     /// Of [`held_releases`](Self::held_releases), each the first since the uploads not yet
-    /// submitted came to hold the object: the sends that releases of every texture and block
-    /// would start, where those of objects shared outside rt alone start one.
+    /// submitted came to hold the object: the sends those releases started, at most one for each
+    /// upload holding a released object.
     pub held_release_starts: u64,
     /// Command buffers that ran untimed, their GPU start and end times 0
     /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time)): at their first

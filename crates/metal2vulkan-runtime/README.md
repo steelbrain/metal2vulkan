@@ -1555,12 +1555,12 @@ made, with no lock, and never rewritten for layouts.
   record at most 4,096 calls and keep at most 64 MiB on their own account: the staging buffers of
   copies larger than the staging region, and the textures and blocks released while they held
   them. A call that finds them past either submits them and waits for them to complete before
-  recording, so nothing grows without a commit. The release of an object they hold that is
-  shared outside rt (a surface plane's image, or an exported block) submits them at once, with no
-  wait, so it is freed with no later call; any other release they hold waits for the next
-  submission or the bound. `Metrics::held_releases` and `held_release_bytes` count every release
-  they held, and `held_release_starts` those that were the first since they came to hold the
-  object. While
+  recording, so nothing grows without a commit. The release of a texture or a block they hold
+  submits them at once, with no wait, so its memory goes back once they complete, with no later
+  call, as Metal frees a released resource once no work uses it: at most one submission more for
+  each upload that holds a released object. `Metrics::held_releases` and `held_release_bytes`
+  count every release they held, and `held_release_starts` those that were the first since they
+  came to hold the object, each a submission it started. While
   fewer than three of a queue's submissions are not yet seen complete, each of its command buffers
   goes at once, alone. While three are, the ones committed meanwhile are held in one group, each
   scheduled as it joins, and the group goes when it holds sixteen, when a completion leaves fewer
@@ -1785,15 +1785,6 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   The call's time grows with the new block it is the first to use: 2.1 and 2.5 ms with a 1 MiB
   block, 9.1 ms with 64 MiB and 28.4 ms with 256 MiB (job m3-max-52745); the probe's later
   submissions spent at most 0.18 ms each.
-- A texture or a block not shared outside rt, released while an upload not yet submitted holds it
-  (a new texture's move home, a copy into or out of it, a block's zero fill), keeps its memory
-  until that upload is submitted: with the next submission, which a commit of a command buffer
-  with work for the GPU makes (one with nothing for the GPU makes none), at a call that sends the
-  uploads at once (`Texture::get_bytes` of a texture without named bytes), or when an upload call
-  finds them past their bound of 4,096 calls or 64 MiB (above). The released bytes count against
-  that bound, which only the next upload call tests; with no later call they stay until the
-  device drops, where Metal frees a released resource once no work uses it.
-  `Metrics::held_releases` and `held_release_bytes` count such releases.
 - On NVIDIA each submission pays the driver's latency per submission. The runtime submits each
   command buffer as soon as it can, so short command buffers committed back to back reach the GPU
   in several submissions: on an RTX 2080 (harness row `frame_5cb`: five short command buffers a
