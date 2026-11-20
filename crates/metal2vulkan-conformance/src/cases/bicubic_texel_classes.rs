@@ -347,3 +347,173 @@ impl Case for BicubicTexelClasses {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each committed Metal answer's samples, by row: `samples[row][(lane * SLOTS + slot) * 4 +
+    /// channel]`.
+    fn recorded() -> Vec<std::collections::BTreeMap<String, Vec<f32>>> {
+        let recording =
+            crate::recording::read(NAME).unwrap_or_else(|e| panic!("{NAME}: no recording: {e}"));
+        let mut answers = Vec::new();
+        for metal in &recording.answers {
+            assert!(!metal.outcomes.is_empty(), "{NAME}: no outcome");
+            for outcome in &metal.outcomes {
+                let mut rows = std::collections::BTreeMap::new();
+                for (name, _) in rows_named() {
+                    let node = (outcome.transcript.root.child(name))
+                        .and_then(|row| row.child("sampled"))
+                        .unwrap_or_else(|| panic!("{NAME}: no {name}/sampled site"));
+                    let Value::Bytes(bytes) = &node.observed.value else {
+                        panic!("{NAME}: {name}'s samples are {:?}", node.observed.value);
+                    };
+                    let floats: Vec<f32> = (bytes.as_chunks::<4>().0.iter())
+                        .map(|&b| f32::from_le_bytes(b))
+                        .collect();
+                    assert_eq!(
+                        floats.len(),
+                        (lanes() * LANE / 4) as usize,
+                        "{NAME}: {name}"
+                    );
+                    rows.insert(name.to_owned(), floats);
+                }
+                answers.push(rows);
+            }
+        }
+        assert!(!answers.is_empty(), "{NAME}: no Metal answer");
+        answers
+    }
+
+    /// The rows' names, each with its slots' classes.
+    fn rows_named() -> Vec<(&'static str, [usize; SLOTS])> {
+        rows()
+    }
+
+    /// Sample `(lane, slot, channel)` of a row's samples.
+    fn sample(row: &[f32], lane: u32, slot: usize, channel: usize) -> f32 {
+        row[(lane as usize * SLOTS + slot) * 4 + channel]
+    }
+
+    /// `v` rounded to the nearest `half`, ties to even (every value here is a normal `float` or
+    /// zero, inside `half`'s range).
+    fn to_half(v: f32) -> f32 {
+        if v == 0.0 {
+            return v;
+        }
+        let exponent = (((v.to_bits() >> 23) & 0xff) as i32 - 127).max(-14);
+        let quantum = 2f32.powi(exponent - 10);
+        (v / quantum).round_ties_even() * quantum
+    }
+
+    /// The texels are the stated codes: the steps' 0 and 1 exact in every format, and the checker's
+    /// inner values each format's nearest code.
+    #[test]
+    fn the_texels_are_each_formats_codes() {
+        assert_eq!(texel(2, 0), [0.0, 0.0, 0.75, 0.0]);
+        assert_eq!(texel(2, 1), [1.0, 0.0, 0.25, 0.0]);
+        assert_eq!(texel(4, 3), [1.0, 1.0, 0.25, 1.0]);
+        let bytes = |name: &str| texels(CLASSES.iter().find(|c| c.name == name).unwrap());
+        assert_eq!(&bytes("rgba8unorm")[8..12], &[0, 0, 191, 0]);
+        assert_eq!(&bytes("rgba8snorm")[8..12], &[0, 0, 95, 0]);
+        assert_eq!(&bytes("rgba16float")[16..24], &[0, 0, 0, 0, 0, 0x3a, 0, 0]);
+        assert_eq!(
+            &bytes("rgba16unorm")[16..24],
+            &[0, 0, 0, 0, 0xff, 0xbf, 0, 0]
+        );
+        for class in &CLASSES {
+            assert_eq!(
+                texels(class).len() as u32,
+                SIZE[0] * SIZE[1] * class.bytes,
+                "{}",
+                class.name
+            );
+        }
+        assert_eq!(lanes(), 40);
+    }
+
+    /// Metal's answers take each class's own arm, read off the red step: where the `RGBA16Float`
+    /// sum rings above 1 or below 0 (no clamp), each normalized unsigned format reads 1 and 0
+    /// (the clamp into `[0, 1]`), `RGBA8Snorm` reads 1 and keeps the value below 0 (the clamp into
+    /// `[-1, 1]`), and `R32Float`, whose filter is not the sixteen taps, stays inside `[0, 1]`
+    /// and parts from the `RGBA16Float` answer.
+    #[test]
+    fn metals_classes_take_their_own_arms() {
+        for rows in recorded() {
+            let red = |row: &str, lane: u32| sample(&rows[row], lane, 0, 0);
+            let over: Vec<u32> = (0..lanes())
+                .filter(|&l| red("rgba16float", l) > 1.0)
+                .collect();
+            let under: Vec<u32> = (0..lanes())
+                .filter(|&l| red("rgba16float", l) < 0.0)
+                .collect();
+            assert!(!over.is_empty() && !under.is_empty(), "{NAME}: no ringing");
+            for row in ["rgba8unorm", "rgba16unorm", "r8unorm"] {
+                assert!(
+                    (0..lanes()).all(|l| (0.0..=1.0).contains(&red(row, l))),
+                    "{row}"
+                );
+                assert!(over.iter().all(|&l| red(row, l) == 1.0), "{row}");
+                assert!(under.iter().all(|&l| red(row, l) == 0.0), "{row}");
+            }
+            assert!((0..lanes()).all(|l| red("rgba8snorm", l) <= 1.0));
+            assert!(over.iter().all(|&l| red("rgba8snorm", l) == 1.0));
+            assert!(under.iter().all(|&l| red("rgba8snorm", l) < 0.0));
+            assert!((0..lanes()).all(|l| (0.0..=1.0).contains(&red("r32float", l))));
+            assert!((0..lanes()).any(|l| red("r32float", l) != red("rgba16float", l)));
+        }
+    }
+
+    /// No two classes' rows give one answer, and the `mixed` row's every slot answers what its
+    /// class's own row answered there: each slot's treatment is its own texture's.
+    #[test]
+    fn metals_rows_part_and_the_mixed_row_is_its_slots_classes() {
+        for rows in recorded() {
+            for (i, a) in CLASSES.iter().enumerate() {
+                for b in &CLASSES[i + 1..] {
+                    assert_ne!(rows[a.name], rows[b.name], "{} and {}", a.name, b.name);
+                }
+            }
+            let (_, mixed) = rows_named()[6];
+            for (slot, &class) in mixed.iter().enumerate() {
+                for lane in 0..lanes() {
+                    for c in 0..4 {
+                        assert_eq!(
+                            sample(&rows["mixed"], lane, slot, c).to_bits(),
+                            sample(&rows[CLASSES[class].name], lane, slot, c).to_bits(),
+                            "slot {slot}, lane {lane}, channel {c}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// In every class's row the `half` slots answer the `float` slots' sample rounded to the
+    /// nearest `half`, and the `float` slots answer alike.
+    #[test]
+    fn metals_half_slots_are_the_float_samples_rounded_to_half() {
+        for rows in recorded() {
+            for class in &CLASSES {
+                let row = &rows[class.name];
+                for lane in 0..lanes() {
+                    for c in 0..4 {
+                        let float = sample(row, lane, 0, c);
+                        for slot in 1..8 {
+                            assert_eq!(sample(row, lane, slot, c).to_bits(), float.to_bits());
+                        }
+                        for slot in 8..SLOTS {
+                            assert_eq!(
+                                sample(row, lane, slot, c).to_bits(),
+                                to_half(float).to_bits(),
+                                "{}: lane {lane}, channel {c}",
+                                class.name
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
