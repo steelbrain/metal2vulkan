@@ -193,6 +193,65 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A Managed buffer over imported host memory whose bytes are all named for the next commit
+    /// (`new_managed_buffer` with `copied` its length, as `newBufferWithBytesNoCopy:` of Managed
+    /// memory makes one) lets the import go as its last handle and the block's go, with no commit
+    /// after them: on a device that keeps a device copy, the ranges named hold the buffer weakly,
+    /// so nothing keeps its blocks, and the import's release runs within 10 s, the imports gauge
+    /// back to 0. Metal runs a no-copy buffer's deallocator as it deallocates the buffer. On a
+    /// device that keeps one copy nothing is named, and the same holds. A device that does not
+    /// import host memory has nothing to show.
+    #[test]
+    fn every_device_releases_an_import_under_a_managed_buffer_dropped_before_any_commit() {
+        each_device("import_managed_drop", |name, _, device| {
+            let counters = device.counters();
+            let Some((_, alignment)) = device.core().imports.host.as_ref() else {
+                println!("import: {name}: imports no host memory");
+                return;
+            };
+            let alignment = *alignment;
+            let len = (64u64 << 10).next_multiple_of(alignment);
+            let (pointer, mapping) = host_memory(len, alignment);
+            let before = counters.gauges();
+            let (release, released) = releasing();
+            // SAFETY: the memory is the test's, mapped until it unmaps it after the release.
+            let (block, _) = unsafe { device.import_host_memory(pointer, len, release) }
+                .unwrap_or_else(|error| panic!("{name}: an import: {error}"));
+            let two = !device.has_unified_memory();
+            let copy = two
+                .then(|| (device.take_block(MemoryClass::Private, len)).expect("a Private block"));
+            let place = copy.as_ref().map(|copy| (copy.id, 0));
+            let buffer = (device.new_managed_buffer((block.id, 0), place, len, len))
+                .unwrap_or_else(|error| panic!("{name}: a Managed buffer: {error}"));
+            assert_eq!(counters.gauges().imports, 1, "{name}");
+            drop((buffer, block));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !released.load(Ordering::SeqCst) {
+                assert!(
+                    Instant::now() < deadline,
+                    "{name}: the import's release did not run within 10 s of the buffer's drop \
+                     (device copy {two})"
+                );
+                thread::sleep(Duration::from_millis(1));
+            }
+            // The blocks gauge is not compared: the block-maker thread may make an allocation
+            // ahead of the Private take meanwhile.
+            let after = counters.gauges();
+            assert_eq!(
+                (after.imports, after.buffers),
+                (0, before.buffers),
+                "{name}: the import gone with the buffer"
+            );
+            drop(copy);
+            assert_eq!(counters.metrics().managed_bytes_captured, 0, "{name}");
+            free(mapping);
+            println!(
+                "import: {name}: a Managed buffer over host memory (device copy {two}) dropped \
+                 with its bytes named and no commit, the import released"
+            );
+        });
+    }
+
     /// A texture over a buffer in an imported block of host memory, read and written by shaders,
     /// is the counted copy on every device: a blit's read of it into a Shared buffer finds the
     /// host's rows, a blit's write to it reaches the host's memory, and the copies between the
