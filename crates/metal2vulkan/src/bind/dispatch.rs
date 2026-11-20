@@ -1020,7 +1020,7 @@ impl BindingPlan {
             (true, Dispatch::Threads { .. }) if flat => Records::Flat,
             (true, _) => return Err(not_implemented(Feature::GpuEncodedIndirectCommands)),
         };
-        let mut planned = regions(&t.local, dispatch, ragged)?;
+        let planned = regions(&t.local, dispatch, ragged)?;
         if planned.emulated {
             return Err(BindError::NeedsVariant {
                 variant: Box::new(self.emulated_variant()),
