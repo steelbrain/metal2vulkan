@@ -1500,8 +1500,8 @@ pub enum PrecisionNote {
     /// mismatch for review.
     DevicePointSize,
     /// A fragment function compiled for a multisampled pipeline reads `[[sample_mask]]`, or reads
-    /// a centroid varying and runs once per pixel, on a device whose rasterizer is not Apple's
-    /// ([`DriverWorkaround::ClippedCoverageNotMetals`](crate::device::DriverWorkaround::ClippedCoverageNotMetals)):
+    /// a centroid varying and runs once per pixel, on every device (no Vulkan query tells Apple's
+    /// rasterizer apart):
     /// Apple's GPU draws a triangle that extends past the viewport as pieces whose shared edges
     /// cross pixels, and such a pixel's fragments can run once per piece, each reading that
     /// piece's coverage (on an M3 Max and an M4), where the device hands the pixel's fragment its
@@ -2009,8 +2009,7 @@ pub enum PrecisionNote {
     /// stage of such a pipeline. Validation derives no tolerance from it.
     ColorAttachmentGroups,
     /// A tessellation pipeline drawn through the device's tessellation stages (a device with
-    /// `tessellationShader`) whose tessellator is not Apple's
-    /// ([`DriverWorkaround::TessellatorNotMetals`](crate::device::DriverWorkaround::TessellatorNotMetals)):
+    /// `tessellationShader`), on every device (no Vulkan query tells Apple's tessellator apart):
     /// the device's tessellator orders each patch's triangles and picks each one's first corner,
     /// and where Vulkan leaves it to the implementation chooses the triangles that join a patch's
     /// rings, where Metal's tessellator draws the D3D11 reference's triangles in its own order,

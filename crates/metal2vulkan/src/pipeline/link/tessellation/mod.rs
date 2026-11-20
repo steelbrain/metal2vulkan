@@ -55,7 +55,7 @@ use std::collections::BTreeMap;
 
 use crate::budget::Meter;
 use crate::device::requirements::{Requirements, VkFeature, VkLimit};
-use crate::device::{DeviceProfile, DriverWorkaround};
+use crate::device::DeviceProfile;
 use crate::error::{
     Capability, DescriptorError, Error, Feature, LowerFamily, RuntimeInput, Unsupported,
 };
@@ -397,17 +397,13 @@ pub fn push_offset(
 }
 
 /// Note what control stage `c` takes without a Metal observation ([`Control::notes`]) on the
-/// pipeline's evaluation stage among `modules`, and, on profile `p` whose tessellator is not
-/// Apple's (`DriverWorkaround::TessellatorNotMetals`), the device's triangle order
-/// (`PrecisionNote::TessellationTriangleOrder`): its output is what the readings change, and the
-/// synthesized stages are no function's module (a census leaves them out).
-pub fn note_evaluation_stage(c: &Control, p: &DeviceProfile, modules: &mut [StageModule]) {
+/// pipeline's evaluation stage among `modules`, and the device's triangle order
+/// (`PrecisionNote::TessellationTriangleOrder`, on every device: no Vulkan query tells Apple's
+/// tessellator apart): its output is what the readings change, and the synthesized stages are no
+/// function's module (a census leaves them out).
+pub fn note_evaluation_stage(c: &Control, modules: &mut [StageModule]) {
     let mut notes = c.notes();
-    if p.workarounds()
-        .contains(&DriverWorkaround::TessellatorNotMetals)
-    {
-        notes.push(PrecisionNote::TessellationTriangleOrder);
-    }
+    notes.push(PrecisionNote::TessellationTriangleOrder);
     for m in modules
         .iter_mut()
         .filter(|m| m.stage == vk::ShaderStage::TESSELLATION_EVALUATION)

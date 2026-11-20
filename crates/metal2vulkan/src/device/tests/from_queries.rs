@@ -37,8 +37,7 @@ fn identities() -> [(Option<vk::DriverId>, u32, u32, vk::PhysicalDeviceType); 5]
 }
 
 /// On every committed profile, descriptions that differ only in `driver_id`, `vendor_id`,
-/// `device_id` and the device type give one profile, whose only workarounds are the two every
-/// device but Apple's takes and which reads YCbCr planes in place.
+/// `device_id` and the device type give one profile, which reads YCbCr planes in place.
 #[test]
 fn from_queries_derives_one_profile_whatever_the_identity() {
     for (stem, _) in committed_profiles() {
@@ -62,14 +61,6 @@ fn from_queries_derives_one_profile_whatever_the_identity() {
         let Some(queried) = &derived[0] else {
             continue;
         };
-        assert_eq!(
-            queried.workarounds(),
-            [
-                DriverWorkaround::ClippedCoverageNotMetals,
-                DriverWorkaround::TessellatorNotMetals
-            ],
-            "{stem}"
-        );
         assert!(queried.fields().ycbcr_in_place, "{stem}");
     }
 }

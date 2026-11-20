@@ -74,14 +74,12 @@ pub use profile::{
 // subgroup model and simdgroup tiers, the buffer robustness that bounds a buffer-slot access, and
 // the Function storage a thread holds.
 pub use profile::{DescriptorCaps, FunctionStorage, Robustness};
-pub use subgroup::{SimdClass, StageSubgroup, SubgroupModel, SubgroupSizes, Tier};
-// The device answers a profile notes on every device (`DeviceProfile::workarounds`).
-pub use profile::DriverWorkaround;
 pub use requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, Requirements, ResolveMode, SpirvCapability,
     SpirvExtension, StageCreateFlag, SubgroupOp, VkExtension, VkFeature, VkLimit, VkProperty,
 };
 pub use subgroup::OpBits;
+pub use subgroup::{SimdClass, StageSubgroup, SubgroupModel, SubgroupSizes, Tier};
 
 #[cfg(test)]
 mod tests;

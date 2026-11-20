@@ -1384,7 +1384,6 @@ enum	metal2vulkan::bind::indirect_commands::RecordError	#[derive(Clone, Copy, De
 enum	metal2vulkan::bind::indirect_commands::RecordField	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum RecordField
 enum	metal2vulkan::bind::indirect_commands::StateSource	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum StateSource
 enum	metal2vulkan::cache::ArtifactError	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ArtifactError
-enum	metal2vulkan::device::DriverWorkaround	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverWorkaround
 enum	metal2vulkan::device::Exposure	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Exposure
 enum	metal2vulkan::device::FloatControl	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FloatControl
 enum	metal2vulkan::device::FloatWidth	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FloatWidth
@@ -7992,7 +7991,6 @@ method	metal2vulkan::device::DeviceProfile::takes_driver_deviation	pub fn takes_
 method	metal2vulkan::device::DeviceProfile::ulong_atomic_gaps	pub fn ulong_atomic_gaps(&self, buffer: bool) -> Vec<Capability>
 method	metal2vulkan::device::DeviceProfile::union_requirements	pub fn union_requirements(&self, a: &Requirements, b: &Requirements) -> Requirements
 method	metal2vulkan::device::DeviceProfile::vertex_entry_inputs	pub fn vertex_entry_inputs(&self, d: &EntryDescriptor<'_>, vertex: Option<&VertexDescriptor>, budget: &Budget) -> Result<LoweringInputs, Error>
-method	metal2vulkan::device::DeviceProfile::workarounds	pub fn workarounds(&self) -> &[DriverWorkaround]
 method	metal2vulkan::device::EnableSet::new	pub fn new() -> EnableSet
 method	metal2vulkan::device::EnabledCaps::portability_withholds	pub fn portability_withholds(&self, feature: VkFeature) -> bool
 method	metal2vulkan::device::Exposure::exposed	pub fn exposed(self, api: ApiVersion, extensions: &BTreeSet<VkExtension>) -> bool
@@ -10922,8 +10920,6 @@ variant	metal2vulkan::bind::indirect_commands::StateSource::Parent	Parent
 variant	metal2vulkan::cache::ArtifactError::Corrupt	Corrupt
 variant	metal2vulkan::cache::ArtifactError::Stale	Stale
 variant	metal2vulkan::cache::ArtifactError::WrongDevice	WrongDevice
-variant	metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals	ClippedCoverageNotMetals
-variant	metal2vulkan::device::DriverWorkaround::TessellatorNotMetals	TessellatorNotMetals
 variant	metal2vulkan::device::Exposure::Core	Core(ApiVersion)
 variant	metal2vulkan::device::Exposure::Extension	Extension(&'static [VkExtension])
 variant	metal2vulkan::device::Exposure::Implied	Implied { version: ApiVersion, extensions: &'static [VkExtension] }

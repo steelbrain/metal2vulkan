@@ -244,7 +244,7 @@ println!("  Metal properties: {:?}", device.metal_properties());
 - `profile().spirv_validation()`: the `spirv-val` environments and relaxations every module for
   the device is valid under. The command line runs exactly these.
 - The profile's facts: `enabled()`, `limits()`, `images()`, `fragment()`, `descriptors()`, the
-  driver workarounds and measured deviations it takes (`workarounds()`, `driver_deviations()`),
+  measured deviations it takes (`driver_deviations()`),
   its `subgroups()` model and `simd_tier(...)`, the buffer robustness that bounds a buffer-slot
   access (`robustness()`, `checks_buffers_in_shader()`), and the Function
   storage a thread holds (`function_storage()`: `FunctionStorage::Measured` bytes for a measured
@@ -2018,9 +2018,8 @@ bound.
   `tessellationShader` draws Metal's tessellator through the emulation and records none.
 - `metal2vulkan-degrade-tessellation-triangle-order` (precision).
   `PrecisionNote::TessellationTriangleOrder`: A tessellation pipeline drawn through the device's
-  tessellation stages (a device with `tessellationShader`), on every device
-  (`DriverWorkaround::TessellatorNotMetals`, which every profile takes: no query tells Apple's
-  tessellator apart): the device's
+  tessellation stages (a device with `tessellationShader`), on every device (no query tells
+  Apple's tessellator apart): the device's
   tessellator orders each patch's triangles, picks each one's first corner, and joins the patch's
   rings where Vulkan leaves that to the implementation. The domain points are Metal's; a flat
   varying, a value interpolated across another triangulation, and the order a patch's triangles
@@ -2419,8 +2418,8 @@ bound.
   primitive a draw of it takes; a draw of lines or triangles of it is Metal's exactly.
 - `metal2vulkan-degrade-clipped-coverage-split` (precision). `PrecisionNote::ClippedCoverageSplit`:
   A fragment function compiled for a multisampled pipeline reads `[[sample_mask]]`, or reads a
-  centroid varying and runs once per pixel, on every device (`DriverWorkaround::ClippedCoverageNotMetals`,
-  which every profile takes: no query tells Apple's rasterizer apart): Apple's GPU draws a triangle
+  centroid varying and runs once per pixel, on every device (no query tells Apple's rasterizer
+  apart): Apple's GPU draws a triangle
   that extends past the viewport as pieces whose shared edges cross pixels, and such a pixel's
   fragments can run once per piece, each reading that piece's coverage, where the device hands the
   pixel's fragment its coverage by the whole primitive (lavapipe by its own pieces). A centroid

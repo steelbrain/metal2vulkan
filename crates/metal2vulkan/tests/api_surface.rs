@@ -234,7 +234,6 @@ surface! {
         struct ImageCaps N;
         struct FloatControls N;
         struct FloatWidthControls N;
-        enum DriverWorkaround N;
         enum HandleDomain N;
         enum Independence N;
         struct Limits N;

@@ -20,7 +20,7 @@ use crate::bind::{
 };
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::device::requirements::{VkFeature, VkLimit};
-use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile, DriverWorkaround};
+use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
 use crate::error::{
     BindError, Capability, DescriptorError, Error, Feature, LowerFamily, Needs, RuntimeInput,
 };
@@ -859,15 +859,8 @@ fn a_tessellation_pipeline_links_four_stages_on_every_profile_with_tessellation(
             ],
         ),
     ];
-    // The device's tessellator orders the triangles its own way on every profile.
     for (stem, _) in &with {
         let dev = device(stem);
-        assert!(
-            dev.profile()
-                .workarounds()
-                .contains(&DriverWorkaround::TessellatorNotMetals),
-            "{stem}"
-        );
         for (entry, t, domain, points, expected) in &cases {
             let d = tessellation_pipeline(&bc, &fragments, entry, Some("tess_fragment"), Some(*t));
             let p = dev

@@ -55,15 +55,14 @@
 //! separate runs, which no Vulkan rasterizer reproduces; the loop reads the pixel's coverage of the
 //! whole primitive, as today's pixel-rate read does. A function compiled for a multisampled
 //! pipeline that reads `[[sample_mask]]`, looped or not, or that reads a centroid varying and runs
-//! once per pixel, records `PrecisionNote::ClippedCoverageSplit` on a device whose rasterizer is
-//! not Apple's (`DriverWorkaround::ClippedCoverageNotMetals`).
+//! once per pixel, records `PrecisionNote::ClippedCoverageSplit` on every device: no Vulkan query
+//! tells Apple's rasterizer apart, so a device that draws through Metal records it too.
 
 use crate::air::abi::{
     Builtin, Interpolation as AirInterp, ParamRole, Sampling as AirSampling, Stage as AirStage,
 };
 use crate::air::ir::{ArgIdx, Body, Value};
 use crate::device::requirements::VkFeature;
-use crate::device::DriverWorkaround;
 use crate::error::{Error, InternalError, InternalKind};
 use crate::lower::arith::legal::form_on;
 use crate::lower::emit::FamilyDecls;
@@ -173,16 +172,9 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         .iter()
         .any(|(id, inst)| super::discard::side_effect(cx, id, inst));
     let per_sample = sample_id || sample_varying || writes;
-    // Off Apple's rasterizer, a multisampled read of the coverage, or of a centroid varying at the
-    // pixel, meets no split of a clipped primitive, where Metal's can (the module docs).
-    if cx.inputs.multisampled
-        && (mask || !per_sample)
-        && cx
-            .profile
-            .fields()
-            .workarounds
-            .contains(&DriverWorkaround::ClippedCoverageNotMetals)
-    {
+    // A multisampled read of the coverage, or of a centroid varying at the pixel, meets no split
+    // of a clipped primitive, where Metal's can (the module docs).
+    if cx.inputs.multisampled && (mask || !per_sample) {
         cx.precision.insert(PrecisionNote::ClippedCoverageSplit);
     }
     if !mask {

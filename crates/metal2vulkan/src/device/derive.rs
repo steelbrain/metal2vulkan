@@ -15,10 +15,9 @@ use crate::device::function_storage;
 use crate::device::metal::MetalDeviceProperties;
 use crate::device::policy::DevicePolicy;
 use crate::device::profile::{
-    BufferAccess, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
-    DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, FunctionStorage,
-    HandleDomain, ImageCaps, Independence, LeafCaps, NanEncoding, PointerDomain, ProfileFields,
-    Robustness,
+    BufferAccess, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile, EnabledCaps,
+    FloatFunctions, FormatTable, FragmentCaps, FunctionStorage, HandleDomain, ImageCaps,
+    Independence, LeafCaps, NanEncoding, PointerDomain, ProfileFields, Robustness,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -70,9 +69,9 @@ impl Device {
     ///
     /// No identity decides anything: the description's `driver_id`, `driver_version`,
     /// `vendor_id`, `device_id` and `device_name` are not read. The rasterizer splits clipped
-    /// coverage and the tessellator orders triangles as the device does
-    /// (`DriverWorkaround::ClippedCoverageNotMetals`, `DriverWorkaround::TessellatorNotMetals`),
-    /// `InterpolateAtOffset` reads from the pixel's center as GLSL.std.450 states, and a thread's
+    /// coverage and the tessellator orders triangles as the device does (each module records its
+    /// static note, `PrecisionNote::ClippedCoverageSplit` and
+    /// `PrecisionNote::TessellationTriangleOrder`), `InterpolateAtOffset` reads from the pixel's center as GLSL.std.450 states, and a thread's
     /// Function storage is the 16 KiB floor. A two-plane YCbCr texture's planes are read in place
     /// on every device, whatever its type. Every stage output is 32-bit: a `half` color output
     /// reaches the device widened to `float`, whatever `storageInputOutput16` says.
@@ -313,13 +312,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         vertex_formats,
         storage_formats,
         image_formats,
-        // Every rasterizer but Apple's hands a clipped primitive's fragments their coverage by the
-        // whole primitive (or by its own pieces), never by Apple's pieces; and every tessellator
-        // but Apple's orders a patch's triangles its own way. No query tells Apple's apart.
-        workarounds: vec![
-            DriverWorkaround::ClippedCoverageNotMetals,
-            DriverWorkaround::TessellatorNotMetals,
-        ],
         api_version: api,
         // The feature, which both description readers list from 1.3 (core without a member),
         // so the extended dynamic states a pipeline makes are exactly what it requires.

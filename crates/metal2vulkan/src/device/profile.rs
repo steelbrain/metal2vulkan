@@ -208,12 +208,6 @@ impl DeviceProfile {
         crate::memory::contain::device_drops_texel_writes(self, texel_buffer)
     }
 
-    /// The driver workarounds the profile takes: the leaf encodings it changes and the refusals of
-    /// what the driver is measured to run wrong.
-    pub fn workarounds(&self) -> &[DriverWorkaround] {
-        &self.fields.workarounds
-    }
-
     /// Whether the profile takes the driver deviation `deviation` (`device::driver_facts`): its
     /// driver is measured with it on the device's GPU, so the translation relies on it. A
     /// profile that does not take it compiles the route the deviation's documentation names for a
@@ -498,9 +492,6 @@ pub struct ProfileFields {
     /// Every other queried usage: sampled images (and their filtering), uniform texel buffers, and
     /// attachments.
     pub image_formats: FormatTable,
-    /// The driver workarounds: leaf encodings, and refusals of what the driver is measured to run
-    /// wrong.
-    pub workarounds: Vec<DriverWorkaround>,
     /// The device's Vulkan version (the floor is 1.2; every profile emits SPIR-V 1.5).
     pub api_version: ApiVersion,
     /// Vertex-buffer strides, with the other extended dynamic states, are dynamic state: the
@@ -1154,37 +1145,6 @@ pub fn portable_vertex_stride(alignment: Option<u32>, stride: u32) -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct FormatTable {
     pub formats: BTreeMap<vk::Format, BTreeSet<FormatUsage>>,
-}
-
-/// A device's answer that the specifications allow and Metal's differs from, which no Vulkan query
-/// tells apart, so a module records the precision note it names on every device. A profile takes
-/// every variant ([`ClippedCoverageNotMetals`](Self::ClippedCoverageNotMetals),
-/// [`TessellatorNotMetals`](Self::TessellatorNotMetals)), never from an identity or a shader.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum DriverWorkaround {
-    /// The device's rasterizer does not split a primitive it clips as Apple's does: Apple's GPU
-    /// draws a triangle that extends past the viewport as pieces whose shared edges cross pixels,
-    /// and such a pixel's fragments can run once per piece, each reading that piece's coverage as
-    /// `[[sample_mask]]` (on an M3 Max and an M4), where a Vulkan rasterizer hands the pixel's one
-    /// fragment its coverage by the whole primitive (and lavapipe splits along its own seams).
-    /// Vulkan states no split, and no Vulkan mechanism follows Apple's clipper, so this is the
-    /// device's answer, not a defect. Every device takes it (`Device::from_queries`): no Vulkan
-    /// query tells Apple's rasterizer apart, so a device that draws through Metal (MoltenVK,
-    /// KosmicKrisp) records it too. A fragment function compiled for a multisampled pipeline that reads `[[sample_mask]]` records
-    /// `PrecisionNote::ClippedCoverageSplit` there (`lower::fragment::coverage`).
-    ClippedCoverageNotMetals,
-    /// The device's tessellator does not draw a patch's triangles as Apple's does: Metal's
-    /// tessellator draws the D3D11 reference's triangles in its own order, each one's first corner
-    /// by its stitch step (`lower::tessellation::tessellator`), where Vulkan leaves a patch's
-    /// triangle order, first corners and ring triangulation to the implementation (every patch
-    /// differs on the RTX 3090, 55-95% of them on RADV and lavapipe). The device's answer, not a
-    /// defect. Every device takes it (`Device::from_queries`): no Vulkan query tells Apple's
-    /// tessellator apart, so a device that draws through Metal records it too. A pipeline drawn
-    /// through the device's tessellation stages records `PrecisionNote::TessellationTriangleOrder`
-    /// there (`link::tessellation::note_evaluation_stage`).
-    TessellatorNotMetals,
 }
 
 #[cfg(test)]

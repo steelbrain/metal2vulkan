@@ -390,29 +390,22 @@ fn a_restricted_context_runs_only_on_a_device_that_has_and_reports_its_profile()
     translated.device_type = native.device_type;
     assert_ne!(translated.driver_id, profile.driver_id);
     assert_eq!(check(&native, &tools, &queried), Ok(translated.clone()));
-    // A profile's workarounds are every device's, whatever driver runs the module: the profile on
-    // lavapipe's identity and on SwiftShader's takes the same ones.
-    let workarounds = |description: &DeviceDescription| {
+    // A profile is every driver's: the profile on lavapipe's identity and on SwiftShader's is one.
+    let profile_of = |description: &DeviceDescription| {
         metal2vulkan::device::Device::from_queries(
             description.clone(),
             metal2vulkan::device::DevicePolicy::default(),
         )
         .expect("device")
         .profile()
-        .workarounds()
-        .to_vec()
+        .fingerprint()
     };
-    let every_device = [
-        metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals,
-        metal2vulkan::device::DriverWorkaround::TessellatorNotMetals,
-    ];
-    assert_eq!(workarounds(&translated), every_device);
     let mut swiftshader_native = native.clone();
     swiftshader_native.driver_id = Some(vk::DriverId::GOOGLE_SWIFTSHADER);
     let mut swiftshader_queried = queried.clone();
     swiftshader_queried.driver_id = swiftshader_native.driver_id;
     let on_swiftshader = check(&swiftshader_native, &tools, &swiftshader_queried).unwrap();
-    assert_eq!(workarounds(&on_swiftshader), every_device);
+    assert_eq!(profile_of(&on_swiftshader), profile_of(&translated));
     assert!(matches!(
         check(&native, &tools[..1], &queried),
         Err(RestrictionError::Inactive { .. })
