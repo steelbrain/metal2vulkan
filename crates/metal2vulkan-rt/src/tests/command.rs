@@ -1674,6 +1674,65 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A completed handler that runs long holds no later submission: while the completion
+    /// thread runs one command buffer's handler, here parked until the test releases it, the
+    /// queue's next command buffers are each submitted at their commit, past [`IN_FLIGHT`] of
+    /// them, as none is held in a group the busy completion thread could not send at a
+    /// completion. Their handlers and their completion still wait for the parked one, in order.
+    #[test]
+    fn every_device_submits_while_a_completed_handler_runs() {
+        each_device("command_handler_holds_no_submission", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let counters = device.counters();
+            crate::tests::blit::on_device::settled(&device);
+            let park = Arc::new(std::sync::Barrier::new(2));
+            let first = queue.command_buffer().expect("a command buffer");
+            fill(&first, &buffer, 1);
+            let parked = Arc::clone(&park);
+            (first.add_completed_handler(move |_| {
+                parked.wait();
+                parked.wait();
+            }))
+            .expect("a handler");
+            first.commit().expect("a commit");
+            park.wait();
+            let mut release = Release::of(&park);
+            let before = counters.metrics().submissions;
+            let later: Vec<CommandBuffer> = (0..IN_FLIGHT + 2)
+                .map(|index| {
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    fill(&command_buffer, &buffer, 2 + index as u32);
+                    command_buffer.commit().expect("a commit");
+                    command_buffer
+                })
+                .collect();
+            let wanted = before + later.len() as u64;
+            within("each later command buffer's submission", || {
+                counters.metrics().submissions >= wanted
+            });
+            assert!(
+                later
+                    .iter()
+                    .all(|cb| cb.status() != CommandBufferStatus::Completed),
+                "{name}: no later command buffer completes before the parked handler returns"
+            );
+            release.now();
+            for command_buffer in &later {
+                finished(name, command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            finished(name, &first);
+            assert_eq!(
+                word(&buffer),
+                2 + IN_FLIGHT as u32 + 1,
+                "{name}: the last fill"
+            );
+            drop((later, first, buffer, arena, queue, device));
+        });
+    }
+
     /// Commits a command buffer of one fill of `buffer` with `word` on `queue`.
     fn queue_fill(queue: &CommandQueue, buffer: &Buffer, word: u32) -> CommandBuffer {
         let command_buffer = queue.command_buffer().expect("a command buffer");
