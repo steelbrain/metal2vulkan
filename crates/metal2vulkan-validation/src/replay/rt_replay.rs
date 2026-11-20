@@ -102,23 +102,23 @@ use std::path::{Path, PathBuf};
 /// A pipeline cache directory one test owns: a new, empty directory in the project's scratch
 /// root, removed when dropped, and by the next run of any suite where a killed test left it
 /// ([`metal2vulkan_devtools::scratch`]).
-struct ScratchCache(metal2vulkan_devtools::scratch::Owned);
+pub(in crate::replay) struct ScratchCache(metal2vulkan_devtools::scratch::Owned);
 
 impl ScratchCache {
     /// A new directory, not yet made (the device makes it).
-    fn new() -> std::io::Result<ScratchCache> {
+    pub(in crate::replay) fn new() -> std::io::Result<ScratchCache> {
         metal2vulkan_devtools::scratch::Owned::reserved("rt-replay-cache").map(ScratchCache)
     }
 
     /// The directory.
-    fn path(&self) -> &Path {
+    pub(in crate::replay) fn path(&self) -> &Path {
         self.0.path()
     }
 }
 
 /// The runtime's first device of the cfg's kind (a GPU: discrete, then integrated, then
 /// virtual; else the CPU), its kernels kept in `cache`.
-fn rt_device(cache: &Path) -> metal2vulkan_runtime::Device {
+pub(in crate::replay) fn rt_device(cache: &Path) -> metal2vulkan_runtime::Device {
     use ash::vk::PhysicalDeviceType as Kind;
     let kinds: &[Kind] = match gpu::TEST_DEVICE {
         DeviceType::Gpu => {

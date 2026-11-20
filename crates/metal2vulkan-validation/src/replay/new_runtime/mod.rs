@@ -1135,7 +1135,10 @@ impl NewRuntime {
             command_buffer,
             retired,
         });
-        Ok(())
+        // The places whose commits have completed are free again, and a pooled block left with no
+        // place goes back to the runtime, with no later place to wait for.
+        let completed = self.completed();
+        self.places.free_completed(completed)
     }
 
     /// The queue of `call`'s receiver, a command buffer of the stream.

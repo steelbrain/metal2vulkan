@@ -1,6 +1,8 @@
 //! The places of the stream's own buffers in the blocks the backend takes: each memory class's
 //! pooled blocks (`MemoryClass::block_len`), first fit at Metal's 256-byte buffer alignment, and
-//! a block of its own for a buffer past the class's block length. A place spans its buffer's
+//! a block of its own for a buffer past the class's block length. A pooled block goes back to the
+//! runtime once its last place is free again, as the runtime's own blocks do, and the runtime's
+//! idle rule frees its allocation; a later place takes a block again. A place spans its buffer's
 //! length rounded up to the buffer's recorded granule ([`granule`]), so the bytes past a buffer
 //! are the slack it had in the recording. A buffer's place is free again
 //! only once every command buffer that named the buffer has completed, as Metal keeps a released
@@ -175,7 +177,9 @@ impl Places {
         }
     }
 
-    fn free_completed(&mut self, completed: u64) -> Result<(), rt::Error> {
+    /// Frees each place given back whose commits have all completed (`completed`, the commits
+    /// that have), and gives back to the runtime each pooled block that then holds no place.
+    pub(super) fn free_completed(&mut self, completed: u64) -> Result<(), rt::Error> {
         let mut at = 0;
         while at < self.held.len() {
             if self.held[at].1 > completed {
@@ -192,8 +196,18 @@ impl Places {
                 continue;
             }
             let start = place.range.start;
-            if let Some(block) = self.blocks.iter_mut().find(|b| b.info.id == place.block) {
-                give_to(&mut block.free, start..start + place.span);
+            let Some(index) = self.blocks.iter().position(|b| b.info.id == place.block) else {
+                continue;
+            };
+            let block = &mut self.blocks[index];
+            give_to(&mut block.free, start..start + place.span);
+            let len = block.info.len;
+            if matches!(block.free.as_slice(), [whole] if *whole == (0..len)) {
+                // In the order taken, as first fit reads them.
+                let emptied = self.blocks.remove(index);
+                let class = emptied.info.class;
+                self.device.release_block(emptied.info)?;
+                self.bytes[class_index(class)] -= len;
             }
         }
         Ok(())
@@ -263,5 +277,67 @@ fn give_to(free: &mut Vec<Range<u64>>, range: Range<u64>) {
     if at > 0 && free[at - 1].end == free[at].start {
         free[at - 1].end = free[at].end;
         free.remove(at);
+    }
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod tests {
+    use super::{Place, Places, ALIGN};
+    use crate::replay::rt_replay::{rt_device, ScratchCache};
+    use metal2vulkan_runtime as rt;
+
+    /// Forty places of 1 MiB take three pooled blocks; each block goes back to the runtime once
+    /// the commits of its places' releases have completed and it holds no place, until the
+    /// runtime holds none of them; a later place takes a block again.
+    #[test]
+    fn an_emptied_pooled_block_goes_back_to_the_runtime() {
+        let cache = ScratchCache::new().unwrap();
+        let device = rt_device(cache.path());
+        let counters = device.counters();
+        let class = rt::MemoryClass::Private;
+        let unit = class.block_len();
+        let mut places = Places::new(device.clone());
+        let held = |places: &Places| {
+            let gauges = counters.gauges();
+            (
+                places.blocks.len(),
+                places.bytes()[0],
+                gauges.private_take_held_bytes,
+            )
+        };
+        let taken: Vec<Place> = (0..40)
+            .map(|_| places.take(class, 1 << 20, ALIGN, 0).unwrap())
+            .collect();
+        assert_eq!(held(&places), (3, 3 * unit, 3 * unit), "three blocks taken");
+
+        // The first block's sixteen places and four of the second's, released by commit 1.
+        let mut taken = taken.into_iter();
+        for place in taken.by_ref().take(20) {
+            places.give(place, 1, Vec::new());
+        }
+        places.free_completed(0).unwrap();
+        assert_eq!(
+            held(&places),
+            (3, 3 * unit, 3 * unit),
+            "commit 1 not completed"
+        );
+        places.free_completed(1).unwrap();
+        assert_eq!(
+            held(&places),
+            (2, 2 * unit, 2 * unit),
+            "the first block back"
+        );
+
+        for place in taken {
+            places.give(place, 1, Vec::new());
+        }
+        places.free_completed(1).unwrap();
+        assert_eq!(held(&places), (0, 0, 0), "every block back");
+
+        let again = places.take(class, 1 << 20, ALIGN, 1).unwrap();
+        assert_eq!(held(&places), (1, unit, unit), "a block taken again");
+        places.give(again, 1, Vec::new());
+        places.free_completed(1).unwrap();
+        assert_eq!(held(&places), (0, 0, 0), "and back");
     }
 }
