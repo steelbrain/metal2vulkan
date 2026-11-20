@@ -2,7 +2,7 @@
 //! surface: T1, a render target shaders also read, and T2, a texture shaders read, both over the
 //! same bytes, each in an image of its own (host memory's import takes no image in place, on every
 //! device). Under a device cfg, on every device of the cfg's kind that imports host memory, in
-//! RGBA16Float and in BGRA8Unorm, 32 by 16 texels at 256-byte rows. Three command buffers, each
+//! BGRA8Unorm and then in RGBA16Float, 32 by 16 texels at 256-byte rows. Three command buffers, each
 //! read exact:
 //!
 //! - the CPU writes the pages, T1 unused, and a kernel reads T2: the CPU's texels;
@@ -322,7 +322,8 @@ mod on_device {
             };
             let first = IndexClass::Texture.range().start;
             (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
-            for format in [Format::Half, Format::Bgra8] {
+            // BGRA8Unorm first: the RGBA16Float images then take places the first run's freed.
+            for format in [Format::Bgra8, Format::Half] {
                 shape(name, &device, &reader, format);
             }
         });
