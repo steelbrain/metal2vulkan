@@ -52,18 +52,27 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 /// The work units and ledger peak of compiling entry `entry` of `bc` for `stem`, with L3 when it
 /// translates.
 fn charged(bc: &[u8], entry: &str, stem: &str) -> Result<(u64, u64), Error> {
-    let prof = p(stem);
+    charged_on(bc, entry, &p(stem), stem)
+}
+
+/// [`charged`] on profile `prof`, named `stem` in messages.
+fn charged_on(
+    bc: &[u8],
+    entry: &str,
+    prof: &DeviceProfile,
+    stem: &str,
+) -> Result<(u64, u64), Error> {
     let mut m = Meter::with_caps(&Budget::default(), WORK_UNITS, LEDGER_BYTES);
     let a = compile_bitcode(
         bc,
         EntryRef::Name(entry),
         &FunctionConstantValues::defaults(),
-        &prof,
+        prof,
         &LowerInputs::new(),
         &mut m,
         SPIRV_WORDS,
     )?;
-    link_and_validate(&a, &prof).unwrap_or_else(|e| panic!("{entry} on {stem}: L3: {e}"));
+    link_and_validate(&a, prof).unwrap_or_else(|e| panic!("{entry} on {stem}: L3: {e}"));
     Ok((m.work(), m.ledger_peak()))
 }
 
@@ -109,14 +118,23 @@ fn homes_kernel(arena: u32, typed: u32) -> String {
 /// A use of an arena alloca finds its arena entry by a search, and a use of a typed object its
 /// position by one, so a function with many of each selects and emits in work linear in its allocas
 /// (`ArenaLayout::entry`, `local::use_home`, `emit_typed`). 4096 of each translate and pass L3, and
-/// twice as many charge under 2.2 times the work units. The scans previously were not metered, so
-/// the units are the same there; at 16384 of each the previous code took 32.0 s in a test build
-/// where this code took 6.8 s, L3 included (one run each).
+/// twice as many charge under 2.2 times the work units, on `moltenvk-m3` with a thread's 192 KiB of
+/// Function storage, as the M3 Max holds (past the 16 KiB every device holds). The scans previously
+/// were not metered, so the units are the same there; at 16384 of each the previous code took
+/// 32.0 s in a test build where this code took 6.8 s, L3 included (one run each).
 #[test]
 fn many_arena_and_typed_allocas_are_found_without_a_scan() {
+    let mut prof = p("moltenvk-m3");
+    prof.edit(|f| {
+        f.function_storage = crate::device::profile::FunctionStorage::Assumed(192 * 1024)
+    });
     let work = |n: u32| {
         let bc = assemble(&format!("homes_{n}"), &homes_kernel(n, n))?;
-        Some(charged(&bc, "homes", "moltenvk-m3").expect("translates").0)
+        Some(
+            charged_on(&bc, "homes", &prof, "moltenvk-m3")
+                .expect("translates")
+                .0,
+        )
     };
     let (Some(small), Some(large)) = (work(1 << 12), work(1 << 13)) else {
         return;
@@ -207,19 +225,30 @@ fn reads_body(accesses: u32) -> String {
 /// fallback slots one at a time, keeping the descriptor census as it goes and the order sorted
 /// once, so the slots are placed in work linear in their number. A table is at most
 /// [`LARGEST_TABLE`] buffers (Metal's 31 buffer entries), so the moves are bounded by Metal's
-/// table: tables of 15 and 30 buffers beside `out` on `roadmap-2022` (30 storage buffers per stage)
-/// translate, pass L3, and charge under 2.2 times the work units for twice the buffers. Previously
+/// table: tables of 15 and 30 buffers beside `out` on `lavapipe` held to 30 storage buffers per
+/// stage (`roadmap-2022`'s, whose 128 push bytes are below the floor's 256) translate, pass L3, and
+/// charge under 2.2 times the work units for twice the buffers. Previously
 /// each move recounted every slot and placed every push field, unmetered, so the units are the same
 /// there; the measured times (at 2^12 and 2^13 buffers, a table no Metal function binds) were
 /// measured.
 #[test]
 fn slots_past_the_storage_limit_move_in_one_pass() {
+    let prof = crate::pipeline::testing::profile_with_storage_buffers(
+        "lavapipe",
+        DevicePolicy::default(),
+        30,
+    )
+    .expect("profile");
     let work = |count: u32| {
         let bc = assemble(
             &format!("slots_{count}"),
             &table_kernel(count, &reads_body(1)),
         )?;
-        Some(charged(&bc, "roots", "roadmap-2022").expect("translates").0)
+        Some(
+            charged_on(&bc, "roots", &prof, "lavapipe")
+                .expect("translates")
+                .0,
+        )
     };
     let (Some(small), Some(large)) = (work(LARGEST_TABLE / 2), work(LARGEST_TABLE)) else {
         return;

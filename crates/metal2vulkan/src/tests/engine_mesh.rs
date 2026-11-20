@@ -1177,8 +1177,8 @@ fn without_the_extension_a_mesh_pipeline_draws_its_records() {
 }
 
 /// An emulated pipeline with an object function (`mesh_draws_object`, a 32-byte payload, with
-/// `mesh_draws_mesh` and `mesh_draws_fragment`): the object function's compute stage first, one
-/// push range of both compute stages' windows, both work bindings; a draw of object threadgroups
+/// `mesh_draws_mesh` and `mesh_draws_fragment`): the object function's compute stage first, at most
+/// one push range of both compute stages' windows, both work bindings; a draw of object threadgroups
 /// dispatches them, is scanned into the records pool, and is drawn from the work buffer, whose
 /// slots hold the payload; an indirect one runs its object arguments pass first, its slots in the
 /// pool.
@@ -1231,9 +1231,9 @@ fn object_records_draws(dev: &crate::device::Device, draws: &crate::library::Lib
         .iter()
         .filter(|r| r.stages.contains(vk::ShaderStageFlags::COMPUTE))
         .collect();
-    assert_eq!(
-        compute.len(),
-        1,
+    // One range at most: none where neither compute stage pushes a field (Intel's Iris Xe).
+    assert!(
+        compute.len() <= 1,
         "{stem}: {:?}",
         pipeline.layout.push_constants
     );
@@ -1593,16 +1593,16 @@ fn mesh_draws(dev: &crate::device::Device, p: &crate::pipeline::RenderPipeline, 
             .iter()
             .find(|f| f.stage == Stage::Mesh && f.field == PushField::DispatchRegion)
             .expect("the mesh function's region");
-        let crate::bind::FieldLocation::PushWindow { offset } = field.location else {
-            panic!("{what}: a region outside the push window");
-        };
-        let write = cmds
-            .push_constants
-            .iter()
-            .find(|w| w.stages == mesh)
-            .expect("the mesh stage's push");
-        let at = (offset - write.offset) as usize;
-        assert_eq!(write.bytes[at..at + 32], region, "{what}");
+        // Past the floor's one window the region is placed in the stage's argument table.
+        if let crate::bind::FieldLocation::PushWindow { offset } = field.location {
+            let write = cmds
+                .push_constants
+                .iter()
+                .find(|w| w.stages == mesh)
+                .expect("the mesh stage's push");
+            let at = (offset - write.offset) as usize;
+            assert_eq!(write.bytes[at..at + 32], region, "{what}");
+        }
     }
     assert_eq!(
         plan.instantiate_draw(
@@ -1838,69 +1838,21 @@ fn index_chains(words: &[u32]) -> [usize; 2] {
     chains
 }
 
-/// On a driver that misplaces a store into one component of an index vector
-/// (`DriverWorkaround::MeshIndexComponentStoresMisplaced`, lavapipe before Mesa 26.2) a triangle
-/// mesh function keeps its indices in workgroup words and its wrapper writes each primitive's
-/// indices whole: no access chain reaches a component of the indices, and the words count among
-/// the wrapper's workgroup memory, refused typed one byte short (`mesh_draws_grid`: one
-/// triangle, 12 bytes of indices beside the 4-byte count). Every other mesh profile stores each
-/// index into its component, as before. Each module passes L3.
+/// A triangle mesh function stores each index into its component, on every mesh profile: the
+/// wrapper's zeroed slot is the one access chain to the whole indices, and at least three reach a
+/// component (`mesh_draws_grid`: one triangle). Each module passes L3.
 #[test]
-fn a_mesh_function_stages_its_indices_where_the_driver_misplaces_component_stores() {
-    use crate::device::profile::DriverWorkaround;
-    use crate::device::requirements::VkLimit;
-    use crate::device::{Device, DeviceDescription, DevicePolicy};
+fn a_mesh_function_stores_each_index_into_its_component() {
     let Some(draws) = fixture("mesh_draws") else {
         return;
     };
-    let defect = DriverWorkaround::MeshIndexComponentStoresMisplaced;
-    let mut staged = 0;
     for (stem, p) in mesh_profiles() {
         let a = compile(&draws, "mesh_draws_grid", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         check_words_valid(&a.module.words, &a.module.requirements, &p)
             .unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         let [whole, component] = index_chains(&a.module.words);
-        if p.fields().workarounds.contains(&defect) {
-            staged += 1;
-            assert_eq!((whole, component), (1, 0), "{stem}: staged indices");
-        } else {
-            assert_eq!(whole, 1, "{stem}: the wrapper's zeroed slot");
-            assert!(component >= 3, "{stem}: {component} component stores");
-        }
-    }
-    assert!(
-        staged >= 2,
-        "the lavapipe profiles of Mesa 26.0.8 and newer stage their indices"
-    );
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/gate-lavapipe-x86_64.json");
-    let text = std::fs::read_to_string(path).expect("profile");
-    for (available, fits) in [(16, true), (15, false)] {
-        let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        desc.limits.mesh.max_mesh_shared_memory_size = available;
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
-        // The refusal's feature and needs (its location is the entry's).
-        let got = compile(&draws, "mesh_draws_grid", dev.profile())
-            .map(|_| ())
-            .map_err(|e| match e {
-                Error::Unsupported(u) => (u.feature, u.needs),
-                other => panic!("{available} bytes: {other:?}"),
-            });
-        let want = match fits {
-            true => Ok(()),
-            false => {
-                let u = crate::error::Unsupported::needs(
-                    Feature::ThreadgroupMemorySize,
-                    Capability::Limit {
-                        limit: VkLimit::MaxMeshSharedMemorySize,
-                        required: 16,
-                        available: 15,
-                    },
-                );
-                Err((u.feature, u.needs))
-            }
-        };
-        assert_eq!(got, want, "{available} bytes");
+        assert_eq!(whole, 1, "{stem}: the wrapper's zeroed slot");
+        assert!(component >= 3, "{stem}: {component} component stores");
     }
 }
 

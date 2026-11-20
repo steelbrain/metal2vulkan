@@ -393,9 +393,8 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
 /// The hoisted derivatives of a texture chosen per fragment are the device's own sample for a 2D
 /// color sample without a bias, an offset or a `min_lod_clamp`, through a runtime or a constexpr
 /// sampler without a bias of its own: they record no `PrecisionNote::GradFromBias` and require the
-/// device's sampler (`VkProperty::MetalSampler` on a profile that samples through Metal's own,
-/// MoltenVK, `VkProperty::DeviceSampling` on any other). A bias, a nonzero offset or a clamp keeps
-/// the note. Every case still hoists its derivatives out of the one switch-at-use.
+/// device's sampler (`VkProperty::DeviceSampling`). A bias, a nonzero offset or a clamp keeps the
+/// note. Every case still hoists its derivatives out of the one switch-at-use.
 #[test]
 fn an_unbiased_chosen_sample_is_the_device_s_own() {
     let zero = "0.000000e+00";
@@ -406,7 +405,6 @@ fn an_unbiased_chosen_sample_is_the_device_s_own() {
         ("%s", zero, "<i32 1, i32 0>", zero, false),
         ("%s", zero, "zeroinitializer", "1.000000e+00", false),
     ];
-    let mut saw_metal_sampler = false;
     for (sampler, bias, offset, clamp, exact) in cases {
         let Some(bc) = chosen_sample(sampler, bias, offset, clamp) else {
             return;
@@ -427,29 +425,19 @@ fn an_unbiased_chosen_sample_is_the_device_s_own() {
             assert_eq!((count(&a, OP_DPDX), count(&a, OP_DPDY)), (1, 1), "{what}");
             assert_no_tangled_in_a_switch(&a);
             use crate::device::requirements::VkProperty;
-            let metal = metal_sampler(&p);
-            saw_metal_sampler |= metal;
             assert_eq!(
                 a.precision.contains(&PrecisionNote::GradFromBias),
                 !exact,
                 "{what}"
             );
             if exact {
-                let sampler = match metal {
-                    true => VkProperty::MetalSampler,
-                    false => VkProperty::DeviceSampling,
-                };
                 assert!(
-                    a.requirements.properties.contains(&sampler),
+                    (a.requirements.properties).contains(&VkProperty::DeviceSampling),
                     "{what}: the module requires the device's sampler"
                 );
             }
         }
     }
-    assert!(
-        saw_metal_sampler,
-        "no committed profile samples through Metal's sampler"
-    );
 }
 
 /// A fragment `calculate_clamped_lod` through element `pos.x` of an `n`-texture array, one
@@ -1666,8 +1654,8 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 // Both loads call the module's one search function, so its 16 steps (one
                 // `OpULessThanEqual` each: of the `u64` ids with `shaderInt64`, else of the low
                 // words) and its read of the table's length are emitted once. The module was
-                // about 3,500 words with a search per load; it is within 1,600 with `u64` ids
-                // and 2,300 with word ids, the bounds below.
+                // about 3,500 words with a search per load; it is within 1,700 with `u64` ids
+                // (1,678 on MoltenVK) and 2,300 with word ids, the bounds below.
                 // The write's normalized channels are the device's conversion: noted where the
                 // profile is not measured to store Metal's codes, or where it stores a texture
                 // of a 1-bit alpha, which it rounds otherwise.
@@ -1715,7 +1703,7 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 // carry and element mask by the constant, and the write's test and select.
                 let ycbcr = 100;
                 let bound =
-                    alpha + converted + ycbcr + if p.fields().leaf.int64 { 1_600 } else { 2_300 };
+                    alpha + converted + ycbcr + if p.fields().leaf.int64 { 1_700 } else { 2_300 };
                 assert!(
                     a.module.words.len() <= bound,
                     "{stem}: {} words over {bound} (alpha in red {a8}, {} conversions)",

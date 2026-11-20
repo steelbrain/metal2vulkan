@@ -242,7 +242,10 @@ fn pipeline_mismatches_are_typed_refusals() {
     };
     let p = prof("moltenvk-m3");
     let v = vertex_under(&bc, &vertex_descriptor(), &p).expect("vertex");
-    let f = compile(&bc, "stage_io_fragment", &p).expect("fragment");
+    // The fragment compiled for the attachments' color writes, which every change below keeps.
+    let targets = render_inputs(vertex_descriptor());
+    let f = compile_with(&bc, "stage_io_fragment", &p, &fragment_inputs(&targets, &p))
+        .expect("fragment");
     // Attribute 4 as a signed format: its projection is pulled, so the fixed-function stage is
     // foreign to the descriptor; compiled under that projection it is fetched in the shader
     // and links.
@@ -546,13 +549,15 @@ fn dual_source_blending_needs_the_second_output() {
     };
     let p = prof("moltenvk-m3");
     let v = compile(&bc, "stage_io_vertex_position", &p).expect("vertex");
-    let dual = compile(&bc, "stage_io_fragment_dual_source", &p).expect("dual source");
-    let single = compile(&bc, "stage_io_fragment_point", &p).expect("single output");
     let mut r = RenderLinkInputs::new();
     let mut blend = ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm);
     blend.blending_enabled = true;
     blend.destination_rgb_blend_factor = BlendFactor::OneMinusSource1Color;
     r.color_attachments[0] = Some(blend);
+    let inputs = fragment_inputs(&r, &p);
+    let dual =
+        compile_with(&bc, "stage_io_fragment_dual_source", &p, &inputs).expect("dual source");
+    let single = compile_with(&bc, "stage_io_fragment_point", &p, &inputs).expect("single output");
     let l = link(&[&v, &dual], &render(&r), &p).expect("dual-source pipeline");
     validate_all(&l, &[&v, &dual], &p);
     assert_eq!(
@@ -616,11 +621,10 @@ fn the_projection_of_the_fixture_is_fixed_function() {
 }
 
 /// A fragment function's write to a half-float channel records the device's NaN encoding
-/// (`PrecisionNote::DeviceNanEncoding`) only where the profile's driver is not measured to store
-/// Metal's NaN: a `float` output's everywhere but MoltenVK, whose conversion is Metal's (the
-/// output's own NaN reaches the device's conversion, which no other driver is measured with), a
-/// `half` output's everywhere, its widening's NaN the device's (NVIDIA's on the RTX 5080 Laptop
-/// GPU stores `0x7fff`). A write to an `RGBA8Unorm` attachment records none.
+/// (`PrecisionNote::DeviceNanEncoding`) on every profile: a `float` output's, whose own NaN
+/// reaches the device's conversion, and a `half` output's, its widening's NaN the device's
+/// (NVIDIA's on the RTX 5080 Laptop GPU stores `0x7fff`). A write to an `RGBA8Unorm` attachment
+/// records none.
 #[test]
 fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -635,7 +639,7 @@ fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
         ("intel-irisxe-rplp-anv", true, true),
         ("nvidia-rtx50-linux", true, true),
         ("nvidia-rtx5080-laptop", true, true),
-        ("moltenvk-m3", false, true),
+        ("moltenvk-m3", true, true),
     ] {
         let p = prof(stem);
         let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
@@ -880,6 +884,8 @@ fn mode_two_refuses_fragment_texture_writes_it_would_round() {
                 if let Some(c) = choice {
                     inputs.storage_images.insert(slot, c);
                 }
+                // The fragment's push fields follow the vertex function's.
+                inputs.push_base = (v.interface.push.push_range).map_or(0, |(at, size)| at + size);
                 inputs
             };
             // The default mode: recorded where it may be such, linked, valid.

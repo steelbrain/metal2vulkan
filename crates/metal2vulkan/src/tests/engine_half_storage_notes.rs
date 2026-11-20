@@ -8,11 +8,9 @@
 //! what the write leaves to the device under the class of the format bound at the slot
 //! (`SpecKey::BoundTexelFormat`), which the runtime reads at each dispatch
 //! (`StageModule::bound_format_clauses`): bound in a half-float format, the NaN
-//! (`PrecisionNote::DeviceNanEncoding`) where the profile does not take
-//! `DriverDeviation::MetalHalfStorageNans` (whose property the module requires where it does), and
-//! the rounding (`PrecisionNote::DeviceColorConversion`) where it does not take
-//! `DriverDeviation::MetalHalfStorageWrites` (likewise); bound in `RG11B10Float`, the NaN on every
-//! profile; bound in a format that holds no NaN, no NaN note.
+//! (`PrecisionNote::DeviceNanEncoding`) and the rounding (`PrecisionNote::DeviceColorConversion`),
+//! on every profile, requiring no `VkProperty::MetalHalfStorage*`; bound in `RG11B10Float`, the
+//! NaN on every profile; bound in a format that holds no NaN, no NaN note.
 //!
 //! `llvm-as` assembles the fixture; without it the tests skip visibly.
 
@@ -20,7 +18,7 @@ use crate::bind::{BindState, BoundBuffer, BoundTexture, StageTable, TextureFacts
 use crate::budget::Budget;
 use crate::device::requirements::VkProperty;
 use crate::device::{Device, DevicePolicy};
-use crate::error::{DriverDeviation, Error};
+use crate::error::Error;
 use crate::library::Library;
 use crate::metal::format::bound_texel_format;
 use crate::metal::{PixelFormat, TextureType, TextureUsage};
@@ -150,13 +148,9 @@ fn a_float_write_notes_the_device_s_half_conversion_under_the_bound_format() {
     let Some(bc) = fixture() else {
         return;
     };
-    let (mut noted, mut measured) = (0, 0);
+    let mut noted = 0;
     for (stem, desc) in committed_descriptions().expect("profiles") {
         let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
-        let p = dev.profile();
-        let rounds = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageWrites);
-        let nans = p.takes_driver_deviation(DriverDeviation::MetalHalfStorageNans);
-        let small_nans = p.takes_driver_deviation(DriverDeviation::MetalSmallFloatNans);
         for (entry, buffer) in [
             ("hsw_write", false),
             ("hsw_read_write", false),
@@ -181,42 +175,28 @@ fn a_float_write_notes_the_device_s_half_conversion_under_the_bound_format() {
                 let stage = &variant.stage;
                 let relied = &variant.requirements.properties;
                 let nan = announced(stage, PrecisionNote::DeviceNanEncoding, pf);
+                for property in [
+                    VkProperty::MetalHalfStorageNans,
+                    VkProperty::MetalHalfStorageWrites,
+                    VkProperty::MetalSmallFloatNans,
+                ] {
+                    assert!(!relied.contains(&property), "{what}: {property:?}");
+                }
                 if HALVES.contains(&pf) {
-                    assert_eq!(nan, !nans, "{what}: {:?}", stage.specialized_notes);
-                    assert_eq!(
-                        relied.contains(&VkProperty::MetalHalfStorageNans),
-                        nans,
-                        "{what}"
-                    );
+                    assert!(nan, "{what}: {:?}", stage.specialized_notes);
                     assert!(
-                        rounds || announced(stage, PrecisionNote::DeviceColorConversion, pf),
+                        announced(stage, PrecisionNote::DeviceColorConversion, pf),
                         "{what}: {:?}",
                         stage.precision_notes
                     );
-                    assert_eq!(
-                        relied.contains(&VkProperty::MetalHalfStorageWrites),
-                        rounds,
-                        "{what}"
-                    );
-                    noted += usize::from(nan);
-                    measured += usize::from(!nan);
+                    noted += 1;
                     continue;
                 }
                 // Metal stores a small float's every NaN as its canonical one, and RADV and
-                // NVIDIA keep another's payload bits, where a device of `MetalSmallFloatNans`
-                // stores Metal's; a 32-bit float or normalized channel takes no half's NaN.
+                // NVIDIA keep another's payload bits; a 32-bit float or normalized channel takes
+                // no half's NaN.
                 let small = pf == PixelFormat::RG11B10Float;
-                assert_eq!(
-                    nan,
-                    small && !small_nans,
-                    "{what}: {:?}",
-                    stage.specialized_notes
-                );
-                // Required wherever the module may store into a small float, on the deviation.
-                let relies = relied.contains(&VkProperty::MetalSmallFloatNans);
-                assert!(small_nans || !relies, "{what}");
-                assert!(!small || relies == small_nans, "{what}");
-                measured += usize::from(small && small_nans);
+                assert_eq!(nan, small, "{what}: {:?}", stage.specialized_notes);
             }
             // The module of no storage choice serves every format the device writes without one:
             // its NaN note holds of the half-float classes (where the device's NaN is not Metal's)
@@ -230,14 +210,11 @@ fn a_float_write_notes_the_device_s_half_conversion_under_the_bound_format() {
                 let small = matches!(pf, P::RG11B10Float | P::RGB9E5Float);
                 assert_eq!(
                     announced(&plain.stage, PrecisionNote::DeviceNanEncoding, pf),
-                    (half && !nans) || (small && !small_nans),
+                    half || small,
                     "{entry} without a storage choice, bound as {pf:?}, on {stem}"
                 );
             }
         }
     }
-    assert!(
-        noted > 0 && measured > 0,
-        "{noted} noted, {measured} measured to store Metal's NaN"
-    );
+    assert!(noted > 0, "no half-float write noted");
 }

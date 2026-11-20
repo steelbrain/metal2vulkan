@@ -7,13 +7,10 @@
 //!   its buffer slots through its own device address, pushed (`SlotGuestBase`) in its window, with
 //!   no descriptor, no root table and no parameter block; the fragment function pushes nothing;
 //!   both modules pass L3.
-//! - On `Device::new`'s profile, the same pipeline is refused as `Unsupported{IdentityDomains}`
-//!   (not implemented), as before: its push window is not the floor's.
 //! - On `Device::from_queries`' profile the two stages push one range, dense by link: with
 //!   `sampled_fragment`, which pushes its constexpr sampler's index, the fragment function's
 //!   fields start at the vertex function's end (64: its second slot's bounds are its tail, 24
-//!   bytes above its other fields), where the fixed windows put
-//!   them at 64. A fragment compiled on its own at base 0 and linked after that vertex function is
+//!   bytes above its other fields). A fragment compiled on its own at base 0 and linked after that vertex function is
 //!   `InvalidDescriptor(PushBase)`; compiled under the vertex function's
 //!   `CompiledFunction::fragment_push_base` it links.
 //! - On `Device::from_queries`' profile with no buffer robustness enabled, every `[[stage_in]]`
@@ -206,28 +203,6 @@ fn from_queries_pushes_a_render_pipeline_dense_by_link() {
             Some(64),
             "{stem}"
         );
-    }
-}
-
-#[test]
-fn device_new_still_refuses_render_functions_under_the_identity_domains() {
-    let Some(library) = library() else {
-        return;
-    };
-    let d = descriptor(&library);
-    for stem in PROFILES {
-        let desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
-        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
-        match device.compile_render_pipeline(&d, &Budget::standard()) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!(
-                    (u.feature, u.needs),
-                    (Feature::IdentityDomains, Needs::NotImplemented),
-                    "{stem}"
-                );
-            }
-            other => panic!("{stem}: {:?}", other.map(|_| "compiled")),
-        }
     }
 }
 

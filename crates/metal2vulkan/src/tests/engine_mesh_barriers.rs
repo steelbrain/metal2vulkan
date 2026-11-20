@@ -305,13 +305,18 @@ fn run_draw(plan: &Plan, m: &TypedModule, draw: Draw, lanes: SubgroupSize) -> Ve
     spec.insert(SpecKey::ObjectFlatLocalSize, u64::from(lx * ly));
     spec.insert(SpecKey::ObjectMultiRegion, 1);
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+    // The fields a profile's push window has no room for: every offset word 0.
+    let mut table = vec![0u8; plan.push.argument_table_size.max(4) as usize];
     for f in &plan.push.fields {
         match (f.field, f.loc) {
-            (PushField::DispatchRegion, PushLoc::Push { offset }) => {
+            (PushField::DispatchRegion, loc) => {
                 let region = crate::lower::dispatch::partial_region_bytes([tx, ty, 1], [lx, ly, 1])
                     .expect("a region");
-                let at = offset as usize;
-                push[at..at + region.len()].copy_from_slice(&region);
+                let (words, at) = match loc {
+                    PushLoc::Push { offset } => (&mut push, offset as usize),
+                    PushLoc::ArgumentTable { offset } => (&mut table, offset as usize),
+                };
+                words[at..at + region.len()].copy_from_slice(&region);
             }
             // Every buffer is bound at offset 0, wherever its offset word is placed.
             (PushField::SlotBindOffset(_), _) => {}
@@ -354,7 +359,6 @@ fn run_draw(plan: &Plan, m: &TypedModule, draw: Draw, lanes: SubgroupSize) -> Ve
                 address: None,
                 bytes: bytes(&[0; 4]),
             },
-            // The offset words a profile's push window has no room for: every one 0.
             Buffer {
                 slot: Some(ResourceSlot {
                     stage: Stage::Object,
@@ -362,7 +366,7 @@ fn run_draw(plan: &Plan, m: &TypedModule, draw: Draw, lanes: SubgroupSize) -> Ve
                     index: 0,
                 }),
                 address: None,
-                bytes: vec![0; plan.push.argument_table_size.max(4) as usize],
+                bytes: table,
             },
         ],
         push,

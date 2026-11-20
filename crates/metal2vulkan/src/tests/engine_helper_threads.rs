@@ -63,8 +63,8 @@ struct Asked {
     input: bool,
 }
 
-/// What `entry` of `bc` compiles to on `p`, after L3 and, where the toolchain is present,
-/// MoltenVK's MSL compile of the module.
+/// What `entry` of `bc` compiles to on `p`, after L3 and, on a MoltenVK profile where the
+/// toolchain is present, MoltenVK's MSL compile of the module.
 fn asked(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) -> Asked {
     let (plan, _) = typed_module(bc, entry, p).unwrap_or_else(|e| panic!("{entry} on {stem}: {e}"));
     let fp = &plan.families.fragment;
@@ -74,10 +74,13 @@ fn asked(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) -> Asked {
     let a = compile(bc, entry, p).unwrap_or_else(|e| panic!("{entry} on {stem}: {e}"));
     let (_, words) =
         link_and_validate(&a, p).unwrap_or_else(|e| panic!("{entry} on {stem}: L3: {e}"));
-    match moltenvk_msl_compile(&words) {
-        Ok(()) => {}
-        Err(AssembleError::Missing(why)) => eprintln!("SKIPPED: {why}"),
-        Err(AssembleError::Rejected(why)) => panic!("{entry} on {stem}: MSL: {why}"),
+    match stem
+        .starts_with("moltenvk-")
+        .then(|| moltenvk_msl_compile(&words))
+    {
+        None | Some(Ok(())) => {}
+        Some(Err(AssembleError::Missing(why))) => eprintln!("SKIPPED: {why}"),
+        Some(Err(AssembleError::Rejected(why))) => panic!("{entry} on {stem}: MSL: {why}"),
     }
     let input = instructions(&words, crate::spv::Op::Decorate)
         .iter()
@@ -92,8 +95,9 @@ fn asked(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) -> Asked {
     }
 }
 
-/// Each fragment function on `moltenvk-m3` and on it without demote, and the expected form,
-/// queries and input of each: the after and before cases ask twice (`quad_` and `simd_`).
+/// Each fragment function on `intel-arl-anv` (demote and `shaderQuadControl`) and on it without
+/// demote, and the expected form, queries and input of each: the after and before cases ask twice
+/// (`quad_` and `simd_`).
 #[test]
 fn fragment_helper_queries_take_the_form_of_their_discards() {
     let (Some(msl4), Some(msl22)) = (
@@ -102,9 +106,17 @@ fn fragment_helper_queries_take_the_form_of_their_discards() {
     ) else {
         return;
     };
-    let with = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
-    let without =
-        super::engine_fragment::moltenvk_without(&[VkFeature::ShaderDemoteToHelperInvocation]);
+    let stem = "intel-arl-anv";
+    let with = profile(stem, DevicePolicy::default()).expect("profile");
+    let without = {
+        let mut desc = crate::pipeline::testing::description(stem).expect("description");
+        let demote = VkFeature::ShaderDemoteToHelperInvocation;
+        assert!(desc.features.remove(&demote), "{stem} has {demote:?}");
+        crate::device::Device::from_queries(desc, DevicePolicy::default())
+            .expect("device")
+            .profile()
+            .clone()
+    };
     let asks = |form, queries, input| Asked {
         form,
         queries,
@@ -152,9 +164,9 @@ fn fragment_helper_queries_take_the_form_of_their_discards() {
         ),
     ];
     for (bc, entry, on_with, on_without) in cases {
-        assert_eq!(asked(bc, entry, "moltenvk-m3", &with), on_with, "{entry}");
+        assert_eq!(asked(bc, entry, stem, &with), on_with, "{entry}");
         assert_eq!(
-            asked(bc, entry, "moltenvk-m3 without demote", &without),
+            asked(bc, entry, &format!("{stem} without demote"), &without),
             on_without,
             "{entry}"
         );
@@ -163,14 +175,13 @@ fn fragment_helper_queries_take_the_form_of_their_discards() {
 
 /// A fragment function that discards, asks whether its thread is a helper and ballots the answers
 /// over its quad records `PrecisionNote::FragmentSimdgroupGrouping` on every committed profile that
-/// compiles it and does not take `MetalFragmentSimdgroups` (the Radeon 780M's among them), and on
-/// the MoltenVK profile, which takes it, records none: an Apple GPU shades some quads of such a
-/// function as several partial quads, which the device's quads are not. The same function without
-/// the discard (`fragment_helper_threads`), and a function that discards and asks with no quad
-/// operation (`fragment_helper_thread_alone_after_a_terminating_discard`), record none anywhere.
+/// compiles it (the Radeon 780M's and Intel's ANV among them): an Apple GPU shades some quads of
+/// such a function as several partial quads, which the device's quads are not. The same function
+/// without the discard (`fragment_helper_threads`), and a function that discards and asks with no
+/// quad operation (`fragment_helper_thread_alone_after_a_terminating_discard`), record none
+/// anywhere.
 #[test]
-fn a_discarding_function_s_helper_ballots_record_the_grouping_where_the_driver_is_not_metal_s() {
-    use crate::error::DriverDeviation;
+fn a_discarding_function_s_helper_ballots_record_the_grouping() {
     use crate::pipeline::artifact::PrecisionNote;
     use crate::spirv::testing::committed_profiles;
     let (Some(msl4), Some(msl22)) = (
@@ -197,10 +208,9 @@ fn a_discarding_function_s_helper_ballots_record_the_grouping_where_the_driver_i
     ];
     let mut noted = BTreeMap::new();
     for (name, p) in committed_profiles().expect("profiles") {
-        let want = !p.takes_driver_deviation(DriverDeviation::MetalFragmentSimdgroups);
         for (bc, entry) in discarding {
             if let Ok(a) = compile(bc, entry, &p) {
-                assert_eq!(a.precision.contains(&note), want, "{entry} on {name}");
+                assert!(a.precision.contains(&note), "{entry} on {name}");
                 *noted.entry(name.clone()).or_insert(0) += 1;
             }
         }
@@ -210,9 +220,8 @@ fn a_discarding_function_s_helper_ballots_record_the_grouping_where_the_driver_i
             }
         }
     }
-    // Both sides ran: the 780M's profile compiles all three and records the note, MoltenVK's
-    // compiles all three and records none.
-    for stem in ["amd-780m-radv", "moltenvk-m3"] {
+    // The 780M's and the Arrow Lake's profiles compile all three and record the note.
+    for stem in ["amd-780m-radv", "intel-arl-anv"] {
         assert_eq!(noted.get(stem), Some(&3), "{stem}: {noted:?}");
     }
 }

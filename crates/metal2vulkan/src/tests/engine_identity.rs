@@ -4,29 +4,24 @@
 //!   through its own device address, pushed (`SlotGuestBase`), with no root table and no
 //!   descriptor. It passes L3, and on the CPU interpreter, with its buffers above 4 GiB and bound
 //!   at offsets that are not 0, it computes the program's answer and writes nothing else.
-//! - A kernel whose slot addresses do not fit the 128-byte window (`many`, generated: 20 read
-//!   buffers and an output) pushes its parameter block's address first
-//!   (`ArgumentTableAddress`), the addresses that fit after it, and reads the rest from the block
-//!   at their placed offsets, with no descriptor; it passes L3 and computes its answer on the CPU
-//!   interpreter. On `Device::from_queries`' profile, whose kernel window is 256 bytes, the same
-//!   kernel pushes all 21 addresses with no block, below its tail word; one of 31 slots, Metal's
-//!   most, pushes its block's address and 27 slot addresses below the tail word at 248, and reads
-//!   the other 4 from the block.
-//! - A kernel that reads grid builtins (`grid`, generated) declares no `MultiRegion` constant and
-//!   reads Metal's grid from its pushed `DispatchRegion` on every dispatch: whole, split in two
-//!   pieces at a base, and indirect (a zero grid, its grid `NumWorkgroups · L`) store the same
-//!   answers. On `Device::from_queries`' profile it declares `MultiRegion`, default 0, and reads
-//!   its base from every region: at 0 the same dispatches store the same answers, and a ragged
-//!   grid split into a region of its threadgroup size and an edge region of fewer threads, at 1
-//!   with Metal's threadgroup size in the region, stores Metal's answers. Through the binder on
-//!   that profile (`BindingPlan::instantiate_dispatch`) a ragged `dispatchThreads` grid's regions,
-//!   edges of fewer threads among them, set `MultiRegion` 1 and store Metal's answers.
+//! - In the kernel window of 256 bytes a kernel of 21 slots (`many`, generated: 20 read buffers
+//!   and an output) pushes all 21 addresses with no block, below its tail word; one of 31 slots,
+//!   Metal's most, pushes its parameter block's address (`ArgumentTableAddress`) and 27 slot
+//!   addresses below the tail word at 248, and reads the other 4 from the block at their placed
+//!   offsets, with no descriptor; each passes L3 and computes its answer on the CPU interpreter.
+//! - A kernel that reads grid builtins (`grid`, generated) declares `MultiRegion`, default 0, and
+//!   reads Metal's grid from its pushed `DispatchRegion` and its base from every region: at 0 a
+//!   whole dispatch, one split in two pieces at a base, and an indirect one (a zero grid, its grid
+//!   `NumWorkgroups · L`) store the same answers, and a ragged grid split into a region of its
+//!   threadgroup size and an edge region of fewer threads, at 1 with Metal's threadgroup size in
+//!   the region, stores Metal's answers. Through the binder (`BindingPlan::instantiate_dispatch`)
+//!   a ragged `dispatchThreads` grid's regions, edges of fewer threads among them, set
+//!   `MultiRegion` 1 and store Metal's answers.
 //! - A kernel's partial-threadgroups variant (`partial`, generated) dispatched at its whole
 //!   threadgroup size over a ragged grid, its pushed region flagged `NONUNIFORM`, answers each
 //!   edge threadgroup's own size, and its invocations past the grid store nothing.
 //! - The partial-threadgroups variant of a kernel that does not observe its threadgroup partition
-//!   (`edge`, generated) keeps Metal's partial threadgroups on `Device::new`'s profile; on
-//!   `Device::from_queries`' it runs its grid in tiles (`RuntimeFact::GridTiles`), its module holds
+//!   (`edge`, generated) runs its grid in tiles (`RuntimeFact::GridTiles`), its module holds
 //!   no division by a value the driver does not know, and over grids ragged along every axis,
 //!   along one, and whole, in `grid_tile`'s tiles, it stores each thread's Metal position once and
 //!   nothing past the grid; an indirect dispatch runs at its own size.
@@ -59,7 +54,7 @@
 //! - A storage slot read without a format (`engine/rrp_swizzled_storage`'s `rrp_sw_rwread_f`) on
 //!   the Iris Xe, which reads storage so by the formats' own bits alone, is declared without a
 //!   format where every read-write tier format has the read bit, and refused where one lacks it;
-//!   `Device::new`'s answer there is unchanged.
+//!   the default domains' answer there is unchanged.
 //! - A kernel that samples 2D textures through a bicubic constexpr sampler at normalized
 //!   coordinates (`engine/bcu_formats`, `float` and `half` results) reads how the filter treats
 //!   each slot's bound format from the slot's pushed field (`PushField::BicubicTexels`): no
@@ -404,11 +399,21 @@ fn workloads() -> Option<Vec<u8>> {
     assembled("workloads", llvm_assemble(&path))
 }
 
+/// Whether `key` is one of a dispatch's own specialization constants: its local size, its
+/// `MultiRegion` and its `DeepThreadgroup`.
+fn dispatch_key(key: SpecKey) -> bool {
+    matches!(
+        key,
+        SpecKey::LocalSize(_) | SpecKey::MultiRegion | SpecKey::DeepThreadgroup
+    )
+}
+
 /// A kernel sampling a texture slot through a runtime sampler slot (`sample_down`: a 2D `float`
 /// sample, a size query and a write) takes the sampled texture from set 1's sampled-image array
 /// and the sampler from its plain sampler array, each at the index its pushed resource ID holds,
-/// with no descriptor, no specialization constant and no fact of the bound sampler: the word the
-/// sample reads is the resource ID's. It passes L3 on each profile.
+/// with no descriptor, no specialization constant but the dispatch's ([`dispatch_key`]) and no
+/// fact of the bound sampler: the word the sample reads is the resource ID's. It passes L3 on each
+/// profile.
 #[test]
 fn a_runtime_sampler_is_the_set_1_element_its_resource_id_names() {
     let Some(bc) = workloads() else {
@@ -430,7 +435,7 @@ fn a_runtime_sampler_is_the_set_1_element_its_resource_id_names() {
             compile_kept(&bc, "sample_down", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         assert!(
-            (a.interface.spec.iter()).all(|c| matches!(c.key, SpecKey::LocalSize(_))),
+            (a.interface.spec.iter()).all(|c| dispatch_key(c.key)),
             "{stem}: {:?}",
             a.interface.spec
         );
@@ -488,7 +493,7 @@ const SAMPLE_UP_WORDS: [u64; 2] = [34_901_797_601_020_489, 0];
 /// hand the device's unnormalized sampler) takes the texture from set 1's sampled-image array at
 /// the index its pushed resource ID holds and the sampler from the plain sampler array at the
 /// index the consumer pushes for it (`PushField::ConstexprSampler`, a `u32`), with no descriptor
-/// and no specialization constant. The field's sampler is the constexpr one in normalized
+/// and no specialization constant but the dispatch's ([`dispatch_key`]). The field's sampler is the constexpr one in normalized
 /// coordinates, whose device sampler (`CombinedSampler::constexpr_sampler`) is normalized: the
 /// shader scales the linear pixel sampler's coordinate and records
 /// `PrecisionNote::PixelSamplerScaling`, which the default domains do not. It passes L3 on each
@@ -554,7 +559,7 @@ fn a_constexpr_sampler_is_the_set_1_element_its_pushed_index_names() {
                 compile_kept(bc, "sample_up", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
             assert!(
-                (a.interface.spec.iter()).all(|c| matches!(c.key, SpecKey::LocalSize(_))),
+                (a.interface.spec.iter()).all(|c| dispatch_key(c.key)),
                 "{stem}: {:?}",
                 a.interface.spec
             );
@@ -1314,13 +1319,8 @@ fn textures_at_their_resource_ids(ab: bool) {
     }
 }
 
-/// The read buffers of [`many`]: with its output, 21 slot addresses of 8 bytes, past the window.
+/// The read buffers of a kernel of [`many_of`]: with its output, 21 slot addresses of 8 bytes.
 const READS: u32 = 20;
-
-/// [`many_of`] [`READS`] buffers.
-fn many() -> String {
-    many_of(READS)
-}
 
 /// A kernel reading one `uint` from each of `reads` buffers and storing their ordered fold
 /// (`s · 3 + v`, so two swapped addresses change it) to the next buffer.
@@ -1447,28 +1447,6 @@ fn many_placed(
     (first, pushed, spilled, plan.push.argument_table_size)
 }
 
-/// A kernel whose slot addresses do not fit the push window reads the rest from its parameter
-/// block, whose address the window holds first, and computes its answer there.
-#[test]
-fn slot_addresses_past_the_window_are_read_from_the_pushed_parameter_block() {
-    let Some(bc) = assemble_text("many", &many()) else {
-        return;
-    };
-    for stem in PROFILES {
-        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let (first, pushed, spilled, table) = many_placed(stem, &p, &bc, READS);
-        assert_eq!(
-            first,
-            Some((PushField::ArgumentTableAddress, PushLoc::Push { offset: 0 })),
-            "{stem}"
-        );
-        // The window's 120 bytes past the block address hold 15 slot addresses.
-        assert_eq!(pushed.len(), 15, "{stem}");
-        assert_eq!(spilled.len(), (READS + 1) as usize - 15, "{stem}");
-        assert_eq!(table, 48, "{stem}");
-    }
-}
-
 /// On `Device::from_queries`' profile a kernel's push window is 256 bytes:
 /// the same kernel's 21 slot addresses are all pushed, with no block, below its tail word 24 bytes
 /// above them (`PushPlacement::tail_word`). A kernel's 31, Metal's most buffer slots, would end
@@ -1562,70 +1540,10 @@ fn grid_push(plan: &Plan, out: (u64, usize), region: [u8; 32]) -> Vec<u8> {
 /// The output's address in the grid tests.
 const OUT: u64 = 0x6_0000_0000;
 
-/// A kernel's grid builtins read Metal's grid from the pushed region on every dispatch: whole,
-/// split in two pieces, and indirect.
-#[test]
-fn every_dispatch_reads_metals_grid_from_its_pushed_region() {
-    let Some(bc) = assemble_text("grid", &grid_kernel("grid")) else {
-        return;
-    };
-    const L: [u32; 3] = [4, 2, 1];
-    const GRID: [u32; 3] = [8, 6, 1];
-    const GROUPS: [u32; 3] = [2, 3, 1];
-    let threads = (GRID[0] * GRID[1]) as usize;
-    let value = GRID[0] | GRID[1] << 8 | GROUPS[0] << 16 | GROUPS[1] << 24;
-    let want: Vec<u8> = (0..threads).flat_map(|_| value.to_le_bytes()).collect();
-    // Each form's dispatches: (region base, region grid, workgroups).
-    type Dispatch = ([u32; 3], [u32; 3], [u32; 3]);
-    let forms: [(&str, &[Dispatch]); 3] = [
-        ("whole", &[([0; 3], GRID, GROUPS)]),
-        (
-            "split",
-            &[([0; 3], GRID, [2, 1, 1]), ([0, 1, 0], GRID, [2, 2, 1])],
-        ),
-        ("indirect", &[([0; 3], [0; 3], GROUPS)]),
-    ];
-    for stem in PROFILES {
-        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let (a, plan, module) =
-            compile_kept(&bc, "grid", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(
-            a.interface
-                .spec
-                .iter()
-                .all(|c| c.key != SpecKey::MultiRegion),
-            "{stem}"
-        );
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-        for (what, dispatches) in forms {
-            let mut out = vec![0u8; 4 * threads];
-            for &(base, grid, workgroups) in dispatches {
-                let region = region_bytes(base, grid, L).expect("packs");
-                let res = Resources {
-                    push: grid_push(&plan, (OUT, out.len()), region),
-                    buffers: vec![Buffer {
-                        slot: None,
-                        address: Some(OUT),
-                        bytes: out,
-                    }],
-                    spec: local_size3(L),
-                };
-                let cfg = Config {
-                    workgroups,
-                    ..Config::default()
-                };
-                let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem} {what}: {e}"));
-                out = got.buffers.into_iter().next().expect("out");
-            }
-            assert_eq!(out, want, "{stem} {what}");
-        }
-    }
-}
-
-/// On `Device::from_queries`' profile (`IdentityRegion::Sized`) the same kernel declares
-/// `MultiRegion`, default 0, and reads its base from every region and its threadgroup size from
-/// its pipeline unless `MultiRegion` is 1. At 0 the whole, split and indirect dispatches of
-/// [`every_dispatch_reads_metals_grid_from_its_pushed_region`] store the same answers; a ragged
+/// A kernel's grid builtins ([`grid_kernel`]) read Metal's grid from the pushed region
+/// (`IdentityRegion::Sized`): the kernel declares `MultiRegion`, default 0, and reads its base
+/// from every region and its threadgroup size from its pipeline unless `MultiRegion` is 1. At 0 a
+/// whole dispatch, one split in two pieces and an indirect one store Metal's answers; a ragged
 /// grid split as the binder splits it, a region of the threadgroup size at 0 and an edge region
 /// of fewer threads at 1, stores Metal's answers for the ragged grid.
 #[test]
@@ -1904,14 +1822,12 @@ fn workgroup_of(module: &TypedModule, spec: &BTreeMap<SpecKey, u64>) -> [u32; 3]
     parts.map(|part| value(module, spec, part) as u32)
 }
 
-/// On `Device::from_queries`' profile a kernel whose workgroup is its threadgroup declares
-/// `SpecKey::DeepThreadgroup`, default false, and on `Device::new`'s it does not. Set for a
-/// threadgroup deeper than `DEEP_THREADGROUP`, its workgroup is one row of the threadgroup's
-/// threads and its threads' positions, linear indices and threadgroup memory are Metal's:
-/// [`deep_kernel`] over two threadgroups of 1 by 1 by 320, 2 by 3 by 100 and 1 by 4 by 256 stores
-/// what Metal's do, and so does one of 4 by 4 by 4, at its own workgroup with the key unset. The
-/// device reports Metal's 1,024 threads along every axis there, where `Device::new` on a profile of
-/// 64 along `z` reports 64.
+/// A kernel whose workgroup is its threadgroup declares `SpecKey::DeepThreadgroup`, default false.
+/// Set for a threadgroup deeper than `DEEP_THREADGROUP`, its workgroup is one row of the
+/// threadgroup's threads and its threads' positions, linear indices and threadgroup memory are
+/// Metal's: [`deep_kernel`] over two threadgroups of 1 by 1 by 320, 2 by 3 by 100 and 1 by 4 by 256
+/// stores what Metal's do, and so does one of 4 by 4 by 4, at its own workgroup with the key unset.
+/// The device reports Metal's 1,024 threads along every axis, on a profile of 64 along `z` too.
 #[test]
 fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
     use crate::pipeline::DEEP_THREADGROUP;
@@ -1919,12 +1835,6 @@ fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let (a, _, _) = compile_kept(&bc, "deep", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(
-            (a.interface.spec.iter()).all(|c| c.key != SpecKey::DeepThreadgroup),
-            "{stem}: DeepThreadgroup on Device::new"
-        );
         let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
         let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
         let p = device.profile();
@@ -1975,11 +1885,7 @@ fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
     }
     let desc = crate::pipeline::testing::description("nvidia-rtx50-linux")
         .unwrap_or_else(|e| panic!("{e}"));
-    let new = Device::from_queries(desc.clone(), identity()).unwrap_or_else(|e| panic!("{e}"));
-    assert_eq!(
-        new.metal_properties().max_threads_per_threadgroup,
-        [1024, 1024, 64]
-    );
+    assert_eq!(desc.limits.max_compute_work_group_size[2], 64);
     let queries = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(
         queries.metal_properties().max_threads_per_threadgroup,
@@ -2171,17 +2077,16 @@ fn edge_words(grid: [u32; 3], len: usize) -> Vec<u8> {
     want
 }
 
-/// On `Device::from_queries`' profile the partial-threadgroups variant of a kernel that does not
-/// observe its threadgroup partition runs its grid in tiles (`RuntimeFact::GridTiles`): over
+/// The partial-threadgroups variant of a kernel that does not observe its threadgroup partition
+/// runs its grid in tiles (`RuntimeFact::GridTiles`): over
 /// grids ragged along every axis, along one, and whole, each in `grid_tile`'s tile, one workgroup
 /// of `GRID_TILE_THREADS` with the tile as the region's nominal size at `MultiRegion` 1, the
 /// region flagged [`NONUNIFORM`], each of the grid's threads stores Metal's position once and no
 /// invocation past the grid stores anything; unflagged, a whole grid does the same and a ragged
 /// one's invocations past the grid store too, so the flag alone guards the test of the grid's
 /// edge; an indirect dispatch at `MultiRegion` 0, its region stating no
-/// grid, runs at its own size, every invocation storing. Its module divides by no value the driver does not know
-/// when it specializes it. On `Device::new`'s profile the same variant keeps Metal's partial
-/// threadgroups, whose positions divide `lin` by the threads left.
+/// grid, runs at its own size, every invocation storing. Its module divides by no value the driver
+/// does not know when it specializes it.
 #[test]
 fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
     use crate::lower::dispatch::{grid_tile, GRID_TILE_THREADS};
@@ -2191,15 +2096,6 @@ fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
     let mut inputs = LowerInputs::new();
     inputs.partial_threadgroups = true;
     for stem in PROFILES {
-        let rows = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let a = compile_with(&bc, "edge", &rows, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(!a.facts.contains(&RuntimeFact::GridTiles), "{stem}");
-        let (_, module_words) =
-            link_and_validate(&a, &rows).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-        assert!(
-            runtime_divisions(&spirv_dis(&module_words)) > 0,
-            "{stem}: Device::new"
-        );
         let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
         let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
         let p = device.profile();
@@ -2755,8 +2651,8 @@ fn unwritten_slots_are_loaded_through_non_writable_places() {
 /// `shaderStorageImageReadWithoutFormat` and sets the read bit on every read-write tier format), is
 /// declared without a format, as a heap storage class's read is: the pipeline requires the SPIR-V
 /// capability and not the feature. With one tier format's bit cleared (`RGBA16Float`) the read is
-/// still refused as `Unsupported{IdentityDomains}`. `Device::new`'s answer on the Iris Xe, the
-/// format as the binder's input (`NeedsInput{StorageTextureFormat}`), does not change.
+/// still refused as `Unsupported{IdentityDomains}`. The default domains' answer on the Iris Xe,
+/// the format as the binder's input (`NeedsInput{StorageTextureFormat}`), does not change.
 #[test]
 fn a_storage_read_the_formats_bits_grant_is_formatless_under_the_identity_domains() {
     use crate::device::requirements::SpirvCapability;
@@ -2800,12 +2696,13 @@ fn a_storage_read_the_formats_bits_grant_is_formatless_under_the_identity_domain
         other => panic!("cleared: {:?}", other.map(|_| ())),
     }
 
-    let old = Device::from_queries(desc, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
-    match compiled(&old) {
+    let default =
+        Device::from_queries(desc, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+    match compiled(&default) {
         Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat { slot })) => {
             assert_eq!((slot.class, slot.index), (SlotClass::Texture, 0));
         }
-        other => panic!("Device::new: {:?}", other.map(|_| ())),
+        other => panic!("the default domains: {:?}", other.map(|_| ())),
     }
 }
 
