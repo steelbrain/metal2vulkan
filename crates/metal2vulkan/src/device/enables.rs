@@ -16,8 +16,8 @@
 //!
 //! - [`DeviceDescription::recommended_enables`]: what the core can use on a device described by
 //!   what it supports (`DeviceDescription::query`); the consumer merges it into its own list.
-//! - [`DeviceDescription::with_enabled`]: that description restricted to what the consumer
-//!   enabled, the input of `Device::new` (which checks the exposure invariant and the feature
+//! - [`DeviceDescription::with_enabled`]: that description restricted to what the consumer enabled,
+//!   the input of `Device::from_queries` (which checks the exposure invariant and the feature
 //!   dependencies).
 //! - [`DeviceDescription::required_enables`]: what a compiled artifact's [`Requirements`] need
 //!   enabled on the device.
@@ -845,8 +845,8 @@ impl Device {
     }
 }
 
-/// `Device::new`'s check of the description invariants: every listed feature is exposed by the
-/// description's version or listed extensions, and every listed feature's [`FEATURE_NEEDS`]
+/// `Device::from_queries`'s check of the description invariants: every listed feature is exposed by
+/// the description's version or listed extensions, and every listed feature's [`FEATURE_NEEDS`]
 /// companion is listed. The rule of [`BUFFER_UPDATE_AFTER_BIND_VUID`] is not checked here: a
 /// committed profile read whole lists both sides of it on three profiles, and the profile the core
 /// derives from such a description translates exactly as from its creatable restriction.

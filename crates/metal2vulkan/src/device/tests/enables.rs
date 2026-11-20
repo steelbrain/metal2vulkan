@@ -1,5 +1,5 @@
 //! Enable sets: `recommended_enables`, `with_enabled`, `required_enables`, and the exposure
-//! invariant `Device::new` checks.
+//! invariant `Device::from_queries` checks.
 
 use std::collections::BTreeSet;
 
@@ -45,11 +45,11 @@ fn floor_with(extensions: &[VkExtension], features: &[VkFeature]) -> DeviceDescr
     d
 }
 
-/// On every committed profile the recommendation lists only what the description lists, is
-/// closed (`with_enabled` accepts it, `Device::new` accepts the result), and is a fixed point:
-/// the device made from it needs exactly it, as does the device made from the full description.
-/// It leaves out exactly the buffer update-after-bind features of the three profiles that list
-/// them with `robustBufferAccess` and without `robustBufferAccessUpdateAfterBind`.
+/// On every committed profile the recommendation lists only what the description lists, is closed
+/// (`with_enabled` accepts it, `Device::from_queries` accepts the result), and is a fixed point:
+/// the device made from it needs exactly it, as does the device made from the full description. It
+/// leaves out exactly the buffer update-after-bind features of the three profiles that list them
+/// with `robustBufferAccess` and without `robustBufferAccessUpdateAfterBind`.
 #[test]
 fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
     let mut left_out = Vec::new();
@@ -473,9 +473,9 @@ fn with_enabled_refuses_sets_breaking_a_co_enable_rule() {
     }
 }
 
-/// `Device::new` refuses a description listing a feature without its companion; every committed
-/// profile lists both or neither. No companion needs one itself, which the one-pass recommendation
-/// relies on.
+/// `Device::from_queries` refuses a description listing a feature without its companion; every
+/// committed profile lists both or neither. No companion needs one itself, which the one-pass
+/// recommendation relies on.
 #[test]
 fn device_new_refuses_a_feature_without_its_companion() {
     for &(f, needs, vuid) in FEATURE_NEEDS {
@@ -717,7 +717,7 @@ fn required_enables_follow_version_dependencies_formats_and_flags() {
     );
 }
 
-/// `Device::new` refuses a description listing a feature it does not expose.
+/// `Device::from_queries` refuses a description listing a feature it does not expose.
 #[test]
 fn device_new_refuses_unexposed_features() {
     let mut d = profile("vk12-floor");

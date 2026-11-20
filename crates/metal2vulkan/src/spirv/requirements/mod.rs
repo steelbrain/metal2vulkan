@@ -11,17 +11,17 @@
 //!
 //! Conventions:
 //!
-//! - **Features imply their exposure; extensions are what every device needs.** A requirement
-//!   lists the gating *feature* (e.g. `shaderDemoteToHelperInvocation`, which exists through
-//!   `VK_EXT_shader_demote_to_helper_invocation` or Vulkan 1.3), and `extensions` lists exactly
-//!   the device extensions the module needs on **every** device: the extension of each required
-//!   feature that no core version exposes (`VkFeature::exposure`; e.g.
-//!   `VK_EXT_fragment_shader_interlock`, `VK_KHR_maintenance8`), added in one closing step, and
-//!   the extension of a declaration the registry gates by exposure alone with no feature and no
-//!   core version (`VK_EXT_shader_stencil_export`). An extension a core version promoted
+//! - **Features imply their exposure; extensions are what every device needs.** A requirement lists
+//!   the gating *feature* (e.g. `shaderDemoteToHelperInvocation`, which exists through
+//!   `VK_EXT_shader_demote_to_helper_invocation` or Vulkan 1.3), and `extensions` lists exactly the
+//!   device extensions the module needs on **every** device: the extension of each required feature
+//!   that no core version exposes (`VkFeature::exposure`; e.g. `VK_EXT_fragment_shader_interlock`,
+//!   `VK_KHR_maintenance8`), added in one closing step, and the extension of a declaration the
+//!   registry gates by exposure alone with no feature and no core version
+//!   (`VK_EXT_shader_stencil_export`). An extension a core version promoted
 //!   (`VK_KHR_shader_terminate_invocation`) depends on the device's version, so it is not listed:
-//!   the description lists the feature only where it is exposed (`Device::new` checks it), and
-//!   `DeviceDescription::required_enables` names the extension below that version.
+//!   the description lists the feature only where it is exposed (`Device::from_queries` checks it),
+//!   and `DeviceDescription::required_enables` names the extension below that version.
 //! - **A capability with a version or an extension beside its feature is enabled on the device.**
 //!   `StorageImageReadWithoutFormat` and `StorageImageWriteWithoutFormat` are enabled by
 //!   `shaderStorageImage{Read,Write}WithoutFormat`, by Vulkan 1.3, or by

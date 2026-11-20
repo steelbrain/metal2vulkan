@@ -49,10 +49,8 @@
 //! namespace tag, so no AIR user key can collide with another role's key. Keys stay opaque to
 //! link; it reads the role here, never the bytes.
 //!
-//! Every interface variable is 32-bit (narrow varyings are widened at the interface, so no varying
-//! needs `storageInputOutput16`), but a `half` color output on a device that enables
-//! `storageInputOutput16` under `Device::new` ([`StageIo::half_outputs`]; never under
-//! `Device::from_queries`), declared with 16-bit `float` lanes;
+//! Every interface variable is 32-bit (narrow varyings and `half` color outputs are widened at the
+//! interface, so none needs `storageInputOutput16`);
 //! [`IoType::source_bits`] keeps the AIR element width for format checks. An attribute or color
 //! takes one whole location; a user varying takes one location at
 //! component 0 unless link packs varyings into shared locations, for which the module decorates
@@ -382,12 +380,9 @@ pub struct StageIo {
     #[cfg_attr(feature = "serde", serde(default))]
     pub half_fast_colors: Vec<u32>,
     /// The color outputs declared with 16-bit `float` lanes, in the order of the entry's outputs:
-    /// each `half` color output (a scalar or vector of AIR's `half`) through a variable of its own
-    /// type on a device that enables `storageInputOutput16` and `shaderFloat16` under
-    /// `Device::new` (never under `Device::from_queries`), but to an
-    /// attachment held with its channels rotated, so the device receives the `half` as Metal's
-    /// attachment does. Every other user variable is declared 32-bit (a narrower value widened).
-    /// Empty for every other function.
+    /// none, as every device receives a `half` color output widened to `float` (the stage plan
+    /// declares no output 16-bit). Every user variable is declared 32-bit (a narrower value
+    /// widened).
     #[cfg_attr(feature = "serde", serde(default))]
     pub half_outputs: Vec<VaryingKey>,
     /// The index builtins, `Layer` and `ViewportIndex`, a fragment function reads as 0 on a device

@@ -2,7 +2,7 @@
 //!
 //! The result is what the physical device **supports**. A description must record what the
 //! consumer **enables** (`device::description`), so the consumer removes every feature and
-//! extension it does not enable at `vkCreateDevice` before calling `Device::new`.
+//! extension it does not enable at `vkCreateDevice` before calling `Device::from_queries`.
 //!
 //! Which structures are chained follows the same exposure rule as the Khronos JSON reader
 //! (`device::khronos`), at the **effective** API version `min(instance, device)` (the Vulkan
@@ -957,12 +957,12 @@ impl DeviceDescription {
     /// limits and properties the core consumes, and the format properties of exactly
     /// [`FormatSupport::queries_for`] its version and available extensions.
     ///
-    /// The result describes what the device **supports**; remove what the consumer does not
-    /// enable before `Device::new`. `instance_api_version` is the `VkApplicationInfo::apiVersion`
+    /// The result describes what the device **supports**; remove what the consumer does not enable
+    /// before `Device::from_queries`. `instance_api_version` is the `VkApplicationInfo::apiVersion`
     /// the instance was created with (e.g. `vk::ApiVersion::from_packed(app_info.api_version)`):
     /// the Vulkan spec limits the device's core functionality to `min(instance, device)` version,
-    /// so the description's `api_version`, the structures chained, and every feature sourced from
-    /// a core version follow that minimum, never the device's own version alone. Only the
+    /// so the description's `api_version`, the structures chained, and every feature sourced from a
+    /// core version follow that minimum, never the device's own version alone. Only the
     /// physical-device query entry points are called; nothing is created and no device is opened.
     ///
     /// Errors: an effective version below Vulkan 1.2 is `Unsupported{VulkanVersion}` (nothing

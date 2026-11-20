@@ -2,7 +2,7 @@
 //!
 //! A description records what the consumer **enables**, not what the hardware has: output may
 //! only declare what was enabled at `vkCreateDevice`. It is the only input of
-//! `Device::new`; Khronos profile JSON is parsed into a description
+//! `Device::from_queries`; Khronos profile JSON is parsed into a description
 //! ([`DeviceDescription::from_khronos_json`]), never directly into a `DeviceProfile`.
 //!
 //! Absence means "not supported": a feature, extension, or format usage the description does not
@@ -24,7 +24,7 @@ use crate::vk;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DeviceDescription {
     /// The device's Vulkan version (`VkPhysicalDeviceProperties::apiVersion`, capped by the
-    /// instance version the consumer uses). Below 1.2 is refused by `Device::new`.
+    /// instance version the consumer uses). Below 1.2 is refused by `Device::from_queries`.
     pub api_version: ApiVersion,
     /// `VkPhysicalDeviceDriverProperties::driverID`, when known.
     pub driver_id: Option<vk::DriverId>,

@@ -1,4 +1,4 @@
-//! `Device::new`, profile derivation, the fingerprint, and `requirements ⊆ profile`.
+//! `Device::from_queries`, profile derivation, the fingerprint, and `requirements ⊆ profile`.
 
 use super::*;
 use crate::device::profile::{

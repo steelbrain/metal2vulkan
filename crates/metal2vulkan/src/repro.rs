@@ -34,7 +34,7 @@ use crate::pipeline::{
 
 /// The device a runtime bundle's command compiles for, as `device.json` holds it and the command
 /// line's `--device` reads it: the description and policy the runtime's compile device was built
-/// from, which build the same `Device` (`Device::new`).
+/// from, which build the same `Device` (`Device::from_queries`).
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReproDevice {

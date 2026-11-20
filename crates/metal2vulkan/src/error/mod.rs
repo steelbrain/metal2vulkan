@@ -1,7 +1,7 @@
 //! Errors: every way compiling or binding can fail, as typed values to match on.
 //!
-//! Compiling returns [`Error`]: `Device::new`, `Library::parse`, every `Device::compile_*` call,
-//! `Device::render_pipeline_key`, and the [`metal`](crate::metal) mappings. Planning and
+//! Compiling returns [`Error`]: `Device::from_queries`, `Library::parse`, every `Device::compile_*`
+//! call, `Device::render_pipeline_key`, and the [`metal`](crate::metal) mappings. Planning and
 //! instantiating a binding returns [`BindError`]. Decoding cached bytes returns
 //! [`ArtifactError`](crate::cache::ArtifactError), which is always a cache miss. Match variants,
 //! not messages: `Display` is for logs.

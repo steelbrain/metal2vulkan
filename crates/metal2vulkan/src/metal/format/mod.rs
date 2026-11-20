@@ -12,10 +12,10 @@
 //! bits 0–4); Vulkan packed formats are named from the most significant bit. The table below pairs
 //! them by layout (`B5G6R5Unorm` ↔ `R5G6B5_UNORM_PACK16`).
 //!
-//! A candidate whose Vulkan format enum value a core version or an extension defines
-//! (`A8_UNORM`, the ASTC HDR and PVRTC blocks) is usable only where the profile exposes the value
-//! ([`vk::Format::exposure`]): `Device::new` keeps only exposed formats in the profile's tables,
-//! and a refusal names the version or extension that would expose it.
+//! A candidate whose Vulkan format enum value a core version or an extension defines (`A8_UNORM`,
+//! the ASTC HDR and PVRTC blocks) is usable only where the profile exposes the value
+//! ([`vk::Format::exposure`]): `Device::from_queries` keeps only exposed formats in the profile's
+//! tables, and a refusal names the version or extension that would expose it.
 
 use std::collections::BTreeSet;
 use std::sync::OnceLock;

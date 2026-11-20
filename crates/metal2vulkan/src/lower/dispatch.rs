@@ -139,8 +139,8 @@
 //! `MultiRegion` 0 it runs at its pipeline's size, its position `(base + WorkgroupId) · (sx, sy,
 //! sz)` plus its position in the workgroup: an indirect dispatch, whose region's grid 0 wraps to
 //! `u32::MAX`, so every invocation is live, or a direct one in workgroups of a size its runtime
-//! picks, whose invocations past the grid return before the body as a tile's do. `Device::new`'s
-//! profile answers Metal's partial threadgroup as above.
+//! picks, whose invocations past the grid return before the body as a tile's do. Every profile
+//! (`Device::from_queries`) answers Metal's partial threadgroup as above.
 //!
 //! **Flat grids**. A flat variant (`LoweringInputs::flat_grid`, of a device replay or not) of a
 //! kernel that does not observe its threadgroup partition runs any grid in threadgroups of its own

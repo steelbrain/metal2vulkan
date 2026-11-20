@@ -298,8 +298,8 @@ recorded as `time harness-gpu-<runtime>/<row>` where the row has one; it is park
 judged. `run` and `show` print, under each leg's line, every harness row's time, its GPU time and,
 where the leg counted them, its instructions per run (with the runtime's own).
 
-The old runtime's translations do not move. The golden hash table compiles through
-`Device::new`, the old runtime's path. When its test reports a cell that changed under an unchanged
+The golden hash table's translations do not move. The table compiles through
+`Device::from_queries`. When its test reports a cell that changed under an unchanged
 key, or one under a changed profile fingerprint, the leg fails with `OLD PATH MOVED`. The one
 exception is a range where a commit since the table's last bless has a subject that starts with
 `old-runtime regression fix`. New, gone and re-keyed fixture rows only need a bless.

@@ -915,8 +915,8 @@ fn diff(committed: &Table, observed: &Observed) -> Diff {
     d
 }
 
-/// The stale cells by kind, in the words the matrix reads (scripts/matrix/results.py): a cell
-/// under a changed profile fingerprint is one whose device, built by `Device::new`, changed.
+/// The stale cells by kind, in the words the matrix reads (scripts/matrix/results.py): a cell under
+/// a changed profile fingerprint is one whose device, built by `Device::from_queries`, changed.
 fn stale_counts(stale: &[String]) -> String {
     let count = |kind: &str| stale.iter().filter(|l| l.starts_with(kind)).count();
     format!(
