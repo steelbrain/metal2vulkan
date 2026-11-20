@@ -1270,9 +1270,8 @@ fn sampler_tables_admit_the_shapes_the_plan_s_checks_pass() {
     }
 }
 
-/// A plan keyed by `BindShape::for_plan` states a heap member at one level; the bind state's
-/// texture of more levels is that member (a heap array views level 0 alone), and one of another
-/// format is not.
+/// A heap member is checked at one level: the bind state's texture of more levels is that member
+/// (a heap array views level 0 alone), and one of another format is not.
 #[test]
 fn a_member_s_level_count_is_not_the_plan_s() {
     let mut facts = TextureFacts::new(TextureType::Type2D, PixelFormat::RGBA8Unorm);

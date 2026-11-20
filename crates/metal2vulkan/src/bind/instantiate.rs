@@ -213,8 +213,8 @@ pub struct DescriptorRange {
 /// `R0` counts 32-byte entries from the table's own address, modulo `2^64`, so a consumer may
 /// point the table at a resident set it uploaded elsewhere ([`ResidentSet`]): the table and the set
 /// 32-byte-aligned, and the set holding at least the table's own ranges
-/// ([`RootTable::resident_ranges`]), it writes [`RootTable::resident_fields`] over the sink
-/// entry's `guest` and `size` fields, at [`RootTable::RESIDENT_FIELDS_OFFSET`].
+/// ([`RootTable::resident_ranges`]), it writes the set's address and its entry count over the
+/// sink entry's `guest` and `size` fields.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -299,31 +299,10 @@ impl ResidentRange {
 /// overlap trimmed of its head, an empty one dropped; indirect command buffers' records, from
 /// `RECORDS_ADDRESS_BASE`, kept whole, one for each start), each at its padded size, as entries in
 /// a root table's layout. The consumer uploads [`bytes`]( Self::bytes) at a 32-byte-aligned device
-/// address and points root tables there ([`RootTable::resident_fields`]).
+/// address and points root tables there.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResidentSet {
     entries: Vec<RootEntry>,
-}
-
-/// A part of a resident set's ranges, sorted and coalesced once, for a consumer whose ranges change
-/// a few at a time: it keeps its ranges in parts, makes again only the parts that changed, and
-/// joins them ([`ResidentSet::of_parts`]) into the set [`ResidentSet::new`] makes of every part's
-/// ranges, without sorting or coalescing the unchanged parts again.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResidentPart {
-    /// Its ranges' entries as a set takes them: sorted, the empty ones dropped.
-    sorted: Vec<RootEntry>,
-    /// Their resident set.
-    set: Vec<RootEntry>,
-}
-
-impl ResidentPart {
-    /// The part of `ranges`, of any count.
-    pub fn new(ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentPart {
-        let sorted = crate::bind::resident::sorted(entries(ranges));
-        let set = crate::bind::resident::coalesced_of_sorted(&sorted);
-        ResidentPart { sorted, set }
-    }
 }
 
 /// `ranges` as a set's entries, at their padded sizes.

@@ -491,8 +491,7 @@ pub struct ReplayPreprocess {
     /// own lengths, without the padding. A kernel buffer resolves only below it, as the host
     /// resolves a record's address (`BufferBinding::resolve_buffer`). The preprocess reads them
     /// after the set the table names, wherever a consumer points it: one that points the table at
-    /// a set uploaded later puts that set's extents after it
-    /// ([`ResidentSet::replay_bytes`](crate::bind::ResidentSet::replay_bytes)).
+    /// a set uploaded later puts that set's extents after it.
     pub extents: Vec<u8>,
     /// The registered variants, at `layout.variants_offset`.
     pub variants: Vec<u8>,

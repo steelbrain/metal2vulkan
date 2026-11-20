@@ -2,9 +2,7 @@
 //!
 //! Metal leaves reading an unbound argument undefined; Vulkan requires a valid descriptor of the
 //! declared type for every layout binding. A plan therefore writes a neutral of the exact
-//! descriptor, view, and numeric type the shader declares ([`NeutralResource::for_image`]), and
-//! [`Device::neutral_kinds`] is the finite set a device can ask for, so the consumer creates each
-//! kind once.
+//! descriptor, view, and numeric type the shader declares ([`NeutralResource::for_image`]).
 //!
 //! Neutral image and texel-buffer formats are chosen from Vulkan's mandatory format support
 //! (`R8G8B8A8_{UNORM,SINT,UINT}` sampled, `D16_UNORM` depth, `R32_{SFLOAT,SINT,UINT}` storage and

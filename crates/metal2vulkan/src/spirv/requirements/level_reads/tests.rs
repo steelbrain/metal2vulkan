@@ -1,5 +1,4 @@
-//! [`level_reads`] on hand-built fragment modules, one read of texture slot 0 each, and
-//! [`LevelReads::highest_level`] and [`LevelReads::lowest_level`] under samplers of each kind.
+//! [`level_reads`] on hand-built fragment modules, one read of texture slot 0 each.
 
 use super::level_reads;
 use crate::budget::{Budget, Meter};

@@ -872,7 +872,7 @@ pub fn function_constants(
 
 /// The view base alignment the executor's bind states state (`BindState::view_base_alignment`):
 /// 256, the largest `minUniformBufferOffsetAlignment` Vulkan allows, a multiple of every device's
-/// view base alignment (`BindState::view_base_alignment_of`), which every bind offset the
+/// view base alignment, which every bind offset the
 /// executor binds, 0, is a multiple of in turn. Each of its states tells it apart at every buffer
 /// slot ([`views_told_apart`]), so a uniform view's range starts at its bind offset in its plan
 /// (`SpecKey::RangeAtBindOffset`) on every device, as in the runtime's plan of the same binds: the

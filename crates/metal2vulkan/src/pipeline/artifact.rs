@@ -214,7 +214,7 @@ pub struct StageModule {
     /// sampler's word, `SpecKey::SamplerState`, and whether it is a nearest pixel sampler,
     /// `SpecKey::NearestPixelSampler`), with the condition under which a specialized
     /// module runs such an arm. Sorted by note, each note at most once. Empty for a module whose
-    /// every note holds under every specialization. [`StageModule::precision_notes_under`]
+    /// every note holds under every specialization. [`StageModule::precision_notes_bound`]
     /// gives the notes of the module as a pipeline specializes it.
     pub specialized_notes: Vec<SpecializedNote>,
     /// The texture slots this fragment stage reads only at the fragment's own pixel, sorted
@@ -249,8 +249,7 @@ impl StageModule {
     }
 
     /// The stage's precision notes where a pipeline creates it under `specialization` and a draw
-    /// or dispatch binds the values `bound` gives: as
-    /// [`precision_notes_under`](Self::precision_notes_under), where a test of a key no pipeline's
+    /// or dispatch binds the values `bound` gives, where a test of a key no pipeline's
     /// key carries (one the stage reads as data, `PushField::Specialized`, the value the binder
     /// pushes; or a bound sampler's word, `SpecKey::BoundSamplerWord`) reads the value `bound`
     /// gives for it (`BindingPlan::specialized_value`); a test of a key neither gives holds.
@@ -303,7 +302,7 @@ impl StageModule {
         clause.all.iter().all(|t| match value(t.key) {
             // A test of a constant the stage does not declare and `bound` does not give holds:
             // the conservative answer (a runtime gives the bound format's class,
-            // `SpecKey::BoundTexelFormat`, through `bound_format_clauses`, and the keys the stage
+            // `SpecKey::BoundTexelFormat`, through `bound` too, and the keys the stage
             // reads as data and the bound samplers' words through `bound`).
             None => true,
             Some(v) => (v & u64::from(t.mask) == u64::from(t.bits)) == t.equal,
@@ -490,7 +489,7 @@ impl RuntimeDependency {
 /// 1024, [`MeshPipelineProblem`](crate::error::MeshPipelineProblem)), held to this device's
 /// limit for the stage where that is lower: `maxTaskWorkGroupInvocations` and
 /// `maxMeshWorkGroupInvocations` with `VK_EXT_mesh_shader`, and `maxComputeWorkGroupInvocations`
-/// where the device runs both stages as compute work (`DeviceProfile::emulates_mesh_shading`).
+/// where the device runs both stages as compute work (`lower::mesh::emulates`).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

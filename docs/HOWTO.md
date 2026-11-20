@@ -102,7 +102,7 @@ Every failure is a typed value; match variants, never messages
   the compile needs, or a limit.
 - A deadline or a cancellation (`Error::Budget`, `Error::Cancelled`) is transient: retry later.
   Every other error is the answer for that input and device and may be cached as one
-  (`error.retry()`, `error.is_permanent_for()`).
+  (`error.retry()`).
 - Never use a module from a compile that returned an error.
 - The command line prints `metal2vulkan: FALLBACK (<why>)`, exits 2, and writes a repro bundle
   (the input, the profile, the descriptor files, `repro.sh`, `failure.txt`) under

@@ -5,8 +5,7 @@
 //! A consumer that runs its own runtime on the compile layer needs it to execute and read back
 //! indirect command buffers: [`CommandBuffer::initialize`] writes the header a
 //! [`CommandDescriptor`] and an [`Inheritance`] fix and resets every record,
-//! [`CommandRecord::encode_into`] writes one command as the CPU's encoder sets it (and
-//! [`CommandRecord::write_field`] one field of it, as one setter does), and
+//! [`CommandRecord::encode_into`] writes one command as the CPU's encoder sets it, and
 //! [`CommandBuffer::decode`] checks storage a kernel wrote (its sticky encoding fault, the header,
 //! every record against the descriptor) before [`CommandBuffer::records`] reads a range back as
 //! [`CommandRecord`]s. [`CommandRecord::resolve_bindings`] picks each command's pipeline and

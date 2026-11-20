@@ -36,11 +36,8 @@
 //! - [`Error::Internal`]: a translator bug ([`InternalError`]). A panic inside a compile entry
 //!   point is caught and returned as one.
 //!
-//! **Caching failures.** [`Error::retry`] says whether the same request can succeed later, and
-//! [`Error::is_permanent_for`] which key may memoize the failure: [`Permanence::Input`] (the
-//! input, on every device), [`Permanence::InputAndDevice`] (the input on this device profile;
-//! every compile key includes the profile's fingerprint), or [`Permanence::Never`] (transient:
-//! never cache it). A [`BindError`] from a pipeline's `plan` depends only on the pipeline, the
+//! **Caching failures.** [`Error::retry`] says whether the same request can succeed later. A
+//! [`BindError`] from a pipeline's `plan` depends only on the pipeline, the
 //! device, and the [`BindShape`](crate::bind::BindShape), so it memoizes beside the plan on
 //! `(PipelineKey, BindShape)`. One from `instantiate_dispatch` or `instantiate_draw` can also
 //! depend on that dispatch or draw and on the bind state's per-draw values (offsets, lengths,
@@ -311,7 +308,7 @@ pub struct Unsupported {
     pub location: Option<Location>,
     /// The symbol the refused construct names, for diagnostics only: an unknown intrinsic, the
     /// callee of a call that needs linking, the pixel format a refused texture, view or copy
-    /// holds ([`naming_format`](Self::naming_format)), or, for a stage past the size the
+    /// holds, or, for a stage past the size the
     /// translator hands a driver ([`Feature::StageSize`]), the stage's entry weight and the bound
     /// it passed (`entry weight 532213, past the bound 99109`). Opaque like every [`DiagName`].
     pub symbol: Option<DiagName>,

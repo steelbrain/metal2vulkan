@@ -86,8 +86,8 @@ impl YCbCrRefreshModule {
     pub const ROW_WORDS: u32 = Self::LOCAL_SIZE * 1024;
 
     /// The push bytes of `words` planes words, the first at word `first_planes` of the planes
-    /// binding and `first_copy` of the copy's (each at most
-    /// [`MOST_FIRST_WORD`](Self::MOST_FIRST_WORD)), for a conversion of `groups` workgroups across
+    /// binding and `first_copy` of the copy's (each at most `0xffff`), for a conversion of
+    /// `groups` workgroups across
     /// (the module docs).
     pub fn shape(firsts: [u32; 2], words: u32, groups: u32) -> [u8; 16] {
         shape_of(firsts, words, Self::ROW_WORDS, groups)

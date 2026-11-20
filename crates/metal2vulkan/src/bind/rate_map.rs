@@ -7,7 +7,7 @@
 //! [`RasterizationRateMap::new`] of a [`RateMapDescriptor`]; `physicalSizeForLayer:`,
 //! `physicalGranularity`, `screenSize`, and `layerCount` are its accessors;
 //! `parameterBufferSizeAndAlign` is [`RasterizationRateMap::parameter_data_size`] (24,624 bytes,
-//! Metal's for every map) and [`RasterizationRateMap::PARAMETER_DATA_ALIGNMENT`];
+//! Metal's for every map) and an alignment of 4;
 //! `copyParameterDataToBuffer:offset:` writes [`RasterizationRateMap::to_bytes`] at the offset,
 //! Metal's bytes; and `mapScreenToPhysicalCoordinates:forLayer:` and
 //! `mapPhysicalToScreenCoordinates:forLayer:` are [`RasterizationRateMap::screen_to_physical`] and

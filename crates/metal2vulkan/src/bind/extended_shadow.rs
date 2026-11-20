@@ -4,8 +4,8 @@
 //! `_sRGB` twins) as `half` through a render pass, and a `Load` fills it with the `half` of each
 //! stored code's value. A consumer that keeps the attachment's shadow for a pass
 //! (`BindState::extended_shadows`) sets it before the render pass instance whose draws first read
-//! and write it: a `Clear` load by clearing the shadow to the clear color's `half`s
-//! (`ExtendedRange::clear_tile_value`), a `Load` by one dispatch of
+//! and write it: a `Clear` load by clearing the shadow to the clear color's `half`s, a `Load`
+//! by one dispatch of
 //! [`extended_shadow_module`], which writes each texel's tile value
 //! (`lower::arith::extended_range::tile_value`, the fetch's own decode) into the shadow.
 //!

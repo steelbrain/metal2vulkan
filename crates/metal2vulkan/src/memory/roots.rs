@@ -24,8 +24,7 @@
 //! `N` in the sink entry's otherwise unread `guest` and `size` fields ([`RESIDENT_FIRST`],
 //! [`RESIDENT_COUNT`]); `N` is any count (At most 2¹⁶ before, a larger set
 //! `BindError::ResidentSetTooLarge`). `R0` counts entries from the table's address modulo 2⁶⁴, so
-//! the set may lie apart from the table, below it too (a consumer's set shared by many tables,
-//! `RootTable::resident_fields`).
+//! the set may lie apart from the table, below it too (a consumer's set shared by many tables).
 //!
 //! **The search** ([`resolve`]) turns a guest address `i` into a wide pointer: a binary search for
 //! the last resident entry whose `guest ≤ i`, whose step halves the candidates whatever its
@@ -204,10 +203,9 @@ pub fn entry_field(
 
 /// The resident set a replay preprocess's resident root table at `table` names
 /// (`bind::ReplayPreprocess::resident`, `bind::DrawReplayPreprocess::resident`): its first root
-/// `R0` and count `N`, from the sink entry, which a consumer points anywhere
-/// (`RootTable::resident_fields`), the set's address (`table + 32·R0`, modulo 2⁶⁴), and the
-/// address of its entries' unpadded extents, a `u64` each, right after the set, then one zero
-/// (`ResidentSet::replay_bytes`; the binder lays its own set out so).
+/// `R0` and count `N`, from the sink entry, which a consumer points anywhere, the set's address
+/// (`table + 32·R0`, modulo 2⁶⁴), and the address of its entries' unpadded extents, a `u64`
+/// each, right after the set, then one zero (the binder lays its own set out so).
 #[derive(Clone, Copy)]
 pub struct ResidentView {
     pub first: Value,
@@ -420,8 +418,8 @@ fn search_step(
 /// The search's narrowing of a set of `2^32` entries or more: [`search_step`] in 64 bits while
 /// `2^32` or more of the `len` candidates from `base` are left; the first candidate and their count
 /// then. No set below `2^32` entries enters it; nothing bounds a set's count below that (a `u64`
-/// in the binder's tables, in a consumer's `RootTable::resident_fields`, and in the runtime's set
-/// of live buffers), so a larger set is narrowed here before the 32-bit loop ([`bisect`]). The
+/// in the binder's tables, in a consumer's root table, and in the runtime's set of live
+/// buffers), so a larger set is narrowed here before the 32-bit loop ([`bisect`]). The
 /// loop carries both in `Function` variables.
 fn narrow(
     fb: &mut FunctionBuilder<'_>,

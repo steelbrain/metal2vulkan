@@ -501,7 +501,6 @@ surface! {
         struct IndirectRef N;
         struct PushConstantWrite N;
         enum PushHole E;
-        struct ResidentPart O;
         struct ResidentRange N;
         struct ResidentSet O;
         struct RootTable N;
@@ -880,7 +879,6 @@ surface! {
         const SEMANTICS_VERSION;
         const ARTIFACT_FORMAT_VERSION;
         const RUNTIME_VERSION;
-        const SOURCE_DIGEST;
         struct PipelineKey N;
         struct VariantKey N;
         struct SpecializationKey N;
@@ -971,7 +969,6 @@ surface! {
         fn ycbcr_writes_stored;
         fn ycbcr_renders;
         fn ycbcr_pass_refused;
-        fn padded_words;
         fn extended_range_blend;
         fn x_channel;
         fn bound_texel_format;

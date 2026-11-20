@@ -30,9 +30,7 @@
 //! pipeline: compile that variant (see [`pipeline`](crate::pipeline)) and plan it for the same
 //! shape. Refusals are [`BindError`](crate::error::BindError)s.
 //!
-//! Per device, create every [`NeutralResource`] of
-//! [`Device::neutral_kinds`](crate::device::Device::neutral_kinds) once. Per command buffer, bind
-//! one [`ExecutionStatus`] buffer: initialize it with [`ExecutionStatus::initial`], and read it
+//! Per command buffer, bind one [`ExecutionStatus`] buffer: initialize it with [`ExecutionStatus::initial`], and read it
 //! back with [`ExecutionStatus::decode`], which reports clamped indirect counts and resident-set
 //! misses. A command reaches it by its device address where the device addresses buffers, and
 //! through the binding [`WriteSource::ExecutionStatus`] names where it does not. An indirect
@@ -129,8 +127,7 @@
 //! ([`RateMapRegions`]). A [`SparseTileMap`] mirrors a sparse texture's tile mappings where the
 //! device has no shader residency: a plan binds its bytes where a function reads the texture's
 //! residency. An [`ArgumentBufferLayout`] says where an argument encoder (`MTLArgumentEncoder`)
-//! writes each argument of an argument buffer: a function's (`Function::argument_buffer_layout`),
-//! or one of [`ArgumentDescriptor`]s ([`ArgumentBufferLayout::from_descriptors`]).
+//! writes each argument of an argument buffer: a function's (`Function::argument_buffer_layout`).
 //!
 //! The frozen surface is the items named at this root; the submodules are crate-private.
 
@@ -250,7 +247,7 @@ pub use index_rewrite::{
 pub use indirect_clamp::{indirect_clamp_module, IndirectClamp, IndirectClampModule};
 pub use instantiate::{
     BufferExtent, BufferRange, DescriptorBytes, DescriptorRange, IndexBufferRef, IndirectRef,
-    PushConstantWrite, PushHole, ResidentPart, ResidentRange, ResidentSet, RootTable,
+    PushConstantWrite, PushHole, ResidentRange, ResidentSet, RootTable,
 };
 pub use mesh_arguments::{
     fold_object_grid, mesh_arguments_module, metal_object_grid, MeshArguments, MeshArgumentsForm,

@@ -16,7 +16,6 @@
 //!   checksum, then scans the modules; it does not re-run the verifier. Every [`ArtifactError`]
 //!   is a cache miss: compile again and replace the entry.
 //! - A [`BindingPlan`](crate::bind::BindingPlan) memoizes in memory on `(PipelineKey, BindShape)`.
-//! - A failed compile memoizes only as `Error::is_permanent_for` allows.
 //!
 //! [`VariantKey`] names the variant of a pipeline a bind shape or a dispatch asks for, and
 //! [`SpecializationKey`] is the data of one `VkSpecializationInfo`.

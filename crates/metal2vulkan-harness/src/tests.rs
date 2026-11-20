@@ -1446,12 +1446,6 @@ fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
             (device.kernel_observes_partition(&function, inputs, &budget, &entries))
                 .unwrap_or_else(|why| panic!("{name}: {why}"))
         };
-        let plain = (resident.compile_function(&function, &LoweringInputs::new(), &budget))
-            .unwrap_or_else(|why| panic!("{name}: {why}"));
-        assert!(
-            plain.observes_partition_through_simdgroups_alone(),
-            "{name}"
-        );
         assert!(observes(&resident, &partial), "{name}: the partial variant");
         assert_eq!(
             observes(&resident, &rows),

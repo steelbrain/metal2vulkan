@@ -281,7 +281,7 @@ pub(crate) fn record_specialized(
 /// `SpecKey::HeapRawTextures` and `SpecKey::HeapNanFamilies`, through `reach`, the stages a used resource's render stages reach,
 /// as for the heap's members; `SpecKey::FilteringArgumentSampler`), which
 /// `BindingPlan::specialized_value` gives the runtime at
-/// each draw or dispatch, where it reads such a note (`StageModule::note_clauses_bound`). Nothing
+/// each draw or dispatch, where it reads such a note (`StageModule::precision_notes_bound`). Nothing
 /// pushes it: instantiation writes only the keys its push fields name.
 pub(crate) fn record_noted<'a>(
     stages: impl IntoIterator<Item = &'a crate::pipeline::StageModule>,

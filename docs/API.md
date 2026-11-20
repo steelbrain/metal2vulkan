@@ -250,8 +250,6 @@ println!("  Metal properties: {:?}", device.metal_properties());
   storage a thread holds (`function_storage()`: `FunctionStorage::Measured` bytes for a measured
   device, or `FunctionStorage::Assumed` with the 16 KiB floor, past which a vertex or fragment
   function runs with `FunctionStorageAssumed` up to 192 KiB and any other stage is refused).
-- `neutral_kinds()`: the neutral resources plans bind where nothing compatible is bound. Create
-  each once, up front.
 
 ### Driver behavior
 
@@ -320,9 +318,8 @@ for info in sampling.functions() {
   undetermined slot reads as neither writable nor read-only.
 - `function.argument_buffer_layout(index, &constants, &budget)` gives the layout of the argument
   buffer the function takes at a buffer index, as `newArgumentEncoderWithBufferIndex:` encodes it:
-  its length, alignment, and each argument's offset and type by `[[id(n)]]`.
-  `ArgumentBufferLayout::from_descriptors` and `from_buffer_binding` give the layouts of Metal's
-  other two encoder constructors. Each argument is 8 bytes: a buffer's address plus offset, or a
+  its length, alignment, and each argument's offset and type by `[[id(n)]]`. Each argument is
+  8 bytes: a buffer's address plus offset, or a
   resource ID.
 - `function.properties(&budget)` answers what `MTLFunction` states about the function.
 
@@ -1027,7 +1024,7 @@ Without the extension, an indirect draw with an object function first dispatches
 arguments pass (`MeshDispatch::object_arguments`, `bind::mesh_object_arguments_module`, one
 invocation over the scan's bindings): it reads Metal's arguments, reserves the object threadgroups'
 slots in the command buffer's records pool, and writes the object function's
-`VkDispatchIndirectCommand` into the work buffer (`MeshDispatch::OBJECT_DISPATCH_OFFSET`). A grid
+`VkDispatchIndirectCommand` into the work buffer. A grid
 Metal's GPU discards sets `StatusBits::MESH_GRID_DISCARDED`; one past the device's compute limits
 sets `MESH_GRID_PAST_LIMITS`; slots the rest of the pool cannot hold set `MESH_RECORDS_OVERFLOW`.
 Each draws nothing. A grid whose threads per grid wrap along an axis runs every threadgroup, and
@@ -1200,9 +1197,7 @@ for dependency in &pipeline.dependencies {
   are specialization constants. The last lets a driver load the constants ahead of the shader:
   inline bytes take that form, and so does a buffer bound at a multiple of
   `max(minUniformBufferOffsetAlignment, 16)` at a slot whose table tells that alignment apart
-  (`state.view_base_alignment = BindState::view_base_alignment_of(limits)`, and the slot's bit in
-  its table's `at_bind_views`; `interface.uniform_view_buffers(stage)` lists the slots that can
-  take it). A buffer bound at any other offset, or at a slot left out, takes the other form, a
+  (`state.view_base_alignment`, and the slot's bit in its table's `at_bind_views`). A buffer bound at any other offset, or at a slot left out, takes the other form, a
   pipeline of its own: leave out a slot bound at offsets that move, so that its draws keep one
   shape and one pipeline (the runtime leaves out each slot of a state once it finds one bound at
   an offset the alignment does not divide). A consumer that draws and dispatches every key with
@@ -1214,8 +1209,8 @@ for dependency in &pipeline.dependencies {
   `DriverWorkaround::PushReadsLengthenThreadPayload` (ANV on the Iris Xe RPL-P, where a light kernel
   that reads a pushed word was measured at about 2.2 times the time of one that reads none) a
   storage view declares the key too, and takes the form that reads no residual only at bind offset 0
-  of a slot whose table tells offset 0 apart (the slot's bit in its table's `zero_offset_views`;
-  `interface.storage_view_buffers(stage)` lists the slots that can take it), its class then
+  of a slot whose table tells offset 0 apart (the slot's bit in its table's
+  `zero_offset_views`), its class then
   `bind::ZERO_OFFSET_CLASS`: leave out a slot bound at another offset, as the runtime does, so that
   the bytes before a bind offset stay reachable through the range from the buffer's start and its
   dispatches keep one shape. A storage view's slot bound to nothing takes the value a bind at
@@ -1237,9 +1232,7 @@ for dependency in &pipeline.dependencies {
   whose two limits are both 4 GiB, every buffer below 4 GiB. The default tells every class apart.
   The runtime sets them on every table it reads.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
-  (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes; the runtime states one on a
-  device whose memory is the host's, `DeviceProfile::reads_ycbcr_planes_in_place`: an integrated
-  GPU or a CPU device). A slot whose function only samples it (nearest or linear, no comparison,
+  (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes). A slot whose function only samples it (nearest or linear, no comparison,
   anisotropy or `min_lod_clamp`), gathers it or reads its size (`RuntimeFact::YCbCrInPlace`) takes the
   pipeline's in-place variant (`VariantKey::ycbcr_in_place`): the slot binds a uniform texel buffer
   over the planes' bytes (`WriteSource::YCbCrInPlace`, in `YCbCrInPlace::format`), its push field
@@ -1352,8 +1345,7 @@ assert!(plan.variant.is_empty(), "this shape needs no other variant");
 resource, formats, level counts, sampler modes, alignment classes). A plan is a pure function of the
 pipeline, the device and the shape: memoize it on `(PipelineKey, BindShape)`. A consumer that keeps
 the shapes it planned can find a state's among them without making it: `state.has_shape(&shape)`
-answers `state.shape() == shape`, compared in place, and `state.position_of_shape(&shapes)` finds
-it among many, making the shape of the resources the state lists at most once.
+answers `state.shape() == shape`, compared in place.
 
 The plan holds one `DescriptorWrite` per layout binding element (the resource at a slot, a buffer
 the binder synthesizes, or a neutral resource where nothing compatible is bound), the vertex
@@ -1362,12 +1354,8 @@ every live sampler state and visible-function table the command can reach throug
 (`argument_samplers`, function tables), and the resources it uses (`used_resources`). A consumer
 that lists those in token order says so (`used_in_token_order`), and one that points every root
 table at a resident set it uploads apart, holding them and the ranges it lists
-(`resident_ranges`), says that (`resident_apart`, with `ResidentSet` and
-`RootTable::resident_fields`): a command's instantiation then costs its own bindings and heap
-members, not every resource the state lists. A consumer whose ranges change a few at a time keeps
-them in parts (`ResidentPart`), makes again only the parts that changed, and joins them
-(`ResidentSet::of_parts`) into the set `ResidentSet::new` makes of all their ranges, entry for
-entry, without sorting or coalescing the unchanged parts again.
+(`resident_ranges`), says that (`resident_apart`, with `ResidentSet`): a command's
+instantiation then costs its own bindings and heap members, not every resource the state lists.
 
 A plan whose `variant` is not empty asks for another variant of the pipeline (a storage texture's
 format, a buffer range past the descriptor limit, a vertex buffer that fixed-function input cannot
@@ -1446,58 +1434,12 @@ for a compute dispatch over a `DispatchCommands` you keep (one `instantiate_disp
 start): each region's specialization and push bytes, and the argument table's, are written in the
 storage the commands before held.
 
-`dispatch_reads` says which slot classes' bound values, past their shape, a compute plan's
-`instantiate_dispatch` may read: buffer slots always; texture slots only where the plan binds a
-texture buffer's range as a texel-buffer view, pushes a texture's in-place planes, or names the
-texture bound at a slot in a handle table; sampler slots never. The commands of a dispatch are
-those of a later dispatch of the same plan whose state has the same shape and differs only at
-slots of a class it answers `false` for: two textures of one shape bound in turn, for one. Every
-other value of the state may be read.
-
-`rebind_draw_slots_into` writes again only what some buffer, texture and sampler slots decide,
-over the commands of the same draw of a state of the same shape that differed only in what those
-slots bind: the buffers' descriptor ranges, the push fields that read them and their vertex
-buffers' offsets. A texture or sampler slot decides none of the commands; its descriptor is
-yours to write again. It answers `Ok(false)` where the plan reads one of them some other way (a
-device address, an argument or root table, a vertex binding of a per-bind stride, a texture
-buffer's texel range, a YCbCr texture's planes, a mesh, patch or de-indexed draw) or a uniform
-view a written slot may alias; then instantiate the draw whole.
-
-What a plan alone decides of such a rebind, for a list of slots, `slot_rebinds` works out once:
-each changed buffer slot's place among the descriptor ranges, the push fields that read the slots
-and where they lie, and the vertex buffers they bind (`None` where `rebind_draw_slots_into`
-answers `Ok(false)` whatever the state). `rebind_draw_slots_with` then rebinds those slots by
-them, looking at the state and the commands alone, with the answers and commands
-`rebind_draw_slots_into` gives: keep the `SlotRebinds` beside the commands for draws that change
-the same slots of the same plan. `slot_rebinds_into` makes them again in a `SlotRebinds` you keep
-(its default holds none), for other slots or another plan, in place of what it held: its lists keep
-their room, so making them again allocates nothing where they had room; `SlotRebinds::slots` names
-the slots they were made for.
-
-`redraw_apart_into` writes again only what a draw's arguments decide, over the commands
-`instantiate_draw_apart_into` wrote for another draw of the same state that differed from it only
-in them (whether it reads indices, its index type and index buffer, its vertex or index counts and
-starts, its index offset, its instance count, base vertex and base instance), both direct draws:
-the Vulkan draw, its index overrun, the `BaseVertexInstance` push fields and the draw's own index
-buffer use. It answers `Ok(false)` where the plan reads the arguments some other way (an argument
-or root table, a mesh, patch or de-indexed draw, a vertices-per-primitive push field of a draw
-with indices and one without), where a fixed-function vertex buffer's fetch window, which the
-extents hold, moves with them (another vertex range of a draw without indices, another instance
-range of a per-instance buffer), or where the two draws are no such pair; then instantiate the
-draw whole. An index offset that moves rebinds the index buffer
-there: the draw command's `index_buffer_offset` is the new offset.
-
 A plan that reads handles (a texture's or sampler state's resource ID, a visible function table's)
 writes heap tables among its descriptor bytes, after the stage tables: its handle tables, sampler
 tables and function-table directories. Their bytes grow with the resources the state lists as
 used and the textures its slots bind that a handle names, and they depend on nothing else of the
-state but its argument samplers, function tables and heap placement. `heap_tables_into` writes them
-alone, and `instantiate_draw_apart_into` writes every other command of a draw, its descriptor bytes
-the stage tables alone. Keep a state's heap tables while those inputs hold (the used resources, the
-textures at the plan's `heap_slots`, the argument samplers, the function tables and the
-placement), and instantiate each draw apart: draws that rebind only buffers then cost what they
-bind, not what the state made resident. `heap_elements` is the same kind of function of the same
-inputs and the heap's capacity.
+state but its argument samplers, function tables and heap placement. `heap_elements` is a
+function of the same inputs and the heap's capacity.
 
 A dispatch is one or more regions (a grid that is not whole threadgroups adds edge regions), each
 with its group count, specialization and push constants: create one `VkPipeline` per distinct
@@ -1659,14 +1601,7 @@ containment of a constant level, a level-of-detail query, a sample through no sa
 minimum level of detail, a storage access, or a use the analysis does not follow), the highest
 constant level a fetch, size query or gather names (`named`) and the lowest whose texels a fetch
 or gather reads (`lowest_read`), and its samples by the sampler each reads through (`sampled`, with the highest
-and the lowest constant level of detail). A sample's level is its sampler's to bound: ask
-`LevelReads::highest_level` with `SampledLevels::level` of the sampler you bind
-(`SamplerLevels::of` its `vk::SamplerDesc`, and `SamplerLevels::finite_texels` of the view's
-format), and `LevelReads::lowest_level` with `SampledLevels::lowest`. A view of the same first
-level and more levels than the highest answer reads what the whole view reads, and no read reaches
-a level below the lowest answer. The runtime counts with it which levels a draw reads of a texture
-its own render pass instance renders, and reads in place those that no attachment of the instance
-renders.
+and the lowest constant level of detail). A sample's level is its sampler's to bound.
 
 ### Indirect command buffers
 
@@ -1703,7 +1638,7 @@ flags.
 The crate keeps no cache; keys and encodings let you keep one across processes. Keys are SHA-256
 hashes of the inputs, `cache::SEMANTICS_VERSION` and the profile fingerprint, known before
 compiling (`device.compute_pipeline_key(&descriptor)`, `render_pipeline_key(&descriptor,
-&budget)`, `tile_pipeline_key`, `function_compile_key`):
+&budget)`, `function_compile_key`):
 
 ```rust
 let bytes = pipeline.to_bytes();
@@ -1750,13 +1685,8 @@ assert_eq!(linked, pipeline);
   (with `serde`) everything a plan states. A cache of driver objects keyed on the digest survives a
   release that bumped `SEMANTICS_VERSION` without changing the output. A digest identifies
   content; it authenticates nothing.
-- A caller that names a stage's module by its words need not hash them twice. A compiled
-  function keeps its last relocation beside it, so a sweep of pipeline states over one function
-  pair takes the same `Arc<[u32]>` on every creation;
-  `compiled.relocated_words_digest(&stage.spirv, derive)` gives the digest `derive` produced over
-  those very words, or `None` where they are not the function's last relocation -- a miss costs no
-  call of `derive` at all, so it is safe to ask first in a creation's hot path. The digest a caller
-  gets is always one its own `derive` made, so nothing it names by the digest moves.
+- A compiled function keeps its last relocation beside it, so a sweep of pipeline states over
+  one function pair takes the same `Arc<[u32]>` on every creation.
 - A memo that holds pipelines in memory and bounds itself by bytes can weigh one it never encoded.
   `pipeline.footprint()` is the bytes a `RenderPipeline` or a `ComputePipeline` keeps live --
   every word of every stage, each stage's constant blob and notes, and its own storage -- so a
@@ -1765,8 +1695,7 @@ assert_eq!(linked, pipeline);
   not made.
 - Versions move independently: the crate's (the API), `SEMANTICS_VERSION` (the output),
   `ARTIFACT_FORMAT_VERSION` (the encoding) and `RUNTIME_VERSION` (what the runtime does with an
-  unchanged artifact). `SOURCE_DIGEST` names the sources a build was compiled from, for caches kept
-  across builds.
+  unchanged artifact).
 
 ## 8. Refusals, requested inputs, and precision
 
@@ -1825,10 +1754,8 @@ bound: `metal::format::storage_image_choice(pixel_format, device.profile())`, pl
 `VariantKey`'s `storage_images` and compiled as a variant. The plan asks for it itself where the
 bound format needs a declared format.
 
-**What to cache.** `error.retry()` says whether the same request can succeed later, and
-
-`error.is_permanent_for()` which key may memoize the failure (the input, the input on this device,
-or never). A `BindError` from `plan` depends only on the pipeline, the device and the shape, so it
+**What to cache.** `error.retry()` says whether the same request can succeed later. A
+`BindError` from `plan` depends only on the pipeline, the device and the shape, so it
 memoizes beside the plan; one from instantiation does not.
 
 **Precision.** Where an output gives a near-equivalent of Metal's answer, its stage lists it in

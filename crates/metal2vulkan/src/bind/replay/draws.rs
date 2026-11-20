@@ -50,7 +50,8 @@
 //!   indirectBuffer:indirectBufferOffset:`). The replay runs over every command of the buffer,
 //!   merged into one draw, and each invocation first reads the `MTLIndirectCommandBufferExecutionRange`
 //!   (`location`, then `length`, each a `u32`) in the parameters, where the consumer copies it
-//!   before the preprocess runs ([`DrawReplayLayout::range_offset`]), as Metal's execution takes it: from
+//!   before the preprocess runs (8 bytes from [`DrawReplayLayout::params_offset`] plus 48), as
+//!   Metal's execution takes it: from
 //!   `location` to `location + length`, clamped at the buffer's size. A command outside it draws
 //!   nothing and reports nothing; where the location lies past the size, or `location + length`
 //!   passes `2^32 - 1` (Metal's GPU then faults the command buffer, or hangs), no command draws and
@@ -151,7 +152,7 @@ const P_FRAGMENT_SLOTS: u64 = 28;
 const P_TYPES: u64 = 32;
 const P_TYPE: u64 = 36;
 /// The range a replay that reads one reads (`location`, then `length`), which the consumer
-/// copies there ([`DrawReplayLayout::range_offset`]).
+/// copies there.
 const P_RANGE: u64 = 48;
 /// `indices - resident`: a merged replay's index entries ([`MergedLayout::indices_offset`]).
 const P_INDICES_AT: u64 = 56;

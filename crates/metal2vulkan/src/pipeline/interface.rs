@@ -556,9 +556,8 @@ pub enum SnapshotRefusal {
 /// The levels of its bound view that a texture slot's reads reach, each counted from the view's
 /// first level (`StageInterface::level_reads`, `StageModule::level_reads`), as the module's
 /// instructions decide them (`spirv::requirements::level_reads`, structural). A sample's level is
-/// its sampler's to bound, so the fact lists each sampler the slot is sampled through apart, and a
-/// runtime asks [`LevelReads::highest_level`] and [`LevelReads::lowest_level`] with the samplers
-/// it binds. Vulkan's rules decide
+/// its sampler's to bound, so the fact lists each sampler the slot is sampled through apart.
+/// Vulkan's rules decide
 /// the levels (Image Level(s) Selection): a sample reads `clamp(λ, 0, q)` past the view's first
 /// level, `λ` its level of detail clamped into the sampler's `[minLod, maxLod]`; a gather reads
 /// the first level; a fetch and a size query read the level they name.

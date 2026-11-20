@@ -1,8 +1,6 @@
 //! Metal's sRGB tables of Apple's extended-range `_sRGB` formats: the decode step of each offset
 //! from the zero code and the first encode index of each, read from an Apple M3 Max and an Apple M4
-//! (byte-identical). The shader's `lower::arith::extended_range` declares them once per module; the
-//! runtime's clear values read them through `ExtendedRange::clear_texel`, beside the thresholds of
-//! Metal's straight clear route's own encode.
+//! (byte-identical). The shader's `lower::arith::extended_range` declares them once per module.
 
 /// The decode step of every offset `n = |c - 384|` of an `_sRGB` color channel: Metal reads
 /// the value `s / 8192` for `s = SRGB_DECODE_STEPS[n]`, signed as `c - 384` (every code read).

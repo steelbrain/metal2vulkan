@@ -626,11 +626,11 @@ impl Default for DrawCommands {
 ///   dispatches [`mesh_object_arguments_module`](crate::bind::mesh_object_arguments_module) (one
 ///   workgroup) under the scan's bindings first: it reads Metal's arguments, reserves the draw's
 ///   slots and offsets in the records pool, and writes the object dispatch's
-///   `VkDispatchIndirectCommand` at [`OBJECT_DISPATCH_OFFSET`](Self::OBJECT_DISPATCH_OFFSET);
+///   `VkDispatchIndirectCommand` in the work buffer;
 /// - with an object function, binds its pipeline and the draw's sets at the compute bind point,
 ///   records the push writes whose stages are `COMPUTE`, and `vkCmdDispatch` of
 ///   [`object_groups`](Self::object_groups), or, for an indirect draw, `vkCmdDispatchIndirect`
-///   from the work buffer at [`OBJECT_DISPATCH_OFFSET`](Self::OBJECT_DISPATCH_OFFSET);
+///   from the work buffer where the object arguments pass wrote it;
 /// - for [`MeshGroups::Scanned`], dispatches [`MeshScanModule`](crate::bind::MeshScanModule)
 ///   (one workgroup) over the work buffer, the command buffer's `ExecutionStatus` buffer, the
 ///   arguments the variant names and the records;

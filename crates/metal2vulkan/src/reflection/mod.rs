@@ -525,8 +525,8 @@ impl MeshPipelineDescriptor {
 
     /// What each stage of the mesh pipeline this descriptor describes may store through each slot
     /// its arguments bind ([`ComputePipelineDescriptor::slot_writes`]'s answer per stage):
-    /// [`SlotWrites::object_slots`], [`SlotWrites::mesh_slots`] and
-    /// [`SlotWrites::fragment_slots`], an object or mesh function's payload among them. Each
+    /// [`SlotWrites::mesh_slots`] and [`SlotWrites::fragment_slots`], a mesh function's payload
+    /// among them. Each
     /// stage's calls nest Metal's default depth of 1, as `Device::compile_mesh_pipeline` compiles
     /// it. Refused only by the decode's and specialization's own errors.
     pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error> {
@@ -566,7 +566,7 @@ impl TileRenderPipelineDescriptor {
 
     /// What the tile function of the pipeline this descriptor describes may store through each
     /// slot its arguments bind ([`ComputePipelineDescriptor::slot_writes`]'s answer for the tile
-    /// stage): [`SlotWrites::tile_slots`], a tile function's implicit imageblock among them.
+    /// stage), a tile function's implicit imageblock among them.
     /// Refused only by the decode's and specialization's own errors.
     pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error> {
         let mut m = Meter::new(budget);

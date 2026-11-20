@@ -71,7 +71,7 @@ impl RowsCopyModule {
 
     /// The push bytes of rows `width` words long, the first row's first word at word
     /// `first_source` of the source binding and `first_destination` of the destination's (each
-    /// at most [`MOST_FIRST_WORD`](Self::MOST_FIRST_WORD)), the rows `source_row_words` and
+    /// at most `0xffff`), the rows `source_row_words` and
     /// `destination_row_words` apart (the module docs).
     pub fn shape(
         [first_source, first_destination]: [u32; 2],

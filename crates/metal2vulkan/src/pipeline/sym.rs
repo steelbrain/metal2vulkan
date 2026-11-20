@@ -827,8 +827,8 @@ pub enum SpecKey {
     /// ([`SpecTest`](crate::pipeline::SpecTest)): no stage declares it as a constant and no
     /// pipeline's key carries it, so the bound format decides the note without a `VkPipeline` of
     /// its own. The runtime reads it from the texture a draw or dispatch binds
-    /// (`StageModule::bound_format_clauses`); where the format is not known (a reading of the
-    /// module alone, `StageModule::precision_notes_under`), such a test holds.
+    /// (`StageModule::precision_notes_bound`'s `bound`); where the format is not known, such a
+    /// test holds.
     BoundTexelFormat(SlotRef),
     /// The plane axes of the texture bound to the slot on which the base-level size Metal's
     /// texel-offset rule reads is not a power of two where the texture's own base level's is
@@ -874,8 +874,8 @@ pub enum SpecKey {
     /// ([`SpecTest`](crate::pipeline::SpecTest)): no stage declares it as a constant and no
     /// pipeline's key carries it, so the bound sampler decides the note without a `VkPipeline` of
     /// its own. A plan gives it (`BindingPlan::specialized_value`), and the runtime reads such a
-    /// test at each draw or dispatch (`StageModule::note_clauses_bound`); where the sampler is not
-    /// known (a reading of the module alone, `StageModule::precision_notes_under`), such a test
+    /// test at each draw or dispatch (`StageModule::precision_notes_bound`); where the sampler is
+    /// not known, such a test
     /// holds. A slot bound to no sampler takes 0.
     BoundSamplerWord(SlotRef),
     /// Boolean: a texture the stage's handles can name is of a two-plane YCbCr class (its

@@ -172,8 +172,7 @@ pub struct BindState {
     /// [`BindingPlan::heap_elements`]: crate::bind::BindingPlan::heap_elements
     #[cfg_attr(feature = "serde", serde(default))]
     pub heap_placement: HeapPlacement,
-    /// The descriptor base alignment of the device's uniform views
-    /// ([`view_base_alignment_of`](Self::view_base_alignment_of)), which the runtime sets: the one
+    /// The descriptor base alignment of the device's uniform views, which the runtime sets: the one
     /// alignment above the vertex fetch's that the bind offset class of a buffer at a slot of
     /// [`StageTable::at_bind_views`] tells apart, as a uniform view's range starts at its bind
     /// offset only at a multiple of it (`SpecKey::RangeAtBindOffset`). 0, the
@@ -281,8 +280,8 @@ pub struct BindState {
     #[cfg_attr(feature = "serde", serde(default))]
     pub resident_ranges: Vec<ResidentRange>,
     /// The consumer points every root table of the command at a resident set it uploads apart
-    /// (a [`ResidentSet`](crate::bind::ResidentSet), written over the table's own fields with
-    /// [`RootTable::resident_fields`](crate::bind::RootTable::resident_fields)) that holds every
+    /// (a [`ResidentSet`](crate::bind::ResidentSet), its address and entry count written over the
+    /// table's own fields) that holds every
     /// allocation of `used_resources` (each `Buffer` and `Heap` entry with both addresses) and of
     /// `resident_ranges`, at their padded lengths, as a root table's own set would, and every
     /// range the table lists ([`RootTable::resident_ranges`](crate::bind::RootTable::resident_ranges)).
@@ -668,8 +667,7 @@ impl BindState {
     /// the shape, so a consumer that keeps the shapes it made can find a state's among them
     /// without allocating. Its used resources' shape alone is made, where it lists any in no
     /// token order ([`used_in_token_order`](Self::used_in_token_order)) and every other field
-    /// matches; [`position_of_shape`](Self::position_of_shape) makes it once for many shapes. A
-    /// list in token order is compared in place, making nothing.
+    /// matches. A list in token order is compared in place, making nothing.
     pub fn has_shape(&self, shape: &BindShape) -> bool {
         self.is_shape(shape, &mut None)
     }
@@ -1188,9 +1186,6 @@ impl TextureFacts {
     ///
     /// The level count is stated whatever the usage: plain Metal writes a texture made without
     /// `ShaderWrite` at every level, through every write form, as one made with it.
-    /// A plan is keyed by [`BindShape::for_plan`], which keeps it only at the slots whose levels
-    /// the pipeline reads, so textures a function only samples do not split plans by their level
-    /// counts.
     pub fn shape(&self) -> TextureShape {
         TextureShape::Texture {
             texture_type: self.texture_type,
@@ -2084,9 +2079,8 @@ pub enum TextureShape {
         /// `ShaderRead` texture and a storage view only of a `ShaderWrite` or `BlockWritesOnly`
         /// one.
         usage: metal::TextureUsage,
-        /// The texture's `mipmapLevelCount` ([`TextureFacts::shape`]; 1 at a slot whose levels
-        /// the pipeline does not read, in [`BindShape::for_plan`]): a storage slot's level views
-        /// view each level, and a neutral past the last.
+        /// The texture's `mipmapLevelCount` ([`TextureFacts::shape`]): a storage slot's level
+        /// views view each level, and a neutral past the last.
         #[cfg_attr(feature = "serde", serde(default = "one_level"))]
         mipmap_level_count: u32,
         /// The texture is sparse (`MTLTexture.isSparse`, [`TextureFacts::sparse`]): it selects
@@ -2207,9 +2201,8 @@ impl TextureShape {
         matches!(self, TextureShape::Texture { sparse: true, .. })
     }
 
-    /// This shape with a level count of 1: [`BindShape::for_plan`]'s projection of a texture
-    /// whose levels the pipeline does not read, and what a heap member's shape is checked by
-    /// (a heap array views level 0 alone).
+    /// This shape with a level count of 1: what a heap member's shape is checked by (a heap
+    /// array views level 0 alone).
     pub(crate) fn at_one_level(mut self) -> TextureShape {
         if let TextureShape::Texture {
             mipmap_level_count, ..

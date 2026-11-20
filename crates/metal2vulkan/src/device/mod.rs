@@ -23,8 +23,6 @@
 //! - [`Device::required_enables`]: everything an artifact compiled for the device can need
 //!   enabled;
 //! - [`Device::metal_properties`]: the Metal device properties to report to the guest;
-//! - [`Device::neutral_kinds`]: the neutral resources plans bind where nothing compatible is
-//!   bound, to create once up front;
 //! - [`DeviceProfile::fingerprint`]: a hash over every profile field, policy included, which
 //!   every cache key includes, so an artifact never serves another device.
 //!

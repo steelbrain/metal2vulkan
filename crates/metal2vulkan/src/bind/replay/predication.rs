@@ -70,7 +70,7 @@
 //!   of a step not of a loop, the check word of a step not a unit's end) has that binding bound
 //!   to its record's region. Its gates lie in the record's region, the first at [`PredicationStep::BOUND_GATES_OFFSET`], their
 //!   count (a `u32`) at [`PredicationStep::BOUND_COUNT_OFFSET`] (0 until the consumer writes it),
-//!   and the region holds one gate more ([`PredicationStep::bound_bytes`]), which the gate loop's
+//!   and the region holds one gate more, which the gate loop's
 //!   pass past the count reads. No table.
 //!
 //! **Recording** (consumer): a barrier from everything before the step (Metal's word is read

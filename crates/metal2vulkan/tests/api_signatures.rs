@@ -39,8 +39,8 @@
 //!   of its record, so a derive that is dropped does show.
 //! - A method a macro expands. The declaring macro's template stands for every type it declares,
 //!   so a change to the generated methods shows once, against the template, not once per type.
-//! - A value the build computes. `cache::SOURCE_DIGEST` is `env!("M2V_SOURCE_DIGEST")`: its type
-//!   is a record and its value is that call, never the digest.
+//! - A value the build computes. A constant that is an `env!(..)` call has its type as a record
+//!   and its value as that call, never the value.
 //! - The values of `cache::SEMANTICS_VERSION`, `cache::ARTIFACT_FORMAT_VERSION` and
 //!   `cache::RUNTIME_VERSION`. Their declarations are pinned like any other constant; their
 //!   values are not recorded, because this repository bumps them whenever behaviour, an encoding

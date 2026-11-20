@@ -2117,8 +2117,8 @@ fn member_id(
                 let ResourceClass::Texture(facts) = u.class else {
                     return Err(mismatch());
                 };
-                // A plan is keyed by `BindShape::for_plan`, which states a used texture at one
-                // level: the member's level count is not the plan's.
+                // A heap array views level 0 alone: the member's level count is not the
+                // plan's.
                 if facts.shape().at_one_level() != m.shape.at_one_level() {
                     return Err(mismatch());
                 }

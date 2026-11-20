@@ -187,8 +187,8 @@ pub enum FormatEmulation {
     /// function reads and writes through its slot's [`ExtendedRange`] variant
     /// (`LoweringInputs::extended_range`), converting Metal's values in the shader. Exact for a
     /// sampled image a function fetches from and for a storage image; admitted for those usages
-    /// and for a color attachment, whose render pass clears the raw codes as Metal's does
-    /// (`clear_texel`) and keeps the codes its draws do not write, where Metal's pass takes them
+    /// and for a color attachment, whose render pass clears the raw codes as Metal's does and
+    /// keeps the codes its draws do not write, where Metal's pass takes them
     /// through `half` (the runtime's `extended-range-bits-kept`). Metal filters no bfloat texel (a linear sample
     /// reads the nearest texel) and blends none (its validation asserts), so a filter and a blend
     /// are not admitted.
@@ -331,8 +331,8 @@ pub enum ExtendedRange {
     },
     /// `R10Unorm_X6` (576), a 10-bit unsigned normalized red code in the top 10 bits of a
     /// little-endian 16-bit word, held as `R16_UINT`. Metal makes a texture of it in memory of
-    /// its own as readily as over an IOSurface's plane or a buffer ([`padded_words`], which has
-    /// the creators measured). Measured on an Apple M4 under macOS 27.0.1 and an Apple M3
+    /// its own as readily as over an IOSurface's plane or a buffer. Measured on an Apple M4
+    /// under macOS 27.0.1 and an Apple M3
     /// Max under macOS 26.7: a read is `c / 1023` correctly rounded (its `half` to nearest even),
     /// the low 6 bits unread; a kernel write stores the code of the exact product of the value,
     /// clamped to `[0, 1]` (a NaN 0), with 1023, rounded to nearest, the low 6 bits zero; a render
@@ -373,8 +373,7 @@ pub enum ExtendedRange {
     /// decoded texel, border texels included. A kernel write stores the value's top 16 bits (toward
     /// zero), a NaN `0x7fc0`, a `half` value widened first. A render pass's clear stores the color
     /// through `float` and then `half`, each rounded to nearest even, then the bfloat code nearest
-    /// that, ties to even, a NaN `0x7fc0` ([`clear_texel`](Self::clear_texel)). Copies and the
-    /// CPU's accesses keep the bytes.
+    /// that, ties to even, a NaN `0x7fc0`. Copies and the CPU's accesses keep the bytes.
     R16Bfloat,
     /// `RG16Bfloat` (66): two such words, red then green, held as `R16G16_UINT`.
     Rg16Bfloat,

@@ -706,7 +706,7 @@ pub enum RecordError {
     /// takes the first two lengths' words (`layout::CONTROL_POINT_INDICES`): a render command
     /// sets none.
     ThreadgroupMemoryLength,
-    /// A field's index past what a record holds ([`CommandRecord::write_field`]): a buffer slot
+    /// A field's index past what a record holds: a buffer slot
     /// at or past [`BINDING_COUNT`], or a threadgroup length at or past
     /// [`THREADGROUP_BUFFER_ARGUMENT_COUNT`].
     Index {
@@ -885,7 +885,7 @@ pub(crate) fn writes_of(action: &Action, barrier: bool) -> crate::pipeline::Comm
     writes
 }
 
-/// One field of a command's record, as one CPU setter writes it ([`CommandRecord::write_field`]).
+/// One field of a command's record, as one CPU setter writes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordField {
     /// The action ([`CommandRecord::action`]): a dispatch or a draw.

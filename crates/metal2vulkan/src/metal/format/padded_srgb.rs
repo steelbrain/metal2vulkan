@@ -1,8 +1,8 @@
 //! Metal's tables of the padded `_sRGB` formats' writes, read from an Apple M4 under macOS 27.0.1
 //! and an Apple M3 Max under macOS 26.7 (the M3's and the M4's files byte-identical):
 //! `R10Unorm_X6_sRGB`'s first encode index of every code, and `RG10Unorm_X12_sRGB`'s code of every
-//! linear write code. The runtime's clear values read them through `ExtendedRange::clear_texel`; a
-//! shader's write takes the transfer by the device's `Pow` (`lower::arith::extended_range`).
+//! linear write code. A shader's write takes the transfer by the device's `Pow`
+//! (`lower::arith::extended_range`).
 
 /// The first encode index of every code of `R10Unorm_X6_sRGB` (`0` for code 0): Metal writes a
 /// value `x` as the largest code `c` with `R10X6_SRGB_ENCODE_FIRST[c] <= i`, where `i` is `x`
