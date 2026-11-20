@@ -5,11 +5,11 @@
 //! of the global through another type than its own, which the translator holds in the constant
 //! blob. Under the new runtime's identity domains the blob is the module's own words, with no
 //! descriptor; under the old runtime's it is bound. The pipeline is made with both constants'
-//! values (`newFunctionWithName:constantValues:error:`), and one dispatch of [`THREADS`] threads
+//! values (`newFunctionWithName:constantValues:error:`), and one dispatch of `THREADS` threads
 //! stores, for thread `t`, lane `t % 3` of each constant as a float, their `half` sum, and `t`.
 //! The values ([`A`], [`B`]) are halves whose sums are exact, so the answer is the program's.
 //!
-//! Every output byte holds [`BLANK`] before the dispatch, so a word the kernel did not write is a
+//! Every output byte holds `BLANK` before the dispatch, so a word the kernel did not write is a
 //! recorded value. Nothing here can fault a GPU: one dispatch of 12 threads, each writing its own
 //! 16 bytes of a 192-byte buffer.
 
