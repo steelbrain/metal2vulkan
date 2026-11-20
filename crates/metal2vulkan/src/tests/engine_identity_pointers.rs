@@ -8,7 +8,7 @@
 //!   `ab_indexed` the texture of an argument buffer a pointer member of the bound one reaches:
 //!   each loaded word is the device address of the bytes it names, used as it is. No plan pushes
 //!   `RootTableAddress` (there is no root table) or `ExecutionStatusAddress` (no access through a
-//!   loaded address is counted), and no module declares a descriptor. Each passes L3.
+//!   loaded address is counted), the buffer kernels declare no descriptor, and each passes L3.
 //! - `ab_slot_address` converts a slot pointer to an integer and increments the element through
 //!   it: the slot stays a static root, reached at its pushed address and checked against its
 //!   pushed bounds (`SlotBounds`), and no parameter is a wide pointer.
@@ -73,13 +73,21 @@ fn addresses(values: &[u64]) -> Vec<u8> {
     values.iter().flat_map(|a| a.to_le_bytes()).collect()
 }
 
-/// `entry` of `bc` compiled on `stem`'s profile `p`, in the identity form: no descriptor, no
-/// `RootTableAddress` and no `ExecutionStatusAddress` among its push fields, and an artifact that
-/// passes L3.
-fn compiled(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) -> (Plan, TypedModule) {
+/// `entry` of `bc` compiled on `stem`'s profile `p`, in the identity form: no
+/// `RootTableAddress` and no `ExecutionStatusAddress` among its push fields, no descriptor where it
+/// reaches memory through `buffers` alone (a texture is an element of set 1's arrays), and an
+/// artifact that passes L3.
+fn compiled(
+    bc: &[u8],
+    (entry, buffers): (&str, bool),
+    stem: &str,
+    p: &DeviceProfile,
+) -> (Plan, TypedModule) {
     let (a, plan, module) =
         compile_kept(bc, entry, p).unwrap_or_else(|e| panic!("{stem}: {entry}: {e}"));
-    assert!(a.interface.descriptors.is_empty(), "{stem}: {entry}");
+    if buffers {
+        assert!(a.interface.descriptors.is_empty(), "{stem}: {entry}");
+    }
     let fields: Vec<PushField> = plan.push.fields.iter().map(|f| f.field).collect();
     for absent in [
         PushField::RootTableAddress,
@@ -162,7 +170,7 @@ fn an_argument_buffers_pointer_members_are_the_device_addresses_they_hold() {
     let mut want = words((0..THREADS as u32).map(|i| (0x1000 + i) + (0x7000_0000 + 3 * (4 + i))));
     want.extend_from_slice(&[0; 4]);
     for (stem, p) in identity_profiles() {
-        let (plan, module) = compiled(&bc, "ab_sum", &stem, &p);
+        let (plan, module) = compiled(&bc, ("ab_sum", true), &stem, &p);
         let res = Resources {
             push: push(
                 &plan,
@@ -196,7 +204,7 @@ fn a_stored_gpu_address_is_the_device_address_it_holds() {
     let mut want = words((0..THREADS as u32).map(|i| 0xA000_0000 | (2 + i)));
     want.extend_from_slice(&[0; 4]);
     for (stem, p) in identity_profiles() {
-        let (plan, module) = compiled(&bc, "ab_address", &stem, &p);
+        let (plan, module) = compiled(&bc, ("ab_address", true), &stem, &p);
         let res = Resources {
             push: push(
                 &plan,
@@ -234,7 +242,7 @@ fn a_slot_pointer_converted_to_an_integer_is_its_metal_address() {
     want_buf.extend_from_slice(&words(elements[..THREADS].iter().map(|v| v + 1)));
     want_buf.extend_from_slice(&elements[THREADS].to_le_bytes());
     for (stem, p) in identity_profiles() {
-        let (plan, module) = compiled(&bc, "ab_slot_address", &stem, &p);
+        let (plan, module) = compiled(&bc, ("ab_slot_address", true), &stem, &p);
         assert!(
             plan.families.access.dynamic.params.is_empty(),
             "{stem}: a wide parameter"
@@ -267,6 +275,6 @@ fn a_texture_behind_an_argument_buffers_pointer_member_is_read_at_the_loaded_add
         return;
     };
     for (stem, p) in identity_profiles() {
-        compiled(&bc, "ab_indexed", &stem, &p);
+        compiled(&bc, ("ab_indexed", false), &stem, &p);
     }
 }
