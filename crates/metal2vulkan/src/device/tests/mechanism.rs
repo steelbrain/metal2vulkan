@@ -405,7 +405,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::TexelBufferParts { .. } => 102,
         RuntimeFact::OpenClLineTexture { .. } => 103,
         RuntimeFact::AddressAlignment { .. } => 104,
-        RuntimeFact::GridTiles => 105,
+        RuntimeFact::GridTiles => 55,
     }
 }
 
@@ -413,7 +413,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..106).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..105).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
