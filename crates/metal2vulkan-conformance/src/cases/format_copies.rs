@@ -29,7 +29,6 @@
 //! Nothing here can fault a GPU: blit copies between textures the program makes, of formats whose
 //! copy unit matches, no dispatch, no draw and no loop.
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::transcript::{ByteLayout, Element, Observed, Sites, Value};
 use crate::work::{Plane, Resource, Step, TextureSpec, Work};
@@ -296,25 +295,6 @@ impl Case for FormatCopies {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // A device that flushes denormal depth values announces `depth-denormals`, and a
-        // `Depth32Float` texture is where that shows (lavapipe does; this Mac does not). It is the
-        // device's own answer, which the suite declares for every case
-        // (`crate::replay::NATIVE_NOTES`), and the bytes the copies moved still compare exactly.
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 16 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

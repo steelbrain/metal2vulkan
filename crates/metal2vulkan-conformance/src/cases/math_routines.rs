@@ -16,13 +16,11 @@
 //! Each word is a column of its own, because the eight words are different answers: a diff names
 //! `frexp-mantissa` or `ilogb` of one input rather than a row of eight numbers. Every column
 //! compares exactly; there is nothing here a device may round differently, and no value is
-//! loosened. The only allowance is the declaration of the notice a device without unified memory
-//! announces for the pass's `Shared` buffers (`SharedInSystemMemory`).
+//! loosened.
 //!
 //! Nothing here can fault a GPU: one compute pass a case, two buffers, no texture, no loop, and
 //! each thread reads its own word.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -171,13 +169,6 @@ impl Case for MathRoutines {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: both of this pass's buffers is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

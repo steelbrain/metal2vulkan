@@ -147,15 +147,13 @@ fn fill(pipeline: Handle, values: Handle, extent: Handle) -> [RenderStep; 4] {
     ]
 }
 
-/// The notices every case of the family may announce, each with the reason it cannot loosen a
-/// code: `shared-in-system-memory` (the read-back buffer is `Shared`; a device without unified
-/// memory announces it) and `half-output-fast-math-blend` (the fixture is a fast-math module whose
-/// `half4` fill a pipeline stores). Every value still compares exactly.
+/// The notice every case of the family may announce, with the reason it cannot loosen a code:
+/// `half-output-fast-math-blend` (the fixture is a fast-math module whose `half4` fill a pipeline
+/// stores). Every value still compares exactly.
 fn notices() -> Vec<Allowance> {
-    vec![
-        crate::replay::shared_memory_notice(),
-        crate::replay::notice_allowance(Degradation::HalfOutputFastMathBlend.code()),
-    ]
+    vec![crate::replay::notice_allowance(
+        Degradation::HalfOutputFastMathBlend.code(),
+    )]
 }
 
 /// Read `target` (one sample, `format`) back into a buffer after `work`, and record its texels.

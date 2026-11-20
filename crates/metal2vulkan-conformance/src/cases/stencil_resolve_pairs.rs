@@ -115,7 +115,6 @@
 //! count refuses the target and the suite counts the case
 //! [`LacksFeature`](crate::verdict::Verdict::LacksFeature) rather than leaving it uncompared.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -649,14 +648,6 @@ impl Case for StencilResolves {
 
     fn record_runs(&self) -> u32 {
         RUNS
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // **No value is loosened**: every resolved byte and every resolved depth Metal leaves is
-        // one we must leave. The one declaration is the buffer each pass reads its resolved
-        // aspects back through, which is `Shared` ([`crate::replay::shared_memory_notice`],
-        // measured firing on the 5080).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1195,14 +1186,8 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            // The declared allowances loosen no value: each names a notice and nothing else, and
-            // the pair case declares the three its separate textures and split resolve provoke
-            // beside the one both cases share.
-            let expected = match case.name() {
-                "resolve-stencil-under-depth-filters" => 5,
-                _ => 2,
-            };
-            assert_eq!(case.allowances().len(), expected, "{}", case.name());
+            // No value is loosened and no notice is declared.
+            assert!(case.allowances().is_empty(), "{}", case.name());
         }
         let stores = StencilResolves {
             cross: Cross::Stores,

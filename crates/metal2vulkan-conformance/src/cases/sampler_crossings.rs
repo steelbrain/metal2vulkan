@@ -967,10 +967,7 @@ impl Case for SamplerCrossings {
         // runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice` holds
         // why). Measured through the rt side on lavapipe, the Radeon 780M and the RX 550: it fired
         // for every row the side does not refuse (the axis and mip-filter rows).
-        let mut allowances = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::pixel_sampler_scaling_notice(),
-        ];
+        let mut allowances = vec![crate::replay::pixel_sampler_scaling_notice()];
         // The opaque-black axis-border rows read that border, which the runtime's sampler
         // states note on every device (`crate::replay::swizzled_border_notice`).
         if matches!(

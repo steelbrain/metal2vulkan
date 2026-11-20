@@ -41,7 +41,6 @@
 //! Nothing here can fault a GPU: single-sampled targets of the case's own extent, one full-screen
 //! triangle a pass, no loop, and every fetch inside its buffer.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -482,25 +481,6 @@ impl Case for RotatedTarget {
         // makes, draws into, blends and reads back a target of it through entirely public calls --
         // measured on this chip before the case was written.
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // One allowance, and it loosens **no texel**: the notice the venue's own memory model
-        // provokes. The buffer each case reads its target back through is `Shared`, which a
-        // device with no unified memory keeps in system memory because that is the only memory
-        // both sides can reach.
-        //
-        // Every state stores through the device's own conversion of the channels it writes, blended
-        // or not (`PrecisionNote::DeviceColorConversion`), a native note the suite declares for
-        // every case ([`crate::replay::NATIVE_NOTES`]), so the case names no notice of its own.
-        //
-        // **No tolerance on any texel, deliberately.** On lavapipe the blended states store a code
-        // one apart from Metal's, and that is exactly the shape `DeviceColorConversion` describes
-        // -- but the note's own definition ends "validation derives no tolerance and no explanation
-        // from it: a difference stays a mismatch for review". Loosening a texel here would be this
-        // suite overruling that, so the blended states stay divergent on lavapipe and are a
-        // per-venue divergence to carry, not a tolerance to write.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -320,20 +320,7 @@ impl Case for BufferTargetClear {
         // replace with arbitrary data (`DONT_CARE_TEXELS`, `dont_care_texels`). The padding and the
         // bytes before and after the target compare exactly, Metal's against ours.
         //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 6 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        named.extend(self.row.dont_care_texels());
-        named
+        self.row.dont_care_texels()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

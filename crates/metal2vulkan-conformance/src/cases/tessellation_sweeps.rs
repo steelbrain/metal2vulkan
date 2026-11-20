@@ -345,11 +345,7 @@ pub(super) fn tessellation_notices() -> Vec<Allowance> {
     ]
     .into_iter()
     .map(|notice| crate::replay::notice_allowance(notice.code()))
-    .chain([
-        // The factor, control-point and read-back buffers a tessellated draw carries are all
-        // `Shared` ([`crate::replay::shared_memory_notice`]).
-        crate::replay::shared_memory_notice(),
-    ])
+    .chain([])
     .collect()
 }
 

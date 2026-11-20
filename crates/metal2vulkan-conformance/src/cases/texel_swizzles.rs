@@ -38,7 +38,6 @@
 //! MSL 4.1 defines (a read out of bounds reads zero, a write out of bounds is ignored), so they are
 //! not an out-of-bounds access the device may fault on.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -532,13 +531,6 @@ impl Case for TexelSwizzles {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the buffer each dispatch writes its swizzled texels into is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shaders_of(self.fixture())
     }
@@ -635,13 +627,6 @@ impl Case for ViewedTexelSwizzles {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the buffer each dispatch writes its swizzled texels into is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

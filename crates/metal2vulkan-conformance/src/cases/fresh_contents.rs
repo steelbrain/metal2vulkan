@@ -47,10 +47,6 @@
 //! compression. The `written` site, the statuses and every `Shared` and `Managed` row still compare
 //! exactly there.
 //!
-//! Every row names one notice, and it belongs to the venue rather than to any row: the declaration
-//! [`crate::replay::shared_memory_notice`] carries, the notice a device without unified memory
-//! announces for the `Shared` buffer each row reads its answer back through.
-//!
 
 //! # Why one process is the right place for this, and more than the lane had
 //!
@@ -230,19 +226,6 @@ pub struct FreshBuffers {
     storage: Storage,
 }
 
-/// The notice every row of this family announces on a device without unified memory: each row
-/// reads its answer back through a `Shared` buffer ([`crate::replay::shared_memory_notice`], which
-/// holds the whole reason).
-///
-/// Measured on the **RTX 5080 Laptop (615.71.09)**: it fired for all 87 rows of the family, and
-/// each row read `divergent` on that one field and nothing else
-/// (`replay-nvidia.log`, "we announced the degrade notice
-/// metal2vulkan-degrade-shared-in-system-memory, which the case declares nowhere"). MoltenVK and
-/// lavapipe announce it for no row of the family.
-fn shared_memory_notice() -> Allowance {
-    crate::replay::shared_memory_notice()
-}
-
 impl Case for FreshBuffers {
     fn name(&self) -> &'static str {
         self.case
@@ -250,10 +233,6 @@ impl Case for FreshBuffers {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        vec![shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -1085,13 +1064,12 @@ impl Case for FreshTexture {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        let mut allowances = vec![shared_memory_notice()];
+        let mut allowances = Vec::new();
         // A new `Private` texture on a device that presents no texture compression holds what
         // its memory held (the module docs). Expected, not yet run: no such venue replayed it.
         if self.row.storage == Storage::Private {
             allowances.push(crate::replay::without_compression("fresh"));
         }
-
         // A shape of blocks more than one texel square (`BC1_RGBA`) is a block-compressed
         // texture, whose device decode the runtime announces where it makes it
         // (`compressed-texel-decode`). At the notices site alone: the case reads bytes.
@@ -1347,12 +1325,9 @@ impl Case for FreshPattern {
         // compressed: the note of the encoding the device's copy keeps, where it is not native
         // (`compressed_blits::kept_encoding_notice`). The pattern's bytes are each format's
         // canonical encoding, so every value still compares exactly.
-        let mut allowances = vec![
-            shared_memory_notice(),
-            // A new `Private` texture on a device that presents no texture compression holds
-            // what its memory held, never the pattern (the module docs). Expected, not yet run.
-            crate::replay::without_compression("fresh"),
-        ];
+        // A new `Private` texture on a device that presents no texture compression holds what its
+        // memory held, never the pattern (the module docs). Expected, not yet run.
+        let mut allowances = vec![crate::replay::without_compression("fresh")];
         allowances.extend(super::compressed_blits::kept_encoding_notice(
             self.row.format,
         ));
@@ -1458,10 +1433,6 @@ impl Case for FreshOverBuffer {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        vec![shared_memory_notice()]
-    }
-
     fn inputs(&self) -> Result<Vec<Input>, String> {
         let mut words = self.shape().words();
         words.extend(self.storage.word().as_bytes());
@@ -1505,7 +1476,6 @@ pub fn all() -> Vec<Box<dyn Case>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allowance::Justification;
     use std::collections::BTreeSet;
 
     /// The runs the recorded site at `path` holds, rebuilt into the bytes they encode.
@@ -2056,39 +2026,18 @@ mod tests {
     /// that presents no texture compression, and nothing else.** On a venue that presents the
     /// compression (MoltenVK, lavapipe) every byte compares exactly: the one value declaration,
     /// [`crate::replay::without_compression`], justifies nothing there.
-    ///
-    /// Every row names [`shared_memory_notice`], which is the venue's memory model and not the
-    /// row's; every `Private` texture row and every pattern row names the value declaration at its
-    /// `fresh` site, and no `Shared` or `Managed` row, buffer row or texture over a buffer does;
-    /// **only** the pattern row whose read blits out of a texture Metal keeps compressed in a
-    /// format whose canonical encoding the device's copy may keep apart from Metal's
-    /// (`RGB9E5Float`) names a further notice, and a block-compressed texture row declares
-    /// `compressed-texel-decode`, which `metal2vulkan-runtime` announces for every such texture. A row
-    /// whose notices were a guess would show here as a row loosening a site nothing needed.
     #[test]
     fn a_row_loosens_the_notices_site_and_a_private_texture_s_fresh_site() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
         let fresh = crate::replay::without_compression("fresh");
-        let shared = crate::degradation::Degradation::SharedInSystemMemory
-            .code()
-            .to_owned();
         for case in all() {
-            let allowances = case.allowances();
-            for allowance in &allowances {
+            for allowance in &case.allowances() {
                 assert!(
                     allowance.path == notices || *allowance == fresh,
                     "{}: {allowance:?}",
                     case.name()
                 );
             }
-            // The venue's notice is the one every row declares, and it is declared exactly once.
-            let declared = allowances
-                .iter()
-                .filter(|allowance| {
-                    allowance.justified_by == Justification::Degradation(shared.clone())
-                })
-                .count();
-            assert_eq!(declared, 1, "{}", case.name());
         }
         for row in TEXTURES {
             let private = row.storage == Storage::Private;
@@ -2096,7 +2045,7 @@ mod tests {
             let allowances = FreshTexture { row }.allowances();
             assert_eq!(
                 allowances.len(),
-                1 + usize::from(private) + usize::from(compressed),
+                usize::from(private) + usize::from(compressed),
                 "{}",
                 row.case
             );
@@ -2110,25 +2059,23 @@ mod tests {
             );
             assert_eq!(allowances.contains(&fresh), private, "{}", row.case);
         }
-        // Everything else is held to Metal exactly, the venue's own notice apart.
+        // Everything else is held to Metal exactly.
         for (case, storage) in BUFFERS {
-            assert_eq!(
-                FreshBuffers { case, storage }.allowances().len(),
-                1,
+            assert!(
+                FreshBuffers { case, storage }.allowances().is_empty(),
                 "{case}"
             );
         }
         for (case, storage) in OVER_BUFFERS {
-            assert_eq!(
-                FreshOverBuffer { case, storage }.allowances().len(),
-                1,
+            assert!(
+                FreshOverBuffer { case, storage }.allowances().is_empty(),
                 "{case}"
             );
         }
         for row in PATTERNS {
             let kept = row.case == "fresh-pattern-93";
             let allowances = FreshPattern { row }.allowances();
-            assert_eq!(allowances.len(), 2 + usize::from(kept), "{}", row.case);
+            assert_eq!(allowances.len(), 1 + usize::from(kept), "{}", row.case);
             assert!(allowances.contains(&fresh), "{}", row.case);
         }
     }

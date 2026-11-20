@@ -1005,6 +1005,31 @@ fn one_word_moving_names_its_row_and_index() {
     assert!(printed.contains("Metal 3"), "{printed}");
 }
 
+/// Every kind a case can name is a precision note's: `docs/API.md` section 9, the catalogue of
+/// the notes the runtime carries, lists its code. The runtime's side announces only the codes of
+/// those notes, so a kind outside the catalogue would never be announced, and a case that
+/// declared it would hold a claim no run can check.
+#[test]
+fn every_kind_is_a_catalogued_precision_note() {
+    let api = include_str!("../../../docs/API.md");
+    let catalogue = api
+        .split_once("\n## 9. Degrade notices")
+        .and_then(|(_, rest)| rest.split_once("\n## 10."))
+        .map(|(section, _)| section)
+        .expect("docs/API.md holds sections 9 and 10");
+    let missing: Vec<&str> = Degradation::ALL
+        .iter()
+        .map(|kind| kind.code())
+        .filter(|code| !catalogue.contains(&format!("\n- `{code}` (precision)")))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} kind(s) the catalogue does not list:\n{}",
+        missing.len(),
+        missing.join("\n")
+    );
+}
+
 #[test]
 fn a_notice_we_announce_and_metal_does_not_is_divergent_until_it_is_named() {
     let kind = Degradation::ALL[0];
@@ -3272,17 +3297,12 @@ fn the_rate_map_cases_name_what_justifies_them() {
             inputs.iter().any(|input| input.name == "descriptor"),
             "{inputs:?}"
         );
-        // Every allowance names something that exists -- the rate-map degradation, or the notice
-        // a device with no unified memory announces for the `Shared` read-back buffer -- over the
+        // Every allowance names something that exists -- the rate-map degradation -- over the
         // notices site alone, so every answer of the map itself still compares exactly.
         for allowance in case.allowances() {
             match &allowance.justified_by {
                 Justification::Degradation(code) => {
-                    assert!(
-                        code == Degradation::RasterizationRateMap.code()
-                            || code == Degradation::SharedInSystemMemory.code(),
-                        "{code}"
-                    );
+                    assert!(code == Degradation::RasterizationRateMap.code(), "{code}");
                     assert_eq!(allowance.path, "case/notices/*");
                 }
                 other => panic!("an unexpected tolerance: {other:?}"),
@@ -3290,9 +3310,8 @@ fn the_rate_map_cases_name_what_justifies_them() {
         }
     }
     // The map of the identity announces no rate-map degradation and declares none; the one that is
-    // not the identity announces it when the map is made. Both declare the venue's own
-    // system-memory notice. Neither rests on the validated oracle any more: the zero-screen-width
-    // refusal that did is closed.
+    // not the identity announces it when the map is made. Neither rests on the validated oracle:
+    // the zero-screen-width refusal that did is closed.
     let codes = |case: &crate::cases::rate_maps::RateMapCase| -> Vec<String> {
         case.allowances()
             .iter()
@@ -3302,16 +3321,10 @@ fn the_rate_map_cases_name_what_justifies_them() {
             })
             .collect()
     };
-    assert_eq!(
-        codes(&cases[0]),
-        vec![Degradation::SharedInSystemMemory.code().to_owned()]
-    );
+    assert!(codes(&cases[0]).is_empty());
     assert_eq!(
         codes(&cases[1]),
-        vec![
-            Degradation::SharedInSystemMemory.code().to_owned(),
-            Degradation::RasterizationRateMap.code().to_owned()
-        ]
+        vec![Degradation::RasterizationRateMap.code().to_owned()]
     );
     for case in &cases {
         assert!(

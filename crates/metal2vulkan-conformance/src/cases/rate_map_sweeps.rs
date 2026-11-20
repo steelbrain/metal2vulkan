@@ -489,9 +489,6 @@ impl Case for RateMapSweep {
         // The allowance is held to its evidence by the suite itself — the notice must have been
         // announced on the run compared — and it is the only loosening this family declares. Every
         // derived answer compares exactly, which is the point of the sweep.
-        // A sweep answers the map's own derived values and reads nothing back through a buffer,
-        // so it declares no system-memory notice: the RTX 5080 announced none for any of the five
-        // sweep rows. The three parameter cases, which do read a target back, declare it.
         if self.walk.points().iter().all(|point| point.identity()) {
             return Vec::new();
         }
@@ -646,21 +643,14 @@ impl Case for RateMapParameterData {
                 .into_iter()
                 .all(|axis| axis.iter().all(|sample| *sample >= 1.0))
         });
-        // Either way the case declares the notice its `Shared` read-back buffer provokes
-        // ([`crate::replay::shared_memory_notice`]); the RTX 5080 announced it for all three
-        // parameter rows, the identity one among them.
-        let shared = crate::replay::shared_memory_notice();
         if identity {
-            return vec![shared];
+            return Vec::new();
         }
-        vec![
-            shared,
-            Allowance::new(
-                format!("case/{NOTICES_SITE}/*"),
-                Loosening::Unchecked,
-                Justification::notice(Degradation::RasterizationRateMap),
-            ),
-        ]
+        vec![Allowance::new(
+            format!("case/{NOTICES_SITE}/*"),
+            Loosening::Unchecked,
+            Justification::notice(Degradation::RasterizationRateMap),
+        )]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

@@ -154,7 +154,6 @@
 //! every fetch is inside a record the case bound, and the whole case is one command buffer, one
 //! commit and one wait.
 
-use crate::allowance::Allowance;
 use crate::attribute_coding as coding;
 use crate::attribute_coding::{shape, FILLER, ROWS, SLOT};
 use crate::case::{
@@ -350,19 +349,6 @@ impl Case for VertexFormats {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened. Every decoding here is exact arithmetic on the codes the record
-        // holds -- an integer widened, a code divided by its own maximum, a half or a float
-        // widened, a packed field extracted -- so a component that differs is a difference in the
-        // decode and not a rounding, and a tolerance written here would hide the bug the sweep
-        // exists to find.
-        //
-        // One notice is declared, and it is the venue's and not this sweep's: the buffer each draw
-        // reads its fetched rows back through is `Shared`, which a device with no unified memory
-        // keeps in system memory because that is the only memory both sides can reach.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

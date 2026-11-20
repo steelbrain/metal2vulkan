@@ -104,7 +104,6 @@
 //! the target and the suite counts the case
 //! [`LacksFeature`](crate::verdict::Verdict::LacksFeature) rather than leaving it uncompared.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -480,16 +479,6 @@ impl Case for DepthFilters {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // No value is loosened: every resolved depth Metal leaves is a depth we must leave. What is
-        // declared is a notice at the notices site that touches no resolved depth: a device
-        // without unified memory holds the `Shared` buffer each row reads its answer back through
-        // in system memory (`crate::replay::shared_memory_notice`). Measured on the RTX 5080
-        // Laptop (615.71.09), where both rows announced it with the case declaring it nowhere
-        // (replay-nvidia.log).
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs()
     }
@@ -845,9 +834,8 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            // The declared allowances loosen no value: each names a notice and nothing else.
-            // The resolve and the `DontCare` store, and the venue's memory model.
-            assert_eq!(case.allowances().len(), 3);
+            // No value is loosened and no notice is declared.
+            assert!(case.allowances().is_empty(), "{}", case.name());
         }
     }
 

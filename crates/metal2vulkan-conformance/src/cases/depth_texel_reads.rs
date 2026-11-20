@@ -217,25 +217,11 @@ impl Case for DepthTexelReads {
         // The fixture's AIR asks for fast math, whose `fast-math-rewrites` the suite declares for
         // every case (`crate::replay::NATIVE_NOTES`); every one of the 131,072 words still
         // compares exactly.
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // this case, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
         //
         // Its samples are through a runtime sampler slot, which the runtime's pipelines note
         // as scaled (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it
         // rests on).
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::pixel_sampler_scaling_notice(),
-        ]
+        vec![crate::replay::pixel_sampler_scaling_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -65,9 +65,7 @@
 //! uncompressed, linearly filterable colour format, which is the shape `generateMipmapsForTexture:`
 //! is defined for. Nothing allocates more than a few kibibytes.
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::transcript::{ByteLayout, Element, Negative, Node, Observed, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, Storage, TextureSpec, Work};
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
@@ -221,15 +219,6 @@ struct Row {
     sites: fn(&crate::work::Done) -> Vec<Node>,
     /// What the case sets that no resource's bytes carry, as its input fingerprint.
     parameters: fn() -> Vec<u8>,
-    /// The degrade notices this case's commands announce on a device that cannot take the exact
-    /// form. Metal announces none, so a notice of ours is the only field of these cases that may
-    /// differ at all — every byte compares exactly.
-    ///
-    /// **Each code here is one a venue was measured announcing for this case**, named in
-    /// `NOTICES`'s own documentation with the run behind it. A code nothing was measured
-    /// announcing is not listed: an unmeasured declaration is itself unchecked, and the replay
-    /// reports a declaration whose notice stayed quiet as never fired.
-    notices: &'static [Degradation],
 }
 
 /// A case of the family: one row.
@@ -244,14 +233,6 @@ impl Case for BlitEncoderCommands {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        self.row
-            .notices
-            .iter()
-            .map(|kind| crate::replay::notice_allowance(kind.code()))
-            .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -368,7 +349,6 @@ static WHOLE_TEXTURE: Row = Row {
         ]
     },
     parameters: || b"copyFromTexture:toTexture:".to_vec(),
-    notices: NOTICES,
 };
 
 /// The slices and the levels [`texture_slice_counts`] copies, from level 1 of slice 0.
@@ -422,7 +402,6 @@ static SLICE_COUNTS: Row = Row {
             .flat_map(|word| word.to_le_bytes())
             .collect()
     },
-    notices: NOTICES,
 };
 
 /// `copyFromTexture:...sliceCount:levelCount:` of no slices, and of no levels.
@@ -479,7 +458,6 @@ static COUNTS_OF_NONE: Row = Row {
         ]
     },
     parameters: || b"sliceCount 0 levelCount 3; sliceCount 2 levelCount 0".to_vec(),
-    notices: NOTICES,
 };
 
 /// Whether every region of an array read-back still holds [`BEFORE`], its guard untouched.
@@ -580,7 +558,6 @@ static GENERATED_MIPMAPS: Row = Row {
         ]
     },
     parameters: || b"generateMipmapsForTexture: over 4 levels of 8x8 RGBA8Unorm".to_vec(),
-    notices: NOTICES,
 };
 
 /// The extended-range mipmap cases' texture: 64 by 64, seven levels, the size of the upload whose
@@ -673,7 +650,6 @@ static GENERATED_BGR10_XR_MIPMAPS: Row = Row {
           getBytes: of it, generateMipmapsForTexture:, getBytes: of every level"
             .to_vec()
     },
-    notices: NOTICES,
 };
 
 /// `generateMipmapsForTexture:` of a 64 by 64 `BGRA10_XR` texture, its upload's round trip first.
@@ -686,7 +662,6 @@ static GENERATED_BGRA10_XR_MIPMAPS: Row = Row {
           getBytes: of it, generateMipmapsForTexture:, getBytes: of every level"
             .to_vec()
     },
-    notices: NOTICES,
 };
 
 /// The four hints [`optimized_contents`] encodes, in that order: `None` is the whole-texture
@@ -753,7 +728,6 @@ static OPTIMIZED_CONTENTS: Row = Row {
         }
         words
     },
-    notices: NOTICES,
 };
 
 /// The managed buffer's length, and the fill the case is about: an unaligned range inside it, so
@@ -806,11 +780,6 @@ static SYNCHRONIZED_BUFFER: Row = Row {
         words.push(value);
         words
     },
-    // The one row of the family that reads its answer back out of a **`Managed`** buffer rather
-    // than a `Shared` one, so [`NOTICES`]'s venue notice is not its: on the RTX 5080 Laptop
-    // (615.71.09) it was the only row of the family that did not announce
-    // `shared-in-system-memory`, and it compared justified there (replay-nvidia.log).
-    notices: &[],
 };
 
 /// The managed texture's extent, and the pitch the host reads it at: six times its row, so the
@@ -872,7 +841,6 @@ static SYNCHRONIZED_TEXTURE: Row = Row {
         words.push(GUARD);
         words
     },
-    notices: NOTICES,
 };
 
 /// The two un-optioned selectors beside the two that take an option, over the same bytes.
@@ -952,7 +920,6 @@ static UNOPTIONED: Row = Row {
         ]
     },
     parameters: || b"unoptioned at slot 0; MTLBlitOptionNone at slot 1".to_vec(),
-    notices: NOTICES,
 };
 
 /// The bytes [`fenced_encoders`] moves.
@@ -1006,23 +973,7 @@ static FENCED_ENCODERS: Row = Row {
         ]
     },
     parameters: || b"updateFence on encoder 0; waitForFence on encoder 1".to_vec(),
-    notices: NOTICES,
 };
-
-/// The notices a case of this family declares, where the case provokes none of its own.
-///
-/// **The venue's own, and nothing else.** Each of these rows reads its answer back through a
-/// `Shared` buffer, and on a device whose GPU does not share the CPU's memory such a buffer lies
-/// in host-cached system memory, which the runtime announces once per device
-/// (`crate::replay::shared_memory_notice` holds the whole reason). Measured on the RTX 5080 Laptop
-/// (615.71.09): all eight rows that carry this list announced it and were divergent on that field
-/// and nothing else (replay-nvidia.log).
-///
-/// Nothing of the rows' own joins it until a venue is measured announcing one. Declaring a code on
-/// a row from the shape of its path would be a declaration nothing checks: a venue that does
-/// announce something reads as `UndeclaredNotice`, naming the code and the case, which is the loud
-/// form and the one that makes the next real notice visible.
-const NOTICES: &[Degradation] = &[Degradation::SharedInSystemMemory];
 
 /// The case of `copyFromTexture:toTexture:`.
 pub fn whole_texture_copy() -> BlitEncoderCommands {
@@ -1158,34 +1109,6 @@ mod tests {
         for row in EVERY_ROW {
             assert!((row.program)().reads() > 0, "{}", row.case);
         }
-    }
-
-    /// Every case loosens the notices site and nothing else: no byte of these cases is ever
-    /// loosened, whatever form a device's copy or fill takes.
-    ///
-    /// And the venue's memory notice is declared only where it was measured: on every row that
-    /// reads its answer back through a `Shared` buffer, and not on the one that reads it out of a
-    /// `Managed` buffer.
-    #[test]
-    fn only_the_shared_read_backs_declare_a_notice() {
-        for case in all() {
-            for allowance in case.allowances() {
-                assert_eq!(
-                    allowance.path,
-                    format!("case/{}/*", crate::replay::NOTICES_SITE),
-                    "{}",
-                    case.name()
-                );
-            }
-        }
-        assert_eq!(NOTICES, [Degradation::SharedInSystemMemory]);
-        let declaring: Vec<&str> = EVERY_ROW
-            .iter()
-            .filter(|row| row.notices != NOTICES)
-            .map(|row| row.case)
-            .collect();
-        assert_eq!(declaring, [SYNCHRONIZED_BUFFER.case]);
-        assert!(SYNCHRONIZED_BUFFER.notices.is_empty());
     }
 
     /// Assert that `origin` plus `size` lies inside `extent` on every axis, naming the step.

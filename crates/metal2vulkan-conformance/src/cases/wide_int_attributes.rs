@@ -68,7 +68,6 @@
 //! costs one commit and one wait; every fetch is inside the record the case bound; no texture, no
 //! loop, no rasterization.
 
-use crate::allowance::Allowance;
 use crate::attribute_coding as coding;
 use crate::attribute_coding::{shape, FILLER, ROWS, SLOT};
 use crate::case::{
@@ -258,17 +257,6 @@ impl Case for WideIntAttributes {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened, and nothing here could be: an integer attribute converts nothing, so
-        // every component the fetch answers is the code the record holds, bit for bit. A tolerance
-        // would hide the only bug this sweep exists to find.
-        //
-        // One notice is declared, and it is the venue's and not this sweep's: the buffer each draw
-        // reads its fetched rows back through is `Shared`, which a device with no unified memory
-        // keeps in system memory because that is the only memory both sides can reach.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

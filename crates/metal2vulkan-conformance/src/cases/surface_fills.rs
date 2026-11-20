@@ -26,7 +26,6 @@
 //! four bytes (a texture-buffer fill pattern over 32752 bytes, which ends Metal's process, is a
 //! case this round must not run).
 
-use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Fill, Input, MetalSource, PlaneTexture, Side};
 use crate::recording::ShaderRef;
 use crate::replay::NOTICES_SITE;
@@ -449,13 +448,6 @@ impl Case for SurfaceFills {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::carried_only(MEASURED_IN, NO_PUBLIC_CALL)
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Metal announces nothing, so the notices site is the one field that may differ: the
-        // buffer the case reads the filled surfaces back through is `Shared`
-        // ([`crate::replay::shared_memory_notice`]).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

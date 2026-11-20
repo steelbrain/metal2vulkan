@@ -82,7 +82,6 @@
 //! refuses the target and the suite counts the case
 //! [`LacksFeature`](crate::verdict::Verdict::LacksFeature) rather than leaving it uncompared.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -688,16 +687,6 @@ impl Case for AttachmentPairs {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // **No value is loosened**: every texel Metal leaves is one we must leave.
-        //
-        // Both cases read their attachments back through a `Shared` buffer, and a device with no
-        // unified memory keeps a `Shared` allocation in system memory because that is the only
-        // memory both sides can reach. That belongs to the venue's memory model rather than to
-        // either crossing, so both declare it.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         match self.cross {
             Cross::Loads => shader_refs(&[BOTH, SECOND]),
@@ -906,8 +895,6 @@ impl Case for AttachmentPairs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allowance::Loosening;
-    use crate::replay::NOTICES_SITE;
     use crate::transcript::Transcript;
     use std::collections::BTreeSet;
 
@@ -1222,32 +1209,10 @@ mod tests {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
         }
-        // Every allowance of either case is a declaration over the notices site: the loads case
-        // stores every attachment and declares only the notice a device with no unified memory
-        // announces for the read-back buffer, and the resolves case adds the two its `DontCare`
-        // store and its emulated resolve provoke.
+        // Neither case loosens a value or declares a notice.
         for case in all() {
-            for allowance in case.allowances() {
-                assert_eq!(allowance.path, format!("case/{NOTICES_SITE}/*"));
-                assert_eq!(allowance.loosening, Loosening::Unchecked);
-            }
+            assert!(case.allowances().is_empty(), "{}", case.name());
         }
-        assert_eq!(
-            AttachmentPairs {
-                cross: Cross::Loads
-            }
-            .allowances()
-            .len(),
-            1
-        );
-        assert_eq!(
-            AttachmentPairs {
-                cross: Cross::Resolves
-            }
-            .allowances()
-            .len(),
-            3
-        );
         // Both fragment functions the family names are the fixture's, and the loads case names
         // both while the resolves case names one.
         assert_eq!(shader_refs(&[BOTH, SECOND]).expect("the fixture").len(), 4);

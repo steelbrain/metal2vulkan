@@ -20,7 +20,6 @@
 //! Nothing here can fault a GPU: one compute pass a row, four buffers, no texture, no loop, and
 //! every fetch inside its buffer.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side, StageInAttribute,
     StageInLayout, StageInRegion, StageInput,
@@ -497,14 +496,6 @@ impl Case for StageInRegions {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The words the rows write compare exactly. The one declaration is the venue's own: the
-        // buffers this dispatch reads its arguments and writes its answer through are `Shared`,
-        // which a device with no unified memory keeps in system memory because that is the only
-        // memory both sides can reach.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

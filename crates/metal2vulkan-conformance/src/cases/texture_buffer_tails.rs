@@ -22,13 +22,7 @@
 //! wrote every texel, with the buffer's 20000 bytes after each write; and, in a program of blits,
 //! reads it into a buffer as made, writes texels 880 to 943 by a blit from a buffer, and reads it
 //! back by a blit and by `getBytes:`, with the buffer's bytes.
-//!
-//! Every byte compares exactly. What differs is the announcing: a device without unified memory
-//! announces `shared-in-system-memory` for the `Shared` buffers the answers are read back
-//! through. Nothing here can fault a GPU: one
-//! small texture buffer, eight threads, no loop.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -295,12 +289,6 @@ impl Case for TextureBufferTails {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every answer is read back through `Shared` buffers, so a device without unified memory
-        // announces `shared-in-system-memory` (`crate::replay::shared_memory_notice`).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

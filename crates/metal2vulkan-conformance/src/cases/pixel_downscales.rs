@@ -426,9 +426,6 @@ impl Case for PixelDownscales {
         vec![
             notice_allowance(Degradation::PixelSamplerScaling.code()),
             notice_allowance(Degradation::ArgumentPixelSamplerScaling.code()),
-            // The buffer each pass writes its sampled texels into is `Shared`
-            // ([`crate::replay::shared_memory_notice`]).
-            crate::replay::shared_memory_notice(),
         ]
     }
 

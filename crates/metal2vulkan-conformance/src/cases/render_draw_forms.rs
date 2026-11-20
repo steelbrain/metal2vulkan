@@ -148,14 +148,10 @@ fn pass_kinds() -> Vec<Degradation> {
 
 /// The allowances a case of the family keeps: one declaration per kind of [`pass_kinds`].
 fn pass_notices() -> Vec<Allowance> {
-    let mut allowances: Vec<Allowance> = pass_kinds()
+    pass_kinds()
         .iter()
         .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect();
-    // The positions, the indices, the indirect arguments and the read-back are all `Shared`
-    // ([`crate::replay::shared_memory_notice`]).
-    allowances.push(crate::replay::shared_memory_notice());
-    allowances
+        .collect()
 }
 
 /// Every case of the family, in the order the report lists them.
@@ -2050,8 +2046,7 @@ mod tests {
             );
             assert_eq!(
                 declared.len(),
-                // The family's own list and the notice a device's own memory model provokes.
-                pass_kinds().len() + 1,
+                pass_kinds().len(),
                 "{} declares the wrong number of notices",
                 case.name()
             );

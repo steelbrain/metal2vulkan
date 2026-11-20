@@ -326,20 +326,16 @@ impl Case for RestartIndices {
         // **Nothing is loosened.** Every draw here is the direct indexed form, which reaches no
         // bounds pass, and every texel of every cell still compares exactly.
         //
-        // Two kinds are declared over the notices site. The vertex function writes
+        // One kind is declared over the notices site. The vertex function writes
         // `[[point_size]]`, which a device whose largest point is below Metal's announces at the
         // `Point` cells' draws, the only ones it sizes (`device-point-size`; a line or triangle
-        // cell announces nothing of it); and the positions, indices, marks, frames and read-back are all
-        // `Shared`, which a device with no unified memory keeps in system memory because that is
-        // the only memory both sides can reach (`shared-in-system-memory`). Both belong to the
-        // venue -- its point-size guarantee and its memory model -- rather than to a primitive
-        // type or an index type. The vertex stage's arithmetic on a device whose float arithmetic
-        // is not Metal's (`device-arithmetic`) is the device's own answer, which the suite
-        // declares for every case (`crate::replay::NATIVE_NOTES`).
-        vec![
-            crate::replay::notice_allowance(Degradation::DevicePointSize.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        // cell announces nothing of it). It belongs to the venue's point-size guarantee rather
+        // than to a primitive type or an index type. The vertex stage's arithmetic on a device
+        // whose float arithmetic is not Metal's (`device-arithmetic`) is the device's own answer,
+        // which the suite declares for every case (`crate::replay::NATIVE_NOTES`).
+        vec![crate::replay::notice_allowance(
+            Degradation::DevicePointSize.code(),
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

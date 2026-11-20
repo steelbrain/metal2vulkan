@@ -714,16 +714,14 @@ impl Case for TextureFills {
 
     fn allowances(&self) -> Vec<Allowance> {
         // What this work announces on a device that needs it: a block-compressed texture's device
-        // decode, announced where the runtime makes it (`compressed-texel-decode`), and shared
-        // storage in system memory. Metal announces neither, so the notices site differs on such a
-        // device, and the difference is justified where one of these fired. A float depth's
-        // denormals are the device's own answer, which the suite declares for every case
-        // (`crate::replay::NATIVE_NOTES`). The format's own digest still compares.
-        use crate::degradation::Degradation as D;
-        [D::CompressedTexelDecode, D::SharedInSystemMemory]
-            .into_iter()
-            .map(|kind| notice_allowance(kind.code()))
-            .collect()
+        // decode, announced where the runtime makes it (`compressed-texel-decode`). Metal
+        // announces none, so the notices site differs on such a device, and the difference is
+        // justified where it fired. A float depth's denormals are the device's own answer, which
+        // the suite declares for every case (`crate::replay::NATIVE_NOTES`). The format's own
+        // digest still compares.
+        vec![notice_allowance(
+            crate::degradation::Degradation::CompressedTexelDecode.code(),
+        )]
     }
 
     fn carried_transcript(&self) -> Result<Option<(u32, Transcript)>, String> {
@@ -850,13 +848,6 @@ impl Case for TwoPlaneHeapFill {
     /// is measured on this chip instead of carried from somebody's terminal.
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    /// What the work declares: every byte of the heap compares exactly, and the buffer this case
-    /// reads the filled planes back through is `Shared`, which a device with no unified memory
-    /// keeps in system memory because that is the only memory both sides can reach.
-    fn allowances(&self) -> Vec<Allowance> {
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

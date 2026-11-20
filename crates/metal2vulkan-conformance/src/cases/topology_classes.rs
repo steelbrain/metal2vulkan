@@ -231,11 +231,7 @@ impl Case for TopologyClassCase {
         // `rt6_full` computes its clip position from the vertex id under the fixture's default fast
         // math, whose `fast-math-rewrites` the suite declares for every case
         // (`crate::replay::NATIVE_NOTES`); it moves no pixel of a fullscreen triangle.
-        //
-        // One is declared for both cases, and it belongs to the venue rather than to a
-        // topology class: the positions and the read-back are `Shared`
-        // ([`crate::replay::shared_memory_notice`], measured on the 5080). It loosens no texel.
-        let mut allowances: Vec<Allowance> = vec![crate::replay::shared_memory_notice()];
+        let mut allowances: Vec<Allowance> = Vec::new();
         // And the point-size function's case alone, whose draws are points, declares what a
         // device whose largest point is below Metal's announces at a draw of points of the size it
         // writes: measured on llvmpipe for that row and for neither the plain row, which draws
@@ -513,8 +509,8 @@ mod tests {
                 }
             }
             // Only the notices site may be loosened, and only the point-size case declares the
-            // point-size notice beside the venue's memory model; the fast-math notice is the
-            // suite's (`crate::replay::NATIVE_NOTES`), declared by neither case.
+            // point-size notice; the fast-math notice is the suite's
+            // (`crate::replay::NATIVE_NOTES`), declared by neither case.
             for allowance in case.allowances() {
                 assert_eq!(
                     allowance.path,
@@ -535,7 +531,7 @@ mod tests {
             );
             assert_eq!(
                 case.allowances().len(),
-                1 + usize::from(writes_point_size(&case.subject)),
+                usize::from(writes_point_size(&case.subject)),
                 "{}: an unexpected number of declarations",
                 case.name()
             );

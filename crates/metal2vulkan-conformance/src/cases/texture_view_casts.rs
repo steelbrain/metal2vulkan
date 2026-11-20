@@ -33,7 +33,6 @@
 //! names its level and slice in sixteenths and eighths, which a half holds exactly, so each sample
 //! is the colour cleared where the view and the parent share the texel, or it is a difference.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -392,13 +391,6 @@ impl Case for TextureViewCast {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The samples land in a `Shared` buffer, and the points are read from one, which is what
-        // [`crate::replay::shared_memory_notice`] is for; it loosens the notices site alone, and
-        // every sample still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

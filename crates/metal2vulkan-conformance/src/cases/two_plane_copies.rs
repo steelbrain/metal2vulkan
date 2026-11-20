@@ -36,7 +36,6 @@
 //! - its chained-blit case asserts a notice fired on the second copy and not the first, which is a
 //!   per-device once rule rather than a Metal observation.
 
-use crate::allowance::Allowance;
 use crate::case::{answered, call, Abort, Case, Input, MetalSource, Side};
 use crate::measured::hex_bytes;
 use crate::replay::NOTICES_SITE;
@@ -423,14 +422,6 @@ impl Case for RowBlits {
         ])
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every word compares exactly. Every case declares the notice the venue's own memory model
-        // provokes: the buffer it reads the copied planes back through is `Shared`, which a device
-        // with no unified memory keeps in system memory because that is the only memory both sides
-        // can reach.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn carried_transcript(&self) -> Result<Option<(u32, Transcript)>, String> {
         if self.announced {
             // Record mode runs this one on Metal. Its probe's table stays as the cross-check
@@ -650,12 +641,6 @@ impl Case for PadFills {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::carried_only(MEASURED_IN, PRIVATE_FILL)
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every digest compares exactly. The venue's own, for the `Shared` read-back buffer, as
-        // the row blits state.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

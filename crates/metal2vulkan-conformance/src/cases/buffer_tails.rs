@@ -23,12 +23,7 @@
 //!   by a blit from a buffer (across the length) and rows 252 to 255 by a blit from a texture
 //!   (wholly past it), copies rows 240 to 255 into a texture of its own, and reads every one of
 //!   those back, with the buffer's bytes.
-//!
-//! Every byte compares exactly. What differs is the announcing: a device without unified memory
-//! announces `shared-in-system-memory` for the `Shared` buffers the answers are read back
-//! through. Nothing here can fault a GPU: one small texture, one thread a texel, no loop.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, PlaneTexture, Side,
 };
@@ -79,13 +74,6 @@ fn written(n: u64, set: u64) -> Vec<u8> {
     (0..n)
         .map(|i| ((i * 13 + set * 101) % 253) as u8 + 2)
         .collect()
-}
-
-/// What both cases loosen: the notices, and nothing else.
-fn allowances() -> Vec<Allowance> {
-    // Every case reads its answers back through `Shared` buffers, so a device without unified
-    // memory announces `shared-in-system-memory` (`crate::replay::shared_memory_notice`).
-    vec![crate::replay::shared_memory_notice()]
 }
 
 /// The numbers that place the texture in the buffer, for both cases' inputs.
@@ -226,10 +214,6 @@ impl Case for Kernels {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        allowances()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -472,10 +456,6 @@ impl Case for Blits {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        allowances()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

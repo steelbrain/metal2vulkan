@@ -361,10 +361,7 @@ impl Case for NanIntegerConversions {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Every word compares exactly. Both answers come back through `Shared` buffers, so a
-        // device without unified memory announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason).
-        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        let mut allowances = Vec::new();
         // A `long` of either infinity, the one answer past a range where Metal on the M3 Max
         // (job m3-max-55436) does not saturate: it answers 0, and the translator the bound. MSL
         // states no answer past the range, so the two elements of each `long` column hold either,

@@ -88,7 +88,6 @@
 //! Nothing dispatches, nothing draws, no shader runs, every wait is bounded, and the heap is 4
 //! MiB of which the rows map at most a few dozen pages.
 
-use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Input, MetalSource, Side};
 use crate::sparse_mapping::{MappingMode, MappingStep, SparseMappingProgram, TileGrid, TileRect};
 use crate::sparse_query::{SparseHeapSpec, SparseTextureSpec};
@@ -174,21 +173,6 @@ fn whole_level(level: u32) -> TileRect {
 fn last_tile(level: u32) -> TileRect {
     let [across, down] = tiles_at(level);
     TileRect::one([across - 1, down - 1])
-}
-
-/// Whether a program reaches a `Shared` buffer of its own: it reads tiles out to one
-/// ([`MappingStep::ReadRegion`], which the fills before it write into), or it makes one for an
-/// indirect update to read its regions from. A program that only maps, moves and fences allocates
-/// none, so a device's own memory model has nothing to announce for it.
-///
-/// It is a structural test of the program rather than a flag on the row, so a row that grows a
-/// read or an indirect buffer declares the notice without anybody remembering to say so.
-fn reaches_a_shared_buffer(program: &SparseMappingProgram) -> bool {
-    !program.buffers.is_empty()
-        || program
-            .steps
-            .iter()
-            .any(|step| matches!(step, MappingStep::ReadRegion { .. }))
 }
 
 /// One row of the family: a case name, and the program it runs.
@@ -1028,19 +1012,6 @@ impl Case for SparseMappings {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // **No value is loosened**: every number and every byte of every row compares exactly. The
-        // one declaration is the `Shared` buffer a row that reads texels back carries
-        // ([`crate::replay::shared_memory_notice`]), which the RTX 5080 announced for the two rows
-        // that read any -- `sparse-mapping-mapped-tiles-hold-their-texels` and
-        // `sparse-mapping-indirect-updates`. The rest answer mappings and numbers alone, so they
-        // allocate no such buffer and declare nothing for one.
-        match reaches_a_shared_buffer(&(self.row.program)()) {
-            true => vec![crate::replay::shared_memory_notice()],
-            false => Vec::new(),
-        }
-    }
-
     fn inputs(&self) -> Result<Vec<Input>, String> {
         // The program itself: the heap, every texture, the indirect arguments, the tile grid the
         // regions are stated in, and every command with its own numbers. A program whose regions,
@@ -1224,23 +1195,7 @@ mod tests {
                 .inputs()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
             assert!(!inputs.is_empty(), "{}", case.name());
-            // The two rows that reach a `Shared` buffer declare the one a device's own memory
-            // model provokes, and no other row declares anything. No value tolerance appears
-            // anywhere in this family.
-            let allowed = case.allowances();
-            let expects = usize::from(reaches_a_shared_buffer(&(EVERY_ROW
-                .iter()
-                .find(|row| row.case == case.name())
-                .expect("a row of the family")
-                .program)()));
-            assert_eq!(allowed.len(), expects, "{}", case.name());
-            for allowance in &allowed {
-                assert!(
-                    matches!(allowance.loosening, crate::allowance::Loosening::Unchecked),
-                    "{}: a value tolerance in a family that loosens none",
-                    case.name()
-                );
-            }
+            assert!(case.allowances().is_empty(), "{}", case.name());
             digests.insert(crate::sha256_hex(
                 &inputs[0].digest.hex.clone().into_bytes(),
             ));

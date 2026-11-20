@@ -193,8 +193,7 @@ struct Row {
     /// `blendingEnabled` with RGB factors that read the **source alpha**, which is how a row sees
     /// what alpha-to-one fed the blend.
     blended: bool,
-    /// The degrade notices a driver that is not Metal announced **for this row**, beside the one
-    /// every row declares ([`crate::replay::shared_memory_notice`]).
+    /// The degrade notices a driver that is not Metal announced **for this row**.
     ///
     /// A measured set, row by row, and not a rule fitted to the rows: the three sets below are what
     /// the RTX 5080 Laptop (615.71.09) and llvmpipe (Mesa 26.2.4) printed, less the device's own
@@ -505,21 +504,12 @@ impl Case for AlphaCoverageCase {
         // **No value is loosened.** The coverage report is an integer, and the resolve of `k`
         // covered samples against `4 - k` uncovered is compared exactly, which is this suite's
         // ruling for the same shape in `super::sample_positions`. Every entry below is a notice
-        // declaration at `case/notices/*`, which moves no coverage and no texel.
-        //
-        // Two parts, and the split is the point. `shared-in-system-memory` belongs to the
-        // **venue**: every row reads its coverage and its resolve back through a `Shared` buffer,
-        // and a device without unified memory holds that buffer in host-cached system memory
-        // (`crate::replay::shared_memory_notice`). It fired for all 17 rows on the RTX 5080 Laptop
-        // (615.71.09) with the case declaring it nowhere. The rest is [`Row::notices`], which is
-        // the set measured **for that row** rather than for the family.
-        std::iter::once(crate::replay::shared_memory_notice())
-            .chain(
-                self.row
-                    .notices
-                    .iter()
-                    .map(|kind| crate::replay::notice_allowance(kind.code())),
-            )
+        // declaration at `case/notices/*`, which moves no coverage and no texel. The notices are
+        // [`Row::notices`], the set measured **for that row** rather than for the family.
+        self.row
+            .notices
+            .iter()
+            .map(|kind| crate::replay::notice_allowance(kind.code()))
             .collect()
     }
 
@@ -1030,10 +1020,10 @@ mod tests {
                     case.name()
                 );
             }
-            // The venue's notice, and whatever the row itself was measured announcing.
+            // Whatever the row itself was measured announcing.
             assert_eq!(
                 case.allowances().len(),
-                1 + case.row.notices.len(),
+                case.row.notices.len(),
                 "{}",
                 case.name()
             );

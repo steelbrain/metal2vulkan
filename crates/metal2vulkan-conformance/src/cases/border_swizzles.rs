@@ -299,18 +299,6 @@ impl Case for BorderSwizzles {
         // for every case, which loosen no word. A word the device's conversion moves is a
         // `known-gaps.tsv` row of the venue.
         //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 8 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        //
         // The fixture's float texture is sampled through the runtime sampler at `[[sampler(0)]]`,
         // which the runtime's pipelines note as scaled
         // (`crate::replay::pixel_sampler_scaling_notice` holds why). Measured through the rt side
@@ -318,10 +306,7 @@ impl Case for BorderSwizzles {
         //
         // Every row sweeps samplers that read an opaque-black border, which the runtime's
         // sampler states note on every device (`crate::replay::swizzled_border_notice`).
-        let mut named = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::pixel_sampler_scaling_notice(),
-        ];
+        let mut named = vec![crate::replay::pixel_sampler_scaling_notice()];
         let black = (SAMPLERS.iter()).any(|&(_, modes, border)| {
             crate::replay::reads_opaque_black_border(&sampler_spec(modes, border))
         });

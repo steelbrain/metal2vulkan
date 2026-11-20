@@ -42,10 +42,6 @@
 //! the answer changes down the target and along a row, so a target whose answer changes at a
 //! scissor's edges is a few rows of a few runs each, where its runs of texels alone would be two a
 //! row (1,042 for each of the chain's targets, 1.46 MB of recording for the three).
-//!
-//! **What the runtime announces, and the case declares.** Every row reads its answer back through a
-//! `Shared` buffer, which a device without unified memory announces as `shared-in-system-memory`
-//! (the RTX 5080 Laptop announces it on every row). The declaration loosens the notices site alone.
 
 use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
@@ -846,11 +842,6 @@ impl Case for PassStartRead {
                 Justification::accepted(DRAWN_WITHOUT_BARRIER),
             ));
         }
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason): the RTX 5080 Laptop's
-        // replay announced it on every row.
-        allowances.push(crate::replay::shared_memory_notice());
         allowances
     }
 

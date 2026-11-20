@@ -35,7 +35,6 @@
 //! it with nothing encoded. No shader, no draw, no dispatch, no loop, no mapping, and every wait is
 //! bounded.
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Input, MetalSource, Side};
 use crate::transcript::Sites;
 
@@ -86,21 +85,6 @@ impl Case for CommandBufferFactsCase {
         5
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // this case, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
         // The call's own site and the facts take **different** names: two siblings under one name
         // are paired by whichever namesake the comparison reaches first, which is how a round
@@ -117,22 +101,18 @@ impl Case for CommandBufferFactsCase {
 mod tests {
     use super::*;
 
-    /// The case states its inputs, names itself once, declares the venue's own memory notice and
-    /// nothing else.
+    /// The case states its inputs, names itself once and declares nothing.
     ///
-    /// A second notice slipping in would be a value the case took for a reason nobody wrote down,
-    /// which is what this count is for.
+    /// A notice slipping in would be a value the case took for a reason nobody wrote down, which
+    /// is what this check is for.
     #[test]
-    fn the_case_states_its_inputs_and_only_the_venue_notice() {
+    fn the_case_states_its_inputs_and_declares_nothing() {
         let cases = all();
         assert_eq!(cases.len(), 1);
         let case = &cases[0];
         assert_eq!(case.name(), COMMAND_BUFFER_FACTS);
         assert!(!case.inputs().expect("the inputs").is_empty());
-        let allowed = case.allowances();
-        // The one a card without unified memory announces for the `Shared` buffer the case reads
-        // its answer back through.
-        assert_eq!(allowed.len(), 1);
+        assert!(case.allowances().is_empty());
         // And the case records more than one run, because two of its booleans read a clock.
         assert!(case.record_runs() > 1);
     }

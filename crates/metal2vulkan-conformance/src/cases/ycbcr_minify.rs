@@ -49,7 +49,6 @@
 //! 23.7 MiB shared buffer, which is the largest input in the suite and well inside the project's
 //! 500 MiB ceiling.
 
-use crate::allowance::Allowance;
 use crate::case::{
     made, Abort, Bindings, Case, Failure, Input, MetalSource, PlaneTexture, SamplerSpec, Side,
 };
@@ -254,13 +253,6 @@ impl Case for MinifyBand {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the buffer each band writes its minified samples into is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

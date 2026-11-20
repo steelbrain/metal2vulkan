@@ -680,16 +680,7 @@ impl Case for TileThreadgroups {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        let mut allowances = tile_notice_allowances();
-        // The record buffer a tile-order or tile-grid pass writes its order into is `Shared`
-        // ([`crate::replay::shared_memory_notice`]), and the RTX 5080 was measured announcing it
-        // for each of those five rows. The thread-limit case answers getters and the two blur
-        // cases were measured announcing nothing of the kind on either venue, so neither declares
-        // it: a declaration no run justifies is one nobody is checking.
-        if matches!(self.shape, Shape::Order { .. } | Shape::Grid) {
-            allowances.push(crate::replay::shared_memory_notice());
-        }
-        allowances
+        tile_notice_allowances()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1071,16 +1062,9 @@ mod tests {
             assert_eq!(case.metal_source(), MetalSource::Run);
             case.shaders().unwrap();
             let allowances = case.allowances();
-            // Every case declares the family's own list, and the five that read a record buffer
-            // back declare the notice a device's own memory model provokes besides. Nothing else
-            // is named and nothing is loosened, so a value tolerance added later fails here.
-            let reads_a_buffer = matches!(case.shape, Shape::Order { .. } | Shape::Grid);
-            assert_eq!(
-                allowances.len(),
-                TILE_PASS_NOTICES.len() + usize::from(reads_a_buffer),
-                "{}",
-                case.name()
-            );
+            // Every case declares the family's own list. Nothing else is named and nothing is
+            // loosened, so a value tolerance added later fails here.
+            assert_eq!(allowances.len(), TILE_PASS_NOTICES.len(), "{}", case.name());
             for allowance in &allowances {
                 assert_eq!(
                     allowance.path,
@@ -1091,10 +1075,8 @@ mod tests {
                 assert_eq!(allowance.loosening, Loosening::Unchecked, "{allowance:?}");
                 match &allowance.justified_by {
                     Justification::Degradation(code) => assert!(
-                        TILE_PASS_NOTICES.iter().any(|kind| kind.code() == code)
-                            || code == Degradation::SharedInSystemMemory.code(),
-                        "{}: {code} is neither a tile-pass notice nor the one a device's own \
-                         memory model provokes",
+                        TILE_PASS_NOTICES.iter().any(|kind| kind.code() == code),
+                        "{}: {code} is not a tile-pass notice",
                         case.name()
                     ),
                     other => panic!("{}: an unexpected tolerance: {other:?}", case.name()),

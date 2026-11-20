@@ -22,7 +22,6 @@
 //!
 //! Two 576-byte surfaces, one sampler and four dispatches of 3,024 threads each, with no loop.
 
-use crate::allowance::Allowance;
 use crate::case::{
     made, Abort, Bindings, Case, Failure, Input, MetalSource, PlaneTexture, SamplerSpec, Side,
 };
@@ -185,13 +184,6 @@ impl Case for YCbCrGathers {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the buffers the kernels write into are `Shared`
-        // ([`crate::replay::shared_memory_notice`]). It loosens the notices site alone, so every
-        // value still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

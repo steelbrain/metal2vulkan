@@ -76,7 +76,6 @@
 //! target and the suite counts the resolve case [`LacksFeature`](crate::verdict::Verdict::LacksFeature)
 //! rather than leaving it uncompared.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -881,20 +880,6 @@ impl Case for LayeredTargets {
 
     fn record_runs(&self) -> u32 {
         RUNS
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // **No value here is loosened, the resolve case included.** Every texel Metal leaves is
-        // one we must leave. What is declared is the notice set, which this M3 Max's own run holds
-        // empty and a driver that is not Metal does not.
-        //
-        // `shared-in-system-memory` is every row's and belongs to the venue, not to the case:
-        // every row reads its texels back through a `Shared` buffer, and a device without unified
-        // memory holds that buffer in host-cached system memory
-        // (`crate::replay::shared_memory_notice`). Measured on the RTX 5080 Laptop (615.71.09),
-        // where all five rows announced it with the case declaring it nowhere and each was
-        // divergent on that field and nothing else (replay-nvidia.log).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

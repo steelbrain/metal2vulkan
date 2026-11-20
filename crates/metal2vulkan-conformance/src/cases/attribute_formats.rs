@@ -102,7 +102,6 @@
 //! one dispatch and one wait a row; every fetch is inside the buffer the row bound; no texture, no
 //! loop.
 
-use crate::allowance::Allowance;
 use crate::attribute_coding as coding;
 use crate::attribute_coding::{shape, FILLER, ROWS, SLOT};
 use crate::case::{
@@ -516,25 +515,6 @@ impl Case for AttributeFormats {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // No value is loosened. Every decoding is exact arithmetic on the codes the record holds
-        // and every site is the raw bits the kernel reported, so a word that differs is a
-        // difference in the decode and not a rounding.
-        //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // this case, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         let mut shaders = Vec::new();
         for extension in [RUNTIME_TEXT, METAL_TEXT] {
@@ -717,14 +697,6 @@ impl Case for ClassCrossings {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened: whether a pipeline was made is not a number that can round, and
-        // the case reads no buffer back, so the notice a card without unified memory announces for
-        // a `Shared` buffer cannot reach it. Measured exact on the RTX 5080 Laptop (615.71.09)
-        // and on llvmpipe, which is why it declares nothing.
-        Vec::new()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

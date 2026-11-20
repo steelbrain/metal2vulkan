@@ -244,13 +244,10 @@ impl Case for BicubicTexelClasses {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The runtime emulates Metal's bicubic footprint and announces that its arithmetic is its
-        // own (`bicubic-filter-arithmetic`): a declaration, which loosens no value. The output is
-        // a `Shared` buffer, so a device without unified memory announces
-        // `shared-in-system-memory` (`crate::replay::shared_memory_notice` holds the whole reason).
-        vec![
-            crate::replay::shared_memory_notice(),
-            notice_allowance(Degradation::BicubicFilterArithmetic.code()),
-        ]
+        // own (`bicubic-filter-arithmetic`): a declaration, which loosens no value.
+        vec![notice_allowance(
+            Degradation::BicubicFilterArithmetic.code(),
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

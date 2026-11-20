@@ -4,7 +4,7 @@
 //! A case loosens a field by naming a code ([`crate::allowance`]), and the comparison holds it
 //! there only where the run announced that code. The runtime's side announces the codes of
 //! the precision notes its states, textures and sampler states carry
-//! ([`Degradation::from_precision_note`]); a code no note announces justifies nothing on its run.
+//! ([`Degradation::from_precision_note`]), and every kind here is one of those notes'.
 
 use metal2vulkan::pipeline::PrecisionNote;
 
@@ -15,8 +15,6 @@ pub enum Degradation {
     DeviceRoundedResolve,
     /// `metal2vulkan-degrade-device-reconvergence`.
     DeviceReconvergence,
-    /// `metal2vulkan-degrade-shared-in-system-memory`.
-    SharedInSystemMemory,
     /// `metal2vulkan-degrade-device-filtered-mipmaps`.
     DeviceFilteredMipmaps,
     /// `metal2vulkan-degrade-capped-lod-bias`.
@@ -196,7 +194,6 @@ impl Degradation {
     pub const ALL: &'static [Degradation] = &[
         Degradation::DeviceRoundedResolve,
         Degradation::DeviceReconvergence,
-        Degradation::SharedInSystemMemory,
         Degradation::DeviceFilteredMipmaps,
         Degradation::CappedLodBias,
         Degradation::SnormMinimumKept,
@@ -290,7 +287,6 @@ impl Degradation {
         match self {
             Degradation::DeviceRoundedResolve => "metal2vulkan-degrade-device-rounded-resolve",
             Degradation::DeviceReconvergence => "metal2vulkan-degrade-device-reconvergence",
-            Degradation::SharedInSystemMemory => "metal2vulkan-degrade-shared-in-system-memory",
             Degradation::DeviceFilteredMipmaps => "metal2vulkan-degrade-device-filtered-mipmaps",
             Degradation::CappedLodBias => "metal2vulkan-degrade-capped-lod-bias",
             Degradation::SnormMinimumKept => "metal2vulkan-degrade-snorm-minimum-kept",

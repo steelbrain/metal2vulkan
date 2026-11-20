@@ -125,7 +125,6 @@
 //! the case's sample count or make its format refuses the target and the suite counts the case
 //! [`LacksFeature`](crate::verdict::Verdict::LacksFeature) rather than leaving it uncompared.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -569,14 +568,6 @@ impl Case for ResolvedSample {
 
     fn record_runs(&self) -> u32 {
         RUNS
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // **No value is loosened**: every resolved byte and every resolved depth Metal leaves is
-        // one we must leave. The one declaration is the buffer each pass reads its resolved
-        // aspects back through, which is `Shared` ([`crate::replay::shared_memory_notice`],
-        // measured firing on the 5080).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

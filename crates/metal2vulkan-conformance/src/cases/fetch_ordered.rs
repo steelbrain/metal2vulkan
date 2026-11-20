@@ -257,27 +257,14 @@ impl Case for FetchOrdered {
         // which is the owner's rule for this family: if Metal allows it we must allow it, so a
         // byte that differs is a bug and a refusal is a bug, and neither gets a tolerance here.
         //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 4 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        //
         // A venue with neither ordered fetch form (no rasterization-order attachment access, no
         // pixel interlock) reads the input attachment ordered between draws alone and announces
         // `unordered-fetch-within-draw`, a precision note of what it leaves unordered: overlapping
         // fragments of one draw. Each draw here is one fullscreen triangle, which overlaps itself
         // nowhere, so every byte still compares exactly.
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::UnorderedFetchWithinDraw.code()),
-        ]
+        vec![crate::replay::notice_allowance(
+            Degradation::UnorderedFetchWithinDraw.code(),
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

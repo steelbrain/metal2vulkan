@@ -397,20 +397,13 @@ impl Case for RenderChain {
         //   measured to interpolate as Metal does. Measured announced by those two rows on
         //   lavapipe, where their texels still compared exactly: the interpolation the note covers
         //   did not move a sampled texel of this geometry.
-        //
-        // Every value of every row compared **exactly** on both venues, which is the evidence that
-        // these declarations loosen nothing: the whole difference they cover is the announcement.
-        // - `shared-in-system-memory`, for every row, because the buffer the chain reads its
-        //   target back through is `Shared`, which a device with no unified memory keeps in
-        //   system memory because that is the only memory both sides can reach. It belongs to
-        //   the venue's memory model rather than to a chain's shape.
         // - `pixel-sampler-scaling`, for every row, because each samples its target through a
         //   runtime sampler slot, which the runtime's pipelines note as scaled
         //   (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it rests on).
-        let mut named = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::pixel_sampler_scaling_notice(),
-        ];
+        //
+        // Every value of every row compared **exactly** on both venues, which is the evidence that
+        // these declarations loosen nothing: the whole difference they cover is the announcement.
+        let mut named = vec![crate::replay::pixel_sampler_scaling_notice()];
         if self.subject.sample.half_output {
             named.push(crate::replay::notice_allowance(
                 Degradation::HalfOutputFastMathBlend.code(),
@@ -791,10 +784,7 @@ mod tests {
             // The whole set, one declaration a code the row can announce: a code the row
             // announces and declares nowhere is a divergence, and a code it declares but cannot
             // announce is an allowance standing behind nothing, so the set is stated exactly.
-            let mut wanted = vec![
-                Degradation::SharedInSystemMemory.code().to_owned(),
-                Degradation::PixelSamplerScaling.code().to_owned(),
-            ];
+            let mut wanted = vec![Degradation::PixelSamplerScaling.code().to_owned()];
             if case.subject.sample.half_output {
                 wanted.push(Degradation::HalfOutputFastMathBlend.code().to_owned());
             }

@@ -88,12 +88,6 @@ impl Case for FunctionConstantsHalf3 {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // The output is a `Shared` buffer, so a device without unified memory announces
-        // `shared-in-system-memory` (`crate::replay::shared_memory_notice` holds the whole reason).
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         let mut shaders = Vec::new();
         for extension in [RUNTIME_TEXT, METAL_TEXT] {

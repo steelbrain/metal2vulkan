@@ -91,11 +91,7 @@ impl Case for FenceOrderCase {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // X and Y are `Shared` buffers the answer is read back out of, and on a device without
-        // unified memory the runtime announces `shared-in-system-memory` for them
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
-        // site alone: every word count and status still compares exactly.
-        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        let mut allowances = Vec::new();
         // Behind one busy command buffer, the runtime's 1024 is its structure: a writer whose
         // queue has fewer than three submissions in flight is submitted at once, so the later copy
         // on another queue reads every word, on every device and run, the order Apple describes

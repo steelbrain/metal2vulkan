@@ -226,12 +226,10 @@ impl Case for SrgbFetch {
         //
         // A venue with neither ordered fetch form reads the input attachment ordered between draws
         // alone, announced `unordered-fetch-within-draw`; each draw is one fullscreen triangle,
-        // which overlaps itself nowhere, so every byte still compares exactly. The buffer each
-        // pass reads its target back through is `Shared` ([`crate::replay::shared_memory_notice`]).
-        vec![
-            crate::replay::notice_allowance(Degradation::UnorderedFetchWithinDraw.code()),
-            crate::replay::shared_memory_notice(),
-        ]
+        // which overlaps itself nowhere, so every byte still compares exactly.
+        vec![crate::replay::notice_allowance(
+            Degradation::UnorderedFetchWithinDraw.code(),
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

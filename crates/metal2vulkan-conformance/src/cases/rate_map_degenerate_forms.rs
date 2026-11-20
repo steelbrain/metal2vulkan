@@ -185,14 +185,11 @@ impl Case for DegenerateFormCase {
         // catalogue). Metal announces nothing, so the notices set is the one field that may differ,
         // and the allowance is held to its evidence — the notice must actually have been announced
         // on the run compared.
-        vec![
-            crate::replay::shared_memory_notice(),
-            Allowance::new(
-                format!("case/{NOTICES_SITE}/*"),
-                Loosening::Unchecked,
-                Justification::notice(Degradation::RasterizationRateMap),
-            ),
-        ]
+        vec![Allowance::new(
+            format!("case/{NOTICES_SITE}/*"),
+            Loosening::Unchecked,
+            Justification::notice(Degradation::RasterizationRateMap),
+        )]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -376,17 +373,15 @@ mod tests {
             let allowances = case.allowances();
             assert_eq!(
                 allowances.len(),
-                2,
-                "{}: the rate-map degradation and the venue's system-memory notice are the two \
-                 this shape declares",
+                1,
+                "{}: the rate-map degradation is the one notice this shape declares",
                 case.name
             );
             for allowance in allowances {
                 match &allowance.justified_by {
                     Justification::Degradation(code) => {
                         assert!(
-                            *code == Degradation::RasterizationRateMap.code()
-                                || *code == Degradation::SharedInSystemMemory.code(),
+                            *code == Degradation::RasterizationRateMap.code(),
                             "{}: {code}",
                             case.name
                         );

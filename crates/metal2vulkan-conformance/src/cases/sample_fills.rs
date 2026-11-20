@@ -25,12 +25,11 @@
 //! Metal's answer is **carried** and re-recording is **forbidden**: Metal fills a texture through
 //! private API.
 
-use crate::allowance::Allowance;
 use crate::case::{answered, call, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::measured::{hex_bytes, public_fixture};
 use crate::recording::ShaderRef;
-use crate::replay::{notice_allowance, NOTICES_SITE};
+use crate::replay::NOTICES_SITE;
 use crate::transcript::{Digest, DigestKind, Node, Observed, Sites, Transcript, Value};
 use crate::work::{Clear, Rect, Resource, Step, TextureSpec, Work};
 
@@ -428,18 +427,6 @@ impl Case for SampleFills {
             Input::bytes("kernels-air-ll", fixture.text(METAL_TEXT)?.as_bytes()),
             Input::bytes("metal-lines", public_fixture(METAL_LINES)?.as_bytes()),
         ])
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // A multisample fill and its read-back announce shared storage in system memory on a
-        // device without unified memory. Metal announces none, so the notices site differs on such
-        // a device, and the difference is justified where it fired. A depth texture's denormals
-        // and a `Depth32Float` target's signed test (`depth-denormals`, `signed-depth-test`) are
-        // the device's own answers, which the suite declares for every case
-        // (`crate::replay::NATIVE_NOTES`); every depth word still compares exactly.
-        vec![notice_allowance(
-            crate::degradation::Degradation::SharedInSystemMemory.code(),
-        )]
     }
 
     fn carried_transcript(&self) -> Result<Option<(u32, Transcript)>, String> {

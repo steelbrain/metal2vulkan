@@ -83,7 +83,6 @@
 //! Nothing here can fault a GPU: one compute pass, one texture, one thread a texel inside it, no
 //! loop and no coordinate outside the texture.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side, TextureRole, TextureSpec,
 };
@@ -347,28 +346,6 @@ impl Case for HalfTexelNans {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The device's NaN encoding of a `half` result of a float texel (`device-nan-encoding`) is
-        // its own answer, which the suite declares for every case (`crate::replay::NATIVE_NOTES`),
-        // and nothing loosens a stored half: the note's own definition in `pipeline/artifact.rs`
-        // ends "Validation derives no tolerance from it", so a tolerance written from it would be
-        // this suite overruling the contract it exists to test. The three 16-bit float formats are
-        // therefore left **divergent** on this round's MoltenVK, with the measured difference in
-        // the module docs above.
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 8 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

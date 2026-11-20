@@ -64,7 +64,6 @@
 //! samples of the format refuses the target and the suite counts the case
 //! [`LacksFeature`](crate::verdict::Verdict::LacksFeature).
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -341,13 +340,6 @@ impl Case for ResolveThenLoad {
 
     fn record_runs(&self) -> u32 {
         RUNS
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // No value is loosened. The buffers the kernel and the blits write are `Shared`
-        // ([`crate::replay::shared_memory_notice`]): it was announced on the RTX 2080 (job
-        // m3-max-55760), and nothing else differed there.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

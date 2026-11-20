@@ -593,20 +593,8 @@ impl Case for TargetDraw {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 22 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        let mut named = vec![crate::replay::shared_memory_notice()];
         if !self.half {
-            return named;
+            return Vec::new();
         }
         // `rt6_samples` is a fast-math module, so a pipeline that stores its `half4` fill into a
         // color attachment announces that the half output's rounding into the attachment may not be
@@ -617,10 +605,9 @@ impl Case for TargetDraw {
         // allowance fails the case if the notice stops firing, so it cannot outlive its reason. The
         // `float4` fill of the same outputs announces nothing and carries no allowance, which is
         // what makes the pairing worth recording.
-        named.push(crate::replay::notice_allowance(
+        vec![crate::replay::notice_allowance(
             Degradation::HalfOutputFastMathBlend.code(),
-        ));
-        named
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -786,21 +773,6 @@ impl Case for ClearTexels {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 22 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1042,26 +1014,13 @@ impl Case for ClearRoutes {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 22 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        let mut named = vec![crate::replay::shared_memory_notice()];
         // On a venue that presents no texture compression the blit that reads `plain-16` back,
         // through the texture the recording's Mac compressed, keeps the device's encoding where
         // the recording holds the compressor's canonical one, and the runtime rewrites none
         // under the suite's exact policy (`compressed_blits`'s declaration says why). Measured on
         // the RTX 5080 Laptop: `case/plain-16/texels/*` alone differ against the recording with
         // the key and matched before it.
-        named.push(crate::replay::without_compression("plain-16"));
-        named
+        vec![crate::replay::without_compression("plain-16")]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

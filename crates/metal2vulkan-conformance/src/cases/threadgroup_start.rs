@@ -14,7 +14,6 @@
 //! compares exactly. Nothing here can fault a GPU: one pass of six dispatches, every access inside
 //! the threadgroup's own memory or the output's 16 bytes, loops bounded by the array's words.
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::compute_pass::{ComputePass, ComputeStep, Dispatching};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -97,13 +96,6 @@ impl Case for ThreadgroupStart {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every byte compares exactly. The answer is read back through a `Shared` buffer, so a
-        // device without unified memory announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

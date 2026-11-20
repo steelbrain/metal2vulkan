@@ -742,10 +742,7 @@ impl Case for Rgb10A2Srgb {
     /// module's filter of the decoded taps. The read and write cases name no notice of their own.
     fn allowances(&self) -> Vec<Allowance> {
         use crate::degradation::Degradation as D;
-        // Every question reads its answer back through a `Shared` buffer, and a device with no
-        // unified memory keeps a `Shared` allocation in system memory because that is the only
-        // memory both sides can reach: the venue's memory model rather than this format's answer.
-        let mut named = vec![crate::replay::shared_memory_notice()];
+        let mut named = Vec::new();
         match &self.question {
             Question::Stores { lanes: Lanes::Half } => {
                 named.push(notice_allowance(D::HalfOutputFastMathBlend.code()))

@@ -468,23 +468,6 @@ impl Case for Blits {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // Every byte of every one of these programs compares exactly, Metal's against ours.
-        //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // both rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn inputs(&self) -> Result<Vec<Input>, String> {
         // Every row and the order they run in, keyed by the call each one makes and its numbers: a
         // table that gains, loses or re-points a row is a change to the case's inputs rather than

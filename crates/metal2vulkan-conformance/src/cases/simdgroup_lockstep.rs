@@ -154,14 +154,12 @@ impl Case for Lockstep {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The output words are lockstep's alone, which the runtime does not give (the module
-        // documentation). And two declarations, each loosening the notices site alone. The buffer
-        // each dispatch writes its per-lane record into is `Shared`, which is what
-        // [`crate::replay::shared_memory_notice`] is for. And both kernels hold simdgroup-scoped
-        // accesses inside divergent loops, so on a device whose answer lacks maximal reconvergence
-        // (`shaderMaximalReconvergence`, the SIMD groups' query form) the stage carries its static
-        // note, `DeviceReconvergence`, which the sides announce as `device-reconvergence`. The
-        // device's answer decides it: a device with maximal reconvergence announces nothing, and
-        // this declaration then holds nowhere.
+        // documentation). And one declaration, loosening the notices site alone: both kernels
+        // hold simdgroup-scoped accesses inside divergent loops, so on a device whose answer lacks
+        // maximal reconvergence (`shaderMaximalReconvergence`, the SIMD groups' query form) the
+        // stage carries its static note, `DeviceReconvergence`, which the sides announce as
+        // `device-reconvergence`. The device's answer decides it: a device with maximal
+        // reconvergence announces nothing, and this declaration then holds nowhere.
         vec![
             Allowance::new(
                 "case/output",
@@ -170,7 +168,6 @@ impl Case for Lockstep {
                     "the-threads-of-a-simd-group-run-in-no-order-between-barriers".to_owned(),
                 ),
             ),
-            crate::replay::shared_memory_notice(),
             crate::replay::notice_allowance(
                 crate::degradation::Degradation::DeviceReconvergence.code(),
             ),

@@ -213,26 +213,16 @@ impl Case for EventOrder {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // The cross-queue row is the one row of the family that reads an answer back out of a
-        // `Shared` buffer, and on a device without unified memory the runtime announces
-        // `shared-in-system-memory` for it (`crate::replay::shared_memory_notice` holds the whole
-        // reason). It declares the notices site alone: the scratch words still compare exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): the notice fired for
-        // `event-cross-queue-wait` alone, which was divergent on that field and nothing else, and
-        // the other three rows were exact (replay-nvidia.log). So the other three name nothing:
-        // what they read back is a count our side holds, not a buffer the device wrote.
         match self.shape {
-            // The waiting command buffer's scratch is read back out of a `Shared` buffer, as
-            // the cross-queue row's is.
-            Shape::CrossQueueWait => vec![crate::replay::shared_memory_notice()],
             Shape::WaitBehindRunningSignal => {
-                let mut allowances = vec![crate::replay::shared_memory_notice()];
-                allowances.extend(scheduled_once_the_submit_thread_is_free());
+                let mut allowances = scheduled_once_the_submit_thread_is_free();
                 allowances.extend(shared_wait_scheduled_as_submitted());
                 allowances
             }
-            Shape::HighestSignal | Shape::Held | Shape::SignalBeforeWait => Vec::new(),
+            Shape::CrossQueueWait
+            | Shape::HighestSignal
+            | Shape::Held
+            | Shape::SignalBeforeWait => Vec::new(),
         }
     }
 

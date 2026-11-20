@@ -241,15 +241,13 @@ impl Case for GradientDraw {
         MetalSource::Run
     }
 
-    /// The notices a draw into such a target may announce, none of which loosens a code (every
-    /// texel still compares exactly): `shared-in-system-memory` (the read-back buffer is `Shared`;
-    /// a device without unified memory announces it) and `half-output-fast-math-blend` (the
-    /// fixture is a fast-math module whose `half4` gradient a pipeline blends).
+    /// The notice a draw into such a target may announce, which loosens no code (every texel
+    /// still compares exactly): `half-output-fast-math-blend` (the fixture is a fast-math module
+    /// whose `half4` gradient a pipeline blends).
     fn allowances(&self) -> Vec<Allowance> {
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::HalfOutputFastMathBlend.code()),
-        ]
+        vec![crate::replay::notice_allowance(
+            Degradation::HalfOutputFastMathBlend.code(),
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

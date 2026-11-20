@@ -472,25 +472,14 @@ impl Case for AstcTextures {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Every row that runs reads its texels back through a `Shared` buffer, so on a device
-        // without unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
-        // site alone, so every texel still compares against Metal's exactly.
-        //
-        // Measured on the LDR and sRGB rows: on the RTX 5080 Laptop (615.71.09) all 28 of them
-        // announced it and were divergent on that field and nothing else (replay-nvidia.log). The
-        // 14 HDR rows, which that card makes through the same carrier and twin since the HDR
-        // decode, have not run there since: their declaration counts as unchecked until a run on
-        // a device without unified memory announces it.
         // Where the device holds the format's block itself, `metal2vulkan-runtime` keeps the blocks in
         // an image of it and reads the device's decode of them, the static note it announces as
         // `compressed-texel-decode` for every block-compressed texture it makes. Here it is a
         // declaration; a linear form's texels also take the entry's bound (below), and an sRGB or
         // HDR form's compare exactly.
-        let mut all = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::CompressedTexelDecode.code()),
-        ];
+        let mut all = vec![crate::replay::notice_allowance(
+            Degradation::CompressedTexelDecode.code(),
+        )];
         // A linear channel is the device's decode of the block, the static note
         // `compressed-texel-decode`, whose catalogue entry bounds an ASTC LDR channel at 1/2048.
         if self.linear() {

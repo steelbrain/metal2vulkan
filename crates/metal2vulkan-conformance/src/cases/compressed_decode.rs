@@ -296,28 +296,13 @@ impl Case for CompressedDecode {
     fn allowances(&self) -> Vec<Allowance> {
         // The device's decode of the texture's own blocks, announced `compressed-texel-decode`
         // where the runtime makes it, declared at the notices site, moves a texel by up to the
-        // largest difference its catalogue entry states for the format's family: on
-        // `metal2vulkan-runtime`'s run each round's texels are loosened by that number and no further,
-        // justified by the notice, so a run past it is the note's claim failing. The old
-        // runtime's run is not loosened: there the notice holds nowhere and faults nothing, and a
-        // texel the device moves is the venue's ledger row. A texel's `float` value is also the
-        // device's conversion of its decoded codes (`device-texel-conversion`), which loosens
-        // nothing.
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 10 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        let mut all = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::notice_allowance(Degradation::CompressedTexelDecode.code()),
-        ];
+        // largest difference its catalogue entry states for the format's family: each round's
+        // texels are loosened by that number and no further, justified by the notice, so a run
+        // past it is the note's claim failing. A texel's `float` value is also the device's
+        // conversion of its decoded codes (`device-texel-conversion`), which loosens nothing.
+        let mut all = vec![crate::replay::notice_allowance(
+            Degradation::CompressedTexelDecode.code(),
+        )];
         for round in 0..ROUNDS {
             all.push(Allowance::new(
                 format!("case/round/{round}/texels"),

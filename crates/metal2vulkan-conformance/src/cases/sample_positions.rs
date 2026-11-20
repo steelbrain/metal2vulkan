@@ -240,8 +240,6 @@ const MEASURED_RUNS: u32 = 1;
 /// a case never branches on the device: it runs and reads what came back, and a venue that
 /// announces a kind not here fails the case until the kind is added.
 const PASS_NOTICES: &[Degradation] = &[
-    // A `Shared` buffer the device keeps in system memory, which the triangle's vertices are.
-    Degradation::SharedInSystemMemory,
     // The fixture's vertex function writes `[[point_size]]`, which sizes no triangle. Where the
     // device's `pointSizeRange` ends below Metal's largest point, its translation records the
     // static note `PrecisionNote::DevicePointSize`, which the runtime's side announces as the

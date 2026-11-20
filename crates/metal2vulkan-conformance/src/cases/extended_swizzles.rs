@@ -359,8 +359,8 @@ impl Case for ExtendedSwizzles {
         MetalSource::Run
     }
 
-    /// The venue's memory model, and for a format the module filters itself the device's
-    /// arithmetic of that filter (`bicubic-filter-arithmetic`).
+    /// For a format the module filters itself, the device's arithmetic of that filter
+    /// (`bicubic-filter-arithmetic`).
     ///
     /// Each op reads every lane of its sweep in one dispatch, in groups of at most 64 threads, and
     /// no lane count here is a whole number of such groups.
@@ -371,18 +371,6 @@ impl Case for ExtendedSwizzles {
     /// tolerance. `every_recorded_swizzle_is_the_unswizzled_texture_swizzled` and
     /// `every_recorded_packed_read_is_metals_rule` hold those words to Metal's own answers.
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 15 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        //
         // An extended-range or padded 10-bit format's linear sample (`sl`) blends its decoded taps
         // in the device's arithmetic, announced as `bicubic-filter-arithmetic` (the M3 Max, each
         // of the four extended-range formats); its values move by it (`known-gaps.tsv`).
@@ -391,10 +379,7 @@ impl Case for ExtendedSwizzles {
         // the runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice`
         // holds why). Measured through the rt side on lavapipe, the Radeon 780M and the RX 550:
         // it fired for every row the side does not refuse (the four 16-bit packed formats).
-        let mut named = vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::pixel_sampler_scaling_notice(),
-        ];
+        let mut named = vec![crate::replay::pixel_sampler_scaling_notice()];
         if matches!(
             self.format().format,
             PixelFormat::BGRA10XR

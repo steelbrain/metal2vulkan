@@ -14,7 +14,6 @@
 //! one dispatch of 64 threads, every access within 8 KiB buffers, which an Apple M3 Max runs at
 //! addresses rounded down to a multiple of 4.
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Handle, Input, MetalSource, Side};
 use crate::compute_pass::{ComputePass, ComputeStep, Dispatching};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -69,12 +68,6 @@ impl Case for BufferBindOffAlignment {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The pass's buffers are `Shared`, so a device without unified memory announces
-        // `shared-in-system-memory` (`crate::replay::shared_memory_notice` holds the whole reason).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -18,7 +18,6 @@
 //! Nothing here can fault a GPU: every grid is a few threadgroups, and every object threadgroup
 //! launches no mesh threadgroup.
 
-use crate::allowance::Allowance;
 use crate::case::{
     Abort, Case, Failure, Handle, Input, MeshFunctions, MeshStep, MetalSource, Side,
 };
@@ -340,10 +339,6 @@ impl Case for MeshPartialBarriers {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        super::mesh_draws::mesh_notice_allowances()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

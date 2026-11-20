@@ -617,21 +617,10 @@ impl Case for CompressedBlits {
         // Every byte of all four rows compares exactly with Metal's; the declarations cover the
         // notices site alone.
         //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 4 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        //
         // The note of the encoding the device's copy keeps ([`kept_encoding_notice`]).
-        let mut allowances = vec![crate::replay::shared_memory_notice()];
-        allowances.extend(kept_encoding_notice(self.format().format.as_raw()));
+        let mut allowances: Vec<Allowance> = kept_encoding_notice(self.format().format.as_raw())
+            .into_iter()
+            .collect();
         // On a venue that presents no texture compression no texture is compressed: Metal's own
         // uncompressed texture keeps its bytes through every blit, so each site a blit reaches
         // through the texture the recording's Mac compressed holds the bytes the device's copy
@@ -692,9 +681,9 @@ mod tests {
         assert_eq!(named.len(), FORMATS.len());
     }
 
-    /// Every case of the family declares exactly the notice codes it announces: the venue's own
-    /// for every format, and the note of the encoding its blits keep where it has one that is not
-    /// a native one the suite declares itself.
+    /// Every case of the family declares exactly the notice codes it announces: the note of the
+    /// encoding its blits keep where it has one that is not a native one the suite declares
+    /// itself.
     ///
     /// Stated as the whole set rather than as "the codes are present", because a declaration fires
     /// on its own code: a code announced and declared nowhere is a divergence at the notices site,
@@ -704,11 +693,7 @@ mod tests {
     fn every_case_declares_exactly_the_notices_it_announces() {
         use crate::allowance::Justification;
         for case in all() {
-            let mut wanted = vec![
-                // The venue's own: a card without unified memory holds the `Shared` buffer each
-                // row reads its answer back through in system memory.
-                Degradation::SharedInSystemMemory.code().to_owned(),
-            ];
+            let mut wanted = Vec::new();
             let note = case.format().note;
             if let Some(note) = note.filter(|note| !crate::replay::NATIVE_NOTES.contains(note)) {
                 wanted.push(note.code().to_owned());

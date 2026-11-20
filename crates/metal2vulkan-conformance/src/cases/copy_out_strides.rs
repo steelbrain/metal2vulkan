@@ -18,7 +18,6 @@
 //! Nothing here can fault a GPU: blit copies between textures and buffers the program makes, every
 //! region inside its texture and its buffer, no dispatch, no draw and no loop.
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::transcript::{ByteLayout, Element, Observed, Sites, Value};
 use crate::work::{Plane, Resource, Step, TextureSpec, Work};
@@ -179,14 +178,6 @@ impl Case for CopyOutStrides {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every read-back goes through a `Shared` buffer, so on a device without unified memory
-        // the runtime announces `shared-in-system-memory` (`crate::replay::shared_memory_notice`
-        // holds the whole reason). It loosens the notices site alone; every byte still compares
-        // against Metal's exactly. No run of this case on such a device has announced it yet.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

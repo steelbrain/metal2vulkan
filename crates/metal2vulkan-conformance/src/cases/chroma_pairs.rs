@@ -55,7 +55,6 @@
 //! ending the process", and the suite's standing rule is that no case may end Metal's process. So
 //! is the render-target half of the lane, whose pipeline Metal's validation aborts plain too.
 
-use crate::allowance::Allowance;
 use crate::case::{
     made, Abort, Bindings, Case, Failure, Input, MetalSource, SamplerSpec, Side, TextureRole,
     TextureSpec,
@@ -571,24 +570,6 @@ impl Case for ChromaCopies {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every byte of every read-back compares exactly; what differs is the notices site, which
-        // Metal records empty.
-        //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // both copy rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn inputs(&self) -> Result<Vec<Input>, String> {
         // The tables and the bytes they move, named one by one, so a diff of a failed input
         // fingerprint says which of them changed rather than "the program".
@@ -724,24 +705,6 @@ impl Case for ChromaTexels {
             });
         }
         Ok(shaders)
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every texel compares exactly; what differs is the notices site, which Metal records
-        // empty.
-        //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 4 texel rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

@@ -39,7 +39,6 @@
 //! recovered under MoltenVK, which is *our* answer, not Metal's — so until record mode ran, that
 //! site's expectation was never tied to Metal at all.
 
-use crate::allowance::Allowance;
 use crate::case::{call, Abort, Case, Input, MetalSource, Side};
 use crate::measured::public_fixture;
 use crate::replay::NOTICES_SITE;
@@ -571,12 +570,6 @@ impl Case for HeapBlits {
             Input::bytes("blit-geometry", geometry.as_bytes()),
             Input::bytes("metal-runs", public_fixture(METAL_RUNS)?.as_bytes()),
         ])
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every heap byte the case reads compares exactly. The buffer the case reads the blitted
-        // planes back through is `Shared` ([`crate::replay::shared_memory_notice`]).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

@@ -92,7 +92,6 @@
 //! indexing outside a bound buffer, and every pass's attachment written and read back by the same
 //! command buffer.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -845,26 +844,6 @@ impl Case for BlendInteraction {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // No value is loosened, and none may be. Every number the float cases form is exact in an
-        // `f32` channel, and every number the 8-bit cases form is a code, so a texel that differs
-        // is a difference in the blend and not in a rounding. The sRGB case's color channels are
-        // Metal's own decode and encode, which are **compared** exactly even though they are not
-        // modelled: a device whose sRGB blend is not Metal's is divergent, which is the honest
-        // verdict rather than a tolerance that would hide the thing this cross exists to find.
-        //
-        // What is declared is the notice set, a declaration at the notices site that moves no
-        // texel: `shared-in-system-memory`, the venue's memory model for the `Shared` buffer every
-        // row reads its texels back through (`crate::replay::shared_memory_notice`). Every row also
-        // announces `device-color-conversion`, the device's own conversion into the attachment,
-        // which the suite declares for every case (`crate::replay::NATIVE_NOTES`).
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09) and on llvmpipe (Mesa 26.2.4): all four rows
-        // announced both, each with the case declaring none (replay-nvidia.log,
-        // replay-llvmpipe.log).
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs(FILLS, &[VERTEX, FILL_FLOAT])
     }
@@ -1416,35 +1395,16 @@ mod tests {
     }
 
     /// Each case states inputs that cover every row of its cross, names Metal as its source, and
-    /// loosens no value: every allowance it names is a notice declaration.
+    /// loosens nothing.
     #[test]
     fn every_case_states_its_rows_and_loosens_nothing() {
         let mut names = BTreeSet::new();
         for case in all() {
             assert!(names.insert(case.name()), "{} twice", case.name());
             assert_eq!(case.metal_source(), MetalSource::Run);
-            // **No value is loosened.** Every allowance the family names is a notice declaration
-            // at `case/notices/*`, which states what our side announced and never a tolerance on a
-            // texel.
-            for allowance in case.allowances() {
-                assert_eq!(
-                    allowance.path,
-                    format!("case/{}/*", crate::replay::NOTICES_SITE),
-                    "{}: a loosened value",
-                    case.name()
-                );
-                assert!(
-                    matches!(
-                        allowance.justified_by,
-                        crate::allowance::Justification::Degradation(_)
-                    ),
-                    "{}: an allowance that is not a notice declaration",
-                    case.name()
-                );
-            }
-            // The venue's memory model, for every row; the device's own conversion into the
-            // attachment is the suite's native declaration.
-            assert_eq!(case.allowances().len(), 1, "{}", case.name());
+            // **No value is loosened**, and no notice is declared: the device's own conversion
+            // into the attachment is the suite's native declaration.
+            assert!(case.allowances().is_empty(), "{}", case.name());
             case.shaders().unwrap();
             let inputs = case.inputs().unwrap();
             let stated: BTreeSet<&str> = inputs.iter().map(|input| input.name.as_str()).collect();

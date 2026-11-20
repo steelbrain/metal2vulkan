@@ -382,13 +382,11 @@ impl Case for TwoPlaneSamples {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // Declarations and no tolerance: the buffer each pass writes its samples into is `Shared`,
-        // which is what [`crate::replay::shared_memory_notice`] is for, and a linear case's filter
-        // of the decoded taps is the device's arithmetic (`bicubic-filter-arithmetic`, announced on
-        // the M3 Max for the eight linear cases; a nearest sampler's word holds no such note).
-        // Each loosens the notices site alone, so every value this case reads still compares
-        // exactly.
-        let mut named = vec![crate::replay::shared_memory_notice()];
+        // A declaration and no tolerance: a linear case's filter of the decoded taps is the
+        // device's arithmetic (`bicubic-filter-arithmetic`, announced on the M3 Max for the eight
+        // linear cases; a nearest sampler's word holds no such note). It loosens the notices site
+        // alone, so every value this case reads still compares exactly.
+        let mut named = Vec::new();
         if self.state.starts_with('l') {
             named.push(crate::replay::notice_allowance(
                 crate::degradation::Degradation::BicubicFilterArithmetic.code(),

@@ -45,7 +45,6 @@
 //! Nothing here can fault a GPU: host copies and blit copies over textures the program makes, no
 //! dispatch, no draw, no loop, every region a whole level.
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::cases::pvrtc_rows::{blocks, Linear, BEFORE, BLOCK};
 use crate::transcript::{ByteLayout, Element, Observed, Sites, Value};
@@ -282,12 +281,6 @@ impl Case for PvrtcCpuOrder {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every block compares exactly. The buffer each row reads its blocks back through is
-        // `Shared` ([`crate::replay::shared_memory_notice`]).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

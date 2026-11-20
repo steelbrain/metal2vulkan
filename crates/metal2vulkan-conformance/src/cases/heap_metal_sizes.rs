@@ -355,11 +355,6 @@ impl Case for HeapSizeCase {
     }
 
     fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // The family reads no buffer back -- it asks the device for a heap texture's size and
-        // alignment -- so the notice a card without unified memory announces for a `Shared` buffer
-        // cannot reach it, and no row declares one. Measured: five of the seven rows were exact on
-        // both the 5080 and llvmpipe.
-        //
         // The runtime's answers are the device's own, held by their property and not by
         // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
         self.queries

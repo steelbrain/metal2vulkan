@@ -290,15 +290,11 @@ impl Case for NearestPositions {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the output buffer the threads write their samples into is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly. Its samples are through a runtime
-        // sampler slot, which the runtime's pipelines note as scaled
-        // (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it rests on).
-        vec![
-            crate::replay::shared_memory_notice(),
-            crate::replay::pixel_sampler_scaling_notice(),
-        ]
+        // One declaration and no tolerance: its samples are through a runtime sampler slot, which
+        // the runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice`
+        // holds why, and the run it rests on). It loosens the notices site alone, so every value
+        // this case reads still compares exactly.
+        vec![crate::replay::pixel_sampler_scaling_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

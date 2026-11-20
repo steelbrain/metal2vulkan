@@ -40,7 +40,6 @@
 //! viewport inside its target, which `every_box_lies_inside_its_target` holds with no device
 //! asked.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Case, Failure, Handle, Input, MetalSource, SamplerSpec, Side, TextureRole,
     TextureSpec,
@@ -530,19 +529,6 @@ impl Case for Boxes {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing is loosened. A `RGBA32Float` texel is the `float4` a fragment function
-        // returned, so what each draw saw is an exact answer or it is a bug; there is no
-        // normalized conversion here and no arithmetic of the shader's -- `tob_solid` returns its
-        // binding and `tob_read` reads a texel at integer coordinates, neither of which can take a
-        // device's float bounds.
-        //
-        // One notice is declared, and it is the venue's and not this case's: the buffer the pass
-        // reads its target back through is `Shared`, which a device with no unified memory keeps
-        // in system memory because that is the only memory both sides can reach.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs()
     }
@@ -732,13 +718,6 @@ impl Case for Facing {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // No value is loosened, for the reason `render-state-boxes` states: every texel this case
-        // reads compared exactly. What is declared is the notice the venue's own memory model
-        // provokes for the `Shared` read-back buffer.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs()
     }
@@ -903,12 +882,6 @@ impl Case for UnreadSlots {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened, for the reason `render-state-boxes` states, and the one notice the
-        // venue's own memory model provokes for the `Shared` read-back buffer.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs()
     }
@@ -984,7 +957,6 @@ impl Case for UnreadSlots {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allowance::Justification;
     use crate::transcript::Transcript;
     use std::collections::BTreeSet;
 
@@ -1364,21 +1336,8 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            // Every case declares the notice the venue's own memory model provokes for the
-            // `Shared` read-back buffer, and nothing else. No value of any case is loosened, so
-            // every declaration sits at the notices site.
-            let declared = case.allowances();
-            for allowance in &declared {
-                assert!(allowance.path.starts_with("case/notices"), "{allowance:?}");
-            }
-            let codes: Vec<&Justification> =
-                declared.iter().map(|held| &held.justified_by).collect();
-            let shared = Justification::Degradation(
-                crate::degradation::Degradation::SharedInSystemMemory
-                    .code()
-                    .to_owned(),
-            );
-            assert_eq!(codes, vec![&shared], "{}", case.name());
+            // No value of any case is loosened, and no case declares a notice.
+            assert!(case.allowances().is_empty(), "{}", case.name());
         }
     }
 }

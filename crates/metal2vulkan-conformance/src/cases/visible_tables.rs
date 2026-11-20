@@ -102,7 +102,6 @@
 //! Every field is a number, a name, an enumerator or a bool. The family declares no tolerance and
 //! announces nothing: no float, no texture object and no sampler is touched.
 
-use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -365,19 +364,6 @@ impl Case for VisibleTablesCase {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance, and only the compute cases make it: those dispatch the
-        // caller and read their answers back through a `Shared` buffer, which is what
-        // [`crate::replay::shared_memory_notice`] is for. A drawing-stage case makes pipelines and
-        // tables and reads nothing back, so it allocates no such buffer, announces nothing and
-        // declares nothing -- which is the falsification of the declaration rather than a
-        // restatement of it.
-        match self.spec.maker {
-            Maker::Compute => vec![crate::replay::shared_memory_notice()],
-            Maker::DrawingStage(_) | Maker::TileStage(_) => Vec::new(),
-        }
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

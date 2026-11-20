@@ -368,13 +368,6 @@ impl Case for TexelReads {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the buffer the texel-read case writes its reads into is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         let fixture = Fixture {
             name: READ_FIXTURE,

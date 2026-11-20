@@ -62,7 +62,6 @@
 //! tolerance. An intermediate byte would have put the 8-bit-to-float conversion in the answer,
 //! which is a different question and one `pixel_samplers` already asks with the notice it needs.
 
-use crate::allowance::Allowance;
 use crate::argument_encoders::{
     changed_node, changed_words, ArgumentDescriptorSpec, ArgumentWrite, ARGUMENT_WORD, BLANK,
 };
@@ -523,32 +522,6 @@ impl Case for ArgumentEncoderCase {
                 .collect::<Vec<u8>>(),
         ));
         Ok(inputs)
-    }
-
-    /// The notices a venue may announce for these cases: shared storage in system memory, the
-    /// venue's own.
-    ///
-    /// Nothing of a value is loosened here: every sampled word, the encoder's own facts and the
-    /// argument buffer's changed-word mask are compared exactly on every venue, which is what the
-    /// texels buy. The texture holds the sixteen patterns of each component at 0 or 255, so every
-    /// sampled component is exactly 0.0 or 1.0 wherever the sampling happens, and a filter, a
-    /// denormal or a decode a device does its own way cannot move a word of that. What the two
-    /// cases that dispatch announce of the sampling on llvmpipe, the device's filter and its sRGB
-    /// decode (`float-sample-filter`, `srgb-texel-decode`), are the device's own answers, which the
-    /// suite declares for every case (`crate::replay::NATIVE_NOTES`).
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 5 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

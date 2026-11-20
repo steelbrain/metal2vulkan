@@ -60,7 +60,6 @@
 //! and **keeps every texel of the tile it did not reach** (512 of 512). A one-tile frame cannot
 //! tell that from mirroring every tile, which is why the lane's own 32x32 test never did.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -295,14 +294,6 @@ impl Case for RotatedPlane {
         // `respondsToSelector:` first. The rest is public: IOSurface is a public framework,
         // `newTextureWithDescriptor:iosurface:plane:` is public, and the pass is an ordinary one.
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every plane byte compares exactly. The buffer every case reads its plane back through is
-        // `Shared`, which a device with no unified memory keeps in system memory because that is
-        // the only memory both sides can reach (`shared-in-system-memory`): the venue's memory
-        // model, not a rotation.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -80,7 +80,6 @@
 //! the 31 slots Metal's descriptor holds (`tests::every_row_is_a_descriptor_metal_admits`). The fixture is loop-free. Nothing here
 //! can hang, fault or trip a watchdog.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, made, probe, Abort, Bindings, Case, Failure, Input, MetalSource, Side, StageInAttribute,
     StageInLayout, StageInRegion, StageInput,
@@ -820,17 +819,6 @@ impl Case for StageInUnread {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing here is loosened: every byte of every row compares exactly, the guard past the
-        // grid included.
-        //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
-        // site alone, so every value of this family still compares against Metal's exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

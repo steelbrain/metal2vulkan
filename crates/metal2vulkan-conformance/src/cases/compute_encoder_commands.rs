@@ -304,23 +304,11 @@ impl Case for ComputeEncoderCommands {
         // measured announcing a notice of this family's own; a venue that does reads as
         // `UndeclaredNotice`, naming the code and the case, which is the loud form.
         //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 8 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        //
         // A sampling row's kernel samples its texture through the runtime sampler at slot 0,
         // which the runtime's pipelines note as scaled
         // (`crate::replay::pixel_sampler_scaling_notice` holds why). Measured through the rt side
         // on lavapipe, the Radeon 780M and the RX 550: it fired for both sampling rows.
-        let mut named = vec![crate::replay::shared_memory_notice()];
+        let mut named = Vec::new();
         if matches!(self.row.resources, Resources::Sampled { .. }) {
             named.push(crate::replay::pixel_sampler_scaling_notice());
         }
@@ -995,10 +983,9 @@ mod tests {
         assert_eq!(rows, named);
     }
 
-    /// Every case states its inputs and loosens no value: its declarations are notices at the
-    /// notices site alone, the one a device without unified memory announces for the `Shared`
-    /// buffer the case reads back through, and on a sampling row the static note of its runtime
-    /// sampler slot, `pixel-sampler-scaling`.
+    /// Every case states its inputs and loosens no value: its one declaration, on a sampling row
+    /// alone, is the static note of its runtime sampler slot, `pixel-sampler-scaling`, at the
+    /// notices site.
     #[test]
     fn every_case_states_its_inputs_and_loosens_nothing() {
         use crate::degradation::Degradation as D;
@@ -1018,10 +1005,10 @@ mod tests {
                 .inputs()
                 .unwrap_or_else(|why| panic!("{}: {why}", case.name()));
             assert!(!inputs.is_empty(), "{}", case.name());
-            let mut wanted = vec![D::SharedInSystemMemory];
-            if matches!(case.row.resources, Resources::Sampled { .. }) {
-                wanted.push(D::PixelSamplerScaling);
-            }
+            let wanted = match case.row.resources {
+                Resources::Sampled { .. } => vec![D::PixelSamplerScaling],
+                _ => Vec::new(),
+            };
             let named: Vec<_> = case
                 .allowances()
                 .into_iter()

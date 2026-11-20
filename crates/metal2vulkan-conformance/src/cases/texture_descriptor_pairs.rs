@@ -586,12 +586,6 @@ impl Case for DescriptorPairs {
                 crate::degradation::Degradation::CompressedTexelDecode.code(),
             ));
         }
-        if self.name == STORAGE {
-            // The storage table names `Shared` among the modes it crosses, so this row alone
-            // makes a `Shared` allocation ([`crate::replay::shared_memory_notice`]). Measured
-            // firing for this row alone, on the 5080.
-            named.push(crate::replay::shared_memory_notice());
-        }
         // The runtime's answers are the device's own, held by their property and not by
         // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
         named.extend(self.queries.iter().map(|query| {

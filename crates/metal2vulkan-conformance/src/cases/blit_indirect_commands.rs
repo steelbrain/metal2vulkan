@@ -69,7 +69,6 @@
 //!
 //! [`Side::compute_pipeline_for_commands`]: crate::case::Side::compute_pipeline_for_commands
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::indirect_commands::{ComputeCommandStep, EncodedCommand, IcbDescriptor};
@@ -319,24 +318,6 @@ impl Case for BlitIndirectCommands {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every byte of every leg's output compares exactly, on this venue and under this
-        // declaration: the only site loosened is the set of notices, which Metal holds empty.
-        //
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 3 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

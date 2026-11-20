@@ -114,11 +114,9 @@
 //!
 //! # Exactness
 //!
-//! Every value is a word or a byte and the family declares no tolerance beyond the one notice a
-//! venue without unified memory announces for the `Shared` buffer each case reads its answer back
-//! through. A format the runtime holds no read-write image of refuses its site with a typed error,
-//! which the comparison reads as [`Refused`](crate::verdict::Verdict::Refused) and never as a
-//! pass.
+//! Every value is a word or a byte and the family declares no tolerance. A format the runtime holds
+//! no read-write image of refuses its site with a typed error, which the comparison reads as
+//! [`Refused`](crate::verdict::Verdict::Refused) and never as a pass.
 
 use crate::allowance::Allowance;
 use crate::case::{
@@ -559,14 +557,6 @@ impl Case for ReadWriteRoundTrip {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every row reads its answer back through a `Shared` buffer and a `Shared` texture, so on
-        // a device without unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notice's
-        // site alone, so every value still compares against Metal's exactly.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         let mut shaders = Vec::new();
         for extension in [RUNTIME_TEXT, METAL_TEXT] {
@@ -879,12 +869,6 @@ impl Case for HeldReadWrite {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The venue's memory model for the `Shared` read-back ([`crate::replay::shared_memory_notice`]),
-        // at the notices site alone: every texel is still compared.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

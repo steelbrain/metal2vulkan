@@ -32,7 +32,6 @@
 //! Nothing here can fault a GPU: single-sampled targets of the case's own extent, one or two
 //! full-screen triangles a pass, no loop, and every fetch inside its buffer.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -227,14 +226,6 @@ impl Case for PaddedFetch {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It loosens the notices
-        // site alone: every value read still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -298,26 +298,14 @@ impl Case for ComputeRenderChain {
         // `device-arithmetic` on a device whose float functions are not Metal's own, a native
         // note the suite declares for every case. Measured: it fires on lavapipe and not on
         // MoltenVK on this M3 Max, and on lavapipe every value compared **exactly**.
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 3 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
         //
         // The row whose fragment function samples the kernel's texture does so through a runtime
         // sampler slot, which the runtime's pipelines note as scaled
         // (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it rests on).
-        let mut named = vec![crate::replay::shared_memory_notice()];
-        if self.subject.crossing == Crossing::KernelToFragment {
-            named.push(crate::replay::pixel_sampler_scaling_notice());
+        match self.subject.crossing {
+            Crossing::KernelToFragment => vec![crate::replay::pixel_sampler_scaling_notice()],
+            _ => Vec::new(),
         }
-        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -804,14 +792,15 @@ mod tests {
     }
 
     /// No row of the family loosens a value: every allowance is a notice declaration on the
-    /// notices site, and the one notice declared is the venue's memory model.
+    /// notices site, and the one notice declared is `pixel-sampler-scaling`, on the row that
+    /// samples through a runtime sampler slot.
     #[test]
     fn no_row_loosens_a_value() {
         use crate::allowance::Justification;
         for case in all() {
             // Every allowance is a notice declaration on the notices site, so no row loosens a
-            // value: the venue's memory model, and pixel-sampler-scaling for the row whose
-            // fragment function samples through a runtime sampler slot.
+            // value: pixel-sampler-scaling for the row whose fragment function samples through a
+            // runtime sampler slot, and nothing for the others.
             let codes: Vec<String> = case
                 .allowances()
                 .iter()
@@ -828,10 +817,12 @@ mod tests {
                     }
                 })
                 .collect();
-            let mut wanted = vec![crate::degradation::Degradation::SharedInSystemMemory.code()];
-            if case.subject.crossing == Crossing::KernelToFragment {
-                wanted.push(crate::degradation::Degradation::PixelSamplerScaling.code());
-            }
+            let wanted = match case.subject.crossing {
+                Crossing::KernelToFragment => {
+                    vec![crate::degradation::Degradation::PixelSamplerScaling.code()]
+                }
+                _ => Vec::new(),
+            };
             assert_eq!(codes, wanted, "{}", case.name());
             assert_eq!(case.metal_source(), MetalSource::Run);
             case.shaders().unwrap();

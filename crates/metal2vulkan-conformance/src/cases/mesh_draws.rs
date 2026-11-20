@@ -34,7 +34,6 @@
 //! belong to a later batch, and one of their rows is a grid Metal's GPU discards — a recovery
 //! victim, which this round must not run.
 
-use crate::allowance::Allowance;
 use crate::case::{
     Abort, Case, Failure, Handle, Input, MeshFunctions, MeshStep, MetalSource, Side, TARGET_TEXEL,
 };
@@ -353,15 +352,6 @@ const PAST_LIMITS: &str = "mesh-object-draws-past-limits";
 /// The fragment function every case's pipeline writes its attachments through.
 const FRAGMENT: &str = "mesh_draws_fragment";
 
-/// The allowance a mesh case keeps: the notice a device's own memory model provokes. These passes
-/// read their payloads, draw arguments and attachments back through `Shared` buffers
-/// ([`crate::replay::shared_memory_notice`]). Every row of the three mesh families but
-/// `mesh-object-draws-past-limits` was measured announcing it on the RTX 5080; that row stops
-/// before it allocates one, so it declares nothing ([`MeshDraws::allowances`]).
-pub fn mesh_notice_allowances() -> Vec<Allowance> {
-    vec![crate::replay::shared_memory_notice()]
-}
-
 impl MeshDraws {
     /// The fixture both sides read.
     fn fixture(&self) -> Fixture {
@@ -578,18 +568,6 @@ impl Case for MeshDraws {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every row of this family but one declares the notice a device's own memory model
-        // provokes for the `Shared` buffers a mesh pass carries. `mesh-object-draws-past-limits`
-        // asks for an object grid past the device's limits, so the pass stops before it allocates
-        // one: the RTX 5080 announced the notice for every other row of the three mesh families
-        // and not for this one, and a declaration no run justifies is one nobody is checking.
-        match self.name == PAST_LIMITS {
-            true => Vec::new(),
-            false => mesh_notice_allowances(),
-        }
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

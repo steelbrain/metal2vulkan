@@ -50,7 +50,6 @@
 use super::indirect_commands::{
     first_refused_piece, fixture_inputs, program_node, shaders_of, UNWRITTEN,
 };
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::Fixture;
 use crate::recording::ShaderRef;
@@ -251,12 +250,6 @@ impl Case for VertexFetchReach {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The answer is read back through a `Shared` buffer, so a device without unified memory
-        // announces `shared-in-system-memory`; the declaration covers the notices site alone.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -183,12 +183,6 @@ impl Case for MeshCommands {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // The pass's notices are a mesh pass's, plus the host step a device announces for commands
-        // it draws itself; both are named by kind in `mesh_draws`.
-        super::mesh_draws::mesh_notice_allowances()
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         let fixture = self.fixture();
         [RUNTIME_TEXT, METAL_TEXT]
@@ -522,13 +516,11 @@ impl Case for UnorderedDraws {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        let mut allowances = super::mesh_draws::mesh_notice_allowances();
-        allowances.push(Allowance::new(
+        vec![Allowance::new(
             format!("case/{UNORDERED_ROW}/{ATTACHMENT_SITE}"),
             Loosening::Unchecked,
             Justification::accepted(crate::allowance::accepted_slug(ORDER_IS_ACCEPTED)),
-        ));
-        allowances
+        )]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

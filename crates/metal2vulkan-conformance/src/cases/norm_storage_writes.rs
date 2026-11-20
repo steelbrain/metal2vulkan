@@ -41,7 +41,6 @@
 //! Nothing here can fault a GPU: one compute pass a route, no loop, no sampling, and every
 //! dispatch a whole number of threadgroups.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, ArgumentSlot, Bindings, Case, Failure, Handle, Input, MetalSource, Side,
 };
@@ -455,13 +454,6 @@ impl Case for NormStorageWrites {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the buffer each dispatch reads its words back through
-        // is `Shared`, which is what [`crate::replay::shared_memory_notice`] is for. It loosens the
-        // notices site alone, so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

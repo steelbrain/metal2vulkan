@@ -22,10 +22,9 @@
 //! choice: the tile-store family's masked draw can only be compared under a notice, and a mask is
 //! too ordinary a piece of state to be checked only where a notice is in the way.
 //!
-//! The one site that is loosened is the notices site, by the venue's memory notice alone: the
-//! device's own float-to-normalized conversion is a native note the suite declares for every case
-//! ([`crate::replay::NATIVE_NOTES`]), and it changes no texel here, because white converts to
-//! `0xff` either way.
+//! No site is loosened: the device's own float-to-normalized conversion is a native note the suite
+//! declares for every case ([`crate::replay::NATIVE_NOTES`]), and it changes no texel here, because
+//! white converts to `0xff` either way.
 //!
 //! The mask of every channel is the control. Without it a side that quietly stopped drawing at all
 //! would pass both of the other two, and the family would prove nothing.
@@ -57,7 +56,6 @@
 //!
 //! Nothing here can fault a GPU: one 4 by 4 target a case, one triangle, no loop.
 
-use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -189,23 +187,6 @@ impl Case for ColorWriteMaskCase {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // The texels are not loosened: `RGBA8Unorm` codes survive Metal's store, so which channels
-        // the mask kept is an exact answer on every device or it is a bug.
-        // Every row reads its answer back through a `Shared` buffer, so on a device without
-        // unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-        // notices site alone, so every value of this family still compares against Metal's
-        // exactly.
-        //
-        // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-        // all 5 rows of the family, and each was divergent on that field and
-        // nothing else (replay-nvidia.log). On MoltenVK, where
-        // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-        // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         let fixture = self.fixture();
         [RUNTIME_TEXT, METAL_TEXT]
@@ -330,10 +311,7 @@ mod tests {
     //! recording was taken with a different pipeline, and the test says which case.
 
     use super::*;
-    use crate::allowance::Justification;
-    use crate::degradation::Degradation;
     use crate::recording::Recording;
-    use crate::replay::NOTICES_SITE;
     use crate::transcript::Transcript;
 
     /// The texel Metal leaves under `mask`: `0xff` in each channel it names, the prefill byte in
@@ -458,32 +436,14 @@ mod tests {
         }
     }
 
-    /// No case of the family loosens a texel: the notices site is the only loosened site, and the
-    /// one notice it names is in the degrade catalogue.
+    /// No case of the family loosens a texel or declares a notice.
     ///
     /// This is the family's whole tolerance story in one assertion. A case that ever loosened the
     /// texels would fail here, which is the field the family exists to compare.
     #[test]
-    fn only_the_notices_site_is_loosened() {
+    fn nothing_is_loosened() {
         for case in all() {
-            for allowance in case.allowances() {
-                assert_eq!(
-                    allowance.path,
-                    format!("case/{NOTICES_SITE}/*"),
-                    "{}: an allowance outside the notices site",
-                    case.name()
-                );
-                match &allowance.justified_by {
-                    // The venue's own memory notice, which every row of the family declares
-                    // because every row reads its answer back through a `Shared` buffer.
-                    Justification::Degradation(code) => assert!(
-                        code == Degradation::SharedInSystemMemory.code(),
-                        "{}: an unexpected notice {code}",
-                        case.name()
-                    ),
-                    other => panic!("{}: an unexpected tolerance: {other:?}", case.name()),
-                }
-            }
+            assert!(case.allowances().is_empty(), "{}", case.name());
             assert_eq!(case.metal_source(), MetalSource::Run);
             case.shaders().unwrap();
             let inputs = case.inputs().unwrap();

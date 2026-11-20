@@ -75,23 +75,6 @@ const READ_WRITE: TextureUsage = TextureUsage::SHADER_READ.union(TextureUsage::S
 /// The buffer every making row is laid over: 4096 bytes, as the lane's is.
 const BUFFER: u64 = 4096;
 
-/// What the two recorded cases loosen: the notices, and nothing else. Every fact and every byte of
-/// both cases compares exactly.
-fn allowances() -> Vec<crate::allowance::Allowance> {
-    // Every row reads its answer back through a `Shared` buffer, so on a device without
-    // unified memory the runtime announces `shared-in-system-memory`
-    // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-    // notices site alone, so every value of this family still compares against Metal's
-    // exactly.
-    //
-    // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-    // all 3 rows of the family, and each was divergent on that field and
-    // nothing else (replay-nvidia.log). On MoltenVK, where
-    // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-    // recording of this suite declares it.
-    vec![crate::replay::shared_memory_notice()]
-}
-
 /// Every case of the family.
 pub fn all() -> Vec<Box<dyn Case>> {
     vec![
@@ -202,10 +185,6 @@ impl Case for MadeOverBuffer {
         MetalSource::Run
     }
 
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        allowances()
-    }
-
     fn inputs(&self) -> Result<Vec<Input>, String> {
         // Every shape and the order they are asked in: a table that gains, loses or re-points a
         // row is a change to the case's inputs, so a recording cannot decay into the answers of
@@ -307,16 +286,6 @@ impl Case for StrideBelowTheRow {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::did_not_return(ASSERTED_IN, BELOW_SITE, ASSERTED_SAYS)
-    }
-
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // The row makes its `Shared` buffer before the texture over it is refused, so on a device
-        // without unified memory the runtime announces `shared-in-system-memory`
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the notices
-        // site alone: the refusal at the one value site is still what the row pins. Measured on
-        // the RTX 5080 Laptop (615.71.09): the whole-set replay announced it here and the row
-        // was divergent at the notices site and nowhere else.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
@@ -604,10 +573,6 @@ impl Case for CpuAccess {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        allowances()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

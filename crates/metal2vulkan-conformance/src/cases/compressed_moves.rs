@@ -841,36 +841,17 @@ pub fn out_tight(
     });
 }
 
-/// The notices a BC case may name as justifying its notices site: the `Shared` buffer each row
-/// reads its answer back through, which a device without unified memory announces, and the
-/// device's decode of the texture's blocks.
+/// The notice a BC case may name as justifying its notices site: the device's decode of the
+/// texture's blocks.
 ///
 /// A BC texture keeps no decoded twin on any venue: the device holds every BC format in its own
 /// compressed form and decodes it itself, which the runtime announces as `compressed-texel-decode`
-/// for every such texture. Every block still compares exactly: the only site these loosen is the
-/// set of notices, which Metal holds empty.
-///
-/// What is **not** here: `staged-texture-copy`. Our `replaceRegion:` into a compressed texture does
-/// go through a staging buffer, and the notice fires on **no** venue of this suite for these cases
-/// (verified over four legs: MoltenVK and lavapipe, exact and default policy). A tolerance naming a
-/// mechanism no venue announces is a claim nothing stands behind, so it is gone, as the `formats`
-/// stream's `shadowed-texture` went.
+/// for every such texture. Every block still compares exactly: the only site it loosens is the set
+/// of notices, which Metal holds empty.
 pub fn block_allowances() -> Vec<Allowance> {
-    // Every row reads its answer back through a `Shared` buffer, so on a device without
-    // unified memory the runtime announces `shared-in-system-memory`
-    // (`crate::replay::shared_memory_notice` holds the whole reason). It declares the
-    // notices site alone, so every value of this family still compares against Metal's
-    // exactly.
-    //
-    // Measured on the RTX 5080 Laptop (615.71.09): it fired for
-    // all 14 rows of each of the two families that call this, and each was divergent on that
-    // field and nothing else (replay-nvidia.log). On MoltenVK, where
-    // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
-    // recording of this suite declares it.
-    vec![
-        crate::replay::notice_allowance(Degradation::SharedInSystemMemory.code()),
-        crate::replay::notice_allowance(Degradation::CompressedTexelDecode.code()),
-    ]
+    vec![crate::replay::notice_allowance(
+        Degradation::CompressedTexelDecode.code(),
+    )]
 }
 
 /// The case for one format.

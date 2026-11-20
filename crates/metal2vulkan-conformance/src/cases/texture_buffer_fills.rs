@@ -522,12 +522,6 @@ impl Case for ByteFills {
         Ok(Some((MEASURED_RUNS, sites.finish())))
     }
 
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // The texture buffer these fills write into is backed by a `Shared` buffer
-        // ([`crate::replay::shared_memory_notice`]).
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
         let work = self.work().map_err(|why| Abort {
             at: "work".to_owned(),
@@ -651,12 +645,6 @@ impl Case for LongFills {
         }
         sites.notices(NOTICES_SITE, &[] as &[&str]);
         Ok(Some((MEASURED_RUNS, sites.finish())))
-    }
-
-    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
-        // The texture buffer these fills write into is backed by a `Shared` buffer
-        // ([`crate::replay::shared_memory_notice`]).
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

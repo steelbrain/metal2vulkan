@@ -41,7 +41,6 @@
 //! by 16 target, no loop in either fixture, every scissor rectangle inside the target, and no bias
 //! larger in magnitude than two.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -179,15 +178,6 @@ fn read_target(texture: Handle, into: Handle) -> RenderWork {
         plane: Plane::Whole,
         at: ReadAt::BASE,
     }
-}
-
-/// The notice every row of the family declares, measured firing for all three rows on the 5080:
-/// the buffer each pass reads its colour target back through is `Shared`
-/// ([`crate::replay::shared_memory_notice`]).
-///
-/// It loosens no value: it sits at the notices site, so a texel that differs still fails the case.
-fn pass_notices() -> Vec<Allowance> {
-    vec![crate::replay::shared_memory_notice()]
 }
 
 /// The shader reference both texts of `fixture` give, under `entries`.
@@ -521,14 +511,6 @@ impl Case for DepthBias {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // **Nothing is loosened.** A texel is four ones or the pass's clear, both of which a
-        // `RGBA32Float` attachment stores exactly, and the fragment function does no arithmetic a
-        // device's float bounds could reach. The family's declaration ([`pass_notices`]) sits at
-        // the notices site.
-        pass_notices()
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs(DEPTH_FIXTURE, DEPTH_ENTRIES)
     }
@@ -695,13 +677,6 @@ impl Case for DepthClip {
 
     fn record_runs(&self) -> u32 {
         RUNS
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened, and the family's two declarations, for the reason
-        // `render-state-depth-bias` states. This case states no depth bias, so it does not
-        // declare the notice one provokes.
-        pass_notices()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -951,13 +926,6 @@ impl Case for StencilReferences {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened, and the family's two declarations, for the reason
-        // `render-state-depth-bias` states. This case states no depth bias, so it does not
-        // declare the notice one provokes.
-        pass_notices()
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs(STENCIL_FIXTURE, STENCIL_ENTRIES)
     }
@@ -1037,8 +1005,6 @@ impl Case for StencilReferences {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allowance::Loosening;
-    use crate::replay::NOTICES_SITE;
     use crate::transcript::Transcript;
     use std::collections::BTreeSet;
 
@@ -1499,14 +1465,8 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            // Every case declares the family's notice, and it loosens no value, so each allowance
-            // sits at the notices site: a value tolerance added later fails here.
-            let allowances = case.allowances();
-            assert_eq!(allowances.len(), pass_notices().len(), "{}", case.name());
-            for allowance in &allowances {
-                assert_eq!(allowance.path, format!("case/{NOTICES_SITE}/*"));
-                assert_eq!(allowance.loosening, Loosening::Unchecked);
-            }
+            // No case loosens a value or declares a notice: an allowance added later fails here.
+            assert!(case.allowances().is_empty(), "{}", case.name());
         }
         // The prefill pipeline writes no channel and the region pipeline writes every one, which
         // is what keeps the prefill's depth out of the colour target.

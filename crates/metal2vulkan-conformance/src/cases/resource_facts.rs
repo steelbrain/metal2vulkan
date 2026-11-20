@@ -91,7 +91,6 @@
 //! the placement offsets': an offset that is not a multiple of 256, or a placement that runs past
 //! the heap, is one Metal's validation stops. This module's own tests hold every row to both with no device.
 
-use crate::allowance::Allowance;
 use crate::case::{Abort, Case, Handle, Input, MetalSource, Side};
 use crate::heap_query::{
     cache_word, hazard_word, purgeable_pairs, purgeable_word, HeapBufferSpec, HeapSpec,
@@ -440,13 +439,6 @@ impl Case for ResourceFactsCase {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: the `Shared` buffers these getters answer about is `Shared`, which is
-        // what [`crate::replay::shared_memory_notice`] is for. It loosens the notices site alone,
-        // so every value this case reads still compares exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<crate::recording::ShaderRef>, String> {

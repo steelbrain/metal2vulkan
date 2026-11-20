@@ -169,25 +169,19 @@ impl Case for RateMapCase {
         // carries no allowance at all: a tolerance that never fires is one nobody is checking, and
         // a device that does announce something there should fail the case until somebody names
         // why.
-        // Either way the case declares the notice its `Shared` read-back buffer provokes
-        // ([`crate::replay::shared_memory_notice`]), which the RTX 5080 announced for both rows.
-        let shared = crate::replay::shared_memory_notice();
         if self.identity {
-            return vec![shared];
+            return Vec::new();
         }
         // A map that is not the identity announces the rate-map degradation when it is made, a
         // near-equivalent the runtime declares (`docs/API.md`'s degrade catalogue): a pass over
         // such a map is drawn region by region, on this crate's tile lines. Metal announces
         // nothing, so the notices set is the one field that may differ, and the allowance is held
         // to its evidence — the notice must actually have been announced on the run compared.
-        vec![
-            shared,
-            Allowance::new(
-                format!("case/{NOTICES_SITE}/*"),
-                Loosening::Unchecked,
-                Justification::notice(Degradation::RasterizationRateMap),
-            ),
-        ]
+        vec![Allowance::new(
+            format!("case/{NOTICES_SITE}/*"),
+            Loosening::Unchecked,
+            Justification::notice(Degradation::RasterizationRateMap),
+        )]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {

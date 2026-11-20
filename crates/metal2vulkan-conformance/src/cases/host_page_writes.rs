@@ -118,7 +118,6 @@
 //! dispatch of 64 threads, no loop, two command buffers over 16 KiB of memory committed and waited
 //! for. The shapes that do fault are measured in the probe and are deliberately absent.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, drawn_or_refused, made, Abort, Case, Failure, Handle, Input, MetalSource, Side,
 };
@@ -432,26 +431,6 @@ impl Case for HostPageWrite {
         // recording holds the set of transcripts Metal produced rather than whichever one a single
         // run happened to see.
         RUNS
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // **One declaration per code a venue was measured announcing for this row**, and nothing
-        // else. A notice our side announces that this list does not name is a divergence at the
-        // notices site; a code this list names that no run announces is an unfired allowance,
-        // which is noise the tally exists to show. So this is a measured set and not a guess.
-        //
-        // The two **drawing** rows' `fast-math-rewrites` (the arithmetic of `rt6_render_state`'s
-        // vertex function, which is the fixture, not this family's subject) is the suite's
-        // (`crate::replay::NATIVE_NOTES`), declared by no row.
-        //
-        // `shared-in-system-memory` is every row's and belongs to the venue, not to this family:
-        // each row reads its pages back through a `Shared` buffer
-        // (`crate::replay::shared_memory_notice`). Announced by all four on the 5080.
-        //
-        // **None of these loosens a byte**, and that matters most here: the read-only rows' pages,
-        // and what a later command buffer reads of them, are this family's whole subject. Those
-        // bytes stay compared exactly.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

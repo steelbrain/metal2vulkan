@@ -9,7 +9,6 @@
 //! difference hides and where one word moving is a readable failure. None reads a texture or an
 //! input buffer, each binds one buffer, and none can fault a GPU.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Bindings, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -226,14 +225,6 @@ impl Case for PassBytes {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The pass's input and output buffers are `Shared`, and a device with no unified memory
-        // keeps a `Shared` allocation in system memory because that is the only memory both sides
-        // can reach. It is the venue's memory model rather than a column's answer, so it is
-        // declared at the notices site alone and loosens no column.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

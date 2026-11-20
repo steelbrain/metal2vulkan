@@ -26,7 +26,6 @@
 //!
 //! Nothing here can fault a GPU: every grid is one or two threadgroups.
 
-use crate::allowance::Allowance;
 use crate::case::{
     Abort, Case, Failure, Handle, Input, MeshFunctions, MeshStep, MetalSource, Side, SCOPE_BUFFERS,
     STAGE_FRAGMENT, STAGE_MESH, STAGE_OBJECT, TARGET_TEXEL,
@@ -433,10 +432,6 @@ impl Case for MeshBarriers {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        super::mesh_draws::mesh_notice_allowances()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

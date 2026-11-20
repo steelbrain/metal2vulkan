@@ -34,7 +34,6 @@
 //! Nothing here can fault a GPU: blit copies between textures and buffers the program makes, no
 //! dispatch, no draw, no loop, every region block-aligned and inside its level.
 
-use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::transcript::{ByteLayout, Element, Node, Observed, Sites, Value};
 use crate::work::{Plane, Rect, Resource, Step, TextureSpec, Work};
@@ -546,14 +545,6 @@ impl Case for PvrtcRows {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every block compares exactly. The buffer each pass reads its blocks back through is
-        // `Shared`, which a device with no unified memory keeps in system memory because that is
-        // the only memory both sides can reach: the venue's memory model, not this family's
-        // subject.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

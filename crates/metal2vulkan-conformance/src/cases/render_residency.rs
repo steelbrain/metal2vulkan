@@ -46,7 +46,6 @@
 //! or 4 by 4 target, no loop in the fixture, and a heap that holds no memory until a mapping takes
 //! a tile, which nothing here asks for.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side, TextureRole, TextureSpec,
 };
@@ -444,18 +443,6 @@ impl Case for RenderBarriers {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // No value is loosened. A `RGBA32Float` texel is the `float4` the fragment function
-        // returned, the fixture's arithmetic is a multiplication by an eighth of an integer, and a
-        // texel read at integer coordinates takes no device's float bounds, so every texel here is
-        // an exact answer or a bug.
-        //
-        // One notice is declared, and it is the venue's rather than this case's: the buffer the
-        // pass reads its target back through is `Shared`, which a device with no unified memory
-        // keeps in system memory because that is the only memory both sides can reach.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs()
     }
@@ -574,12 +561,6 @@ impl Case for HeapResidency {
         RUNS
     }
 
-    fn allowances(&self) -> Vec<Allowance> {
-        // Nothing loosened, for the reason the barrier case states. What is declared is the one
-        // notice the venue's own memory model provokes for the `Shared` read-back buffer.
-        vec![crate::replay::shared_memory_notice()]
-    }
-
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs()
     }
@@ -635,7 +616,6 @@ impl Case for HeapResidency {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allowance::Justification;
     use crate::transcript::Transcript;
     use std::collections::BTreeSet;
 
@@ -805,21 +785,8 @@ mod tests {
         for case in all() {
             assert_eq!(case.record_runs(), RUNS);
             assert!(matches!(case.metal_source(), MetalSource::Run));
-            // Both cases declare the notice the venue's own memory model provokes for the
-            // `Shared` read-back buffer, and nothing else. No value of either is loosened, so
-            // every declaration sits at the notices site.
-            let declared = case.allowances();
-            for allowance in &declared {
-                assert!(allowance.path.starts_with("case/notices"), "{allowance:?}");
-            }
-            let codes: Vec<&Justification> =
-                declared.iter().map(|held| &held.justified_by).collect();
-            let shared = Justification::Degradation(
-                crate::degradation::Degradation::SharedInSystemMemory
-                    .code()
-                    .to_owned(),
-            );
-            assert_eq!(codes, vec![&shared], "{}", case.name());
+            // No value of either case is loosened, and neither declares a notice.
+            assert!(case.allowances().is_empty(), "{}", case.name());
         }
         // The barriers name the stage whose writes the next draw reads, on both sides of each.
         assert_eq!(FRAGMENT, RenderStages::FRAGMENT);

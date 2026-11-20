@@ -315,16 +315,6 @@ pub struct FootprintCase {
     /// The formats a round trip runs for, in order. Empty where Metal makes no texture of any
     /// format of the case.
     round_trips: Vec<PixelFormat>,
-    /// Whether the runtime makes a `Shared` texture buffer of one of the case's formats: the
-    /// buffer under it is `Shared` memory, which a device without unified memory places in system
-    /// memory and announces (`shared-in-system-memory`). Measured on the RTX 5080 Laptop
-    /// (615.71.09): the plain stragglers' case announced it in the whole-set replay. Measured on
-    /// the RX 7900 XTX (RADV NAVI31, the round's replay at 6898863f3f): the one-plane YCbCr and
-    /// padded wide-channel cases announced it too, the runtime now making their formats'
-    /// `Shared` texture buffers as Metal makes them, and no other case of the family did: the
-    /// ASTC formats take no texture buffer, the two-plane ones are refused and the packed ones
-    /// nil.
-    shared_texture_buffers: bool,
 }
 
 /// Every case of the family.
@@ -386,7 +376,6 @@ fn case_over(
         } else {
             Vec::new()
         },
-        shared_texture_buffers: false,
     }
 }
 
@@ -401,7 +390,6 @@ fn astc_footprints() -> FootprintCase {
 /// answers are what a reader compares the rest of the family against.
 fn plain_stragglers() -> FootprintCase {
     FootprintCase {
-        shared_texture_buffers: true,
         ..case_over(PLAIN_STRAGGLERS, &PLAIN, &all_types(), true)
     }
 }
@@ -410,7 +398,6 @@ fn plain_stragglers() -> FootprintCase {
 /// **no texture**.
 fn one_plane_ycbcr() -> FootprintCase {
     FootprintCase {
-        shared_texture_buffers: true,
         ..case_over(ONE_PLANE_YCBCR, &ONE_PLANE, &all_types(), true)
     }
 }
@@ -419,7 +406,6 @@ fn one_plane_ycbcr() -> FootprintCase {
 /// `*10A2Unorm` ones.
 fn padded_wide_channels() -> FootprintCase {
     FootprintCase {
-        shared_texture_buffers: true,
         ..case_over(PADDED_WIDE_CHANNELS, &PADDED, &all_types(), true)
     }
 }
@@ -570,23 +556,18 @@ impl Case for FootprintCase {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        let mut named = Vec::new();
-        // A `Shared` texture buffer's own buffer, on a device without unified memory
-        // (`crate::replay::shared_memory_notice` holds the whole reason). It loosens the notices
-        // site alone: the case reads bytes, every one compared with Metal's exactly.
-        if self.shared_texture_buffers {
-            named.push(crate::replay::shared_memory_notice());
-        }
         // The runtime's answers are the device's own, held by their property and not by
         // Metal's numbers (`texture_query::DEVICE_OWN_SIZES`).
-        named.extend(self.queries.iter().map(|query| {
-            Allowance::new(
-                format!("case/{}/{}/Ok/*", query.site(), site::QUERY),
-                Loosening::Unchecked,
-                Justification::accepted(crate::texture_query::DEVICE_OWN_SIZES),
-            )
-        }));
-        named
+        self.queries
+            .iter()
+            .map(|query| {
+                Allowance::new(
+                    format!("case/{}/{}/Ok/*", query.site(), site::QUERY),
+                    Loosening::Unchecked,
+                    Justification::accepted(crate::texture_query::DEVICE_OWN_SIZES),
+                )
+            })
+            .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

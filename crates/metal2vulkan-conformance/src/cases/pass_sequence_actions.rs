@@ -861,12 +861,7 @@ impl Case for SequenceActions {
         // attachment's contents with arbitrary data: Metal's answer on the M3 Max (the texels it
         // held before pass A) is one outcome of that, the runtime's (what pass A rendered)
         // another. Every other texel compares exactly.
-        //
-        // `SharedInSystemMemory`: both cases read their attachments back through a `Shared`
-        // buffer, and a device with no unified memory keeps a `Shared` allocation in system memory
-        // because that is the only memory both sides can reach. It belongs to the venue's memory
-        // model rather than to a load or a store action.
-        let mut allowances = vec![crate::replay::shared_memory_notice()];
+        let mut allowances = Vec::new();
         if self.cross == Cross::Color {
             for cell in color_cells() {
                 let site = cell.site();

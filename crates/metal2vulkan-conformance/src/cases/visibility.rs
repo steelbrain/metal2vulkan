@@ -62,16 +62,13 @@
 //!
 //! //! Nothing here can fault a GPU: one 4 by 4 target a pass, three vertices a draw, no loop.
 
-use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Failure, Handle, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
     ColorState, PassColor, PassDepth, RenderPass, RenderPipelineSpec, RenderStep, RenderWork,
     TargetSpec,
 };
-use crate::replay::NOTICES_SITE;
 use crate::transcript::{ByteLayout, Digest, Element, Node, Observed, Sites, Value};
 use crate::values::{StoreAction, VisibilityResultMode, VisibilityResultType};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
@@ -524,14 +521,6 @@ pub fn all() -> Vec<Visibility> {
     SHAPES.iter().map(|shape| Visibility { shape }).collect()
 }
 
-/// The degrade notices a visibility pass may announce. As with every family, it is a list rather
-/// than a device query, because a case never branches on the device: it asks by running and reads
-/// what came back. A venue that announces a kind not here fails the case until its kind is added.
-const PASS_NOTICES: &[Degradation] = &[
-    // A `Shared` buffer the device keeps in system memory, which the visibility buffer is.
-    Degradation::SharedInSystemMemory,
-];
-
 /// The shape's passes by command buffer, as indices: all in one where it is `joined`, else one
 /// each.
 fn groups(shape: &Shape) -> Vec<Vec<usize>> {
@@ -792,21 +781,6 @@ impl Case for Visibility {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The notices site alone: a visibility result is a number Metal wrote, and any number
-        // that differs is a bug, not a near-equivalent.
-        PASS_NOTICES
-            .iter()
-            .map(|kind| {
-                Allowance::new(
-                    format!("case/{NOTICES_SITE}/*"),
-                    Loosening::Unchecked,
-                    Justification::notice(*kind),
-                )
-            })
-            .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
@@ -1211,13 +1185,12 @@ mod tests {
         }
     }
 
-    /// Every case of the family is in the table, states its inputs, and loosens **only** its
-    /// notices site.
+    /// Every case of the family is in the table, states its inputs, and loosens nothing.
     ///
     /// A visibility result is a number Metal wrote; a number that differs is a bug, never a
     /// near-equivalent. A case that ever loosened a word would fail here.
     #[test]
-    fn every_case_is_tabled_and_loosens_its_notices_alone() {
+    fn every_case_is_tabled_and_loosens_nothing() {
         for case in all() {
             assert!(
                 TABLE.iter().any(|(name, _)| *name == case.name()),
@@ -1232,22 +1205,7 @@ mod tests {
             );
             assert_eq!(case.metal_source(), MetalSource::Run);
             case.shaders().unwrap();
-            for allowance in case.allowances() {
-                assert_eq!(
-                    allowance.path,
-                    format!("case/{NOTICES_SITE}/*"),
-                    "{}: an allowance outside the notices site",
-                    case.name()
-                );
-                match &allowance.justified_by {
-                    Justification::Degradation(code) => assert!(
-                        PASS_NOTICES.iter().any(|kind| kind.code() == code),
-                        "{}: {code} is not a visibility-pass notice",
-                        case.name()
-                    ),
-                    other => panic!("{}: an unexpected tolerance: {other:?}", case.name()),
-                }
-            }
+            assert!(case.allowances().is_empty(), "{}", case.name());
         }
     }
 

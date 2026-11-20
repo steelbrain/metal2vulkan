@@ -36,7 +36,6 @@
 //! Nothing here can fault a GPU: two render passes of three triangles each over a 4 by 1 target,
 //! no loop in either fixture, and one blit of four bytes.
 
-use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -236,13 +235,6 @@ impl Case for ShaderStencil {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Exact: every stencil byte Metal leaves is a byte we must leave. The one declaration is
-        // the `Shared` buffer the pass reads its stencil back through
-        // ([`crate::replay::shared_memory_notice`]), measured firing for both rows on the RTX 5080.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

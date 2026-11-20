@@ -28,7 +28,6 @@
 //! case, how many surfaces of each form it made. A case reads the texture's texels alone, never the
 //! surface's bytes, so where a side laid the planes is not compared.
 
-use crate::allowance::Allowance;
 use crate::case::{
     call, made, Abort, Case, Input, MetalSource, Side, SurfacePlane, SurfaceRoute, SurfaceTexture,
 };
@@ -224,12 +223,6 @@ impl Case for SurfaceTextures {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The GPU read lands in a `Shared` buffer, which is what
-        // [`crate::replay::shared_memory_notice`] is for; it loosens the notices site alone.
-        vec![crate::replay::shared_memory_notice()]
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {

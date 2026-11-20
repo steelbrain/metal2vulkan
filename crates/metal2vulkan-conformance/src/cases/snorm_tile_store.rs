@@ -310,9 +310,6 @@ impl Case for SnormTileStore {
                 Justification::notice(*kind),
             ));
         }
-        // The buffer each pass reads the stored tiles back through is `Shared`
-        // ([`crate::replay::shared_memory_notice`]).
-        allowances.push(crate::replay::shared_memory_notice());
         allowances
     }
 
@@ -515,10 +512,8 @@ mod tests {
                 );
                 match &allowance.justified_by {
                     Justification::Degradation(code) => assert!(
-                        PASS_NOTICES.iter().any(|kind| kind.code() == code)
-                            || code == Degradation::SharedInSystemMemory.code(),
-                        "{}: {code} is neither a tile-store notice nor the one a device's own \
-                         memory model provokes",
+                        PASS_NOTICES.iter().any(|kind| kind.code() == code),
+                        "{}: {code} is not a tile-store notice",
                         case.name()
                     ),
                     other => panic!("{}: an unexpected tolerance: {other:?}", case.name()),
