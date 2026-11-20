@@ -42,7 +42,7 @@ pub(crate) struct QueueInner {
     run: AtomicU64,
     /// Its command buffers retired with their GPU times ([`retired`](Self::retired)).
     retired: AtomicU64,
-    counters: Counters,
+    pub(crate) counters: Counters,
     /// The device, without keeping it: a command buffer handle that outlives the device's
     /// handles holds its queue, and neither keeps the device from its teardown.
     core: Weak<Core>,

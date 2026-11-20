@@ -30,6 +30,32 @@ const OVER_NANOS: [u64; 3] = [1_000_000, 5_000_000, 20_000_000];
 /// [`Metrics::submit_calls_over_100_ms`].
 const LONG_SUBMIT_CALL: u64 = 100_000_000;
 
+/// The buckets of each stage histogram of [`Metrics`]
+/// ([`commit_to_scheduled`](Metrics::commit_to_scheduled) and the three after it).
+pub(crate) const STAGE_BUCKETS: usize = 23;
+
+/// The stage histogram bucket of a span of `nanos` nanoseconds: 0 under 2 us, `i` from 2^i us
+/// to under 2^(i+1) us, and the last from 2^22 us (about 4.19 s) on.
+pub(crate) fn stage_bucket(nanos: u64) -> usize {
+    match nanos / 1_000 {
+        0 | 1 => 0,
+        micros => (micros.ilog2() as usize).min(STAGE_BUCKETS - 1),
+    }
+}
+
+/// A stage of a command buffer's life that [`Metrics`] keeps a histogram of.
+#[derive(Clone, Copy)]
+pub(crate) enum Stage {
+    /// [`Metrics::commit_to_scheduled`].
+    CommitToScheduled,
+    /// [`Metrics::scheduled_to_gpu_start`].
+    ScheduledToGpuStart,
+    /// [`Metrics::gpu_run`].
+    GpuRun,
+    /// [`Metrics::gpu_end_to_handler`].
+    GpuEndToHandler,
+}
+
 /// A part of the consumer's takes, buffer makes and exported block makes the runtime times,
 /// counted on its own in [`Metrics`].
 #[derive(Clone, Copy)]
@@ -398,6 +424,8 @@ struct Atomics {
     submit_calls_over_100_ms: AtomicU64,
     queue_lock_wait_nanos: AtomicU64,
     queue_lock_wait_max_nanos: AtomicU64,
+    /// Each [`Stage`]'s histogram, at its index.
+    stages: [[AtomicU64; STAGE_BUCKETS]; 4],
     passes: AtomicU64,
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
@@ -700,6 +728,12 @@ impl Counters {
         let a = &self.atomics;
         a.queue_lock_wait_nanos.fetch_add(nanos, Relaxed);
         a.queue_lock_wait_max_nanos.fetch_max(nanos, Relaxed);
+    }
+
+    /// A command buffer's span of `nanos` nanoseconds at `stage`, in its histogram
+    /// ([`Metrics::commit_to_scheduled`] and the three after it).
+    pub(crate) fn stage(&self, stage: Stage, nanos: u64) {
+        self.atomics.stages[stage as usize][stage_bucket(nanos)].fetch_add(1, Relaxed);
     }
 
     /// An allocation of `bytes` made for blocks ([`Metrics::block_bytes_made`]).
@@ -1137,6 +1171,7 @@ impl Counters {
         let over = |cause: OverCause| {
             (a.over_by_cause[cause as usize].each_ref()).map(|n| n.load(Relaxed))
         };
+        let stage = |stage: Stage| (a.stages[stage as usize].each_ref()).map(|n| n.load(Relaxed));
         Metrics {
             submissions: a.submissions.load(Relaxed),
             submit_infos: a.submit_infos.load(Relaxed),
@@ -1145,6 +1180,10 @@ impl Counters {
             submit_calls_over_100_ms: a.submit_calls_over_100_ms.load(Relaxed),
             queue_lock_wait_nanos: a.queue_lock_wait_nanos.load(Relaxed),
             queue_lock_wait_max_nanos: a.queue_lock_wait_max_nanos.load(Relaxed),
+            commit_to_scheduled: stage(Stage::CommitToScheduled),
+            scheduled_to_gpu_start: stage(Stage::ScheduledToGpuStart),
+            gpu_run: stage(Stage::GpuRun),
+            gpu_end_to_handler: stage(Stage::GpuEndToHandler),
             passes: a.passes.load(Relaxed),
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
@@ -1381,6 +1420,36 @@ pub struct Metrics {
     /// The longest such wait, in nanoseconds; a maximum since the device was made, so the
     /// difference of two reads does not apply to it.
     pub queue_lock_wait_max_nanos: u64,
+    /// Command buffers by the span from their commit to their scheduling, in nanoseconds of
+    /// [`host_time`](crate::host_time), in 23 buckets of powers of two: bucket 0 counts spans
+    /// under 2 us, bucket `i` from 1 to 21 spans from 2^i us to under 2^(i+1) us, and bucket 22
+    /// spans of 2^22 us (about 4.19 s) or more. The span runs from the host time at the commit to
+    /// the [`kernel_end_time`](crate::CommandBuffer::kernel_end_time): its last segment joining a
+    /// submission, passed to `vkQueueSubmit2` at once or held in its queue's group, or for one
+    /// that presents a drawable, that call's return. Counted as each is scheduled; one that ends
+    /// unscheduled counts none.
+    pub commit_to_scheduled: [u64; STAGE_BUCKETS],
+    /// Command buffers that completed with GPU times by the span from their
+    /// [`kernel_end_time`](crate::CommandBuffer::kernel_end_time) to their
+    /// [`gpu_start_time`](crate::CommandBuffer::gpu_start_time), in the buckets of
+    /// [`commit_to_scheduled`](Self::commit_to_scheduled); 0 where the GPU start is placed before
+    /// the kernel end, as for one that presents, scheduled once its call returned. Counted on the
+    /// completion thread as each retires, before its handlers run; one that ends with an error,
+    /// or completes without GPU times, counts none here or in the two below.
+    pub scheduled_to_gpu_start: [u64; STAGE_BUCKETS],
+    /// The same command buffers by their GPU run: the span from their
+    /// [`gpu_start_time`](crate::CommandBuffer::gpu_start_time) to their
+    /// [`gpu_end_time`](crate::CommandBuffer::gpu_end_time), their two timestamps' own span, in
+    /// the buckets of [`commit_to_scheduled`](Self::commit_to_scheduled); 0 for one with nothing
+    /// for the GPU.
+    pub gpu_run: [u64; STAGE_BUCKETS],
+    /// The same command buffers by the span from their
+    /// [`gpu_end_time`](crate::CommandBuffer::gpu_end_time) to the host time their handlers
+    /// begin, whether they have any or not, in the buckets of
+    /// [`commit_to_scheduled`](Self::commit_to_scheduled). The completion thread retires a
+    /// round's command buffers in order, so the span holds the earlier ones' retirements and
+    /// handlers in the round.
+    pub gpu_end_to_handler: [u64; STAGE_BUCKETS],
     /// Encoders recorded: compute, blit and render.
     pub passes: u64,
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each

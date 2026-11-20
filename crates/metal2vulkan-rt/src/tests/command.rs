@@ -4,15 +4,33 @@
 //! and with work held, which holds no handle of the device; refusals of what has started; a loss; a released block kept until its last
 //! command buffer retires; a block whose last handle drops freed once its last command buffer
 //! retires; a block's clones, one dropped giving nothing back, and a handle outliving its
-//! device; the thread gauge holding the device's four threads as it is made; and a command
-//! buffer joining a held group only within the group's expected GPU run. Without a device: a push
-//! whose bytes the command buffer holds is not recorded again; a queue's expected run rises to a
-//! longer run at once and halves toward a shorter one; the join and send decisions of the group
-//! bound.
+//! device; the thread gauge holding the device's four threads as it is made; a command buffer
+//! joining a held group only within the group's expected GPU run; and each command buffer
+//! counted once in every stage histogram. Without a device: a push whose bytes the command buffer
+//! holds is not recorded again; a queue's expected run rises to a longer run at once and halves
+//! toward a shorter one; the join and send decisions of the group bound; the stage histograms'
+//! bucket edges.
 
 use crate::command::Pushed;
+use crate::counters::{stage_bucket, STAGE_BUCKETS};
 use crate::queue::next_run;
 use crate::submit::{apart, joins, GROUP_RUN, UNSEEN_JOINS};
+
+/// The stage histograms' bucket edges: under 2 us in bucket 0, from 2^i us to under 2^(i+1) us
+/// in bucket i, and from 2^22 us on in the last.
+#[test]
+fn a_stage_span_lands_in_its_power_of_two_bucket() {
+    let us = 1_000;
+    assert_eq!(stage_bucket(0), 0);
+    assert_eq!(stage_bucket(2 * us - 1), 0);
+    assert_eq!(stage_bucket(2 * us), 1);
+    assert_eq!(stage_bucket(4 * us - 1), 1);
+    assert_eq!(stage_bucket(4 * us), 2);
+    assert_eq!(stage_bucket((1 << 21) * us), 21);
+    assert_eq!(stage_bucket((1 << 22) * us - 1), 21);
+    assert_eq!(stage_bucket((1 << 22) * us), STAGE_BUCKETS - 1);
+    assert_eq!(stage_bucket(u64::MAX), STAGE_BUCKETS - 1);
+}
 
 /// The group bound's decisions. A command buffer joins a held group only while the members'
 /// expected runs and its own, summed, stay within `GROUP_RUN`; one past it goes alone, the group
@@ -1730,6 +1748,40 @@ pub(crate) mod on_device {
                 "{name}: the last fill"
             );
             drop((later, first, buffer, arena, queue, device));
+        });
+    }
+
+    /// Each command buffer that completes lands one count in each of the four stage histograms:
+    /// three committed in turn, each finished before the next, add three to each histogram.
+    #[test]
+    fn every_device_counts_each_command_buffer_once_in_every_stage_histogram() {
+        each_device("command_stage_histograms", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let counters = device.counters();
+            crate::tests::blit::on_device::settled(&device);
+            let sums = |m: crate::Metrics| {
+                [
+                    m.commit_to_scheduled,
+                    m.scheduled_to_gpu_start,
+                    m.gpu_run,
+                    m.gpu_end_to_handler,
+                ]
+                .map(|histogram| histogram.iter().sum::<u64>())
+            };
+            let before = sums(counters.metrics());
+            for word in 1..=3 {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                fill(&command_buffer, &buffer, word);
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            let after = sums(counters.metrics());
+            let added: Vec<u64> = after.iter().zip(before).map(|(a, b)| a - b).collect();
+            assert_eq!(added, [3; 4], "{name}: each histogram's counts added");
+            drop((buffer, arena, queue, device));
         });
     }
 

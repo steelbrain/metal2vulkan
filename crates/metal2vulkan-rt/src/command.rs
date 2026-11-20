@@ -2,7 +2,7 @@
 //! states from creation to retirement.
 
 use crate::buffer::{Buffer, BufferInner, BufferObject};
-use crate::counters::{Metric, Tally};
+use crate::counters::{Metric, Stage, Tally};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::event::{Event, EventInner};
@@ -1395,6 +1395,9 @@ impl CbInner {
         let mut state = lock(&self.state);
         state.status = CommandBufferStatus::Scheduled;
         state.scheduled_ran = !handlers;
+        // Its kernel start is still the host time at its commit.
+        let committed = state.times.kernel_start;
+        (self.queue.counters).stage(Stage::CommitToScheduled, now.saturating_sub(committed));
         let before = self.queue.last_scheduled.fetch_max(now, Relaxed);
         state.times.kernel_start = state.times.kernel_start.max(before);
         state.times.kernel_end = now;
@@ -1473,7 +1476,7 @@ pub(crate) fn retire(
     if let Some((start, end)) = gpu_times {
         inner.queue.ran(end.saturating_sub(start));
     }
-    let stamps = {
+    let (stamps, stages) = {
         let mut state = lock(&inner.state);
         // One with nothing for the GPU, as Metal reports it: its start and end equal, at its
         // queue's previous command buffer's end or its own kernel end, whichever is later.
@@ -1488,13 +1491,15 @@ pub(crate) fn retire(
             state.times.gpu_end = end;
             inner.queue.last_end.fetch_max(end, Relaxed);
         }
+        let stages = (gpu_times.filter(|_| error.is_none()))
+            .map(|(start, end)| (state.times.kernel_end, start, end));
         state.status = match error {
             Some(_) => CommandBufferStatus::Error,
             None => CommandBufferStatus::Completed,
         };
         state.error = error;
         inner.changed.notify_all();
-        state.stamps.take()
+        (state.stamps.take(), stages)
     };
     let Gpu {
         recorder,
@@ -1517,6 +1522,17 @@ pub(crate) fn retire(
         core.stamps.give_back(pair);
     }
     inner.queue.release(kept);
+    // Its stages from its scheduling on, by the times it already holds and the host time its
+    // handlers begin (`Metrics::scheduled_to_gpu_start` and the two after it).
+    if let Some((scheduled, start, end)) = stages {
+        let counters = &core.counters;
+        counters.stage(Stage::ScheduledToGpuStart, start.saturating_sub(scheduled));
+        counters.stage(Stage::GpuRun, end.saturating_sub(start));
+        counters.stage(
+            Stage::GpuEndToHandler,
+            times::host_time().saturating_sub(end),
+        );
+    }
     let handle = CommandBuffer { inner };
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {
         handler(&handle);

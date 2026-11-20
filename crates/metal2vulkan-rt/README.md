@@ -168,6 +168,11 @@ nanoseconds, in total and longest: among them each `vkQueueSubmit2` call's time 
 driver (`submit_call_nanos`, with the calls over 100 ms counted) and the submit thread's wait
 for the queue's lock before a submission's calls (`queue_lock_wait_nanos`), which on a family of
 one queue is also the wait behind the consumer's presents (`Device::with_present_queue`);
+four histograms of each command buffer's stages, in 23 power-of-two buckets from under 2 us to
+2^22 us (about 4.19 s) or more, filled from the times the command buffer already reports: commit
+to scheduled (`commit_to_scheduled`, counted as it is scheduled), scheduled to GPU start, the GPU
+run, and GPU end to the host time its handlers begin (counted as it retires, for one that
+completes with GPU times);
 the copies of textures over a buffer that no linear image holds are split by cause
 (`over_copies_pitch` and the rest, in Textures below);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and

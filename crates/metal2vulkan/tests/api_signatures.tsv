@@ -2234,6 +2234,7 @@ field	metal2vulkan-rt::Metrics.cache_bytes_written	pub cache_bytes_written: u64
 field	metal2vulkan-rt::Metrics.cache_writes_dropped	pub cache_writes_dropped: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_max_nanos	pub commit_lock_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_nanos	pub commit_lock_wait_nanos: u64
+field	metal2vulkan-rt::Metrics.commit_to_scheduled	pub commit_to_scheduled: [u64; STAGE_BUCKETS]
 field	metal2vulkan-rt::Metrics.consumer_allocation_max_nanos	pub consumer_allocation_max_nanos: u64
 field	metal2vulkan-rt::Metrics.consumer_allocation_nanos	pub consumer_allocation_nanos: u64
 field	metal2vulkan-rt::Metrics.consumer_allocations	pub consumer_allocations: u64
@@ -2254,6 +2255,8 @@ field	metal2vulkan-rt::Metrics.first_use_variant_waits	pub first_use_variant_wai
 field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
+field	metal2vulkan-rt::Metrics.gpu_end_to_handler	pub gpu_end_to_handler: [u64; STAGE_BUCKETS]
+field	metal2vulkan-rt::Metrics.gpu_run	pub gpu_run: [u64; STAGE_BUCKETS]
 field	metal2vulkan-rt::Metrics.held_release_bytes	pub held_release_bytes: u64
 field	metal2vulkan-rt::Metrics.held_release_starts	pub held_release_starts: u64
 field	metal2vulkan-rt::Metrics.held_releases	pub held_releases: u64
@@ -2316,6 +2319,7 @@ field	metal2vulkan-rt::Metrics.resolves	pub resolves: u64
 field	metal2vulkan-rt::Metrics.ring_block_allocations	pub ring_block_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.sampler_element_writes	pub sampler_element_writes: u64
+field	metal2vulkan-rt::Metrics.scheduled_to_gpu_start	pub scheduled_to_gpu_start: [u64; STAGE_BUCKETS]
 field	metal2vulkan-rt::Metrics.shared_long_reuses	pub shared_long_reuses: u64
 field	metal2vulkan-rt::Metrics.shared_take_allocations	pub shared_take_allocations: SiteAllocations
 field	metal2vulkan-rt::Metrics.sparse_binds	pub sparse_binds: u64
