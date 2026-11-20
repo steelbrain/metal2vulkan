@@ -1254,20 +1254,6 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review, which C3 names as the answer gap of a case that meets it.
     QuadsSplitByClipping,
-    /// A vertex function runs a simdgroup or quad operation on a device whose vertex stage takes
-    /// no required subgroup size and whose driver is measured to group vertices otherwise than
-    /// Apple's GPUs ([`DriverWorkaround::VertexGroupingNotApples`]: ANV, 8 vertices a subgroup,
-    /// interleaved): the operation runs over the device's group of vertices, so a sum, a ballot
-    /// or a shuffle combines other vertices than on an Apple GPU, whose simdgroup holds 32
-    /// consecutive vertices. Metal does not fix which vertices share a simdgroup, so each
-    /// device group is a simdgroup Metal's API allows, not the reference's; with no required
-    /// size for the stage, nothing pins the grouping.
-    ///
-    /// Validation derives no tolerance and no explanation from it: a difference stays a
-    /// mismatch for review, deferred in C3 until an exact path exists.
-    ///
-    /// [`DriverWorkaround::VertexGroupingNotApples`]: crate::device::DriverWorkaround::VertexGroupingNotApples
-    VertexSimdgroupGrouping,
     /// A fragment function runs a simdgroup operation (a reduction, scan, vote, ballot, shuffle,
     /// broadcast or AGX multiply-add) or reads its `[[thread_index_in_simdgroup]]`, or discards,
     /// asks whether its thread is a helper (`quad_is_helper_thread`, `simd_is_helper_thread`) and

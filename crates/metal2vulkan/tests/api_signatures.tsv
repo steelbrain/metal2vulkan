@@ -10482,7 +10482,6 @@ variant	metal2vulkan-runtime::PrecisionNote::TessellationWinding	TessellationWin
 variant	metal2vulkan-runtime::PrecisionNote::UnmeasuredFetchBlend	UnmeasuredFetchBlend
 variant	metal2vulkan-runtime::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGroupSpeculation
 variant	metal2vulkan-runtime::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
-variant	metal2vulkan-runtime::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan-runtime::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan-runtime::Refusal::ArgumentPlace	ArgumentPlace { place: u64, alignment: u64 }
 variant	metal2vulkan-runtime::Refusal::AttachmentFormat	AttachmentFormat { pixel_format: PixelFormat }
@@ -11728,7 +11727,6 @@ variant	metal2vulkan::error::Feature::Barycentrics	Barycentrics
 variant	metal2vulkan::error::Feature::BitcodeRecord	BitcodeRecord { block: u32, code: u32 }
 variant	metal2vulkan::error::Feature::BufferRange	BufferRange
 variant	metal2vulkan::error::Feature::CallingConvention	CallingConvention(u32)
-variant	metal2vulkan::error::Feature::CentroidVarying	CentroidVarying
 variant	metal2vulkan::error::Feature::ClipDistance	ClipDistance
 variant	metal2vulkan::error::Feature::CoherentMemory	CoherentMemory
 variant	metal2vulkan::error::Feature::ComputeDerivatives	ComputeDerivatives
@@ -11785,7 +11783,6 @@ variant	metal2vulkan::error::Feature::MinLodClamp	MinLodClamp
 variant	metal2vulkan::error::Feature::MipmapGeneration	MipmapGeneration
 variant	metal2vulkan::error::Feature::ModuleRecord	ModuleRecord { code: u32 }
 variant	metal2vulkan::error::Feature::MultisampledShaderDepthTest	MultisampledShaderDepthTest
-variant	metal2vulkan::error::Feature::PixelCoverage	PixelCoverage
 variant	metal2vulkan::error::Feature::PixelCoverageAtSampleRate	PixelCoverageAtSampleRate
 variant	metal2vulkan::error::Feature::PixelSamplerCompare	PixelSamplerCompare
 variant	metal2vulkan::error::Feature::PointerCompare	PointerCompare
@@ -12129,7 +12126,6 @@ variant	metal2vulkan::pipeline::ChannelWrite::Snorm	Snorm { bits: u8, blended: b
 variant	metal2vulkan::pipeline::ChannelWrite::Srgb	Srgb
 variant	metal2vulkan::pipeline::ChannelWrite::Unorm	Unorm { bits: u8 }
 variant	metal2vulkan::pipeline::DescriptorView::Storage	Storage
-variant	metal2vulkan::pipeline::DescriptorView::UniformTexel	UniformTexel
 variant	metal2vulkan::pipeline::DescriptorView::UniformVec4	UniformVec4
 variant	metal2vulkan::pipeline::DescriptorView::UniformWords	UniformWords
 variant	metal2vulkan::pipeline::EntryMath::Fast	Fast
@@ -12260,7 +12256,6 @@ variant	metal2vulkan::pipeline::PrecisionNote::TessellationWinding	TessellationW
 variant	metal2vulkan::pipeline::PrecisionNote::UnmeasuredFetchBlend	UnmeasuredFetchBlend
 variant	metal2vulkan::pipeline::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGroupSpeculation
 variant	metal2vulkan::pipeline::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
-variant	metal2vulkan::pipeline::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan::pipeline::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan::pipeline::PushField::AlphaTestReference	AlphaTestReference
 variant	metal2vulkan::pipeline::PushField::AmplificationId	AmplificationId

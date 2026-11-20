@@ -725,10 +725,6 @@ pub struct SlotRow {
 ///   extended-range linear, 3D or level blend) in the device's multiply and add under weights
 ///   computed from the fraction, where Metal sums its fixed-point weights exactly onto the
 ///   format's grid, and the sampled value is ordinary data later words use.
-/// - A vertex function's simdgroup operation on a device that groups vertices otherwise than
-///   Apple's GPUs and cannot pin the vertex stage's subgroup size (`VertexSimdgroupGrouping`): the
-///   operation combines the device's group of vertices, a simdgroup Metal allows, and its value is
-///   ordinary data later words use. No exact path exists on such a device.
 /// - A fragment function's simdgroup operation on a device whose fragment subgroups are not
 ///   Metal's simdgroups, or a quad operation beside a helper query in a function that discards
 ///   there (`FragmentSimdgroupGrouping`): the operation combines the pixels the device's
@@ -766,13 +762,12 @@ pub struct SlotRow {
 /// denormal, a `half` rounding) belongs in a per-word judgement of a reading's differing words,
 /// beside the check of each against Apple's bound, never in this list: a row-level match would
 /// reopen every signed-off reading whose row merely records the note.
-pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 11] = [
+pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 10] = [
     PrecisionNote::RasterizationRateMap,
     PrecisionNote::SparseResidency,
     PrecisionNote::CubeGradientFootprint,
     PrecisionNote::QuadsCountedBeforeDiscard,
     PrecisionNote::BicubicFilterArithmetic,
-    PrecisionNote::VertexSimdgroupGrouping,
     PrecisionNote::FragmentSimdgroupGrouping,
     PrecisionNote::BlendedWriteRounding,
     PrecisionNote::CoverageReadsRoundedAlpha,
@@ -854,13 +849,6 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
              weights (each axis within 4.83e-4 of the polynomial) exactly onto the format's \
              grid: a few grid steps apart (1/4080 of an 8-bit format), up to 2.1e-3 on an \
              extended-range sRGB texture; no exact path: the device's arithmetic is the form"
-        }
-        PrecisionNote::VertexSimdgroupGrouping => {
-            "a vertex function's simdgroup holds the device's group of vertices: 8 a subgroup, \
-             interleaved (vertices 0, 2, ..., 14 and 1, 3, ..., 15), on ANV's Mesa 26.2.4, where \
-             Apple M4's holds 32 consecutive vertices (rvc_simd_vertex: its sums, ballots and \
-             shuffles combine those 8); no exact path: the vertex stage takes no required \
-             subgroup size there"
         }
         PrecisionNote::FragmentSimdgroupGrouping => {
             "a fragment function's simdgroup holds the pixels the device's rasterizer packs into a \

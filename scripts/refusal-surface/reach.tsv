@@ -121,9 +121,7 @@ feature	GpuTimes	rare	GPU times on a queue without timestamps
 feature	CountingVisibility	rare	counting occlusion queries on a device without precise queries
 feature	ViewFormatReinterpretation	app	a view of another component layout on a portability subset (MoltenVK)
 feature	SeparateMultisampledDepthStencil	rare	separate multisampled depth and stencil textures
-feature	PixelCoverage	rare	coverage reads at pixel rate in a multisampled pipeline
 feature	PostDepthCoverage	rare	the coverage after early depth and stencil tests on a device without VK_EXT_post_depth_coverage
-feature	CentroidVarying	rare	centroid varyings in a multisampled pipeline
 feature	PrivateMemory	rare	very large per-thread arrays
 feature	SparseTextures	rare	sparse heaps on a device without sparse images
 feature	TimelineSemaphores	none	a device below the runtime's floor

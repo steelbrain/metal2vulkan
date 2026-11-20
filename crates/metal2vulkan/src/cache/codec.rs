@@ -1489,7 +1489,6 @@ codec_enum! {
         DeviceColorConversion,
         DeviceInterpolation,
         QuadsSplitByClipping,
-        VertexSimdgroupGrouping,
         FragmentSimdgroupGrouping,
         BlendedWriteRounding,
         RotatedBlendRounding,

@@ -161,7 +161,6 @@ use crate::air::error::IntrinsicError;
 use crate::air::intrinsics::{AirIntrinsic, Elem, Group, GroupOp, GroupScope, LlvmIntrinsic, Sign};
 use crate::air::ir::{Call, Callee, Inst, InstId, InstKind, Value, ValueId};
 use crate::budget::Meter;
-use crate::device::profile::DriverWorkaround;
 use crate::device::requirements::VkFeature;
 use crate::device::subgroup::{self, OpBits, SimdClass, Tier};
 use crate::error::{
@@ -430,13 +429,6 @@ pub fn raise(c: SimdClass, ops: OpBits) -> SimdClass {
 /// holds, or the refusal `select` then reports.
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.simd.device_lockstep = cx.entry.lockstep.device;
-    // A vertex function's simdgroups are the device's vertex subgroups. Where the stage takes no
-    // required size and the driver is measured to group vertices otherwise than Apple's GPUs,
-    // an operation combines other vertices than on an Apple GPU: a simdgroup Metal allows, not
-    // the reference's.
-    if cx.stage == Stage::Vertex && cx.families.simd.groups && regroups_vertices(cx.profile) {
-        cx.precision.insert(PrecisionNote::VertexSimdgroupGrouping);
-    }
     // A fragment function's simdgroups are the pixels the device's rasterizer packs into a
     // subgroup, which are Metal's only where the driver runs the fragment on Metal: elsewhere an
     // operation over the simdgroup's members combines a simdgroup Metal allows, not the
@@ -593,16 +585,6 @@ fn discarding_quads_observed(cx: &SelectCx<'_>) -> bool {
     !cx.families.fragment.discards.is_empty()
         && cx.families.fragment.helper_queries
         && cx.families.simd.observes_lanes
-}
-
-/// Whether the profile's vertex stage groups vertices otherwise than Apple's GPUs with nothing to
-/// pin it: no required subgroup size for the stage, and the driver measured to group vertices
-/// apart (`DriverWorkaround::VertexGroupingNotApples`).
-fn regroups_vertices(profile: &crate::device::DeviceProfile) -> bool {
-    !profile.subgroups().vertex.pinnable
-        && profile
-            .workarounds()
-            .contains(&DriverWorkaround::VertexGroupingNotApples)
 }
 
 /// The simd family's module-scope objects: the lane builtin a simdgroup or quad operation reads

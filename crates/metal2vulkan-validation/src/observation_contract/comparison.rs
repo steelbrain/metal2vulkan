@@ -213,9 +213,6 @@ impl UlpTable {
 ///   1.0 on the pull-model lane's geometry), and the value is ordinary data later words use.
 /// - `QuadsSplitByClipping`: unbounded: a quad a clipping seam crosses runs once per piece, which
 ///   moves a count, a ballot, or a reduction by whole lanes.
-/// - `VertexSimdgroupGrouping`: unbounded: a vertex function's simdgroup holds the device's group
-///   of vertices (ANV's 8, interleaved, where Apple's GPUs group 32 consecutive ones), which moves
-///   a sum, a ballot, or a shuffle by whole vertices.
 /// - `FragmentSimdgroupGrouping`: unbounded: a fragment function's simdgroup holds the pixels the
 ///   device's rasterizer packs together, not Apple's, which moves a sum, a ballot, or a shuffle by
 ///   whole pixels; and a quad of a function that discards holds every covered pixel where Apple's
@@ -309,7 +306,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::ExtrapolatedInterpolation
         | N::ComputedSampleDepth
         | N::QuadsSplitByClipping
-        | N::VertexSimdgroupGrouping
         | N::FragmentSimdgroupGrouping
         | N::BlendedWriteRounding
         | N::CoverageReadsRoundedAlpha

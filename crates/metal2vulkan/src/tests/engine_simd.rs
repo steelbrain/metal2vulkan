@@ -665,46 +665,6 @@ fn float_sums_record_their_precision() {
     assert!(!a.precision.contains(&PrecisionNote::ReductionOrder));
 }
 
-/// A vertex function of simdgroup operations (`rvc_simd_vertex`: a sum, shuffles and a ballot;
-/// `rvc_simd_vertex_fill`: a fill with an explicit width) records
-/// `PrecisionNote::VertexSimdgroupGrouping` on no committed profile, a profile without subgroup
-/// operations in the vertex stage refusing the function; on ANV a kernel of simdgroup operations
-/// and a vertex function of none record no such note either.
-#[test]
-fn vertex_simdgroup_functions_record_no_grouping() {
-    let note = PrecisionNote::VertexSimdgroupGrouping;
-    for (stem, entry) in [
-        ("rvc_simd_vertex", "simd_functions_in_a_vertex_function"),
-        (
-            "rvc_simd_vertex_fill",
-            "simd_shuffle_and_fill_down_in_a_vertex_function",
-        ),
-    ] {
-        let Some(bc) = assemble(stem) else {
-            return;
-        };
-        for (name, p) in committed_profiles().expect("profiles") {
-            if let Ok(a) = compile(&bc, entry, &p) {
-                assert!(!a.precision.contains(&note), "{stem} on {name}");
-            }
-        }
-    }
-    let p = profile("intel-irisxe-rplp-anv", DevicePolicy::default()).expect("profile");
-    let Some(kernels) = assemble("simd_ops") else {
-        return;
-    };
-    let a = compile(&kernels, "simd_shuffle_k", &p).expect("a simd kernel");
-    assert!(!a.precision.contains(&note), "a kernel");
-    let Some(plain) = assemble("rt6_render_state") else {
-        return;
-    };
-    let a = compile(&plain, "rt6_full", &p).expect("a plain vertex function");
-    assert!(
-        !a.precision.contains(&note),
-        "a vertex function of no simdgroup operation"
-    );
-}
-
 /// `gsm2_vertex_quad_permutes`' quad broadcasts and shuffle-xors by a constant lane or mask in
 /// vertex functions are shuffles through the ballot of the live lanes on every committed profile,
 /// since a vertex quad may lack a lane past the draw's vertex count: each function compiles,

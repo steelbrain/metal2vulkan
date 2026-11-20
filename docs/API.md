@@ -2307,9 +2307,6 @@ bound.
   shade a triangle it clips as several triangles, and then a quad a seam between the pieces crosses
   runs once per piece, each run with the other piece's pixels as helper invocations, so the
   operation counts or combines fewer active lanes than Metal's, whose quad holds all four.
-- `metal2vulkan-degrade-vertex-simdgroup-grouping` (precision).
-  `PrecisionNote::VertexSimdgroupGrouping`: Recorded by no device: its condition,
-  `DriverWorkaround::VertexGroupingNotApples`, is one no profile takes.
 - `metal2vulkan-degrade-fragment-simdgroup-grouping` (precision).
   `PrecisionNote::FragmentSimdgroupGrouping`: A fragment function runs a simdgroup operation (a
   reduction, scan, vote, ballot, shuffle, broadcast or AGX multiply-add) or reads its

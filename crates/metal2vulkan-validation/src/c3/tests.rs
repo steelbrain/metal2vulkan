@@ -1440,16 +1440,6 @@ fn a_device_interpolation_row_stays_a_mismatch() {
     }
 }
 
-/// A vertex function's simdgroup operation on a device that groups vertices otherwise than
-/// Apple's GPUs (`VertexSimdgroupGrouping`) is deferred the same way, with its measured bound.
-#[test]
-fn a_vertex_simdgroup_grouping_row_is_deferred_and_never_a_reviewed_reading() {
-    deferred_and_never_reviewed(
-        PrecisionNote::VertexSimdgroupGrouping,
-        "VertexSimdgroupGrouping:a vertex function's simdgroup",
-    );
-}
-
 /// A fragment function's simdgroup operation on a device whose fragment subgroups are not Metal's
 /// simdgroups (`FragmentSimdgroupGrouping`) is deferred the same way.
 #[test]

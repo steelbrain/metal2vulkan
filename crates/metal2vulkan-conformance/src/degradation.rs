@@ -99,8 +99,6 @@ pub enum Degradation {
     ExtrapolatedInterpolation,
     /// `metal2vulkan-degrade-quads-split-by-clipping`.
     QuadsSplitByClipping,
-    /// `metal2vulkan-degrade-vertex-simdgroup-grouping`.
-    VertexSimdgroupGrouping,
     /// `metal2vulkan-degrade-fragment-simdgroup-grouping`.
     FragmentSimdgroupGrouping,
     /// `metal2vulkan-degrade-blended-write-rounding`.
@@ -236,7 +234,6 @@ impl Degradation {
         Degradation::DeviceInterpolationOffset,
         Degradation::ExtrapolatedInterpolation,
         Degradation::QuadsSplitByClipping,
-        Degradation::VertexSimdgroupGrouping,
         Degradation::FragmentSimdgroupGrouping,
         Degradation::BlendedWriteRounding,
         Degradation::RotatedBlendRounding,
@@ -349,9 +346,6 @@ impl Degradation {
                 "metal2vulkan-degrade-extrapolated-interpolation"
             }
             Degradation::QuadsSplitByClipping => "metal2vulkan-degrade-quads-split-by-clipping",
-            Degradation::VertexSimdgroupGrouping => {
-                "metal2vulkan-degrade-vertex-simdgroup-grouping"
-            }
             Degradation::FragmentSimdgroupGrouping => {
                 "metal2vulkan-degrade-fragment-simdgroup-grouping"
             }
@@ -467,7 +461,6 @@ impl Degradation {
             PrecisionNote::DeviceInterpolationOffset => Degradation::DeviceInterpolationOffset,
             PrecisionNote::ExtrapolatedInterpolation => Degradation::ExtrapolatedInterpolation,
             PrecisionNote::QuadsSplitByClipping => Degradation::QuadsSplitByClipping,
-            PrecisionNote::VertexSimdgroupGrouping => Degradation::VertexSimdgroupGrouping,
             PrecisionNote::FragmentSimdgroupGrouping => Degradation::FragmentSimdgroupGrouping,
             PrecisionNote::BlendedWriteRounding => Degradation::BlendedWriteRounding,
             PrecisionNote::RotatedBlendRounding => Degradation::RotatedBlendRounding,
